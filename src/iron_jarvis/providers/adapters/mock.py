@@ -3,9 +3,11 @@
 Two modes:
   * **scripted** — pop pre-canned ``LLMResponse`` objects in order (tests).
   * **default behavior** — drive a real two-step agent loop with no script: on
-    the first turn it calls ``write_file`` to record a result, then on the next
-    turn (once a tool result is present) it finalizes. This lets the whole
-    runtime demo end-to-end with zero external dependencies.
+    the first turn it takes one concrete action (``write_file`` for a worker
+    agent, or ``delegate`` for a supervisor that only has the ``delegate``
+    tool), then on the next turn (once a tool result is present) it finalizes.
+    This lets the whole runtime — including supervised delegation — demo
+    end-to-end with zero external dependencies.
 """
 
 from __future__ import annotations
@@ -43,21 +45,41 @@ class MockLLMAdapter(LLMAdapter):
         has_tool_result = any(m.role == "tool" for m in messages)
         tool_names = {t["name"] for t in tools}
 
-        if not has_tool_result and "write_file" in tool_names:
-            content = (
-                "# Iron Jarvis result\n\n"
-                f"Task: {task}\n\n"
-                "Completed offline by the MockLLM adapter (no network).\n"
-            )
+        if not has_tool_result:
+            if "write_file" in tool_names:
+                content = (
+                    "# Iron Jarvis result\n\n"
+                    f"Task: {task}\n\n"
+                    "Completed offline by the MockLLM adapter (no network).\n"
+                )
+                return LLMResponse(
+                    tool_calls=[
+                        ToolCall(
+                            id="call_1",
+                            name="write_file",
+                            arguments={"path": "RESULT.md", "content": content},
+                        )
+                    ],
+                    finish_reason="tool_use",
+                )
+            # A supervisor only has the ``delegate`` tool: hand the task to one
+            # subagent, then finalize once the subagent's summary comes back.
+            if "delegate" in tool_names:
+                return LLMResponse(
+                    tool_calls=[
+                        ToolCall(
+                            id="call_1",
+                            name="delegate",
+                            arguments={"agent_type": "builder", "task": task},
+                        )
+                    ],
+                    finish_reason="tool_use",
+                )
+
+        if "delegate" in tool_names:
             return LLMResponse(
-                tool_calls=[
-                    ToolCall(
-                        id="call_1",
-                        name="write_file",
-                        arguments={"path": "RESULT.md", "content": content},
-                    )
-                ],
-                finish_reason="tool_use",
+                text="Delegated the task to a subagent; all subtasks complete.",
+                finish_reason="stop",
             )
         return LLMResponse(
             text="Done. Wrote RESULT.md summarizing the task.",

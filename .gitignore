@@ -6,13 +6,15 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
-# Iron Jarvis runtime state (local-first; not committed)
-.ironjarvis/workspaces/
-.ironjarvis/artifacts/
-.ironjarvis/browser/
-.ironjarvis/*.db
-.ironjarvis/*.db-*
+# Iron Jarvis runtime state (local-first; disposable; never committed)
+.ironjarvis/
+RESULT.md
 
-# Node / dashboard (later phase)
+# Node / dashboard
 dashboard/node_modules/
 dashboard/.next/
+dashboard/.turbo/
+
+# OS
+Thumbs.db
+.DS_Store

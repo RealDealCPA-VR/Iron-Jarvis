@@ -7,8 +7,11 @@ registry, and the permission engine.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
+import httpx
 from sqlalchemy import Engine
 
 from .core.config import Config, load_config
@@ -22,6 +25,44 @@ from .tools.builtins import default_registry
 from .tools.permissions import AskResolver, PermissionEngine
 from .tools.registry import ToolRegistry
 
+# Subsystem imports. Importing the model-bearing packages at module load time
+# registers their SQLModel tables on the shared metadata BEFORE init_db runs.
+from .agents.delegate_tool import DelegateTool
+from .artifacts.store import ArtifactStore
+from .eval.evaluation import Evaluator
+from .eval.observability import Observability
+from .memory.layers import MemoryLayers
+from .memory.tools import memory_tools
+from .sandbox.shell_tool import SandboxedShellTool
+from .skills import SkillRegistry, builtin_dir, skill_tools
+from .workflows import models as _wf_models  # noqa: F401  (registers WorkflowRunRecord)
+
+# Robust feature set (each importing its package registers any SQLModel tables).
+from .agents import dynamic_models as _dyn_models  # noqa: F401
+from .agents.agent_tools import agent_management_tools
+from .agents.dynamic import DynamicAgentRegistry
+from .comm import Notifier, build_notifier, httpx_post, notify_tools
+from .filesearch import FileSearchService, filesearch_tools
+from .integrations import IntegrationRegistry, integration_tools
+from .integrations import models as _intg_models  # noqa: F401
+from .integrations.builtin import register_builtins
+from .ltm import (
+    LongTermMemory,
+    MarkdownBrainConnector,
+    NotionConnector,
+    ObsidianConnector,
+    load_custom_sources,
+    ltm_tools,
+)
+from .ltm import sources as _ltm_sources  # noqa: F401  (registers LTMSourceRecord)
+from .memory.embeddings import MockEmbedder
+from .scheduling import Scheduler
+from .scheduling import models as _sched_models  # noqa: F401
+from .secrets import SecretsManager, secret_tools
+from .secrets import models as _sec_models  # noqa: F401
+from .webhooks import InboundWebhooks, OutboundWebhooks
+from .webhooks import models as _whk_models  # noqa: F401
+
 
 @dataclass
 class Platform:
@@ -33,6 +74,20 @@ class Platform:
     router: ModelRouter
     registry: ToolRegistry
     permissions: PermissionEngine
+    memory: MemoryLayers
+    skills: SkillRegistry
+    artifacts: ArtifactStore
+    evaluator: Evaluator
+    observability: Observability
+    secrets: SecretsManager
+    integrations: IntegrationRegistry
+    notifier: Notifier
+    inbound_webhooks: InboundWebhooks
+    outbound_webhooks: OutboundWebhooks
+    filesearch: FileSearchService
+    ltm: LongTermMemory
+    scheduler: Scheduler | None = None
+    agents_registry: DynamicAgentRegistry | None = None
 
 
 def build_platform(
@@ -56,9 +111,89 @@ def build_platform(
     providers = ProviderManager(vault=vault, default_model=config.default_model)
     router = ModelRouter(providers, config.default_provider, event_bus)
     registry = default_registry()
+
+    # Phase 4: route the shell tool through the Sandbox Manager (same "shell" name).
+    registry.register(SandboxedShellTool())
+
+    # Phase 5: layered memory + retrieval, exposed as tools.
+    memory = MemoryLayers(engine, config=config)
+    for tool in memory_tools(memory):
+        registry.register(tool)
+
+    # Phase 11: skills framework (builtin + project-local), exposed as tools.
+    skills = SkillRegistry().discover(builtin_dir(), config.home / "skills")
+    for tool in skill_tools(skills):
+        registry.register(tool)
+
+    # Phase 8a / 9: artifact store, evaluation + observability.
+    artifacts = ArtifactStore(config.artifacts_dir, engine)
+    evaluator = Evaluator(engine)
+    observability = Observability(engine)
+
+    # --- Robust feature set ----------------------------------------------
+
+    # Shared secrets vault (API keys / OAuth / tokens) used by all subsystems.
+    secrets = SecretsManager(config.home, engine)
+    for tool in secret_tools(secrets):
+        registry.register(tool)
+
+    # Integrations framework + built-in generic/mock integrations.
+    integrations = IntegrationRegistry(engine)
+    register_builtins(integrations)
+    for tool in integration_tools(integrations, secrets.get):
+        registry.register(tool)
+
+    # File search across configured roots (shared offline embedder).
+    embedder = MockEmbedder()
+    search_roots = [Path(r) for r in config.search_roots] or [config.project_root]
+    filesearch = FileSearchService(search_roots, embedder=embedder)
+    for tool in filesearch_tools(filesearch):
+        registry.register(tool)
+
+    # Communication channels + Notifier (auto-alerts on selected events).
+    notifier = build_notifier(
+        getattr(config, "comm", None), secret_resolver=secrets.get, http_post=httpx_post
+    )
+    for tool in notify_tools(notifier):
+        registry.register(tool)
+    event_bus.add_handler(notifier.on_event)
+
+    # Webhooks: inbound dispatch + outbound delivery on matching events.
+    inbound_webhooks = InboundWebhooks(engine)
+    outbound_webhooks = OutboundWebhooks(
+        engine,
+        http_post=lambda url, payload, headers: httpx.post(
+            url, json=payload, headers=headers, timeout=10
+        ),
+    )
+    event_bus.add_handler(outbound_webhooks.on_event)
+
+    # Long-term memory: built-in markdown brain + optional Obsidian / Notion.
+    ltm = LongTermMemory()
+    ltm.register(MarkdownBrainConnector(config.home / "brain", embedder=embedder))
+    if getattr(config, "obsidian_vault", None):
+        ltm.register(ObsidianConnector(Path(config.obsidian_vault), embedder=embedder))
+    if secrets.get("notion_token") and getattr(config, "notion_database_id", None):
+        ltm.register(
+            NotionConnector(
+                config.notion_database_id,
+                token_resolver=lambda: secrets.get("notion_token"),
+                http=httpx.Client(timeout=30),
+            )
+        )
+    # User-configured custom LTM sources (markdown dirs / Notion DBs), persisted.
+    load_custom_sources(
+        ltm,
+        engine,
+        secret_resolver=secrets.get,
+        http_factory=lambda: httpx.Client(timeout=30),
+    )
+    for tool in ltm_tools(ltm):
+        registry.register(tool)
+
     permissions = PermissionEngine(config.permissions, ask_resolver=ask_resolver)
 
-    return Platform(
+    platform = Platform(
         config=config,
         event_bus=event_bus,
         engine=engine,
@@ -67,4 +202,53 @@ def build_platform(
         router=router,
         registry=registry,
         permissions=permissions,
+        memory=memory,
+        skills=skills,
+        artifacts=artifacts,
+        evaluator=evaluator,
+        observability=observability,
+        secrets=secrets,
+        integrations=integrations,
+        notifier=notifier,
+        inbound_webhooks=inbound_webhooks,
+        outbound_webhooks=outbound_webhooks,
+        filesearch=filesearch,
+        ltm=ltm,
     )
+
+    # Phase 6: the delegate tool needs the assembled platform.
+    platform.registry.register(DelegateTool(platform))
+
+    # Scheduled tasks (cron): a task runs a workflow or emits an event on fire.
+    def _run_scheduled(task):
+        payload = json.loads(task.payload_json or "{}")
+        if task.kind == "workflow":
+            from .workflows.engine import WorkflowEngine, load_workflow
+
+            return WorkflowEngine(platform).run(load_workflow(payload))
+        if task.kind == "event":
+            return platform.event_bus.publish(
+                payload.get("type", "schedule.fired"), payload
+            )
+        return None
+
+    platform.scheduler = Scheduler(engine, _run_scheduled)
+
+    # Dynamic agents (agents that add agents): load persisted + expose tools.
+    platform.agents_registry = DynamicAgentRegistry(engine).load()
+    for tool in agent_management_tools(platform, platform.agents_registry):
+        platform.registry.register(tool)
+
+    # Agent self-service: create schedules / webhooks / workflows (needs scheduler).
+    from .scheduling.tools import schedule_tools
+    from .webhooks.tools import webhook_tools
+    from .workflows.tools import workflow_tools
+
+    for tool in (
+        *schedule_tools(platform),
+        *webhook_tools(platform),
+        *workflow_tools(platform),
+    ):
+        platform.registry.register(tool)
+
+    return platform

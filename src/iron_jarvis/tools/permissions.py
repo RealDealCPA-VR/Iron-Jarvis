@@ -8,12 +8,36 @@ unknown tool defaults to ``ask``, and ``ask`` with no resolver (headless) denies
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Iterable
 
 from ..core.models import PermissionMode
 
 # A resolver answers an interactive "ask": True = allow this call, False = deny.
 AskResolver = Callable[[str, dict], bool]
+
+# Low-risk *orchestration* tools that are safe to auto-approve when no human is
+# present to answer an "ask" (headless daemon mode). ``delegate`` only spawns a
+# subagent in an isolated workspace — it never touches the host — so a Supervisor
+# can decompose work without a prompt. Genuinely dangerous tools (e.g. ``shell``)
+# are deliberately excluded and stay fail-closed.
+SAFE_HEADLESS_TOOLS: frozenset[str] = frozenset({"delegate", "spawn_agent"})
+
+
+def headless_ask_resolver(
+    allow: Iterable[str] = SAFE_HEADLESS_TOOLS,
+) -> AskResolver:
+    """Build an :data:`AskResolver` that auto-approves an allowlist, denies else.
+
+    Used by the daemon (§9) so supervised sessions can ``delegate`` end-to-end
+    without an interactive approver, while every other ``ask`` tool — notably
+    ``shell`` — remains denied (fail-closed, §20).
+    """
+    allowed = frozenset(allow)
+
+    def _resolve(tool_name: str, _args: dict) -> bool:
+        return tool_name in allowed
+
+    return _resolve
 
 
 @dataclass

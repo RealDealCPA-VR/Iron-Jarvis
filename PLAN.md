@@ -1,6 +1,9 @@
 # IRON JARVIS — Implementation Plan
 
-**Status:** Draft for approval. No code written yet.
+**Status:** ✅ EXECUTED — all 12 phases complete. 71 tests pass; dashboard prod
+build green with live-data screenshots (`dashboard/proof/`). See `TASKS.md` for
+the per-task proof. (Slice deviation honored: a single `iron_jarvis` uv package
+with submodules instead of multi-distribution packages.)
 **Stack:** Python core + Next.js (TypeScript) dashboard.
 **Spec basis:** `SPEC.MD` (§10–33) + `SPEC-SECTIONS-01-09.md` (reconstructed, all
 assumptions tagged).

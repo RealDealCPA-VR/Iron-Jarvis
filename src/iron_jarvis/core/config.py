@@ -31,6 +31,10 @@ def default_permissions() -> dict[str, str]:
         "git_commit": "ask",
         "memory_read": "allow",
         "memory_write": "allow",
+        "memory_search": "allow",
+        "skill_search": "allow",
+        "skill_load": "allow",
+        "delegate": "ask",
         "web_search": "ask",
         "browser_use": "allow",
         "mcp_call": "ask",
@@ -39,6 +43,22 @@ def default_permissions() -> dict[str, str]:
         "image_analysis": "allow",
         "delete_file": "ask",
         "internet": "ask",
+        # Robust feature set: reads are allowed; actions/secret-writes ask.
+        "secret_list": "allow",
+        "secret_set": "ask",
+        "integration_list": "allow",
+        "integration_test": "ask",
+        "notify": "ask",
+        "file_search": "allow",
+        "ltm_search": "allow",
+        "ltm_append": "allow",
+        "list_agents": "allow",
+        "create_agent": "ask",
+        "spawn_agent": "ask",
+        # Agent self-service (local, user-visible, reversible) — allowed.
+        "schedule_create": "allow",
+        "webhook_add": "allow",
+        "workflow_create": "allow",
     }
 
 
@@ -62,6 +82,13 @@ class Config(BaseModel):
     max_agent_steps: int = 12
     permissions: dict[str, str] = Field(default_factory=default_permissions)
     sandbox: dict[str, Any] = Field(default_factory=default_sandbox_policy)
+    sandbox_runtime: str = "native"  # "native" | "docker" (§16)
+    git_native: bool = False  # run sessions on a git worktree branch (§27)
+    default_skills: list[str] = Field(default_factory=list)  # auto-injected (§23)
+    comm: dict[str, Any] = Field(default_factory=dict)  # communication channels
+    search_roots: list[str] = Field(default_factory=list)  # extra file_search roots
+    obsidian_vault: str | None = None  # long-term memory vault path
+    notion_database_id: str | None = None  # long-term memory Notion DB
 
     @property
     def db_path(self) -> Path:
