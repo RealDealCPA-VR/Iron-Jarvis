@@ -1,0 +1,109 @@
+"""Persistence models (§14 Session, §13 AgentRun, §19 ToolInvocation, §31 events).
+
+SQLModel tables backed by SQLite (zero-setup local-first, §22). JSON-shaped
+fields are stored as text columns to keep the slice dependency-light.
+"""
+
+from __future__ import annotations
+
+import enum
+from datetime import datetime
+
+from sqlmodel import Field, SQLModel
+
+from .ids import new_id, utcnow
+
+
+class AgentType(str, enum.Enum):
+    SUPERVISOR = "supervisor"
+    PLANNER = "planner"
+    BUILDER = "builder"
+    REVIEWER = "reviewer"
+    RESEARCHER = "researcher"
+    MEMORY = "memory"
+    AUTOMATION = "automation"
+
+
+class AgentState(str, enum.Enum):
+    """Lifecycle states (§13)."""
+
+    CREATED = "created"
+    INITIALIZING = "initializing"
+    RUNNING = "running"
+    WAITING = "waiting"
+    PAUSED = "paused"
+    DELEGATING = "delegating"
+    REVIEWING = "reviewing"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+
+class SessionStatus(str, enum.Enum):
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class PermissionMode(str, enum.Enum):
+    ALLOW = "allow"
+    ASK = "ask"
+    DENY = "deny"
+
+
+class Project(SQLModel, table=True):
+    id: str = Field(default_factory=lambda: new_id("project"), primary_key=True)
+    name: str
+    root: str
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class Session(SQLModel, table=True):
+    id: str = Field(default_factory=lambda: new_id("session"), primary_key=True)
+    project_id: str | None = Field(default=None, index=True)
+    task: str = ""
+    agent_type: AgentType = AgentType.BUILDER
+    provider: str = "mock"
+    model: str = "claude-opus-4-8"
+    status: SessionStatus = SessionStatus.ACTIVE
+    workspace_path: str = ""
+    summary: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+    finished_at: datetime | None = None
+
+
+class AgentRun(SQLModel, table=True):
+    id: str = Field(default_factory=lambda: new_id("run"), primary_key=True)
+    session_id: str = Field(index=True)
+    parent_id: str | None = Field(default=None, index=True)  # subagents (§12)
+    agent_type: AgentType = AgentType.BUILDER
+    provider: str = "mock"
+    model: str = "claude-opus-4-8"
+    state: AgentState = AgentState.CREATED
+    steps: int = 0
+    result: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+    finished_at: datetime | None = None
+
+
+class ToolInvocation(SQLModel, table=True):
+    id: str = Field(default_factory=lambda: new_id("tool"), primary_key=True)
+    session_id: str = Field(index=True)
+    agent_run_id: str = Field(index=True)
+    tool: str = ""
+    args_json: str = "{}"
+    verdict: PermissionMode = PermissionMode.ALLOW
+    ok: bool = True
+    output: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class EventRecord(SQLModel, table=True):
+    """Persisted event log for observability & replay (§29, §30, §31)."""
+
+    id: str = Field(primary_key=True)
+    type: str = Field(index=True)
+    session_id: str | None = Field(default=None, index=True)
+    payload_json: str = "{}"
+    created_at: datetime = Field(default_factory=utcnow)

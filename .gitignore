@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Iron Jarvis runtime state (local-first; not committed)
+.ironjarvis/workspaces/
+.ironjarvis/artifacts/
+.ironjarvis/browser/
+.ironjarvis/*.db
+.ironjarvis/*.db-*
+
+# Node / dashboard (later phase)
+dashboard/node_modules/
+dashboard/.next/
