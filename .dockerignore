@@ -1,0 +1,27 @@
+# Keep the build context lean and never ship local runtime state.
+.git
+.gitignore
+
+# Python
+.venv
+__pycache__
+**/__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.ruff_cache
+
+# Iron Jarvis runtime state (local-first; disposable)
+.ironjarvis
+.scratch-ltm-notes
+data/
+*.db
+
+# Node / dashboard
+dashboard/node_modules
+dashboard/.next
+dashboard/.turbo
+
+# OS / editors
+.DS_Store
+Thumbs.db

@@ -36,7 +36,7 @@ def default_permissions() -> dict[str, str]:
         "skill_load": "allow",
         "delegate": "ask",
         "web_search": "ask",
-        "browser_use": "allow",
+        "browser_use": "deny",  # computer-control capability — never default-allow
         "mcp_call": "ask",
         "create_document": "allow",
         "extract_pdf": "allow",
@@ -66,6 +66,24 @@ def default_permissions() -> dict[str, str]:
         # Self-correcting learning loop.
         "remember_preference": "allow",
         "recall_lessons": "allow",
+        # Computer use (opt-in): reads allowed but still gated by policy.enabled;
+        # actions ask. The capability is OFF unless the user enables it.
+        "browse": "allow",
+        "web_extract": "allow",
+        "computer_use_status": "allow",
+        "web_action": "ask",
+    }
+
+
+def default_computer_use() -> dict[str, Any]:
+    """Computer-use policy (§ best practices) — DISABLED by default."""
+    return {
+        "enabled": False,
+        "domain_allowlist": [],
+        "action_allowlist": ["navigate", "read", "extract", "wait"],
+        "isolation": "isolated",
+        "max_steps": 20,
+        "max_retries": 2,
     }
 
 
@@ -96,6 +114,7 @@ class Config(BaseModel):
     search_roots: list[str] = Field(default_factory=list)  # extra file_search roots
     obsidian_vault: str | None = None  # long-term memory vault path
     notion_database_id: str | None = None  # long-term memory Notion DB
+    computer_use: dict[str, Any] = Field(default_factory=default_computer_use)
 
     @property
     def db_path(self) -> Path:

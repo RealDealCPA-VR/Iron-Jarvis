@@ -72,6 +72,18 @@ from .learning import models as _learn_models  # noqa: F401
 from .connections import ConnectionRegistry
 from .connections import models as _conn_models  # noqa: F401
 
+# Computer use (opt-in, gated, traced).
+from .computeruse import (
+    ApprovalQueue,
+    ComputerUsePolicy,
+    CUContext,
+    FakeBrowser,
+    PlaywrightBrowser,
+    TraceRecorder,
+    computeruse_tools,
+)
+from .computeruse import models as _cu_models  # noqa: F401
+
 
 @dataclass
 class Platform:
@@ -97,6 +109,7 @@ class Platform:
     ltm: LongTermMemory
     learning: LearningEngine
     connections: ConnectionRegistry
+    computeruse: CUContext
     scheduler: Scheduler | None = None
     agents_registry: DynamicAgentRegistry | None = None
 
@@ -162,6 +175,20 @@ def build_platform(
     artifacts = ArtifactStore(config.artifacts_dir, engine)
     evaluator = Evaluator(engine)
     observability = Observability(engine)
+
+    # Computer use (safety best practices) — OFF by default. Built either way so
+    # status/approvals are available, but a real (Playwright) browser is only
+    # constructed when the user explicitly enables it; reads stay gated on policy.
+    cu_policy = ComputerUsePolicy.from_config(getattr(config, "computer_use", None))
+    cu_browser = PlaywrightBrowser() if cu_policy.enabled else FakeBrowser({})
+    computeruse = CUContext(
+        cu_policy,
+        cu_browser,
+        ApprovalQueue(engine),
+        trace=TraceRecorder(artifacts=artifacts),
+    )
+    for tool in computeruse_tools(computeruse):
+        registry.register(tool)
 
     # --- Robust feature set ----------------------------------------------
 
@@ -258,6 +285,7 @@ def build_platform(
         ltm=ltm,
         learning=learning,
         connections=connections,
+        computeruse=computeruse,
     )
 
     # Phase 6: the delegate tool needs the assembled platform.

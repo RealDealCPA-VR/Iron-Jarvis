@@ -320,6 +320,27 @@ export interface FeedbackResult {
   rating: string;
 }
 
+/* ---- Computer use (opt-in browser/desktop control; allowlist + approval) - */
+export interface ComputerUseStatus {
+  enabled: boolean;
+  domain_allowlist: string[];
+  action_allowlist: string[];
+  isolation: string;
+  max_steps: number;
+  max_retries: number;
+  pending_approvals: number;
+}
+
+/** A human-in-the-loop approval gate for a sensitive/destructive action. */
+export interface Approval {
+  id: string;
+  run_id: string;
+  action_json: string; // JSON of the proposed Action
+  reason: string;
+  status: string; // pending | approved | denied
+  created_at: string;
+}
+
 /* ---- Agents -------------------------------------------------------------- */
 export interface DynamicAgent {
   name: string;

@@ -1,0 +1,67 @@
+# Iron Jarvis — DigitalOcean App Platform spec
+# Reference: https://docs.digitalocean.com/products/app-platform/reference/app-spec/
+# One-click: https://cloud.digitalocean.com/apps/new?repo=https://github.com/RealDealCPA-VR/Iron-Jarvis/tree/master
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# PERSISTENCE CAVEAT — READ THIS FIRST
+# App Platform service instances are EPHEMERAL: the local filesystem is wiped on
+# every deploy, restart, and scale event. Iron Jarvis is local-first and stores
+# SQLite + the Fernet-encrypted secrets vault under .ironjarvis/ (here, /data), so
+# on App Platform that state is NOT durable. For real stateful use, either:
+#   * run the daemon on a small Droplet with docker-compose + an attached Volume
+#     (block storage), or
+#   * point Iron Jarvis at a managed Postgres database instead of local SQLite.
+# App Platform does not offer mountable block volumes for app services — use the
+# spec below for a stateless/demo deployment, or a Droplet for stateful use.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: iron-jarvis
+region: nyc
+services:
+  - name: daemon
+    dockerfile_path: Dockerfile
+    source_dir: /
+    github:
+      repo: RealDealCPA-VR/Iron-Jarvis
+      branch: master
+      deploy_on_push: true
+    http_port: 8787
+    instance_size_slug: basic-xs       # ~1GB. basic-xxs (512MB) is fine for the mock model.
+    instance_count: 1
+    health_check:
+      http_path: /health
+    run_command: ironjarvis serve --host 0.0.0.0 --port 8787 --root /data
+    envs:
+      # Protects the public API. Set the value in the UI (stored encrypted).
+      - key: IRONJARVIS_TOKEN
+        scope: RUN_TIME
+        type: SECRET
+      - key: IRONJARVIS_ROOT
+        scope: RUN_TIME
+        value: /data
+      # Optional: enables live Claude models (otherwise the mock model runs).
+      - key: ANTHROPIC_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+
+  - name: dashboard
+    dockerfile_path: Dockerfile.dashboard
+    source_dir: /
+    github:
+      repo: RealDealCPA-VR/Iron-Jarvis
+      branch: master
+      deploy_on_push: true
+    http_port: 3000
+    instance_size_slug: basic-xxs
+    instance_count: 1
+    envs:
+      # Next.js inlines NEXT_PUBLIC_* at BUILD time, so this is RUN_AND_BUILD_TIME
+      # (App Platform passes build-time vars as Docker build args). ${daemon.PUBLIC_URL}
+      # resolves to the daemon component's public https URL.
+      - key: NEXT_PUBLIC_IJ_API
+        scope: RUN_AND_BUILD_TIME
+        value: ${daemon.PUBLIC_URL}
+      # Optional: same value as the daemon's IRONJARVIS_TOKEN.
+      - key: NEXT_PUBLIC_IJ_TOKEN
+        scope: RUN_AND_BUILD_TIME
+        type: SECRET

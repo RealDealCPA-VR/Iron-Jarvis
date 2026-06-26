@@ -90,6 +90,20 @@ uv run ironjarvis connect anthropic sk-ant-...   # stored encrypted in the vault
 
 ---
 
+## ☁️ Deploy to your own server (optional)
+
+Want it always-on? Ship it to a VPS in a couple of clicks — **full guide + one-click buttons in [`DEPLOY.md`](DEPLOY.md)** (Render, Railway, DigitalOcean, AWS, Azure).
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/RealDealCPA-VR/Iron-Jarvis) [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new) [![Deploy to DO](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/RealDealCPA-VR/Iron-Jarvis/tree/master)
+
+```bash
+docker compose up        # daemon + dashboard, locally or on any Docker host
+```
+
+> 🔒 **Before exposing it publicly:** set `IRONJARVIS_TOKEN` (protects the API — it's RCE-by-design), serve over HTTPS, set `IRONJARVIS_CORS_ORIGINS` to your dashboard origin, persist `.ironjarvis/` on a volume, and keep **computer use off** unless you run it in a disposable VM. The `DEPLOY.md` security checklist walks through it.
+
+---
+
 ## 📖 Using Iron Jarvis — a practical guide
 
 ### Run a session (and dictate it 🎙️)

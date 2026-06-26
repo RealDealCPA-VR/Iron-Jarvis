@@ -22,6 +22,8 @@ import {
   PlugZap,
   Megaphone,
   Webhook,
+  MonitorCog,
+  MoveUpRight,
   type LucideIcon,
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
@@ -39,6 +41,7 @@ const NAV: NavItem[] = [
   { href: "/sessions", label: "Sessions", icon: Boxes },
   { href: "/kanban", label: "Kanban", icon: SquareKanban },
   { href: "/agents", label: "Agents", icon: Bot },
+  { href: "/computeruse", label: "Computer Use", icon: MonitorCog },
   { href: "/workflows", label: "Workflows", icon: Workflow },
   { href: "/schedules", label: "Schedules", icon: CalendarClock },
   { href: "/skills", label: "Skills", icon: Sparkles },
@@ -174,6 +177,14 @@ export function Sidebar() {
           </kbd>
           <span>commands</span>
         </div>
+        <a
+          href="https://github.com/RealDealCPA-VR/Iron-Jarvis/blob/master/DEPLOY.md"
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 pt-0.5 text-[11px] text-zinc-600 transition-colors hover:text-accent-soft"
+        >
+          Deploy to a server <MoveUpRight size={11} />
+        </a>
       </div>
     </aside>
   );

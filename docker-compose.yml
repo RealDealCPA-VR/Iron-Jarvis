@@ -1,0 +1,41 @@
+# Iron Jarvis — VPS deployment.
+#
+#   IRONJARVIS_TOKEN=$(openssl rand -hex 32) \
+#   PUBLIC_API_URL=https://api.your-host.tld \
+#   docker compose up -d --build
+#
+# - IRONJARVIS_TOKEN: set it to require bearer-token auth on the daemon. Leave
+#   unset only for a trusted/private network — an unset/empty token = wide open.
+# - PUBLIC_API_URL: the daemon URL the BROWSER will call. It is baked into the
+#   dashboard bundle at build time, so it must be reachable from the user's
+#   browser (e.g. https://api.your-host.tld), NOT the internal "daemon" hostname.
+
+services:
+  daemon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Persist runtime state (config, sqlite db, workspaces, artifacts).
+    volumes:
+      - ./data:/data
+    environment:
+      # Passed through from the host shell; empty/unset => auth disabled.
+      - IRONJARVIS_TOKEN
+    ports:
+      - "8787:8787"
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+      args:
+        # NEXT_PUBLIC_* is inlined at build time — must be browser-reachable.
+        NEXT_PUBLIC_IJ_API: ${PUBLIC_API_URL:-http://localhost:8787}
+    environment:
+      NEXT_PUBLIC_IJ_API: ${PUBLIC_API_URL:-http://localhost:8787}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - daemon
+    restart: unless-stopped

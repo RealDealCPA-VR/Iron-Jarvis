@@ -45,6 +45,12 @@ class ConnectionKeyBody(BaseModel):
     key: str
 
 
+class ComputerUseEnable(BaseModel):
+    enabled: bool = False
+    domain_allowlist: list[str] | None = None
+    action_allowlist: list[str] | None = None
+
+
 class MemoryWrite(BaseModel):
     layer: str = "project"
     key: str
@@ -161,6 +167,26 @@ def _session_view(session) -> dict[str, Any]:
     }
 
 
+def _fs_path_allowed(path: str) -> bool:
+    """When IRONJARVIS_FS_ALLOWLIST is set (a public deployment), restrict file
+    reads to those roots. Unset (local) → unrestricted, preserving local UX."""
+    allow = os.environ.get("IRONJARVIS_FS_ALLOWLIST", "").strip()
+    if not allow:
+        return True
+    try:
+        target = Path(path).resolve()
+    except Exception:
+        return False
+    for root in (r.strip() for r in allow.split(",") if r.strip()):
+        try:
+            rp = Path(root).resolve()
+            if target == rp or target.is_relative_to(rp):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def create_app(project_root: str | None = None) -> FastAPI:
     # Headless mode: no human can answer an "ask", so wire a resolver that
     # auto-approves only low-risk orchestration (delegate) and keeps dangerous
@@ -188,10 +214,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 pass
 
     app = FastAPI(title="Iron Jarvis", version=__version__, lifespan=lifespan)
-    # Local dashboard (e.g. http://localhost:3000) is cross-origin to the daemon.
+    # Optional bearer-token auth (env IRONJARVIS_TOKEN) — required for a public
+    # deployment; no-op locally. Added before CORS so it runs outermost.
+    from .auth import TokenAuthMiddleware
+
+    app.add_middleware(TokenAuthMiddleware)
+    # CORS: defaults open for local dev; in prod set IRONJARVIS_CORS_ORIGINS
+    # (comma-separated) to your dashboard origin(s).
+    _origins = os.environ.get("IRONJARVIS_CORS_ORIGINS", "").strip()
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=[o.strip() for o in _origins.split(",") if o.strip()] or ["*"],
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -284,6 +317,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
     def documents_read(path: str) -> dict[str, Any]:
         from ..documents import extract_text
 
+        if not _fs_path_allowed(path):
+            raise HTTPException(status_code=403, detail="path not in IRONJARVIS_FS_ALLOWLIST")
         try:
             text = extract_text(path)
         except Exception as exc:  # noqa: BLE001
@@ -443,6 +478,74 @@ def create_app(project_root: str | None = None) -> FastAPI:
         from ..onboarding import doctor
 
         return doctor()
+
+    # --- Computer use (opt-in; gated by allowlists + human approval) ------
+
+    def _cu_status() -> dict[str, Any]:
+        p = platform.computeruse.policy
+        return {
+            "enabled": p.enabled,
+            "domain_allowlist": list(p.domain_allowlist),
+            "action_allowlist": list(p.action_allowlist),
+            "isolation": getattr(p, "isolation", "isolated"),
+            "max_steps": p.max_steps,
+            "max_retries": p.max_retries,
+            "pending_approvals": len(platform.computeruse.approvals.pending()),
+        }
+
+    @app.get("/computeruse")
+    def computeruse_status() -> dict[str, Any]:
+        return _cu_status()
+
+    @app.post("/computeruse/enable")
+    def computeruse_enable(body: ComputerUseEnable) -> dict[str, Any]:
+        from ..computeruse import ComputerUsePolicy, PlaywrightBrowser
+
+        cu = platform.computeruse
+        cu.policy = ComputerUsePolicy.from_config(
+            {
+                "enabled": body.enabled,
+                "domain_allowlist": body.domain_allowlist
+                if body.domain_allowlist is not None
+                else list(cu.policy.domain_allowlist),
+                "action_allowlist": body.action_allowlist
+                if body.action_allowlist is not None
+                else list(cu.policy.action_allowlist),
+                "isolation": getattr(cu.policy, "isolation", "isolated"),
+                "max_steps": cu.policy.max_steps,
+                "max_retries": cu.policy.max_retries,
+            }
+        )
+        # Switch to a real isolated browser when enabling (needs `playwright install`).
+        if body.enabled and type(cu.browser).__name__ == "FakeBrowser":
+            cu.browser = PlaywrightBrowser()
+        return _cu_status()
+
+    @app.get("/computeruse/approvals")
+    def computeruse_approvals() -> dict[str, Any]:
+        return {
+            "approvals": [a.model_dump() for a in platform.computeruse.approvals.pending()]
+        }
+
+    @app.post("/computeruse/approvals/{approval_id}/approve")
+    def computeruse_approve(approval_id: str) -> dict[str, Any]:
+        platform.computeruse.approvals.approve(approval_id)
+        return {"id": approval_id, "status": "approved"}
+
+    @app.post("/computeruse/approvals/{approval_id}/deny")
+    def computeruse_deny(approval_id: str) -> dict[str, Any]:
+        platform.computeruse.approvals.deny(approval_id)
+        return {"id": approval_id, "status": "denied"}
+
+    @app.get("/computeruse/runs/{run_id}")
+    def computeruse_run(run_id: str) -> dict[str, Any]:
+        from ..computeruse.models import ComputerUseRun
+
+        with session_scope(platform.engine) as db:
+            run = db.get(ComputerUseRun, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="no such run")
+        return run.model_dump()
 
     # --- Workflows (§24, §25) ---------------------------------------------
 
@@ -624,6 +727,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
     def filesearch(
         q: str, mode: str = "content", limit: int = 50, root: str | None = None
     ) -> dict[str, Any]:
+        if root and not _fs_path_allowed(root):
+            raise HTTPException(status_code=403, detail="root not in IRONJARVIS_FS_ALLOWLIST")
         roots = [Path(root)] if root else None
         return {
             "results": platform.filesearch.search(q, mode=mode, limit=limit, roots=roots)
@@ -788,6 +893,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     @app.websocket("/events")
     async def events(ws: WebSocket) -> None:
+        # BaseHTTPMiddleware can't see WS scope, so guard the token here too.
+        token = os.environ.get("IRONJARVIS_TOKEN", "").strip()
+        if token and ws.query_params.get("token") != token:
+            await ws.close(code=1008)
+            return
         await ws.accept()
         try:
             async for event in platform.event_bus.subscribe():

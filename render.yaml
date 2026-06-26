@@ -1,0 +1,73 @@
+# Iron Jarvis — Render Blueprint
+# Spec: https://render.com/docs/blueprint-spec
+# One-click: https://render.com/deploy?repo=https://github.com/RealDealCPA-VR/Iron-Jarvis
+#
+# Two web services, built from the repo's Dockerfiles:
+#   * iron-jarvis-daemon     — FastAPI API on :8787 (the brain; EXECUTES tools)
+#   * iron-jarvis-dashboard  — Next.js control center on :3000 (the UI)
+#
+# After the first deploy: open the dashboard service → Environment, and paste the
+# daemon's public URL into NEXT_PUBLIC_IJ_API (e.g. https://iron-jarvis-daemon.onrender.com),
+# then trigger a redeploy of the dashboard so the value is baked into the bundle
+# (Next.js inlines NEXT_PUBLIC_* at build time; Render exposes env vars as Docker
+# build args, so the Dockerfile.dashboard ARG picks it up).
+
+services:
+  # ---------------------------------------------------------------------------
+  # Daemon (FastAPI) — the API the dashboard and HTTP clients talk to.
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: iron-jarvis-daemon
+    runtime: docker
+    repo: https://github.com/RealDealCPA-VR/Iron-Jarvis
+    branch: master
+    plan: starter            # 512MB. Bump to standard if you enable Playwright/computer-use.
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Bind to all interfaces and keep all state on the persistent disk (/data).
+    dockerCommand: ironjarvis serve --host 0.0.0.0 --port 8787 --root /data
+    healthCheckPath: /health
+    autoDeploy: true
+    # A disk pins the service to a single instance — correct for SQLite (single writer).
+    disk:
+      name: ironjarvis-data
+      mountPath: /data       # .ironjarvis/ (SQLite + Fernet-encrypted vault) lives here
+      sizeGB: 1
+    envVars:
+      - key: PORT
+        value: "8787"
+      - key: IRONJARVIS_ROOT
+        value: /data
+      # Protects the public API. Render generates a strong random value once.
+      # WITHOUT a token, anyone who finds the URL can drive your agents.
+      - key: IRONJARVIS_TOKEN
+        generateValue: true
+      # Optional: a real Claude key turns on live models (otherwise the deterministic
+      # mock model runs). Leave blank to run fully offline.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+  # ---------------------------------------------------------------------------
+  # Dashboard (Next.js) — talks to the daemon from the user's browser.
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: iron-jarvis-dashboard
+    runtime: docker
+    repo: https://github.com/RealDealCPA-VR/Iron-Jarvis
+    branch: master
+    plan: starter
+    region: oregon
+    dockerfilePath: ./Dockerfile.dashboard
+    dockerContext: .
+    autoDeploy: true
+    envVars:
+      # The PUBLIC daemon URL the browser hits. Render can't prepend the https://
+      # scheme to a fromService host, so paste the full URL once (sync:false).
+      # This is consumed as a Docker build arg AND at runtime.
+      - key: NEXT_PUBLIC_IJ_API
+        sync: false
+      # Optional: if you set IRONJARVIS_TOKEN on the daemon, set the SAME value here
+      # so the dashboard sends it as a bearer token.
+      - key: NEXT_PUBLIC_IJ_TOKEN
+        sync: false

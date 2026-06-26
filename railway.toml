@@ -1,0 +1,40 @@
+# Iron Jarvis on Railway — config-as-code
+# Docs: https://docs.railway.com/reference/config-as-code
+#
+# Railway builds ONE service per Dockerfile, so deploy Iron Jarvis as TWO services
+# inside the same Railway project:
+#
+#   1. daemon     — build ./Dockerfile            (this file configures it)
+#   2. dashboard  — build ./Dockerfile.dashboard  (configure in the Railway UI, below)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# DAEMON service variables (set in the Railway UI → daemon → Variables):
+#     IRONJARVIS_TOKEN   = <a long random secret>   # protects the public API
+#     IRONJARVIS_ROOT    = /data                     # state on the mounted volume
+#     ANTHROPIC_API_KEY  = <optional>                # enables live Claude models
+# Add a Railway Volume to the daemon mounted at /data so .ironjarvis/ (SQLite +
+# encrypted vault) survives redeploys.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# DASHBOARD service (Railway UI → New → GitHub repo → same repo → Settings):
+#     Build  → Dockerfile Path = Dockerfile.dashboard
+#     Deploy → Start Command   = pnpm start          # Next.js binds to $PORT
+#     Variables:
+#         NEXT_PUBLIC_IJ_API   = https://${{daemon.RAILWAY_PUBLIC_DOMAIN}}
+#         NEXT_PUBLIC_IJ_TOKEN = <optional; SAME value as the daemon's IRONJARVIS_TOKEN>
+#     NEXT_PUBLIC_* is inlined at BUILD time; Railway exposes variables as build
+#     args, so the Dockerfile.dashboard ARG picks them up. Redeploy after changes.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Bind to Railway's injected $PORT and keep state on the mounted volume.
+startCommand = "ironjarvis serve --host 0.0.0.0 --port $PORT --root /data"
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+numReplicas = 1

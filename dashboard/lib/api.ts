@@ -5,8 +5,21 @@ export const API_BASE = (
   process.env.NEXT_PUBLIC_IJ_API || "http://127.0.0.1:8787"
 ).replace(/\/$/, "");
 
+// Optional bearer token for deployed daemons that set IRONJARVIS_TOKEN.
+// Unset (local) => no header is sent and behaviour is exactly as before.
+const IJ_TOKEN = (process.env.NEXT_PUBLIC_IJ_TOKEN || "").trim();
+
+/** Authorization header for the bearer token, or {} when none is configured. */
+function authHeaders(): Record<string, string> {
+  return IJ_TOKEN ? { Authorization: `Bearer ${IJ_TOKEN}` } : {};
+}
+
 export function wsUrl(path: string): string {
-  return API_BASE.replace(/^http/, "ws") + path;
+  const url = API_BASE.replace(/^http/, "ws") + path;
+  // Browsers can't set WS headers, so the token rides along as a query param.
+  if (!IJ_TOKEN) return url;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${url}${sep}token=${encodeURIComponent(IJ_TOKEN)}`;
 }
 
 export class ApiError extends Error {
@@ -25,6 +38,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
       ...init,
       headers: {
         "Content-Type": "application/json",
+        ...authHeaders(),
         ...(init?.headers || {}),
       },
       cache: "no-store",
