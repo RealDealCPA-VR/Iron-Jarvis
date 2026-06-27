@@ -1,7 +1,7 @@
 [project]
 name = "iron-jarvis"
-version = "0.1.0"
-description = "Iron Jarvis — a local-first AI operating system (Phases 0–3 vertical slice)"
+version = "1.0.0"
+description = "Iron Jarvis - a local-first AI operating system: a multi-agent orchestrator with tools, memory, workflows, a sandbox, git-native review, and a Next.js control center."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -25,6 +25,7 @@ dependencies = [
     "openpyxl>=3.1.5",
     "fpdf2>=2.8.7",
     "python-pptx>=1.0.2",
+    "pillow>=11",  # imported directly in documents/readers.py (image metadata)
     "playwright>=1.60.0",
     "pywinpty>=3.0.5 ; sys_platform == 'win32'",
 ]

@@ -24,10 +24,92 @@ from __future__ import annotations
 
 import hmac
 import os
+from urllib.parse import urlparse
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
+
+# --- Host / Origin guard (anti drive-by RCE + DNS rebinding) ----------------
+# The local daemon is RCE-by-design (agents run tools/shell, /terminals spawns a
+# PTY). A loopback bind is NOT enough: any website the user visits can fetch
+# http://127.0.0.1:8787 (and open its WebSockets, which CORS does not cover). We
+# reject (a) requests whose Host header is not loopback (defeats DNS rebinding,
+# which uses an attacker hostname that resolves to 127.0.0.1) and (b) cross-
+# origin BROWSER requests from untrusted Origins. Browsers cannot forge Origin,
+# and only locally-served pages carry a loopback Origin, so loopback origins are
+# trusted; CLI/server requests carry no Origin and pass. Covers HTTP + WebSocket.
+
+# "testserver" is Starlette's TestClient default Host; a real browser/attacker
+# can never send it (it sends the real loopback Host), so allowing it is safe.
+_LOOPBACK_HOSTS = frozenset(
+    {"127.0.0.1", "localhost", "::1", "[::1]", "testserver", ""}
+)
+
+
+def _host_label(host: str) -> str:
+    """Host header without the port: '127.0.0.1:8787' -> '127.0.0.1'."""
+    h = (host or "").strip()
+    if h.startswith("["):  # bracketed IPv6 literal, e.g. [::1]:8787
+        return h.split("]", 1)[0] + "]"
+    return h.split(":", 1)[0]
+
+
+def _host_ok(host: str) -> bool:
+    label = _host_label(host).lower()
+    if label in _LOOPBACK_HOSTS:
+        return True
+    allow = (os.environ.get("IRONJARVIS_HOST_ALLOWLIST") or "").strip()
+    if not allow:  # default: loopback only (local daily driver)
+        return False
+    return label in {a.strip().lower() for a in allow.split(",") if a.strip()}
+
+
+def _origin_ok(origin: str) -> bool:
+    o = (origin or "").strip().rstrip("/")
+    if not o:
+        return True  # no Origin (CLI / server / top-level nav) -> not a CSRF vector
+    try:
+        host = (urlparse(o).hostname or "").lower()
+    except Exception:
+        return False
+    if host in {"127.0.0.1", "localhost", "::1"}:
+        return True  # a browser can only send a loopback Origin from a local page
+    cfg = (os.environ.get("IRONJARVIS_CORS_ORIGINS") or "").strip()
+    allowed = {c.strip().rstrip("/") for c in cfg.split(",") if c.strip()}
+    return o in allowed
+
+
+class HostOriginGuardMiddleware:
+    """Pure-ASGI guard covering HTTP AND WebSocket (BaseHTTPMiddleware can't see
+    WS). Add it OUTERMOST (last add_middleware) so a bad Host/Origin is rejected
+    before anything else runs."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") in ("http", "websocket"):
+            headers = {
+                k.decode("latin-1").lower(): v.decode("latin-1")
+                for k, v in (scope.get("headers") or [])
+            }
+            if not _host_ok(headers.get("host", "")):
+                return await self._reject(scope, receive, send, "host not allowed")
+            if not _origin_ok(headers.get("origin", "")):
+                return await self._reject(scope, receive, send, "origin not allowed")
+        await self.app(scope, receive, send)
+
+    @staticmethod
+    async def _reject(scope, receive, send, detail: str) -> None:
+        if scope.get("type") == "websocket":
+            try:
+                await receive()  # consume the connect before closing
+            except Exception:
+                pass
+            await send({"type": "websocket.close", "code": 1008})
+            return
+        await JSONResponse({"detail": detail}, status_code=403)(scope, receive, send)
 
 # Paths that must work without a token even when auth is enabled:
 #   - health/liveness probes (load balancers, `ironjarvis status`)

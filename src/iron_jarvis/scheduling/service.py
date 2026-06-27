@@ -17,10 +17,12 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import threading
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from sqlalchemy import Engine
+from sqlalchemy import update as sql_update
 from sqlmodel import select
 
 from ..core.db import session_scope
@@ -95,6 +97,10 @@ class Scheduler:
     task record) whenever a task fires — on a real cron tick *or* via
     :meth:`run_now`. The callback may be sync or async.
     """
+
+    # Fire a one-time "date" task at most this many seconds late after the
+    # daemon was down; anything more overdue is recorded *missed* (never fired).
+    CATCHUP_WINDOW_SECONDS: int = 24 * 60 * 60
 
     def __init__(self, engine: Engine, run_callback: RunCallback) -> None:
         from apscheduler.schedulers.background import BackgroundScheduler
@@ -271,12 +277,68 @@ class Scheduler:
         """Register every enabled persisted task and start the scheduler.
 
         Idempotent: safe to call when already running and with zero tasks.
+
+        Also reconciles one-time ``date`` tasks that came due while the daemon
+        was down (see :meth:`_catch_up`). APScheduler drops a past-due
+        ``DateTrigger`` on (re-)registration (misfire), so without this a
+        one-time task whose ``run_at`` elapsed during downtime would silently
+        never fire. The catch-up runs on its own daemon thread so a slow
+        callback never blocks daemon startup.
         """
         for task in self.list():
             if task.enabled:
                 self._schedule_job(task)
         if not self.scheduler.running:
             self.scheduler.start()
+        threading.Thread(
+            target=self._catch_up, name="sched-catchup", daemon=True
+        ).start()
+
+    def _catch_up(self) -> None:
+        """Fire (or mark missed) one-time date tasks that came due while down.
+
+        For each enabled, not-yet-run ``trigger_type == "date"`` task whose
+        ``run_at`` is already in the past: fire it once immediately when it is
+        only modestly late (within :data:`CATCHUP_WINDOW_SECONDS`), otherwise
+        record it *missed* (clear ``next_run`` and disable it) without firing.
+        Either way the task is disabled afterwards so a subsequent restart never
+        double-fires it. Recurring ``cron``/``interval`` tasks are left untouched
+        — APScheduler reschedules those normally. Never raises (a single bad task
+        must not abort the sweep or crash startup).
+        """
+        now = utcnow()
+        for task in self.list():
+            if (
+                not task.enabled
+                or task.trigger_type != "date"
+                or task.run_at is None
+                or task.last_run is not None  # already fired — never double-fire
+            ):
+                continue
+            run_at = task.run_at
+            if run_at.tzinfo is None:  # SQLite round-trips datetimes as naive
+                run_at = run_at.replace(tzinfo=timezone.utc)
+            if run_at >= now:
+                continue  # still in the future — APScheduler owns this one
+            late = (now - run_at).total_seconds()
+            try:
+                if late <= self.CATCHUP_WINDOW_SECONDS:
+                    self._fire(task.name)  # reuse the normal fire + last_run path
+                self._finish_catch_up(task.name)
+            except Exception:  # noqa: BLE001 — keep reconciling the rest
+                continue
+
+    def _finish_catch_up(self, name: str) -> None:
+        """Disable a reconciled date task and clear its next_run (no more fires)."""
+        with session_scope(self.engine) as db:
+            rec = self._fetch(db, name)
+            if rec is None:
+                return
+            rec.enabled = False
+            rec.next_run = None
+            db.add(rec)
+            db.commit()
+        self._unschedule_job(name)
 
     def shutdown(self, wait: bool = False) -> None:
         """Stop the scheduler if it is running (never raises when stopped)."""
@@ -302,11 +364,40 @@ class Scheduler:
             db.refresh(rec)
             return rec
 
+    def _claim_once(self, name: str) -> bool:
+        """Atomically claim a one-time ``date`` task so exactly one runner fires
+        it. A task due within APScheduler's misfire grace at boot can be raced by
+        the catch-up thread AND the APScheduler worker; a conditional UPDATE
+        (``WHERE last_run IS NULL``) is the only race-safe claim in SQLite (a
+        read-then-write across two transactions is not). Returns True if THIS
+        caller won the claim (last_run is now stamped)."""
+        with session_scope(self.engine) as db:
+            result = db.execute(
+                sql_update(ScheduledTaskRecord)
+                .where(
+                    ScheduledTaskRecord.name == name,
+                    ScheduledTaskRecord.last_run.is_(None),
+                    ScheduledTaskRecord.enabled.is_(True),
+                )
+                .values(last_run=utcnow(), next_run=None)
+            )
+            db.commit()
+        return (result.rowcount or 0) == 1
+
     def _fire(self, name: str) -> None:
         """APScheduler job entrypoint (runs in the BackgroundScheduler thread)."""
         task = self.get(name)
         if task is None or not task.enabled:
             return
+        if task.trigger_type == "date":
+            # Claim atomically first so the catch-up + APScheduler paths can't
+            # both fire the same one-time task.
+            if not self._claim_once(name):
+                return
+            result = self.run_callback(task)
+            if inspect.isawaitable(result):
+                asyncio.run(result)
+            return  # last_run / next_run already stamped by the claim
         result = self.run_callback(task)
         if inspect.isawaitable(result):
             # No event loop runs in the scheduler's worker thread, so drive the

@@ -104,6 +104,31 @@ class ToolInvocation(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class PendingReviewRecord(SQLModel, table=True):
+    """A git-native session whose change awaits human review, persisted so it
+    survives a daemon restart (the in-memory review/worktree state does not).
+    Deleted on approve/reject; rehydrated on boot if the worktree still exists."""
+
+    session_id: str = Field(primary_key=True)
+    repo: str = ""  # the repo the worktree was created from (project_root or self-dev)
+    branch: str = ""
+    base: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class SavedPromptRecord(SQLModel, table=True):
+    """A reusable task template / saved prompt the user can re-run with one
+    click (daily-driver: stop retyping the same task into a blank box)."""
+
+    id: str = Field(default_factory=lambda: new_id("prompt"), primary_key=True)
+    name: str = ""
+    agent_type: AgentType = AgentType.BUILDER
+    task: str = ""
+    provider: str | None = None
+    model: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class EventRecord(SQLModel, table=True):
     """Persisted event log for observability & replay (§29, §30, §31)."""
 

@@ -8,12 +8,18 @@ adding an ``X-IronJarvis-Signature`` header when a secret is configured.
 
 External HTTP is injected (``http_post(url, payload, headers) -> response``) so
 the delivery path is fully offline-testable.
+
+The HMAC secret is resolved at delivery-time. When a ``secret_resolver`` is
+injected (``Callable[[str], str | None]``, e.g. ``secrets.get``) the live secret
+is looked up from each ``WebhookRecord.secret_name`` (the real vault key), so
+deliveries stay signed after a daemon restart. With no resolver the legacy
+in-memory ``_secrets`` dict is used for back-compat.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from sqlalchemy import Engine
 from sqlmodel import select
@@ -25,6 +31,8 @@ from .security import canonical_bytes, sign
 from .validate import assert_safe_webhook_url
 
 HttpPost = Callable[[str, dict, dict], Any]
+#: resolves a persisted ``secret_name`` (vault key) to its live secret value.
+SecretResolver = Callable[[str], Optional[str]]
 
 
 class OutboundWebhooks:
@@ -34,12 +42,16 @@ class OutboundWebhooks:
         http_post: HttpPost,
         *,
         allow_internal: bool = False,
+        secret_resolver: SecretResolver | None = None,
     ) -> None:
         self.engine = engine
         self.http_post = http_post
         #: when False (default) outbound targets resolving to private/loopback/
         #: link-local/etc. addresses are refused (SSRF defense).
         self.allow_internal = allow_internal
+        #: optional vault lookup (e.g. ``secrets.get``); when set, secrets are
+        #: resolved from the persisted ``secret_name`` instead of memory.
+        self._secret_resolver = secret_resolver
         self._secrets: dict[str, str] = {}
 
     def register(
@@ -48,8 +60,15 @@ class OutboundWebhooks:
         url: str,
         event_types: list[str],
         secret: str | None = None,
+        secret_name: str | None = None,
     ) -> str:
         """Register (or update) an outbound delivery and persist its row.
+
+        ``secret_name`` is the durable vault key persisted on the
+        ``WebhookRecord`` (the real key, never the slug) so it can be resolved
+        after a restart; pass it whenever a secret is configured. ``secret`` is
+        the live secret *value* — kept in the in-memory cache for back-compat
+        when no ``secret_resolver`` is injected.
 
         Raises ``ValueError`` (before persisting anything) if ``url`` is unsafe
         to deliver to -- e.g. a non-http(s) scheme or a host resolving to an
@@ -60,6 +79,8 @@ class OutboundWebhooks:
             self._secrets[slug] = secret
         else:
             self._secrets.pop(slug, None)
+
+        persisted_secret_name = secret_name or (slug if secret else "")
 
         types_json = json.dumps(list(event_types))
         with session_scope(self.engine) as db:
@@ -73,7 +94,7 @@ class OutboundWebhooks:
                         direction="outbound",
                         target_url=url,
                         event_types_json=types_json,
-                        secret_name=slug if secret else "",
+                        secret_name=persisted_secret_name,
                         enabled=True,
                     )
                 )
@@ -81,16 +102,35 @@ class OutboundWebhooks:
                 existing.direction = "outbound"
                 existing.target_url = url
                 existing.event_types_json = types_json
-                existing.secret_name = slug if secret else ""
+                existing.secret_name = persisted_secret_name
                 db.add(existing)
             db.commit()
         return slug
 
+    def _resolve_secret(self, rec: WebhookRecord) -> str | None:
+        """Return the live HMAC secret for ``rec`` (or ``None`` if unsigned).
+
+        With a ``secret_resolver`` injected, the persisted ``secret_name`` (vault
+        key) is resolved through it — so a fresh instance after a restart still
+        signs. Otherwise the legacy in-memory cache keyed by slug is used.
+        """
+        if self._secret_resolver is None:
+            return self._secrets.get(rec.slug)
+        if not rec.secret_name:
+            return None
+        try:
+            return self._secret_resolver(rec.secret_name)
+        except Exception:
+            # A misconfigured/unavailable vault must not crash delivery; just
+            # send the payload unsigned rather than dropping the event.
+            return None
+
     def on_event(self, event: Event) -> list[dict[str, Any]]:
         """POST the event to every enabled outbound webhook that matches.
 
-        Reads the durable registry (so a disabled row is skipped), pulls the
-        live secret from memory, signs the body when present, and returns one
+        Reads the durable registry (so a disabled row is skipped), resolves the
+        live secret (via the injected resolver from the persisted ``secret_name``
+        or the in-memory cache), signs the body when present, and returns one
         delivery descriptor per webhook fired.
         """
         payload = event.to_dict()
@@ -113,7 +153,7 @@ class OutboundWebhooks:
                 continue
 
             headers: dict[str, str] = {}
-            secret = self._secrets.get(rec.slug)
+            secret = self._resolve_secret(rec)
             if secret:
                 headers["X-IronJarvis-Signature"] = sign(body_bytes, secret)
 

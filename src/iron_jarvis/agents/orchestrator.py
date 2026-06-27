@@ -21,6 +21,7 @@ from ..core.models import (
     AgentRun,
     AgentState,
     AgentType,
+    PendingReviewRecord,
     Session,
     SessionStatus,
     ToolInvocation,
@@ -197,6 +198,7 @@ class Orchestrator:
                     tool_history=self.transcript(session.id)["tools"],
                 )
                 self._reviews[session.id] = review
+                self._persist_pending_review(session.id, gs)  # survives restart
                 await self.p.event_bus.publish(
                     EventType.REVIEW_REQUESTED,
                     {
@@ -434,12 +436,96 @@ class Orchestrator:
             log.exception("worktree cleanup failed after approving %s", session_id)
         self._reviews.pop(session_id, None)
         self._git_sessions.pop(session_id, None)
+        self._delete_pending_review(session_id)
         return result
 
     def reject_review(self, session_id: str) -> None:
         _reject_review(self._reviews[session_id], self._git_sessions[session_id])
         self._reviews.pop(session_id, None)
         self._git_sessions.pop(session_id, None)
+        self._delete_pending_review(session_id)
+
+    # --- restart survival: persist + rehydrate review/session state -------
+
+    def _persist_pending_review(self, session_id: str, gs: GitSession) -> None:
+        try:
+            with session_scope(self.p.engine) as db:
+                db.merge(
+                    PendingReviewRecord(
+                        session_id=session_id,
+                        repo=str(gs.repo),
+                        branch=gs.branch,
+                        base=gs.base,
+                    )
+                )
+                db.commit()
+        except Exception:  # noqa: BLE001
+            log.exception("failed to persist pending review for %s", session_id)
+
+    def _delete_pending_review(self, session_id: str) -> None:
+        try:
+            with session_scope(self.p.engine) as db:
+                rec = db.get(PendingReviewRecord, session_id)
+                if rec is not None:
+                    db.delete(rec)
+                    db.commit()
+        except Exception:  # noqa: BLE001
+            log.exception("failed to delete pending review for %s", session_id)
+
+    def reconcile_interrupted_sessions(self) -> int:
+        """On boot, mark sessions left ACTIVE by a crash/restart as FAILED (none
+        are actually running on a fresh process) so they don't linger forever."""
+        active_ids = set(self._running.keys())
+        marked = 0
+        with session_scope(self.p.engine) as db:
+            rows = list(
+                db.exec(select(Session).where(Session.status == SessionStatus.ACTIVE))
+            )
+            for s in rows:
+                if s.id in active_ids:
+                    continue
+                s.status = SessionStatus.FAILED
+                s.finished_at = utcnow()
+                if not s.summary:
+                    s.summary = "interrupted by a daemon restart"
+                db.add(s)
+                marked += 1
+            if marked:
+                db.commit()
+        return marked
+
+    def rehydrate_reviews(self) -> int:
+        """On boot, rebuild in-memory review state for pending-review sessions
+        whose worktree still exists, so they stay approvable after a restart.
+        Run BEFORE prune_orphan_worktrees so their worktrees aren't reaped."""
+        with session_scope(self.p.engine) as db:
+            recs = list(db.exec(select(PendingReviewRecord)))
+        rehydrated = 0
+        for rec in recs:
+            try:
+                workspace = self.p.config.workspaces_dir / rec.session_id
+                if not (workspace / ".git").exists():  # worktree gone -> stale
+                    self._delete_pending_review(rec.session_id)
+                    continue
+                session = self.get_session(rec.session_id)
+                gs = GitSession(
+                    repo=Path(rec.repo),
+                    workspace=workspace,
+                    branch=rec.branch,
+                    base=rec.base,
+                )
+                review = build_review(
+                    gs,
+                    rec.session_id,
+                    summary=session.summary if session else "",
+                    tool_history=self.transcript(rec.session_id)["tools"],
+                )
+                self._git_sessions[rec.session_id] = gs
+                self._reviews[rec.session_id] = review
+                rehydrated += 1
+            except Exception:  # noqa: BLE001
+                log.exception("failed to rehydrate review for %s", rec.session_id)
+        return rehydrated
 
     # --- maintenance: garbage-collect orphaned worktrees ------------------
 

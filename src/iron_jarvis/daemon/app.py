@@ -164,6 +164,14 @@ class ScheduleAdd(BaseModel):
     payload: dict = {}
 
 
+class TemplateCreateBody(BaseModel):
+    name: str
+    task: str
+    agent_type: str = "builder"
+    provider: str | None = None
+    model: str | None = None
+
+
 class LTMAppend(BaseModel):
     title: str
     content: str
@@ -246,6 +254,22 @@ def create_app(project_root: str | None = None) -> FastAPI:
             platform.scheduler.start()
         except Exception:  # pragma: no cover - never block boot
             pass
+        try:  # restart survival: settle interrupted sessions + re-arm reviews/webhooks
+            orchestrator.reconcile_interrupted_sessions()
+            orchestrator.rehydrate_reviews()  # before prune so worktrees aren't reaped
+
+            def _make_webhook_handler(slug):
+                async def _handler(body, _slug=slug):
+                    await platform.event_bus.publish(
+                        "webhook.received", {"slug": _slug, "body": body}
+                    )
+                    return {"ok": True}
+
+                return _handler
+
+            platform.inbound_webhooks.rehydrate(_make_webhook_handler)
+        except Exception:  # pragma: no cover - never block boot
+            pass
         try:  # GC worktrees orphaned by a prior restart (failed/missing sessions)
             orchestrator.prune_orphan_worktrees()
         except Exception:  # pragma: no cover - never block boot
@@ -258,9 +282,47 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 prune_events(platform.engine, days)
         except Exception:  # pragma: no cover - never block boot
             pass
+        # Periodic auto-backup safety net — a daily driver shouldn't depend on the
+        # user remembering to run `ironjarvis backup`. Disable with
+        # IRONJARVIS_AUTO_BACKUP=off; tune via *_HOURS (default 24) / *_KEEP (7).
+        backup_task = None
+        if (os.environ.get("IRONJARVIS_AUTO_BACKUP", "on").strip().lower()
+                not in {"0", "false", "no", "off"}):
+
+            async def _auto_backup_loop() -> None:
+                from ..maintenance import run_auto_backup
+
+                try:
+                    hours = float(os.environ.get("IRONJARVIS_AUTO_BACKUP_HOURS", "24"))
+                except ValueError:
+                    hours = 24.0
+                try:
+                    keep = int(os.environ.get("IRONJARVIS_AUTO_BACKUP_KEEP", "7"))
+                except ValueError:
+                    keep = 7
+                interval = max(3600.0, hours * 3600.0)
+                await asyncio.sleep(60)  # don't slow boot; first snapshot ~1 min in
+                while True:
+                    try:
+                        await asyncio.to_thread(
+                            run_auto_backup,
+                            platform.config.home,
+                            engine=platform.engine,
+                            keep=keep,
+                        )
+                        log.info("auto-backup written (keep=%d)", keep)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:  # noqa: BLE001 - never let backup kill the daemon
+                        log.exception("auto-backup failed")
+                    await asyncio.sleep(interval)
+
+            backup_task = asyncio.create_task(_auto_backup_loop())
         try:
             yield
         finally:
+            if backup_task is not None:
+                backup_task.cancel()
             try:
                 platform.scheduler.shutdown()
             except Exception:  # pragma: no cover
@@ -278,19 +340,33 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     app = FastAPI(title="Iron Jarvis", version=__version__, lifespan=lifespan)
     # Optional bearer-token auth (env IRONJARVIS_TOKEN) — required for a public
-    # deployment; no-op locally. Added before CORS so it runs outermost.
-    from .auth import TokenAuthMiddleware
+    # deployment; no-op locally.
+    from .auth import HostOriginGuardMiddleware, TokenAuthMiddleware
 
-    app.add_middleware(TokenAuthMiddleware)
-    # CORS: defaults open for local dev; in prod set IRONJARVIS_CORS_ORIGINS
-    # (comma-separated) to your dashboard origin(s).
+    app.add_middleware(TokenAuthMiddleware)  # inner: token check
+    # CORS: default to loopback dashboard origins ONLY (never wildcard, since the
+    # daemon is RCE-by-design); a public deployment sets IRONJARVIS_CORS_ORIGINS.
     _origins = os.environ.get("IRONJARVIS_CORS_ORIGINS", "").strip()
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[o.strip() for o in _origins.split(",") if o.strip()] or ["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    _methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    if _origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=[o.strip() for o in _origins.split(",") if o.strip()],
+            allow_methods=_methods,
+            allow_headers=["*"],
+        )
+    else:
+        # A browser can only present a loopback Origin from a locally-served page,
+        # so any loopback origin may read responses; evil.com cannot.
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
+            allow_methods=_methods,
+            allow_headers=["*"],
+        )
+    # OUTERMOST (added last): reject non-loopback Host (DNS rebinding) + untrusted
+    # cross-origin browser requests (drive-by RCE) before anything — covers WS.
+    app.add_middleware(HostOriginGuardMiddleware)
     app.state.platform = platform
     app.state.orchestrator = orchestrator
     # Background session tasks are registered on the orchestrator keyed by
@@ -594,6 +670,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     @app.get("/metrics")
     def metrics() -> dict[str, Any]:
         return platform.observability.metrics()
+
+    @app.get("/usage")
+    def usage(days: int = 30) -> dict[str, Any]:
+        """Token + $ cost over time (totals, by-day, by-model) from agent runs."""
+        return platform.observability.usage_summary(days)
 
     @app.get("/sessions/{session_id}/traces")
     def traces(session_id: str) -> dict[str, Any]:
@@ -1031,6 +1112,32 @@ def create_app(project_root: str | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="no such workflow")
         return rec.model_dump()
 
+    # Saved prompts / task templates (one-click re-run of a frequent task).
+    @app.get("/templates")
+    def list_templates() -> dict[str, Any]:
+        from ..templates import TemplateStore
+
+        return {
+            "templates": [t.model_dump() for t in TemplateStore(platform.engine).list()]
+        }
+
+    @app.post("/templates")
+    def create_template(body: TemplateCreateBody) -> dict[str, Any]:
+        from ..templates import TemplateStore
+
+        if not (body.task or "").strip():
+            raise HTTPException(status_code=400, detail="task is required")
+        rec = TemplateStore(platform.engine).create(
+            body.name, body.task, body.agent_type, body.provider, body.model
+        )
+        return rec.model_dump()
+
+    @app.delete("/templates/{prompt_id}")
+    def delete_template(prompt_id: str) -> dict[str, Any]:
+        from ..templates import TemplateStore
+
+        return {"removed": TemplateStore(platform.engine).remove(prompt_id)}
+
     # --- Review (§27, §28) — approve/reject; agents never auto-merge -------
 
     @app.get("/sessions/{session_id}/review")
@@ -1123,7 +1230,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
             if not body.target_url:
                 raise HTTPException(status_code=400, detail="outbound needs target_url")
             platform.outbound_webhooks.register(
-                body.slug, body.target_url, body.event_types, secret=secret
+                body.slug,
+                body.target_url,
+                body.event_types,
+                secret=secret,
+                secret_name=body.secret_name or None,  # persist the real vault key
             )
         else:  # inbound: a default handler that emits a webhook.received event
             async def _handler(payload: dict, _slug: str = body.slug) -> dict[str, Any]:
@@ -1132,7 +1243,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 )
                 return {"ok": True, "slug": _slug}
 
-            platform.inbound_webhooks.register(body.slug, _handler, secret=secret)
+            platform.inbound_webhooks.register(
+                body.slug, _handler, secret=secret, secret_name=body.secret_name or None
+            )
         return {"slug": body.slug, "direction": body.direction}
 
     @app.post("/webhooks/{slug}")

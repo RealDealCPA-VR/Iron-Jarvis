@@ -595,29 +595,16 @@ def backup(
     root: str = typer.Option("."),
 ) -> None:
     """Back up the .ironjarvis state (DB + memory + artifacts) to a tar.gz."""
-    import tarfile
+    from ..maintenance import create_backup
 
     platform = build_platform(root)
-    try:  # checkpoint WAL so the .db file is self-contained
-        with platform.engine.connect() as conn:
-            conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
-    except Exception:  # noqa: BLE001
-        pass
-    home = platform.config.home
     out_path = Path(out) if out else Path("ironjarvis-backup.tar.gz")
-    n = 0
-    with tarfile.open(out_path, "w:gz") as tar:
-        for p in home.rglob("*"):
-            if not p.is_file():
-                continue
-            # Exclude the Fernet keys AND their .bak rotation siblings (which can
-            # hold the live key after a rollback) — match by name prefix.
-            if not include_keys and (
-                p.name.startswith(".secrets.key") or p.name.startswith(".vault.key")
-            ):
-                continue
-            tar.add(p, arcname=str(p.relative_to(home.parent)))
-            n += 1
+    out_path, n = create_backup(
+        platform.config.home,
+        out_path,
+        engine=platform.engine,
+        include_keys=include_keys,
+    )
     note = "" if include_keys else " (encryption keys excluded)"
     console.print(f"[green]backed up[/green] {n} files -> {out_path}{note}")
 

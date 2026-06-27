@@ -63,7 +63,11 @@ class WebhookAddTool(Tool):
                 )
             try:
                 self.platform.outbound_webhooks.register(
-                    slug, target_url, args.get("event_types") or [], secret=secret
+                    slug,
+                    target_url,
+                    args.get("event_types") or [],
+                    secret=secret,
+                    secret_name=secret_name,  # persist the real vault key (survives restart)
                 )
             except ValueError as exc:
                 return ToolResult(ok=False, error=str(exc))
@@ -74,7 +78,9 @@ class WebhookAddTool(Tool):
                 )
                 return {"ok": True}
 
-            self.platform.inbound_webhooks.register(slug, handler, secret=secret)
+            self.platform.inbound_webhooks.register(
+                slug, handler, secret=secret, secret_name=secret_name
+            )
 
         return ToolResult(
             ok=True,

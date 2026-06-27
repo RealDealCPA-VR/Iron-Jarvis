@@ -242,7 +242,7 @@ def build_platform(
     event_bus.add_handler(notifier.on_event)
 
     # Webhooks: inbound dispatch + outbound delivery on matching events.
-    inbound_webhooks = InboundWebhooks(engine)
+    inbound_webhooks = InboundWebhooks(engine, secret_resolver=secrets.get)
     outbound_webhooks = OutboundWebhooks(
         engine,
         http_post=lambda url, payload, headers: httpx.post(
@@ -252,6 +252,9 @@ def build_platform(
         # addresses are refused unless explicitly opted in (local dev/testing).
         allow_internal=os.environ.get("IRONJARVIS_WEBHOOK_ALLOW_INTERNAL", "").strip().lower()
         in {"1", "true", "yes", "on"},
+        # Resolve signing/verify secrets from the vault at use-time so they
+        # survive a daemon restart (the in-memory cache does not).
+        secret_resolver=secrets.get,
     )
     event_bus.add_handler(outbound_webhooks.on_event)
 

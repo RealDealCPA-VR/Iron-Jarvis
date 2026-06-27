@@ -148,7 +148,10 @@ def _read_csv(p: Path) -> str:
 
 
 def _describe_image(p: Path) -> str:
-    from PIL import Image
+    try:
+        from PIL import Image
+    except ImportError:  # Pillow not installed (e.g. trimmed from a frozen build)
+        return f"[image {p.suffix.lstrip('.').upper() or 'IMAGE'}: Pillow not available for metadata]"
 
     with Image.open(p) as img:
         fmt = img.format or (p.suffix.lstrip(".").upper() or "IMAGE")
