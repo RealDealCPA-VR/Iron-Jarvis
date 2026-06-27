@@ -151,6 +151,9 @@ uv run ironjarvis cancel <session-id>     # stop a background run
 uv run ironjarvis rerun  <session-id>     # clone its inputs and run again
 ```
 
+### Agents that build their own tools 🔧
+Iron Jarvis can **grow new capabilities at runtime**. From **Dashboard → Tools** (or when an agent calls `tool_create`), you define a reusable tool: a name, typed parameters, and a command template whose `{param}` placeholders are filled from the call arguments — e.g. `wc_lines(file)` → `["wc", "-l", "{file}"]`. The tool is **persisted and instantly available to every future agent and session** (it's advertised to agents via a `custom:*` capability), so a tool one agent builds, the next agent can use. Each runs argv-style (no shell, so a parameter value can't inject commands) inside the session workspace, gated under its own `custom:<name>` permission (defaults to *ask* — you approve the first use, like `shell`). Manage them on the Tools page.
+
 ### Reuse tasks & watch your spend 📝💰
 **Dashboard → Templates** is your library of saved prompts: name a frequent task once, then **Run** it to jump straight into a pre-filled New Session (no retyping). **Dashboard → Usage** charts your **token + dollar cost over time** — totals for the window, a by-day cost trend, and a per-provider/per-model breakdown — so a daily driver never surprises you on the bill. Press **⌘K / Ctrl+K** anywhere for the command palette to jump to any page or start a new session instantly.
 
