@@ -44,6 +44,10 @@ class EventType:
     WEBHOOK_RECEIVED = "webhook.received"
     SCHEDULE_FIRED = "schedule.fired"
     COMPUTERUSE_RUN_FINISHED = "computeruse.run_finished"
+    # Motivation Layer (the pulse): a deliberation tick produced a candidate
+    # action (proposed), or auto-executed one within governance (executed).
+    AUTONOMY_PROPOSED = "autonomy.proposed"
+    AUTONOMY_EXECUTED = "autonomy.executed"
 
 
 @dataclass

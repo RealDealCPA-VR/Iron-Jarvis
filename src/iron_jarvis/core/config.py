@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import tomli_w
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 def default_permissions() -> dict[str, str]:
@@ -73,6 +73,11 @@ def default_permissions() -> dict[str, str]:
         # Self-correcting learning loop.
         "remember_preference": "allow",
         "recall_lessons": "allow",
+        # Motivation Layer: recording a standing goal is local + reversible and
+        # never acts on its own (acting is gated by the autonomy dial + budget +
+        # autonomy_enabled), so listing/adding goals is allowed.
+        "goal_add": "allow",
+        "goal_list": "allow",
         # Computer use (opt-in): reads allowed but still gated by policy.enabled;
         # actions ask. The capability is OFF unless the user enables it.
         "browse": "allow",
@@ -143,6 +148,27 @@ class Config(BaseModel):
     # unreachable); "mock" pins the deterministic offline embedder.
     embedder_provider: str = "auto"  # "auto" | "ollama" | "mock"
     embedder_model: str = "nomic-embed-text"  # local embedding model (Ollama)
+    # Motivation Layer ("the pulse") — OFF by default, exactly like computer_use
+    # and self_dev. When disabled NO deliberation tick runs and no goal acts, so
+    # the default install + the offline test suite are untouched.
+    autonomy_enabled: bool = False
+    # Global dial ceiling: caps EVERY goal's own dial (suggest < act_low < act_all).
+    # "suggest" => every deliberated action is a proposal, never auto-executed.
+    autonomy_level: str = "suggest"  # suggest | act_low | act_all
+    autonomy_dry_run: bool = False  # log/propose what it WOULD do, never execute
+    autonomy_kill_switch: bool = False  # global emergency stop (POST /autonomy/kill)
+    autonomy_tick_seconds: int = 900  # deliberation cadence (background loop)
+    autonomy_max_actions_per_day: int = 5  # global rolling self-initiated action cap
+    autonomy_max_tokens_per_day: int = 50000  # global rolling self-initiated token cap
+
+    @field_validator("autonomy_level")
+    @classmethod
+    def _valid_autonomy_level(cls, v: str) -> str:
+        # Reject a bad /settings value (422) rather than persist it + skew the
+        # global ceiling. validate_assignment=True applies this on PUT /settings too.
+        if v not in ("suggest", "act_low", "act_all"):
+            raise ValueError("autonomy_level must be suggest | act_low | act_all")
+        return v
 
     @property
     def db_path(self) -> Path:

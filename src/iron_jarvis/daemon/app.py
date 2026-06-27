@@ -85,6 +85,16 @@ _SETTINGS_KEYS = [
     "ollama_base_url",
     "ollama_model",
     "event_retention_days",
+    # Motivation Layer (the pulse) — all OFF / conservative by default. Toggling
+    # autonomy_enabled at runtime is honoured by the manual /autonomy/tick + the
+    # endpoints; the background loop is (re)armed on the next daemon restart.
+    "autonomy_enabled",
+    "autonomy_level",
+    "autonomy_dry_run",
+    "autonomy_kill_switch",
+    "autonomy_tick_seconds",
+    "autonomy_max_actions_per_day",
+    "autonomy_max_tokens_per_day",
 ]
 
 
@@ -220,6 +230,33 @@ class UpdateBody(BaseModel):
     build_dashboard: bool = True
 
 
+# --- Motivation Layer (the pulse) -------------------------------------------
+
+
+class GoalBody(BaseModel):
+    text: str
+    category: str = "general"
+    priority: int = 3
+    autonomy_level: str = "suggest"  # suggest | act_low | act_all
+    source: str = "user"
+
+
+class GoalPatch(BaseModel):
+    text: str | None = None
+    category: str | None = None
+    priority: int | None = None
+    autonomy_level: str | None = None  # the per-goal dial
+    status: str | None = None  # active | paused | done | abandoned
+    action_budget: int | None = None
+    spend_budget: int | None = None
+    actions_taken: int | None = None  # set to 0 to reset the rolling counter
+    tokens_spent: int | None = None
+
+
+class KillBody(BaseModel):
+    enabled: bool = True  # engage (True) or release (False) the global kill switch
+
+
 def _agent_type(name: str) -> AgentType:
     try:
         return AgentType(name)
@@ -255,6 +292,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     if _env_truthy("IRONJARVIS_GIT_NATIVE"):
         platform.config.git_native = True
     orchestrator = Orchestrator(platform)
+    # Wire the executor into the Motivation Layer so an auto-approved (or
+    # human-approved) proposal can become a real session. The engine is safe
+    # with this unset; setting it does NOT enable autonomy (that's config-gated).
+    if platform.intent is not None:
+        platform.intent.orchestrator = orchestrator
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -326,9 +368,41 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     await asyncio.sleep(interval)
 
             backup_task = asyncio.create_task(_auto_backup_loop())
+
+        # Motivation Layer deliberation tick — the pulse. GUARDED by
+        # config.autonomy_enabled (OFF by default), so by default + in tests the
+        # loop is never created and nothing self-initiates. Mirrors the auto-backup
+        # loop: sleeps before the first tick (never blocks boot) and is cancelled
+        # on shutdown. Disable explicitly via IRONJARVIS_AUTONOMY=off.
+        autonomy_task = None
+        if (
+            getattr(platform.config, "autonomy_enabled", False)
+            and platform.intent is not None
+            and os.environ.get("IRONJARVIS_AUTONOMY", "on").strip().lower()
+            not in {"0", "false", "no", "off"}
+        ):
+
+            async def _autonomy_loop() -> None:
+                try:
+                    interval = max(60, int(platform.config.autonomy_tick_seconds))
+                except (TypeError, ValueError):
+                    interval = 900
+                await asyncio.sleep(30)  # let boot settle before the first pulse
+                while True:
+                    try:
+                        await platform.intent.deliberate()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:  # noqa: BLE001 - a tick must never kill the daemon
+                        log.exception("autonomy deliberation tick failed")
+                    await asyncio.sleep(interval)
+
+            autonomy_task = asyncio.create_task(_autonomy_loop())
         try:
             yield
         finally:
+            if autonomy_task is not None:
+                autonomy_task.cancel()
             if backup_task is not None:
                 backup_task.cancel()
             try:
@@ -1167,6 +1241,136 @@ def create_app(project_root: str | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="no review for session")
         orchestrator.reject_review(session_id)
         return {"status": "rejected"}
+
+    # --- Motivation Layer (the pulse): standing goals + proposals ---------
+
+    def _goal_view(g) -> dict[str, Any]:
+        return {
+            "id": g.id, "text": g.text, "source": g.source, "category": g.category,
+            "priority": g.priority, "autonomy_level": g.autonomy_level,
+            "status": g.status, "action_budget": g.action_budget,
+            "spend_budget": g.spend_budget, "actions_taken": g.actions_taken,
+            "tokens_spent": g.tokens_spent,
+            "last_acted_at": g.last_acted_at.isoformat() if g.last_acted_at else None,
+            "created_at": g.created_at.isoformat(),
+        }
+
+    def _proposal_view(p) -> dict[str, Any]:
+        return {
+            "id": p.id, "goal_id": p.goal_id, "title": p.title,
+            "rationale": p.rationale, "action": p.decoded_action(), "risk": p.risk,
+            "source": p.source, "status": p.status, "session_id": p.session_id,
+            "tokens": p.tokens, "created_at": p.created_at.isoformat(),
+        }
+
+    def _persist_config(keys: list[str]) -> None:
+        """Persist whitelisted config keys to the project config.toml (restart-safe)."""
+        import tomllib
+
+        import tomli_w
+
+        cfg = platform.config
+        path = cfg.home / "config.toml"
+        cfg.home.mkdir(parents=True, exist_ok=True)
+        doc: dict[str, Any] = {}
+        if path.exists():
+            try:
+                doc = tomllib.loads(path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                doc = {}
+        for key in keys:
+            doc[key] = getattr(cfg, key, None)
+        with path.open("wb") as fh:
+            tomli_w.dump({k: v for k, v in doc.items() if v is not None}, fh)
+
+    @app.get("/goals")
+    def list_goals(status: str | None = None) -> dict[str, Any]:
+        return {"goals": [_goal_view(g) for g in platform.intent.list_goals(status)]}
+
+    @app.post("/goals")
+    def create_goal(body: GoalBody) -> dict[str, Any]:
+        try:
+            rec = platform.intent.add_goal(
+                body.text,
+                source=body.source,
+                category=body.category,
+                priority=body.priority,
+                autonomy_level=body.autonomy_level,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return _goal_view(rec)
+
+    @app.patch("/goals/{goal_id}")
+    def patch_goal(goal_id: str, body: GoalPatch) -> dict[str, Any]:
+        rec = platform.intent.update_goal(
+            goal_id, **{k: v for k, v in body.model_dump().items() if v is not None}
+        )
+        if rec is None:
+            raise HTTPException(status_code=404, detail="goal not found")
+        return _goal_view(rec)
+
+    @app.get("/proposals")
+    def list_proposals(status: str | None = None) -> dict[str, Any]:
+        return {
+            "proposals": [_proposal_view(p) for p in platform.intent.list_proposals(status)]
+        }
+
+    @app.post("/proposals/{proposal_id}/approve")
+    async def approve_proposal(proposal_id: str) -> dict[str, Any]:
+        try:
+            session = await platform.intent.approve(proposal_id, wait=False)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="proposal not found")
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"status": "executed", "session_id": session.id if session else None}
+
+    @app.post("/proposals/{proposal_id}/reject")
+    def reject_proposal(proposal_id: str) -> dict[str, Any]:
+        rec = platform.intent.reject(proposal_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="proposal not found")
+        return {"status": rec.status}
+
+    @app.get("/autonomy")
+    def autonomy_status() -> dict[str, Any]:
+        cfg = platform.config
+        used_actions, used_tokens = platform.intent._global_window_usage()
+        return {
+            "enabled": getattr(cfg, "autonomy_enabled", False),
+            "level": getattr(cfg, "autonomy_level", "suggest"),
+            "dry_run": getattr(cfg, "autonomy_dry_run", False),
+            "kill_switch": getattr(cfg, "autonomy_kill_switch", False),
+            "tick_seconds": getattr(cfg, "autonomy_tick_seconds", 900),
+            "max_actions_per_day": getattr(cfg, "autonomy_max_actions_per_day", 5),
+            "max_tokens_per_day": getattr(cfg, "autonomy_max_tokens_per_day", 50000),
+            "used_actions_24h": used_actions,
+            "used_tokens_24h": used_tokens,
+            "active_goals": len(platform.intent.list_goals(status="active")),
+            "pending_proposals": len(platform.intent.list_proposals(status="pending")),
+        }
+
+    @app.post("/autonomy/kill")
+    def autonomy_kill(body: KillBody) -> dict[str, Any]:
+        """Global kill switch: engage (default) or release. Persisted to config."""
+        platform.config.autonomy_kill_switch = bool(body.enabled)
+        _persist_config(["autonomy_kill_switch"])
+        return {"kill_switch": platform.config.autonomy_kill_switch}
+
+    @app.post("/autonomy/tick")
+    async def autonomy_tick(wait: bool = False) -> dict[str, Any]:
+        """Run a single deliberation pulse now (no-ops when autonomy is disabled)."""
+        return await platform.intent.deliberate(wait=wait)
+
+    @app.get("/autonomy/briefing")
+    def autonomy_briefing(notify: bool = False) -> dict[str, Any]:
+        """Summarise recent self-activity + pending proposals (optionally pushed)."""
+        return platform.intent.briefing(notify=notify)
 
     # --- Secrets (shared, encrypted) — names/metadata only, never values --
 

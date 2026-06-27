@@ -76,6 +76,10 @@ from .mcp import mcp_tools
 from .learning import LearningEngine, learning_tools
 from .learning import models as _learn_models  # noqa: F401
 
+# Motivation Layer ("the pulse"): standing goals + off-by-default deliberation.
+from .motivation import IntentEngine, goal_tools
+from .motivation import models as _motiv_models  # noqa: F401
+
 # LLM Connections (API key + OAuth2/PKCE).
 from .connections import ConnectionRegistry
 from .connections import models as _conn_models  # noqa: F401
@@ -125,6 +129,7 @@ class Platform:
     scheduler: Scheduler | None = None
     agents_registry: DynamicAgentRegistry | None = None
     tools_registry: "DynamicToolRegistry | None" = None
+    intent: "IntentEngine | None" = None
 
 
 def build_platform(
@@ -386,5 +391,15 @@ def build_platform(
         *workflow_tools(platform),
     ):
         platform.registry.register(tool)
+
+    # Motivation Layer ("the pulse"): standing goals + off-by-default deliberation.
+    # The orchestrator (the executor) is wired in by the daemon after build; the
+    # engine is safe with it unset (deliberation stays propose-only). Its EventBus
+    # subscriber maps notable signals to suggest-only backlog items, but ONLY when
+    # autonomy is enabled — so the default install + tests see zero new behaviour.
+    platform.intent = IntentEngine(platform)
+    for tool in goal_tools(platform):
+        platform.registry.register(tool)
+    event_bus.add_handler(platform.intent.on_event)
 
     return platform

@@ -33,6 +33,10 @@ _SELF_SERVICE_TOOLS = [
     "schedule_create",
     "webhook_add",
     "workflow_create",
+    # Motivation Layer: record/list standing goals (recording never acts — the
+    # autonomy dial + budget + autonomy_enabled govern whether a goal ever acts).
+    "goal_add",
+    "goal_list",
     # Author + reuse custom tools. "custom:*" is a sentinel the registry expands
     # to every agent/user-authored tool, so a tool one agent creates is callable
     # by every future agent.
