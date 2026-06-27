@@ -126,6 +126,8 @@ pnpm --dir desktop run dist:full     # → desktop/release/Iron Jarvis Setup x.y
 ```
 Double-click the `.exe`, install, and launch from the Start menu — it boots the bundled daemon (port 8787) and dashboard in a native window with **no Python, uv, Node, or pnpm required**. Connecting a Claude/OpenAI/Google key or a local Ollama all work. (Computer-use and the Docker sandbox — both opt-in advanced features — aren't bundled in the standalone; everything else is.)
 
+> **Always-on.** Closing the window doesn't quit — it **minimizes to the system tray** so the daemon keeps running and your schedules, cron jobs, webhooks, and integrations fire for weeks unattended. Re-open from the tray icon or the global hotkey **Ctrl+Shift+J**; choose **Quit Iron Jarvis** in the tray menu to fully stop it. The desktop app also runs the daemon **token-protected** (a per-install token, generated on first launch) on top of the loopback-only Host/Origin guard, so no other program or website can reach it.
+
 > **Building locally needs the symlink privilege.** electron-builder unpacks a cache containing macOS symlinks, so the *packaging step* requires **Windows Developer Mode** (Settings → Privacy & security → For developers → Developer Mode = On) or an elevated PowerShell — a one-time toggle. You don't need it to *run* the app, only to build the installer yourself. The easiest path is to let CI build it: push a tag (`git tag v0.1.0 && git push --tags`) and `.github/workflows/release.yml` produces + publishes the installer on a GitHub runner that already has the privilege.
 
 **Option 2 — dev mode (run the repo directly).** Drives the repo via uv/pnpm:
@@ -148,6 +150,9 @@ uv run ironjarvis run "Summarize the quarterly financials and draft an email"
 uv run ironjarvis cancel <session-id>     # stop a background run
 uv run ironjarvis rerun  <session-id>     # clone its inputs and run again
 ```
+
+### Reuse tasks & watch your spend 📝💰
+**Dashboard → Templates** is your library of saved prompts: name a frequent task once, then **Run** it to jump straight into a pre-filled New Session (no retyping). **Dashboard → Usage** charts your **token + dollar cost over time** — totals for the window, a by-day cost trend, and a per-provider/per-model breakdown — so a daily driver never surprises you on the bill. Press **⌘K / Ctrl+K** anywhere for the command palette to jump to any page or start a new session instantly.
 
 ### Settings, Self-development & Help
 **Dashboard → Settings** edits the safe config keys (default model, sandbox runtime, self-dev, local Ollama endpoint…) without touching `config.toml`, and holds the **daemon access-token** box so you can log into a deployed instance without a rebuild. **Dashboard → Self-development** shows whether the Maintainer can edit Iron Jarvis's own source and starts a review-gated session. **Dashboard → Help** is an in-app guide to every subsystem. A **🔔 bell** in the top bar surfaces pending reviews and computer-use approvals.
