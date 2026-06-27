@@ -13,7 +13,6 @@ import {
   ShieldCheck,
   ExternalLink,
   Plug,
-  Unplug,
   CheckCircle2,
   type LucideIcon,
 } from "lucide-react";
@@ -27,6 +26,7 @@ import {
   ErrorNote,
   SuccessNote,
   LoaderInline,
+  ConfirmButton,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -262,13 +262,12 @@ function ConnectionCard({
           <button onClick={runTest} disabled={busy} className="btn-ghost flex-1 py-1.5 text-xs">
             {busy ? <LoaderInline label="Testing…" /> : <><CheckCircle2 size={14} /> Test</>}
           </button>
-          <button
-            onClick={disconnect}
-            disabled={busy}
-            className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/10 px-3 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:border-rose-500/40 hover:text-rose-300 disabled:opacity-40"
-          >
-            <Unplug size={14} /> Disconnect
-          </button>
+          <ConfirmButton
+            onConfirm={disconnect}
+            label="Disconnect"
+            title={`Disconnect ${conn.display_name}`}
+            className="py-1.5"
+          />
         </div>
       ) : conn.method === "oauth" ? (
         <div className="space-y-2.5">

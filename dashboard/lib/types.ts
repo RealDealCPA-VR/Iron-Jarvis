@@ -37,6 +37,8 @@ export interface SessionView {
   status: string;
   workspace_path: string;
   summary: string;
+  input_tokens?: number;
+  output_tokens?: number;
   created_at: string;
   finished_at: string | null;
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { KeyRound, Plus, Trash2, ShieldCheck, EyeOff } from "lucide-react";
+import { KeyRound, Plus, ShieldCheck, EyeOff } from "lucide-react";
 import { post, del, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import type { SecretMeta } from "@/lib/types";
@@ -14,6 +14,7 @@ import {
   ErrorNote,
   SuccessNote,
   LoaderInline,
+  ConfirmButton,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -33,7 +34,6 @@ export default function SecretsPage() {
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -62,15 +62,12 @@ export default function SecretsPage() {
   }
 
   async function remove(secretName: string) {
-    setDeleting(secretName);
     setOk(null);
     try {
       await del(`/secrets/${encodeURIComponent(secretName)}`);
       reload();
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : String(err));
-    } finally {
-      setDeleting(null);
     }
   }
 
@@ -207,14 +204,11 @@ export default function SecretsPage() {
                             {s.updated_at ? timeAgo(s.updated_at) : "—"}
                           </td>
                           <td className="px-2 py-2.5 text-right">
-                            <button
-                              onClick={() => remove(s.name)}
-                              disabled={deleting === s.name}
-                              title="Delete secret"
-                              className="rounded-lg border border-white/10 p-1.5 text-zinc-500 transition-colors hover:border-rose-500/40 hover:text-rose-300 disabled:opacity-40"
-                            >
-                              <Trash2 size={14} />
-                            </button>
+                            <ConfirmButton
+                              onConfirm={() => remove(s.name)}
+                              label="Delete"
+                              title={`Delete secret "${s.name}" — this cannot be undone`}
+                            />
                           </td>
                         </tr>
                       ))}

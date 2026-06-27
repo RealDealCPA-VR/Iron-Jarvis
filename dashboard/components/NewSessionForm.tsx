@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Play, Cpu, PlugZap, ArrowRight } from "lucide-react";
+import { Play, Cpu, PlugZap, ArrowRight, Paperclip } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import type { SessionView, ModelOption, Health } from "@/lib/types";
@@ -12,8 +12,31 @@ import { VoiceInput, appendDictation } from "./VoiceInput";
 
 const AGENT_TYPES = ["builder", "supervisor", "planner", "researcher", "reviewer"];
 
+/** Capability-spanning starter prompts shown when the task box is empty. */
+const EXAMPLE_TASKS = [
+  "Summarize this PDF and draft a follow-up email",
+  "Read a spreadsheet and chart the totals",
+  "Research a topic and write a markdown brief",
+  "Search the web for a question and summarize the top results",
+  "Schedule a daily 9am status check",
+];
+
 /** A stable "provider|model" key used as the <select> value. */
 const optKey = (m: ModelOption) => `${m.provider}|${m.model}`;
+
+/** Read a File as raw base64 (FileReader gives a data: URL — strip the prefix). */
+function readAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("could not read file"));
+    reader.onload = () => {
+      const res = String(reader.result);
+      const comma = res.indexOf(",");
+      resolve(comma >= 0 ? res.slice(comma + 1) : res);
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 export function NewSessionForm({ onCreated }: { onCreated?: () => void }) {
   const router = useRouter();
@@ -23,9 +46,13 @@ export function NewSessionForm({ onCreated }: { onCreated?: () => void }) {
   const [task, setTask] = useState("");
   const [agentType, setAgentType] = useState("builder");
   const [choice, setChoice] = useState(""); // "provider|model" or "" => default
-  const [wait, setWait] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // File attach
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [attaching, setAttaching] = useState(false);
+  const [attachedName, setAttachedName] = useState<string | null>(null);
 
   const models = useMemo(() => modelsData?.models ?? [], [modelsData]);
 
@@ -46,6 +73,28 @@ export function NewSessionForm({ onCreated }: { onCreated?: () => void }) {
     return reals.length === 0 || reals.every((p) => !p.available);
   }, [health]);
 
+  async function onAttach(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file
+    if (!file) return;
+    setAttaching(true);
+    setError(null);
+    try {
+      const content_b64 = await readAsBase64(file);
+      const res = await post<{ path: string; name: string; bytes: number }>(
+        "/documents/upload",
+        { filename: file.name, content_b64 },
+      );
+      setAttachedName(res.name);
+      // Append a note so the agent can read it with read_document.
+      setTask((t) => `${t}${t.trim() ? "\n\n" : ""}(Attached file at ${res.path})`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setAttaching(false);
+    }
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!task.trim()) return;
@@ -53,14 +102,17 @@ export function NewSessionForm({ onCreated }: { onCreated?: () => void }) {
     setError(null);
     const [provider, model] = choice ? choice.split("|") : ["", ""];
     try {
+      // wait:false — the session starts and we jump to its detail page so the
+      // user watches it run live (and can cancel it).
       const session = await post<SessionView>("/sessions", {
         task: task.trim(),
         agent_type: agentType,
         provider: provider || undefined,
         model: model || undefined,
-        wait,
+        wait: false,
       });
       setTask("");
+      setAttachedName(null);
       onCreated?.();
       if (session?.id) router.push(`/sessions/${session.id}`);
     } catch (err) {
@@ -89,6 +141,49 @@ export function NewSessionForm({ onCreated }: { onCreated?: () => void }) {
           placeholder="Describe what the agent should do… or dictate with the mic"
           className="field resize-y"
         />
+
+        {/* Starter prompts — only while the box is empty */}
+        {!task.trim() && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {EXAMPLE_TASKS.map((ex) => (
+              <button
+                key={ex}
+                type="button"
+                onClick={() => setTask(ex)}
+                className="rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] text-zinc-400 transition-colors hover:border-accent/30 hover:text-accent-soft"
+              >
+                {ex}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Optional file attach */}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <input
+            ref={fileRef}
+            type="file"
+            className="hidden"
+            onChange={onAttach}
+          />
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            disabled={attaching}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-[11px] text-zinc-400 transition-colors hover:border-accent/30 hover:text-accent-soft disabled:opacity-50"
+          >
+            {attaching ? (
+              <LoaderInline label="Uploading…" />
+            ) : (
+              <>
+                <Paperclip size={12} /> Attach file
+              </>
+            )}
+          </button>
+          {attachedName && (
+            <span className="text-[11px] text-emerald-300">Attached {attachedName}</span>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
@@ -149,18 +244,9 @@ export function NewSessionForm({ onCreated }: { onCreated?: () => void }) {
         </Link>
       )}
 
-      <div className="flex items-center justify-between">
-        <label className="flex items-center gap-2 text-sm text-zinc-400">
-          <input
-            type="checkbox"
-            checked={wait}
-            onChange={(e) => setWait(e.target.checked)}
-            className="h-4 w-4 accent-[#22d3ee]"
-          />
-          Wait for completion
-        </label>
+      <div className="flex items-center justify-end">
         <button type="submit" disabled={busy || !task.trim()} className="btn-accent">
-          {busy ? <LoaderInline label="Running…" /> : <><Play size={14} /> Run session</>}
+          {busy ? <LoaderInline label="Starting…" /> : <><Play size={14} /> Run session</>}
         </button>
       </div>
 

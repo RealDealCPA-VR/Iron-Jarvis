@@ -41,7 +41,10 @@ export default function MemoryPage() {
   return (
     <PageShell>
       <Reveal>
-        <PageHeader title="Memory" subtitle="Semantic search across the memory layers (§22)." />
+        <PageHeader
+          title="Memory"
+          subtitle="Search everything the agent remembers and instantly surface the most relevant notes."
+        />
       </Reveal>
       {offline && (
         <Reveal>

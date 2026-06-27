@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   CircleCheck,
@@ -328,5 +328,60 @@ export function SectionLabel({ children }: { children: ReactNode }) {
     <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-500">
       {children}
     </div>
+  );
+}
+
+/**
+ * Two-step destructive button: the first click arms it ("Confirm?"), a second
+ * click within 3s runs the action. Prevents accidental irreversible deletes
+ * (secrets are write-only and unrecoverable).
+ */
+export function ConfirmButton({
+  onConfirm,
+  label = "Delete",
+  confirmLabel = "Confirm?",
+  className = "",
+  title,
+}: {
+  onConfirm: () => void | Promise<void>;
+  label?: string;
+  confirmLabel?: string;
+  className?: string;
+  title?: string;
+}) {
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 3000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  const onClick = async () => {
+    if (!armed) {
+      setArmed(true);
+      return;
+    }
+    setBusy(true);
+    try {
+      await onConfirm();
+    } finally {
+      setBusy(false);
+      setArmed(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      title={title}
+      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+        armed
+          ? "border-rose-500/50 bg-rose-500/15 text-rose-200"
+          : "border-white/10 text-zinc-400 hover:border-rose-500/30 hover:text-rose-300"
+      } ${className}`}
+    >
+      {busy ? <LoaderInline label={confirmLabel} /> : armed ? confirmLabel : label}
+    </button>
   );
 }

@@ -29,7 +29,10 @@ export default function ArtifactsPage() {
   return (
     <PageShell>
       <Reveal>
-        <PageHeader title="Artifacts" subtitle="Versioned outputs produced by sessions (§26)." />
+        <PageHeader
+          title="Artifacts"
+          subtitle="Versioned files your sessions produce — browse every revision and see exactly what was generated."
+        />
       </Reveal>
       {offline && (
         <Reveal>

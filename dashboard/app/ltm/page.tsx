@@ -8,7 +8,6 @@ import {
   FileText,
   Plus,
   FolderPlus,
-  Trash2,
   Layers,
 } from "lucide-react";
 import { get, post, del, ApiError } from "@/lib/api";
@@ -22,6 +21,7 @@ import {
   ErrorNote,
   SuccessNote,
   LoaderInline,
+  ConfirmButton,
   type Tone,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
@@ -75,7 +75,6 @@ export default function LtmPage() {
   const [srcBusy, setSrcBusy] = useState(false);
   const [srcError, setSrcError] = useState<string | null>(null);
   const [srcOk, setSrcOk] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState<string | null>(null);
 
   async function search(e: React.FormEvent) {
     e.preventDefault();
@@ -156,15 +155,12 @@ export default function LtmPage() {
   }
 
   async function removeSource(nm: string) {
-    setDeleting(nm);
     setSrcError(null);
     try {
       await del(`/ltm/sources/${encodeURIComponent(nm)}`);
       reloadSources();
     } catch (err) {
       setSrcError(err instanceof ApiError ? err.message : String(err));
-    } finally {
-      setDeleting(null);
     }
   }
 
@@ -457,14 +453,11 @@ export default function LtmPage() {
                             : s.path || "—"}
                         </div>
                       </div>
-                      <button
-                        onClick={() => removeSource(s.name)}
-                        disabled={deleting === s.name}
-                        title="Remove source"
-                        className="rounded-lg border border-white/10 p-1.5 text-zinc-500 transition-colors hover:border-rose-500/40 hover:text-rose-300 disabled:opacity-40"
-                      >
-                        {deleting === s.name ? <LoaderInline /> : <Trash2 size={14} />}
-                      </button>
+                      <ConfirmButton
+                        onConfirm={() => removeSource(s.name)}
+                        label="Remove"
+                        title={`Remove memory source "${s.name}"`}
+                      />
                     </li>
                   ))}
                 </ul>

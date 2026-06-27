@@ -19,7 +19,10 @@ export default function SkillsPage() {
   return (
     <PageShell>
       <Reveal>
-        <PageHeader title="Skills" subtitle="Reusable agent skills (§23)." />
+        <PageHeader
+          title="Skills"
+          subtitle="Reusable skills your agents can call on to handle specialized tasks faster."
+        />
       </Reveal>
       {offline && (
         <Reveal>

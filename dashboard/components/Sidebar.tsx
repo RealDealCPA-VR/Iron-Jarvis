@@ -1,8 +1,9 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   LayoutDashboard,
   Boxes,
@@ -25,6 +26,11 @@ import {
   MonitorCog,
   SquareTerminal,
   MoveUpRight,
+  GitBranch,
+  Settings,
+  LifeBuoy,
+  Menu,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
@@ -42,6 +48,7 @@ const NAV: NavItem[] = [
   { href: "/sessions", label: "Sessions", icon: Boxes },
   { href: "/kanban", label: "Kanban", icon: SquareKanban },
   { href: "/agents", label: "Agents", icon: Bot },
+  { href: "/self-dev", label: "Self-development", icon: GitBranch },
   { href: "/computeruse", label: "Computer Use", icon: MonitorCog },
   { href: "/terminals", label: "Terminals", icon: SquareTerminal },
   { href: "/workflows", label: "Workflows", icon: Workflow },
@@ -57,6 +64,8 @@ const NAV: NavItem[] = [
   { href: "/integrations", label: "Integrations", icon: Plug },
   { href: "/channels", label: "Channels", icon: Megaphone },
   { href: "/webhooks", label: "Webhooks", icon: Webhook },
+  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/help", label: "Help", icon: LifeBuoy },
 ];
 
 /** The arc-reactor brand mark. */
@@ -99,95 +108,199 @@ function ArcMark() {
   );
 }
 
-export function Sidebar() {
+function Brand() {
+  return (
+    <Link href="/" className="flex items-center gap-3 text-accent">
+      <ArcMark />
+      <div>
+        <div className="text-[15px] font-semibold tracking-tight text-zinc-50">Iron Jarvis</div>
+        <div className="text-[11px] tracking-wide text-zinc-500">control center</div>
+      </div>
+    </Link>
+  );
+}
+
+/** The shared nav list, used by both the desktop rail and the mobile drawer. */
+function NavLinks({
+  layoutId,
+  onNavigate,
+}: {
+  layoutId: string;
+  onNavigate?: () => void;
+}) {
   const pathname = usePathname();
-  const { online: connected } = useDaemon();
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
-
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-white/[0.06] bg-ink-900/70 backdrop-blur-xl">
-      <div className="px-5 py-5">
-        <Link href="/" className="flex items-center gap-3 text-accent">
-          <ArcMark />
-          <div>
-            <div className="text-[15px] font-semibold tracking-tight text-zinc-50">
-              Iron Jarvis
-            </div>
-            <div className="text-[11px] tracking-wide text-zinc-500">
-              control center
-            </div>
-          </div>
-        </Link>
-      </div>
-
-      <div className="mx-5 h-px bg-accent-line opacity-60" />
-
-      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
-        {NAV.map((item) => {
-          const active = isActive(item.href);
-          const Icon = item.icon;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors ${
-                active
-                  ? "text-accent-soft"
-                  : "text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-100"
+    <>
+      {NAV.map((item) => {
+        const active = isActive(item.href);
+        const Icon = item.icon;
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            onClick={onNavigate}
+            className={`group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors ${
+              active
+                ? "text-accent-soft"
+                : "text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-100"
+            }`}
+          >
+            {active && (
+              <motion.span
+                layoutId={layoutId}
+                className="absolute inset-0 rounded-xl border border-accent/25 bg-accent/[0.08] shadow-[inset_0_0_0_1px_rgba(34,211,238,0.06)]"
+                transition={{ type: "spring", stiffness: 380, damping: 32 }}
+              />
+            )}
+            <span
+              className={`relative z-10 transition-colors ${
+                active ? "text-accent" : "text-zinc-500 group-hover:text-zinc-300"
               }`}
             >
-              {active && (
-                <motion.span
-                  layoutId="nav-active"
-                  className="absolute inset-0 rounded-xl border border-accent/25 bg-accent/[0.08] shadow-[inset_0_0_0_1px_rgba(34,211,238,0.06)]"
-                  transition={{ type: "spring", stiffness: 380, damping: 32 }}
-                />
-              )}
-              <span
-                className={`relative z-10 transition-colors ${
-                  active ? "text-accent" : "text-zinc-500 group-hover:text-zinc-300"
-                }`}
-              >
-                <Icon size={17} strokeWidth={2} />
-              </span>
-              <span className="relative z-10 font-medium">{item.label}</span>
-            </Link>
-          );
-        })}
-      </nav>
+              <Icon size={17} strokeWidth={2} />
+            </span>
+            <span className="relative z-10 font-medium">{item.label}</span>
+          </Link>
+        );
+      })}
+    </>
+  );
+}
 
-      <div className="space-y-2 border-t border-white/[0.06] px-5 py-4">
-        <div className="flex items-center gap-2 text-[11px]">
-          <span
-            className={`h-2 w-2 rounded-full ${
-              connected
-                ? "bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.5)] animate-pulse-glow"
-                : "bg-zinc-600"
-            }`}
-          />
-          <span className={connected ? "text-emerald-300/90" : "text-zinc-500"}>
-            {connected ? "daemon connected" : "daemon offline"}
-          </span>
-        </div>
-        <div className="truncate font-mono text-[11px] text-zinc-600" title={API_BASE}>
-          {API_BASE.replace(/^https?:\/\//, "")}
-        </div>
-        <div className="flex items-center gap-1.5 pt-0.5 text-[11px] text-zinc-600">
-          <kbd className="rounded border border-white/10 bg-white/[0.03] px-1.5 py-0.5 font-sans text-[10px] text-zinc-500">
-            ⌘K
-          </kbd>
-          <span>commands</span>
-        </div>
-        <a
-          href="https://github.com/RealDealCPA-VR/Iron-Jarvis/blob/master/DEPLOY.md"
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 pt-0.5 text-[11px] text-zinc-600 transition-colors hover:text-accent-soft"
-        >
-          Deploy to a server <MoveUpRight size={11} />
-        </a>
+/** Shared daemon-status footer (connection dot + API host + deploy link). */
+function SidebarFooter() {
+  const { online: connected } = useDaemon();
+  return (
+    <div className="space-y-2 border-t border-white/[0.06] px-5 py-4">
+      <div className="flex items-center gap-2 text-[11px]">
+        <span
+          className={`h-2 w-2 rounded-full ${
+            connected
+              ? "bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.5)] animate-pulse-glow"
+              : "bg-zinc-600"
+          }`}
+        />
+        <span className={connected ? "text-emerald-300/90" : "text-zinc-500"}>
+          {connected ? "daemon connected" : "daemon offline"}
+        </span>
       </div>
+      <div className="truncate font-mono text-[11px] text-zinc-600" title={API_BASE}>
+        {API_BASE.replace(/^https?:\/\//, "")}
+      </div>
+      <div className="flex items-center gap-1.5 pt-0.5 text-[11px] text-zinc-600">
+        <kbd className="rounded border border-white/10 bg-white/[0.03] px-1.5 py-0.5 font-sans text-[10px] text-zinc-500">
+          ⌘K
+        </kbd>
+        <span>commands</span>
+      </div>
+      <a
+        href="https://github.com/RealDealCPA-VR/Iron-Jarvis/blob/master/DEPLOY.md"
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center gap-1 pt-0.5 text-[11px] text-zinc-600 transition-colors hover:text-accent-soft"
+      >
+        Deploy to a server <MoveUpRight size={11} />
+      </a>
+    </div>
+  );
+}
+
+/** The desktop sidebar rail. Hidden below the `md` breakpoint (see MobileNav). */
+export function Sidebar() {
+  return (
+    <aside className="hidden w-64 shrink-0 flex-col border-r border-white/[0.06] bg-ink-900/70 backdrop-blur-xl md:flex">
+      <div className="px-5 py-5">
+        <Brand />
+      </div>
+      <div className="mx-5 h-px bg-accent-line opacity-60" />
+      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
+        <NavLinks layoutId="nav-active" />
+      </nav>
+      <SidebarFooter />
     </aside>
+  );
+}
+
+/**
+ * Mobile navigation: a hamburger button (shown only below `md`) that opens a
+ * slide-over drawer with the same nav. Lives in the top bar so the desktop rail
+ * is untouched.
+ */
+export function MobileNav() {
+  const [open, setOpen] = useState(false);
+  const pathname = usePathname();
+
+  // Close the drawer whenever the route changes.
+  useEffect(() => {
+    setOpen(false);
+  }, [pathname]);
+
+  // Lock body scroll while the drawer is open.
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  return (
+    <div className="flex items-center gap-2 md:hidden">
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label="Open navigation"
+        className="grid h-9 w-9 place-items-center rounded-xl border border-white/10 bg-white/[0.02] text-zinc-300 transition-colors hover:border-white/20 hover:text-zinc-100"
+      >
+        <Menu size={18} />
+      </button>
+      <Link href="/" className="flex items-center gap-2 text-accent">
+        <span className="text-[14px] font-semibold tracking-tight text-zinc-50">Iron Jarvis</span>
+      </Link>
+
+      <AnimatePresence>
+        {open && (
+          <>
+            <motion.div
+              key="backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              onClick={() => setOpen(false)}
+              className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.aside
+              key="drawer"
+              initial={{ x: "-100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "-100%" }}
+              transition={{ type: "spring", stiffness: 360, damping: 38 }}
+              className="fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col border-r border-white/[0.06] bg-ink-900/95 backdrop-blur-xl"
+            >
+              <div className="flex items-center justify-between px-5 py-5">
+                <Brand />
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  aria-label="Close navigation"
+                  className="grid h-8 w-8 place-items-center rounded-lg border border-white/10 text-zinc-400 transition-colors hover:text-zinc-100"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="mx-5 h-px bg-accent-line opacity-60" />
+              <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
+                <NavLinks layoutId="nav-active-mobile" onNavigate={() => setOpen(false)} />
+              </nav>
+              <SidebarFooter />
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }

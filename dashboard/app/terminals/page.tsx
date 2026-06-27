@@ -9,7 +9,7 @@ import dynamic from "next/dynamic";
 import { Loader2, Plus, SquareTerminal } from "lucide-react";
 import { ApiError, del, get, post } from "@/lib/api";
 import type { Shell, TerminalInfo } from "@/lib/types";
-import { Card, OfflineHint, ErrorNote, Spinner } from "@/components/ui";
+import { Card, OfflineHint, ErrorNote, Spinner, ConfirmButton } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
@@ -33,6 +33,9 @@ export default function TerminalsPage() {
   const [shell, setShell] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [focusedId, setFocusedId] = useState<string | null>(null);
+  // A terminal whose close was requested (from the pane's X) and is awaiting a
+  // confirm — killing a live shell is irreversible, so we gate it.
+  const [pendingClose, setPendingClose] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [offline, setOffline] = useState(false);
@@ -163,13 +166,43 @@ export default function TerminalsPage() {
             ) : (
               <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
                 {terminals.map((t) => (
-                  <div key={t.id} className="h-[360px]">
+                  <div key={t.id} className="relative h-[360px]">
                     <TerminalPane
                       info={t}
                       focused={focusedId === t.id}
                       onFocus={() => setFocusedId(t.id)}
-                      onClose={() => closeTerminal(t.id)}
+                      onClose={() => setPendingClose(t.id)}
                     />
+                    {pendingClose === t.id && (
+                      <div className="absolute inset-0 z-20 grid place-items-center rounded-2xl bg-black/70 backdrop-blur-sm">
+                        <div className="w-[min(20rem,90%)] rounded-2xl border border-white/10 bg-ink-850/95 p-5 text-center shadow-card">
+                          <div className="text-sm font-semibold text-zinc-100">
+                            Close this terminal?
+                          </div>
+                          <p className="mt-1 break-all text-[12px] text-zinc-500">
+                            Ends the live shell session in {t.cwd}.
+                          </p>
+                          <div className="mt-4 flex items-center justify-center gap-2">
+                            <ConfirmButton
+                              onConfirm={() => {
+                                closeTerminal(t.id);
+                                setPendingClose(null);
+                              }}
+                              label="Close terminal"
+                              confirmLabel="Confirm close"
+                              title="End this shell session"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setPendingClose(null)}
+                              className="btn-ghost py-1 text-xs"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
 

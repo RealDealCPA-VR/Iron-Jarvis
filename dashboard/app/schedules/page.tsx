@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CalendarClock, Plus, Play, Trash2, Clock, Repeat, Timer } from "lucide-react";
+import { CalendarClock, Plus, Play, Clock, Repeat, Timer } from "lucide-react";
 import { post, del, ApiError } from "@/lib/api";
 import { usePolledApi } from "@/lib/useApi";
 import type { Schedule } from "@/lib/types";
@@ -15,6 +15,7 @@ import {
   ErrorNote,
   SuccessNote,
   LoaderInline,
+  ConfirmButton,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -320,14 +321,11 @@ export default function SchedulesPage() {
                                   <Play size={14} />
                                 )}
                               </button>
-                              <button
-                                onClick={() => remove(s.name)}
-                                disabled={acting === `del:${s.name}`}
-                                title="Delete"
-                                className="rounded-lg border border-white/10 p-1.5 text-zinc-500 transition-colors hover:border-rose-500/40 hover:text-rose-300 disabled:opacity-40"
-                              >
-                                <Trash2 size={14} />
-                              </button>
+                              <ConfirmButton
+                                onConfirm={() => remove(s.name)}
+                                label="Delete"
+                                title={`Delete schedule "${s.name}"`}
+                              />
                             </div>
                           </td>
                         </tr>
