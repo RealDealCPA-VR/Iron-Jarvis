@@ -133,6 +133,9 @@ function ConnectionCard({
   const [test, setTest] = useState<ConnectionTestResult | null>(null);
 
   const isMock = conn.provider === "mock";
+  // A provider may offer account-login (OAuth), an API key, or BOTH.
+  const canOAuth = (conn.supports_oauth ?? conn.method === "oauth") && !isMock;
+  const canKey = (conn.supports_api_key ?? conn.method === "api_key") && !isMock;
 
   /* --- API key connect ----------------------------------------------------- */
   async function connectKey(e: React.FormEvent) {
@@ -210,7 +213,7 @@ function ConnectionCard({
 
   // Listen for the daemon callback's postMessage (OAuth completion).
   useEffect(() => {
-    if (conn.method !== "oauth") return;
+    if (!canOAuth) return;
     function onMessage(ev: MessageEvent) {
       const d = ev.data;
       if (!d || d.type !== "ironjarvis-oauth" || d.provider !== conn.provider) return;
@@ -269,88 +272,107 @@ function ConnectionCard({
             className="py-1.5"
           />
         </div>
-      ) : conn.method === "oauth" ? (
-        <div className="space-y-2.5">
-          <button onClick={connectOAuth} disabled={busy} className="btn-accent w-full py-1.5 text-xs">
-            {busy ? <LoaderInline label="Starting…" /> : <><ShieldCheck size={14} /> Connect with OAuth</>}
-          </button>
-          {meta.docsUrl && (
-            <a
-              href={meta.docsUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center gap-1 text-[11px] text-zinc-500 transition-colors hover:text-accent-soft"
-            >
-              Manage OAuth app in {meta.docsLabel} <ExternalLink size={11} />
-            </a>
-          )}
-          {needsSecrets && (
-            <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.07] px-3 py-2.5 text-[11px] leading-relaxed text-amber-100/90">
-              No OAuth client configured. Add{" "}
-              <code className="rounded bg-black/40 px-1 font-mono text-amber-200">
-                {conn.provider}_oauth_client_id
-              </code>{" "}
-              and{" "}
-              <code className="rounded bg-black/40 px-1 font-mono text-amber-200">
-                {conn.provider}_oauth_client_secret
-              </code>{" "}
-              in{" "}
-              <Link href="/secrets" className="font-medium text-accent-soft underline">
-                Secrets
-              </Link>{" "}
-              first, then connect.
-            </div>
-          )}
-        </div>
-      ) : !open ? (
-        <button onClick={() => setOpen(true)} className="btn-accent w-full py-1.5 text-xs">
-          <Plug size={14} /> Connect
-        </button>
       ) : (
-        <form onSubmit={connectKey} className="space-y-2.5">
-          <input
-            type="password"
-            value={key}
-            onChange={(e) => setKey(e.target.value)}
-            placeholder={meta.placeholder ?? "Paste your API key"}
-            autoComplete="off"
-            autoFocus
-            className="field font-mono text-xs"
-          />
-          <p className="text-[11px] leading-relaxed text-zinc-500">
-            Paste your API key — it&apos;s stored encrypted and never shown again.
-            {meta.keyUrl && (
-              <>
-                {" "}Get one at{" "}
+        <div className="space-y-3">
+          {/* Account login (OAuth) — log in with your Anthropic/OpenAI/Google account */}
+          {canOAuth && (
+            <div className="space-y-2">
+              <button onClick={connectOAuth} disabled={busy} className="btn-accent w-full py-1.5 text-xs">
+                {busy ? <LoaderInline label="Starting…" /> : <><ShieldCheck size={14} /> Log in with your account</>}
+              </button>
+              {conn.oauth_help && (
+                <p className="text-[11px] leading-relaxed text-zinc-500">{conn.oauth_help}</p>
+              )}
+              {meta.docsUrl && (
                 <a
-                  href={meta.keyUrl}
+                  href={meta.docsUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex items-center gap-0.5 text-accent-soft hover:text-accent"
+                  className="flex items-center gap-1 text-[11px] text-zinc-500 transition-colors hover:text-accent-soft"
                 >
-                  {meta.keyLabel} <ExternalLink size={10} />
+                  Manage OAuth app in {meta.docsLabel} <ExternalLink size={11} />
                 </a>
-                .
-              </>
-            )}
-          </p>
-          <div className="flex items-center gap-2">
-            <button type="submit" disabled={busy || !key.trim()} className="btn-accent flex-1 py-1.5 text-xs">
-              {busy ? <LoaderInline label="Connecting…" /> : <><Plug size={14} /> Connect</>}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                setKey("");
-                setError(null);
-              }}
-              className="btn-ghost py-1.5 text-xs"
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
+              )}
+              {needsSecrets && (
+                <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.07] px-3 py-2.5 text-[11px] leading-relaxed text-amber-100/90">
+                  No OAuth client configured. Set{" "}
+                  <code className="rounded bg-black/40 px-1 font-mono text-amber-200">
+                    {conn.provider}_oauth_client_id
+                  </code>{" "}
+                  in{" "}
+                  <Link href="/secrets" className="font-medium text-accent-soft underline">
+                    Secrets
+                  </Link>{" "}
+                  to override the built-in client, then connect.
+                </div>
+              )}
+            </div>
+          )}
+
+          {canOAuth && canKey && (
+            <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-zinc-600">
+              <span className="h-px flex-1 bg-white/[0.08]" />
+              or use an API key
+              <span className="h-px flex-1 bg-white/[0.08]" />
+            </div>
+          )}
+
+          {/* API key */}
+          {canKey &&
+            (!open ? (
+              <button
+                onClick={() => setOpen(true)}
+                className={`${canOAuth ? "btn-ghost" : "btn-accent"} w-full py-1.5 text-xs`}
+              >
+                <KeyRound size={14} /> {canOAuth ? "Use an API key instead" : "Connect"}
+              </button>
+            ) : (
+              <form onSubmit={connectKey} className="space-y-2.5">
+                <input
+                  type="password"
+                  value={key}
+                  onChange={(e) => setKey(e.target.value)}
+                  placeholder={meta.placeholder ?? "Paste your API key"}
+                  autoComplete="off"
+                  autoFocus
+                  className="field font-mono text-xs"
+                />
+                <p className="text-[11px] leading-relaxed text-zinc-500">
+                  Paste your API key — it&apos;s stored encrypted and never shown again.
+                  {meta.keyUrl && (
+                    <>
+                      {" "}Get one at{" "}
+                      <a
+                        href={meta.keyUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-0.5 text-accent-soft hover:text-accent"
+                      >
+                        {meta.keyLabel} <ExternalLink size={10} />
+                      </a>
+                      .
+                    </>
+                  )}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button type="submit" disabled={busy || !key.trim()} className="btn-accent flex-1 py-1.5 text-xs">
+                    {busy ? <LoaderInline label="Connecting…" /> : <><Plug size={14} /> Connect</>}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpen(false);
+                      setKey("");
+                      setError(null);
+                    }}
+                    className="btn-ghost py-1.5 text-xs"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ))}
+        </div>
       )}
 
       {/* Test result + errors */}

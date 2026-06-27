@@ -50,7 +50,7 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 | 🖥️ **Beautiful dashboard** | arc-reactor dark UI, Kanban board, real-time everything |
 | 📄 **Every file type** | read & write **PDF, Word, Excel, PowerPoint, CSV, Markdown, text** — like a colleague would |
 | 🌱 **Self-correcting** | feedback → lessons injected into every future run; it gets **better each time** you use it |
-| 🔌 **Connect a model in seconds** | a Connections page — paste an **API key** (Anthropic/OpenAI/Google) or sign in to **Google with OAuth 2.0 (PKCE)** |
+| 🔌 **Connect a model in seconds** | a Connections page — **log in with your Anthropic (Claude Pro/Max) or OpenAI (ChatGPT/Codex) account** via OAuth 2.0 + PKCE, or paste an **API key** (Anthropic/OpenAI/Google) |
 | 🦙 **Or stay fully local** | point it at a local **Ollama** / OpenAI-compatible endpoint — real intelligence, no cloud, no key |
 | 🔎 **Web search + MCP** | a keyless `web_search` tool for agents, plus an **MCP client** to consume external MCP servers as native tools |
 | 🛠️ **Edits itself** | an opt-in **Maintainer** agent can read/edit/test/fix Iron Jarvis's own source on a review-gated worktree |
@@ -94,8 +94,12 @@ That's it. Open the dashboard, hit **New Session**, and watch agents work in rea
 uv run ironjarvis connect anthropic sk-ant-...   # stored encrypted in the vault
 # the provider flips to "available" instantly — sessions route to it, no env vars
 ```
-- **API key** works for **Anthropic, OpenAI, and Google** — paste it and you're live.
-- **OAuth 2.0 (PKCE)** sign-in currently applies to **Google/Gemini**, and (like any OAuth app) needs you to register your own Google Cloud OAuth client and store its `client_id`/`client_secret` in the vault. Anthropic/OpenAI use API keys.
+- **Log in with your account (OAuth)** — since this runs locally, you can **"Log in with your account"** on the Connections page instead of pasting a key:
+  - **Anthropic** — sign in with your **Claude Pro/Max** account (the public Claude Code OAuth/PKCE client, no app registration). The minted token calls the Messages API with the OAuth beta header — fully wired for inference.
+  - **OpenAI** — sign in with your **ChatGPT (Plus/Pro)** account via the public **Codex** OAuth client; the account token is stored and sent as a bearer.
+  - **Google/Gemini** — OAuth too (bring your own Google Cloud client id).
+  - The flow is standard OAuth 2.0 + PKCE to the daemon's loopback callback; the public client ids are embedded but overridable via the `<provider>_oauth_client_id` / `_oauth_redirect_uri` secrets. Tokens auto-refresh and live only in the encrypted vault.
+- **API key** still works for **Anthropic, OpenAI, and Google** — paste it on the same card (a provider can be connected by *either* a key or your account; the account token is preferred when present).
 - **Fully local?** Run a local **Ollama** (or any OpenAI-compatible server) and set `ollama_base_url` in config — no key, no network. Sessions can pick the `ollama` provider.
 
 ---

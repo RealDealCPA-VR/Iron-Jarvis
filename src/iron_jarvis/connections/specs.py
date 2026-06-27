@@ -21,13 +21,30 @@ class ConnectionSpec:
 
     provider: str
     display_name: str
-    method: str  # "api_key" | "oauth" | "browser"
+    method: str  # "api_key" | "oauth" | "browser" — the PRIMARY connect method
     auth_url: str = ""
     token_url: str = ""
     scopes: list[str] = field(default_factory=list)
     docs_url: str = ""
     key_help: str = ""
     key_secret_name: str = ""
+    #: Embedded PUBLIC OAuth client id (a native/PKCE app id shipped by the
+    #: provider's own CLI) so a user can "log in with their account" with NO app
+    #: registration. Overridable via the ``<provider>_oauth_client_id`` secret.
+    oauth_client_id: str = ""
+    #: Help text for the account-login (OAuth) option, when distinct from key_help.
+    oauth_help: str = ""
+
+    @property
+    def supports_oauth(self) -> bool:
+        """True when this provider can be connected by an OAuth account login.
+        The client id may be embedded here (a public CLI app id) OR supplied by
+        the registry's ``oauth_app`` resolver, so only the endpoints are required."""
+        return bool(self.auth_url and self.token_url)
+
+    @property
+    def supports_api_key(self) -> bool:
+        return bool(self.key_secret_name)
 
 
 def generic_oauth_spec(
@@ -61,18 +78,34 @@ BUILTIN_SPECS: dict[str, ConnectionSpec] = {
     "anthropic": ConnectionSpec(
         provider="anthropic",
         display_name="Anthropic (Claude)",
-        method="api_key",
+        method="api_key",  # also supports OAuth account login (see oauth_* below)
         docs_url="https://console.anthropic.com/settings/keys",
         key_help="Get a key at console.anthropic.com",
         key_secret_name="anthropic_api_key",
+        # Log in with a Claude Pro/Max account via the public Claude Code OAuth
+        # client (PKCE, no secret). The minted token (sk-ant-oat...) calls the
+        # Messages API with the oauth beta header (see the Anthropic adapter).
+        auth_url="https://claude.ai/oauth/authorize",
+        token_url="https://console.anthropic.com/v1/oauth/token",
+        scopes=["org:create_api_key", "user:profile", "user:inference"],
+        oauth_client_id="9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+        oauth_help="Log in with your Claude Pro/Max account (no API key needed).",
     ),
     "openai": ConnectionSpec(
         provider="openai",
         display_name="OpenAI",
-        method="api_key",
+        method="api_key",  # also supports OAuth account login (ChatGPT / Codex)
         docs_url="https://platform.openai.com/api-keys",
         key_help="Get a key at platform.openai.com/api-keys",
         key_secret_name="openai_api_key",
+        # Log in with a ChatGPT (Plus/Pro) account via the public Codex CLI OAuth
+        # client (PKCE). The token routes inference through the ChatGPT backend
+        # (see the OpenAI adapter); overridable via the openai_oauth_client_id secret.
+        auth_url="https://auth.openai.com/oauth/authorize",
+        token_url="https://auth.openai.com/oauth/token",
+        scopes=["openid", "profile", "email", "offline_access"],
+        oauth_client_id="app_EMoamEEZ73f0CkXaXp7hrann",
+        oauth_help="Log in with your ChatGPT (Plus/Pro) account via Codex.",
     ),
     "google": ConnectionSpec(
         provider="google",

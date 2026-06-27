@@ -279,6 +279,11 @@ export interface Connection {
   provider: string;
   display_name: string;
   method: "api_key" | "oauth" | "browser";
+  /** A provider may support BOTH account-login (OAuth) and an API key. */
+  supports_oauth?: boolean;
+  supports_api_key?: boolean;
+  oauth_help?: string;
+  key_help?: string;
   connected: boolean;
   status: string; // "connected" | "disconnected" | "needs_auth"
   account: string;

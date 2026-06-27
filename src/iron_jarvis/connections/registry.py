@@ -95,6 +95,10 @@ class ConnectionRegistry:
                     "provider": spec.provider,
                     "display_name": spec.display_name,
                     "method": spec.method,
+                    "supports_oauth": spec.supports_oauth,
+                    "supports_api_key": spec.supports_api_key,
+                    "oauth_help": spec.oauth_help,
+                    "key_help": spec.key_help,
                     "connected": connected,
                     "status": status,
                     "account": record.account if record else "",
@@ -108,9 +112,9 @@ class ConnectionRegistry:
     def set_api_key(self, provider: str, key: str) -> ConnectionRecord:
         """Store an API key in the vault and mark the provider connected."""
         spec = self._require_spec(provider)
-        if spec.method != "api_key":
+        if not spec.supports_api_key:
             raise ValueError(
-                f"provider '{provider}' connects via {spec.method}, not an API key"
+                f"provider '{provider}' does not accept an API key (use OAuth login)"
             )
         secret_name = spec.key_secret_name or f"{provider}_api_key"
         self.secrets.set(secret_name, key, kind="api_key")
@@ -132,10 +136,12 @@ class ConnectionRegistry:
         ``needs_auth``. Raises if the provider is not OAuth or has no client id.
         """
         spec = self._require_spec(provider)
-        if spec.method != "oauth":
-            raise ValueError(f"provider '{provider}' does not use OAuth")
+        if not spec.supports_oauth:
+            raise ValueError(f"provider '{provider}' does not support OAuth login")
         app = self._oauth_app(provider) or {}
-        client_id = app.get("client_id")
+        # Fall back to the spec's embedded PUBLIC client id (the provider's own
+        # CLI app id) so account login works with no app registration.
+        client_id = app.get("client_id") or spec.oauth_client_id
         if not client_id:
             raise ValueError(
                 f"no OAuth client configured for '{provider}' — set its client id"
@@ -177,7 +183,7 @@ class ConnectionRegistry:
                 spec,
                 code=code,
                 code_verifier=pending["verifier"],
-                client_id=app.get("client_id", ""),
+                client_id=app.get("client_id") or spec.oauth_client_id,
                 client_secret=app.get("client_secret", ""),
                 redirect_uri=app.get("redirect_uri", ""),
                 http=http,
@@ -226,10 +232,14 @@ class ConnectionRegistry:
         spec = self.get_spec(provider)
         if spec is None:
             return None
-        if spec.method == "api_key":
-            secret_name = spec.key_secret_name or f"{provider}_api_key"
-            return self.secrets.get(secret_name)
-        if spec.method == "oauth":
+        # Prefer a connected OAuth account token; otherwise fall back to an API key.
+        if spec.supports_oauth:
+            token = self._oauth_access_token(provider, spec)
+            if token:
+                return token
+        if spec.supports_api_key:
+            return self.secrets.get(spec.key_secret_name or f"{provider}_api_key")
+        if spec.method == "oauth":  # oauth-only spec with no embedded client
             return self._oauth_access_token(provider, spec)
         return None
 
@@ -245,9 +255,12 @@ class ConnectionRegistry:
         spec = self.get_spec(provider)
         if spec is None:
             return False
-        if spec.method == "api_key":
-            secret_name = spec.key_secret_name or f"{provider}_api_key"
-            return bool(self.secrets.get(secret_name))
+        if spec.supports_oauth:
+            token = self.secrets.get_oauth(f"{provider}_oauth")
+            if token and token.get("access_token"):
+                return True
+        if spec.supports_api_key:
+            return bool(self.secrets.get(spec.key_secret_name or f"{provider}_api_key"))
         if spec.method == "oauth":
             token = self.secrets.get_oauth(f"{provider}_oauth")
             return bool(token and token.get("access_token"))
@@ -268,7 +281,7 @@ class ConnectionRegistry:
                 fresh = OAuthClient.refresh(
                     spec,
                     refresh_token=token["refresh_token"],
-                    client_id=app.get("client_id", ""),
+                    client_id=app.get("client_id") or spec.oauth_client_id,
                     client_secret=app.get("client_secret", ""),
                     http=http,
                 )
@@ -320,11 +333,21 @@ class ConnectionRegistry:
         """Drop the stored credential and mark the provider disconnected."""
         spec = self._require_spec(provider)
         record = self._get_record(provider)
-        secret_name = (record.secret_name if record else "") or _default_secret_name(
-            spec
-        )
-        if secret_name:
-            self.secrets.delete(secret_name)
+        # Clear EVERY credential this provider may hold (OAuth token + API key),
+        # so a provider connected by either method is fully disconnected.
+        names = {
+            (record.secret_name if record else "") or "",
+            _default_secret_name(spec),
+        }
+        if spec.supports_oauth:
+            names.add(f"{provider}_oauth")
+        if spec.supports_api_key:
+            names.add(spec.key_secret_name or f"{provider}_api_key")
+        for name in filter(None, names):
+            try:
+                self.secrets.delete(name)
+            except Exception:  # deleting an absent secret must not break disconnect
+                pass
         return self._upsert(
             provider,
             method=spec.method,

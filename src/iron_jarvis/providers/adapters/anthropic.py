@@ -47,6 +47,15 @@ class AnthropicAdapter(LLMAdapter):
             )
         from anthropic import AsyncAnthropic  # lazy import
 
+        # An OAuth ACCOUNT token (Claude Pro/Max via the Claude Code login flow)
+        # is an `sk-ant-oat...` Bearer token that calls the Messages API with the
+        # oauth beta header — never as an x-api-key. A normal API key
+        # (`sk-ant-api...`) uses x-api-key as before.
+        if key.startswith("sk-ant-oat"):
+            return AsyncAnthropic(
+                auth_token=key,
+                default_headers={"anthropic-beta": "oauth-2025-04-20"},
+            )
         return AsyncAnthropic(api_key=key)
 
     @staticmethod
