@@ -365,6 +365,8 @@ class Orchestrator:
                 ("..core.models.EventRecord", "session_id"),
                 ("..eval.models.Evaluation", "session_id"),
                 ("..artifacts.models.ArtifactRecord", "session_id"),
+                # Department blackboard rows are keyed by the root session id.
+                ("..blackboard.models.BlackboardRecord", "board_id"),
             ):
                 try:
                     mod_name, cls_name = model_path.rsplit(".", 1)

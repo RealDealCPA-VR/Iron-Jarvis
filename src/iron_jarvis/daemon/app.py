@@ -614,6 +614,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "transcript": orchestrator.transcript(session_id),
         }
 
+    @app.get("/blackboard/{board_id}")
+    def blackboard(board_id: str) -> dict[str, Any]:
+        """Read a department's shared blackboard (notes + messages) for the UI."""
+        from ..blackboard.tools import _to_view
+
+        store = platform.blackboard
+        if store is None:
+            return {"board_id": board_id, "records": []}
+        records = store.list(board_id)
+        return {"board_id": board_id, "records": _to_view(records)}
+
     @app.get("/self-dev")
     def self_dev_status() -> dict[str, Any]:
         """Whether agents may edit Iron Jarvis's own source (opt-in, review-gated)."""

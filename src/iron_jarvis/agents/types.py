@@ -49,6 +49,9 @@ _SELF_SERVICE_TOOLS = [
 _DOCUMENT_TOOLS = ["read_document", "write_document", "extract_pdf"]
 # Self-correction: record preferences learned mid-task; recall past lessons.
 _LEARNING_TOOLS = ["remember_preference", "recall_lessons"]
+# Departments: the shared blackboard lets sibling agents post findings and
+# address each other instead of only summarizing upward. Low-risk + allowed.
+_COLLAB_TOOLS = ["blackboard_post", "blackboard_read", "message_agent"]
 
 # A warm, human voice shared across agents. Accumulated lessons are appended to
 # this prompt at runtime (see LearningEngine.apply_to_prompt), so it improves
@@ -82,7 +85,7 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
         ),
         tools=(
             _FILE_TOOLS + ["shell"] + _KNOWLEDGE_TOOLS + _SELF_SERVICE_TOOLS
-            + _DOCUMENT_TOOLS + _LEARNING_TOOLS
+            + _DOCUMENT_TOOLS + _LEARNING_TOOLS + _COLLAB_TOOLS
         ),
     ),
     AgentType.PLANNER: AgentDefinition(
@@ -94,7 +97,7 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
         ),
         tools=(
             _FILE_TOOLS + _KNOWLEDGE_TOOLS + _SELF_SERVICE_TOOLS
-            + _DOCUMENT_TOOLS + _LEARNING_TOOLS
+            + _DOCUMENT_TOOLS + _LEARNING_TOOLS + _COLLAB_TOOLS
         ),
     ),
     AgentType.REVIEWER: AgentDefinition(
@@ -107,7 +110,7 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
         tools=[
             "read_file", "list_files", "grep", "read_document", "extract_pdf",
             "memory_search", "skill_search", "recall_lessons",
-        ],
+        ] + _COLLAB_TOOLS,
     ),
     AgentType.SUPERVISOR: AgentDefinition(
         type=AgentType.SUPERVISOR,
@@ -119,7 +122,7 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
         tools=[
             "delegate", "read_file", "list_files", "read_document", "recall_lessons",
             "list_agents", "spawn_agent", "notify",
-        ],
+        ] + _COLLAB_TOOLS,
     ),
     AgentType.RESEARCHER: AgentDefinition(
         type=AgentType.RESEARCHER,
@@ -133,7 +136,7 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
             ["read_file", "list_files", "grep", "file_search", "recall", "ltm_search", "ltm_append"]
             + ["web_search"]
             + _DOCUMENT_TOOLS + _KNOWLEDGE_TOOLS + _LEARNING_TOOLS
-            + ["browse", "web_extract", "computer_use_status"]
+            + ["browse", "web_extract", "computer_use_status"] + _COLLAB_TOOLS
         ),
     ),
     AgentType.MEMORY: AgentDefinition(
@@ -144,7 +147,7 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
         ),
         tools=(
             _KNOWLEDGE_TOOLS + ["ltm_search", "ltm_append", "file_search", "recall"]
-            + _DOCUMENT_TOOLS + _LEARNING_TOOLS
+            + _DOCUMENT_TOOLS + _LEARNING_TOOLS + _COLLAB_TOOLS
         ),
     ),
     AgentType.MAINTAINER: AgentDefinition(
@@ -166,7 +169,7 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
         ),
         tools=(
             _FILE_TOOLS + ["shell"] + ["file_search", "recall"]
-            + _DOCUMENT_TOOLS + _KNOWLEDGE_TOOLS + _LEARNING_TOOLS
+            + _DOCUMENT_TOOLS + _KNOWLEDGE_TOOLS + _LEARNING_TOOLS + _COLLAB_TOOLS
         ),
     ),
     AgentType.AUTOMATION: AgentDefinition(
@@ -183,6 +186,7 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
             + ["notify", "integration_list", "integration_test"]
             + ["create_agent", "list_agents", "spawn_agent"]
             + ["browse", "web_extract", "web_action", "computer_use_status"]
+            + _COLLAB_TOOLS
         ),
     ),
 }

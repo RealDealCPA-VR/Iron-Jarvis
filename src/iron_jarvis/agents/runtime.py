@@ -8,6 +8,7 @@ Lifecycle state transitions are persisted and emitted on the event bus.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from ..core.db import session_scope
@@ -124,20 +125,45 @@ class AgentRuntime:
                 event_bus=self.p.event_bus,
                 engine=self.p.engine,
             )
-            for tc in resp.tool_calls:
-                result = await self.p.registry.invoke(
+            # Run the turn's tool calls as a TEAM: gather them concurrently so
+            # multiple delegate/blackboard calls execute at once. registry.invoke
+            # opens its own session_scope per call (no shared Session across the
+            # coroutines), records its own ToolInvocation, and publishes its own
+            # event — so concurrency is safe. ``return_exceptions=True`` isolates a
+            # failure/denial in one call so it never cancels its siblings. Results
+            # are then appended in the ORIGINAL call order (the model maps tool
+            # results to calls positionally), keeping behavior deterministic.
+            async def _invoke(tc):
+                return await self.p.registry.invoke(
                     tc.name,
                     tc.arguments,
                     ctx,
                     self.p.permissions,
                     agent_def.permission_overrides,
                 )
+
+            results = await asyncio.gather(
+                *(_invoke(tc) for tc in resp.tool_calls),
+                return_exceptions=True,
+            )
+            for tc, result in zip(resp.tool_calls, results):
+                if isinstance(result, asyncio.CancelledError):
+                    # Cooperative cancellation (user stopped the run) must still
+                    # unwind — never swallow it into a tool result.
+                    raise result
+                if isinstance(result, BaseException):
+                    # registry.invoke already traps tool exceptions, so this only
+                    # fires for an error OUTSIDE the tool (e.g. the event bus); turn
+                    # it into this call's error result without aborting the siblings.
+                    content = f"{type(result).__name__}: {result}"
+                else:
+                    content = result.output if result.ok else (result.error or "error")
                 messages.append(
                     LLMMessage(
                         role="tool",
                         tool_call_id=tc.id,
                         name=tc.name,
-                        content=result.output if result.ok else (result.error or "error"),
+                        content=content,
                     )
                 )
             self._save(run)

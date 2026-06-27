@@ -56,6 +56,11 @@ def default_permissions() -> dict[str, str]:
         "list_agents": "allow",
         "create_agent": "ask",
         "spawn_agent": "ask",
+        # Departments: the shared blackboard. Posting/reading notes and messaging
+        # a sibling are low-risk, local, and user-visible — allowed.
+        "blackboard_post": "allow",
+        "blackboard_read": "allow",
+        "message_agent": "allow",
         # Agents authoring their own reusable tools. Listing is read-only; creating
         # or deleting a tool (it runs commands) asks for approval like create_agent.
         # Each created tool runs under "custom:<name>", which defaults to ASK.

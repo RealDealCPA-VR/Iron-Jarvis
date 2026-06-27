@@ -44,6 +44,8 @@ from .workflows import models as _wf_models  # noqa: F401  (registers WorkflowRu
 from .agents import dynamic_models as _dyn_models  # noqa: F401
 from .agents.agent_tools import agent_management_tools
 from .agents.dynamic import DynamicAgentRegistry
+from .blackboard import BlackboardStore, blackboard_tools
+from .blackboard import models as _bb_models  # noqa: F401  (registers BlackboardRecord)
 from .comm import Notifier, build_notifier, httpx_post, notify_tools
 from .filesearch import FileSearchService, filesearch_tools
 from .integrations import IntegrationRegistry, integration_tools
@@ -130,6 +132,7 @@ class Platform:
     connections: ConnectionRegistry
     computeruse: CUContext
     terminals: TerminalManager
+    blackboard: "BlackboardStore | None" = None
     scheduler: Scheduler | None = None
     agents_registry: DynamicAgentRegistry | None = None
     tools_registry: "DynamicToolRegistry | None" = None
@@ -353,6 +356,13 @@ def build_platform(
 
     # Phase 6: the delegate tool needs the assembled platform.
     platform.registry.register(DelegateTool(platform))
+
+    # Departments: the shared, session-scoped blackboard. Sibling sub-agents of
+    # one task resolve to ONE board (their root session id) so they can post
+    # findings and message each other instead of only summarizing upward.
+    platform.blackboard = BlackboardStore(engine)
+    for tool in blackboard_tools(platform.blackboard):
+        platform.registry.register(tool)
 
     # Scheduled tasks (cron): a task runs a workflow or emits an event on fire.
     def _run_scheduled(task):
