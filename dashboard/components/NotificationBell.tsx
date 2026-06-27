@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Bell, GitBranch, MonitorCog, Inbox, ArrowRight } from "lucide-react";
 import { useEvents } from "@/lib/useEvents";
 import { usePolledApi } from "@/lib/useApi";
+import { useDesktopNotifications } from "@/lib/useDesktopNotifications";
 import type { ComputerUseStatus, IJEvent } from "@/lib/types";
 import { shortId, clockTime } from "@/lib/format";
 
@@ -52,6 +53,46 @@ export function NotificationBell() {
 
   const count = reviews.length + pendingApprovals;
 
+  // Desktop notifications + browser tab title are owned here, app-wide.
+  const { permission, requestPermission, notify } = useDesktopNotifications();
+  const prevCount = useRef(count);
+  const askedPermission = useRef(false);
+
+  // Reflect pending work in the tab title (so a backgrounded user notices) and
+  // ping a desktop notification on each UPWARD transition of the count.
+  useEffect(() => {
+    const prev = prevCount.current;
+    prevCount.current = count;
+
+    if (count === 0) {
+      document.title = "Iron Jarvis";
+    } else {
+      document.title = `(${count}) Iron Jarvis`;
+    }
+
+    if (count > prev) {
+      const parts: string[] = [];
+      if (reviews.length)
+        parts.push(`${reviews.length} review${reviews.length === 1 ? "" : "s"} awaiting approval`);
+      if (pendingApprovals)
+        parts.push(
+          `${pendingApprovals} computer-use approval${pendingApprovals === 1 ? "" : "s"}`,
+        );
+      const body = parts.join(" · ") || "Something needs your attention.";
+      notify(`Iron Jarvis — ${count} pending`, body, () => setOpen(true));
+    }
+  }, [count, reviews.length, pendingApprovals, notify]);
+
+  // Lazily request notification permission the first time the user opens the
+  // bell — a real user gesture, so the browser actually shows the prompt.
+  const toggleOpen = () => {
+    setOpen((o) => !o);
+    if (!askedPermission.current && permission === "default") {
+      askedPermission.current = true;
+      void requestPermission();
+    }
+  };
+
   // Close the dropdown on an outside click or Escape.
   useEffect(() => {
     if (!open) return;
@@ -73,7 +114,7 @@ export function NotificationBell() {
     <div ref={ref} className="relative">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggleOpen}
         aria-label={count ? `${count} notifications` : "Notifications"}
         className={`relative grid h-9 w-9 place-items-center rounded-xl border transition-colors ${
           open

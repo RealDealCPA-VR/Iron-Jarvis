@@ -11,6 +11,7 @@ import {
   Boxes,
   ArrowRight,
   PlugZap,
+  HeartPulse,
 } from "lucide-react";
 import { usePolledApi, useApi } from "@/lib/useApi";
 import type { Health, Metrics, VaultProvider, SessionView } from "@/lib/types";
@@ -33,11 +34,65 @@ import { OnboardingWelcome } from "@/components/OnboardingWelcome";
 import { PageShell, Reveal } from "@/components/motion";
 import { pct, num, timeAgo, shortId } from "@/lib/format";
 
+type Diagnostics = {
+  db_integrity?: string;
+  db_bytes?: number;
+  wal_bytes?: number;
+  secrets_key_present?: boolean;
+  running_sessions?: number;
+  pending_reviews?: number;
+  tracked_worktrees?: number;
+};
+
+function fmtBytes(b?: number): string {
+  if (!b || b <= 0) return "0 B";
+  const u = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  let n = b;
+  while (n >= 1024 && i < u.length - 1) {
+    n /= 1024;
+    i += 1;
+  }
+  return `${n.toFixed(i > 0 && n < 10 ? 1 : 0)} ${u[i]}`;
+}
+
+function HealthItem({
+  label,
+  value,
+  status,
+}: {
+  label: string;
+  value: string;
+  status: "ok" | "bad" | "warn" | "neutral";
+}) {
+  const tint =
+    status === "ok"
+      ? "text-emerald-300"
+      : status === "bad"
+        ? "text-rose-300"
+        : status === "warn"
+          ? "text-amber-300"
+          : "text-zinc-200";
+  return (
+    <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2">
+      <div className="text-[11px] uppercase tracking-wide text-zinc-500">{label}</div>
+      <div className={`mt-0.5 flex items-center gap-1.5 text-sm font-medium ${tint}`}>
+        {(status === "ok" || status === "bad") && <Dot on={status === "ok"} />}
+        <span className="truncate" title={value}>
+          {value}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export default function OverviewPage() {
   const health = usePolledApi<Health>("/health", 5000);
   const metrics = usePolledApi<Metrics>("/metrics", 5000);
   const vault = useApi<{ providers: VaultProvider[] }>("/vault");
   const sessions = usePolledApi<{ sessions: SessionView[] }>("/sessions", 5000);
+  // /diagnostics runs a full DB integrity scan — poll slowly.
+  const diag = usePolledApi<Diagnostics>("/diagnostics", 30000);
 
   const offline = health.error && health.error.status === 0;
   const m = metrics.data;
@@ -217,6 +272,54 @@ export default function OverviewPage() {
             )}
           </Card>
         </div>
+      </Reveal>
+
+      {/* System health (the /diagnostics self-test, surfaced at a glance) */}
+      <Reveal>
+        <Card
+          title="System health"
+          icon={<HeartPulse size={15} />}
+          right={<span className="text-[11px] text-zinc-500">self-test</span>}
+        >
+          {diag.loading && !diag.data ? (
+            <SkeletonRows rows={2} />
+          ) : diag.data ? (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+              <HealthItem
+                label="DB integrity"
+                value={diag.data.db_integrity === "ok" ? "ok" : diag.data.db_integrity || "—"}
+                status={diag.data.db_integrity === "ok" ? "ok" : "bad"}
+              />
+              <HealthItem
+                label="Secrets key"
+                value={diag.data.secrets_key_present ? "present" : "missing"}
+                status={diag.data.secrets_key_present ? "ok" : "bad"}
+              />
+              <HealthItem
+                label="WAL size"
+                value={fmtBytes(diag.data.wal_bytes)}
+                status={(diag.data.wal_bytes || 0) > 64 * 1024 * 1024 ? "warn" : "neutral"}
+              />
+              <HealthItem
+                label="Running"
+                value={String(diag.data.running_sessions ?? 0)}
+                status="neutral"
+              />
+              <HealthItem
+                label="Pending reviews"
+                value={String(diag.data.pending_reviews ?? 0)}
+                status={(diag.data.pending_reviews || 0) > 0 ? "warn" : "neutral"}
+              />
+              <HealthItem
+                label="Worktrees"
+                value={String(diag.data.tracked_worktrees ?? 0)}
+                status="neutral"
+              />
+            </div>
+          ) : (
+            <Empty icon={<HeartPulse size={22} />}>No diagnostics available.</Empty>
+          )}
+        </Card>
       </Reveal>
 
       <Reveal>

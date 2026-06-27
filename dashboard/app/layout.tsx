@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { Sidebar, MobileNav } from "@/components/Sidebar";
 import { DaemonBanner } from "@/components/DaemonBanner";
@@ -7,8 +7,23 @@ import { NotificationBell } from "@/components/NotificationBell";
 import { DaemonProvider } from "@/lib/daemon";
 
 export const metadata: Metadata = {
-  title: "Iron Jarvis — Control Center",
+  // Base title; NotificationBell mutates document.title at runtime to surface
+  // pending review/approval counts.
+  title: "Iron Jarvis",
   description: "Dashboard for the Iron Jarvis daemon.",
+  manifest: "/manifest.webmanifest",
+  applicationName: "Iron Jarvis",
+  appleWebApp: {
+    capable: true,
+    title: "Iron Jarvis",
+    statusBarStyle: "black-translucent",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#070809",
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({

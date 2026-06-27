@@ -30,6 +30,8 @@ import {
   DownloadCloud,
   Settings,
   LifeBuoy,
+  BarChart3,
+  LayoutTemplate,
   Menu,
   X,
   type LucideIcon,
@@ -43,31 +45,63 @@ interface NavItem {
   icon: LucideIcon;
 }
 
-const NAV: NavItem[] = [
-  { href: "/", label: "Overview", icon: LayoutDashboard },
-  { href: "/connections", label: "Connections", icon: PlugZap },
-  { href: "/sessions", label: "Sessions", icon: Boxes },
-  { href: "/kanban", label: "Kanban", icon: SquareKanban },
-  { href: "/agents", label: "Agents", icon: Bot },
-  { href: "/self-dev", label: "Self-development", icon: GitBranch },
-  { href: "/computeruse", label: "Computer Use", icon: MonitorCog },
-  { href: "/terminals", label: "Terminals", icon: SquareTerminal },
-  { href: "/workflows", label: "Workflows", icon: Workflow },
-  { href: "/schedules", label: "Schedules", icon: CalendarClock },
-  { href: "/skills", label: "Skills", icon: Sparkles },
-  { href: "/memory", label: "Memory", icon: BrainCircuit },
-  { href: "/lessons", label: "What I've learned", icon: GraduationCap },
-  { href: "/ltm", label: "Long-term Memory", icon: Database },
-  { href: "/filesearch", label: "File Search", icon: FileSearch },
-  { href: "/documents", label: "Documents", icon: FileText },
-  { href: "/artifacts", label: "Artifacts", icon: Package },
-  { href: "/secrets", label: "Secrets", icon: KeyRound },
-  { href: "/integrations", label: "Integrations", icon: Plug },
-  { href: "/channels", label: "Channels", icon: Megaphone },
-  { href: "/webhooks", label: "Webhooks", icon: Webhook },
-  { href: "/updates", label: "Updates", icon: DownloadCloud },
-  { href: "/settings", label: "Settings", icon: Settings },
-  { href: "/help", label: "Help", icon: LifeBuoy },
+interface NavSection {
+  label: string;
+  items: NavItem[];
+}
+
+const NAV: NavSection[] = [
+  {
+    label: "Work",
+    items: [
+      { href: "/", label: "Overview", icon: LayoutDashboard },
+      { href: "/sessions", label: "Sessions", icon: Boxes },
+      { href: "/kanban", label: "Kanban", icon: SquareKanban },
+      { href: "/templates", label: "Templates", icon: LayoutTemplate },
+      { href: "/agents", label: "Agents", icon: Bot },
+      { href: "/self-dev", label: "Self-development", icon: GitBranch },
+    ],
+  },
+  {
+    label: "Automation",
+    items: [
+      { href: "/workflows", label: "Workflows", icon: Workflow },
+      { href: "/schedules", label: "Schedules", icon: CalendarClock },
+      { href: "/computeruse", label: "Computer Use", icon: MonitorCog },
+      { href: "/terminals", label: "Terminals", icon: SquareTerminal },
+      { href: "/webhooks", label: "Webhooks", icon: Webhook },
+    ],
+  },
+  {
+    label: "Knowledge",
+    items: [
+      { href: "/skills", label: "Skills", icon: Sparkles },
+      { href: "/memory", label: "Memory", icon: BrainCircuit },
+      { href: "/lessons", label: "What I've learned", icon: GraduationCap },
+      { href: "/ltm", label: "Long-term Memory", icon: Database },
+      { href: "/filesearch", label: "File Search", icon: FileSearch },
+      { href: "/documents", label: "Documents", icon: FileText },
+      { href: "/artifacts", label: "Artifacts", icon: Package },
+    ],
+  },
+  {
+    label: "Connections",
+    items: [
+      { href: "/connections", label: "Connections", icon: PlugZap },
+      { href: "/secrets", label: "Secrets", icon: KeyRound },
+      { href: "/integrations", label: "Integrations", icon: Plug },
+      { href: "/channels", label: "Channels", icon: Megaphone },
+    ],
+  },
+  {
+    label: "System",
+    items: [
+      { href: "/usage", label: "Usage", icon: BarChart3 },
+      { href: "/updates", label: "Updates", icon: DownloadCloud },
+      { href: "/settings", label: "Settings", icon: Settings },
+      { href: "/help", label: "Help", icon: LifeBuoy },
+    ],
+  },
 ];
 
 /** The arc-reactor brand mark. */
@@ -135,38 +169,45 @@ function NavLinks({
     href === "/" ? pathname === "/" : pathname.startsWith(href);
   return (
     <>
-      {NAV.map((item) => {
-        const active = isActive(item.href);
-        const Icon = item.icon;
-        return (
-          <Link
-            key={item.href}
-            href={item.href}
-            onClick={onNavigate}
-            className={`group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors ${
-              active
-                ? "text-accent-soft"
-                : "text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-100"
-            }`}
-          >
-            {active && (
-              <motion.span
-                layoutId={layoutId}
-                className="absolute inset-0 rounded-xl border border-accent/25 bg-accent/[0.08] shadow-[inset_0_0_0_1px_rgba(34,211,238,0.06)]"
-                transition={{ type: "spring", stiffness: 380, damping: 32 }}
-              />
-            )}
-            <span
-              className={`relative z-10 transition-colors ${
-                active ? "text-accent" : "text-zinc-500 group-hover:text-zinc-300"
-              }`}
-            >
-              <Icon size={17} strokeWidth={2} />
-            </span>
-            <span className="relative z-10 font-medium">{item.label}</span>
-          </Link>
-        );
-      })}
+      {NAV.map((section) => (
+        <div key={section.label} className="space-y-1 pb-2">
+          <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600">
+            {section.label}
+          </div>
+          {section.items.map((item) => {
+            const active = isActive(item.href);
+            const Icon = item.icon;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={onNavigate}
+                className={`group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors ${
+                  active
+                    ? "text-accent-soft"
+                    : "text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-100"
+                }`}
+              >
+                {active && (
+                  <motion.span
+                    layoutId={layoutId}
+                    className="absolute inset-0 rounded-xl border border-accent/25 bg-accent/[0.08] shadow-[inset_0_0_0_1px_rgba(34,211,238,0.06)]"
+                    transition={{ type: "spring", stiffness: 380, damping: 32 }}
+                  />
+                )}
+                <span
+                  className={`relative z-10 transition-colors ${
+                    active ? "text-accent" : "text-zinc-500 group-hover:text-zinc-300"
+                  }`}
+                >
+                  <Icon size={17} strokeWidth={2} />
+                </span>
+                <span className="relative z-10 font-medium">{item.label}</span>
+              </Link>
+            );
+          })}
+        </div>
+      ))}
     </>
   );
 }

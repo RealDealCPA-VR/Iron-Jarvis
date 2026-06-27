@@ -15,6 +15,24 @@ import {
   KeyRound,
   CalendarClock,
   BrainCircuit,
+  SquareKanban,
+  LayoutTemplate,
+  BarChart3,
+  GitBranch,
+  Workflow,
+  MonitorCog,
+  SquareTerminal,
+  Webhook,
+  GraduationCap,
+  Database,
+  FileSearch,
+  FileText,
+  Package,
+  Plug,
+  Megaphone,
+  DownloadCloud,
+  Settings,
+  LifeBuoy,
   type LucideIcon,
 } from "lucide-react";
 
@@ -27,16 +45,41 @@ interface Command {
   keywords?: string;
 }
 
+// Quick actions (do something) listed first, then a full "jump to" index of
+// every route in the app so ⌘K can reach anywhere.
 const COMMANDS: Command[] = [
-  { id: "connect", label: "Connect a model", hint: "Connections", icon: PlugZap, href: "/connections", keywords: "llm api key oauth anthropic openai google provider" },
-  { id: "new-session", label: "New session", hint: "Run an agent", icon: Plus, href: "/sessions", keywords: "run task agent start" },
-  { id: "overview", label: "Overview", icon: LayoutDashboard, href: "/", keywords: "home dashboard health metrics" },
-  { id: "sessions", label: "Sessions", icon: Boxes, href: "/sessions" },
-  { id: "agents", label: "Agents", icon: Bot, href: "/agents" },
-  { id: "skills", label: "Skills", icon: Sparkles, href: "/skills" },
-  { id: "memory", label: "Memory", icon: BrainCircuit, href: "/memory" },
-  { id: "schedules", label: "Schedules", icon: CalendarClock, href: "/schedules" },
-  { id: "secrets", label: "Secrets", icon: KeyRound, href: "/secrets" },
+  // ── Actions ──────────────────────────────────────────────────────────────
+  { id: "new-session", label: "New session", hint: "Action", icon: Plus, href: "/sessions?new=1", keywords: "run task agent start launch create" },
+  { id: "connect", label: "Connect a model", hint: "Action", icon: PlugZap, href: "/connections", keywords: "llm api key oauth anthropic openai google provider" },
+  { id: "open-usage", label: "View usage & cost", hint: "Action", icon: BarChart3, href: "/usage", keywords: "tokens cost spend report analytics billing" },
+  { id: "open-templates", label: "Open task templates", hint: "Action", icon: LayoutTemplate, href: "/templates", keywords: "preset saved reusable task template" },
+  // ── Jump to ──────────────────────────────────────────────────────────────
+  { id: "overview", label: "Overview", hint: "Work", icon: LayoutDashboard, href: "/", keywords: "home dashboard health metrics" },
+  { id: "sessions", label: "Sessions", hint: "Work", icon: Boxes, href: "/sessions", keywords: "runs history" },
+  { id: "kanban", label: "Kanban", hint: "Work", icon: SquareKanban, href: "/kanban", keywords: "board tasks status" },
+  { id: "templates", label: "Templates", hint: "Work", icon: LayoutTemplate, href: "/templates", keywords: "preset saved reusable" },
+  { id: "agents", label: "Agents", hint: "Work", icon: Bot, href: "/agents", keywords: "builder supervisor planner researcher reviewer" },
+  { id: "self-dev", label: "Self-development", hint: "Work", icon: GitBranch, href: "/self-dev", keywords: "self dev git code improve" },
+  { id: "workflows", label: "Workflows", hint: "Automation", icon: Workflow, href: "/workflows", keywords: "pipeline chain steps" },
+  { id: "schedules", label: "Schedules", hint: "Automation", icon: CalendarClock, href: "/schedules", keywords: "cron timer recurring" },
+  { id: "computeruse", label: "Computer Use", hint: "Automation", icon: MonitorCog, href: "/computeruse", keywords: "desktop screen control approval" },
+  { id: "terminals", label: "Terminals", hint: "Automation", icon: SquareTerminal, href: "/terminals", keywords: "shell console command" },
+  { id: "webhooks", label: "Webhooks", hint: "Automation", icon: Webhook, href: "/webhooks", keywords: "trigger http callback" },
+  { id: "skills", label: "Skills", hint: "Knowledge", icon: Sparkles, href: "/skills", keywords: "abilities tools" },
+  { id: "memory", label: "Memory", hint: "Knowledge", icon: BrainCircuit, href: "/memory", keywords: "context recall" },
+  { id: "lessons", label: "What I've learned", hint: "Knowledge", icon: GraduationCap, href: "/lessons", keywords: "lessons learned insights" },
+  { id: "ltm", label: "Long-term Memory", hint: "Knowledge", icon: Database, href: "/ltm", keywords: "obsidian notion store" },
+  { id: "filesearch", label: "File Search", hint: "Knowledge", icon: FileSearch, href: "/filesearch", keywords: "find files grep index" },
+  { id: "documents", label: "Documents", hint: "Knowledge", icon: FileText, href: "/documents", keywords: "files upload pdf" },
+  { id: "artifacts", label: "Artifacts", hint: "Knowledge", icon: Package, href: "/artifacts", keywords: "output results files" },
+  { id: "connections", label: "Connections", hint: "Connections", icon: PlugZap, href: "/connections", keywords: "models providers api key" },
+  { id: "secrets", label: "Secrets", hint: "Connections", icon: KeyRound, href: "/secrets", keywords: "vault credentials env" },
+  { id: "integrations", label: "Integrations", hint: "Connections", icon: Plug, href: "/integrations", keywords: "services connect" },
+  { id: "channels", label: "Channels", hint: "Connections", icon: Megaphone, href: "/channels", keywords: "slack telegram discord notify" },
+  { id: "usage", label: "Usage", hint: "System", icon: BarChart3, href: "/usage", keywords: "tokens cost spend analytics" },
+  { id: "updates", label: "Updates", hint: "System", icon: DownloadCloud, href: "/updates", keywords: "version upgrade release" },
+  { id: "settings", label: "Settings", hint: "System", icon: Settings, href: "/settings", keywords: "config preferences" },
+  { id: "help", label: "Help", hint: "System", icon: LifeBuoy, href: "/help", keywords: "docs support guide" },
 ];
 
 export function CommandPalette() {

@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Play, Cpu, PlugZap, ArrowRight, Paperclip } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
@@ -38,8 +38,22 @@ function readAsBase64(file: File): Promise<string> {
   });
 }
 
-export function NewSessionForm({ onCreated }: { onCreated?: () => void }) {
+/**
+ * Public entry point. The inner form reads `useSearchParams`, which would force
+ * the whole consuming page out of static prerendering unless it sits inside a
+ * Suspense boundary — so we own that boundary here instead of touching the page.
+ */
+export function NewSessionForm(props: { onCreated?: () => void }) {
+  return (
+    <Suspense fallback={null}>
+      <NewSessionFormInner {...props} />
+    </Suspense>
+  );
+}
+
+function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { data: modelsData } = useApi<{ models: ModelOption[] }>("/models");
   const { data: health } = useApi<Health>("/health");
 
@@ -48,6 +62,28 @@ export function NewSessionForm({ onCreated }: { onCreated?: () => void }) {
   const [choice, setChoice] = useState(""); // "provider|model" or "" => default
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Deep-link support: /sessions?new=1&task=<encoded>&agent=<type>. Used by the
+  // command palette ("New session") and the Templates page ("Run").
+  const taskRef = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    const presetTask = searchParams.get("task");
+    if (presetTask) setTask(presetTask);
+    const presetAgent = searchParams.get("agent");
+    if (presetAgent && AGENT_TYPES.includes(presetAgent)) setAgentType(presetAgent);
+    if (searchParams.get("new") || presetTask) {
+      // Focus (and place the caret at the end of) the task box on arrival.
+      requestAnimationFrame(() => {
+        const el = taskRef.current;
+        if (!el) return;
+        el.focus();
+        const len = el.value.length;
+        el.setSelectionRange(len, len);
+      });
+    }
+    // Run once on mount; the deep-link is consumed immediately.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // File attach
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -135,6 +171,7 @@ export function NewSessionForm({ onCreated }: { onCreated?: () => void }) {
           />
         </div>
         <textarea
+          ref={taskRef}
           value={task}
           onChange={(e) => setTask(e.target.value)}
           rows={3}
