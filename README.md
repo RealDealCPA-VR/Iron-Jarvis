@@ -118,12 +118,25 @@ docker compose up        # daemon + dashboard, locally or on any Docker host
 
 ## 📖 Using Iron Jarvis — a practical guide
 
-### Run it as a desktop app 🪟
-Prefer a native window over a browser tab? An Electron wrapper boots the daemon + dashboard and shows them in one app:
+### Install & run as a desktop app 🪟
+
+**Option 1 — a real installer (no Python/Node needed on the target machine).** Build a self-contained Windows installer that bundles the PyInstaller-frozen daemon + the Next.js standalone dashboard:
+```powershell
+pnpm --dir desktop run dist:full     # → desktop/release/Iron Jarvis Setup x.y.z.exe
+```
+Double-click the `.exe`, install, and launch from the Start menu — it boots the bundled daemon (port 8787) and dashboard in a native window with **no Python, uv, Node, or pnpm required**. Connecting a Claude/OpenAI/Google key or a local Ollama all work. (Computer-use and the Docker sandbox — both opt-in advanced features — aren't bundled in the standalone; everything else is.)
+
+> **Building locally needs the symlink privilege.** electron-builder unpacks a cache containing macOS symlinks, so the *packaging step* requires **Windows Developer Mode** (Settings → Privacy & security → For developers → Developer Mode = On) or an elevated PowerShell — a one-time toggle. You don't need it to *run* the app, only to build the installer yourself. The easiest path is to let CI build it: push a tag (`git tag v0.1.0 && git push --tags`) and `.github/workflows/release.yml` produces + publishes the installer on a GitHub runner that already has the privilege.
+
+**Option 2 — dev mode (run the repo directly).** Drives the repo via uv/pnpm:
 ```bash
 cd dashboard && pnpm install && pnpm build   # once
 cd ../desktop  && pnpm install && pnpm start  # opens Iron Jarvis in a native window
 ```
+
+### Keep it up to date 🔄
+- **From source:** `uv run ironjarvis self-update` (or the dashboard's **Updates** page) does `git pull` + `uv sync` + a dashboard rebuild, then asks you to restart; `ironjarvis update-check` just reports whether you're behind upstream.
+- **Installed app:** push a version tag (`git tag v0.1.1 && git push --tags`) — the GitHub Actions release workflow builds and publishes the installer, and the desktop app then **auto-updates** from GitHub Releases on launch (electron-updater).
 
 ### Manage multiple terminals (and pick a project) 🖥️
 **Dashboard → Terminals.** A tiled workspace of **live terminal sessions** — click the **`+` tile** to open another, so you can run/watch several agents or shells side by side. The **directory tree on the right** browses your computer (drives → folders, with git/python/node project badges); pick a folder and hit **"Open terminal here →"** to launch a terminal already `cd`'d into that project. Real PTYs (ConPTY on Windows), streamed over WebSocket.
