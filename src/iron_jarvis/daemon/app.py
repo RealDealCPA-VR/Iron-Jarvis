@@ -7,6 +7,8 @@ exposes them over REST + a WebSocket event stream for the dashboard (§4).
 from __future__ import annotations
 
 import asyncio
+import hmac
+import html as _html
 import json
 import os
 from contextlib import asynccontextmanager
@@ -24,13 +26,26 @@ from sqlmodel import select
 from .. import __version__
 from ..agents.orchestrator import Orchestrator
 from ..core.db import session_scope
+from ..core.fs_policy import fs_read_ok, is_protected_path
+from ..core.logging import get_logger
 from ..core.models import AgentType
 from ..platform import build_platform
 from ..tools.permissions import headless_ask_resolver
 
+log = get_logger("daemon")
+
 
 def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _ws_token_ok(ws: WebSocket) -> bool:
+    """Constant-time WebSocket bearer-token check (matches the HTTP middleware)."""
+    token = os.environ.get("IRONJARVIS_TOKEN", "").strip()
+    if not token:
+        return True
+    candidate = ws.query_params.get("token") or ""
+    return hmac.compare_digest(candidate, token)
 
 
 class SessionCreate(BaseModel):
@@ -39,6 +54,38 @@ class SessionCreate(BaseModel):
     provider: str | None = None
     model: str | None = None
     wait: bool = True
+    # Opt-in self-development: run a Maintainer on a worktree of Iron Jarvis's
+    # OWN source (gated by config.self_dev_enabled; review-gated, never auto-merge).
+    self_dev: bool = False
+
+
+class ContinueBody(BaseModel):
+    message: str
+    wait: bool = True
+
+
+class UploadBody(BaseModel):
+    filename: str
+    content_b64: str
+
+
+class SettingsBody(BaseModel):
+    values: dict[str, Any]
+
+
+#: Whitelist of config keys the Settings UI may read/write (safe, restart-light).
+_SETTINGS_KEYS = [
+    "default_provider",
+    "default_model",
+    "max_agent_steps",
+    "git_native",
+    "self_dev_enabled",
+    "self_dev_root",
+    "sandbox_runtime",
+    "ollama_base_url",
+    "ollama_model",
+    "event_retention_days",
+]
 
 
 class ConnectionKeyBody(BaseModel):
@@ -169,29 +216,11 @@ def _session_view(session) -> dict[str, Any]:
         "status": session.status.value,
         "workspace_path": session.workspace_path,
         "summary": session.summary,
+        "input_tokens": getattr(session, "input_tokens", 0),
+        "output_tokens": getattr(session, "output_tokens", 0),
         "created_at": session.created_at.isoformat(),
         "finished_at": session.finished_at.isoformat() if session.finished_at else None,
     }
-
-
-def _fs_path_allowed(path: str) -> bool:
-    """When IRONJARVIS_FS_ALLOWLIST is set (a public deployment), restrict file
-    reads to those roots. Unset (local) → unrestricted, preserving local UX."""
-    allow = os.environ.get("IRONJARVIS_FS_ALLOWLIST", "").strip()
-    if not allow:
-        return True
-    try:
-        target = Path(path).resolve()
-    except Exception:
-        return False
-    for root in (r.strip() for r in allow.split(",") if r.strip()):
-        try:
-            rp = Path(root).resolve()
-            if target == rp or target.is_relative_to(rp):
-                return True
-        except Exception:
-            continue
-    return False
 
 
 def create_app(project_root: str | None = None) -> FastAPI:
@@ -212,6 +241,18 @@ def create_app(project_root: str | None = None) -> FastAPI:
             platform.scheduler.start()
         except Exception:  # pragma: no cover - never block boot
             pass
+        try:  # GC worktrees orphaned by a prior restart (failed/missing sessions)
+            orchestrator.prune_orphan_worktrees()
+        except Exception:  # pragma: no cover - never block boot
+            pass
+        try:  # event-log retention sweep (config.event_retention_days > 0)
+            days = int(getattr(platform.config, "event_retention_days", 0) or 0)
+            if days > 0:
+                from ..core.db import prune_events
+
+                prune_events(platform.engine, days)
+        except Exception:  # pragma: no cover - never block boot
+            pass
         try:
             yield
         finally:
@@ -221,6 +262,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 pass
             try:
                 platform.terminals.kill_all()
+            except Exception:  # pragma: no cover
+                pass
+            try:  # close any launched computer-use browser (Chromium + driver)
+                br = getattr(platform.computeruse, "browser", None)
+                if br is not None and hasattr(br, "aclose"):
+                    await br.aclose()
             except Exception:  # pragma: no cover
                 pass
 
@@ -241,6 +288,24 @@ def create_app(project_root: str | None = None) -> FastAPI:
     )
     app.state.platform = platform
     app.state.orchestrator = orchestrator
+    # Background session tasks are registered on the orchestrator keyed by
+    # session_id (a strong ref preventing premature GC, and the handle the
+    # cancel endpoint uses). Exceptions are surfaced (logged), not swallowed.
+    def _spawn_bg(session_id: str, coro) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        orchestrator.register_running(session_id, task)
+
+        def _done(t: asyncio.Task) -> None:
+            orchestrator._running.pop(session_id, None)
+            try:
+                t.result()
+            except asyncio.CancelledError:  # pragma: no cover - expected on cancel
+                pass
+            except Exception:  # noqa: BLE001
+                log.exception("background session %s failed", session_id)
+
+        task.add_done_callback(_done)
+        return task
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -262,14 +327,115 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     @app.post("/sessions")
     async def create_session(body: SessionCreate) -> dict[str, Any]:
-        session = await orchestrator.create_session(
-            body.task, _agent_type(body.agent_type), body.provider, model=body.model
-        )
+        try:
+            session = await orchestrator.create_session(
+                body.task,
+                _agent_type(body.agent_type),
+                body.provider,
+                model=body.model,
+                self_dev=body.self_dev,
+            )
+        except (PermissionError, RuntimeError) as exc:  # self-dev gating
+            raise HTTPException(status_code=400, detail=str(exc))
         if body.wait:
             session = await orchestrator.run_session(session.id)
         else:
-            asyncio.create_task(orchestrator.run_session(session.id))
+            _spawn_bg(session.id, orchestrator.run_session(session.id))
         return _session_view(session)
+
+    @app.post("/sessions/{session_id}/cancel")
+    def cancel_session(session_id: str) -> dict[str, Any]:
+        try:
+            session = orchestrator.cancel_session(session_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="session not found")
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        return _session_view(session)
+
+    @app.post("/sessions/{session_id}/rerun")
+    async def rerun_session(session_id: str, wait: bool = True) -> dict[str, Any]:
+        try:
+            session = await orchestrator.rerun_session(session_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="session not found")
+        except (PermissionError, RuntimeError) as exc:  # self-dev gating on a maintainer rerun
+            raise HTTPException(status_code=400, detail=str(exc))
+        if wait:
+            session = await orchestrator.run_session(session.id)
+        else:
+            _spawn_bg(session.id, orchestrator.run_session(session.id))
+        return _session_view(session)
+
+    @app.post("/sessions/{session_id}/continue")
+    async def continue_session(session_id: str, body: ContinueBody) -> dict[str, Any]:
+        try:
+            session = await orchestrator.continue_session(session_id, body.message)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="session not found")
+        if body.wait:
+            session = await orchestrator.run_session(session.id)
+        else:
+            _spawn_bg(session.id, orchestrator.run_session(session.id))
+        return _session_view(session)
+
+    @app.delete("/sessions/{session_id}")
+    def delete_session(session_id: str) -> dict[str, Any]:
+        try:
+            orchestrator.delete_session(session_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="session not found")
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        return {"deleted": session_id}
+
+    @app.get("/sessions/{session_id}/export")
+    def export_session(session_id: str, format: str = "md"):
+        session = orchestrator.get_session(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        transcript = orchestrator.transcript(session_id)
+        try:
+            ev = platform.evaluator.latest(session_id)
+        except Exception:  # noqa: BLE001
+            ev = None
+        view = _session_view(session)
+        if format == "json":
+            return {
+                "session": view,
+                "transcript": transcript,
+                "evaluation": ev.model_dump() if ev is not None else None,
+            }
+        from fastapi.responses import PlainTextResponse
+
+        lines = [
+            f"# Iron Jarvis session — {session.task}",
+            "",
+            f"- id: {session.id}",
+            f"- status: {session.status.value}",
+            f"- provider/model: {session.provider} / {session.model}",
+            f"- created: {session.created_at}",
+            f"- finished: {session.finished_at}",
+            "",
+            "## Summary",
+            session.summary or "(none)",
+            "",
+            "## Tool calls",
+        ]
+        for t in transcript.get("tools", []):
+            lines.append(
+                f"- `{t.get('tool', '')}` ({t.get('verdict', '')}) ok={t.get('ok')}: "
+                f"{(t.get('output') or '')[:200]}"
+            )
+        if ev is not None:
+            lines += [
+                "",
+                "## Evaluation",
+                "```json",
+                json.dumps(ev.model_dump(), indent=2, default=str),
+                "```",
+            ]
+        return PlainTextResponse("\n".join(lines), media_type="text/markdown")
 
     @app.get("/sessions")
     def list_sessions() -> dict[str, Any]:
@@ -284,6 +450,103 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "session": _session_view(session),
             "transcript": orchestrator.transcript(session_id),
         }
+
+    @app.get("/self-dev")
+    def self_dev_status() -> dict[str, Any]:
+        """Whether agents may edit Iron Jarvis's own source (opt-in, review-gated)."""
+        from ..core.self_dev import self_dev_status as _status
+
+        return _status(platform.config)
+
+    @app.post("/worktrees/prune")
+    def prune_worktrees(all: bool = False) -> dict[str, Any]:
+        """GC orphaned session worktrees (failed/missing; pass ?all=true for every orphan)."""
+        return {"pruned": orchestrator.prune_orphan_worktrees(include_completed=all)}
+
+    @app.post("/documents/upload")
+    def documents_upload(body: UploadBody) -> dict[str, Any]:
+        """Accept a base64 file and store it under <home>/uploads (no multipart dep)."""
+        import base64
+        import re
+
+        name = re.sub(r"[^A-Za-z0-9._-]", "_", body.filename).strip("._") or "upload"
+        uploads = platform.config.home / "uploads"
+        uploads.mkdir(parents=True, exist_ok=True)
+        target = uploads / name
+        try:
+            data = base64.b64decode(body.content_b64, validate=False)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"invalid base64: {exc}")
+        target.write_bytes(data)
+        return {"path": str(target), "name": name, "bytes": len(data)}
+
+    @app.get("/settings")
+    def get_settings() -> dict[str, Any]:
+        cfg = platform.config
+        return {"settings": {k: getattr(cfg, k, None) for k in _SETTINGS_KEYS}}
+
+    @app.put("/settings")
+    def put_settings(body: SettingsBody) -> dict[str, Any]:
+        import tomllib
+
+        import tomli_w
+
+        cfg = platform.config
+        updated: list[str] = []
+        for key, value in body.values.items():
+            if key not in _SETTINGS_KEYS:
+                continue
+            try:
+                setattr(cfg, key, value)  # live-update the running config
+            except Exception:  # noqa: BLE001 - pydantic validation
+                raise HTTPException(status_code=400, detail=f"invalid value for {key}")
+            updated.append(key)
+        # Persist to the project config.toml so it survives a restart.
+        path = cfg.home / "config.toml"
+        cfg.home.mkdir(parents=True, exist_ok=True)
+        doc: dict[str, Any] = {}
+        if path.exists():
+            try:
+                doc = tomllib.loads(path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                doc = {}
+        for key in updated:
+            doc[key] = getattr(cfg, key, None)
+        with path.open("wb") as fh:
+            tomli_w.dump({k: v for k, v in doc.items() if v is not None}, fh)
+        return {
+            "settings": {k: getattr(cfg, k, None) for k in _SETTINGS_KEYS},
+            "updated": updated,
+        }
+
+    @app.get("/diagnostics")
+    def diagnostics() -> dict[str, Any]:
+        """Read-only health of the running state (never raises)."""
+        from sqlalchemy import text
+
+        cfg = platform.config
+        out: dict[str, Any] = {}
+        try:
+            with platform.engine.connect() as conn:
+                out["db_integrity"] = conn.execute(text("PRAGMA integrity_check")).scalar()
+        except Exception as exc:  # noqa: BLE001
+            out["db_integrity"] = f"error: {exc}"
+        try:
+            db_path = cfg.db_path
+            out["db_bytes"] = db_path.stat().st_size if db_path.exists() else 0
+            wal = Path(str(db_path) + "-wal")
+            out["wal_bytes"] = wal.stat().st_size if wal.exists() else 0
+        except Exception:  # noqa: BLE001
+            pass
+        out["secrets_key_present"] = (cfg.home / "secrets" / ".secrets.key").exists()
+        out["running_sessions"] = len(orchestrator._running)
+        out["pending_reviews"] = len(orchestrator._reviews)
+        out["tracked_worktrees"] = len(orchestrator._git_sessions)
+        try:
+            out["providers"] = platform.providers.health()
+        except Exception:  # noqa: BLE001
+            out["providers"] = []
+        return out
 
     # --- Observability + Evaluation (§29, §30) ----------------------------
 
@@ -328,8 +591,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
     def documents_read(path: str) -> dict[str, Any]:
         from ..documents import extract_text
 
-        if not _fs_path_allowed(path):
-            raise HTTPException(status_code=403, detail="path not in IRONJARVIS_FS_ALLOWLIST")
+        ok, reason = fs_read_ok(path)
+        if not ok:
+            raise HTTPException(status_code=403, detail=reason)
         try:
             text = extract_text(path)
         except Exception as exc:  # noqa: BLE001
@@ -464,17 +728,33 @@ def create_app(project_root: str | None = None) -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             msg, ok = f"Connection failed: {exc}", False
         color = "#22d3ee" if ok else "#fb7185"
+        # SECURITY: this route is auth-exempt and `provider`/exception text are
+        # attacker-influenced — a reflected-XSS sink. Escape every interpolated
+        # value and build the postMessage payload as a JS-safe string literal.
+        safe_msg = _html.escape(msg)
+        payload = json.dumps(
+            {"type": "ironjarvis-oauth", "provider": provider, "ok": ok}
+        ).replace("<", "\\u003c")
         html = (
             "<!doctype html><meta charset=utf-8><title>Iron Jarvis</title>"
             "<body style='background:#0a0a0f;color:#e5e7eb;font-family:system-ui;"
             "display:grid;place-items:center;height:100vh;margin:0'>"
             f"<div style='text-align:center'><div style='font-size:42px;color:{color}'>"
-            f"{'✓' if ok else '✕'}</div><p>{msg}</p></div>"
+            f"{'✓' if ok else '✕'}</div><p>{safe_msg}</p></div>"
             "<script>try{window.opener&&window.opener.postMessage("
-            f"{{'type':'ironjarvis-oauth','provider':'{provider}','ok':{str(ok).lower()}}},'*');"
+            f"JSON.parse({json.dumps(payload)}),'*');"
             "setTimeout(()=>window.close(),1200)}catch(e){}</script></body>"
         )
-        return HTMLResponse(html)
+        return HTMLResponse(
+            html,
+            headers={
+                "Content-Security-Policy": (
+                    "default-src 'none'; script-src 'unsafe-inline'; "
+                    "style-src 'unsafe-inline'"
+                ),
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     # --- Onboarding / first-run / doctor ----------------------------------
 
@@ -586,8 +866,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     @app.websocket("/terminals/{term_id}/ws")
     async def terminal_ws(ws: WebSocket, term_id: str) -> None:
-        token = os.environ.get("IRONJARVIS_TOKEN", "").strip()
-        if token and ws.query_params.get("token") != token:
+        if not _ws_token_ok(ws):
             await ws.close(code=1008)
             return
         session = platform.terminals.get(term_id)
@@ -653,8 +932,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
     ) -> dict[str, Any]:
         from ..fsbrowser import list_dir
 
-        if not _fs_path_allowed(path):
-            raise HTTPException(status_code=403, detail="path not in IRONJARVIS_FS_ALLOWLIST")
+        ok, reason = fs_read_ok(path)
+        if not ok:
+            raise HTTPException(status_code=403, detail=reason)
         try:
             return list_dir(path, show_hidden=show_hidden, dirs_only=dirs_only)
         except (FileNotFoundError, NotADirectoryError) as exc:
@@ -840,12 +1120,20 @@ def create_app(project_root: str | None = None) -> FastAPI:
     def filesearch(
         q: str, mode: str = "content", limit: int = 50, root: str | None = None
     ) -> dict[str, Any]:
-        if root and not _fs_path_allowed(root):
-            raise HTTPException(status_code=403, detail="root not in IRONJARVIS_FS_ALLOWLIST")
+        if root:
+            ok, reason = fs_read_ok(root)
+            if not ok:
+                raise HTTPException(status_code=403, detail=reason)
         roots = [Path(root)] if root else None
-        return {
-            "results": platform.filesearch.search(q, mode=mode, limit=limit, roots=roots)
-        }
+        results = platform.filesearch.search(q, mode=mode, limit=limit, roots=roots)
+        # Filter protected/out-of-allowlist hits (a default-root search can reach
+        # them) — same as the agent file_search tool.
+        results = [
+            r
+            for r in results
+            if not is_protected_path(r.get("path", "")) and fs_read_ok(r.get("path", ""))[0]
+        ]
+        return {"results": results}
 
     # --- Scheduled tasks --------------------------------------------------
 
@@ -1007,15 +1295,47 @@ def create_app(project_root: str | None = None) -> FastAPI:
     @app.websocket("/events")
     async def events(ws: WebSocket) -> None:
         # BaseHTTPMiddleware can't see WS scope, so guard the token here too.
-        token = os.environ.get("IRONJARVIS_TOKEN", "").strip()
-        if token and ws.query_params.get("token") != token:
+        if not _ws_token_ok(ws):
             await ws.close(code=1008)
             return
         await ws.accept()
+        # Race a receiver against the event stream so a client that disconnects
+        # while idle is detected promptly (Starlette only surfaces a disconnect
+        # via receive()) — otherwise the coroutine parks at queue.get() forever,
+        # leaking the subscriber while publish() keeps appending to its queue.
+        it = platform.event_bus.subscribe()
+        recv_task = asyncio.ensure_future(ws.receive())
+        next_task = asyncio.ensure_future(it.__anext__())
         try:
-            async for event in platform.event_bus.subscribe():
-                await ws.send_json(event.to_dict())
-        except WebSocketDisconnect:
-            return
+            while True:
+                done, _ = await asyncio.wait(
+                    {recv_task, next_task}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if recv_task in done:
+                    try:
+                        msg = recv_task.result()
+                    except WebSocketDisconnect:
+                        break
+                    if isinstance(msg, dict) and msg.get("type") == "websocket.disconnect":
+                        break
+                    recv_task = asyncio.ensure_future(ws.receive())  # ignore, keep streaming
+                    continue
+                if next_task in done:
+                    event = next_task.result()
+                    await ws.send_json(event.to_dict())
+                    next_task = asyncio.ensure_future(it.__anext__())
+        except (WebSocketDisconnect, StopAsyncIteration, RuntimeError):
+            pass
+        finally:
+            recv_task.cancel()
+            next_task.cancel()
+            try:
+                await it.aclose()  # runs subscribe()'s finally -> discards subscriber
+            except Exception:
+                pass
+            try:
+                await ws.close()
+            except Exception:
+                pass
 
     return app

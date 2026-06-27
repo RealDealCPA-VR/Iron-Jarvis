@@ -60,6 +60,64 @@ def run(
     console.print(f"[bold]Summary[/bold] {session.summary}")
 
 
+@app.command("self-dev")
+def self_dev(
+    task: str = typer.Argument(..., help="What to fix or improve in Iron Jarvis itself."),
+    enable: bool = typer.Option(
+        False, "--enable", help="Opt in: allow this run to edit Iron Jarvis's own source."
+    ),
+    provider: str = typer.Option(None, help="Override provider (default from config)."),
+    root: str = typer.Option(".", help="Project root (for config/state)."),
+) -> None:
+    """Run a Maintainer that edits Iron Jarvis's OWN source — review-gated.
+
+    Self-development is OFF by default. Pass ``--enable`` (or set
+    ``self_dev_enabled`` in config) to allow it. Changes land on a git worktree
+    branch and are NOT merged — review the diff (dashboard/API) before approving.
+    """
+    platform = build_platform(root, ask_resolver=headless_ask_resolver())
+    if enable:
+        platform.config.self_dev_enabled = True
+
+    from ..core.self_dev import self_dev_status
+
+    st = self_dev_status(platform.config)
+    if not st["available"]:
+        console.print(f"[red]self-dev unavailable[/red]: {st['reason']}")
+        raise typer.Exit(code=1)
+    console.print(f"[cyan]Self-dev repo[/cyan] {st['repo_root']}")
+
+    orch = Orchestrator(platform)
+
+    async def _go():
+        session = await orch.create_session(task, provider=provider, self_dev=True)
+        return await orch.run_session(session.id)
+
+    session = asyncio.run(_go())
+    console.print(
+        f"[bold]Maintainer session[/bold] {session.id} -> [cyan]{session.status.value}[/cyan]"
+    )
+    console.print(f"[bold]Worktree[/bold] {session.workspace_path}")
+    review = orch.get_review(session.id)
+    if review is not None:
+        console.print(f"[bold]Review[/bold] branch={review.branch} risk={review.risk}")
+        console.print(f"changed: {review.changed_files}")
+        console.print("[yellow]Not merged[/yellow] — approve via the dashboard/API to land it.")
+    console.print(f"[bold]Summary[/bold] {session.summary}")
+
+
+@app.command("prune-worktrees")
+def prune_worktrees(
+    all: bool = typer.Option(False, "--all", help="Prune every orphan, incl. completed pending-review."),
+    root: str = typer.Option(".", help="Project root."),
+) -> None:
+    """Garbage-collect session worktrees orphaned by a restart (failed/missing by default)."""
+    platform = build_platform(root, ask_resolver=headless_ask_resolver())
+    orch = Orchestrator(platform)
+    pruned = orch.prune_orphan_worktrees(include_completed=all)
+    console.print(f"[green]pruned[/green] {len(pruned)} orphan worktree(s): {pruned}")
+
+
 @app.command()
 def demo(root: str = typer.Option(".", help="Project root.")) -> None:
     """Offline end-to-end demo: plan->act->tool->workspace artifact, no network."""
@@ -149,6 +207,45 @@ def serve(
     from .app import create_app
 
     uvicorn.run(create_app(os.environ["IRONJARVIS_ROOT"]), host=host, port=port)
+
+
+@app.command()
+def cancel(
+    session_id: str, url: str = typer.Option("http://127.0.0.1:8787")
+) -> None:
+    """Stop a running session on a daemon."""
+    try:
+        info = DaemonClient(url).cancel(session_id)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]cancel failed[/red]: {exc}")
+        raise typer.Exit(code=1)
+    console.print(info)
+
+
+@app.command()
+def rerun(
+    session_id: str, url: str = typer.Option("http://127.0.0.1:8787")
+) -> None:
+    """Re-run a past session with the same inputs (on a daemon)."""
+    try:
+        info = DaemonClient(url).rerun(session_id)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]rerun failed[/red]: {exc}")
+        raise typer.Exit(code=1)
+    console.print(info)
+
+
+@app.command("delete-session")
+def delete_session(
+    session_id: str, url: str = typer.Option("http://127.0.0.1:8787")
+) -> None:
+    """Delete a session from a daemon."""
+    try:
+        info = DaemonClient(url).delete(session_id)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]delete failed[/red]: {exc}")
+        raise typer.Exit(code=1)
+    console.print(info)
 
 
 @app.command()
@@ -487,6 +584,104 @@ def up(
                 pr.terminate()
             except Exception:
                 pass
+
+
+@app.command()
+def backup(
+    out: str = typer.Option(None, help="Output .tar.gz (default ./ironjarvis-backup.tar.gz)."),
+    include_keys: bool = typer.Option(
+        False, "--include-keys", help="Include the encryption keys (DANGEROUS)."
+    ),
+    root: str = typer.Option("."),
+) -> None:
+    """Back up the .ironjarvis state (DB + memory + artifacts) to a tar.gz."""
+    import tarfile
+
+    platform = build_platform(root)
+    try:  # checkpoint WAL so the .db file is self-contained
+        with platform.engine.connect() as conn:
+            conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
+    except Exception:  # noqa: BLE001
+        pass
+    home = platform.config.home
+    out_path = Path(out) if out else Path("ironjarvis-backup.tar.gz")
+    n = 0
+    with tarfile.open(out_path, "w:gz") as tar:
+        for p in home.rglob("*"):
+            if not p.is_file():
+                continue
+            # Exclude the Fernet keys AND their .bak rotation siblings (which can
+            # hold the live key after a rollback) — match by name prefix.
+            if not include_keys and (
+                p.name.startswith(".secrets.key") or p.name.startswith(".vault.key")
+            ):
+                continue
+            tar.add(p, arcname=str(p.relative_to(home.parent)))
+            n += 1
+    note = "" if include_keys else " (encryption keys excluded)"
+    console.print(f"[green]backed up[/green] {n} files -> {out_path}{note}")
+
+
+@app.command()
+def restore(
+    file: str,
+    force: bool = typer.Option(False, "--force", help="Overwrite existing state."),
+    root: str = typer.Option("."),
+) -> None:
+    """Restore .ironjarvis state from a backup tar.gz."""
+    import tarfile
+
+    platform = build_platform(root)
+    home = platform.config.home
+    if home.exists() and any(home.iterdir()) and not force:
+        console.print("[red]refusing[/red]: .ironjarvis is not empty; pass --force")
+        raise typer.Exit(code=1)
+    dest = home.parent
+    with tarfile.open(file, "r:gz") as tar:
+        # filter="data" (Python 3.12+) is tarfile's vetted extractor: it rejects
+        # absolute paths, '..' traversal, AND symlink/hardlink escapes — far safer
+        # than a hand-rolled prefix check.
+        tar.extractall(path=dest, filter="data")
+    console.print(f"[green]restored[/green] from {file} into {home}")
+
+
+@app.command("prune-events")
+def prune_events_cmd(
+    older_than_days: int = typer.Option(30, "--older-than-days"),
+    vacuum: bool = typer.Option(False, "--vacuum"),
+    root: str = typer.Option("."),
+) -> None:
+    """Delete persisted events older than N days (retention)."""
+    from ..core.db import prune_events
+
+    platform = build_platform(root)
+    n = prune_events(platform.engine, older_than_days, vacuum=vacuum)
+    extra = " + VACUUM" if vacuum else ""
+    console.print(f"[green]pruned[/green] {n} event(s) older than {older_than_days}d{extra}")
+
+
+@app.command("rotate-keys")
+def rotate_keys(root: str = typer.Option(".")) -> None:
+    """Re-encrypt the secrets vault + browser vault under fresh keys."""
+    platform = build_platform(root)
+    s = platform.secrets.rotate_key()
+    v = platform.vault.rotate_key()
+    console.print(
+        f"[green]rotated[/green] {s} secret(s) and {v} browser session(s); "
+        "old keys kept as *.bak"
+    )
+
+
+@app.command()
+def migrate(root: str = typer.Option(".")) -> None:
+    """Apply pending schema migrations (additive changes self-heal automatically)."""
+    from ..core.db import get_schema_version, init_db
+
+    platform = build_platform(root)
+    init_db(platform.engine)
+    console.print(
+        f"[green]schema up to date[/green] at version {get_schema_version(platform.engine)}"
+    )
 
 
 if __name__ == "__main__":

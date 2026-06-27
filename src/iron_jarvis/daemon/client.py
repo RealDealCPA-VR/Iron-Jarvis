@@ -25,3 +25,18 @@ class DaemonClient:
 
     def sessions(self) -> dict[str, Any]:
         return httpx.get(f"{self.base_url}/sessions", timeout=10).json()
+
+    def cancel(self, session_id: str) -> dict[str, Any]:
+        return httpx.post(
+            f"{self.base_url}/sessions/{session_id}/cancel", timeout=10
+        ).json()
+
+    def rerun(self, session_id: str) -> dict[str, Any]:
+        return httpx.post(
+            f"{self.base_url}/sessions/{session_id}/rerun", timeout=120
+        ).json()
+
+    def delete(self, session_id: str) -> dict[str, Any]:
+        return httpx.delete(
+            f"{self.base_url}/sessions/{session_id}", timeout=10
+        ).json()

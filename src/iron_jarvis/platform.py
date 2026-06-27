@@ -8,6 +8,7 @@ registry, and the permission engine.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from sqlalchemy import Engine
 from .core.config import Config, load_config
 from .core.db import init_db, make_engine, persist_event
 from .core.events import EventBus
+from .core.fs_policy import register_protected_root
 from .core.logging import get_logger
 from .providers.manager import ProviderManager
 from .providers.router import ModelRouter
@@ -65,6 +67,10 @@ from .webhooks import models as _whk_models  # noqa: F401
 
 # Documents (all file types) + self-correcting learning loop.
 from .documents import document_tools
+
+# Web search (keyless) + MCP client (consume external MCP servers).
+from .tools.websearch import web_search_tools
+from .mcp import mcp_tools
 from .learning import LearningEngine, learning_tools
 from .learning import models as _learn_models  # noqa: F401
 
@@ -137,6 +143,11 @@ def build_platform(
 
     vault = BrowserVault(config.browser_dir)
 
+    # Never let an agent file tool (read_document/extract_pdf/file_search) read
+    # the Fernet key material, regardless of the FS allowlist (security).
+    register_protected_root(config.home / "secrets")
+    register_protected_root(config.browser_dir)
+
     # Secrets vault + LLM Connections (OAuth2/PKCE + API key) — built early so the
     # provider manager resolves live credentials and reports REAL availability.
     secrets = SecretsManager(config.home, engine)
@@ -158,6 +169,12 @@ def build_platform(
         vault=vault,
         default_model=config.default_model,
         credential_resolver=connections.credential,
+        # Presence-only availability check — never triggers a (blocking) OAuth
+        # token refresh on the event loop from /health, routing, or onboarding.
+        presence_resolver=connections.has_credential,
+        # Local OpenAI-compatible (Ollama) endpoint — "network optional" local LLM.
+        ollama_base_url=config.ollama_base_url,
+        ollama_model=config.ollama_model,
     )
     router = ModelRouter(providers, config.default_provider, event_bus)
     registry = default_registry()
@@ -229,8 +246,12 @@ def build_platform(
     outbound_webhooks = OutboundWebhooks(
         engine,
         http_post=lambda url, payload, headers: httpx.post(
-            url, json=payload, headers=headers, timeout=10
+            url, json=payload, headers=headers, timeout=httpx.Timeout(10, connect=2.0)
         ),
+        # SSRF defense: outbound targets resolving to private/loopback/metadata
+        # addresses are refused unless explicitly opted in (local dev/testing).
+        allow_internal=os.environ.get("IRONJARVIS_WEBHOOK_ALLOW_INTERNAL", "").strip().lower()
+        in {"1", "true", "yes", "on"},
     )
     event_bus.add_handler(outbound_webhooks.on_event)
 
@@ -259,6 +280,15 @@ def build_platform(
 
     # Documents: read/write PDF, Word, Excel, PowerPoint, CSV, Markdown, text.
     for tool in document_tools():
+        registry.register(tool)
+
+    # Web search: keyless DuckDuckGo by default; Brave if a key is in the vault.
+    for tool in web_search_tools(secret_resolver=secrets.get):
+        registry.register(tool)
+
+    # External MCP servers (Gmail/Drive/GitHub/...) as native tools. Empty
+    # config (the default) is a safe no-op; an unreachable server is skipped.
+    for tool in mcp_tools(getattr(config, "mcp_servers", None), secret_resolver=secrets.get):
         registry.register(tool)
 
     # Self-correcting learning loop: feedback + reflections become lessons that
