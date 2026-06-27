@@ -50,11 +50,15 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 | 🖥️ **Beautiful dashboard** | arc-reactor dark UI, Kanban board, real-time everything |
 | 📄 **Every file type** | read & write **PDF, Word, Excel, PowerPoint, CSV, Markdown, text** — like a colleague would |
 | 🌱 **Self-correcting** | feedback → lessons injected into every future run; it gets **better each time** you use it |
-| 🔌 **Connect a model in seconds** | a Connections page with API-key or **OAuth 2.0 (PKCE)** sign-in — paste a key or click Connect |
+| 🔌 **Connect a model in seconds** | a Connections page — paste an **API key** (Anthropic/OpenAI/Google) or sign in to **Google with OAuth 2.0 (PKCE)** |
+| 🦙 **Or stay fully local** | point it at a local **Ollama** / OpenAI-compatible endpoint — real intelligence, no cloud, no key |
+| 🔎 **Web search + MCP** | a keyless `web_search` tool for agents, plus an **MCP client** to consume external MCP servers as native tools |
+| 🛠️ **Edits itself** | an opt-in **Maintainer** agent can read/edit/test/fix Iron Jarvis's own source on a review-gated worktree |
+| ⏹️ **Full session control** | stop, rerun, continue (multi-turn), delete, and export any run; per-run **token usage** is tracked |
 | 🖥️ **Multi-terminal workspace** | tiled live terminals with a **+ tile** to add more + a **directory tree** to pick a project per terminal |
 | 🪟 **Runs as a desktop app** | an Electron wrapper opens the whole thing in a native window |
 | 🤖 **Opt-in computer use** | gated, DOM-first browser automation with human-approval for risky actions |
-| ✅ **312 offline tests** | the whole platform runs green with no network and no API keys |
+| ✅ **436 offline tests** | the whole platform runs green with no network and no API keys |
 
 <div align="center">
 
@@ -85,11 +89,14 @@ First time only, build the dashboard once: `cd dashboard && pnpm install && pnpm
 
 That's it. Open the dashboard, hit **New Session**, and watch agents work in real time.
 
-**Connect a real model** — flawless and clear, right in the dashboard's **Connections** page (paste an API key or **Connect with OAuth**), or from the CLI:
+**Connect a real model** — in the dashboard's **Connections** page or the CLI:
 ```bash
 uv run ironjarvis connect anthropic sk-ant-...   # stored encrypted in the vault
 # the provider flips to "available" instantly — sessions route to it, no env vars
 ```
+- **API key** works for **Anthropic, OpenAI, and Google** — paste it and you're live.
+- **OAuth 2.0 (PKCE)** sign-in currently applies to **Google/Gemini**, and (like any OAuth app) needs you to register your own Google Cloud OAuth client and store its `client_id`/`client_secret` in the vault. Anthropic/OpenAI use API keys.
+- **Fully local?** Run a local **Ollama** (or any OpenAI-compatible server) and set `ollama_base_url` in config — no key, no network. Sessions can pick the `ollama` provider.
 
 ---
 
@@ -97,7 +104,9 @@ uv run ironjarvis connect anthropic sk-ant-...   # stored encrypted in the vault
 
 Want it always-on? Ship it to a VPS in a couple of clicks — **full guide + one-click buttons in [`DEPLOY.md`](DEPLOY.md)** (Render, Railway, DigitalOcean, AWS, Azure).
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/RealDealCPA-VR/Iron-Jarvis) [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new) [![Deploy to DO](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/RealDealCPA-VR/Iron-Jarvis/tree/master)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/RealDealCPA-VR/Iron-Jarvis) [![Deploy to DO](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/RealDealCPA-VR/Iron-Jarvis/tree/master)
+
+*(The Render and DigitalOcean buttons carry this repo. **Railway** works too — follow the manual steps in [`DEPLOY.md`](DEPLOY.md); the generic "deploy on Railway" button doesn't carry a repo, so we link the guide instead of a one-click that wouldn't.)*
 
 ```bash
 docker compose up        # daemon + dashboard, locally or on any Docker host
@@ -120,10 +129,15 @@ cd ../desktop  && pnpm install && pnpm start  # opens Iron Jarvis in a native wi
 **Dashboard → Terminals.** A tiled workspace of **live terminal sessions** — click the **`+` tile** to open another, so you can run/watch several agents or shells side by side. The **directory tree on the right** browses your computer (drives → folders, with git/python/node project badges); pick a folder and hit **"Open terminal here →"** to launch a terminal already `cd`'d into that project. Real PTYs (ConPTY on Windows), streamed over WebSocket.
 
 ### Run a session (and dictate it 🎙️)
-**Dashboard → Sessions → New session.** Type a task, or **click the mic and speak it** — your words transcribe straight into the prompt. Pick an agent type (`builder`, `supervisor`, …) and a provider, then **Run**. Watch the transcript, tool calls, and live events stream in. Or from the terminal:
+**Dashboard → Sessions → New session.** Type a task — or **click an example chip**, **click the mic and speak it**, or **attach a file** for the agent to read. Pick an agent type (`builder`, `supervisor`, …) and a provider, then **Run**. The run streams its tool calls and events **live** on the session page. You can **Stop** a runaway run, **Rerun** it, **Continue** it (a multi-turn follow-up that reuses the workspace), **Export** the transcript (Markdown/JSON), or **Delete** it — and every run shows its **token usage**. Or from the terminal:
 ```bash
 uv run ironjarvis run "Summarize the quarterly financials and draft an email"
+uv run ironjarvis cancel <session-id>     # stop a background run
+uv run ironjarvis rerun  <session-id>     # clone its inputs and run again
 ```
+
+### Settings, Self-development & Help
+**Dashboard → Settings** edits the safe config keys (default model, sandbox runtime, self-dev, local Ollama endpoint…) without touching `config.toml`, and holds the **daemon access-token** box so you can log into a deployed instance without a rebuild. **Dashboard → Self-development** shows whether the Maintainer can edit Iron Jarvis's own source and starts a review-gated session. **Dashboard → Help** is an in-app guide to every subsystem. A **🔔 bell** in the top bar surfaces pending reviews and computer-use approvals.
 
 ### Watch it on the Kanban board
 **Dashboard → Kanban.** Sessions flow across **Active → In Review → Completed / Failed** lanes. For git-native sessions, **drag a card from In Review onto Completed to approve** (merge) or onto Failed to reject. Approve/Reject buttons are on each review card too.
@@ -138,7 +152,15 @@ Agents have self-service tools, so a single high-level task can ripple out:
 - `ltm_append` / `ltm_search` — an agent writes to & queries long-term memory
 - `file_search` — an agent searches across your drives
 - `workflow_create` — an agent authors a workflow **you then see and edit visually**
-- `create_agent` / `spawn_agent` — agents that add more agents
+- `create_agent` / `spawn_agent` — agents that add more agents (now on the **same model** as the parent, not the mock)
+- `web_search` — a keyless web search (DuckDuckGo by default; Brave with a vault key)
+- **MCP tools** — any configured MCP server's tools appear as `mcp__<server>__<tool>` and are callable like native tools
+
+### Fix Iron Jarvis with Iron Jarvis (self-development)
+Opt-in (`self_dev_enabled` in config, or `--enable`): a **Maintainer** agent edits Iron Jarvis's *own* source on a git worktree. Changes are **review-gated — never auto-merged**; you approve the diff. Surfaces: `ironjarvis self-dev "fix X" --enable`, the **Self-development** dashboard page, or `POST /sessions {self_dev:true}`.
+
+### Run it locally, no cloud (Ollama)
+Set `ollama_base_url` in config (e.g. `http://localhost:11434/v1/chat/completions`) to route sessions through a local **Ollama** / OpenAI-compatible model — real intelligence with **no API key and no network**.
 
 ### Schedules (no cron required)
 **Dashboard → Schedules.** Pick a **Repeat** preset (Hourly, Daily 9am, Weekdays 9am…) or choose **Once at a specific time** with a date picker. Each fire can run a workflow or emit an event.
@@ -162,7 +184,7 @@ uv run ironjarvis ltm-search "onboarding"
 - **Webhooks** — **+ Add webhook** (inbound or outbound, HMAC-signed); inbound gives you a `POST /webhooks/{slug}` trigger URL.
 - **File Search** — pick a **drive** (C:, D:, Home…) or a folder and search by name, content, or semantics.
 
-> **CLI cheat sheet:** `init · serve · run · demo · metrics · evaluate · memory-search · ltm-search · ltm-append · file-search · schedule-add · schedules · secrets · integrations · agents · create-agent · notify · workflow · status`
+> **CLI cheat sheet:** `init · serve · up · run · self-dev · demo · cancel · rerun · delete-session · backup · restore · rotate-keys · prune-events · prune-worktrees · migrate · metrics · evaluate · memory-search · ltm-search · ltm-append · file-search · schedule-add · schedules · secrets · integrations · agents · create-agent · notify · workflow · doctor · connect · status`
 
 ---
 
@@ -178,7 +200,9 @@ Dashboard (Next.js)  ──REST + WebSocket──►  Daemon (FastAPI)
         │                                      │
    Sandbox · Git/Review · Workflows · Scheduler · Webhooks · Integrations · Comm
         └──────────────── Event Bus · Evaluation · Observability ──────────────┘
-                          Persistence: SQLite (default) / Postgres+pgvector
+                  Persistence: SQLite (WAL, self-healing additive migrations)
+                  — the only backend today; Postgres+pgvector is a planned
+                  engine-URL swap, not yet implemented.
 ```
 
 ```
@@ -209,13 +233,13 @@ Built from `SPEC.MD` (§10–33) + reconstructed `SPEC-SECTIONS-01-09.md`. See `
 - **Fail-closed.** Unknown or unconfigured tool → denied. `shell` and other dangerous tools never auto-run headless.
 - **Secrets encrypted at rest** (Fernet); agents can set/list names but **never read values**.
 - **No auto-merge.** Agents stop at the diff; humans approve.
-- **Sandboxed execution** with workspace-only filesystem, env scrubbing, timeouts (Docker or native).
+- **Sandboxed execution.** Structured file tools are workspace-confined; the **Docker** runtime adds a real filesystem/network/resource boundary (workspace-only mount, fail-closed network, CPU/memory/pid caps). The **native** runtime is best-effort (env scrubbing + timeouts only) — when an isolating policy is set, the shell tool prefers Docker and clearly flags any native fallback as unconfined. `shell` itself stays permission-gated (fail-closed headless).
 
 ---
 
 ## ✅ Proof it works
 
-- **312 offline tests pass** (`uv run pytest -q`) — no network, no keys.
+- **436 offline tests pass** (`uv run pytest -q`) — no network, no keys.
 - Live daemon serves every endpoint; the dashboard has a clean production build.
 - Real-Chrome screenshots of every page live in [`dashboard/proof/`](dashboard/proof/).
 
