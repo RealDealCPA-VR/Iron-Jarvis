@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import tomli_w
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 def default_permissions() -> dict[str, str]:
@@ -100,6 +100,10 @@ def default_sandbox_policy() -> dict[str, Any]:
 
 
 class Config(BaseModel):
+    # Validate on assignment so a bad value via PUT /settings is rejected (400)
+    # rather than silently persisted to config.toml and bricking the next boot.
+    model_config = ConfigDict(validate_assignment=True)
+
     project_root: Path
     home: Path
     default_provider: str = "mock"
@@ -109,12 +113,23 @@ class Config(BaseModel):
     sandbox: dict[str, Any] = Field(default_factory=default_sandbox_policy)
     sandbox_runtime: str = "native"  # "native" | "docker" (§16)
     git_native: bool = False  # run sessions on a git worktree branch (§27)
+    # Self-development (opt-in, OFF by default): when enabled, a `self_dev`
+    # session runs a Maintainer agent on a git worktree of Iron Jarvis's OWN
+    # source so agents can read/edit/fix this project — changes land only via
+    # the same review/approve gate (never auto-merge). `self_dev_root` overrides
+    # the auto-detected repo path (e.g. when running from an installed package).
+    self_dev_enabled: bool = False
+    self_dev_root: str | None = None
     default_skills: list[str] = Field(default_factory=list)  # auto-injected (§23)
     comm: dict[str, Any] = Field(default_factory=dict)  # communication channels
     search_roots: list[str] = Field(default_factory=list)  # extra file_search roots
     obsidian_vault: str | None = None  # long-term memory vault path
     notion_database_id: str | None = None  # long-term memory Notion DB
     computer_use: dict[str, Any] = Field(default_factory=default_computer_use)
+    mcp_servers: list[dict[str, Any]] = Field(default_factory=list)  # external MCP servers (mcp_call)
+    event_retention_days: int = 0  # 0 = keep forever; >0 prunes old events on boot
+    ollama_base_url: str | None = None  # local OpenAI-compatible (Ollama) endpoint URL
+    ollama_model: str = "llama3.1"  # default model for the local "ollama" provider
 
     @property
     def db_path(self) -> Path:

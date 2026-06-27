@@ -22,6 +22,7 @@ class AgentType(str, enum.Enum):
     RESEARCHER = "researcher"
     MEMORY = "memory"
     AUTOMATION = "automation"
+    MAINTAINER = "maintainer"  # self-development: edits Iron Jarvis's own source
 
 
 class AgentState(str, enum.Enum):
@@ -69,6 +70,8 @@ class Session(SQLModel, table=True):
     status: SessionStatus = SessionStatus.ACTIVE
     workspace_path: str = ""
     summary: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
     created_at: datetime = Field(default_factory=utcnow)
     finished_at: datetime | None = None
 
@@ -83,6 +86,8 @@ class AgentRun(SQLModel, table=True):
     state: AgentState = AgentState.CREATED
     steps: int = 0
     result: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
     created_at: datetime = Field(default_factory=utcnow)
     finished_at: datetime | None = None
 
