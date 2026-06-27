@@ -7,6 +7,7 @@ runs only when ANTHROPIC_API_KEY is set. When extending this, consult the
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any
 
@@ -79,6 +80,24 @@ class AnthropicAdapter(LLMAdapter):
                         }
                     )
                 out.append({"role": "assistant", "content": blocks})
+            elif m.role == "user" and m.images:
+                # Multimodal user turn: a text block followed by one image block
+                # per attached image (base64 source).
+                img_blocks: list[dict[str, Any]] = [
+                    {"type": "text", "text": m.content}
+                ]
+                for img in m.images:
+                    img_blocks.append(
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": img["media_type"],
+                                "data": img["data_b64"],
+                            },
+                        }
+                    )
+                out.append({"role": "user", "content": img_blocks})
             else:
                 out.append({"role": m.role, "content": m.content})
         return out
@@ -90,7 +109,9 @@ class AnthropicAdapter(LLMAdapter):
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
     ) -> LLMResponse:
-        client = self._client()
+        # Build the client off the loop — credential resolution may trigger a
+        # blocking OAuth token refresh that must not stall the event loop.
+        client = await asyncio.to_thread(self._client)
         resp = await client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
@@ -115,6 +136,14 @@ class AnthropicAdapter(LLMAdapter):
                     ToolCall(id=block.id, name=block.name, arguments=dict(block.input))
                 )
         finish = "tool_use" if resp.stop_reason == "tool_use" else "stop"
+        usage = getattr(resp, "usage", None)
+        usage_dict = {
+            "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+            "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
+        }
         return LLMResponse(
-            text="".join(text_parts), tool_calls=tool_calls, finish_reason=finish
+            text="".join(text_parts),
+            tool_calls=tool_calls,
+            finish_reason=finish,
+            usage=usage_dict,
         )

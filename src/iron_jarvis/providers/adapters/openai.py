@@ -9,6 +9,7 @@ is injectable so the test suite stays fully offline.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Callable
 
@@ -28,21 +29,28 @@ class OpenAIAdapter(LLMAdapter):
         credential: Callable[[], str | None] | None = None,
         http: Any = None,
         max_tokens: int = 4096,
+        base_url: str | None = None,
+        provider_name: str | None = None,
     ) -> None:
         self.model = model
         self._api_key = api_key
         self._credential = credential
         self._http = http
         self.max_tokens = max_tokens
+        #: Chat-completions endpoint — defaults to OpenAI's hosted API, but can be
+        #: pointed at any OpenAI-compatible server (e.g. a local Ollama instance).
+        self._endpoint = base_url or _ENDPOINT
+        if provider_name:
+            self.provider = provider_name
 
     # -- credential / transport --------------------------------------------
-    def _resolve_key(self) -> str:
-        key = self._api_key or (self._credential() if self._credential else None)
-        if not key:
-            raise RuntimeError(
-                "OpenAIAdapter: no API key (set api_key= or wire a credential())"
-            )
-        return key
+    def _resolve_key(self) -> str | None:
+        """Resolve the API key, or None when none is configured.
+
+        No longer raises: a custom ``base_url`` (e.g. a local Ollama server)
+        needs no key. The hosted-OpenAI no-key case is enforced in ``complete``.
+        """
+        return self._api_key or (self._credential() if self._credential else None)
 
     def _client(self) -> Any:
         if self._http is None:
@@ -86,6 +94,25 @@ class OpenAIAdapter(LLMAdapter):
                         ],
                     }
                 )
+            elif m.role == "user" and m.images:
+                # Multimodal user turn: a text part followed by one image_url
+                # part per attached image (base64 data: URL).
+                content: list[dict[str, Any]] = [
+                    {"type": "text", "text": m.content}
+                ]
+                for img in m.images:
+                    content.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": (
+                                    f"data:{img['media_type']};base64,"
+                                    f"{img['data_b64']}"
+                                )
+                            },
+                        }
+                    )
+                out.append({"role": "user", "content": content})
             else:
                 out.append({"role": m.role, "content": m.content})
         return out
@@ -122,7 +149,17 @@ class OpenAIAdapter(LLMAdapter):
                 ToolCall(id=raw.get("id", ""), name=fn.get("name", ""), arguments=args)
             )
         finish = "tool_use" if choice.get("finish_reason") == "tool_calls" else "stop"
-        return LLMResponse(text=text, tool_calls=tool_calls, finish_reason=finish)
+        usage = data.get("usage") or {}
+        usage_dict = {
+            "input_tokens": int(usage.get("prompt_tokens", 0) or 0),
+            "output_tokens": int(usage.get("completion_tokens", 0) or 0),
+        }
+        return LLMResponse(
+            text=text,
+            tool_calls=tool_calls,
+            finish_reason=finish,
+            usage=usage_dict,
+        )
 
     # -- the interface ------------------------------------------------------
     async def complete(
@@ -132,7 +169,19 @@ class OpenAIAdapter(LLMAdapter):
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
     ) -> LLMResponse:
-        key = self._resolve_key()
+        # Resolve the credential off the loop — for an OAuth provider this may
+        # trigger a blocking token refresh that must not stall the event loop.
+        key = await asyncio.to_thread(self._resolve_key)
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        elif self._endpoint == _ENDPOINT:
+            # The hosted OpenAI endpoint requires a key; a custom base_url
+            # (e.g. a local Ollama server) authenticates without one, so we
+            # only fail closed when targeting OpenAI itself.
+            raise RuntimeError(
+                "OpenAIAdapter: no API key (set api_key= or wire a credential())"
+            )
         body: dict[str, Any] = {
             "model": self.model,
             "max_tokens": self.max_tokens,
@@ -141,11 +190,8 @@ class OpenAIAdapter(LLMAdapter):
         if tools:
             body["tools"] = self._to_openai_tools(tools)
         resp = await self._client().post(
-            _ENDPOINT,
-            headers={
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-            },
+            self._endpoint,
+            headers=headers,
             json=body,
         )
         return self._parse(resp.json())

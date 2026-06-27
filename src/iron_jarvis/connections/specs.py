@@ -81,7 +81,10 @@ BUILTIN_SPECS: dict[str, ConnectionSpec] = {
         auth_url="https://accounts.google.com/o/oauth2/v2/auth",
         token_url="https://oauth2.googleapis.com/token",
         scopes=[
-            "https://www.googleapis.com/auth/generative-language.retriever",
+            # Authorizes generateContent on the Generative Language API. The
+            # ``.retriever`` scope only covers semantic retrieval, so an access
+            # token minted with it is rejected (401) by generateContent.
+            "https://www.googleapis.com/auth/generative-language",
             "openid",
             "email",
         ],

@@ -28,6 +28,26 @@ def _b64url(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
 
+def _require_token(resp) -> dict:
+    """Return the token dict, or raise ``ValueError`` on a failed exchange.
+
+    A failed token exchange (non-2xx, an OAuth ``{"error": ...}`` body, or a
+    payload missing ``access_token``) must NOT be persisted as a credential —
+    raise so the caller surfaces the failure instead of going "connected but
+    always mock".
+    """
+    data = resp.json()
+    status = getattr(resp, "status_code", 200)
+    if status >= 400 or not isinstance(data, dict) or "error" in data or not data.get(
+        "access_token"
+    ):
+        detail = None
+        if isinstance(data, dict):
+            detail = data.get("error_description") or data.get("error")
+        raise ValueError(f"token exchange failed: {detail or f'HTTP {status}'}")
+    return data
+
+
 class OAuthClient:
     """Stateless OAuth 2.0 + PKCE helper (Authorization Code, S256)."""
 
@@ -94,7 +114,7 @@ class OAuthClient:
             data=data,
             headers={"Accept": "application/json"},
         )
-        return resp.json()
+        return _require_token(resp)
 
     @staticmethod
     def refresh(
@@ -117,4 +137,7 @@ class OAuthClient:
             data=data,
             headers={"Accept": "application/json"},
         )
-        return resp.json()
+        # A successful refresh always returns a fresh access_token; treat a
+        # non-2xx / {"error": ...} / missing access_token response as a failure
+        # rather than silently caching a bad/empty token.
+        return _require_token(resp)

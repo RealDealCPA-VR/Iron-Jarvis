@@ -8,6 +8,7 @@ callable, and the async HTTP client is injectable so tests stay offline.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Callable
 
 from .base import LLMAdapter, LLMMessage, LLMResponse, ToolCall
@@ -25,11 +26,15 @@ class GoogleAdapter(LLMAdapter):
         api_key: str | None = None,
         credential: Callable[[], str | None] | None = None,
         http: Any = None,
+        oauth: bool = False,
     ) -> None:
         self.model = model
         self._api_key = api_key
         self._credential = credential
         self._http = http
+        #: True when the credential is an OAuth access token (sent as a Bearer
+        #: token); False for a true ``api_key`` connection (sent as x-goog-api-key).
+        self._oauth = oauth
 
     # -- credential / transport --------------------------------------------
     def _resolve_key(self) -> str:
@@ -80,7 +85,20 @@ class GoogleAdapter(LLMAdapter):
                 contents.append({"role": "model", "parts": parts})
             else:
                 role = "model" if m.role == "assistant" else "user"
-                contents.append({"role": role, "parts": [{"text": m.content}]})
+                parts = [{"text": m.content}]
+                if m.role == "user" and m.images:
+                    # Multimodal user turn: append an inline_data part per image
+                    # alongside the text part.
+                    for img in m.images:
+                        parts.append(
+                            {
+                                "inline_data": {
+                                    "mime_type": img["media_type"],
+                                    "data": img["data_b64"],
+                                }
+                            }
+                        )
+                contents.append({"role": role, "parts": parts})
         return contents
 
     @staticmethod
@@ -115,8 +133,16 @@ class GoogleAdapter(LLMAdapter):
                     ToolCall(id=name, name=name, arguments=dict(fc.get("args") or {}))
                 )
         finish = "tool_use" if tool_calls else "stop"
+        meta = data.get("usageMetadata") or {}
+        usage_dict = {
+            "input_tokens": int(meta.get("promptTokenCount", 0) or 0),
+            "output_tokens": int(meta.get("candidatesTokenCount", 0) or 0),
+        }
         return LLMResponse(
-            text="".join(text_parts), tool_calls=tool_calls, finish_reason=finish
+            text="".join(text_parts),
+            tool_calls=tool_calls,
+            finish_reason=finish,
+            usage=usage_dict,
         )
 
     # -- the interface ------------------------------------------------------
@@ -127,18 +153,25 @@ class GoogleAdapter(LLMAdapter):
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
     ) -> LLMResponse:
-        key = self._resolve_key()
+        # Resolve the credential off the event loop: an OAuth credential() may do
+        # a blocking (up to 30s) httpx refresh, which must not stall the loop.
+        key = await asyncio.to_thread(self._resolve_key)
         body: dict[str, Any] = {"contents": self._to_contents(messages)}
         if system:
             body["system_instruction"] = {"parts": [{"text": system}]}
         if tools:
             body["tools"] = self._to_tools(tools)
-        resp = await self._client().post(
-            self._url(),
-            headers={
+        if self._oauth:
+            # An OAuth access token authorizes via the standard Bearer header;
+            # sent as x-goog-api-key it is rejected (401) and we silently mock.
+            headers = {
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            }
+        else:
+            headers = {
                 "x-goog-api-key": key,
                 "Content-Type": "application/json",
-            },
-            json=body,
-        )
+            }
+        resp = await self._client().post(self._url(), headers=headers, json=body)
         return self._parse(resp.json())

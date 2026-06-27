@@ -20,6 +20,9 @@ class LLMMessage:
     #: present on assistant turns that requested tool use (so multi-step tool
     #: loops can be replayed faithfully to vendors that require it).
     tool_calls: list["ToolCall"] = field(default_factory=list)
+    #: optional image parts on a user turn (multimodal). Each is
+    #: ``{"data_b64": <base64>, "media_type": "image/png"|"image/jpeg"|...}``.
+    images: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -34,6 +37,10 @@ class LLMResponse:
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     finish_reason: str = "stop"  # "stop" | "tool_use" | "max_tokens"
+    #: token accounting for this completion (0/0 for the offline mock).
+    usage: dict[str, int] = field(
+        default_factory=lambda: {"input_tokens": 0, "output_tokens": 0}
+    )
 
     @property
     def wants_tools(self) -> bool:

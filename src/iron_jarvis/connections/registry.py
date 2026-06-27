@@ -185,7 +185,20 @@ class ConnectionRegistry:
         finally:
             _close(http)
 
-        token = self._stamp_expiry(dict(token or {}))
+        # Defense-in-depth: never persist a failed/empty exchange as a credential
+        # (which would flip the provider to "connected" but always fall to mock).
+        token = dict(token or {})
+        if "error" in token or not token.get("access_token"):
+            raise ValueError(
+                "OAuth token exchange failed: "
+                + (
+                    token.get("error_description")
+                    or token.get("error")
+                    or "no access_token in token response"
+                )
+            )
+
+        token = self._stamp_expiry(token)
         secret_name = f"{provider}_oauth"
         self.secrets.set_oauth(secret_name, token)
 
@@ -220,6 +233,26 @@ class ConnectionRegistry:
             return self._oauth_access_token(provider, spec)
         return None
 
+    def has_credential(self, provider: str) -> bool:
+        """Presence-only credential check — NEVER refreshes (safe on the loop).
+
+        For ``api_key`` providers, reports whether the vault holds the key. For
+        ``oauth`` providers, reports whether a stored token exists WITHOUT calling
+        :meth:`_oauth_access_token` (i.e. no blocking network refresh). Wire this
+        into :class:`ProviderManager` as the ``presence_resolver`` so availability
+        / health checks stay off the network.
+        """
+        spec = self.get_spec(provider)
+        if spec is None:
+            return False
+        if spec.method == "api_key":
+            secret_name = spec.key_secret_name or f"{provider}_api_key"
+            return bool(self.secrets.get(secret_name))
+        if spec.method == "oauth":
+            token = self.secrets.get_oauth(f"{provider}_oauth")
+            return bool(token and token.get("access_token"))
+        return False
+
     def _oauth_access_token(
         self, provider: str, spec: ConnectionSpec
     ) -> str | None:
@@ -230,6 +263,7 @@ class ConnectionRegistry:
         if _is_expired(token) and token.get("refresh_token"):
             app = self._oauth_app(provider) or {}
             http = self._http_factory()
+            fresh = None
             try:
                 fresh = OAuthClient.refresh(
                     spec,
@@ -238,15 +272,20 @@ class ConnectionRegistry:
                     client_secret=app.get("client_secret", ""),
                     http=http,
                 )
+            except Exception:
+                # A failed refresh must not pollute the stored token with an
+                # error body — leave the existing token untouched and return it.
+                fresh = None
             finally:
                 _close(http)
-            merged = {**token, **(fresh or {})}
-            # A refresh response often omits the refresh_token — keep the old one.
-            if not merged.get("refresh_token"):
-                merged["refresh_token"] = token.get("refresh_token")
-            merged = self._stamp_expiry(merged, force=True)
-            self.secrets.set_oauth(secret_name, merged)
-            token = merged
+            if fresh and not fresh.get("error") and fresh.get("access_token"):
+                merged = {**token, **fresh}
+                # A refresh response often omits the refresh_token — keep the old one.
+                if not merged.get("refresh_token"):
+                    merged["refresh_token"] = token.get("refresh_token")
+                merged = self._stamp_expiry(merged, force=True)
+                self.secrets.set_oauth(secret_name, merged)
+                token = merged
         return token.get("access_token")
 
     # --- test / disconnect ------------------------------------------------

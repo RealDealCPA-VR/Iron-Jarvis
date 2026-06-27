@@ -40,6 +40,36 @@ class BrowserVault:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    def rotate_key(self) -> int:
+        """Re-encrypt every stored browser session under a fresh Fernet key
+        (old key kept as ``.vault.key.bak``). Returns the count rotated.
+
+        Crash-safe: every blob is re-encrypted to a ``.new`` temp BEFORE the key
+        is flipped, so a failure during re-encryption leaves the old key + old
+        ciphertext intact; after the flip the staged temps are swapped in with
+        an atomic ``os.replace`` (and remain recoverable alongside ``.bak`` if
+        the process dies mid-swap)."""
+        import os
+
+        key_path = self.root / ".vault.key"
+        old = self._fernet()
+        new_key = Fernet.generate_key()
+        new = Fernet(new_key)
+        # Stage all re-encrypted ciphertext while the OLD key is still current.
+        staged: list[tuple[Path, Path]] = []
+        for path in self.root.glob("*/session.enc"):
+            plain = old.decrypt(path.read_bytes())
+            tmp = path.with_suffix(".enc.new")
+            tmp.write_bytes(new.encrypt(plain))
+            staged.append((path, tmp))
+        bak = key_path.parent / (key_path.name + ".bak")
+        if key_path.exists():
+            bak.write_bytes(key_path.read_bytes())
+        key_path.write_bytes(new_key)  # flip the key; temps are ready to swap
+        for path, tmp in staged:
+            os.replace(tmp, path)
+        return len(staged)
+
     def store(self, provider: str, session: dict[str, Any]) -> None:
         leaked = _FORBIDDEN_KEYS & {k.lower() for k in session}
         if leaked:
