@@ -15,7 +15,7 @@ Everything here is deterministic and offline (DB rows only, no model calls).
 
 from __future__ import annotations
 
-from sqlalchemy import Engine
+from sqlalchemy import Engine, func
 from sqlmodel import select
 
 from ..core.db import session_scope
@@ -122,16 +122,21 @@ class LearningEngine:
     def lessons(
         self, scope: str | None = "user", limit: int = 12
     ) -> list[LessonRecord]:
-        """Lessons ordered for injection: highest weight first, then most recent.
+        """Lessons ordered for injection: highest EFFECTIVE weight first, newest next.
 
-        ``scope=None`` returns lessons across all scopes.
+        The effective weight is the static ``weight`` plus the outcome-driven
+        ``weight_bonus`` the ImprovementEngine maintains, so a lesson that has
+        actually been helping surfaces ahead of one that has been hurting. (NULL
+        bonus on a pre-existing row is coalesced to 0.) ``scope=None`` returns
+        lessons across all scopes.
         """
+        effective = LessonRecord.weight + func.coalesce(LessonRecord.weight_bonus, 0.0)
         with session_scope(self.engine) as db:
             query = select(LessonRecord)
             if scope is not None:
                 query = query.where(LessonRecord.scope == scope)
             query = query.order_by(
-                LessonRecord.weight.desc(), LessonRecord.created_at.desc()
+                effective.desc(), LessonRecord.created_at.desc()
             ).limit(limit)
             return list(db.exec(query))
 

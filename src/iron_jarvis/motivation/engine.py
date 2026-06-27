@@ -484,8 +484,13 @@ class IntentEngine:
             agent_type = AgentType(action.get("agent_type", "builder"))
         except ValueError:
             agent_type = AgentType.BUILDER
+        # A MAINTAINER proposal patches Iron Jarvis's OWN source, so route it onto a
+        # self-dev worktree (review-gated, never auto-merge). create_session raises
+        # when self_dev_enabled is off, so approval FAILS CLOSED on that gate rather
+        # than silently running a maintainer in a throwaway workspace.
+        is_self_dev = agent_type == AgentType.MAINTAINER
         session = await self.orchestrator.create_session(
-            action.get("task", goal.text), agent_type
+            action.get("task", goal.text), agent_type, self_dev=is_self_dev
         )
         # Book the action against the budget NOW (before the run finishes) so a
         # concurrent tick can't double-spend; mark the proposal executed durably.
@@ -578,7 +583,16 @@ class IntentEngine:
         goal = self.get_goal(proposal.goal_id) if proposal.goal_id else None
         if goal is None:  # backlog proposal with no goal — synthesise a throwaway
             goal = GoalRecord(id=proposal.goal_id or "goal_adhoc", text=proposal.title)
-        return await self._execute(proposal, goal, wait=wait)
+        try:
+            return await self._execute(proposal, goal, wait=wait)
+        except PermissionError as exc:
+            # A maintainer (self-mod) proposal when self_dev_enabled is off: leave
+            # the proposal pending and tell the approver how to allow it.
+            raise PermissionError(
+                f"cannot run this self-modifying proposal: {exc}. "
+                "Enable self_dev_enabled in Settings to let the Maintainer patch "
+                "Iron Jarvis's own source (still review-gated)."
+            ) from exc
 
     def reject(self, proposal_id: str) -> ProposalRecord | None:
         with session_scope(self.p.engine) as db:

@@ -789,6 +789,26 @@ def create_app(project_root: str | None = None) -> FastAPI:
             ]
         }
 
+    # --- ImprovementEngine: outcomes feed back into lessons + proposals ----
+
+    @app.get("/improvement")
+    def improvement_stats() -> dict[str, Any]:
+        """Per-lesson + per-agent outcome stats and quality trend."""
+        if platform.improvement is None:
+            raise HTTPException(status_code=503, detail="improvement engine unavailable")
+        return platform.improvement.stats()
+
+    @app.post("/improvement/reflect")
+    async def improvement_reflect(limit: int = 5) -> dict[str, Any]:
+        """Run model reflection over recent low-scoring sessions (on-demand).
+
+        Returns structured suggestions; applies NOTHING (no prompt/lesson/source
+        edits). Safe + deterministic offline via the mock model + heuristic fallback.
+        """
+        if platform.improvement is None:
+            raise HTTPException(status_code=503, detail="improvement engine unavailable")
+        return await platform.improvement.reflect(limit=limit)
+
     # --- Documents (all file types) ---------------------------------------
 
     @app.get("/documents/read")

@@ -176,6 +176,17 @@ class Orchestrator:
         except Exception:  # noqa: BLE001
             log.exception("evaluation failed for session %s", session.id)
 
+        # ImprovementEngine: record the measured outcome + update rolling lesson /
+        # agent stats so scores actually feed back into weighting. Runs on EVERY
+        # completion BEFORE reflection (so this run's own new lesson isn't
+        # mis-attributed). Cheap, pure-DB, and internally never-raising.
+        improvement = getattr(self.p, "improvement", None)
+        if improvement is not None:
+            try:
+                improvement.record_outcome(session.id)
+            except Exception:  # noqa: BLE001
+                log.exception("outcome recording failed for session %s", session.id)
+
         # Self-correction: reflect on what happened into a durable lesson.
         try:
             self.p.learning.reflect(

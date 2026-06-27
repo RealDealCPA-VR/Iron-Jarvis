@@ -38,5 +38,14 @@ class LessonRecord(SQLModel, table=True):
     text: str = ""
     scope: str = "user"  # user | project
     source: str = "reflection"  # feedback | reflection | preference
-    weight: int = 1  # higher weight + preference/feedback = injected first
+    weight: int = 1  # static base priority (preference/feedback = high)
+    # Outcome-driven adjustment maintained by the ImprovementEngine: lessons whose
+    # sessions beat the baseline gain weight, those that trail it decay. The
+    # EFFECTIVE priority used for injection/recall is ``weight + weight_bonus``.
+    weight_bonus: float = 0.0
     created_at: datetime = Field(default_factory=utcnow)
+
+    @property
+    def effective_weight(self) -> float:
+        """Static weight plus the outcome-driven bonus (used for ordering)."""
+        return self.weight + (self.weight_bonus or 0.0)

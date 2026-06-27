@@ -76,6 +76,10 @@ from .mcp import mcp_tools
 from .learning import LearningEngine, learning_tools
 from .learning import models as _learn_models  # noqa: F401
 
+# ImprovementEngine: measured outcomes feed back into lesson weights + proposals.
+from .improvement import ImprovementEngine
+from .improvement import models as _improve_models  # noqa: F401
+
 # Motivation Layer ("the pulse"): standing goals + off-by-default deliberation.
 from .motivation import IntentEngine, goal_tools
 from .motivation import models as _motiv_models  # noqa: F401
@@ -130,6 +134,7 @@ class Platform:
     agents_registry: DynamicAgentRegistry | None = None
     tools_registry: "DynamicToolRegistry | None" = None
     intent: "IntentEngine | None" = None
+    improvement: "ImprovementEngine | None" = None
 
 
 def build_platform(
@@ -401,5 +406,11 @@ def build_platform(
     for tool in goal_tools(platform):
         platform.registry.register(tool)
     event_bus.add_handler(platform.intent.on_event)
+
+    # ImprovementEngine: the consumer of evaluation scores. Built last so it can
+    # reach learning/evaluator/intent. record_outcome() is hooked into the
+    # orchestrator (cheap, never-raising, runs on every session completion); the
+    # model-driven reflect() stays on-demand (POST /improvement/reflect).
+    platform.improvement = ImprovementEngine(platform)
 
     return platform

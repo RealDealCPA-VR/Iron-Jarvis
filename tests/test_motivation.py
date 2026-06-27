@@ -317,3 +317,15 @@ def test_autonomy_level_rejects_bad_value(platform):
         platform.config.autonomy_level = "yolo"
     platform.config.autonomy_level = "act_low"  # a valid value still assigns
     assert platform.config.autonomy_level == "act_low"
+
+
+async def test_approve_maintainer_proposal_fails_closed_without_self_dev(platform, engine):
+    # A self-modifying (maintainer) proposal must NOT run when self_dev is off.
+    _enable(platform)  # autonomy on; self_dev_enabled stays False (default)
+    p = engine._create_proposal(
+        goal_id=None, title="Fix a recurring tool failure", rationale="r",
+        agent_type="maintainer", task="patch the failing tool", risk="high", source="event",
+    )
+    with pytest.raises(PermissionError):
+        await engine.approve(p.id, wait=True)
+    assert engine.get_proposal(p.id).status == "pending"  # fail-closed: not executed
