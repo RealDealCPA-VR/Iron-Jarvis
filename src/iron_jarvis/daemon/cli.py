@@ -684,5 +684,77 @@ def migrate(root: str = typer.Option(".")) -> None:
     )
 
 
+@app.command("update-check")
+def update_check(root: str = typer.Option(".", help="Project root (for config).")) -> None:
+    """Check whether repo updates are available (git fetch + count behind upstream)."""
+    from ..core.self_dev import iron_jarvis_repo_root
+    from ..core.updates import update_status
+
+    platform = build_platform(root)
+    repo = iron_jarvis_repo_root(platform.config)
+    if repo is None:
+        console.print(
+            "[yellow]not a source checkout[/yellow] — Iron Jarvis git repo not found "
+            "(running from an installed package?)."
+        )
+        return
+    st = update_status(repo)
+    if st.get("available"):
+        console.print(
+            f"[green]update available[/green]: {st.get('behind')} commit(s) behind "
+            f"on [cyan]{st.get('branch')}[/cyan]"
+        )
+    else:
+        console.print(f"[cyan]{st.get('reason', 'up to date')}[/cyan]")
+    console.print(
+        f"current={st.get('current')}  remote={st.get('remote')}  clean={st.get('clean')}"
+    )
+
+
+@app.command("self-update")
+def self_update(
+    root: str = typer.Option(".", help="Project root (for config)."),
+    no_dashboard: bool = typer.Option(
+        False, "--no-dashboard", help="Skip the dashboard (pnpm) build."
+    ),
+) -> None:
+    """Pull the latest Iron Jarvis source and rebuild (git pull + uv sync + pnpm build).
+
+    Refuses if the working tree is dirty. This updates the FILES on disk only —
+    you must restart the daemon (and dashboard) afterwards to load the new code.
+    """
+    from ..core.self_dev import iron_jarvis_repo_root
+    from ..core.updates import apply_update
+
+    platform = build_platform(root)
+    repo = iron_jarvis_repo_root(platform.config)
+    if repo is None:
+        console.print(
+            "[red]not a source checkout[/red] — can't self-update an installed package."
+        )
+        raise typer.Exit(code=1)
+
+    console.print(f"[cyan]Updating[/cyan] {repo}")
+    result = apply_update(repo, build_dashboard=not no_dashboard)
+    for entry in result.get("log", []):
+        mark = "[green]OK[/green]" if entry.get("ok") else "[red]FAIL[/red]"
+        console.print(f"  {mark} {entry.get('step')} (rc={entry.get('returncode')})")
+        err = (entry.get("stderr") or "").strip()
+        if err:
+            console.print(f"      [dim]{err[:400]}[/dim]")
+
+    if result.get("ok"):
+        console.print(f"[green]update complete[/green] — {result.get('reason')}")
+    else:
+        console.print(f"[red]update failed[/red] — {result.get('reason')}")
+    if result.get("restart_required"):
+        console.print(
+            "[yellow]Restart the daemon (and dashboard) to load the new code:[/yellow] "
+            "stop `ironjarvis serve`/`up` and start it again."
+        )
+    if not result.get("ok"):
+        raise typer.Exit(code=1)
+
+
 if __name__ == "__main__":
     app()

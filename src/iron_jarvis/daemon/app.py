@@ -199,6 +199,11 @@ class SpawnBody(BaseModel):
     task: str
 
 
+class UpdateBody(BaseModel):
+    # Whether to rebuild the dashboard (pnpm install && pnpm build) after pulling.
+    build_dashboard: bool = True
+
+
 def _agent_type(name: str) -> AgentType:
     try:
         return AgentType(name)
@@ -457,6 +462,42 @@ def create_app(project_root: str | None = None) -> FastAPI:
         from ..core.self_dev import self_dev_status as _status
 
         return _status(platform.config)
+
+    # --- Repo-based self-update (git pull + uv sync + pnpm build) ---------
+
+    @app.get("/update/check")
+    def update_check() -> dict[str, Any]:
+        """Is a newer commit available on this checkout's upstream branch?"""
+        from ..core.self_dev import iron_jarvis_repo_root
+        from ..core.updates import update_status
+
+        repo = iron_jarvis_repo_root(platform.config)
+        if repo is None:
+            return {
+                "available": False,
+                "reason": "not a source checkout (running from an installed package)",
+            }
+        return update_status(repo)
+
+    @app.post("/update/apply")
+    def update_apply(body: UpdateBody) -> dict[str, Any]:
+        """Pull + rebuild this checkout. Returns the per-step log; restart required.
+
+        NOTE: this updates the FILES on disk only — the daemon keeps running the
+        old code until it is restarted (``restart_required`` in the response).
+        """
+        from ..core.self_dev import iron_jarvis_repo_root
+        from ..core.updates import apply_update
+
+        repo = iron_jarvis_repo_root(platform.config)
+        if repo is None:
+            return {
+                "ok": False,
+                "log": [],
+                "restart_required": False,
+                "reason": "not a source checkout",
+            }
+        return apply_update(repo, build_dashboard=body.build_dashboard)
 
     @app.post("/worktrees/prune")
     def prune_worktrees(all: bool = False) -> dict[str, Any]:

@@ -27,6 +27,7 @@ import {
   SquareTerminal,
   MoveUpRight,
   GitBranch,
+  DownloadCloud,
   Settings,
   LifeBuoy,
   Menu,
@@ -64,6 +65,7 @@ const NAV: NavItem[] = [
   { href: "/integrations", label: "Integrations", icon: Plug },
   { href: "/channels", label: "Channels", icon: Megaphone },
   { href: "/webhooks", label: "Webhooks", icon: Webhook },
+  { href: "/updates", label: "Updates", icon: DownloadCloud },
   { href: "/settings", label: "Settings", icon: Settings },
   { href: "/help", label: "Help", icon: LifeBuoy },
 ];

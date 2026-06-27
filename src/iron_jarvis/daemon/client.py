@@ -40,3 +40,14 @@ class DaemonClient:
         return httpx.delete(
             f"{self.base_url}/sessions/{session_id}", timeout=10
         ).json()
+
+    def update_check(self) -> dict[str, Any]:
+        return httpx.get(f"{self.base_url}/update/check", timeout=30).json()
+
+    def update_apply(self, build_dashboard: bool = True) -> dict[str, Any]:
+        # A pull + uv sync + pnpm build can take a while — generous timeout.
+        return httpx.post(
+            f"{self.base_url}/update/apply",
+            json={"build_dashboard": build_dashboard},
+            timeout=900,
+        ).json()
