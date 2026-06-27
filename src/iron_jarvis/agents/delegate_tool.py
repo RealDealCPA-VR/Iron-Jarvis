@@ -55,9 +55,16 @@ class DelegateTool(Tool):
             agent_type = AgentType.BUILDER
 
         orch = Orchestrator(self.platform)
-        # Subagents run offline on the default mock provider; the supervisor's
-        # own (possibly scripted) provider is intentionally NOT inherited.
-        child_session = await orch.create_session(task, agent_type, provider="mock")
+        # Subagents INHERIT the parent session's provider/model so a real
+        # multi-agent run uses the user's chosen model end-to-end (a Claude
+        # supervisor delegates to Claude subagents — not the offline mock).
+        # Fall back to the configured defaults when the parent is unknown.
+        parent = orch.get_session(ctx.session_id)
+        provider = parent.provider if parent else None
+        model = parent.model if parent else None
+        child_session = await orch.create_session(
+            task, agent_type, provider=provider, model=model
+        )
 
         run = await AgentRuntime(self.platform).run(
             child_session,

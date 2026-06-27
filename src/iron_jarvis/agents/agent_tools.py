@@ -174,8 +174,14 @@ class SpawnAgentTool(Tool):
             definition = get_agent_definition(base_type)
 
         orch = Orchestrator(self.platform)
-        # Subagents run offline on the default mock provider, like `delegate`.
-        child_session = await orch.create_session(task, base_type, provider="mock")
+        # Subagents INHERIT the parent session's provider/model (like `delegate`)
+        # so the user's chosen model is used end-to-end, not the offline mock.
+        parent = orch.get_session(ctx.session_id)
+        provider = parent.provider if parent else None
+        model = parent.model if parent else None
+        child_session = await orch.create_session(
+            task, base_type, provider=provider, model=model
+        )
         run = await AgentRuntime(self.platform).run(
             child_session, definition, parent_id=ctx.agent_run_id
         )

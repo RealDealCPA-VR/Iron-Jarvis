@@ -102,6 +102,9 @@ class AgentRuntime:
             resp = route.response
             run.steps = step + 1
             run.provider, run.model = route.provider, route.model
+            usage = getattr(resp, "usage", None) or {}
+            run.input_tokens += int(usage.get("input_tokens", 0) or 0)
+            run.output_tokens += int(usage.get("output_tokens", 0) or 0)
 
             if not resp.wants_tools:
                 final_text = resp.text

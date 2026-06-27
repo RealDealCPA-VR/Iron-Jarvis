@@ -119,6 +119,7 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
         ),
         tools=(
             ["read_file", "list_files", "grep", "file_search", "ltm_search", "ltm_append"]
+            + ["web_search"]
             + _DOCUMENT_TOOLS + _KNOWLEDGE_TOOLS + _LEARNING_TOOLS
             + ["browse", "web_extract", "computer_use_status"]
         ),
@@ -132,6 +133,28 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
         tools=(
             _KNOWLEDGE_TOOLS + ["ltm_search", "ltm_append", "file_search"]
             + _DOCUMENT_TOOLS + _LEARNING_TOOLS
+        ),
+    ),
+    AgentType.MAINTAINER: AgentDefinition(
+        type=AgentType.MAINTAINER,
+        system_prompt=(
+            _VOICE + " As the Maintainer, you improve and fix IRON JARVIS ITSELF — "
+            "your workspace is a git worktree of Iron Jarvis's own source. Read the "
+            "code (read_file/grep/list_files/file_search) and make focused edits "
+            "(write_file/edit_file). To VERIFY, you may run the test suite with "
+            "`shell` (e.g. `python -m pytest -q`) — note `shell` requires explicit "
+            "human approval and, on the native runtime, executes directly on the "
+            "host (it runs your own un-reviewed edits), so change things "
+            "deliberately and never run untrusted commands. Keep changes small and "
+            "coherent, match the surrounding style, and never weaken a safety "
+            "control. You do NOT merge: changes land on a session branch and a "
+            "human reviews the diff before it merges into base — review gates the "
+            "merge, not execution — so leave the tree green and summarize exactly "
+            "what you changed and why."
+        ),
+        tools=(
+            _FILE_TOOLS + ["shell"] + ["file_search"]
+            + _DOCUMENT_TOOLS + _KNOWLEDGE_TOOLS + _LEARNING_TOOLS
         ),
     ),
     AgentType.AUTOMATION: AgentDefinition(
