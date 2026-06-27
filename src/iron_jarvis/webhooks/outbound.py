@@ -22,14 +22,24 @@ from ..core.db import session_scope
 from ..core.events import Event
 from .models import WebhookRecord
 from .security import canonical_bytes, sign
+from .validate import assert_safe_webhook_url
 
 HttpPost = Callable[[str, dict, dict], Any]
 
 
 class OutboundWebhooks:
-    def __init__(self, engine: Engine, http_post: HttpPost) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        http_post: HttpPost,
+        *,
+        allow_internal: bool = False,
+    ) -> None:
         self.engine = engine
         self.http_post = http_post
+        #: when False (default) outbound targets resolving to private/loopback/
+        #: link-local/etc. addresses are refused (SSRF defense).
+        self.allow_internal = allow_internal
         self._secrets: dict[str, str] = {}
 
     def register(
@@ -39,7 +49,13 @@ class OutboundWebhooks:
         event_types: list[str],
         secret: str | None = None,
     ) -> str:
-        """Register (or update) an outbound delivery and persist its row."""
+        """Register (or update) an outbound delivery and persist its row.
+
+        Raises ``ValueError`` (before persisting anything) if ``url`` is unsafe
+        to deliver to -- e.g. a non-http(s) scheme or a host resolving to an
+        internal/loopback/metadata address while ``allow_internal`` is False.
+        """
+        assert_safe_webhook_url(url, allow_internal=self.allow_internal)
         if secret:
             self._secrets[slug] = secret
         else:
@@ -100,6 +116,25 @@ class OutboundWebhooks:
             secret = self._secrets.get(rec.slug)
             if secret:
                 headers["X-IronJarvis-Signature"] = sign(body_bytes, secret)
+
+            # Re-validate at delivery time (the persisted row, or the DNS it
+            # resolves to, may have changed since registration) to defeat DNS
+            # rebinding. A blocked target is skipped, not POSTed.
+            try:
+                assert_safe_webhook_url(
+                    rec.target_url, allow_internal=self.allow_internal
+                )
+            except ValueError as exc:
+                deliveries.append(
+                    {
+                        "slug": rec.slug,
+                        "url": rec.target_url,
+                        "signed": bool(secret),
+                        "blocked": True,
+                        "error": str(exc),
+                    }
+                )
+                continue
 
             response = self.http_post(rec.target_url, payload, headers)
             deliveries.append(

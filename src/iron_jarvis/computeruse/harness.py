@@ -167,6 +167,18 @@ class ComputerUseHarness:
     async def _handle_approval(
         self, run: ComputerUseRun, action: Action, reason: str
     ) -> str | None:
+        # Consume-on-use: a standing dashboard approval of this EXACT action (this
+        # run) unblocks the retry without minting a fresh pending gate. This is the
+        # path that makes a human approval actually take effect when no synchronous
+        # resolver is injected (the resolver-less production wiring).
+        prior = self.approvals.approved_unconsumed(run.id, action)
+        if prior is not None:
+            self.approvals.consume(prior.id)
+            self.trace.record_approval(prior.id, "consumed", reason)
+            run.status = "running"
+            self._persist(run)
+            return None  # proceed to execute
+
         req = self.approvals.create_request(run.id, action, reason)
         run.status = "awaiting_approval"
         self._persist(run)

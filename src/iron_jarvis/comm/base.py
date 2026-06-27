@@ -38,7 +38,9 @@ def httpx_post(url: str, payload: dict[str, Any]) -> Any:
     """
     import httpx
 
-    return httpx.post(url, json=payload, timeout=15.0)
+    # Short connect timeout so an unreachable/offline destination fails fast
+    # (~2s) instead of stalling its worker thread for the full window.
+    return httpx.post(url, json=payload, timeout=httpx.Timeout(15.0, connect=2.0))
 
 
 def interpret_response(resp: Any) -> tuple[bool, str]:

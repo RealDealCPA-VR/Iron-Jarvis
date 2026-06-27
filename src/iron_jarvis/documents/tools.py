@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ..core.fs_policy import fs_read_ok
 from ..tools.base import Tool, ToolContext, ToolResult, safe_path
 from .readers import extract_text
 from .writers import write_document
@@ -53,6 +54,9 @@ class ReadDocumentTool(Tool):
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = _resolve_read_path(args["path"], ctx)
+        allowed, reason = fs_read_ok(path)
+        if not allowed:
+            return ToolResult(ok=False, error=reason)
         try:
             text = extract_text(path)
         except Exception as exc:  # reading real files must never crash the runtime
@@ -119,6 +123,9 @@ class ExtractPdfTool(Tool):
         path = _resolve_read_path(args["path"], ctx)
         if path.suffix.lower() != ".pdf":
             return ToolResult(ok=False, error=f"not a PDF file: {args['path']}")
+        allowed, reason = fs_read_ok(path)
+        if not allowed:
+            return ToolResult(ok=False, error=reason)
         try:
             text = extract_text(path)
         except Exception as exc:

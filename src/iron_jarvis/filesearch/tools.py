@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ..core.fs_policy import fs_path_allowed, is_protected_path
 from ..tools.base import Tool, ToolContext, ToolResult
 from .service import FileSearchService
 
@@ -44,6 +45,15 @@ class FileSearchTool(Tool):
         mode = args.get("mode", "content")
         limit = int(args.get("limit", 50))
         root = args.get("root")
+        # A caller-supplied root must satisfy the same FS policy as the HTTP
+        # endpoints: never a protected secrets/key dir, and inside the allowlist
+        # when one is configured. Otherwise an agent could search arbitrary roots.
+        if root is not None:
+            if is_protected_path(root) or not fs_path_allowed(root):
+                return ToolResult(
+                    ok=False,
+                    error="root is protected or outside IRONJARVIS_FS_ALLOWLIST",
+                )
         roots = [Path(root)] if root else None
         try:
             results = self.service.search(
@@ -51,6 +61,14 @@ class FileSearchTool(Tool):
             )
         except Exception as exc:  # never crash the runtime
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+
+        # Filter individual hits through the policy too: a configured default
+        # root (e.g. the project) may itself contain a protected/excluded path.
+        results = [
+            r
+            for r in results
+            if not is_protected_path(r.get("path", "")) and fs_path_allowed(r.get("path", ""))
+        ]
 
         lines: list[str] = []
         for r in results:

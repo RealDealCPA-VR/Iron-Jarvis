@@ -200,7 +200,55 @@ class PlaywrightBrowser:
             a11y = _flatten_a11y(tree)
         except Exception:  # noqa: BLE001
             a11y = []
+        # Enrich with real form-control field nodes so policy.classify's
+        # field-type / autocomplete layer (passwords, payment, PII) has real
+        # data to inspect — the bare a11y snapshot carries only {role, name}.
+        a11y.extend(await self._field_nodes(page))
         return Page(url=page.url, a11y_tree=a11y, text=text)
+
+    async def _field_nodes(self, page: Any) -> list[dict[str, Any]]:
+        """Query form controls and emit field nodes mirroring ``FakeBrowser``.
+
+        Each node is ``{role, name, type, autocomplete, css, selector, field}``
+        so :meth:`ComputerUsePolicy.classify` sees the DOM ``type`` /
+        ``autocomplete`` of a control even when the agent selected it via a
+        non-credential-y css selector.
+        """
+        nodes: list[dict[str, Any]] = []
+        try:
+            elements = await page.query_selector_all("input, select, textarea")
+        except Exception:  # noqa: BLE001
+            return nodes
+        for el in elements or []:
+            try:
+                el_type = await el.get_attribute("type")
+                autocomplete = await el.get_attribute("autocomplete")
+                el_id = await el.get_attribute("id")
+                el_name = await el.get_attribute("name")
+                placeholder = await el.get_attribute("placeholder")
+                aria_label = await el.get_attribute("aria-label")
+            except Exception:  # noqa: BLE001
+                continue
+            # Build a stable css selector preferring #id then [name="..."].
+            if el_id:
+                css: str | None = f"#{el_id}"
+            elif el_name:
+                css = f'[name="{el_name}"]'
+            else:
+                css = None
+            name = aria_label or placeholder or el_name or el_id or ""
+            nodes.append(
+                {
+                    "role": "textbox",
+                    "name": name,
+                    "type": (el_type or "text"),
+                    "autocomplete": (autocomplete or ""),
+                    "css": css,
+                    "selector": css,
+                    "field": True,
+                }
+            )
+        return nodes
 
     # -- Browser protocol ---------------------------------------------------
     async def navigate(self, url: str) -> Page:

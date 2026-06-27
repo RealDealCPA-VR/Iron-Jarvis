@@ -24,6 +24,7 @@ class DockerSandbox(Sandbox):
 
     def available(self) -> bool:
         """True iff the Docker daemon is reachable; swallows all errors (§16)."""
+        client = None
         try:
             import docker  # lazy import
 
@@ -32,6 +33,12 @@ class DockerSandbox(Sandbox):
             return True
         except Exception:
             return False
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
 
     def run(
         self, command: str, *, cwd: Path, timeout: float | None = None
@@ -50,6 +57,13 @@ class DockerSandbox(Sandbox):
 
         limit = timeout if timeout is not None else self.policy.timeout_s
         host_dir = str(Path(cwd).resolve())
+        # Fail-closed network: only an explicit 'allow' opens egress; both
+        # 'deny' and the unattended 'ask' keep the container offline (F13).
+        network_disabled = self.policy.internet != "allow"
+        # CPU cap (F13): translate the CPU-seconds budget over the wall-clock
+        # timeout into a nano-cpus quota, clamped to at least 1 nano-cpu.
+        timeout_basis = max(float(self.policy.timeout_s), 1.0)
+        nano_cpus = max(1, int(self.policy.cpu_seconds / timeout_basis * 1_000_000_000))
         container = None
         try:
             container = client.containers.run(
@@ -58,7 +72,9 @@ class DockerSandbox(Sandbox):
                 working_dir="/workspace",
                 volumes={host_dir: {"bind": "/workspace", "mode": "rw"}},
                 mem_limit=f"{self.policy.memory_mb}m",
-                network_disabled=self.policy.internet == "deny",
+                network_disabled=network_disabled,
+                nano_cpus=nano_cpus,
+                pids_limit=512,
                 detach=True,
             )
             timed_out = False
@@ -96,3 +112,7 @@ class DockerSandbox(Sandbox):
                     container.remove(force=True)
                 except Exception:
                     pass
+            try:
+                client.close()  # F9: don't leak the docker client
+            except Exception:
+                pass

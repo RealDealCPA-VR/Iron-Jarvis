@@ -78,6 +78,36 @@ def branch_name(slug: str, ts: str | None = None) -> str:
     return f"ironjarvis/session-{ts}-{_slugify(slug)}"
 
 
+def list_session_worktrees(repo: Path) -> list[tuple[Path, str]]:
+    """Return ``(workspace, branch)`` for each ``ironjarvis/session-*`` worktree.
+
+    Parses ``git worktree list --porcelain`` so the orchestrator can find and
+    garbage-collect worktrees orphaned by a daemon restart (review state is held
+    in memory). Returns an empty list if *repo* is not a git repository.
+    """
+    if _git_code(["rev-parse", "--git-dir"], repo) != 0:
+        return []
+    out = _git(["worktree", "list", "--porcelain"], cwd=repo)
+    results: list[tuple[Path, str]] = []
+    cur_path: Path | None = None
+    for line in out.splitlines():
+        if line.startswith("worktree "):
+            cur_path = Path(line[len("worktree ") :].strip())
+        elif line.startswith("branch ") and cur_path is not None:
+            branch = line[len("branch ") :].strip().removeprefix("refs/heads/")
+            if branch.startswith("ironjarvis/session-"):
+                results.append((cur_path, branch))
+    return results
+
+
+def prune_worktree(repo: Path, workspace: Path, branch: str) -> None:
+    """Best-effort removal of a linked worktree + its branch (never raises)."""
+    _git_code(["worktree", "remove", "--force", str(workspace)], cwd=repo)
+    _git_code(["worktree", "prune"], cwd=repo)
+    if _git_code(["rev-parse", "--verify", branch], cwd=repo) == 0:
+        _git_code(["branch", "-D", branch], cwd=repo)
+
+
 @dataclass
 class GitSession:
     """A session's working branch, materialised as a linked git worktree."""
@@ -153,14 +183,29 @@ class GitSession:
 
         Called ONLY by an explicit review approval (§28) — never by an agent.
         Runs in the main repo: checks out ``base`` and ``git merge --no-ff``.
+        Restores the main checkout's original branch afterwards so an approval
+        never leaves the developer's working tree parked on a surprise branch
+        (a no-op in the normal case where HEAD already points at ``base``).
         """
         self.commit(f"Iron Jarvis session {self.branch}")
+        original = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=self.repo).strip()
         _git(["checkout", self.base], cwd=self.repo)
         merge_msg = message or f"Merge {self.branch} into {self.base}"
-        return _git(
-            ["merge", "--no-ff", "-m", merge_msg, self.branch],
-            cwd=self.repo,
-        )
+        try:
+            return _git(
+                ["merge", "--no-ff", "-m", merge_msg, self.branch],
+                cwd=self.repo,
+            )
+        except GitError:
+            # A conflicting merge (base moved) leaves unmerged paths in the index,
+            # which makes `git checkout original` refuse and would strand the
+            # developer's main checkout mid-conflict. Abort so the tree is clean,
+            # then propagate so the approval surfaces as a failure (no merge landed).
+            _git_code(["merge", "--abort"], cwd=self.repo)
+            raise
+        finally:
+            if original and original not in (self.base, "HEAD"):
+                _git_code(["checkout", original], cwd=self.repo)
 
     def discard(self) -> None:
         """Remove the worktree and delete the branch; the base is untouched."""

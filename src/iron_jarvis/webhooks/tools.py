@@ -61,9 +61,12 @@ class WebhookAddTool(Tool):
                 return ToolResult(
                     ok=False, error="target_url is required for an outbound webhook"
                 )
-            self.platform.outbound_webhooks.register(
-                slug, target_url, args.get("event_types") or [], secret=secret
-            )
+            try:
+                self.platform.outbound_webhooks.register(
+                    slug, target_url, args.get("event_types") or [], secret=secret
+                )
+            except ValueError as exc:
+                return ToolResult(ok=False, error=str(exc))
         else:
             async def handler(body, _slug=slug):
                 await self.platform.event_bus.publish(

@@ -29,6 +29,16 @@ from .base import READ_ONLY_KINDS, Action, Page, Selector, match_element
 _PASSWORD_FIELD_TYPES = {"password", "passwd", "pwd"}
 _PAYMENT_FIELD_TYPES = {"creditcard", "credit-card", "cc", "card", "tel-cc"}
 
+#: HTML ``autocomplete`` tokens that mark a control as credential / payment.
+_PASSWORD_AUTOCOMPLETE = {"current-password", "new-password"}
+_PAYMENT_AUTOCOMPLETE = {
+    "cc-number",
+    "cc-csc",
+    "cc-exp",
+    "cc-exp-month",
+    "cc-exp-year",
+}
+
 _PASSWORD_WORDS = ("password", "passphrase", "passwd", "pwd")
 _PAYMENT_WORDS = (
     "credit card",
@@ -154,18 +164,39 @@ class ComputerUsePolicy:
         """
         kind = action.kind
         sel = action.selector or Selector()
-        hay_parts = [sel.name or "", sel.text or "", action.value or ""]
+        # The agent-supplied css/value is part of the haystack so credential-y
+        # words in a css selector can't slip past the keyword scan.
+        hay_parts = [sel.name or "", sel.text or "", sel.css or "", action.value or ""]
         field = self._field_for(action, page)
+        autocomplete = ""
         if field:
-            hay_parts.extend([str(field.get("name", "")), str(field.get("type", ""))])
+            autocomplete = str(field.get("autocomplete", "")).lower()
+            hay_parts.extend(
+                [
+                    str(field.get("name", "")),
+                    str(field.get("type", "")),
+                    str(field.get("autocomplete", "")),
+                ]
+            )
         hay = " ".join(hay_parts).lower()
         field_type = str(field.get("type", "")).lower() if field else ""
 
-        # 1) Typing into a credential / payment / PII field.
+        # 1) Typing into a credential / payment / PII field. The real
+        # ``PlaywrightBrowser`` snapshot now carries the control's DOM ``type``
+        # and ``autocomplete``, so these branches fire even when the agent
+        # selected the field via a css selector with no credential keywords.
         if kind == "type":
-            if field_type in _PASSWORD_FIELD_TYPES or any(w in hay for w in _PASSWORD_WORDS):
+            if (
+                field_type in _PASSWORD_FIELD_TYPES
+                or autocomplete in _PASSWORD_AUTOCOMPLETE
+                or any(w in hay for w in _PASSWORD_WORDS)
+            ):
                 return {"sensitive": True, "reason": "typing into a password field"}
-            if field_type in _PAYMENT_FIELD_TYPES or any(w in hay for w in _PAYMENT_WORDS):
+            if (
+                field_type in _PAYMENT_FIELD_TYPES
+                or autocomplete in _PAYMENT_AUTOCOMPLETE
+                or any(w in hay for w in _PAYMENT_WORDS)
+            ):
                 return {"sensitive": True, "reason": "typing payment/credit-card data"}
             if any(w in hay for w in _PII_WORDS):
                 return {"sensitive": True, "reason": "typing personal/PII data"}

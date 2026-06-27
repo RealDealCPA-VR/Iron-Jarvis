@@ -57,6 +57,31 @@ class ApprovalQueue:
     def deny(self, request_id: str) -> ApprovalRequest | None:
         return self._set_status(request_id, "denied")
 
+    def consume(self, request_id: str) -> ApprovalRequest | None:
+        """Mark an approval as *consumed* (spent on one action; not replayable)."""
+        return self._set_status(request_id, "consumed")
+
+    def approved_unconsumed(
+        self, run_id: str, action: Action
+    ) -> ApprovalRequest | None:
+        """Most recent *approved*, not-yet-consumed request for ``run_id`` + ``action``.
+
+        The action signature is the same ``json.dumps(action.to_dict())`` stored by
+        :meth:`create_request`, so a dashboard approval of the FIRST (pending) call
+        unblocks the NEXT identical call (consume-on-use). Returns ``None`` when no
+        such approval exists (so a consumed approval can never be replayed).
+        """
+        signature = json.dumps(action.to_dict(), default=str)
+        with session_scope(self.engine) as db:
+            rows = db.exec(
+                select(ApprovalRequest)
+                .where(ApprovalRequest.run_id == run_id)
+                .where(ApprovalRequest.status == "approved")
+                .where(ApprovalRequest.action_json == signature)
+                .order_by(ApprovalRequest.created_at.desc())
+            )
+            return rows.first()
+
     def get(self, request_id: str) -> ApprovalRequest | None:
         with session_scope(self.engine) as db:
             return db.get(ApprovalRequest, request_id)

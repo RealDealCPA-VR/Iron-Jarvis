@@ -22,8 +22,10 @@ from ..core.ids import new_id, utcnow
 
 #: Terminal/lifecycle statuses for a run.
 RUN_STATUSES = ("running", "completed", "failed", "blocked", "awaiting_approval")
-#: Lifecycle statuses for an approval request.
-APPROVAL_STATUSES = ("pending", "approved", "denied")
+#: Lifecycle statuses for an approval request. ``consumed`` marks an approval
+#: that has been spent on a single action (consume-on-use), so a dashboard
+#: approval cannot be replayed by a later identical action.
+APPROVAL_STATUSES = ("pending", "approved", "denied", "consumed")
 
 
 class ComputerUseRun(SQLModel, table=True):
@@ -45,5 +47,5 @@ class ApprovalRequest(SQLModel, table=True):
     run_id: str = Field(index=True)
     action_json: str = "{}"
     reason: str = ""
-    status: str = "pending"  # pending|approved|denied
+    status: str = "pending"  # pending|approved|denied|consumed
     created_at: datetime = Field(default_factory=utcnow)

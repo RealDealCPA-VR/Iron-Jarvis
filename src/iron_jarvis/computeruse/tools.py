@@ -195,23 +195,34 @@ class WebActionTool(_GatedTool):
             return ToolResult(ok=False, error=f"policy denied: {decision.reason}")
 
         if decision.requires_approval:
-            # Create the human-approval gate. Only proceed if a resolver approves.
             run_id = getattr(ctx, "agent_run_id", "ad-hoc")
-            req = self.cu.approvals.create_request(run_id, action, decision.reason)
-            resolver = self.cu.approval_resolver
-            granted = bool(resolver(req)) if resolver is not None else False
-            if not granted:
-                if resolver is not None:
-                    self.cu.approvals.deny(req.id)
-                return ToolResult(
-                    ok=False,
-                    error=(
-                        f"approval required: {decision.reason}. "
-                        f"Pending approval id={req.id}."
-                    ),
-                    data={"approval_id": req.id, "status": "pending"},
-                )
-            self.cu.approvals.approve(req.id)
+            # Consume-on-use: if a human already approved this EXACT action in the
+            # dashboard (the prior, pending call), spend that approval now and
+            # proceed. This is what makes the resolver-less production path work —
+            # without it a dashboard approval would never be matched/consumed.
+            prior = self.cu.approvals.approved_unconsumed(run_id, action)
+            if prior is not None:
+                self.cu.approvals.consume(prior.id)
+            else:
+                # No standing approval: create the human-approval gate. Only proceed
+                # if an injected resolver approves synchronously (tests); otherwise
+                # return pending for a human to approve in the dashboard, and the
+                # agent's NEXT identical call will consume it via the branch above.
+                req = self.cu.approvals.create_request(run_id, action, decision.reason)
+                resolver = self.cu.approval_resolver
+                granted = bool(resolver(req)) if resolver is not None else False
+                if not granted:
+                    if resolver is not None:
+                        self.cu.approvals.deny(req.id)
+                    return ToolResult(
+                        ok=False,
+                        error=(
+                            f"approval required: {decision.reason}. "
+                            f"Pending approval id={req.id}."
+                        ),
+                        data={"approval_id": req.id, "status": "pending"},
+                    )
+                self.cu.approvals.approve(req.id)
 
         if kind == "screenshot_click" and not action.fallback:
             return ToolResult(

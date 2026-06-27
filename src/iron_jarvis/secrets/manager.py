@@ -51,6 +51,32 @@ class SecretsManager:
     def _decrypt(self, token: str) -> str:
         return self._fernet().decrypt(token.encode("utf-8")).decode("utf-8")
 
+    def rotate_key(self) -> int:
+        """Re-encrypt every secret under a fresh Fernet key (keeping the old key
+        as ``.secrets.key.bak``). Returns the number of secrets rotated. Either
+        the new key + re-encrypted rows both land, or the old key is restored."""
+        key_path = self.root / ".secrets.key"
+        old = self._fernet()
+        new_key = Fernet.generate_key()
+        new = Fernet(new_key)
+        bak = key_path.parent / (key_path.name + ".bak")
+        with session_scope(self.engine) as db:
+            rows = list(db.exec(select(SecretRecord)))
+            for r in rows:
+                plain = old.decrypt(r.enc_value.encode("utf-8"))
+                r.enc_value = new.encrypt(plain).decode("utf-8")
+                db.add(r)
+            if key_path.exists():
+                bak.write_bytes(key_path.read_bytes())
+            key_path.write_bytes(new_key)
+            try:
+                db.commit()
+            except Exception:
+                if bak.exists():  # roll the key back so existing rows decrypt
+                    key_path.write_bytes(bak.read_bytes())
+                raise
+        return len(rows)
+
     # -- write --------------------------------------------------------------
     def set(
         self,
