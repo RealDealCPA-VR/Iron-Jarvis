@@ -65,6 +65,8 @@ from .memory.embeddings import build_embedder
 from .memory.recall import recall_tools
 from .scheduling import Scheduler
 from .scheduling import models as _sched_models  # noqa: F401
+from .sentinels import SentinelService, sentinel_tools
+from .sentinels import models as _sentinel_models  # noqa: F401
 from .secrets import SecretsManager, secret_tools
 from .secrets import models as _sec_models  # noqa: F401
 from .webhooks import InboundWebhooks, OutboundWebhooks
@@ -135,6 +137,7 @@ class Platform:
     terminals: TerminalManager
     blackboard: "BlackboardStore | None" = None
     scheduler: Scheduler | None = None
+    sentinels: "SentinelService | None" = None
     agents_registry: DynamicAgentRegistry | None = None
     tools_registry: "DynamicToolRegistry | None" = None
     intent: "IntentEngine | None" = None
@@ -422,6 +425,16 @@ def build_platform(
     for tool in goal_tools(platform):
         platform.registry.register(tool)
     event_bus.add_handler(platform.intent.on_event)
+
+    # Sentinels ("always-on watchers"): durable, suggest-only filesystem watchers
+    # that NOTICE changes and mint suggest-only proposals into the Motivation Layer
+    # backlog. The registry is built always (so the API/tool work), but the polling
+    # runner is created ONLY when config.sentinels_enabled (OFF by default), so the
+    # default install + tests see zero new behaviour. A fired Sentinel never spawns
+    # a session — execution still flows through the autonomy dial + budget + approval.
+    platform.sentinels = SentinelService(engine)
+    for tool in sentinel_tools(platform):
+        platform.registry.register(tool)
 
     # ImprovementEngine: the consumer of evaluation scores. Built last so it can
     # reach learning/evaluator/intent. record_outcome() is hooked into the

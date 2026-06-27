@@ -83,6 +83,10 @@ def default_permissions() -> dict[str, str]:
         # autonomy_enabled), so listing/adding goals is allowed.
         "goal_add": "allow",
         "goal_list": "allow",
+        # Sentinels: registering an always-on watcher is local + reversible and
+        # never acts on its own (a fired Sentinel only mints a suggest-only
+        # proposal, and the runner is OFF unless sentinels_enabled), so allowed.
+        "sentinel_add": "allow",
         # Computer use (opt-in): reads allowed but still gated by policy.enabled;
         # actions ask. The capability is OFF unless the user enables it.
         "browse": "allow",
@@ -165,6 +169,13 @@ class Config(BaseModel):
     autonomy_tick_seconds: int = 900  # deliberation cadence (background loop)
     autonomy_max_actions_per_day: int = 5  # global rolling self-initiated action cap
     autonomy_max_tokens_per_day: int = 50000  # global rolling self-initiated token cap
+    # Sentinels ("always-on watchers") — OFF by default, exactly like autonomy and
+    # computer_use. When disabled NO watcher runs and nothing is polled, so the
+    # default install + the offline test suite are untouched. A fired Sentinel
+    # only mints a SUGGEST-ONLY proposal into the Motivation Layer backlog; it
+    # never executes (the autonomy dial + budget + approval still gate any action).
+    sentinels_enabled: bool = False
+    sentinels_tick_seconds: int = 300  # filesystem poll cadence (background loop)
 
     @field_validator("autonomy_level")
     @classmethod

@@ -95,6 +95,11 @@ _SETTINGS_KEYS = [
     "autonomy_tick_seconds",
     "autonomy_max_actions_per_day",
     "autonomy_max_tokens_per_day",
+    # Sentinels (always-on watchers) — OFF by default. Toggling sentinels_enabled
+    # at runtime is honoured by the manual /sentinels/poll; the background polling
+    # loop is (re)armed on the next daemon restart (mirrors autonomy_enabled).
+    "sentinels_enabled",
+    "sentinels_tick_seconds",
 ]
 
 
@@ -172,6 +177,16 @@ class ScheduleAdd(BaseModel):
     interval_seconds: int | None = None
     kind: str = "workflow"
     payload: dict = {}
+
+
+class SentinelAdd(BaseModel):
+    name: str
+    path: str
+    glob: str | None = None
+    task: str = ""
+    kind: str = "file"
+    agent_type: str = "builder"
+    risk: str = "low"  # low | med
 
 
 class TemplateCreateBody(BaseModel):
@@ -410,6 +425,45 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
             autonomy_task = asyncio.create_task(_autonomy_loop())
 
+        # Sentinels ("always-on watchers") polling loop. GUARDED by
+        # config.sentinels_enabled (OFF by default), so by default + in tests the
+        # loop is never created and nothing is polled. Mirrors the autonomy loop:
+        # rehydrates the durable registry, sleeps before the first poll (never
+        # blocks boot), and is cancelled on shutdown. Each poll diffs every enabled
+        # sentinel and mints SUGGEST-ONLY proposals — never a session. Disable
+        # explicitly via IRONJARVIS_SENTINELS=off.
+        sentinel_task = None
+        if (
+            getattr(platform.config, "sentinels_enabled", False)
+            and platform.sentinels is not None
+            and platform.intent is not None
+            and os.environ.get("IRONJARVIS_SENTINELS", "on").strip().lower()
+            not in {"0", "false", "no", "off"}
+        ):
+            try:  # restart survival: rehydrate seen-state (never re-fires)
+                platform.sentinels.load()
+            except Exception:  # pragma: no cover - never block boot
+                pass
+
+            async def _sentinel_loop() -> None:
+                try:
+                    interval = max(15, int(platform.config.sentinels_tick_seconds))
+                except (TypeError, ValueError):
+                    interval = 300
+                await asyncio.sleep(30)  # let boot settle before the first poll
+                while True:
+                    try:
+                        await asyncio.to_thread(
+                            platform.sentinels.poll_once, platform.intent
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:  # noqa: BLE001 - a poll must never kill the daemon
+                        log.exception("sentinel poll failed")
+                    await asyncio.sleep(interval)
+
+            sentinel_task = asyncio.create_task(_sentinel_loop())
+
         # Two-way comm inbound poller — the receive leg. GUARDED by
         # poller.enabled() (True only when a channel has inbound_enabled +
         # credentials), so by default + in tests the loop is NEVER created and no
@@ -446,6 +500,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
         finally:
             if inbound_task is not None:
                 inbound_task.cancel()
+            if sentinel_task is not None:
+                sentinel_task.cancel()
             if autonomy_task is not None:
                 autonomy_task.cancel()
             if backup_task is not None:
@@ -1447,6 +1503,58 @@ def create_app(project_root: str | None = None) -> FastAPI:
     def autonomy_briefing(notify: bool = False) -> dict[str, Any]:
         """Summarise recent self-activity + pending proposals (optionally pushed)."""
         return platform.intent.briefing(notify=notify)
+
+    # --- Sentinels (always-on watchers): suggest-only, never act ----------
+
+    def _sentinel_view(s) -> dict[str, Any]:
+        return {
+            "id": s.id, "name": s.name, "kind": s.kind,
+            "config": s.decoded_config(), "task": s.task,
+            "agent_type": s.agent_type, "risk": s.risk, "enabled": s.enabled,
+            "last_checked_at": s.last_checked_at.isoformat() if s.last_checked_at else None,
+            "created_at": s.created_at.isoformat(),
+        }
+
+    @app.get("/sentinels")
+    def list_sentinels() -> dict[str, Any]:
+        return {
+            "enabled": getattr(platform.config, "sentinels_enabled", False),
+            "sentinels": [_sentinel_view(s) for s in platform.sentinels.list()],
+        }
+
+    @app.post("/sentinels")
+    def create_sentinel(body: SentinelAdd) -> dict[str, Any]:
+        try:
+            rec = platform.sentinels.add(
+                body.name,
+                path=body.path,
+                glob=body.glob,
+                task=body.task,
+                kind=body.kind,
+                agent_type=body.agent_type,
+                risk=body.risk,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return _sentinel_view(rec)
+
+    @app.delete("/sentinels/{name}")
+    def delete_sentinel(name: str) -> dict[str, Any]:
+        if not platform.sentinels.remove(name):
+            raise HTTPException(status_code=404, detail="sentinel not found")
+        return {"deleted": name}
+
+    @app.post("/sentinels/poll")
+    def poll_sentinels() -> dict[str, Any]:
+        """Run one polling sweep now (suggest-only; no-ops when sentinels disabled).
+
+        Mints SUGGEST-ONLY proposals for any noticed changes — never a session.
+        Guarded by config.sentinels_enabled so a manual poke can't bypass opt-in.
+        """
+        if not getattr(platform.config, "sentinels_enabled", False):
+            return {"ran": False, "reason": "sentinels_disabled", "proposals": []}
+        created = platform.sentinels.poll_once(platform.intent)
+        return {"ran": True, "proposals": [p.id for p in created]}
 
     # --- Secrets (shared, encrypted) — names/metadata only, never values --
 

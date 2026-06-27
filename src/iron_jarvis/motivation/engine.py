@@ -194,6 +194,67 @@ class IntentEngine:
             db.refresh(rec)
         return rec
 
+    def add_backlog(
+        self,
+        *,
+        title: str,
+        task: str,
+        risk: str = "low",
+        source: str = "sentinel",
+        agent_type: str = "builder",
+        rationale: str = "",
+        goal_id: str | None = None,
+        dedupe: bool = True,
+    ) -> ProposalRecord | None:
+        """Public, thin minting helper for EXTERNAL suggest-only producers.
+
+        Sentinels (and the file trigger) call this to surface a noticed signal as
+        a SUGGEST-ONLY :class:`ProposalRecord` in the backlog — exactly like the
+        deliberation/event paths, but without reaching into private methods. It
+        ONLY proposes: it never spawns a session (execution still flows through
+        the autonomy dial + budget + approval).
+
+        When ``dedupe`` (the default), an existing *pending* proposal with the same
+        ``title`` + ``source`` is reused (returns it) so a repeating signal can't
+        pile up an unbounded backlog. Never raises — returns None on failure so a
+        bad signal can't break the producer's loop.
+        """
+        title = (title or "").strip()
+        if not title:
+            return None
+        try:
+            if dedupe:
+                with session_scope(self.p.engine) as db:
+                    existing = db.exec(
+                        select(ProposalRecord).where(
+                            ProposalRecord.title == title[:200],
+                            ProposalRecord.status == "pending",
+                            ProposalRecord.source == source,
+                        )
+                    ).first()
+                    if existing is not None:
+                        # Fold the new signal into the pending proposal instead of
+                        # silently dropping it: refresh the rationale to the newest
+                        # change so an accumulating watcher never loses an update.
+                        if rationale and rationale != existing.rationale:
+                            existing.rationale = rationale[:2000]
+                            db.add(existing)
+                            db.commit()
+                            db.refresh(existing)
+                        return existing
+            return self._create_proposal(
+                goal_id=goal_id,
+                title=title,
+                rationale=rationale,
+                agent_type=agent_type,
+                task=task,
+                risk=risk,
+                source=source,
+            )
+        except Exception:  # noqa: BLE001 — a mint failure must not break the caller
+            log.exception("add_backlog mint failed for %r", title)
+            return None
+
     # -- budget + governance ----------------------------------------------
 
     def _global_window_usage(self) -> tuple[int, int]:

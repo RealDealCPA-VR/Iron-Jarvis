@@ -34,7 +34,7 @@ GOAL_STATUSES: tuple[str, ...] = ("active", "paused", "done", "abandoned")
 # auto-execute low/med-risk actions (high risk ALWAYS needs human approval).
 AUTONOMY_LEVELS: tuple[str, ...] = ("suggest", "act_low", "act_all")
 RISKS: tuple[str, ...] = ("low", "med", "high")
-PROPOSAL_SOURCES: tuple[str, ...] = ("deliberation", "event")
+PROPOSAL_SOURCES: tuple[str, ...] = ("deliberation", "event", "sentinel")
 PROPOSAL_STATUSES: tuple[str, ...] = ("pending", "approved", "rejected", "executed")
 
 
@@ -67,7 +67,7 @@ class ProposalRecord(SQLModel, table=True):
     rationale: str = ""
     action_json: str = "{}"  # {"agent_type": ..., "task": ...}
     risk: str = "med"  # low | med | high
-    source: str = "deliberation"  # deliberation | event
+    source: str = "deliberation"  # deliberation | event | sentinel
     status: str = "pending"  # pending | approved | rejected | executed
     session_id: str | None = None  # set once executed
     tokens: int = 0  # tokens the executed session actually spent

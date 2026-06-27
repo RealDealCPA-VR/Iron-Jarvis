@@ -4,9 +4,13 @@ Decides *when* a workflow runs. SPEC §25 enumerates seven kinds:
 
     manual, cron, webhook, file (change), email, calendar, api
 
-``manual`` and ``cron`` are fully wired here; the remaining kinds are inert
-stubs that raise ``NotImplementedError`` so the surface matches the spec while
-keeping the slice dependency-light. ``cron`` is backed by APScheduler.
+``manual`` and ``cron`` are fully wired here; ``file`` is wired to the Sentinels
+subsystem (a declared ``[[triggers]]`` of kind ``file`` registers a durable,
+suggest-only filesystem watcher — see :mod:`iron_jarvis.sentinels`). The
+remaining kinds (``webhook``, ``email``, ``calendar``, ``api``) are inert stubs
+that raise ``NotImplementedError``: ``email``/``calendar`` are intentionally NOT
+faked — they need the integration/network layer before they can be real.
+``cron`` is backed by APScheduler.
 
 TOML authoring shape (SPEC §25 ``[[triggers]]`` example)::
 
@@ -131,18 +135,50 @@ def manual_handler(spec: TriggerSpec, callback: Callable[[], Any]):
     return callback
 
 
+def file_trigger(spec: TriggerSpec, callback: Callable[[], Any], sentinels):
+    """Wire a ``file`` trigger to the Sentinels subsystem (SPEC §25).
+
+    A declared ``[[triggers]]`` of kind ``file`` becomes a durable, SUGGEST-ONLY
+    filesystem watcher: when matching files appear/change, the Sentinel mints a
+    proposal into the Motivation Layer backlog — it NEVER runs ``callback`` (or
+    any session) directly. The ``callback`` is accepted only for signature parity
+    with the other handlers; firing is decoupled by design (that decoupling IS the
+    safety model — a noticed signal becomes a suggestion, not an action).
+
+    The watch spec comes from the trigger's ``extra`` keys: ``path`` (required —
+    a file, directory, or glob) and optional ``glob``/``task``/``risk``. The
+    suggested ``task`` defaults to reviewing the change for the bound workflow.
+    """
+    if sentinels is None:
+        raise ValueError("file triggers require a SentinelService instance")
+    path = spec.extra.get("path") or spec.extra.get("watch")
+    if not path:
+        raise ValueError(f"file trigger {spec.name!r} requires a 'path'")
+    task = spec.extra.get("task") or (
+        f"Files watched by trigger '{spec.name}' changed; review what changed and "
+        f"whether to run the '{spec.workflow}' workflow. Take no action yet."
+    )
+    return sentinels.add(
+        spec.name,
+        path=str(path),
+        glob=spec.extra.get("glob"),
+        task=task,
+        kind="file",
+        risk=spec.extra.get("risk", "low"),
+    )
+
+
 webhook_handler = _stub("webhook")
-file_handler = _stub("file")
 email_handler = _stub("email")
 calendar_handler = _stub("calendar")
 api_handler = _stub("api")
 
-# Registry mapping kind -> handler for the non-cron kinds. ``cron`` is handled
-# by :class:`CronScheduler` (it needs a live scheduler), so it dispatches there.
+# Registry mapping kind -> handler for the non-cron, non-file kinds. ``cron`` is
+# handled by :class:`CronScheduler` and ``file`` by the Sentinels subsystem (both
+# need a live collaborator), so they dispatch separately in ``register_trigger``.
 TRIGGER_HANDLERS: dict[str, Callable[[TriggerSpec, Callable[[], Any]], Any]] = {
     "manual": manual_handler,
     "webhook": webhook_handler,
-    "file": file_handler,
     "email": email_handler,
     "calendar": calendar_handler,
     "api": api_handler,
@@ -153,16 +189,21 @@ def register_trigger(
     spec: TriggerSpec,
     callback: Callable[[], Any],
     scheduler: CronScheduler | None = None,
+    sentinels=None,
 ):
     """Route a trigger to its handler (SPEC §25).
 
-    cron triggers require a :class:`CronScheduler`; the inert kinds raise
-    ``NotImplementedError`` so callers see a clear message.
+    ``cron`` triggers require a :class:`CronScheduler`; ``file`` triggers require
+    a :class:`~iron_jarvis.sentinels.SentinelService` (suggest-only). The still
+    inert kinds (webhook/email/calendar/api) raise ``NotImplementedError`` so
+    callers see a clear message.
     """
     if spec.kind == "cron":
         if scheduler is None:
             raise ValueError("cron triggers require a CronScheduler instance")
         return scheduler.add(spec, callback)
+    if spec.kind == "file":
+        return file_trigger(spec, callback, sentinels)
     handler = TRIGGER_HANDLERS.get(spec.kind)
     if handler is None:
         raise ValueError(f"unknown trigger kind: {spec.kind!r}")
