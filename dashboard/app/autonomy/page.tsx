@@ -15,7 +15,7 @@ import {
   CircleCheck,
   Sparkles,
 } from "lucide-react";
-import { api, post, ApiError } from "@/lib/api";
+import { api, post, put, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import {
   Card,
@@ -130,10 +130,53 @@ export default function AutonomyPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionOk, setActionOk] = useState<string | null>(null);
   const [killBusy, setKillBusy] = useState(false);
+  const [enableBusy, setEnableBusy] = useState(false);
+  const [tickBusy, setTickBusy] = useState(false);
 
   function flash(ok: string | null, error: string | null = null) {
     setActionOk(ok);
     setActionError(error);
+  }
+
+  async function toggleEnabled(enabled: boolean) {
+    setEnableBusy(true);
+    flash(null);
+    try {
+      await put("/settings", { values: { autonomy_enabled: enabled } });
+      flash(
+        enabled
+          ? 'Autonomy enabled. The background pulse arms on the next daemon restart — use "Run a tick" to deliberate right now.'
+          : "Autonomy disabled.",
+      );
+      status.reload();
+    } catch (err) {
+      flash(null, errText(err));
+    } finally {
+      setEnableBusy(false);
+    }
+  }
+
+  async function runTick() {
+    setTickBusy(true);
+    flash(null);
+    try {
+      const r = await post<{ ran: boolean; reason?: string; proposal_id?: string }>(
+        "/autonomy/tick",
+      );
+      flash(
+        r.ran
+          ? r.proposal_id
+            ? "Deliberated — a new proposal is in the backlog below."
+            : "Deliberated — nothing new to propose this tick."
+          : `Tick didn't run (${r.reason ?? "unknown"}).`,
+      );
+      status.reload();
+      proposals.reload();
+    } catch (err) {
+      flash(null, errText(err));
+    } finally {
+      setTickBusy(false);
+    }
   }
 
   async function toggleKill(enabled: boolean) {
@@ -201,29 +244,61 @@ export default function AutonomyPage() {
           title="Autonomy"
           subtitle="The trust surface for the Motivation Layer — what Iron Jarvis wants to do on its own, what it's waiting to ask you, and the one switch that stops everything."
           actions={
-            <button
-              type="button"
-              onClick={() => toggleKill(!killed)}
-              disabled={killBusy || !s}
-              className={`inline-flex items-center gap-2 rounded-xl border px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${
-                killed
-                  ? "border-emerald-500/40 bg-emerald-500/[0.1] text-emerald-300 hover:bg-emerald-500/[0.16]"
-                  : "border-rose-500/40 bg-rose-500/[0.1] text-rose-300 hover:bg-rose-500/[0.16]"
-              }`}
-              title={killed ? "Release the global kill switch" : "Halt all autonomy now"}
-            >
-              {killBusy ? (
-                <LoaderInline label={killed ? "Releasing…" : "Halting…"} />
-              ) : killed ? (
-                <>
-                  <ShieldCheck size={15} /> Release kill switch
-                </>
-              ) : (
-                <>
-                  <Power size={15} /> Kill switch
-                </>
-              )}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Master enable (off by default) — writes autonomy_enabled via /settings. */}
+              <button
+                type="button"
+                onClick={() => toggleEnabled(!s?.enabled)}
+                disabled={enableBusy || !s}
+                className={`inline-flex items-center gap-2 rounded-xl border px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${
+                  s?.enabled
+                    ? "border-emerald-500/40 bg-emerald-500/[0.1] text-emerald-300 hover:bg-emerald-500/[0.16]"
+                    : "border-white/15 bg-white/[0.04] text-zinc-200 hover:bg-white/[0.08]"
+                }`}
+                title={s?.enabled ? "Disable autonomy" : "Enable autonomy (off by default)"}
+              >
+                {enableBusy ? (
+                  <LoaderInline label="Saving…" />
+                ) : (
+                  <>
+                    <Power size={15} /> {s?.enabled ? "Autonomy on" : "Enable autonomy"}
+                  </>
+                )}
+              </button>
+              {/* Deliberate once right now (works even before the background loop arms). */}
+              <button
+                type="button"
+                onClick={runTick}
+                disabled={tickBusy || !s}
+                className="inline-flex items-center gap-2 rounded-xl border border-accent/30 bg-accent/[0.08] px-3.5 py-2 text-sm font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
+                title="Deliberate once right now"
+              >
+                {tickBusy ? <LoaderInline label="Thinking…" /> : <><Activity size={15} /> Run a tick</>}
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleKill(!killed)}
+                disabled={killBusy || !s}
+                className={`inline-flex items-center gap-2 rounded-xl border px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${
+                  killed
+                    ? "border-emerald-500/40 bg-emerald-500/[0.1] text-emerald-300 hover:bg-emerald-500/[0.16]"
+                    : "border-rose-500/40 bg-rose-500/[0.1] text-rose-300 hover:bg-rose-500/[0.16]"
+                }`}
+                title={killed ? "Release the global kill switch" : "Halt all autonomy now"}
+              >
+                {killBusy ? (
+                  <LoaderInline label={killed ? "Releasing…" : "Halting…"} />
+                ) : killed ? (
+                  <>
+                    <ShieldCheck size={15} /> Release kill switch
+                  </>
+                ) : (
+                  <>
+                    <ShieldAlert size={15} /> Kill switch
+                  </>
+                )}
+              </button>
+            </div>
           }
         />
       </Reveal>

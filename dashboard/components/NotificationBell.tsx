@@ -25,6 +25,11 @@ export function NotificationBell() {
   // Computer-use approvals don't ride the event stream, so poll their count.
   const cu = usePolledApi<ComputerUseStatus>("/computeruse", 15000);
   const pendingApprovals = cu.data?.pending_approvals ?? 0;
+  // The live event buffer is empty right after a page reload, so seed the pending
+  // review count from /diagnostics (the authoritative current count) — otherwise
+  // a reload silently hides reviews that are still waiting on the user.
+  const diag = usePolledApi<{ pending_reviews?: number }>("/diagnostics", 15000);
+  const polledReviews = diag.data?.pending_reviews ?? 0;
 
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -51,7 +56,9 @@ export function NotificationBell() {
     return out;
   }, [events]);
 
-  const count = reviews.length + pendingApprovals;
+  // Use the larger of live-streamed vs polled reviews so neither a fresh reload
+  // (no events yet) nor a just-arrived live event under-reports the badge/title.
+  const count = Math.max(reviews.length, polledReviews) + pendingApprovals;
 
   // Desktop notifications + browser tab title are owned here, app-wide.
   const { permission, requestPermission, notify } = useDesktopNotifications();

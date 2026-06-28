@@ -174,4 +174,15 @@ class GoogleAdapter(LLMAdapter):
                 "Content-Type": "application/json",
             }
         resp = await self._client().post(self._url(), headers=headers, json=body)
+        # Fail loudly on an HTTP error so the router falls back / surfaces it,
+        # rather than parsing the error body into a blank successful reply.
+        status = getattr(resp, "status_code", 200)
+        if status >= 400:
+            detail = ""
+            try:
+                err = resp.json().get("error")
+                detail = str((err or {}).get("message") if isinstance(err, dict) else err)[:300]
+            except Exception:
+                detail = (getattr(resp, "text", "") or "")[:300]
+            raise RuntimeError(f"google API error {status}: {detail}")
         return self._parse(resp.json())

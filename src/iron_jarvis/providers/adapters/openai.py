@@ -18,6 +18,18 @@ from .base import LLMAdapter, LLMMessage, LLMResponse, ToolCall
 _ENDPOINT = "https://api.openai.com/v1/chat/completions"
 
 
+def _error_detail(resp: Any) -> str:
+    """Best-effort human-readable message from an HTTP error response body."""
+    try:
+        data = resp.json()
+        err = data.get("error")
+        if isinstance(err, dict):
+            return str(err.get("message") or err)[:300]
+        return str(err or data)[:300]
+    except Exception:
+        return (getattr(resp, "text", "") or "")[:300]
+
+
 class OpenAIAdapter(LLMAdapter):
     provider = "openai"
 
@@ -194,4 +206,11 @@ class OpenAIAdapter(LLMAdapter):
             headers=headers,
             json=body,
         )
+        # Fail LOUDLY on an HTTP error instead of parsing it into a blank success:
+        # a wrong key / bad model / rate-limit / expired token must raise so the
+        # router emits provider.failed + falls back (never a silent empty reply).
+        status = getattr(resp, "status_code", 200)
+        if status >= 400:
+            detail = _error_detail(resp)
+            raise RuntimeError(f"{self.provider} API error {status}: {detail}")
         return self._parse(resp.json())

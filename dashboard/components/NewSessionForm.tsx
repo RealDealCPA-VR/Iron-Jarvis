@@ -71,6 +71,9 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
     if (presetTask) setTask(presetTask);
     const presetAgent = searchParams.get("agent");
     if (presetAgent && AGENT_TYPES.includes(presetAgent)) setAgentType(presetAgent);
+    // Preselect the saved provider|model (the <select> value is this exact key).
+    const presetModel = searchParams.get("model");
+    if (presetModel) setChoice(presetModel);
     if (searchParams.get("new") || presetTask) {
       // Focus (and place the caret at the end of) the task box on arrival.
       requestAnimationFrame(() => {

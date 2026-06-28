@@ -146,6 +146,7 @@ class ConnectionRegistry:
             raise ValueError(
                 f"no OAuth client configured for '{provider}' — set its client id"
             )
+        self._prune_pending()  # bound _pending so a drive-by GET can't grow memory
         verifier, challenge = OAuthClient.pkce_pair()
         state = OAuthClient.new_state()
         self._pending[state] = {
@@ -357,6 +358,25 @@ class ConnectionRegistry:
         )
 
     # --- internals --------------------------------------------------------
+
+    #: In-flight OAuth states expire / are capped so an unauthenticated drive-by
+    #: GET /oauth/{provider}/start cannot grow ``_pending`` without bound.
+    _OAUTH_PENDING_TTL = timedelta(minutes=10)
+    _OAUTH_PENDING_CAP = 256
+
+    def _prune_pending(self) -> None:
+        cutoff = utcnow() - self._OAUTH_PENDING_TTL
+        for st in [
+            s for s, v in self._pending.items()
+            if not v.get("created_at") or v["created_at"] < cutoff
+        ]:
+            self._pending.pop(st, None)
+        if len(self._pending) > self._OAUTH_PENDING_CAP:
+            oldest = sorted(
+                self._pending.items(), key=lambda kv: kv[1].get("created_at") or utcnow()
+            )[: len(self._pending) - self._OAUTH_PENDING_CAP]
+            for st, _ in oldest:
+                self._pending.pop(st, None)
 
     def _require_spec(self, provider: str) -> ConnectionSpec:
         spec = self._specs.get(provider)

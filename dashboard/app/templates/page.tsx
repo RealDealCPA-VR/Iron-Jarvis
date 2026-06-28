@@ -114,7 +114,12 @@ export default function TemplatesPage() {
 
   /** Deep-link that prefills the New Session form (nav-palette-pwa contract). */
   function useHref(t: Template): string {
-    return `/sessions?new=1&task=${encodeURIComponent(t.task)}&agent=${encodeURIComponent(t.agent_type)}`;
+    let url = `/sessions?new=1&task=${encodeURIComponent(t.task)}&agent=${encodeURIComponent(t.agent_type)}`;
+    // Carry the saved provider/model too, so "Use" runs the template as saved.
+    if (t.provider && t.model) {
+      url += `&model=${encodeURIComponent(`${t.provider}|${t.model}`)}`;
+    }
+    return url;
   }
 
   return (

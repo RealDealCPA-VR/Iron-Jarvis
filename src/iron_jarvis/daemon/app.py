@@ -307,6 +307,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
     if _env_truthy("IRONJARVIS_GIT_NATIVE"):
         platform.config.git_native = True
     orchestrator = Orchestrator(platform)
+    # Health of the background loops (auto-backup/autonomy/sentinel/inbound), so a
+    # silent failure (e.g. backups failing) is visible in /diagnostics, not just
+    # buried in the log. Keyed by loop name.
+    loop_health: dict[str, dict[str, Any]] = {}
     # Wire the executor into the Motivation Layer so an auto-approved (or
     # human-approved) proposal can become a real session. The engine is safe
     # with this unset; setting it does NOT enable autonomy (that's config-gated).
@@ -366,6 +370,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 not in {"0", "false", "no", "off"}):
 
             async def _auto_backup_loop() -> None:
+                from ..core.ids import utcnow
                 from ..maintenance import run_auto_backup
 
                 try:
@@ -387,10 +392,18 @@ def create_app(project_root: str | None = None) -> FastAPI:
                             keep=keep,
                         )
                         log.info("auto-backup written (keep=%d)", keep)
+                        loop_health["auto_backup"] = {
+                            "ok": True, "last_success_at": utcnow().isoformat()
+                        }
                     except asyncio.CancelledError:
                         raise
-                    except Exception:  # noqa: BLE001 - never let backup kill the daemon
+                    except Exception as exc:  # noqa: BLE001 - never kill the daemon
                         log.exception("auto-backup failed")
+                        loop_health["auto_backup"] = {
+                            "ok": False,
+                            "last_error": f"{type(exc).__name__}: {exc}"[:300],
+                            "at": utcnow().isoformat(),
+                        }
                     await asyncio.sleep(interval)
 
             backup_task = asyncio.create_task(_auto_backup_loop())
@@ -803,14 +816,20 @@ def create_app(project_root: str | None = None) -> FastAPI:
         import tomli_w
 
         cfg = platform.config
-        updated: list[str] = []
-        for key, value in body.values.items():
-            if key not in _SETTINGS_KEYS:
-                continue
+        candidates = {k: v for k, v in body.values.items() if k in _SETTINGS_KEYS}
+        # Validate ALL keys on a throwaway copy first, so one bad value can't
+        # partially mutate (and then persist) the live config — which previously
+        # could brick the next boot or break in-flight sessions.
+        trial = cfg.model_copy(deep=True)
+        for key, value in candidates.items():
             try:
-                setattr(cfg, key, value)  # live-update the running config
+                setattr(trial, key, value)
             except Exception:  # noqa: BLE001 - pydantic validation
                 raise HTTPException(status_code=400, detail=f"invalid value for {key}")
+        # Everything validated — commit to the running config.
+        updated: list[str] = []
+        for key, value in candidates.items():
+            setattr(cfg, key, value)
             updated.append(key)
         # Persist to the project config.toml so it survives a restart.
         path = cfg.home / "config.toml"
@@ -852,6 +871,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
         out["secrets_key_present"] = (cfg.home / "secrets" / ".secrets.key").exists()
         out["running_sessions"] = len(orchestrator._running)
         out["pending_reviews"] = len(orchestrator._reviews)
+        out["background_loops"] = dict(loop_health)  # silent-failure visibility
         out["tracked_worktrees"] = len(orchestrator._git_sessions)
         try:
             out["providers"] = platform.providers.health()
@@ -1500,9 +1520,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
         return await platform.intent.deliberate(wait=wait)
 
     @app.get("/autonomy/briefing")
-    def autonomy_briefing(notify: bool = False) -> dict[str, Any]:
-        """Summarise recent self-activity + pending proposals (optionally pushed)."""
-        return platform.intent.briefing(notify=notify)
+    def autonomy_briefing() -> dict[str, Any]:
+        """Read-only briefing summary. Pushing it (a side effect) is POST-only so
+        the Origin/CSRF guard (which only gates non-GET) actually protects it."""
+        return platform.intent.briefing(notify=False)
+
+    @app.post("/autonomy/briefing")
+    def autonomy_briefing_push() -> dict[str, Any]:
+        """Summarise + PUSH the briefing to the configured comm channel(s)."""
+        return platform.intent.briefing(notify=True)
 
     # --- Sentinels (always-on watchers): suggest-only, never act ----------
 

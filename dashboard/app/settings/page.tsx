@@ -41,6 +41,14 @@ const FIELDS: FieldDef[] = [
   { key: "ollama_base_url", label: "Ollama base URL", type: "text", placeholder: "http://127.0.0.1:11434" },
   { key: "ollama_model", label: "Ollama model", type: "text", placeholder: "llama3.1" },
   { key: "event_retention_days", label: "Event retention (days)", type: "number", hint: "How long the event log is kept.", restart: true },
+  // Motivation Layer ("the pulse") — OFF by default; suggest-only until a goal's dial is raised.
+  { key: "autonomy_enabled", label: "Autonomy (the pulse)", type: "boolean", hint: "Let Iron Jarvis deliberate on your standing goals and propose (or, within budget, act). Manage goals on the Autonomy page.", restart: true },
+  { key: "autonomy_level", label: "Autonomy ceiling", type: "select", options: ["suggest", "act_low", "act_all"], hint: "Global cap over every goal's dial. 'suggest' = always propose, never auto-act." },
+  { key: "autonomy_dry_run", label: "Autonomy dry-run", type: "boolean", hint: "Propose/log what it WOULD do, without executing anything." },
+  { key: "autonomy_max_actions_per_day", label: "Autonomy: max actions/day", type: "number", hint: "Global rolling cap on self-initiated actions." },
+  { key: "autonomy_max_tokens_per_day", label: "Autonomy: max tokens/day", type: "number", hint: "Global rolling token budget for self-initiated work." },
+  // Sentinels — always-on watchers that mint suggest-only backlog items. OFF by default.
+  { key: "sentinels_enabled", label: "Sentinels (watchers)", type: "boolean", hint: "Always-on watchers that notice changes and surface them to the Autonomy backlog (suggest-only).", restart: true },
 ];
 
 /** Coerce a raw API value into the editor value for a field. */
