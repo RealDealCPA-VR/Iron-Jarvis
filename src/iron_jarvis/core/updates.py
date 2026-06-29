@@ -130,21 +130,26 @@ def apply_update(
     repo_root: Path,
     build_dashboard: bool = True,
     runner: Runner = _subprocess_runner,
+    *,
+    run_tests: bool = True,
 ) -> dict:
-    """Pull + rebuild this checkout. Refuses on a dirty tree.
+    """Pull + rebuild this checkout SAFELY. Refuses on a dirty tree.
 
-    Steps (each captured into ``log`` with its stdout/stderr): ``git pull
-    --ff-only`` → ``uv sync --extra dev`` → (optionally, when a ``dashboard/``
-    dir exists and ``pnpm`` is on PATH) ``pnpm install`` + ``pnpm build``.
+    Steps (each captured into ``log`` with its stdout/stderr): record the pre-pull
+    SHA → ``git pull --ff-only`` → ``uv sync --extra dev`` → (optionally) ``pnpm
+    install`` + ``pnpm build`` → (when ``run_tests``) ``uv run pytest -q`` as a
+    GATE. If ``uv sync`` or the test gate fails, the checkout is ROLLED BACK to the
+    recorded pre-pull SHA (``git reset --hard`` + ``uv sync``) so a bad update can
+    never leave the daily driver half-updated or unbootable.
 
-    Returns ``{ok, log, restart_required, reason}``. ``restart_required`` is
-    always True once any step ran — the running process keeps the OLD code in
+    Returns ``{ok, log, restart_required, rolled_back, reason}``. ``restart_required``
+    is always True once any step ran — the running process keeps the OLD code in
     memory until it is restarted.
     """
     repo_root = Path(repo_root)
     log: list[dict] = []
 
-    def step(name: str, cmd: list[str], cwd: Path) -> bool:
+    def step(name: str, cmd: list[str], cwd: Path) -> "tuple[bool, int]":
         res = runner(cmd, cwd)
         rc = getattr(res, "returncode", 1)
         ok = rc == 0
@@ -158,7 +163,24 @@ def apply_update(
                 "stderr": (getattr(res, "stderr", "") or "").strip()[-4000:],
             }
         )
-        return ok
+        return ok, rc
+
+    def rollback(reason: str, pre_sha: str | None) -> dict:
+        """Restore the last-known-good tree + deps before returning a failure."""
+        rolled = False
+        if pre_sha:
+            reset_ok, _ = step(
+                "rollback: git reset --hard", ["git", "reset", "--hard", pre_sha], repo_root
+            )
+            step("rollback: uv sync", ["uv", "sync", "--extra", "dev"], repo_root)
+            rolled = reset_ok
+        return {
+            "ok": False,
+            "log": log,
+            "restart_required": True,
+            "rolled_back": rolled,
+            "reason": reason + (" — rolled back to the previous version" if rolled else ""),
+        }
 
     try:
         # Refuse on a dirty tree — pulling over uncommitted edits risks a merge
@@ -169,6 +191,7 @@ def apply_update(
                 "ok": False,
                 "log": log,
                 "restart_required": False,
+                "rolled_back": False,
                 "reason": "git status failed — is this a git checkout?",
             }
         if (st.stdout or "").strip():
@@ -176,39 +199,52 @@ def apply_update(
                 "ok": False,
                 "log": log,
                 "restart_required": False,
+                "rolled_back": False,
                 "reason": "working tree has uncommitted changes — commit or stash before updating",
             }
 
-        if not step("git pull --ff-only", ["git", "pull", "--ff-only"], repo_root):
+        # Record the exact commit we can roll back to if anything below fails.
+        pre_sha = _out(runner(["git", "rev-parse", "HEAD"], repo_root))
+
+        # A failed --ff-only pull leaves HEAD unmoved, so no rollback is needed.
+        if not step("git pull --ff-only", ["git", "pull", "--ff-only"], repo_root)[0]:
             return {
                 "ok": False,
                 "log": log,
                 "restart_required": True,
+                "rolled_back": False,
                 "reason": "git pull --ff-only failed (branch diverged or no fast-forward)",
             }
 
-        if not step("uv sync --extra dev", ["uv", "sync", "--extra", "dev"], repo_root):
-            return {
-                "ok": False,
-                "log": log,
-                "restart_required": True,
-                "reason": "uv sync failed",
-            }
+        # HEAD has now moved. From here on, any failure rolls back.
+        if not step("uv sync --extra dev", ["uv", "sync", "--extra", "dev"], repo_root)[0]:
+            return rollback("uv sync failed after pull", pre_sha)
 
         dash = repo_root / "dashboard"
         if build_dashboard and dash.is_dir() and shutil.which("pnpm"):
-            if step("pnpm install", ["pnpm", "install"], dash):
+            ok_install, _ = step("pnpm install", ["pnpm", "install"], dash)
+            if ok_install:
                 step("pnpm build", ["pnpm", "build"], dash)
+
+        # Test GATE: the new code must pass its own suite before we declare success.
+        # A returncode of 127 means the test runner itself is absent (e.g. uv not on
+        # PATH in a packaged install) — we can't verify, so we WARN rather than roll
+        # back a pull that otherwise succeeded.
+        if run_tests:
+            tests_ok, rc = step("uv run pytest -q", ["uv", "run", "pytest", "-q"], repo_root)
+            if not tests_ok and rc != 127:
+                return rollback("the test suite failed after update", pre_sha)
 
         ok = all(e["ok"] for e in log)
         return {
             "ok": ok,
             "log": log,
             "restart_required": True,
+            "rolled_back": False,
             "reason": (
                 "updated — restart the daemon (and dashboard) to load the new code"
                 if ok
-                else "update ran but a build step failed — check the log"
+                else "update ran but a non-critical step failed — check the log"
             ),
         }
     except Exception as exc:  # noqa: BLE001
@@ -226,5 +262,6 @@ def apply_update(
             "ok": False,
             "log": log,
             "restart_required": True,
+            "rolled_back": False,
             "reason": f"update failed: {exc}",
         }

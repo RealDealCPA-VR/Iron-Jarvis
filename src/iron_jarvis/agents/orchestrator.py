@@ -146,29 +146,37 @@ class Orchestrator:
             else:
                 agent_def = get_agent_definition(session.agent_type)
                 run = await self.runtime.run(session, agent_def)
+
+            session.status = (
+                SessionStatus.COMPLETED
+                if run.state is AgentState.COMPLETED
+                else SessionStatus.FAILED
+            )
+            session.provider, session.model = run.provider, run.model  # what actually ran
+            session.summary = run.result
+            session.input_tokens = run.input_tokens
+            session.output_tokens = run.output_tokens
+            session.finished_at = utcnow()
+            self._save(session)
+            await self.p.event_bus.publish(
+                EventType.SESSION_COMPLETED,
+                {"status": session.status.value, "summary": session.summary},
+                session_id=session.id,
+            )
         except asyncio.CancelledError:
             # The user stopped this run (POST /sessions/{id}/cancel). Mark it
             # CANCELLED (not FAILED), GC any worktree, then propagate so the
             # background task ends cancelled.
             await self._finalize_cancelled(session)
             raise
-
-        session.status = (
-            SessionStatus.COMPLETED
-            if run.state is AgentState.COMPLETED
-            else SessionStatus.FAILED
-        )
-        session.provider, session.model = run.provider, run.model  # what actually ran
-        session.summary = run.result
-        session.input_tokens = run.input_tokens
-        session.output_tokens = run.output_tokens
-        session.finished_at = utcnow()
-        self._save(session)
-        await self.p.event_bus.publish(
-            EventType.SESSION_COMPLETED,
-            {"status": session.status.value, "summary": session.summary},
-            session_id=session.id,
-        )
+        except Exception as exc:  # noqa: BLE001
+            # Any other failure (a provider blow-up that escaped the router, a DB
+            # write error, a supervised-run crash) must NOT strand the session in
+            # ACTIVE forever. Finalize it FAILED + emit SESSION_COMPLETED(ok=False)
+            # so the dashboard stops spinning and the run is recoverable, then
+            # re-raise for the caller/HTTP.
+            await self._finalize_failed(session, exc)
+            raise
 
         # Phase 9: score the run (never fatal to the session).
         try:
@@ -223,6 +231,32 @@ class Orchestrator:
                 log.exception("failed to build review for session %s", session.id)
 
         return session
+
+    async def _finalize_failed(self, session: Session, error: Exception) -> None:
+        """Mark a crashed run FAILED, persist, emit SESSION_COMPLETED(ok=False), GC
+        its worktree — so an unexpected exception never leaves a zombie ACTIVE
+        session the app can't see or recover."""
+        session.status = SessionStatus.FAILED
+        session.summary = session.summary or f"Session failed: {type(error).__name__}: {error}"
+        session.finished_at = utcnow()
+        try:
+            self._save(session)
+        except Exception:  # noqa: BLE001 - never block teardown on persistence
+            log.exception("failed to persist FAILED state for %s", session.id)
+        try:
+            await self.p.event_bus.publish(
+                EventType.SESSION_COMPLETED,
+                {"status": session.status.value, "summary": session.summary, "ok": False},
+                session_id=session.id,
+            )
+        except Exception:  # noqa: BLE001 - never block teardown on the event bus
+            log.exception("failed to publish failure event for %s", session.id)
+        gs = self._git_sessions.pop(session.id, None)
+        if gs is not None:
+            try:
+                gs.discard()
+            except Exception:  # noqa: BLE001
+                log.exception("worktree cleanup failed after failing %s", session.id)
 
     async def _finalize_cancelled(self, session: Session) -> None:
         """Mark a cancelled run CANCELLED, persist, notify, and GC its worktree."""
