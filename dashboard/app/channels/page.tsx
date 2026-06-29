@@ -88,11 +88,11 @@ export default function ChannelsPage() {
             {loading && !data ? (
               <SkeletonRows rows={3} />
             ) : channels.length === 0 ? (
-              <Empty
-                icon={<Megaphone size={22} />}
-                action={{ label: "Configure integrations", href: "/integrations" }}
-              >
-                No channels configured.
+              <Empty icon={<Megaphone size={22} />}>
+                No channels configured. Channels (Slack / Telegram / Discord) are
+                set up in the <span className="font-mono text-zinc-400">[comm]</span>{" "}
+                section of <span className="font-mono text-zinc-400">.ironjarvis/config.toml</span>,
+                then take effect on the next daemon restart.
               </Empty>
             ) : (
               <ul className="space-y-2">

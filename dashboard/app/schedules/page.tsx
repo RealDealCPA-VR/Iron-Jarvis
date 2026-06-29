@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { CalendarClock, Plus, Play, Clock, Repeat, Timer } from "lucide-react";
 import { post, del, ApiError } from "@/lib/api";
-import { usePolledApi } from "@/lib/useApi";
+import { usePolledApi, useApi } from "@/lib/useApi";
 import type { Schedule } from "@/lib/types";
 import {
   Card,
@@ -20,7 +20,8 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 
-const KINDS = ["workflow", "event", "callback"];
+// Matches the backend's scheduling/models.py KINDS ("callback" was removed).
+const KINDS = ["workflow", "event"];
 
 /** Friendly repeat presets that each map to a 5-field cron expression. */
 const REPEAT_PRESETS: { label: string; cron: string }[] = [
@@ -60,8 +61,12 @@ export default function SchedulesPage() {
   );
   const offline = error && error.status === 0;
   const schedules = data?.schedules ?? [];
+  // Saved workflows a "workflow" schedule can reference by name.
+  const workflows = useApi<{ workflows: { name: string }[] }>("/workflows");
+  const workflowNames = workflows.data?.workflows?.map((w) => w.name) ?? [];
 
   const [name, setName] = useState("");
+  const [workflowName, setWorkflowName] = useState("");
   // "repeat" holds a preset cron, or the ADVANCED / ONCE sentinels.
   const [repeat, setRepeat] = useState<string>("0 9 * * *");
   const [advancedCron, setAdvancedCron] = useState("");
@@ -77,16 +82,21 @@ export default function SchedulesPage() {
 
   // Whether the schedule-defining field for the current mode is filled in.
   const triggerReady = isOnce ? !!runAt : isAdvanced ? !!advancedCron.trim() : !!repeat;
+  // A "workflow" schedule MUST reference a saved workflow, else it would fire and
+  // run nothing (the backend now rejects an empty workflow at execution time).
+  const payloadReady = kind !== "workflow" || !!workflowName;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !triggerReady) return;
+    if (!name.trim() || !triggerReady || !payloadReady) return;
     setBusy(true);
     setFormError(null);
     setOk(null);
 
-    // Exactly one of cron / run_at must be sent.
-    const body: Record<string, unknown> = { name: name.trim(), kind, payload: {} };
+    // Exactly one of cron / run_at must be sent. A workflow schedule carries the
+    // saved workflow's name so the daemon can run its steps (not an empty no-op).
+    const payload = kind === "workflow" ? { workflow: workflowName } : {};
+    const body: Record<string, unknown> = { name: name.trim(), kind, payload };
     if (isOnce) {
       const d = new Date(runAt);
       if (Number.isNaN(d.getTime())) {
@@ -107,13 +117,12 @@ export default function SchedulesPage() {
       setAdvancedCron("");
       setRunAt("");
       setKind("workflow");
+      setWorkflowName("");
       reload();
     } catch (err) {
-      if (err instanceof ApiError && err.status === 400) {
-        setFormError(`Invalid cron expression: ${err.message}`);
-      } else {
-        setFormError(err instanceof ApiError ? err.message : String(err));
-      }
+      // The daemon's 400 detail is already specific (bad cron, duplicate name,
+      // unknown kind, missing workflow) — show it verbatim, don't mislabel it.
+      setFormError(err instanceof ApiError ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -244,9 +253,35 @@ export default function SchedulesPage() {
                     ))}
                   </select>
                 </div>
+
+                {kind === "workflow" && (
+                  <div>
+                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                      Workflow to run
+                    </label>
+                    {workflowNames.length === 0 ? (
+                      <div className="text-[11px] text-amber-300/80">
+                        No saved workflows yet — create one on the Workflows page first.
+                      </div>
+                    ) : (
+                      <select
+                        value={workflowName}
+                        onChange={(e) => setWorkflowName(e.target.value)}
+                        className="field"
+                      >
+                        <option value="">Select a workflow…</option>
+                        {workflowNames.map((w) => (
+                          <option key={w} value={w}>
+                            {w}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                )}
                 <button
                   type="submit"
-                  disabled={busy || !name.trim() || !triggerReady}
+                  disabled={busy || !name.trim() || !triggerReady || !payloadReady}
                   className="btn-accent w-full"
                 >
                   {busy ? <LoaderInline label="Adding…" /> : <><Plus size={14} /> Add schedule</>}

@@ -10,7 +10,9 @@ import type { SessionView, ModelOption, Health } from "@/lib/types";
 import { ErrorNote, LoaderInline } from "./ui";
 import { VoiceInput, appendDictation } from "./VoiceInput";
 
-const AGENT_TYPES = ["builder", "supervisor", "planner", "researcher", "reviewer"];
+// Fallback only — the real list comes live from GET /agents (builtin + dynamic)
+// so memory/maintainer/automation and custom agents aren't silently dropped.
+const FALLBACK_AGENTS = ["builder", "supervisor", "planner", "researcher", "reviewer"];
 
 /** Capability-spanning starter prompts shown when the task box is empty. */
 const EXAMPLE_TASKS = [
@@ -56,6 +58,14 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
   const searchParams = useSearchParams();
   const { data: modelsData } = useApi<{ models: ModelOption[] }>("/models");
   const { data: health } = useApi<Health>("/health");
+  const { data: agentsData } = useApi<{ builtin: string[]; dynamic: { name: string }[] }>("/agents");
+  const agentTypes = (() => {
+    const names = [
+      ...(agentsData?.builtin ?? []),
+      ...(agentsData?.dynamic ?? []).map((d) => d.name),
+    ];
+    return names.length ? names : FALLBACK_AGENTS;
+  })();
 
   const [task, setTask] = useState("");
   const [agentType, setAgentType] = useState("builder");
@@ -69,8 +79,10 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
   useEffect(() => {
     const presetTask = searchParams.get("task");
     if (presetTask) setTask(presetTask);
+    // Accept ANY agent the deep-link names (the daemon falls back safely for an
+    // unknown type); the dropdown options populate from GET /agents once loaded.
     const presetAgent = searchParams.get("agent");
-    if (presetAgent && AGENT_TYPES.includes(presetAgent)) setAgentType(presetAgent);
+    if (presetAgent) setAgentType(presetAgent);
     // Preselect the saved provider|model (the <select> value is this exact key).
     const presetModel = searchParams.get("model");
     if (presetModel) setChoice(presetModel);
@@ -236,7 +248,7 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
             onChange={(e) => setAgentType(e.target.value)}
             className="field"
           >
-            {AGENT_TYPES.map((t) => (
+            {agentTypes.map((t) => (
               <option key={t} value={t}>
                 {t}
               </option>
