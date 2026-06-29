@@ -55,11 +55,16 @@ class ConnectionRegistry:
         *,
         http_factory: Callable[[], object] | None = None,
         oauth_app: OAuthAppResolver | None = None,
+        prober: "Callable[[str, str], tuple[bool, str]] | None" = None,
     ) -> None:
         self.engine = engine
         self.secrets = secrets
         self._http_factory = http_factory or _default_http_factory
         self._oauth_app = oauth_app or _no_oauth_app
+        # Optional live reachability probe (provider, credential) -> (ok, detail).
+        # When None (the default, and in the offline test suite), test() stays
+        # presence-only; the platform wires a real network probe in production.
+        self._prober = prober
         self._specs: dict[str, ConnectionSpec] = dict(BUILTIN_SPECS)
         # state -> {"verifier", "provider", "created_at"} for in-flight OAuth flows
         self._pending: dict[str, dict] = {}
@@ -320,15 +325,28 @@ class ConnectionRegistry:
                     "connect it on the Connections page"
                 ),
             }
-        if self.credential(provider):
-            return {"ok": True, "detail": f"{spec.display_name} is connected"}
-        return {
-            "ok": False,
-            "detail": (
-                f"{spec.display_name} has no stored credential — "
-                "reconnect it on the Connections page"
-            ),
-        }
+        cred = self.credential(provider)
+        if not cred:
+            return {
+                "ok": False,
+                "detail": (
+                    f"{spec.display_name} has no stored credential — "
+                    "reconnect it on the Connections page"
+                ),
+            }
+        # Real reachability probe (when wired): actually hit the provider so a
+        # bad/expired/revoked credential is caught HERE, not at the first session
+        # (where it would silently fall back to mock). Presence-only when no prober.
+        if self._prober is not None:
+            try:
+                ok, detail = self._prober(provider, cred)
+                return {"ok": bool(ok), "detail": detail}
+            except Exception as exc:  # a probe error must never crash Test
+                return {
+                    "ok": False,
+                    "detail": f"{spec.display_name}: probe failed ({exc})",
+                }
+        return {"ok": True, "detail": f"{spec.display_name} is connected"}
 
     def disconnect(self, provider: str) -> ConnectionRecord:
         """Drop the stored credential and mark the provider disconnected."""

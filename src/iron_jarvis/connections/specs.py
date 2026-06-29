@@ -96,16 +96,18 @@ BUILTIN_SPECS: dict[str, ConnectionSpec] = {
         display_name="OpenAI",
         method="api_key",  # also supports OAuth account login (ChatGPT / Codex)
         docs_url="https://platform.openai.com/api-keys",
-        key_help="Get a key at platform.openai.com/api-keys",
+        key_help="Get a key at platform.openai.com/api-keys (recommended — works for inference today).",
         key_secret_name="openai_api_key",
-        # Log in with a ChatGPT (Plus/Pro) account via the public Codex CLI OAuth
-        # client (PKCE). The token routes inference through the ChatGPT backend
-        # (see the OpenAI adapter); overridable via the openai_oauth_client_id secret.
+        # Account login via the public Codex CLI OAuth client (PKCE) is EXPERIMENTAL:
+        # a ChatGPT/Codex OAuth token is minted at auth.openai.com and is NOT accepted
+        # by api.openai.com/v1/chat/completions (the OpenAI adapter has no separate
+        # ChatGPT-backend path yet), so it will fail the connection Test and fall back
+        # to mock. Use an API key for reliable OpenAI inference until that path lands.
         auth_url="https://auth.openai.com/oauth/authorize",
         token_url="https://auth.openai.com/oauth/token",
         scopes=["openid", "profile", "email", "offline_access"],
         oauth_client_id="app_EMoamEEZ73f0CkXaXp7hrann",
-        oauth_help="Log in with your ChatGPT (Plus/Pro) account via Codex.",
+        oauth_help="Experimental — ChatGPT account login may not run inference yet; use an API key for reliable OpenAI access.",
     ),
     "xai": ConnectionSpec(
         provider="xai",

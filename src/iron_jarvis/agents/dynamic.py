@@ -35,7 +35,7 @@ KNOWN_MODELS: list[dict] = [
     {"provider": "anthropic", "model": "claude-opus-4-8"},
     {"provider": "anthropic", "model": "claude-sonnet-4-6"},
     {"provider": "anthropic", "model": "claude-haiku-4-5"},
-    {"provider": "fable", "model": "claude-fable-5"},
+    {"provider": "anthropic", "model": "claude-fable-5"},
     {"provider": "openai", "model": "gpt-4o"},
     {"provider": "openai", "model": "gpt-4o-mini"},
     {"provider": "google", "model": "gemini-2.0-flash"},

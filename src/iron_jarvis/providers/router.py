@@ -33,16 +33,27 @@ class ModelRouter:
     def __init__(
         self,
         manager: ProviderManager,
-        default_provider: str,
+        default_provider: "str | Callable[[], str]",
         event_bus: EventBus,
         *,
         local_oracle: LocalOracle | None = None,
     ) -> None:
         self.manager = manager
-        self.default_provider = default_provider
+        # Resolve the default provider LIVE on every request: accept either a
+        # plain string or a zero-arg callable (the platform passes
+        # ``lambda: config.default_provider``). Switching the model in the UI then
+        # reaches provider-less callers — routing, the motivation/improvement
+        # loops — WITHOUT a daemon restart (otherwise they stay on the boot
+        # default, which is "mock" out of the box).
+        self._default_provider = default_provider
         self.event_bus = event_bus
         # OFF by default: with no oracle, _resolve behaves exactly as before.
         self._local_oracle = local_oracle
+
+    @property
+    def default_provider(self) -> str:
+        dp = self._default_provider
+        return dp() if callable(dp) else dp
 
     def _resolve(
         self, provider: str | None, model: str | None, task_class: str | None = None
@@ -93,6 +104,22 @@ class ModelRouter:
                     "requested": wanted,
                     "used": "mock",
                     "reason": "not connected — connect a model on the Connections page",
+                },
+                session_id=session_id,
+            )
+        elif adapter.provider == "mock" and self.manager.has_available_api_provider():
+            # The mock-trap: the default provider is still "mock" while a REAL
+            # provider is connected, so output would be fabricated with no signal.
+            # Surface it loudly (the dashboard banners on PROVIDER_DOWNGRADED).
+            await self.event_bus.publish(
+                EventType.PROVIDER_DOWNGRADED,
+                {
+                    "requested": "mock (default)",
+                    "used": "mock",
+                    "reason": (
+                        "your default provider is 'mock' but a real provider is "
+                        "connected — set it as your default on the Connections page"
+                    ),
                 },
                 session_id=session_id,
             )

@@ -51,12 +51,16 @@ class AnthropicAdapter(LLMAdapter):
         # is an `sk-ant-oat...` Bearer token that calls the Messages API with the
         # oauth beta header — never as an x-api-key. A normal API key
         # (`sk-ant-api...`) uses x-api-key as before.
+        # A 60s request timeout (matching the OpenAI/Google adapters) so a slow or
+        # half-open connection trips the router's PROVIDER_FAILED fallback promptly
+        # instead of hanging a session on the SDK's ~600s default.
         if key.startswith("sk-ant-oat"):
             return AsyncAnthropic(
                 auth_token=key,
                 default_headers={"anthropic-beta": "oauth-2025-04-20"},
+                timeout=60.0,
             )
-        return AsyncAnthropic(api_key=key)
+        return AsyncAnthropic(api_key=key, timeout=60.0)
 
     @staticmethod
     def _to_anthropic_messages(messages: list[LLMMessage]) -> list[dict[str, Any]]:

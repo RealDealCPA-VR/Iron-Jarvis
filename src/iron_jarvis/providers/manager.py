@@ -33,6 +33,24 @@ API_PROVIDERS = ("anthropic", "openai", "google", "xai")
 XAI_ENDPOINT = "https://api.x.ai/v1/chat/completions"
 
 
+def _normalize_ollama_url(url: str | None) -> str | None:
+    """Accept a host, a ``/v1`` base, or a full chat URL → the chat endpoint.
+
+    Ollama's OpenAI-compatible chat endpoint is ``<host>/v1/chat/completions``.
+    Users naturally enter ``http://localhost:11434`` or ``.../v1``; without this
+    the adapter POSTs to the URL verbatim and every call 404s. Mirrors the
+    host-normalization the embeddings layer already does on the same value.
+    """
+    if not url:
+        return url
+    u = url.strip().rstrip("/")
+    if u.endswith("/chat/completions"):
+        return u
+    if u.endswith("/v1"):
+        return u + "/chat/completions"
+    return u + "/v1/chat/completions"
+
+
 class ProviderManager:
     def __init__(
         self,
@@ -48,7 +66,9 @@ class ProviderManager:
         self._credential_resolver = credential_resolver
         # Local OpenAI-compatible (Ollama) endpoint: when set, the "ollama"
         # provider is available and routes through OpenAIAdapter(base_url=...).
-        self._ollama_base_url = ollama_base_url
+        # Normalized so a host-only URL ("http://localhost:11434") still resolves
+        # to the real /v1/chat/completions endpoint instead of 404-ing.
+        self._ollama_base_url = _normalize_ollama_url(ollama_base_url)
         self._ollama_model = ollama_model
         # Presence-only resolver for availability/health: when wired it avoids a
         # blocking OAuth refresh on the async loop. Falls back to the (possibly
@@ -153,6 +173,15 @@ class ProviderManager:
             # Local provider: available only once a base_url is configured.
             return self._ollama_base_url is not None
         return name in self._factories
+
+    def has_available_api_provider(self) -> bool:
+        """True if at least one REAL (non-mock) provider is connected/available.
+
+        Used by the router to detect the "default is still mock while a real
+        provider is connected" trap and emit a downgrade signal instead of
+        silently returning fabricated mock output.
+        """
+        return any(self.available(p) for p in API_PROVIDERS) or self.available("ollama")
 
     def get(self, name: str, model: str | None = None) -> LLMAdapter:
         if name not in self._factories:

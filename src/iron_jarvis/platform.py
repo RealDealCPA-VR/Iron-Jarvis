@@ -171,10 +171,15 @@ def build_platform(
     # Secrets vault + LLM Connections (OAuth2/PKCE + API key) — built early so the
     # provider manager resolves live credentials and reports REAL availability.
     secrets = SecretsManager(config.home, engine)
+    from .connections.probe import live_probe
+
     connections = ConnectionRegistry(
         engine,
         secrets,
         http_factory=lambda: httpx.Client(timeout=30),
+        # Real network reachability for the Connections "Test" button so a bad key
+        # is caught at Test, not silently at first session.
+        prober=live_probe,
         oauth_app=lambda provider: {
             "client_id": secrets.get(f"{provider}_oauth_client_id"),
             "client_secret": secrets.get(f"{provider}_oauth_client_secret"),
@@ -219,8 +224,11 @@ def build_platform(
             return ("ollama", config.ollama_model)
         return None
 
+    # Pass the default provider as a LIVE callable so a model switch in the UI
+    # (PUT /settings mutates config) reaches provider-less callers — routing and
+    # the motivation/improvement loops — without a daemon restart.
     router = ModelRouter(
-        providers, config.default_provider, event_bus, local_oracle=_local_oracle
+        providers, lambda: config.default_provider, event_bus, local_oracle=_local_oracle
     )
     registry = default_registry()
 
