@@ -352,22 +352,36 @@ def create_app(project_root: str | None = None) -> FastAPI:
             platform.scheduler.start()
         except Exception:  # pragma: no cover - never block boot
             pass
-        try:  # restart survival: settle interrupted sessions + re-arm reviews/webhooks
-            orchestrator.reconcile_interrupted_sessions()
-            orchestrator.rehydrate_reviews()  # before prune so worktrees aren't reaped
+        # Restart survival. Each step is INDEPENDENT: a failure in one (e.g. a
+        # review rehydrate tripping on a bad worktree) must NOT skip the others —
+        # previously a single try-block meant a session/review failure silently
+        # left every inbound webhook un-armed until the next restart, with no
+        # signal. Record each in loop_health so a silent skip is visible in
+        # /diagnostics.
+        def _rehydrate_step(name, fn):
+            try:
+                fn()
+                loop_health[name] = {"ok": True}
+            except Exception as exc:  # noqa: BLE001 - never block boot
+                loop_health[name] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                log.exception("boot rehydration step %s failed", name)
 
-            def _make_webhook_handler(slug):
-                async def _handler(body, _slug=slug):
-                    await platform.event_bus.publish(
-                        "webhook.received", {"slug": _slug, "body": body}
-                    )
-                    return {"ok": True}
+        _rehydrate_step("reconcile_sessions", orchestrator.reconcile_interrupted_sessions)
+        _rehydrate_step("rehydrate_reviews", orchestrator.rehydrate_reviews)
 
-                return _handler
+        def _make_webhook_handler(slug):
+            async def _handler(body, _slug=slug):
+                await platform.event_bus.publish(
+                    "webhook.received", {"slug": _slug, "body": body}
+                )
+                return {"ok": True}
 
-            platform.inbound_webhooks.rehydrate(_make_webhook_handler)
-        except Exception:  # pragma: no cover - never block boot
-            pass
+            return _handler
+
+        _rehydrate_step(
+            "rehydrate_webhooks",
+            lambda: platform.inbound_webhooks.rehydrate(_make_webhook_handler),
+        )
         try:  # GC worktrees orphaned by a prior restart (failed/missing sessions)
             orchestrator.prune_orphan_worktrees()
         except Exception:  # pragma: no cover - never block boot

@@ -310,3 +310,61 @@ def test_diagnostics_repair_actions(tmp_path):
         is True
     )
     assert client.post("/diagnostics/repair", json={"action": "nope"}).status_code == 400
+
+
+# --- Convergence round 1: workflow scheduling, MCP timeout, rehydration -------
+
+
+def test_empty_workflow_schedule_raises_instead_of_silent_success(platform):
+    # The old behavior ran an empty workflow and reported "completed" (a silent
+    # no-op); now a workflow schedule with no steps fails loudly when it fires.
+    platform.scheduler.add_task("empty-wf", "0 0 * * *", kind="workflow", payload={})
+    with pytest.raises(ValueError):
+        asyncio.run(platform.scheduler.run_now("empty-wf"))
+
+
+def test_scheduled_saved_workflow_runs_its_steps(platform):
+    from sqlmodel import select
+
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.workflows.models import WorkflowRunRecord
+    from iron_jarvis.workflows.store import WorkflowStore
+
+    WorkflowStore(platform.engine).save(
+        "nightly", [{"name": "s1", "agent": "builder", "task": "write a short note"}]
+    )
+    platform.scheduler.add_task(
+        "run-nightly", "0 0 * * *", kind="workflow", payload={"workflow": "nightly"}
+    )
+    # Resolves the saved workflow BY NAME and runs its steps (mock provider).
+    asyncio.run(platform.scheduler.run_now("run-nightly"))
+    with session_scope(platform.engine) as db:
+        runs = list(db.exec(select(WorkflowRunRecord)))
+    assert any(r.workflow_name == "nightly" for r in runs)
+
+
+def test_mcp_hanging_server_is_skipped(monkeypatch):
+    import time
+
+    monkeypatch.setenv("IRONJARVIS_MCP_CONNECT_TIMEOUT", "1")
+    from iron_jarvis.mcp.tools import mcp_tools
+
+    class Hang:
+        def request(self, method, params=None):
+            time.sleep(30)  # never answers
+            return {}
+
+        def close(self):
+            pass
+
+    # A non-responding stdio server must be skipped (not hang boot) → no tools.
+    assert mcp_tools([{"name": "hang", "transport": Hang()}]) == []
+
+
+def test_rehydration_steps_recorded_independently(tmp_path):
+    # The boot rehydration steps run in independent try-blocks and each records
+    # its health, so a failure in one can't silently skip the others.
+    with TestClient(create_app(str(tmp_path))) as client:
+        loops = client.get("/diagnostics").json()["background_loops"]
+    assert loops.get("reconcile_sessions", {}).get("ok") is True
+    assert loops.get("rehydrate_webhooks", {}).get("ok") is True

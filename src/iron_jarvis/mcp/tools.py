@@ -149,6 +149,53 @@ def _build_transport(cfg: dict[str, Any], secret_resolver: SecretResolver | None
     )
 
 
+#: Max seconds to wait for one MCP server to connect + list its tools at boot. A
+#: stdio server that spawns but never answers blocks on a pipe read with no
+#: timeout, so without this bound a single misbehaving server hangs daemon boot
+#: forever. Override via IRONJARVIS_MCP_CONNECT_TIMEOUT.
+def _mcp_connect_timeout() -> float:
+    import os
+
+    try:
+        return max(1.0, float(os.environ.get("IRONJARVIS_MCP_CONNECT_TIMEOUT", "15")))
+    except ValueError:
+        return 15.0
+
+
+def _connect_with_timeout(cfg, name, secret_resolver, timeout):
+    """Connect + list_tools for one server on a daemon thread, bounded by
+    ``timeout``. On timeout, close the transport (killing a hung stdio child to
+    unblock its pipe read) and raise TimeoutError so the caller skips the server."""
+    import threading
+
+    box: dict[str, Any] = {}
+
+    def work() -> None:
+        try:
+            transport = _build_transport(cfg, secret_resolver)
+            box["transport"] = transport
+            client = MCPClient(transport, name=name)
+            box["specs"] = _run_sync(client.list_tools())
+            box["client"] = client
+        except Exception as exc:  # noqa: BLE001 — surfaced to the caller below
+            box["error"] = exc
+
+    th = threading.Thread(target=work, daemon=True)
+    th.start()
+    th.join(timeout)
+    if th.is_alive():
+        transport = box.get("transport")
+        if transport is not None and hasattr(transport, "close"):
+            try:
+                transport.close()  # terminate the hung child; unblocks readline
+            except Exception:  # noqa: BLE001
+                pass
+        raise TimeoutError(f"did not respond within {timeout:g}s")
+    if "error" in box:
+        raise box["error"]
+    return box["client"], box["specs"]
+
+
 def mcp_tools(
     server_configs: list[dict[str, Any]] | None,
     secret_resolver: SecretResolver | None = None,
@@ -158,20 +205,20 @@ def mcp_tools(
     * Empty / ``None`` config (the default — no MCP servers) -> ``[]`` so platform
       wiring is a safe no-op.
     * Each server is connected, ``tools/list``-ed, and its tools wrapped.
-    * A server that cannot be reached (connection / list error) is **skipped**
-      with a warning so one bad server never breaks boot.
+    * A server that cannot be reached, errors, OR does not respond within the
+      connect timeout is **skipped** with a warning so one bad/hung server never
+      breaks (or hangs) boot.
     """
     if not server_configs:
         return []
 
+    timeout = _mcp_connect_timeout()
     tools: list[Tool] = []
     for cfg in server_configs:
         name = cfg.get("name") or "mcp"
         try:
-            transport = _build_transport(cfg, secret_resolver)
-            client = MCPClient(transport, name=name)
-            specs = _run_sync(client.list_tools())
-        except Exception as exc:  # skip the bad server; keep booting
+            client, specs = _connect_with_timeout(cfg, name, secret_resolver, timeout)
+        except Exception as exc:  # skip the bad/hung server; keep booting
             log.warning("skipping MCP server %r: %s: %s", name, type(exc).__name__, exc)
             continue
         for spec in specs:

@@ -411,7 +411,24 @@ def build_platform(
         payload = json.loads(task.payload_json or "{}")
         if task.kind == "workflow":
             from .workflows.engine import WorkflowEngine, load_workflow
+            from .workflows.store import WorkflowStore
 
+            # The UI can only express a SAVED workflow by name; resolve it to its
+            # stored steps. (Inline steps in the payload still work for API callers.)
+            ref = payload.get("workflow") or payload.get("name")
+            steps = payload.get("steps")
+            if ref and not steps:
+                rec = WorkflowStore(platform.engine).get(ref)
+                if rec is None:
+                    raise ValueError(f"scheduled workflow {ref!r} not found")
+                payload = {"name": rec.name, "steps": json.loads(rec.steps_json or "[]")}
+            # Never silently "complete" a zero-step workflow — that masked every
+            # mis-configured schedule as a success.
+            if not payload.get("steps"):
+                raise ValueError(
+                    "scheduled workflow has no steps — set a 'workflow' name or "
+                    "inline 'steps' in the schedule payload"
+                )
             return WorkflowEngine(platform).run(load_workflow(payload))
         if task.kind == "event":
             return platform.event_bus.publish(
