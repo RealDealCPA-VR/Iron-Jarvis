@@ -123,7 +123,9 @@ def prune_events(engine: Engine, older_than_days: int, vacuum: bool = False) -> 
     from .ids import utcnow
     from .models import EventRecord
 
-    cutoff = utcnow() - timedelta(days=max(0, older_than_days))
+    # Clamp the age so a huge value can't underflow datetime (year 1) and raise
+    # OverflowError; ~365,000 days (~1000 years) is already before any real event.
+    cutoff = utcnow() - timedelta(days=min(max(0, older_than_days), 365_000))
     with Session(engine) as db:
         rows = list(db.exec(select(EventRecord).where(EventRecord.created_at < cutoff)))
         for r in rows:

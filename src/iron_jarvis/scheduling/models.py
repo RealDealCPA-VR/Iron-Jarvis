@@ -2,7 +2,7 @@
 
 ``ScheduledTaskRecord`` is the persistent registry the daemon's scheduler reads
 on startup: each row is a named cron-fired task bound to an *action* (run a
-workflow, emit an event, or invoke a callback). It is a plain SQLModel table;
+workflow or emit an event). It is a plain SQLModel table;
 importing this module before ``init_db`` registers the table on
 ``SQLModel.metadata`` so it auto-creates.
 """

@@ -305,11 +305,36 @@ def test_diagnostics_repair_actions(tmp_path):
     client = TestClient(create_app(str(tmp_path)))
     assert client.post("/diagnostics/repair", json={"action": "db_integrity"}).json()["ok"] is True
     assert client.post("/diagnostics/repair", json={"action": "backup_now"}).json()["ok"] is True
+    # db_vacuum used to 500 (OverflowError) — now a standalone VACUUM.
+    assert client.post("/diagnostics/repair", json={"action": "db_vacuum"}).json()["ok"] is True
     assert (
         client.post("/diagnostics/repair", json={"action": "prune_events", "older_than_days": 0}).json()["ok"]
         is True
     )
     assert client.post("/diagnostics/repair", json={"action": "nope"}).status_code == 400
+
+
+# --- Convergence round 2: CORS PATCH + prune clamp ----------------------------
+
+
+def test_prune_events_huge_age_does_not_overflow(platform):
+    # A giant day count must clamp, not raise OverflowError (the db_vacuum bug).
+    from iron_jarvis.core.db import prune_events
+
+    assert prune_events(platform.engine, 10_000_000) == 0  # nothing that old; no crash
+
+
+def test_cors_allows_patch_preflight(tmp_path):
+    # PATCH /goals/{id} (autonomy dial) must survive the browser preflight.
+    client = TestClient(create_app(str(tmp_path)))
+    resp = client.options(
+        "/goals/abc",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "PATCH",
+        },
+    )
+    assert resp.status_code == 200  # 400 "Disallowed CORS method" before the fix
 
 
 # --- Convergence round 1: workflow scheduling, MCP timeout, rehydration -------

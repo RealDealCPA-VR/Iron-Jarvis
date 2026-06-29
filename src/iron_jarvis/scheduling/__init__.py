@@ -1,7 +1,7 @@
 """Scheduling subsystem (SPEC §25 cron — made durable).
 
 Persistent **scheduled tasks** that fire on a crontab and run an action
-(workflow / event / callback). This is the registry that makes the daemon's cron
+(workflow / event). This is the registry that makes the daemon's cron
 scheduling real: enabled tasks survive restarts and are re-registered on startup.
 
 Importing :mod:`iron_jarvis.scheduling.models` before ``init_db`` registers the

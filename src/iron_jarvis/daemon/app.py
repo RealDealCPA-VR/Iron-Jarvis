@@ -575,7 +575,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # CORS: default to loopback dashboard origins ONLY (never wildcard, since the
     # daemon is RCE-by-design); a public deployment sets IRONJARVIS_CORS_ORIGINS.
     _origins = os.environ.get("IRONJARVIS_CORS_ORIGINS", "").strip()
-    _methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    # PATCH is required for the autonomy goal controls (PATCH /goals/{id} — the
+    # per-goal dial + pause/activate). Without it the browser preflight fails and
+    # the call surfaces as a misleading "daemon offline".
+    _methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
     if _origins:
         app.add_middleware(
             CORSMiddleware,
@@ -949,13 +952,23 @@ def create_app(project_root: str | None = None) -> FastAPI:
             with platform.engine.connect() as conn:
                 res = conn.execute(text("PRAGMA integrity_check")).scalar()
             return {"action": action, "ok": res == "ok", "result": res}
-        if action in ("db_vacuum", "prune_events"):
-            # prune_events(..., vacuum=True) reclaims space AND compacts the DB
-            # (a standalone VACUUM can't run inside SQLAlchemy's transaction).
+        if action == "db_vacuum":
+            # Standalone VACUUM (compact/defragment) — run outside a transaction
+            # via the raw DBAPI connection in autocommit, as the offline CLI does.
+            raw = platform.engine.raw_connection()
+            try:
+                dbapi = getattr(raw, "dbapi_connection", None) or raw.connection
+                old_iso = dbapi.isolation_level
+                dbapi.isolation_level = None  # VACUUM cannot run inside a transaction
+                dbapi.execute("VACUUM")
+                dbapi.isolation_level = old_iso
+            finally:
+                raw.close()
+            return {"action": action, "ok": True, "result": "vacuumed"}
+        if action == "prune_events":
             from ..core.db import prune_events
 
-            days = body.older_than_days if action == "prune_events" else 10_000_000
-            n = prune_events(platform.engine, days, vacuum=True)
+            n = prune_events(platform.engine, body.older_than_days, vacuum=True)
             return {"action": action, "ok": True, "result": f"pruned {n} event(s) + vacuumed"}
         if action == "backup_now":
             from ..maintenance import run_auto_backup
