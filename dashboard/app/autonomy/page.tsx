@@ -160,12 +160,14 @@ export default function AutonomyPage() {
     setTickBusy(true);
     flash(null);
     try {
-      const r = await post<{ ran: boolean; reason?: string; proposal_id?: string }>(
+      const r = await post<{ ran: boolean; reason?: string; proposal_id?: string; deduped?: boolean }>(
         "/autonomy/tick",
       );
       flash(
         r.ran
-          ? r.proposal_id
+          ? // The backend sets proposal_id even on a dedupe/backlog-full tick, so
+            // only claim a NEW proposal when it wasn't deduped.
+            r.proposal_id && !r.deduped
             ? "Deliberated — a new proposal is in the backlog below."
             : "Deliberated — nothing new to propose this tick."
           : `Tick didn't run (${r.reason ?? "unknown"}).`,
