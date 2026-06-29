@@ -33,6 +33,42 @@ def _agent_type(name: str) -> AgentType:
         return AgentType.BUILDER
 
 
+def _port_in_use(host: str, port: int) -> bool:
+    """True if something is already listening on host:port (a running daemon)."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        try:
+            return s.connect_ex((host, port)) == 0
+        except OSError:
+            return False
+
+
+def _home_for(root: str) -> Path:
+    """The .ironjarvis state home for a root — WITHOUT building the platform, so
+    recovery commands work even when the platform/config can't load."""
+    return Path(root).resolve() / ".ironjarvis"
+
+
+def _source_repo_root() -> "Path | None":
+    """Locate the git checkout Iron Jarvis runs from, WITHOUT importing the
+    platform — so ``rollback`` works even when a bad update broke the daemon."""
+    import subprocess
+
+    pkg_dir = Path(__file__).resolve().parents[2]  # .../src (or the package parent)
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(pkg_dir), capture_output=True, text=True, timeout=10,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return Path(out.stdout.strip())
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 @app.command()
 def init(path: str = typer.Argument(".", help="Project root to initialize.")) -> None:
     """Create .ironjarvis/ and a starter config for a project."""
@@ -201,12 +237,29 @@ def serve(
     """Start the daemon (FastAPI) for the dashboard and HTTP clients."""
     import uvicorn
 
-    os.environ["IRONJARVIS_ROOT"] = str(Path(root).resolve())
+    # Pre-flight: if something is already listening on host:port, don't run the
+    # whole lifespan startup (auto-backup, rehydration) only to die on bind with a
+    # raw WinError 10048. Tell the user plainly and exit cleanly.
+    if _port_in_use(host, port):
+        console.print(
+            f"[yellow]Iron Jarvis is already running[/yellow] on http://{host}:{port} "
+            "— not starting a second instance."
+        )
+        raise typer.Exit(code=0)
+
+    resolved_root = str(Path(root).resolve())
+    os.environ["IRONJARVIS_ROOT"] = resolved_root
+    # Make the state location obvious: starting `serve` from a different directory
+    # uses a DIFFERENT .ironjarvis (DB/secrets/sessions), which otherwise looks like
+    # "everything disappeared". Print where state actually lives.
+    home = Path(resolved_root) / ".ironjarvis"
+    fresh = not home.exists() or not any(home.iterdir())
+    console.print(f"[cyan]State home[/cyan] {home}" + ("  [dim](new/empty)[/dim]" if fresh else ""))
     if git_native:
         os.environ["IRONJARVIS_GIT_NATIVE"] = "1"
     from .app import create_app
 
-    uvicorn.run(create_app(os.environ["IRONJARVIS_ROOT"]), host=host, port=port)
+    uvicorn.run(create_app(resolved_root), host=host, port=port)
 
 
 @app.command()
@@ -741,6 +794,118 @@ def self_update(
         )
     if not result.get("ok"):
         raise typer.Exit(code=1)
+
+
+@app.command()
+def repair(
+    root: str = typer.Option(".", help="Project root (for state location)."),
+    no_sync: bool = typer.Option(False, "--no-sync", help="Skip re-syncing Python deps."),
+) -> None:
+    """OFFLINE recovery: re-sync deps + check/compact the database.
+
+    Works WITHOUT loading the platform, so you can run it when the daemon won't
+    boot (broken deps after an update, a bloated/corrupt DB). Idempotent."""
+    import sqlite3
+
+    # 1. Restore Python deps (the most common post-update breakage).
+    if not no_sync:
+        repo = _source_repo_root()
+        if repo is not None:
+            from ..core.updates import _subprocess_runner
+
+            res = _subprocess_runner(["uv", "sync", "--extra", "dev"], repo)
+            mark = "[green]OK[/green]" if res.returncode == 0 else "[red]FAIL[/red]"
+            console.print(f"  {mark} uv sync (rc={res.returncode})")
+            if res.returncode != 0 and (res.stderr or "").strip():
+                console.print(f"      [dim]{res.stderr.strip()[:400]}[/dim]")
+        else:
+            console.print("  [yellow]skip uv sync[/yellow] — not a source checkout")
+
+    # 2. Database integrity + compaction (no platform needed; raw sqlite3).
+    db = _home_for(root) / "ironjarvis.db"
+    if not db.exists():
+        console.print(f"  [yellow]no database[/yellow] at {db}")
+        return
+    try:
+        con = sqlite3.connect(str(db))
+        integ = con.execute("PRAGMA integrity_check").fetchone()[0]
+        con.isolation_level = None  # VACUUM cannot run inside a transaction
+        con.execute("VACUUM")
+        con.close()
+        mark = "[green]OK[/green]" if integ == "ok" else "[red]FAIL[/red]"
+        console.print(f"  {mark} database integrity: {integ}; vacuumed")
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"  [red]database repair failed[/red]: {exc}")
+        raise typer.Exit(code=1)
+    console.print("[green]repair complete[/green]")
+
+
+@app.command()
+def rollback(
+    to: str = typer.Option(
+        "HEAD@{1}", "--to", help="Commit to reset to (default: the commit before the last pull)."
+    ),
+) -> None:
+    """OFFLINE: undo a bad self-update — git reset --hard <to> + uv sync.
+
+    Use after an update bricked the checkout. Default ``HEAD@{1}`` is the commit
+    that was current before the most recent ``git pull`` (the self-update)."""
+    repo = _source_repo_root()
+    if repo is None:
+        console.print("[red]not a source checkout[/red] — nothing to roll back.")
+        raise typer.Exit(code=1)
+    from ..core.updates import _subprocess_runner
+
+    console.print(f"[cyan]Rolling back[/cyan] {repo} -> {to}")
+    reset = _subprocess_runner(["git", "reset", "--hard", to], repo)
+    mark = "[green]OK[/green]" if reset.returncode == 0 else "[red]FAIL[/red]"
+    console.print(f"  {mark} git reset --hard {to} (rc={reset.returncode})")
+    if reset.returncode != 0:
+        console.print(f"      [dim]{(reset.stderr or '').strip()[:400]}[/dim]")
+        raise typer.Exit(code=1)
+    sync = _subprocess_runner(["uv", "sync", "--extra", "dev"], repo)
+    console.print(
+        f"  {'[green]OK[/green]' if sync.returncode == 0 else '[red]FAIL[/red]'} uv sync"
+    )
+    console.print(
+        "[green]rolled back[/green] — restart the daemon (and dashboard) to load the restored code."
+    )
+
+
+@app.command("reset-config")
+def reset_config(
+    root: str = typer.Option(".", help="Project root."),
+    yes: bool = typer.Option(False, "--yes", help="Skip the confirmation prompt."),
+) -> None:
+    """OFFLINE: back up config.toml to .bak and write fresh defaults.
+
+    Recovers a daemon that won't boot because of a corrupt/invalid config —
+    operates on the file directly, never loading the (possibly broken) config."""
+    import shutil
+
+    home = _home_for(root)
+    path = home / "config.toml"
+    if path.exists() and not yes:
+        console.print(f"[yellow]Will reset[/yellow] {path} to defaults (a .bak is kept).")
+        console.print("Re-run with [bold]--yes[/bold] to proceed.")
+        raise typer.Exit(code=1)
+    home.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        shutil.copy2(path, path.with_name("config.toml.bak"))
+        console.print(f"  backed up old config -> {path.with_name('config.toml.bak')}")
+    from ..core.config import atomic_write_toml, default_permissions, default_sandbox_policy
+
+    atomic_write_toml(
+        path,
+        {
+            "default_provider": "mock",
+            "default_model": "claude-opus-4-8",
+            "max_agent_steps": 12,
+            "permissions": default_permissions(),
+            "sandbox": default_sandbox_policy(),
+        },
+    )
+    console.print(f"[green]wrote fresh config[/green] {path}")
 
 
 if __name__ == "__main__":

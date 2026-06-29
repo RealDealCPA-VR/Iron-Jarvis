@@ -25,6 +25,7 @@ from sqlmodel import select
 
 from .. import __version__
 from ..agents.orchestrator import Orchestrator
+from ..core.config import persist_config_values
 from ..core.db import session_scope
 from ..core.fs_policy import fs_read_ok, is_protected_path
 from ..core.logging import get_logger
@@ -37,6 +38,18 @@ log = get_logger("daemon")
 
 def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _max_upload_bytes() -> int:
+    """Decoded-upload size cap (default 100 MB); override via IRONJARVIS_MAX_UPLOAD_MB."""
+    try:
+        mb = int(os.environ.get("IRONJARVIS_MAX_UPLOAD_MB", "100"))
+    except ValueError:
+        mb = 100
+    return max(1, mb) * 1024 * 1024
+
+
+_MAX_UPLOAD_BYTES = _max_upload_bytes()
 
 
 def _ws_token_ok(ws: WebSocket) -> bool:
@@ -71,6 +84,11 @@ class UploadBody(BaseModel):
 
 class SettingsBody(BaseModel):
     values: dict[str, Any]
+
+
+class RepairBody(BaseModel):
+    action: str  # db_integrity | db_vacuum | prune_events | backup_now | recheck
+    older_than_days: int = 30
 
 
 #: Whitelist of config keys the Settings UI may read/write (safe, restart-light).
@@ -563,6 +581,27 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # OUTERMOST (added last): reject non-loopback Host (DNS rebinding) + untrusted
     # cross-origin browser requests (drive-by RCE) before anything — covers WS.
     app.add_middleware(HostOriginGuardMiddleware)
+
+    # Global exception handler: an endpoint that raises an UNHANDLED error (e.g.
+    # malformed workflow TOML, a bad JSON body that escaped validation) should
+    # return a clean, actionable message — input/parse errors as 400, everything
+    # else as a logged 500 — instead of an opaque "Internal Server Error".
+    # HTTPException keeps its own handler (this only catches what falls through).
+    from fastapi.responses import JSONResponse
+
+    @app.exception_handler(Exception)
+    async def _unhandled(request: Request, exc: Exception):  # noqa: ANN202
+        import json as _json
+        import tomllib as _tomllib
+
+        if isinstance(exc, (ValueError, KeyError, _tomllib.TOMLDecodeError, _json.JSONDecodeError)):
+            return JSONResponse(status_code=400, content={"detail": f"{type(exc).__name__}: {exc}"})
+        log.exception("unhandled error on %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"internal error: {type(exc).__name__}: {exc}"},
+        )
+
     app.state.platform = platform
     app.state.orchestrator = orchestrator
     # Background session tasks are registered on the orchestrator keyed by
@@ -793,6 +832,18 @@ def create_app(project_root: str | None = None) -> FastAPI:
         import base64
         import re
 
+        # Cap the decoded size so a giant upload can't OOM-kill the whole daemon
+        # (which would take down every session/terminal with it). 4/3 accounts for
+        # base64 expansion; reject BEFORE decoding so we never buffer the bytes.
+        approx_bytes = (len(body.content_b64) * 3) // 4
+        if approx_bytes > _MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"upload too large (~{approx_bytes // (1024 * 1024)} MB); "
+                    f"limit is {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB"
+                ),
+            )
         name = re.sub(r"[^A-Za-z0-9._-]", "_", body.filename).strip("._") or "upload"
         uploads = platform.config.home / "uploads"
         uploads.mkdir(parents=True, exist_ok=True)
@@ -811,10 +862,6 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     @app.put("/settings")
     def put_settings(body: SettingsBody) -> dict[str, Any]:
-        import tomllib
-
-        import tomli_w
-
         cfg = platform.config
         candidates = {k: v for k, v in body.values.items() if k in _SETTINGS_KEYS}
         # Validate ALL keys on a throwaway copy first, so one bad value can't
@@ -831,19 +878,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
         for key, value in candidates.items():
             setattr(cfg, key, value)
             updated.append(key)
-        # Persist to the project config.toml so it survives a restart.
-        path = cfg.home / "config.toml"
-        cfg.home.mkdir(parents=True, exist_ok=True)
-        doc: dict[str, Any] = {}
-        if path.exists():
-            try:
-                doc = tomllib.loads(path.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001
-                doc = {}
-        for key in updated:
-            doc[key] = getattr(cfg, key, None)
-        with path.open("wb") as fh:
-            tomli_w.dump({k: v for k, v in doc.items() if v is not None}, fh)
+        # Persist atomically (temp + os.replace) so a crash mid-write can't leave a
+        # torn config.toml that aborts the next boot.
+        persist_config_values(cfg.home, {k: getattr(cfg, k, None) for k in updated})
         return {
             "settings": {k: getattr(cfg, k, None) for k in _SETTINGS_KEYS},
             "updated": updated,
@@ -869,6 +906,13 @@ def create_app(project_root: str | None = None) -> FastAPI:
         except Exception:  # noqa: BLE001
             pass
         out["secrets_key_present"] = (cfg.home / "secrets" / ".secrets.key").exists()
+        # Real decryptability check (not mere file existence): catches a lost /
+        # mismatched key (e.g. a key-less restore) that would silently break every
+        # stored credential while still reading as "present".
+        try:
+            out["secrets_key_valid"] = platform.secrets.key_valid()
+        except Exception:  # noqa: BLE001 — diagnostics must never raise
+            out["secrets_key_valid"] = False
         out["running_sessions"] = len(orchestrator._running)
         out["pending_reviews"] = len(orchestrator._reviews)
         out["background_loops"] = dict(loop_health)  # silent-failure visibility
@@ -878,6 +922,43 @@ def create_app(project_root: str | None = None) -> FastAPI:
         except Exception:  # noqa: BLE001
             out["providers"] = []
         return out
+
+    @app.post("/diagnostics/repair")
+    def diagnostics_repair(body: RepairBody) -> dict[str, Any]:
+        """Gated, idempotent, in-app remediation — let the app FIX (not just report)
+        the common infrastructure problems a daily driver hits, without dropping to
+        a shell. Each action is logged and safe to re-run."""
+        from sqlalchemy import text
+
+        action = body.action
+        if action == "db_integrity":
+            with platform.engine.connect() as conn:
+                res = conn.execute(text("PRAGMA integrity_check")).scalar()
+            return {"action": action, "ok": res == "ok", "result": res}
+        if action in ("db_vacuum", "prune_events"):
+            # prune_events(..., vacuum=True) reclaims space AND compacts the DB
+            # (a standalone VACUUM can't run inside SQLAlchemy's transaction).
+            from ..core.db import prune_events
+
+            days = body.older_than_days if action == "prune_events" else 10_000_000
+            n = prune_events(platform.engine, days, vacuum=True)
+            return {"action": action, "ok": True, "result": f"pruned {n} event(s) + vacuumed"}
+        if action == "backup_now":
+            from ..maintenance import run_auto_backup
+
+            p = run_auto_backup(platform.config.home, engine=platform.engine)
+            return {"action": action, "ok": True, "result": str(p)}
+        if action == "recheck":
+            from ..onboarding import doctor as _doctor
+
+            return {"action": action, "ok": True, "result": _doctor(platform)}
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"unknown repair action '{action}' "
+                "(db_integrity | db_vacuum | prune_events | backup_now | recheck)"
+            ),
+        )
 
     # --- Observability + Evaluation (§29, §30) ----------------------------
 
@@ -1052,17 +1133,42 @@ def create_app(project_root: str | None = None) -> FastAPI:
     def connections() -> dict[str, Any]:
         return {"connections": platform.connections.status()}
 
+    #: A sane default model per provider, used when auto-promoting the FIRST real
+    #: connection away from the out-of-box "mock" default (see _maybe_autopromote).
+    _PROMOTE_DEFAULT_MODEL = {
+        "anthropic": "claude-opus-4-8",
+        "openai": "gpt-4o-mini",
+        "google": "gemini-1.5-flash",
+        "xai": "grok-2-latest",
+    }
+
+    def _maybe_autopromote_default(provider: str) -> bool:
+        """If the default provider is still the offline "mock" when the first REAL
+        provider connects, promote that provider (+ a matching default model) so a
+        "Default" session uses a real model instead of silently faking output.
+        Returns True if it promoted."""
+        cfg = platform.config
+        if provider == "mock" or cfg.default_provider != "mock":
+            return False
+        cfg.default_provider = provider
+        cfg.default_model = _PROMOTE_DEFAULT_MODEL.get(provider, cfg.default_model)
+        _persist_config(["default_provider", "default_model"])
+        return True
+
     @app.post("/connections/{provider}/key")
     def connect_key(provider: str, body: ConnectionKeyBody) -> dict[str, Any]:
         try:
             rec = platform.connections.set_api_key(provider, body.key)
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        return {"provider": rec.provider, "status": rec.status}
+        promoted = _maybe_autopromote_default(rec.provider)
+        return {"provider": rec.provider, "status": rec.status, "promoted_default": promoted}
 
     @app.post("/connections/{provider}/test")
-    def connect_test(provider: str) -> dict[str, Any]:
-        return platform.connections.test(provider)
+    async def connect_test(provider: str) -> dict[str, Any]:
+        # test() may do a real network probe (when wired) → run it off the event
+        # loop so a slow provider can't stall the daemon.
+        return await asyncio.to_thread(platform.connections.test, provider)
 
     @app.delete("/connections/{provider}")
     def connect_disconnect(provider: str) -> dict[str, Any]:
@@ -1080,6 +1186,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
     def oauth_callback(provider: str, code: str = "", state: str = "") -> HTMLResponse:
         try:
             platform.connections.complete_oauth(provider, code=code, state=state)
+            _maybe_autopromote_default(provider)
             msg, ok = f"Connected to {provider}. You can close this window.", True
         except Exception as exc:  # noqa: BLE001
             msg, ok = f"Connection failed: {exc}", False
@@ -1124,7 +1231,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
     def doctor_ep() -> dict[str, Any]:
         from ..onboarding import doctor
 
-        return doctor()
+        # Pass the live platform so doctor also runs RUNTIME checks (model
+        # connected, secrets key valid, DB integrity) — the failures a daily
+        # driver actually hits, not just machine prerequisites.
+        return doctor(platform)
 
     # --- Computer use (opt-in; gated by allowlists + human approval) ------
 
@@ -1416,24 +1526,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
         }
 
     def _persist_config(keys: list[str]) -> None:
-        """Persist whitelisted config keys to the project config.toml (restart-safe)."""
-        import tomllib
-
-        import tomli_w
-
+        """Persist whitelisted config keys to the project config.toml (atomic +
+        restart-safe via temp-file + os.replace)."""
         cfg = platform.config
-        path = cfg.home / "config.toml"
-        cfg.home.mkdir(parents=True, exist_ok=True)
-        doc: dict[str, Any] = {}
-        if path.exists():
-            try:
-                doc = tomllib.loads(path.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001
-                doc = {}
-        for key in keys:
-            doc[key] = getattr(cfg, key, None)
-        with path.open("wb") as fh:
-            tomli_w.dump({k: v for k, v in doc.items() if v is not None}, fh)
+        persist_config_values(cfg.home, {k: getattr(cfg, k, None) for k in keys})
 
     @app.get("/goals")
     def list_goals(status: str | None = None) -> dict[str, Any]:

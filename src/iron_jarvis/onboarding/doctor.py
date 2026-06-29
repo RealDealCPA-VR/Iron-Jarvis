@@ -195,12 +195,87 @@ CHECKS = [
 ]
 
 
-def doctor() -> dict:
-    """Run every check and summarize machine readiness.
+def runtime_checks(platform) -> list[dict]:
+    """Live health of a RUNNING install — the failure modes a daily driver hits
+    (no model connected, lost secrets key, a corrupt DB) that the machine-prereq
+    checks above can't see. Each is read-only and never raises. Only meaningful
+    with a built platform, so the offline CLI ``doctor`` (no platform) skips these.
+    """
+    checks: list[dict] = []
+
+    # A usable model is connected (else every session silently runs on mock).
+    try:
+        health = platform.providers.health()
+        live = [p["provider"] for p in health if p.get("available") and p.get("class") != "mock"]
+        ok = bool(live)
+        checks.append(
+            _result(
+                "provider",
+                ok,
+                f"connected: {', '.join(live)}" if ok else "no real model connected — sessions fall back to mock",
+                fix="" if ok else "Connect a provider (API key or account login) on the Connections page.",
+                # Recommended, not required: mock works offline (demo/first-run), so a
+                # missing paid model is a warning, not an "install is broken".
+                level=RECOMMENDED,
+            )
+        )
+        # The mock-trap: a real provider exists but the default still points at mock.
+        default_provider = getattr(platform.config, "default_provider", "mock")
+        if ok and default_provider == "mock":
+            checks.append(
+                _result(
+                    "default_model",
+                    False,
+                    "default provider is still 'mock' while a real provider is connected",
+                    fix="Set your connected provider as the default on the Connections page.",
+                    level=RECOMMENDED,
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        checks.append(_result("provider", False, f"provider health failed: {exc}", level=RECOMMENDED))
+
+    # The secrets key actually decrypts stored credentials (catches a key-less restore).
+    try:
+        valid = platform.secrets.key_valid()
+        checks.append(
+            _result(
+                "secrets_key",
+                valid,
+                "secrets key decrypts stored credentials" if valid else "secrets key cannot decrypt stored credentials (lost/mismatched key)",
+                fix="" if valid else "Restore <home>/secrets/.secrets.key from a backup, or reconnect your providers to re-store credentials.",
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        checks.append(_result("secrets_key", False, f"secrets check failed: {exc}", level=RECOMMENDED))
+
+    # Database integrity (a corrupt SQLite is unrecoverable from inside the UI).
+    try:
+        from sqlalchemy import text
+
+        with platform.engine.connect() as conn:
+            integ = conn.execute(text("PRAGMA integrity_check")).scalar()
+        ok = integ == "ok"
+        checks.append(
+            _result(
+                "database",
+                ok,
+                "database integrity ok" if ok else f"database integrity check failed: {integ}",
+                fix="" if ok else "Run POST /diagnostics/repair {action:'prune_events'} or restore from a backup.",
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        checks.append(_result("database", False, f"integrity check failed: {exc}"))
+
+    return checks
+
+
+def doctor(platform=None) -> dict:
+    """Run every check and summarize readiness.
 
     Returns ``{"ok": bool, "checks": [{name, ok, detail, fix, level}, ...]}``.
     ``ok`` is True iff every *required* check passes; recommended checks only
-    warn. Never raises — a check that errors is reported as a failed row.
+    warn. When a built ``platform`` is passed, live runtime checks (provider
+    connected, secrets key valid, DB integrity) are appended. Never raises.
     """
     checks: list[dict] = []
     for fn in CHECKS:
@@ -217,5 +292,10 @@ def doctor() -> dict:
                     level=RECOMMENDED,
                 )
             )
+    if platform is not None:
+        try:
+            checks.extend(runtime_checks(platform))
+        except Exception:  # noqa: BLE001 — never let runtime checks crash the doctor
+            pass
     ok = all(c["ok"] for c in checks if c.get("level") == REQUIRED)
     return {"ok": ok, "checks": checks}
