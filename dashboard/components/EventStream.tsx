@@ -19,6 +19,7 @@ const TYPE_COLOR: Record<string, string> = {
   "workflow.completed": "text-emerald-300",
   "review.requested": "text-amber-300",
   "provider.failed": "text-rose-300",
+  "provider.downgraded": "text-amber-300",
 };
 
 export function EventStream() {

@@ -30,6 +30,7 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { EventStream } from "@/components/EventStream";
+import { ProviderDowngradeBanner } from "@/components/ProviderDowngradeBanner";
 import { OnboardingWelcome } from "@/components/OnboardingWelcome";
 import { PageShell, Reveal } from "@/components/motion";
 import { pct, num, timeAgo, shortId } from "@/lib/format";
@@ -39,6 +40,7 @@ type Diagnostics = {
   db_bytes?: number;
   wal_bytes?: number;
   secrets_key_present?: boolean;
+  secrets_key_valid?: boolean;
   running_sessions?: number;
   pending_reviews?: number;
   tracked_worktrees?: number;
@@ -119,6 +121,11 @@ export default function OverviewPage() {
           <OfflineHint />
         </Reveal>
       )}
+
+      {/* Loud warning when a session silently fell back to the mock model. */}
+      <Reveal>
+        <ProviderDowngradeBanner />
+      </Reveal>
 
       {/* First-run welcome + getting-started checklist */}
       <Reveal>
@@ -292,8 +299,18 @@ export default function OverviewPage() {
               />
               <HealthItem
                 label="Secrets key"
-                value={diag.data.secrets_key_present ? "present" : "missing"}
-                status={diag.data.secrets_key_present ? "ok" : "bad"}
+                value={
+                  diag.data.secrets_key_valid === false
+                    ? "invalid"
+                    : diag.data.secrets_key_present
+                      ? "valid"
+                      : "missing"
+                }
+                status={
+                  diag.data.secrets_key_valid === false || !diag.data.secrets_key_present
+                    ? "bad"
+                    : "ok"
+                }
               />
               <HealthItem
                 label="WAL size"
