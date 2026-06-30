@@ -83,11 +83,10 @@ class OutboundWebhooks:
         persisted_secret_name = secret_name or (slug if secret else "")
 
         types_json = json.dumps(list(event_types))
-        with session_scope(self.engine) as db:
-            existing = db.exec(
-                select(WebhookRecord).where(WebhookRecord.slug == slug)
-            ).first()
-            if existing is None:
+        from sqlalchemy.exc import IntegrityError
+
+        def _apply(row: "WebhookRecord | None", db) -> None:
+            if row is None:
                 db.add(
                     WebhookRecord(
                         slug=slug,
@@ -99,12 +98,20 @@ class OutboundWebhooks:
                     )
                 )
             else:
-                existing.direction = "outbound"
-                existing.target_url = url
-                existing.event_types_json = types_json
-                existing.secret_name = persisted_secret_name
-                db.add(existing)
-            db.commit()
+                row.direction = "outbound"
+                row.target_url = url
+                row.event_types_json = types_json
+                row.secret_name = persisted_secret_name
+                db.add(row)
+
+        with session_scope(self.engine) as db:
+            _apply(db.exec(select(WebhookRecord).where(WebhookRecord.slug == slug)).first(), db)
+            try:
+                db.commit()
+            except IntegrityError:  # concurrent first-register of the same slug
+                db.rollback()
+                _apply(db.exec(select(WebhookRecord).where(WebhookRecord.slug == slug)).first(), db)
+                db.commit()
         return slug
 
     def _resolve_secret(self, rec: WebhookRecord) -> str | None:

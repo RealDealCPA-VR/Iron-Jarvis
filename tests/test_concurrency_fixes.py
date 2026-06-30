@@ -337,3 +337,44 @@ def test_embedding_cache_concurrent_first_write_does_not_raise(tmp_path):
     for t in threads:
         t.join()
     assert not errors, f"embedding put raised under concurrency: {errors}"
+
+
+# --- Round 3: connection connect/disconnect stays consistent ------------------
+
+
+def test_connection_connect_disconnect_consistent_under_threads(platform):
+    reg = platform.connections
+    errors: list[Exception] = []
+
+    def connect() -> None:
+        try:
+            for _ in range(25):
+                reg.set_api_key("anthropic", "sk-x")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    def disconnect() -> None:
+        try:
+            for _ in range(25):
+                reg.disconnect("anthropic")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads: list[threading.Thread] = []
+    for _ in range(2):
+        threads.append(threading.Thread(target=connect))
+        threads.append(threading.Thread(target=disconnect))
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors, errors
+
+    # Final state must be CONSISTENT: connected ⇒ a credential exists; disconnected
+    # ⇒ none. The race left "connected with no credential" before the lock.
+    status = {s["provider"]: s for s in reg.status()}["anthropic"]
+    cred = reg.credential("anthropic")
+    if status["connected"]:
+        assert cred is not None
+    else:
+        assert cred is None

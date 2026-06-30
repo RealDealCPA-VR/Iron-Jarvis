@@ -95,11 +95,10 @@ class InboundWebhooks:
         # in-memory path keeps a non-empty marker).
         persisted_secret_name = secret_name or (slug if secret else "")
 
-        with session_scope(self.engine) as db:
-            existing = db.exec(
-                select(WebhookRecord).where(WebhookRecord.slug == slug)
-            ).first()
-            if existing is None:
+        from sqlalchemy.exc import IntegrityError
+
+        def _apply(row: "WebhookRecord | None", db) -> None:
+            if row is None:
                 db.add(
                     WebhookRecord(
                         slug=slug,
@@ -109,10 +108,18 @@ class InboundWebhooks:
                     )
                 )
             else:
-                existing.direction = "inbound"
-                existing.secret_name = persisted_secret_name
-                db.add(existing)
-            db.commit()
+                row.direction = "inbound"
+                row.secret_name = persisted_secret_name
+                db.add(row)
+
+        with session_scope(self.engine) as db:
+            _apply(db.exec(select(WebhookRecord).where(WebhookRecord.slug == slug)).first(), db)
+            try:
+                db.commit()
+            except IntegrityError:  # concurrent first-register of the same slug
+                db.rollback()
+                _apply(db.exec(select(WebhookRecord).where(WebhookRecord.slug == slug)).first(), db)
+                db.commit()
         return slug
 
     def rehydrate(

@@ -68,6 +68,14 @@ class ConnectionRegistry:
         self._specs: dict[str, ConnectionSpec] = dict(BUILTIN_SPECS)
         # state -> {"verifier", "provider", "created_at"} for in-flight OAuth flows
         self._pending: dict[str, dict] = {}
+        # The connect/disconnect/oauth endpoints are sync `def` → FastAPI runs them
+        # on concurrent threadpool threads. Serialize the cross-store mutations
+        # (vault write + ConnectionRecord upsert must commit together) and the
+        # _pending dict so a connect racing a disconnect on one provider can't leave
+        # status='connected' with no credential, and two starts can't race _pending.
+        import threading
+
+        self._lock = threading.RLock()
 
     # --- specs ------------------------------------------------------------
 
@@ -122,14 +130,15 @@ class ConnectionRegistry:
                 f"provider '{provider}' does not accept an API key (use OAuth login)"
             )
         secret_name = spec.key_secret_name or f"{provider}_api_key"
-        self.secrets.set(secret_name, key, kind="api_key")
-        return self._upsert(
-            provider,
-            method="api_key",
-            status="connected",
-            secret_name=secret_name,
-            connected_at=utcnow(),
-        )
+        with self._lock:  # vault write + status row commit together (atomic connect)
+            self.secrets.set(secret_name, key, kind="api_key")
+            return self._upsert(
+                provider,
+                method="api_key",
+                status="connected",
+                secret_name=secret_name,
+                connected_at=utcnow(),
+            )
 
     # --- OAuth 2.0 + PKCE -------------------------------------------------
 
@@ -151,23 +160,24 @@ class ConnectionRegistry:
             raise ValueError(
                 f"no OAuth client configured for '{provider}' — set its client id"
             )
-        self._prune_pending()  # bound _pending so a drive-by GET can't grow memory
         verifier, challenge = OAuthClient.pkce_pair()
         state = OAuthClient.new_state()
-        self._pending[state] = {
-            "verifier": verifier,
-            "provider": provider,
-            "created_at": utcnow(),
-        }
-        url = OAuthClient.authorization_url(
-            spec,
-            client_id=client_id,
-            redirect_uri=app.get("redirect_uri", ""),
-            state=state,
-            code_challenge=challenge,
-        )
-        self._upsert(provider, method="oauth", status="needs_auth")
-        return {"authorization_url": url, "state": state}
+        with self._lock:  # serialize _pending prune+insert (no dict-changed-size race)
+            self._prune_pending()  # bound _pending so a drive-by GET can't grow memory
+            self._pending[state] = {
+                "verifier": verifier,
+                "provider": provider,
+                "created_at": utcnow(),
+            }
+            url = OAuthClient.authorization_url(
+                spec,
+                client_id=client_id,
+                redirect_uri=app.get("redirect_uri", ""),
+                state=state,
+                code_challenge=challenge,
+            )
+            self._upsert(provider, method="oauth", status="needs_auth")
+            return {"authorization_url": url, "state": state}
 
     def complete_oauth(
         self, provider: str, *, code: str, state: str
@@ -179,7 +189,8 @@ class ConnectionRegistry:
         token dict in the vault, and marks the provider connected.
         """
         spec = self._require_spec(provider)
-        pending = self._pending.pop(state, None)
+        with self._lock:
+            pending = self._pending.pop(state, None)
         if pending is None or pending.get("provider") != provider:
             raise ValueError("unknown or expired OAuth state")
         app = self._oauth_app(provider) or {}
@@ -212,20 +223,20 @@ class ConnectionRegistry:
 
         token = self._stamp_expiry(token)
         secret_name = f"{provider}_oauth"
-        self.secrets.set_oauth(secret_name, token)
-
         scope = token.get("scope")
         scopes = scope.split() if isinstance(scope, str) and scope else list(spec.scopes)
         account = token.get("account") or token.get("email") or ""
-        return self._upsert(
-            provider,
-            method="oauth",
-            status="connected",
-            secret_name=secret_name,
-            account=account,
-            scopes_json=json.dumps(scopes),
-            connected_at=utcnow(),
-        )
+        with self._lock:  # token write + status row commit together (atomic connect)
+            self.secrets.set_oauth(secret_name, token)
+            return self._upsert(
+                provider,
+                method="oauth",
+                status="connected",
+                secret_name=secret_name,
+                account=account,
+                scopes_json=json.dumps(scopes),
+                connected_at=utcnow(),
+            )
 
     # --- credential resolution -------------------------------------------
 
@@ -362,18 +373,19 @@ class ConnectionRegistry:
             names.add(f"{provider}_oauth")
         if spec.supports_api_key:
             names.add(spec.key_secret_name or f"{provider}_api_key")
-        for name in filter(None, names):
-            try:
-                self.secrets.delete(name)
-            except Exception:  # deleting an absent secret must not break disconnect
-                pass
-        return self._upsert(
-            provider,
-            method=spec.method,
-            status="disconnected",
-            account="",
-            connected_at=None,
-        )
+        with self._lock:  # credential delete + status row commit together
+            for name in filter(None, names):
+                try:
+                    self.secrets.delete(name)
+                except Exception:  # deleting an absent secret must not break disconnect
+                    pass
+            return self._upsert(
+                provider,
+                method=spec.method,
+                status="disconnected",
+                account="",
+                connected_at=None,
+            )
 
     # --- internals --------------------------------------------------------
 
