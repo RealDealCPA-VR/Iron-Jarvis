@@ -631,6 +631,24 @@ class IntentEngine:
                 db.add(g)
             db.commit()
 
+    def reconcile_executing_proposals(self) -> int:
+        """Boot recovery for the H1 claim window: a hard crash between approve()'s
+        claim (status→executing) and _book (status→executed) leaves a proposal
+        durably 'executing' — invisible to the pending list and non-retryable
+        (approve/_claim_for_execution accept only pending/approved). Reset any such
+        orphan back to 'pending' on boot so it can be approved again (mirrors
+        reconcile_interrupted_sessions for sessions). Returns the count reset."""
+        with session_scope(self.p.engine) as db:
+            rows = list(
+                db.exec(select(ProposalRecord).where(ProposalRecord.status == "executing"))
+            )
+            for p in rows:
+                p.status = "pending"
+                db.add(p)
+            if rows:
+                db.commit()
+        return len(rows)
+
     def _claim_for_execution(self, proposal_id: str) -> bool:
         """Atomically transition pending/approved → executing; True iff WE claimed
         it. A compare-and-set so two concurrent approvals of one proposal can't both

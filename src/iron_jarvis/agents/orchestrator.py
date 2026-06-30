@@ -146,6 +146,17 @@ class Orchestrator:
         session = self.get_session(session_id)
         if session is None:
             raise KeyError(f"unknown session '{session_id}'")
+        # Honor a terminal status that WON the create→register race: a cancel that
+        # landed while create_session was parked awaiting the SESSION_CREATED publish
+        # leaves no _running task, so cancel_session's else-branch marked the row
+        # CANCELLED (without publishing/GC). Never run the agent for an already
+        # cancelled/finished session — that would execute (possibly irreversible)
+        # work the user was told was cancelled, then overwrite it COMPLETED.
+        if session.status is SessionStatus.CANCELLED:
+            await self._finalize_cancelled(session)
+            return session
+        if session.status in (SessionStatus.COMPLETED, SessionStatus.FAILED):
+            return session
         try:
             if session.agent_type is AgentType.SUPERVISOR:
                 run = await run_supervised(self.p, session)  # §12 delegate to subagents
@@ -407,6 +418,12 @@ class Orchestrator:
                 ("..artifacts.models.ArtifactRecord", "session_id"),
                 # Department blackboard rows are keyed by the root session id.
                 ("..blackboard.models.BlackboardRecord", "board_id"),
+                # The pending review row: an orphan can rehydrate as an approvable
+                # review and merge a deleted session's branch (wrong behavior).
+                ("..core.models.PendingReviewRecord", "session_id"),
+                # Improvement/learning rows (harmless bloat, but keep it tidy).
+                ("..improvement.models.OutcomeRecord", "session_id"),
+                ("..learning.models.FeedbackRecord", "session_id"),
             ):
                 try:
                     mod_name, cls_name = model_path.rsplit(".", 1)

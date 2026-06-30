@@ -368,6 +368,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         _rehydrate_step("reconcile_sessions", orchestrator.reconcile_interrupted_sessions)
         _rehydrate_step("rehydrate_reviews", orchestrator.rehydrate_reviews)
+        if platform.intent is not None:  # reset proposals stranded 'executing' by a crash
+            _rehydrate_step("reconcile_proposals", platform.intent.reconcile_executing_proposals)
 
         def _make_webhook_handler(slug):
             async def _handler(body, _slug=slug):

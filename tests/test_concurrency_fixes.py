@@ -194,3 +194,59 @@ def test_backup_db_snapshot_is_consistent(platform, tmp_path):
     finally:
         con.close()
     assert ok == "ok"  # the snapshot restores to a valid, consistent database
+
+
+# --- Round 1: cancel-race HIGH, executing-strand reconcile, delete cascade -----
+
+
+async def test_run_session_honors_a_cancel_that_won_the_race(platform):
+    import os
+
+    from iron_jarvis.core.models import SessionStatus
+
+    orch = Orchestrator(platform)
+    session = await orch.create_session("do real work", AgentType.BUILDER)
+    # No task is registered yet (the create→register window): cancel marks the row
+    # CANCELLED via cancel_session's else-branch.
+    orch.cancel_session(session.id)
+    assert orch.get_session(session.id).status is SessionStatus.CANCELLED
+
+    result = await orch.run_session(session.id)
+    # run_session must NOT run the agent — status stays CANCELLED and no work ran.
+    assert result.status is SessionStatus.CANCELLED
+    assert not os.path.exists(os.path.join(session.workspace_path, "RESULT.md"))
+
+
+async def test_reconcile_resets_executing_proposals(platform):
+    eng = IntentEngine(platform, orchestrator=Orchestrator(platform))
+    platform.intent = eng
+    platform.config.autonomy_enabled = True
+    eng.add_goal("a goal")
+    out = await eng.deliberate()
+    pid = out["proposal_id"]
+    # Simulate a crash mid-approve: the claim committed 'executing' but _book never ran.
+    eng._claim_for_execution(pid)
+    assert eng.get_proposal(pid).status == "executing"
+
+    n = eng.reconcile_executing_proposals()
+    assert n == 1
+    assert eng.get_proposal(pid).status == "pending"  # retryable again
+
+
+def test_delete_session_cascades_outcome_and_review(platform):
+    from sqlmodel import select
+
+    from iron_jarvis.core.models import PendingReviewRecord
+    from iron_jarvis.improvement.models import OutcomeRecord
+
+    orch = Orchestrator(platform)
+    sid = asyncio.run(orch.run("a task", AgentType.BUILDER)).id
+    with session_scope(platform.engine) as db:
+        assert db.exec(select(OutcomeRecord).where(OutcomeRecord.session_id == sid)).first() is not None
+
+    orch.delete_session(sid)
+    with session_scope(platform.engine) as db:
+        assert db.exec(select(OutcomeRecord).where(OutcomeRecord.session_id == sid)).first() is None
+        assert db.exec(
+            select(PendingReviewRecord).where(PendingReviewRecord.session_id == sid)
+        ).first() is None
