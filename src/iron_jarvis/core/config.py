@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
+import threading
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,11 @@ import tomli_w
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 _log = logging.getLogger("iron_jarvis.config")
+
+#: Serializes the read-modify-write of config.toml across the daemon's threads so
+#: concurrent persisters (PUT /settings, /autonomy/kill, provider auto-promote)
+#: can't lose each other's keys or collide on the temp file (a 500 on Windows).
+_CONFIG_WRITE_LOCK = threading.Lock()
 
 
 def default_permissions() -> dict[str, str]:
@@ -253,24 +260,38 @@ def _read_toml(path: Path) -> dict[str, Any]:
 
 
 def atomic_write_toml(path: Path, doc: dict[str, Any]) -> None:
-    """Write ``doc`` to ``path`` crash-safely: dump to a sibling temp then
+    """Write ``doc`` to ``path`` crash-safely: dump to a UNIQUE sibling temp then
     ``os.replace`` (atomic on the same filesystem). A power loss mid-write leaves
     either the old file or the new one — never a truncated config that bricks boot.
-    ``None`` values are dropped (TOML has no null)."""
+    A unique temp name (not a fixed ``.tmp``) means two concurrent writers can't
+    clobber each other's temp or fail os.replace. ``None`` values are dropped."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    with tmp.open("wb") as fh:
-        tomli_w.dump({k: v for k, v in doc.items() if v is not None}, fh)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            tomli_w.dump({k: v for k, v in doc.items() if v is not None}, fh)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def persist_config_values(home: str | Path, values: dict[str, Any]) -> None:
-    """Merge ``values`` into ``<home>/config.toml`` atomically (restart-safe)."""
+    """Merge ``values`` into ``<home>/config.toml`` atomically AND concurrency-safely.
+
+    The whole read-merge-write is held under a process lock so two overlapping
+    persisters (e.g. a settings save racing the kill-switch persist) can't read the
+    same base and drop one another's keys — without it, a lost kill-switch write
+    would silently re-enable autonomy on the next boot."""
     path = Path(home) / "config.toml"
-    doc = _read_toml(path)
-    doc.update(values)
-    atomic_write_toml(path, doc)
+    with _CONFIG_WRITE_LOCK:
+        doc = _read_toml(path)
+        doc.update(values)
+        atomic_write_toml(path, doc)
 
 
 def global_config_path() -> Path:

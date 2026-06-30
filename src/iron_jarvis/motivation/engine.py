@@ -631,6 +631,27 @@ class IntentEngine:
                 db.add(g)
             db.commit()
 
+    def _claim_for_execution(self, proposal_id: str) -> bool:
+        """Atomically transition pending/approved → executing; True iff WE claimed
+        it. A compare-and-set so two concurrent approvals of one proposal can't both
+        pass the status check and double-run it / double-book the budget."""
+        with session_scope(self.p.engine) as db:
+            p = db.get(ProposalRecord, proposal_id)
+            if p is None or p.status not in ("pending", "approved"):
+                return False
+            p.status = "executing"
+            db.add(p)
+            db.commit()
+            return True
+
+    def _reset_proposal_status(self, proposal_id: str, status: str) -> None:
+        with session_scope(self.p.engine) as db:
+            p = db.get(ProposalRecord, proposal_id)
+            if p is not None:
+                p.status = status
+                db.add(p)
+                db.commit()
+
     async def approve(self, proposal_id: str, *, wait: bool = False) -> Any:
         """Human approval path: execute a pending proposal as a real session.
 
@@ -645,19 +666,35 @@ class IntentEngine:
             raise PermissionError("autonomy kill switch is engaged")
         if self.orchestrator is None:
             raise RuntimeError("no orchestrator wired to execute the proposal")
-        goal = self.get_goal(proposal.goal_id) if proposal.goal_id else None
-        if goal is None:  # backlog proposal with no goal — synthesise a throwaway
-            goal = GoalRecord(id=proposal.goal_id or "goal_adhoc", text=proposal.title)
-        try:
-            return await self._execute(proposal, goal, wait=wait)
-        except PermissionError as exc:
-            # A maintainer (self-mod) proposal when self_dev_enabled is off: leave
-            # the proposal pending and tell the approver how to allow it.
-            raise PermissionError(
-                f"cannot run this self-modifying proposal: {exc}. "
-                "Enable self_dev_enabled in Settings to let the Maintainer patch "
-                "Iron Jarvis's own source (still review-gated)."
-            ) from exc
+        # Serialize the claim→execute span (same lock deliberate() uses) and claim
+        # the proposal atomically, so a double-clicked/retried/two-tab Approve runs
+        # it exactly ONCE instead of spawning two sessions + double-booking budget.
+        async with self._exec_lock:
+            if not self._claim_for_execution(proposal_id):
+                current = self.get_proposal(proposal_id)
+                raise ValueError(
+                    f"proposal is already {current.status if current else 'gone'}"
+                )
+            proposal = self.get_proposal(proposal_id)  # refresh (now 'executing')
+            goal = self.get_goal(proposal.goal_id) if proposal.goal_id else None
+            if goal is None:  # backlog proposal with no goal — synthesise a throwaway
+                goal = GoalRecord(id=proposal.goal_id or "goal_adhoc", text=proposal.title)
+            try:
+                return await self._execute(proposal, goal, wait=wait)
+            except PermissionError as exc:
+                # A maintainer (self-mod) proposal when self_dev_enabled is off:
+                # release the claim back to pending and tell the approver.
+                self._reset_proposal_status(proposal_id, "pending")
+                raise PermissionError(
+                    f"cannot run this self-modifying proposal: {exc}. "
+                    "Enable self_dev_enabled in Settings to let the Maintainer patch "
+                    "Iron Jarvis's own source (still review-gated)."
+                ) from exc
+            except Exception:
+                # Any other failure before _book durably marked it executed: release
+                # the claim so the proposal is retryable, not stuck 'executing'.
+                self._reset_proposal_status(proposal_id, "pending")
+                raise
 
     def reject(self, proposal_id: str) -> ProposalRecord | None:
         with session_scope(self.p.engine) as db:

@@ -94,16 +94,11 @@ class EventBus:
     ) -> Event:
         event = Event(type=type, payload=payload or {}, session_id=session_id)
         self.history.append(event)
-        # Sync handlers (persistence, logging, comm/webhook delivery) may do
-        # BLOCKING work (an offline Slack/webhook POST). Run each off the event
-        # loop so a slow handler can't freeze the daemon — sequentially so a
-        # single publish never fans out concurrent SQLite writers. Awaiting keeps
-        # the contract "handlers have run by the time publish returns".
-        for handler in self._handlers:
-            await self._dispatch(handler, event)
-        # Subscribers (the dashboard WS) get a bounded queue; deliver via the
-        # queue's OWNING loop so a publish from a foreign loop (scheduler thread)
-        # is thread-safe and actually wakes the waiter.
+        # Deliver to subscribers (the dashboard WS) FIRST so a slow/blocking sync
+        # handler (e.g. an offline Slack/webhook POST) can't withhold or reorder
+        # the live feed — the subscriber enqueue is instant and non-blocking.
+        # Deliver via the queue's OWNING loop so a publish from a foreign loop (the
+        # scheduler thread) is thread-safe and actually wakes the waiter.
         try:
             running = asyncio.get_running_loop()
         except RuntimeError:  # pragma: no cover - publish is always awaited
@@ -114,6 +109,13 @@ class EventBus:
                 owner.call_soon_threadsafe(self._enqueue, queue, event)
             else:
                 self._enqueue(queue, event)
+        # THEN the sync handlers (persistence, logging, comm/webhook delivery),
+        # which may do BLOCKING work. Run each off the event loop so a slow handler
+        # can't freeze the daemon — sequentially so a single publish never fans out
+        # concurrent SQLite writers. Awaiting keeps the contract "handlers have run
+        # by the time publish returns".
+        for handler in self._handlers:
+            await self._dispatch(handler, event)
         return event
 
     @staticmethod

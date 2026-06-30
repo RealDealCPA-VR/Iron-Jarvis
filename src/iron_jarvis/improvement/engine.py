@@ -83,6 +83,13 @@ class ImprovementEngine:
         self.p = platform
         self.engine = platform.engine
         self._reflector = reflector
+        # Serializes the rolling-stats read-modify-write so a scheduled-workflow
+        # session finalizing on the APScheduler thread can't lose an increment
+        # against a main-loop session finalizing at the same instant (WAL serializes
+        # writers but NOT the read→+1→commit across two deferred transactions).
+        import threading
+
+        self._stats_lock = threading.Lock()
 
     # -- 1 + 2: per-session outcome attribution + lesson weighting ----------
 
@@ -131,7 +138,7 @@ class ImprovementEngine:
             lessons_applied=json.dumps(lessons_applied),
             tools_used=json.dumps(tools),
         )
-        with session_scope(self.engine) as db:
+        with self._stats_lock, session_scope(self.engine) as db:
             db.add(record)
 
             # Per-agent rolling stats.

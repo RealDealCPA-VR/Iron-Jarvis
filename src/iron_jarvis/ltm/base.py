@@ -163,5 +163,20 @@ class MarkdownDirConnector(LTMConnector):
             body = f"{existing}\n\n{content.rstrip()}\n"
         else:
             body = f"# {title}\n\n{content.rstrip()}\n"
-        path.write_text(body, encoding="utf-8")
+        # Atomic write: a crash mid-write must not lose the ENTIRE prior note (this
+        # rewrites the whole file). Stage to a sibling temp then os.replace.
+        import os
+        import tempfile
+
+        fd, tmp = tempfile.mkstemp(dir=str(self.dir), prefix=path.name + ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(body)
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
         return str(path)

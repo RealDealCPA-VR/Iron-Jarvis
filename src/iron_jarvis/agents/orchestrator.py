@@ -52,8 +52,14 @@ class Orchestrator:
         self._running: dict[str, asyncio.Task] = {}
 
     def register_running(self, session_id: str, task: asyncio.Task) -> None:
-        """Track a background run so it can be cancelled (called by the daemon)."""
+        """Track a background run so it can be cancelled (called by the daemon).
+
+        Always attaches a self-removing done-callback so a finished/failed run can't
+        leak its ``_running`` entry — the autonomy non-wait path registers here
+        directly (not via the daemon's _spawn_bg), and previously leaked an entry
+        per auto-executed/approved session, inflating running_sessions forever."""
         self._running[session_id] = task
+        task.add_done_callback(lambda t, sid=session_id: self._running.pop(sid, None))
 
     def _save(self, session: Session) -> None:
         with session_scope(self.p.engine) as db:
