@@ -188,16 +188,31 @@ def session_scope(engine: Engine) -> Session:
 
 
 def persist_event(engine: Engine, event: Event) -> None:
-    """Sync EventBus handler: append the event to the EventRecord log."""
+    """Sync EventBus handler: append the event to the EventRecord log.
+
+    Retries briefly on a transient lock (e.g. a `db_vacuum` EXCLUSIVE lock that
+    outlasts busy_timeout) so the only durable copy of an event isn't lost — the
+    EventBus dispatcher would otherwise swallow the OperationalError."""
+    import time
+
+    from sqlalchemy.exc import OperationalError
+
     record = EventRecord(
         id=event.id,
         type=event.type,
         session_id=event.session_id,
         payload_json=json.dumps(event.payload, default=str),
     )
-    with Session(engine) as db:
-        db.add(record)
-        db.commit()
+    for attempt in range(5):
+        try:
+            with Session(engine) as db:
+                db.add(record)
+                db.commit()
+            return
+        except OperationalError:
+            if attempt == 4:
+                raise
+            time.sleep(0.2 * (attempt + 1))  # 0.2,0.4,0.6,0.8s — ~2s total
 
 
 def dumps(value: Any) -> str:

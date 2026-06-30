@@ -40,6 +40,70 @@ class SecretsManager:
         self.root = Path(home) / "secrets"
         self.root.mkdir(parents=True, exist_ok=True)
         self.engine = engine
+        # Reconcile a key rotation interrupted by a crash (a leftover .new file).
+        try:
+            self._recover_key()
+        except Exception:  # noqa: BLE001 — recovery must never block boot
+            _log.exception("secrets key recovery failed")
+
+    @staticmethod
+    def _atomic_write_key(path: Path, data: bytes) -> None:
+        """Write a keyfile crash-safely (unique temp + os.replace)."""
+        import os
+        import tempfile
+
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
+    def _key_file_decrypts(self, key_path: Path) -> bool:
+        """True if the key at ``key_path`` decrypts a stored secret (or none exist)."""
+        if not key_path.exists():
+            return False
+        with session_scope(self.engine) as db:
+            row = db.exec(select(SecretRecord).limit(1)).first()
+            enc = row.enc_value if row is not None else None
+        if enc is None:
+            return True
+        try:
+            Fernet(key_path.read_bytes()).decrypt(enc.encode("utf-8"))
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _recover_key(self) -> None:
+        """Finish or discard a rotation interrupted between commit and key promote.
+
+        A leftover ``.secrets.key.new`` means rotate_key didn't complete its final
+        atomic promote. Decide by trial-decrypt which key matches the DB ciphertext:
+        current already works → drop ``.new``; ``.new`` works (commit landed) →
+        promote it; neither but ``.bak`` works (commit never landed) → restore .bak."""
+        import os
+
+        key_path = self.root / ".secrets.key"
+        new_path = key_path.with_name(key_path.name + ".new")
+        bak = key_path.with_name(key_path.name + ".bak")
+        if not new_path.exists():
+            return
+        if self._key_file_decrypts(key_path):
+            pass  # promote already happened (or wasn't needed)
+        elif self._key_file_decrypts(new_path):
+            os.replace(new_path, key_path)  # commit landed; finish the promote
+            return
+        elif bak.exists() and self._key_file_decrypts(bak):
+            self._atomic_write_key(key_path, bak.read_bytes())  # commit never landed
+        try:
+            os.unlink(new_path)
+        except OSError:
+            pass
 
     # -- encryption ---------------------------------------------------------
     def _fernet(self) -> Fernet:
@@ -91,29 +155,43 @@ class SecretsManager:
         return self._fernet().decrypt(token.encode("utf-8")).decode("utf-8")
 
     def rotate_key(self) -> int:
-        """Re-encrypt every secret under a fresh Fernet key (keeping the old key
-        as ``.secrets.key.bak``). Returns the number of secrets rotated. Either
-        the new key + re-encrypted rows both land, or the old key is restored."""
+        """Re-encrypt every secret under a fresh Fernet key, CRASH-SAFELY.
+
+        Staging order so a crash at any point is recoverable on next boot
+        (:meth:`_recover_key`): the new key is persisted to ``.secrets.key.new`` and
+        the old key backed up to ``.secrets.key.bak`` BEFORE the DB commit, then the
+        new ciphertext is committed, then ``.new`` is atomically promoted to the
+        live key. A crash before commit leaves old key + old ciphertext intact; a
+        crash after commit but before promote is finished from ``.new`` on boot."""
+        import os
+
         key_path = self.root / ".secrets.key"
+        new_path = key_path.with_name(key_path.name + ".new")
+        bak = key_path.with_name(key_path.name + ".bak")
         old = self._fernet()
         new_key = Fernet.generate_key()
         new = Fernet(new_key)
-        bak = key_path.parent / (key_path.name + ".bak")
         with session_scope(self.engine) as db:
             rows = list(db.exec(select(SecretRecord)))
             for r in rows:
                 plain = old.decrypt(r.enc_value.encode("utf-8"))
                 r.enc_value = new.encrypt(plain).decode("utf-8")
                 db.add(r)
+            # Persist new key (staged) + back up the old one BEFORE committing the
+            # new ciphertext, so a crash leaves a recoverable (.new + .bak) state.
             if key_path.exists():
-                bak.write_bytes(key_path.read_bytes())
-            key_path.write_bytes(new_key)
+                self._atomic_write_key(bak, key_path.read_bytes())
+            self._atomic_write_key(new_path, new_key)
             try:
                 db.commit()
             except Exception:
-                if bak.exists():  # roll the key back so existing rows decrypt
-                    key_path.write_bytes(bak.read_bytes())
+                try:  # commit failed → DB still holds OLD ciphertext; drop staged key
+                    os.unlink(new_path)
+                except OSError:
+                    pass
                 raise
+        # Commit landed (DB now holds NEW ciphertext) → promote the new key atomically.
+        os.replace(new_path, key_path)
         return len(rows)
 
     # -- write --------------------------------------------------------------

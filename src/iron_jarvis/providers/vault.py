@@ -29,10 +29,28 @@ class BrowserVault:
         self.root = Path(browser_dir)
         self.root.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def _atomic_write(path: Path, data: bytes) -> None:
+        """Write ``data`` to ``path`` crash-safely (unique temp + os.replace)."""
+        import os
+        import tempfile
+
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
     def _fernet(self) -> Fernet:
         key_path = self.root / ".vault.key"
         if not key_path.exists():
-            key_path.write_bytes(Fernet.generate_key())
+            self._atomic_write(key_path, Fernet.generate_key())  # no torn keyfile
         return Fernet(key_path.read_bytes())
 
     def _provider_dir(self, provider: str) -> Path:
@@ -64,8 +82,8 @@ class BrowserVault:
             staged.append((path, tmp))
         bak = key_path.parent / (key_path.name + ".bak")
         if key_path.exists():
-            bak.write_bytes(key_path.read_bytes())
-        key_path.write_bytes(new_key)  # flip the key; temps are ready to swap
+            self._atomic_write(bak, key_path.read_bytes())
+        self._atomic_write(key_path, new_key)  # flip the key; temps are ready to swap
         for path, tmp in staged:
             os.replace(tmp, path)
         return len(staged)
@@ -77,13 +95,19 @@ class BrowserVault:
                 f"vault refuses to store secret-like keys: {sorted(leaked)}"
             )
         blob = self._fernet().encrypt(json.dumps(session).encode("utf-8"))
-        (self._provider_dir(provider) / "session.enc").write_bytes(blob)
+        # Atomic so a torn write can't leave an unreadable blob in place.
+        self._atomic_write(self._provider_dir(provider) / "session.enc", blob)
 
     def load(self, provider: str) -> dict[str, Any] | None:
         path = self._provider_dir(provider) / "session.enc"
         if not path.exists():
             return None
-        return json.loads(self._fernet().decrypt(path.read_bytes()).decode("utf-8"))
+        # A corrupt/torn or wrong-key blob must degrade to "not logged in", never
+        # raise out of a status/listing call.
+        try:
+            return json.loads(self._fernet().decrypt(path.read_bytes()).decode("utf-8"))
+        except Exception:  # noqa: BLE001
+            return None
 
     def has_session(self, provider: str) -> bool:
         return (self.root / provider / "session.enc").exists()

@@ -117,3 +117,80 @@ def test_record_outcome_no_lost_increment_under_threads(platform):
     with session_scope(platform.engine) as db:
         final = db.get(AgentStatRecord, "builder").session_count
     assert final - base == K  # every increment landed (no read-modify-write loss)
+
+
+# --- M3: secrets key rotation is crash-recoverable ----------------------------
+
+
+def test_secrets_rotate_roundtrip(tmp_path):
+    from iron_jarvis.core.db import init_db, make_engine
+    from iron_jarvis.secrets.manager import SecretsManager
+
+    engine = make_engine(tmp_path / "x.db")
+    init_db(engine)
+    sm = SecretsManager(tmp_path, engine)
+    sm.set("k", "v", kind="api_key")
+    sm.rotate_key()
+    assert sm.get("k") == "v" and sm.key_valid() is True
+
+
+def test_secrets_rotate_recovery_promotes_staged_new_key(tmp_path):
+    """Simulate a crash AFTER the re-encrypt commit but BEFORE the key promote:
+    the DB ciphertext is under the new key, which sits staged at .new while the
+    live key file is wrong. Boot recovery must promote .new and restore access."""
+    from cryptography.fernet import Fernet
+
+    from iron_jarvis.core.db import init_db, make_engine
+    from iron_jarvis.secrets.manager import SecretsManager
+
+    engine = make_engine(tmp_path / "x.db")
+    init_db(engine)
+    sm = SecretsManager(tmp_path, engine)
+    sm.set("k", "v", kind="api_key")
+    key_path = sm.root / ".secrets.key"
+    good = key_path.read_bytes()  # the key the DB ciphertext is under
+    (sm.root / ".secrets.key.new").write_bytes(good)  # staged, awaiting promote
+    key_path.write_bytes(Fernet.generate_key())  # live key is WRONG (promote didn't run)
+
+    sm2 = SecretsManager(tmp_path, engine)  # __init__ runs _recover_key
+    assert sm2.key_valid() is True
+    assert sm2.get("k") == "v"
+    assert not (sm.root / ".secrets.key.new").exists()  # consumed by recovery
+
+
+# --- M4: browser vault tolerates a corrupt blob -------------------------------
+
+
+def test_browser_vault_load_tolerates_corrupt_blob(tmp_path):
+    from iron_jarvis.providers.vault import BrowserVault
+
+    v = BrowserVault(tmp_path / "browser")
+    v.store("claude", {"cookies": "x"})
+    (tmp_path / "browser" / "claude" / "session.enc").write_bytes(b"not a fernet token")
+    assert v.load("claude") is None  # degrades to "not logged in", never raises
+
+
+# --- M6: auto-backup archives a CONSISTENT DB snapshot ------------------------
+
+
+def test_backup_db_snapshot_is_consistent(platform, tmp_path):
+    import sqlite3
+    import tarfile
+
+    from iron_jarvis.maintenance import create_backup
+
+    out = tmp_path / "b.tar.gz"
+    create_backup(platform.config.home, out, engine=platform.engine, include_keys=True)
+    names = tarfile.open(out).getnames()
+    assert any(n.endswith("ironjarvis.db") for n in names)
+    assert not any(n.endswith("ironjarvis.db-wal") for n in names)  # live WAL not archived
+
+    ex = tmp_path / "ex"
+    tarfile.open(out).extractall(ex, filter="data")
+    dbf = next(p for p in ex.rglob("ironjarvis.db"))
+    con = sqlite3.connect(str(dbf))
+    try:
+        ok = con.execute("PRAGMA integrity_check").fetchone()[0]
+    finally:
+        con.close()
+    assert ok == "ok"  # the snapshot restores to a valid, consistent database
