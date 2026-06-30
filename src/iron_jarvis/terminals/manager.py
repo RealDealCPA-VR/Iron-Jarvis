@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,13 @@ class TerminalManager:
         self.max_sessions = max_sessions
         self.max_dead_retained = max_dead_retained
         self._sessions: dict[str, TerminalSession] = {}
+        # The /terminals endpoints are sync `def`, so Starlette runs them on
+        # concurrent threadpool threads. Guard the dict so a list() iteration can't
+        # race a create/kill ("dictionary changed size during iteration" -> 500) and
+        # the cap check-then-act can't overshoot. Reentrant: create() calls
+        # purge_dead() while holding it. Per-element syscalls (info()/start()/kill())
+        # run on a SNAPSHOT outside the lock so polling can't be blocked by a spawn.
+        self._lock = threading.RLock()
 
     def create(
         self,
@@ -50,29 +58,33 @@ class TerminalManager:
         ``cwd`` defaults to the user's home; ``shell`` defaults via
         :func:`resolve_shell`. Raises :class:`RuntimeError` at the cap.
         """
-        # Evict stale dead sessions first so the dict can't grow without bound
-        # across long-running create/kill churn. Keep the most recent ones
-        # queryable (insertion-ordered) per ``max_dead_retained``.
-        self.purge_dead()
-        live = sum(1 for s in self._sessions.values() if s.alive)
-        if live >= self.max_sessions:
-            raise RuntimeError(
-                f"terminal session cap reached ({self.max_sessions})"
-            )
         cwd = cwd or str(Path.home())
         name, argv = resolve_shell(shell)
-        session = TerminalSession(
-            cwd=cwd, shell=name, argv=argv, cols=cols, rows=rows, backend=backend
-        )
-        session.start(env=env)
-        self._sessions[session.id] = session
-        return session
+        with self._lock:
+            # Evict stale dead sessions first so the dict can't grow without bound
+            # across long-running create/kill churn, then check the cap + register
+            # atomically so two concurrent creates can't both pass and overshoot.
+            self.purge_dead()
+            live = sum(1 for s in self._sessions.values() if s.alive)
+            if live >= self.max_sessions:
+                raise RuntimeError(
+                    f"terminal session cap reached ({self.max_sessions})"
+                )
+            session = TerminalSession(
+                cwd=cwd, shell=name, argv=argv, cols=cols, rows=rows, backend=backend
+            )
+            session.start(env=env)
+            self._sessions[session.id] = session
+            return session
 
     def get(self, id: str) -> TerminalSession | None:
-        return self._sessions.get(id)
+        with self._lock:
+            return self._sessions.get(id)
 
     def list(self) -> list[dict[str, Any]]:
-        return [s.info() for s in self._sessions.values()]
+        with self._lock:  # snapshot under the lock; query alive/info outside it
+            items = list(self._sessions.values())
+        return [s.info() for s in items]
 
     def purge_dead(self) -> int:
         """Evict all but the most recently added dead sessions.
@@ -81,14 +93,16 @@ class TerminalManager:
         so just-killed sessions stay queryable for a bounded window, while
         older dead entries are dropped. Returns the number evicted.
         """
-        dead = [sid for sid, s in self._sessions.items() if not s.alive]
-        stale = dead[: -self.max_dead_retained] if self.max_dead_retained else dead
-        for sid in stale:
-            del self._sessions[sid]
-        return len(stale)
+        with self._lock:
+            dead = [sid for sid, s in self._sessions.items() if not s.alive]
+            stale = dead[: -self.max_dead_retained] if self.max_dead_retained else dead
+            for sid in stale:
+                self._sessions.pop(sid, None)  # tolerate an already-removed key
+            return len(stale)
 
     def kill(self, id: str) -> bool:
-        session = self._sessions.get(id)
+        with self._lock:
+            session = self._sessions.get(id)
         if session is None:
             return False
         session.kill()
@@ -96,7 +110,9 @@ class TerminalManager:
         return True
 
     def kill_all(self) -> None:
-        for session in list(self._sessions.values()):
+        with self._lock:
+            items = list(self._sessions.values())
+        for session in items:
             try:
                 session.kill()
             except Exception:  # pragma: no cover - defensive

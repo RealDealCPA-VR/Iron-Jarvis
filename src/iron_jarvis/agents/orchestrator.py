@@ -50,6 +50,9 @@ class Orchestrator:
         # background (wait=false) runs register here; synchronous runs are not
         # cancellable (the request itself blocks).
         self._running: dict[str, asyncio.Task] = {}
+        # Serializes the check-then-create of a workspace-reusing continuation so a
+        # double-continue can't start two agents writing the same shared workspace.
+        self._continue_lock = asyncio.Lock()
 
     def register_running(self, session_id: str, task: asyncio.Task) -> None:
         """Track a background run so it can be cancelled (called by the daemon).
@@ -370,13 +373,29 @@ class Orchestrator:
         # parent's review/reject, which would yank the follow-up's files out from
         # under it, so a git-backed parent's continuation gets a fresh workspace
         # (the recap still carries the context).
-        if prev.workspace_path and self._git_sessions.get(prev.id) is None:
-            ws = prev.workspace_path
-        else:
-            ws = str(self.p.config.workspaces_dir / session.id)
-        Path(ws).mkdir(parents=True, exist_ok=True)
-        session.workspace_path = ws
-        self._save(session)
+        reuse_ws = bool(prev.workspace_path) and self._git_sessions.get(prev.id) is None
+        # Serialize the busy-check + save when REUSING a workspace, so two
+        # simultaneous continuations of the same parent can't both pass the check.
+        async with self._continue_lock:
+            if reuse_ws:
+                ws = prev.workspace_path
+                with session_scope(self.p.engine) as db:
+                    busy = db.exec(
+                        select(Session).where(
+                            Session.workspace_path == ws,
+                            Session.status == SessionStatus.ACTIVE,
+                        )
+                    ).first()
+                if busy is not None:
+                    raise ValueError(
+                        "a continuation is already running in this workspace — wait "
+                        "for it to finish before continuing again"
+                    )
+            else:
+                ws = str(self.p.config.workspaces_dir / session.id)
+            Path(ws).mkdir(parents=True, exist_ok=True)
+            session.workspace_path = ws
+            self._save(session)
         await self.p.event_bus.publish(
             EventType.SESSION_CREATED,
             {"task": message, "agent": session.agent_type.value, "workspace": ws},

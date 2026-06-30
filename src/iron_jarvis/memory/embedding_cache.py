@@ -117,28 +117,41 @@ class EmbeddingStore:
         cid = self._chunk_id(text, chunk_id)
         h = text_hash(text)
         payload = json.dumps([float(x) for x in vector])
-        with Session(self.engine) as db:
-            row = db.exec(
+        def _find(db):
+            return db.exec(
                 select(EmbeddingRecord).where(
                     EmbeddingRecord.source == source,
                     EmbeddingRecord.chunk_id == cid,
                     EmbeddingRecord.model == model,
                 )
             ).first()
+
+        from sqlalchemy.exc import IntegrityError
+
+        with Session(self.engine) as db:
+            row = _find(db)
             if row is None:
                 row = EmbeddingRecord(
-                    source=source,
-                    chunk_id=cid,
-                    model=model,
-                    text_hash=h,
-                    vector_json=payload,
+                    source=source, chunk_id=cid, model=model, text_hash=h, vector_json=payload
                 )
             else:
                 row.text_hash = h
                 row.vector_json = payload
                 row.created_at = utcnow()
             db.add(row)
-            db.commit()
+            try:
+                db.commit()
+            except IntegrityError:
+                # A concurrent first-write committed the same unique key between our
+                # SELECT and INSERT — converge by updating the now-existing row.
+                db.rollback()
+                existing = _find(db)
+                if existing is not None:
+                    existing.text_hash = h
+                    existing.vector_json = payload
+                    existing.created_at = utcnow()
+                    db.add(existing)
+                    db.commit()
             self._put_count += 1
             if self._put_count % _PRUNE_EVERY == 0:
                 try:

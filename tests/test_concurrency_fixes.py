@@ -250,3 +250,90 @@ def test_delete_session_cascades_outcome_and_review(platform):
         assert db.exec(
             select(PendingReviewRecord).where(PendingReviewRecord.session_id == sid)
         ).first() is None
+
+
+# --- Round 2: terminals lock, double-continue guard, embedding upsert ----------
+
+
+def test_terminal_manager_concurrent_create_list_kill_is_safe():
+    from iron_jarvis.terminals.backend import FakeBackend
+    from iron_jarvis.terminals.manager import TerminalManager
+
+    m = TerminalManager(max_sessions=1000)
+    errors: list[Exception] = []
+
+    def churn() -> None:
+        try:
+            for _ in range(15):
+                s = m.create(backend=FakeBackend())
+                m.list()  # iterate while others create/kill
+                m.kill(s.id)
+        except Exception as exc:  # noqa: BLE001 — e.g. dict changed size during iteration
+            errors.append(exc)
+
+    threads = [threading.Thread(target=churn) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors, f"terminal manager raced: {errors}"
+
+
+def test_terminal_create_cap_not_overshot_under_concurrency():
+    from iron_jarvis.terminals.backend import FakeBackend
+    from iron_jarvis.terminals.manager import TerminalManager
+
+    m = TerminalManager(max_sessions=5)
+    created: list[object] = []
+    lock = threading.Lock()
+
+    def grab() -> None:
+        try:
+            s = m.create(backend=FakeBackend())
+            with lock:
+                created.append(s)
+        except RuntimeError:
+            pass  # hit the cap — expected
+
+    threads = [threading.Thread(target=grab) for _ in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sum(1 for s in m.list() if s["alive"]) <= 5  # cap never overshot
+
+
+async def test_concurrent_continue_refuses_the_second(platform):
+    orch = Orchestrator(platform)
+    prev = await orch.run("first task", AgentType.BUILDER)  # finished, non-git
+    results = await asyncio.gather(
+        orch.continue_session(prev.id, "follow-up A"),
+        orch.continue_session(prev.id, "follow-up B"),
+        return_exceptions=True,
+    )
+    ok = [r for r in results if not isinstance(r, Exception)]
+    errs = [r for r in results if isinstance(r, Exception)]
+    assert len(ok) == 1 and len(errs) == 1 and isinstance(errs[0], ValueError)
+
+
+def test_embedding_cache_concurrent_first_write_does_not_raise(tmp_path):
+    from iron_jarvis.core.db import init_db, make_engine
+    from iron_jarvis.memory.embedding_cache import EmbeddingStore
+
+    engine = make_engine(tmp_path / "e.db")
+    init_db(engine)
+    store = EmbeddingStore(engine)
+    errors: list[Exception] = []
+
+    def put() -> None:
+        try:
+            store.put("identical text", [0.1, 0.2, 0.3], model="m")  # same unique key
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=put) for _ in range(12)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors, f"embedding put raised under concurrency: {errors}"
