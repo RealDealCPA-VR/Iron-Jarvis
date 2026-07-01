@@ -96,6 +96,15 @@ def run(
     orch = Orchestrator(platform)
     session = asyncio.run(orch.run(task, _agent_type(agent), provider))
     console.print(f"[bold]Session[/bold] {session.id} -> [cyan]{session.status.value}[/cyan]")
+    console.print(f"[bold]Model[/bold] {session.provider} / {session.model}")
+    # A headless caller has no WS to see PROVIDER_DOWNGRADED — warn loudly here so a
+    # bad/absent key doesn't hand back fabricated MOCK output believing it was real.
+    if session.provider == "mock":
+        console.print(
+            "[yellow]! ran on the offline MOCK model[/yellow] — output is not from a "
+            "real provider. Connect one (`ironjarvis connect <provider> <key>`) or check "
+            "your default_provider/credentials."
+        )
     console.print(f"[bold]Workspace[/bold] {session.workspace_path}")
     console.print(f"[bold]Summary[/bold] {session.summary}")
 
@@ -254,9 +263,10 @@ def serve(
     resolved_root = str(Path(root).resolve())
     os.environ["IRONJARVIS_ROOT"] = resolved_root
     # Make the state location obvious: starting `serve` from a different directory
-    # uses a DIFFERENT .ironjarvis (DB/secrets/sessions), which otherwise looks like
-    # "everything disappeared". Print where state actually lives.
-    home = Path(resolved_root) / ".ironjarvis"
+    # uses a DIFFERENT home (DB/secrets/sessions), which otherwise looks like
+    # "everything disappeared". Print where state ACTUALLY lives (honors
+    # IRONJARVIS_HOME — the shared brain — not the project-local path).
+    home = _home_for(resolved_root)
     fresh = not home.exists() or not any(home.iterdir())
     console.print(f"[cyan]State home[/cyan] {home}" + ("  [dim](new/empty)[/dim]" if fresh else ""))
     if git_native:

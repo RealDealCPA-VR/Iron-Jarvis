@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import tomli_w
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 _log = logging.getLogger("iron_jarvis.config")
 
@@ -327,13 +327,32 @@ def load_config(project_root: str | Path) -> Config:
     permissions = _deep_merge(default_permissions(), layered.pop("permissions", {}))
     sandbox = _deep_merge(default_sandbox_policy(), layered.pop("sandbox", {}))
 
-    return Config(
-        project_root=root,
-        home=home,
-        permissions=permissions,
-        sandbox=sandbox,
-        **{k: v for k, v in layered.items() if k in Config.model_fields},
-    )
+    overrides = {k: v for k, v in layered.items() if k in Config.model_fields}
+    try:
+        return Config(
+            project_root=root, home=home, permissions=permissions, sandbox=sandbox, **overrides
+        )
+    except ValidationError as exc:
+        # Self-heal a hand-edited config.toml with a WRONG-TYPED value (e.g. a
+        # quoted number) the same way the DB self-heals a corrupt file: drop just
+        # the offending keys (fall back to their defaults) and retry, so a single
+        # typo in the primary user-edited file never bricks boot. Torn/unreadable
+        # TOML is already handled by _read_toml.
+        bad = {str(e["loc"][0]) for e in exc.errors() if e.get("loc")}
+        for key in bad:
+            overrides.pop(key, None)
+            _log.error("ignoring invalid config value for %r — using its default", key)
+        if "permissions" in bad:
+            permissions = default_permissions()
+        if "sandbox" in bad:
+            sandbox = default_sandbox_policy()
+        try:
+            return Config(
+                project_root=root, home=home, permissions=permissions, sandbox=sandbox, **overrides
+            )
+        except ValidationError:
+            _log.error("config.toml has multiple invalid values — falling back to all defaults")
+            return Config(project_root=root, home=home)
 
 
 def write_default_config(project_root: str | Path) -> Path:

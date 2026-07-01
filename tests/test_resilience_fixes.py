@@ -142,3 +142,32 @@ def test_default_home_is_isolated_per_project(tmp_path, monkeypatch):
     a = load_config(tmp_path / "projA")
     b = load_config(tmp_path / "projB")
     assert a.home != b.home  # default: each project fully isolated (unchanged)
+
+
+# --- MED-RESIL2-1: a wrong-typed config value doesn't brick boot --------------
+
+
+def test_load_config_self_heals_wrong_typed_value(tmp_path, monkeypatch):
+    from iron_jarvis.core.config import load_config
+
+    monkeypatch.delenv("IRONJARVIS_HOME", raising=False)
+    home = tmp_path / ".ironjarvis"
+    home.mkdir()
+    (home / "config.toml").write_text('max_agent_steps = "lots"\ndefault_model = "claude-x"\n')
+    cfg = load_config(tmp_path)  # must NOT raise on the type error
+    assert cfg.max_agent_steps == 12  # invalid value dropped → default
+    assert cfg.default_model == "claude-x"  # valid value preserved
+
+
+# --- MED-SYNCMOCK-1: the CLI warns when a run falls back to mock ---------------
+
+
+def test_cli_run_signals_mock_fallback(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from iron_jarvis.daemon.cli import app
+
+    monkeypatch.delenv("IRONJARVIS_HOME", raising=False)
+    result = CliRunner().invoke(app, ["run", "write a short note", "--root", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "MOCK" in result.stdout  # headless caller now sees the mock-fallback signal
