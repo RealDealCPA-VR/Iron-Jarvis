@@ -58,7 +58,7 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 | 🖥️ **Multi-terminal workspace** | tiled live terminals with a **+ tile** to add more + a **directory tree** to pick a project per terminal |
 | 🪟 **Runs as a desktop app** | an Electron wrapper opens the whole thing in a native window |
 | 🤖 **Opt-in computer use** | gated, DOM-first browser automation with human-approval for risky actions |
-| ✅ **436 offline tests** | the whole platform runs green with no network and no API keys |
+| ✅ **687 offline tests** | the whole platform runs green with no network and no API keys |
 
 <div align="center">
 
@@ -70,24 +70,56 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 
 ---
 
-## 🚀 Quickstart
+## 📦 Installation
+
+**Two ways to run it. Most people want Option A.**
+
+### 🪟 Option A — the Windows desktop app (recommended · zero dependencies)
+
+A single self-contained installer that bundles a PyInstaller-frozen daemon **and** the Next.js dashboard. **No Python, Node, uv, or pnpm needed on the machine** — install it and it opens in a native window.
+
+1. **Get the installer** — download the latest **`Iron Jarvis Setup 1.0.0.exe`** from the **[Releases page](https://github.com/RealDealCPA-VR/Iron-Jarvis/releases)**. *(No build published there yet? Build one yourself — see below.)*
+2. **Run it.** It isn't code-signed yet, so Windows SmartScreen shows *"Windows protected your PC"* → click **More info → Run anyway** (one time). Install, then launch **Iron Jarvis** from the Start menu.
+3. **Connect a model.** Open the **Connections** page and either **log in with your Claude/OpenAI account** or paste an **API key** (details just below). That's it.
+
+The app boots the bundled daemon on loopback `127.0.0.1:8787` (token-protected, per-install) plus the dashboard, and **auto-updates** from GitHub Releases on launch.
+
+> **Always-on.** Closing the window **minimizes to the system tray** so schedules, cron jobs, webhooks, and integrations keep firing for weeks. Reopen from the tray icon or **Ctrl+Shift+J**; choose **Quit Iron Jarvis** in the tray menu to fully stop it.
+
+**Build the installer yourself** (needs Node 20 + pnpm + uv, once):
+```powershell
+pnpm --dir desktop run dist:full     # → desktop/release/Iron Jarvis Setup 1.0.0.exe
+```
+> Use **`dist:full`**, not bare `pnpm dist` (which ships a broken, daemon-less installer). Building locally needs **Windows Developer Mode** (Settings → Privacy & security → For developers → Developer Mode = On) or an elevated PowerShell — electron-builder unpacks a cache containing macOS symlinks. You only need this to *build* the installer, not to *run* it. Or let CI do it: `git tag v1.0.0 && git push --tags` triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds + publishes the installer on a GitHub runner (no Developer-Mode toggle needed there).
+
+### 💻 Option B — run from source (for developers)
+
+**Prerequisites:** **Python 3.12+**, **[uv](https://docs.astral.sh/uv/)**, **Node 20+**, **[pnpm](https://pnpm.io/)** (and **git** for git-native sessions).
 
 ```bash
-# 0. Check your machine is ready (Python/uv/Node/pnpm/git/browser)
-uv run ironjarvis doctor
-
-# 1. Install + (optional) try it offline, no keys
-uv sync --extra dev
-uv run ironjarvis demo        # offline end-to-end across every subsystem
-uv run pytest -q              # the full offline test suite, all green
-
-# 2. ONE command to run everything (daemon :8787 + dashboard :3000, opens your browser)
-uv run ironjarvis up
+git clone https://github.com/RealDealCPA-VR/Iron-Jarvis && cd Iron-Jarvis
+uv run ironjarvis doctor                              # verify the machine is ready
+uv sync --extra dev                                   # install the daemon + Python deps
+cd dashboard && pnpm install && pnpm build && cd ..   # build the dashboard once
+uv run ironjarvis up                                  # daemon :8787 + dashboard :3000, opens your browser
 ```
 
-First time only, build the dashboard once: `cd dashboard && pnpm install && pnpm build`. After that, `ironjarvis up` launches both. Prefer two terminals? `uv run ironjarvis serve` + `cd dashboard && pnpm start`.
+Prefer two terminals? `uv run ironjarvis serve` + `cd dashboard && pnpm start`. Want a native window over the source checkout? `cd desktop && pnpm install && pnpm start`.
 
-That's it. Open the dashboard, hit **New Session**, and watch agents work in real time.
+> **Try it with zero setup / zero keys:** `uv run ironjarvis demo` runs end-to-end **offline** with a deterministic mock model, and `uv run pytest -q` runs the full **687-test** suite — all green with no network.
+
+### 🧠 One brain across every project
+
+By default each working directory gets its **own** isolated `.ironjarvis/` home (DB, secrets, memory) — projects stay fully separate. To use **one shared brain — the same keys, memory, and history — across every project** you work in, point `IRONJARVIS_HOME` at a fixed location:
+
+```bash
+export IRONJARVIS_HOME="$HOME/.ironjarvis"                     # macOS / Linux
+# PowerShell:  setx IRONJARVIS_HOME "$env:USERPROFILE\.ironjarvis"
+```
+
+Now `ironjarvis serve` from any folder shares one vault + memory while still operating on that folder's files. (The desktop app already pins one per-install home.)
+
+Open the dashboard, hit **New Session**, and watch agents work in real time.
 
 **Connect a real model** — in the dashboard's **Connections** page or the CLI:
 ```bash
@@ -122,27 +154,25 @@ docker compose up        # daemon + dashboard, locally or on any Docker host
 
 ## 📖 Using Iron Jarvis — a practical guide
 
-### Install & run as a desktop app 🪟
+### Update, recover & self-heal 🔄
 
-**Option 1 — a real installer (no Python/Node needed on the target machine).** Build a self-contained Windows installer that bundles the PyInstaller-frozen daemon + the Next.js standalone dashboard:
-```powershell
-pnpm --dir desktop run dist:full     # → desktop/release/Iron Jarvis Setup x.y.z.exe
-```
-Double-click the `.exe`, install, and launch from the Start menu — it boots the bundled daemon (port 8787) and dashboard in a native window with **no Python, uv, Node, or pnpm required**. Connecting a Claude/OpenAI/Google key or a local Ollama all work. (Computer-use and the Docker sandbox — both opt-in advanced features — aren't bundled in the standalone; everything else is.)
+**Stay current.**
+- **Installed app:** it **auto-updates** from GitHub Releases on launch (electron-updater). Cut a release by pushing a version tag — `git tag v1.0.1 && git push --tags` — and CI builds + publishes the installer; the desktop app picks it up on next launch and rolls back automatically if a bad update won't boot.
+- **From source:** `uv run ironjarvis self-update` (or the dashboard's **Updates** page) does `git pull` + `uv sync` + a dashboard rebuild, gated behind the test suite, then asks you to restart; `ironjarvis update-check` just reports whether you're behind upstream.
 
-> **Always-on.** Closing the window doesn't quit — it **minimizes to the system tray** so the daemon keeps running and your schedules, cron jobs, webhooks, and integrations fire for weeks unattended. Re-open from the tray icon or the global hotkey **Ctrl+Shift+J**; choose **Quit Iron Jarvis** in the tray menu to fully stop it. The desktop app also runs the daemon **token-protected** (a per-install token, generated on first launch) on top of the loopback-only Host/Origin guard, so no other program or website can reach it.
+**When something breaks, fix it from within.** Iron Jarvis is built to self-correct — every recovery is a single command (or a dashboard button), and they work **even when the daemon won't boot**:
 
-> **Building locally needs the symlink privilege.** electron-builder unpacks a cache containing macOS symlinks, so the *packaging step* requires **Windows Developer Mode** (Settings → Privacy & security → For developers → Developer Mode = On) or an elevated PowerShell — a one-time toggle. You don't need it to *run* the app, only to build the installer yourself. The easiest path is to let CI build it: push a tag (`git tag v0.1.0 && git push --tags`) and `.github/workflows/release.yml` produces + publishes the installer on a GitHub runner that already has the privilege.
+| Command | What it does |
+|---|---|
+| `ironjarvis doctor` | Diagnose the install (missing model, DB issue, secrets-key mismatch) with an actionable fix for each. |
+| `ironjarvis repair` | Re-sync deps + check/recover the database — restores your latest backup if the DB is corrupt. |
+| `ironjarvis rollback` | Undo a bad self-update: reset to the exact pre-update commit + re-sync. |
+| `ironjarvis reset-config` | Restore a wedged `config.toml` to defaults (keeps a `.bak`). |
+| `ironjarvis backup` · `ironjarvis restore <file>` | Snapshot / restore your whole state. An automatic backup also runs every 24h. |
 
-**Option 2 — dev mode (run the repo directly).** Drives the repo via uv/pnpm:
-```bash
-cd dashboard && pnpm install && pnpm build   # once
-cd ../desktop  && pnpm install && pnpm start  # opens Iron Jarvis in a native window
-```
+On top of that it self-heals silently: a **corrupt database is quarantined at boot** and a fresh one created so the daemon **always starts**, a mistyped `config.toml` **falls back to defaults** instead of bricking boot, and interrupted **sessions, reviews, and schedules rehydrate** on restart.
 
-### Keep it up to date 🔄
-- **From source:** `uv run ironjarvis self-update` (or the dashboard's **Updates** page) does `git pull` + `uv sync` + a dashboard rebuild, then asks you to restart; `ironjarvis update-check` just reports whether you're behind upstream.
-- **Installed app:** push a version tag (`git tag v0.1.1 && git push --tags`) — the GitHub Actions release workflow builds and publishes the installer, and the desktop app then **auto-updates** from GitHub Releases on launch (electron-updater).
+> The packaged app bundles everything except the two opt-in *advanced* features — **computer-use** browser automation and the **Docker** sandbox — which need extra local setup; everything else (models, Ollama, memory, schedules, workflows, terminals…) works out of the box.
 
 ### Manage multiple terminals (and pick a project) 🖥️
 **Dashboard → Terminals.** A tiled workspace of **live terminal sessions** — click the **`+` tile** to open another, so you can run/watch several agents or shells side by side. The **directory tree on the right** browses your computer (drives → folders, with git/python/node project badges); pick a folder and hit **"Open terminal here →"** to launch a terminal already `cd`'d into that project. Real PTYs (ConPTY on Windows), streamed over WebSocket.
@@ -209,7 +239,7 @@ uv run ironjarvis ltm-search "onboarding"
 - **Webhooks** — **+ Add webhook** (inbound or outbound, HMAC-signed); inbound gives you a `POST /webhooks/{slug}` trigger URL.
 - **File Search** — pick a **drive** (C:, D:, Home…) or a folder and search by name, content, or semantics.
 
-> **CLI cheat sheet:** `init · serve · up · run · self-dev · demo · cancel · rerun · delete-session · backup · restore · rotate-keys · prune-events · prune-worktrees · migrate · metrics · evaluate · memory-search · ltm-search · ltm-append · file-search · schedule-add · schedules · secrets · integrations · agents · create-agent · notify · workflow · doctor · connect · status`
+> **CLI cheat sheet:** `init · serve · up · run · self-dev · demo · cancel · rerun · delete-session · backup · restore · doctor · repair · rollback · reset-config · rotate-keys · prune-events · prune-worktrees · migrate · metrics · evaluate · memory-search · ltm-search · ltm-append · file-search · schedule-add · schedules · secrets · integrations · agents · create-agent · notify · workflow · connect · status`
 
 ---
 
@@ -264,7 +294,7 @@ Built from `SPEC.MD` (§10–33) + reconstructed `SPEC-SECTIONS-01-09.md`. See `
 
 ## ✅ Proof it works
 
-- **436 offline tests pass** (`uv run pytest -q`) — no network, no keys.
+- **687 offline tests pass** (`uv run pytest -q`) — no network, no keys.
 - Live daemon serves every endpoint; the dashboard has a clean production build.
 - Real-Chrome screenshots of every page live in [`dashboard/proof/`](dashboard/proof/).
 
