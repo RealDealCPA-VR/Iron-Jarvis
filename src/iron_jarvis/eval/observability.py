@@ -91,34 +91,40 @@ class Observability:
         local model has *demonstrably* met a quality bar for a class of work do we
         start preferring it for that class.
         """
-        try:
-            with session_scope(self.engine) as db:
-                evals = list(db.exec(select(Evaluation)))
-                runs = list(db.exec(select(AgentRun)))
-        except Exception:  # pragma: no cover - degrade rather than crash
-            return None
-
-        by_session: dict[str, list[AgentRun]] = {}
-        for r in runs:
-            by_session.setdefault(r.session_id, []).append(r)
-
         def _agent_value(at: object) -> str:
             return getattr(at, "value", at) if at is not None else ""
 
-        scores: list[float] = []
-        for e in evals:
-            rs = by_session.get(e.session_id, [])
-            if not rs:
-                continue
-            if not any((r.provider or "") == provider for r in rs):
-                continue
-            if model is not None and not any((r.model or "") == model for r in rs):
-                continue  # don't credit a different local model's track record
-            if task_class is not None and not any(
-                _agent_value(r.agent_type) == task_class for r in rs
-            ):
-                continue
-            scores.append(float(e.completion))
+        try:
+            with session_scope(self.engine) as db:
+                # Filter runs to this provider (+ model) IN SQL, then pull only the
+                # Evaluations for those sessions — never load the whole (unbounded)
+                # AgentRun + Evaluation tables into Python. This is the router's hot
+                # path; it was O(all rows) per call.
+                run_stmt = select(AgentRun.session_id, AgentRun.agent_type).where(
+                    AgentRun.provider == provider
+                )
+                if model is not None:
+                    run_stmt = run_stmt.where(AgentRun.model == model)
+                sess_types: dict[str, set[str]] = {}
+                for sid, at in db.exec(run_stmt):
+                    sess_types.setdefault(sid, set()).add(_agent_value(at))
+                if not sess_types:
+                    return None
+                eval_rows = list(
+                    db.exec(
+                        select(Evaluation.session_id, Evaluation.completion).where(
+                            Evaluation.session_id.in_(list(sess_types.keys()))
+                        )
+                    )
+                )
+        except Exception:  # pragma: no cover - degrade rather than crash
+            return None
+
+        scores: list[float] = [
+            float(completion)
+            for sid, completion in eval_rows
+            if task_class is None or task_class in sess_types.get(sid, set())
+        ]
 
         if len(scores) < max(1, int(min_samples)):
             return None

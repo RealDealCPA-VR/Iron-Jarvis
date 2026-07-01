@@ -20,11 +20,11 @@ from .embeddings import Embedder
 from .models import MemoryRecord
 
 
-#: Cap the candidate rows a single recall loads + cosines in Python. Without it,
-#: every recall (which runs INSIDE an agent turn) loads and scores EVERY memory row
-#: — O(store size) per call, growing forever. The most-recent N is a recency-biased
-#: approximation; layer/scope filters usually narrow it well below this anyway.
-_MAX_RECALL_CANDIDATES = 2000
+#: Safety cap on the candidate rows a single recall scores — high enough that a
+#: real (layer,scope) never truncates in practice (a scope reaching this takes far
+#: longer than "weeks"), low enough to bound memory/parse on a pathological store.
+#: Cosine is VECTORIZED (one numpy matmul), so scoring this many stays fast.
+_MAX_RECALL_CANDIDATES = 10000
 
 
 def _cosine(a: np.ndarray, b: np.ndarray) -> float:
@@ -84,16 +84,27 @@ class SqliteVectorRetriever(Retriever):
             stmt = stmt.where(MemoryRecord.layer == layer)
         if scope_id is not None:
             stmt = stmt.where(MemoryRecord.scope_id == scope_id)
-        # Bound to the most-recent candidates so recall cost stays flat as the store
-        # grows (was: load + cosine EVERY row on every call, inside the agent turn).
         stmt = stmt.order_by(MemoryRecord.created_at.desc()).limit(_MAX_RECALL_CANDIDATES)
         with session_scope(self.engine) as db:
-            rows = list(db.exec(stmt))  # full-entity select loads all columns
-        scored: list[tuple[MemoryRecord, float]] = []
+            rows = list(db.exec(stmt))
+        qn = float(np.linalg.norm(q))
+        if not rows or qn == 0.0:
+            return []
+        # Vectorized cosine: stack the candidate embeddings and do ONE matmul rather
+        # than a Python per-row loop (the measured hot cost) — keeps recall fast
+        # while still scoring the whole candidate set for correctness.
+        keep: list[MemoryRecord] = []
+        vecs: list[np.ndarray] = []
         for row in rows:
-            vec = np.asarray(json.loads(row.embedding_json or "[]"), dtype=np.float64)
-            if vec.size != q.size:
-                continue
-            scored.append((row, _cosine(q, vec)))
-        scored.sort(key=lambda item: item[1], reverse=True)
-        return scored[:k]
+            v = np.asarray(json.loads(row.embedding_json or "[]"), dtype=np.float64)
+            if v.size == q.size:
+                keep.append(row)
+                vecs.append(v)
+        if not vecs:
+            return []
+        matrix = np.vstack(vecs)
+        norms = np.linalg.norm(matrix, axis=1)
+        norms[norms == 0.0] = 1.0
+        sims = (matrix @ q) / (norms * qn)
+        order = np.argsort(sims)[::-1][: max(0, k)]
+        return [(keep[i], float(sims[i])) for i in order]

@@ -21,6 +21,11 @@ from .types import AgentDefinition
 
 _TERMINAL = {AgentState.COMPLETED, AgentState.FAILED, AgentState.CANCELLED}
 
+#: Cap on tool output fed into the MODEL CONTEXT (the full output still lands in the
+#: DB transcript). Without it, a large read/shell/grep result is re-sent on every
+#: subsequent step of the loop — O(n^2) token growth at full input price.
+_MAX_TOOL_CONTEXT_CHARS = 16000
+
 
 class AgentRuntime:
     def __init__(self, platform) -> None:
@@ -174,6 +179,12 @@ class AgentRuntime:
                             if inj["flagged"]
                             else content
                         )
+                if len(content) > _MAX_TOOL_CONTEXT_CHARS:
+                    dropped = len(content) - _MAX_TOOL_CONTEXT_CHARS
+                    content = (
+                        content[:_MAX_TOOL_CONTEXT_CHARS]
+                        + f"\n[... truncated {dropped} chars — full output in the transcript]"
+                    )
                 messages.append(
                     LLMMessage(
                         role="tool",

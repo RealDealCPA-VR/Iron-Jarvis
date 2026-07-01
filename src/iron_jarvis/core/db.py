@@ -251,7 +251,7 @@ def prune_events(engine: Engine, older_than_days: int, vacuum: bool = False) -> 
     """Delete EventRecord rows older than N days (retention). Returns the count."""
     from datetime import timedelta
 
-    from sqlmodel import select
+    from sqlalchemy import delete as sa_delete
 
     from .ids import utcnow
     from .models import EventRecord
@@ -260,14 +260,16 @@ def prune_events(engine: Engine, older_than_days: int, vacuum: bool = False) -> 
     # OverflowError; ~365,000 days (~1000 years) is already before any real event.
     cutoff = utcnow() - timedelta(days=min(max(0, older_than_days), 365_000))
     with Session(engine) as db:
-        rows = list(db.exec(select(EventRecord).where(EventRecord.created_at < cutoff)))
-        for r in rows:
-            db.delete(r)
+        # Bulk DELETE in the engine (returns rowcount) rather than materializing every
+        # expired row as an ORM object and deleting one-by-one — the boot prune over a
+        # large backlog was O(rows) memory + ~1.3s/33k rows.
+        result = db.execute(sa_delete(EventRecord).where(EventRecord.created_at < cutoff))
         db.commit()
+        deleted = int(result.rowcount or 0)
     if vacuum:
         with engine.connect() as conn:
             conn.exec_driver_sql("VACUUM")
-    return len(rows)
+    return deleted
 
 
 def _reconcile_additive_columns(engine: Engine) -> None:

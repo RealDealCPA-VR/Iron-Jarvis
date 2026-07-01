@@ -525,12 +525,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
         ):
 
             async def _inbound_loop() -> None:
+                # 15s default (was 3s): a 3s short-poll is ~28,800 round-trips/day that
+                # keep a laptop's event loop from idling; 15s stays responsive for an
+                # inbound message while cutting idle wakeups ~5x. Override for faster.
                 try:
                     interval = max(
-                        1, int(os.environ.get("IRONJARVIS_INBOUND_INTERVAL", "3"))
+                        1, int(os.environ.get("IRONJARVIS_INBOUND_INTERVAL", "15"))
                     )
                 except ValueError:
-                    interval = 3
+                    interval = 15
                 await asyncio.sleep(20)  # let boot settle before the first poll
                 while True:
                     try:

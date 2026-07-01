@@ -145,11 +145,29 @@ class AnthropicAdapter(LLMAdapter):
             ]
         if tool_defs:
             tool_defs[-1] = {**tool_defs[-1], "cache_control": {"type": "ephemeral"}}
+        anthropic_messages = self._to_anthropic_messages(messages)
+        # Message-level cache breakpoint: mark the LAST content block so the whole
+        # growing conversation prefix (system + tools + all prior turns) bills at the
+        # ~10% cache-read rate on the next step instead of re-billing in full. The
+        # system/tools breakpoints above only cover the FIXED prefix; this is what
+        # stops a multi-step loop re-paying for the entire history every step. Only
+        # for a real conversation (2+ messages) — a lone first message has no prior
+        # prefix to reuse, and adding it there would just alter the request shape.
+        # Fresh dicts each call, so this never accumulates across requests.
+        if len(anthropic_messages) > 1:
+            last = anthropic_messages[-1]
+            content = last.get("content")
+            if isinstance(content, str):
+                last["content"] = [
+                    {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+                ]
+            elif isinstance(content, list) and content:
+                content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
         resp = await client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
             system=system_param,
-            messages=self._to_anthropic_messages(messages),
+            messages=anthropic_messages,
             tools=tool_defs,
         )
         text_parts: list[str] = []

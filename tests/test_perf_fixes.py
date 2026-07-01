@@ -78,9 +78,56 @@ async def test_anthropic_attaches_prompt_cache(monkeypatch):
     monkeypatch.setattr(a, "_client", lambda: FakeClient())
     await a.complete(
         system="a stable system prompt",
-        messages=[LLMMessage(role="user", content="hi")],
+        messages=[
+            LLMMessage(role="user", content="hi"),
+            LLMMessage(role="assistant", content="hello"),
+            LLMMessage(role="user", content="continue"),
+        ],
         tools=[{"name": "t", "description": "d", "input_schema": {"type": "object"}}],
     )
     assert isinstance(captured["system"], list)
     assert captured["system"][-1]["cache_control"] == {"type": "ephemeral"}
     assert captured["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+    # PERF-COST-1: with a real conversation (2+ messages) the growing prefix is also
+    # cached (breakpoint on the last message), so a multi-step loop doesn't re-bill
+    # the full history each step.
+    last = captured["messages"][-1]
+    assert isinstance(last["content"], list)
+    assert last["content"][-1]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_recall_finds_old_relevant_memory(platform):
+    # PERF-VER-1 regression guard: an OLD but exactly-relevant memory must still be
+    # the top hit even when many newer, irrelevant rows exist (the LIMIT-by-recency
+    # fix must not silently drop it).
+    import json
+    from datetime import timedelta
+
+    from iron_jarvis.core.ids import utcnow
+    from iron_jarvis.memory.models import MemoryRecord
+    from iron_jarvis.memory.retrieval import SqliteVectorRetriever
+
+    class StubEmbedder:
+        def embed(self, text):
+            return [1.0, 0.0] if "gold" in text else [0.0, 1.0]
+
+    with session_scope(platform.engine) as db:
+        old = MemoryRecord(
+            layer="semantic", scope_id="s", key="k", text="gold", embedding_json=json.dumps([1.0, 0.0])
+        )
+        old.created_at = utcnow() - timedelta(days=400)
+        db.add(old)
+        for i in range(30):
+            db.add(
+                MemoryRecord(
+                    layer="semantic", scope_id="s", key=f"n{i}", text=f"noise{i}",
+                    embedding_json=json.dumps([0.0, 1.0]),
+                )
+            )
+        db.commit()
+
+    hits = SqliteVectorRetriever(platform.engine, StubEmbedder()).search(
+        "gold please", k=3, layer="semantic", scope_id="s"
+    )
+    assert hits and hits[0][0].text == "gold"
+    assert hits[0][1] > 0.99  # cosine ~1.0 for the exact match
