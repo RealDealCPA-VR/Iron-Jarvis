@@ -207,7 +207,7 @@ export default function AgentsPage() {
             <form onSubmit={create} className="space-y-3.5">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Name
                   </label>
                   <input
@@ -218,7 +218,7 @@ export default function AgentsPage() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Description
                   </label>
                   <input
@@ -230,7 +230,7 @@ export default function AgentsPage() {
                 </div>
               </div>
               <div>
-                <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   <Cpu size={12} /> Model
                 </label>
                 <select
@@ -248,7 +248,7 @@ export default function AgentsPage() {
                 </select>
               </div>
               <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   System prompt
                 </label>
                 <textarea
@@ -260,7 +260,7 @@ export default function AgentsPage() {
                 />
               </div>
               <div>
-                <div className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                <div className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   <Wrench size={12} /> Tools{tools.length ? ` · ${tools.length}` : ""}
                 </div>
                 <div className="grid max-h-44 grid-cols-2 gap-1.5 overflow-y-auto rounded-xl border border-white/[0.06] bg-ink-900/50 p-2.5 sm:grid-cols-3">
@@ -302,7 +302,7 @@ export default function AgentsPage() {
           <Card title="Spawn agent" icon={<Rocket size={15} />}>
             <form onSubmit={spawn} className="space-y-3.5">
               <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   Agent
                 </label>
                 <select
@@ -333,7 +333,7 @@ export default function AgentsPage() {
                 </select>
               </div>
               <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   Task
                 </label>
                 <textarea

@@ -159,7 +159,7 @@ export default function DocumentsPage() {
           <Card title="Read & extract" icon={<FileDown size={15} />}>
             <form onSubmit={extract} className="space-y-3.5">
               <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   File path
                 </label>
                 <div className="flex items-stretch gap-2">
@@ -199,7 +199,7 @@ export default function DocumentsPage() {
               {readText !== null && !readError && (
                 <div>
                   <div className="mb-1.5 flex items-center justify-between">
-                    <label className="block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                    <label className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                       Extracted text
                     </label>
                     {readDoneType && (
@@ -230,7 +230,7 @@ export default function DocumentsPage() {
           <Card title="Create a document" icon={<FileUp size={15} />}>
             <form onSubmit={create} className="space-y-3.5">
               <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   File name
                 </label>
                 <div className="flex items-center gap-2">
@@ -255,7 +255,7 @@ export default function DocumentsPage() {
 
               <div>
                 <div className="mb-1.5 flex items-center justify-between">
-                  <label className="block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Contents
                   </label>
                   <VoiceInput

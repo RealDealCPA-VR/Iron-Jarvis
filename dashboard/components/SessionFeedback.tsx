@@ -98,7 +98,7 @@ export function SessionFeedback({ sessionId }: { sessionId: string }) {
 
       <div className="mt-3.5">
         <div className="mb-1.5 flex items-center justify-between">
-          <label className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+          <label className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
             <MessageSquare size={12} /> What should I do differently?
           </label>
           <VoiceInput

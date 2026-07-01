@@ -229,7 +229,7 @@ export default function UsagePage() {
             <div className="-mx-1 overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>
-                  <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     <th className="px-2 py-2.5 font-medium">Model</th>
                     <th className="px-2 py-2.5 text-right font-medium">Runs</th>
                     <th className="px-2 py-2.5 text-right font-medium">Input</th>

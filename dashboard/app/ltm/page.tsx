@@ -182,7 +182,7 @@ export default function LtmPage() {
         <Card>
           <form onSubmit={search} className="flex flex-wrap items-end gap-3">
             <div className="min-w-[240px] flex-1">
-              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                 Query
               </label>
               <div className="relative">
@@ -205,7 +205,7 @@ export default function LtmPage() {
               </div>
             </div>
             <div className="w-40">
-              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                 Source
               </label>
               <select aria-label="Source" value={source} onChange={(e) => setSource(e.target.value)} className="field">
@@ -218,7 +218,7 @@ export default function LtmPage() {
               </select>
             </div>
             <div className="w-20">
-              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                 k
               </label>
               <input
@@ -279,7 +279,7 @@ export default function LtmPage() {
             <Card title="Append note" icon={<NotebookPen size={15} />}>
               <form onSubmit={append} className="space-y-3.5">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Title
                   </label>
                   <input
@@ -291,7 +291,7 @@ export default function LtmPage() {
                 </div>
                 <div>
                   <div className="mb-1.5 flex items-center justify-between">
-                    <label className="block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                    <label className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                       Content
                     </label>
                     <VoiceInput
@@ -308,7 +308,7 @@ export default function LtmPage() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Source
                   </label>
                   <select
@@ -346,7 +346,7 @@ export default function LtmPage() {
             <Card title="Add memory source" icon={<FolderPlus size={15} />}>
               <form onSubmit={addSource} className="space-y-3.5">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Name
                   </label>
                   <input
@@ -357,7 +357,7 @@ export default function LtmPage() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Kind
                   </label>
                   <select
@@ -373,7 +373,7 @@ export default function LtmPage() {
 
                 {srcKind === "markdown" ? (
                   <div>
-                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                       Folder path
                     </label>
                     <input
@@ -389,7 +389,7 @@ export default function LtmPage() {
                 ) : (
                   <>
                     <div>
-                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                         Database id
                       </label>
                       <input
@@ -400,7 +400,7 @@ export default function LtmPage() {
                       />
                     </div>
                     <div>
-                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                         Token secret
                       </label>
                       <input

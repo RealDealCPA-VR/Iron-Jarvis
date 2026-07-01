@@ -141,7 +141,7 @@ export function SessionCard({
               aria-label="Drag card"
               {...listeners}
               {...attributes}
-              className="-m-1 cursor-grab rounded-md p-1 text-zinc-600 opacity-0 transition-opacity hover:text-zinc-300 active:cursor-grabbing group-hover/card:opacity-100"
+              className="-m-1 cursor-grab rounded-md p-1 text-zinc-600 opacity-0 outline-none transition-opacity hover:text-zinc-300 active:cursor-grabbing group-hover/card:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               <GripVertical size={15} aria-hidden="true" />
             </button>

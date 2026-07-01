@@ -268,7 +268,7 @@ export default function SessionDetailPage({
               </div>
               {(inTok > 0 || outTok > 0) && (
                 <div className="mt-4 flex flex-wrap items-center gap-2">
-                  <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-zinc-500">
+                  <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-zinc-400">
                     Tokens
                   </span>
                   {inTok > 0 && (
@@ -467,7 +467,7 @@ export default function SessionDetailPage({
                 <div className="-mx-1 overflow-x-auto">
                   <table className="w-full text-left text-sm">
                     <thead>
-                      <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                      <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                         <th className="px-2 py-2.5 font-medium">Run</th>
                         <th className="px-2 py-2.5 font-medium">Agent</th>
                         <th className="px-2 py-2.5 font-medium">State</th>
@@ -514,7 +514,7 @@ export default function SessionDetailPage({
                 <div className="-mx-1 overflow-x-auto">
                   <table className="w-full text-left text-sm">
                     <thead>
-                      <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                      <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                         <th className="px-2 py-2.5 font-medium">Tool</th>
                         <th className="px-2 py-2.5 font-medium">Verdict</th>
                         <th className="px-2 py-2.5 font-medium">OK</th>
@@ -574,7 +574,7 @@ function summarizeEvent(e: IJEvent): string {
 function Meta({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
-      <div className="text-[11px] font-medium uppercase tracking-[0.1em] text-zinc-500">
+      <div className="text-[11px] font-medium uppercase tracking-[0.1em] text-zinc-400">
         {label}
       </div>
       <div className="mt-1 text-sm text-zinc-200">{value}</div>

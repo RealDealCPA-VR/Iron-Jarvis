@@ -112,7 +112,7 @@ export default function ChannelsPage() {
           <Card title="Send test message" icon={<Send size={15} />}>
             <form onSubmit={send} className="space-y-3.5">
               <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   Message
                 </label>
                 <textarea
@@ -124,7 +124,7 @@ export default function ChannelsPage() {
                 />
               </div>
               <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   Channel
                 </label>
                 <select aria-label="Channel" value={channel} onChange={(e) => setChannel(e.target.value)} className="field">
@@ -144,7 +144,7 @@ export default function ChannelsPage() {
 
             {results && (
               <div className="mt-4 space-y-2">
-                <div className="text-[11px] uppercase tracking-[0.1em] text-zinc-500">Result</div>
+                <div className="text-[11px] uppercase tracking-[0.1em] text-zinc-400">Result</div>
                 {results.length === 0 ? (
                   <Empty>No channel responses.</Empty>
                 ) : (

@@ -205,7 +205,7 @@ export default function ToolsPage() {
             <Card title="New tool" icon={<Plus size={15} />}>
               <form onSubmit={submit} className="space-y-3.5">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Name
                   </label>
                   <input
@@ -220,7 +220,7 @@ export default function ToolsPage() {
                 </div>
 
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Description
                   </label>
                   <textarea
@@ -233,7 +233,7 @@ export default function ToolsPage() {
                 </div>
 
                 <div>
-                  <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     <Terminal size={12} /> Command (argv)
                   </label>
                   <input
@@ -270,7 +270,7 @@ export default function ToolsPage() {
 
                 <div>
                   <div className="mb-1.5 flex items-center justify-between">
-                    <label className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                    <label className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                       <Braces size={12} /> Parameters
                       {rows.length ? ` · ${rows.length}` : ""}
                     </label>
@@ -360,7 +360,7 @@ export default function ToolsPage() {
                 </div>
 
                 <div>
-                  <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     <Clock size={12} /> Timeout (seconds)
                   </label>
                   <input

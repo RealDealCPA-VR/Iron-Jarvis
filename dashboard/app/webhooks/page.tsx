@@ -127,7 +127,7 @@ export default function WebhooksPage() {
             <form onSubmit={submit} className="space-y-3.5">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Slug
                   </label>
                   <input
@@ -138,7 +138,7 @@ export default function WebhooksPage() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Direction
                   </label>
                   <select
@@ -155,7 +155,7 @@ export default function WebhooksPage() {
 
               {direction === "outbound" && (
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Target URL
                   </label>
                   <input
@@ -169,7 +169,7 @@ export default function WebhooksPage() {
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Event types
                   </label>
                   <input
@@ -183,7 +183,7 @@ export default function WebhooksPage() {
                   </div>
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Secret name (optional)
                   </label>
                   <input
@@ -251,7 +251,7 @@ export default function WebhooksPage() {
             <div className="-mx-1 overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>
-                  <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     <th className="px-2 py-2.5 font-medium">Slug</th>
                     <th className="px-2 py-2.5 font-medium">Direction</th>
                     <th className="px-2 py-2.5 font-medium">Target / URL</th>

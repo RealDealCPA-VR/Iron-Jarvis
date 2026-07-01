@@ -110,7 +110,7 @@ function IntegrationCard({
 
       {integ.required_secrets.length > 0 && (
         <div className="mt-3">
-          <div className="text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+          <div className="text-[11px] uppercase tracking-[0.1em] text-zinc-400">
             Required secrets
           </div>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
@@ -156,10 +156,11 @@ function IntegrationCard({
 
       {showConfig && (
         <div className="mt-3 space-y-2">
-          <label className="block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+          <label className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
             Config (JSON)
           </label>
           <textarea
+            aria-label="Config (JSON)"
             value={config}
             onChange={(e) => setConfig(e.target.value)}
             rows={5}

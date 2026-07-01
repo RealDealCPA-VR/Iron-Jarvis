@@ -91,7 +91,7 @@ export default function FileSearchPage() {
           <form onSubmit={search} className="space-y-3">
             <div className="flex flex-wrap items-end gap-3">
               <div className="min-w-[240px] flex-1">
-                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   Query
                 </label>
                 <div className="relative">
@@ -121,7 +121,7 @@ export default function FileSearchPage() {
             {/* Drive / root selector --------------------------------------- */}
             <div className="flex flex-wrap items-end gap-3">
               <div className="w-48">
-                <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   <HardDrive size={12} /> Search in
                 </label>
                 <select
@@ -142,7 +142,7 @@ export default function FileSearchPage() {
                 </select>
               </div>
               <div className="min-w-[200px] flex-1">
-                <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   <FolderOpen size={12} /> Or a specific folder path
                 </label>
                 <input

@@ -176,7 +176,7 @@ export default function SchedulesPage() {
             <Card title="Add schedule" icon={<Plus size={15} />}>
               <form onSubmit={submit} className="space-y-3.5">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Name
                   </label>
                   <input
@@ -188,7 +188,7 @@ export default function SchedulesPage() {
                 </div>
 
                 <div>
-                  <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     <Repeat size={12} /> Repeat
                   </label>
                   <select
@@ -212,7 +212,7 @@ export default function SchedulesPage() {
 
                 {isOnce && (
                   <div>
-                    <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                    <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                       <Timer size={12} /> Run at
                     </label>
                     <input
@@ -229,7 +229,7 @@ export default function SchedulesPage() {
 
                 {isAdvanced && (
                   <div>
-                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                       Cron expression
                     </label>
                     <input
@@ -243,7 +243,7 @@ export default function SchedulesPage() {
                 )}
 
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Kind
                   </label>
                   <select aria-label="Task kind" value={kind} onChange={(e) => setKind(e.target.value)} className="field">
@@ -257,7 +257,7 @@ export default function SchedulesPage() {
 
                 {kind === "workflow" && (
                   <div>
-                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                       Workflow to run
                     </label>
                     {workflowNames.length === 0 ? (
@@ -307,7 +307,7 @@ export default function SchedulesPage() {
                 <div className="-mx-1 overflow-x-auto">
                   <table className="w-full text-left text-sm">
                     <thead>
-                      <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                      <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                         <th className="px-2 py-2.5 font-medium">Name</th>
                         <th className="px-2 py-2.5 font-medium">Repeat</th>
                         <th className="px-2 py-2.5 font-medium">Kind</th>

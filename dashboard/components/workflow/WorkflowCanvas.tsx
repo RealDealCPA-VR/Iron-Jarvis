@@ -498,7 +498,7 @@ function Canvas() {
             {loadOpen && (
               <div className="card-surface absolute right-0 top-[calc(100%+8px)] z-30 w-72 origin-top-right overflow-hidden">
                 <div className="flex items-center justify-between gap-2 border-b hairline px-3 py-2">
-                  <span className="text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <span className="text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     {defsLoading
                       ? "Loading…"
                       : defs.length

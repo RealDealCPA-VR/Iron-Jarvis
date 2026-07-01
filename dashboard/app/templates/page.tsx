@@ -142,7 +142,7 @@ export default function TemplatesPage() {
             <Card title="New template" icon={<Plus size={15} />}>
               <form onSubmit={submit} className="space-y-3.5">
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Name
                   </label>
                   <input
@@ -154,7 +154,7 @@ export default function TemplatesPage() {
                 </div>
 
                 <div>
-                  <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     <Bot size={12} /> Agent type
                   </label>
                   <select
@@ -172,7 +172,7 @@ export default function TemplatesPage() {
                 </div>
 
                 <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Task
                   </label>
                   <textarea
@@ -185,7 +185,7 @@ export default function TemplatesPage() {
                 </div>
 
                 <div>
-                  <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                  <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     <Cpu size={12} /> Model{" "}
                     <span className="text-zinc-600">(optional)</span>
                   </label>

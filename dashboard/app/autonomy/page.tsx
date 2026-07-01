@@ -598,7 +598,7 @@ function NewGoalCard({
     <Card title="New goal" icon={<Plus size={15} />}>
       <form onSubmit={submit} className="space-y-3.5">
         <div>
-          <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+          <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
             <Sparkles size={12} /> What should I keep working toward?
           </label>
           <textarea
@@ -611,7 +611,7 @@ function NewGoalCard({
         </div>
         <div className="grid grid-cols-3 gap-2">
           <div>
-            <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+            <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
               Category
             </label>
             <input
@@ -622,7 +622,7 @@ function NewGoalCard({
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+            <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
               Priority
             </label>
             <select
@@ -639,7 +639,7 @@ function NewGoalCard({
             </select>
           </div>
           <div>
-            <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+            <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
               Dial
             </label>
             <select

@@ -37,7 +37,7 @@ export function NodeInspector({
 
       <div className="flex-1 space-y-4 overflow-y-auto p-4">
         <div>
-          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
             Step name
           </label>
           <input
@@ -49,7 +49,7 @@ export function NodeInspector({
         </div>
 
         <div>
-          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
             Agent type
           </label>
           <div className="grid grid-cols-2 gap-2">
@@ -78,7 +78,7 @@ export function NodeInspector({
 
         <div>
           <div className="mb-1.5 flex items-center justify-between">
-            <label className="text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+            <label className="text-[11px] uppercase tracking-[0.1em] text-zinc-400">
               Task
             </label>
             <VoiceInput

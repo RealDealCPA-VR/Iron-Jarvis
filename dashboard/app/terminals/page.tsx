@@ -110,7 +110,7 @@ export default function TerminalsPage() {
           subtitle="Live shell sessions, tiled. Pick a project folder on the right and open a terminal there, or hit + to add one."
           actions={
             <div className="flex items-center gap-2">
-              <label className="flex items-center gap-2 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+              <label className="flex items-center gap-2 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                 <SquareTerminal size={13} className="text-accent-soft/70" />
                 Shell
               </label>
@@ -224,7 +224,7 @@ export default function TerminalsPage() {
                     </span>
                     <div className="text-center">
                       <div className="text-sm font-medium">Add terminal</div>
-                      <div className="mt-0.5 max-w-[16rem] text-[11px] text-zinc-600">
+                      <div className="mt-0.5 max-w-[16rem] text-[11px] text-zinc-400">
                         {selectedPath
                           ? `opens in ${selectedPath}`
                           : "opens in your home directory"}
