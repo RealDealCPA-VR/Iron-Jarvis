@@ -427,18 +427,43 @@ def test_openai_login_mints_api_key(engine, secrets):
     assert registry.has_credential("openai") is True
 
 
-def test_openai_login_without_id_token_fails_closed(engine, secrets):
+def test_openai_login_without_org_falls_back_to_chatgpt_backend(engine, secrets):
+    # LIVE-HIT (2026-07-01): a subscription-only ChatGPT account has no API
+    # organization, so the key mint fails with "Invalid ID token: missing
+    # organization_id". That is NOT a login failure — the flow now stores the
+    # OAuth token instead, which the OpenAI adapter routes to the ChatGPT
+    # (Codex) backend for subscription-billed inference.
+    id_tok = _fake_jwt({"email": "user@example.com"})
+    http = SeqHTTP(
+        [
+            {"access_token": "chatgpt-token", "id_token": id_tok,
+             "refresh_token": "r1", "expires_in": 3600},
+            # the mint REJECTS the org-less id_token (the live error shape)
+            {"error": {"message": "Invalid ID token: missing organization_id",
+                       "code": "invalid_subject_token"}},
+        ]
+    )
+    registry = _openai_registry(engine, secrets, http)
+    state = registry.start_oauth("openai")["state"]
+
+    rec = registry.complete_oauth("openai", code="auth-code", state=state)
+    assert rec.status == "connected"
+    assert rec.account == "user@example.com"  # label from the id_token claim
+    # The OAuth token IS the credential now (no minted key exists).
+    assert secrets.get("openai_api_key") is None
+    assert secrets.get_oauth("openai_oauth")["access_token"] == "chatgpt-token"
+    assert registry.credential("openai") == "chatgpt-token"
+
+
+def test_openai_login_without_id_token_still_connects_via_backend(engine, secrets):
+    # No id_token at all -> mint impossible -> same ChatGPT-backend fallback.
     http = SeqHTTP([{"access_token": "chatgpt-token", "expires_in": 3600}])
     registry = _openai_registry(engine, secrets, http)
     state = registry.start_oauth("openai")["state"]
 
-    with pytest.raises(ValueError):
-        registry.complete_oauth("openai", code="c", state=state)
-    # Nothing persisted, nothing connected.
-    assert secrets.get("openai_api_key") is None
-    assert secrets.get_oauth("openai_oauth") is None
-    by_provider = {s["provider"]: s for s in registry.status()}
-    assert by_provider["openai"]["connected"] is False
+    rec = registry.complete_oauth("openai", code="c", state=state)
+    assert rec.status == "connected"
+    assert secrets.get_oauth("openai_oauth")["access_token"] == "chatgpt-token"
 
 
 def test_google_keeps_offline_access_params(engine, secrets):

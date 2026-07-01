@@ -38,6 +38,9 @@ KNOWN_MODELS: list[dict] = [
     {"provider": "anthropic", "model": "claude-fable-5"},
     {"provider": "openai", "model": "gpt-4o"},
     {"provider": "openai", "model": "gpt-4o-mini"},
+    # Served by BOTH api.openai.com and the ChatGPT (Codex) backend — the only
+    # family available to a subscription-only ChatGPT account login.
+    {"provider": "openai", "model": "gpt-5-codex"},
     {"provider": "google", "model": "gemini-2.0-flash"},
     {"provider": "google", "model": "gemini-1.5-pro"},
     {"provider": "xai", "model": "grok-2-latest"},

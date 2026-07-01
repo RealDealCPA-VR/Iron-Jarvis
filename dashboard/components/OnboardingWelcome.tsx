@@ -142,18 +142,22 @@ export function OnboardingWelcome() {
                   </div>
                   <p className="mt-0.5 text-xs leading-relaxed text-zinc-500">{step.detail}</p>
                 </div>
-                {!step.done && (
-                  <Link
-                    href={link.href}
-                    className={`mt-0.5 inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
-                      isNext
+                {/* Always clickable — a completed step still links to its page
+                    (e.g. "Connect your AI" done -> open Connections to manage
+                    it). A done row previously rendered NO control at all, which
+                    read as a broken button. */}
+                <Link
+                  href={link.href}
+                  className={`mt-0.5 inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+                    step.done
+                      ? "text-zinc-500 hover:bg-white/[0.05] hover:text-zinc-300"
+                      : isNext
                         ? "bg-accent text-ink-950 shadow-glow-sm hover:bg-accent-soft"
                         : "border border-white/10 text-zinc-300 hover:bg-white/[0.05]"
-                    }`}
-                  >
-                    {link.cta} <ArrowRight size={13} />
-                  </Link>
-                )}
+                  }`}
+                >
+                  {step.done ? "Open" : link.cta} <ArrowRight size={13} />
+                </Link>
               </li>
             );
           })}

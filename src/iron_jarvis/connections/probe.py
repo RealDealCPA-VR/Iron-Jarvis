@@ -37,6 +37,15 @@ def live_probe(provider: str, credential: str) -> tuple[bool, str]:
     spec = _PROBES.get(provider)
     if spec is None:
         return True, f"{provider} is connected (no live probe available)"
+    # A ChatGPT-account OAuth token (a JWT, not an sk- key) is NOT accepted by
+    # api.openai.com — inference routes through the ChatGPT/Codex backend
+    # instead (see the OpenAI adapter), so probing /v1/models would report a
+    # FALSE failure for a healthy connection.
+    if provider == "openai" and not credential.startswith("sk-") and credential.count(".") == 2:
+        return True, (
+            "openai connected via ChatGPT account (Codex backend) — "
+            "run a session to verify inference"
+        )
     url, style = spec
     import httpx  # lazy: only when a real probe runs
 

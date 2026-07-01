@@ -151,7 +151,12 @@ BUILTIN_SPECS: dict[str, ConnectionSpec] = {
             "codex_cli_simplified_flow": "true",
         },
         oauth_key_exchange=True,
-        oauth_help="Log in with your ChatGPT account — an API key is minted from your session and stored encrypted.",
+        oauth_help=(
+            "Log in with your ChatGPT account. With an API organization an API "
+            "key is minted and stored encrypted; without one (subscription-only "
+            "account) inference runs through the ChatGPT backend on your plan "
+            "(codex-capable models)."
+        ),
     ),
     "xai": ConnectionSpec(
         provider="xai",

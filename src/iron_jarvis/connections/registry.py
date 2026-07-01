@@ -276,23 +276,28 @@ class ConnectionRegistry:
                         or "no access_token in token response"
                     )
                 )
-            # KEY MINT (OpenAI Codex flow): the account token can't call the
-            # inference API — exchange the id_token for a REAL API key while
-            # the HTTP client is still open. Fails closed: no id_token / a
-            # failed mint raises and nothing is persisted.
+            # KEY MINT (OpenAI Codex flow): the account token can't call
+            # api.openai.com — exchange the id_token for a REAL API key while
+            # the HTTP client is still open. The mint only works for accounts
+            # WITH an API organization; a subscription-only ChatGPT account
+            # gets "Invalid ID token: missing organization_id" — that is NOT a
+            # failure of the login, so fall back to storing the OAuth token,
+            # which the OpenAI adapter routes to the ChatGPT (Codex) backend
+            # for subscription-billed inference.
             if spec.oauth_key_exchange:
                 id_token = token.get("id_token") or ""
-                if not id_token:
-                    raise ValueError(
-                        "no id_token in the token response — cannot mint an API key"
+                try:
+                    if not id_token:
+                        raise ValueError("no id_token in the token response")
+                    minted_key = OAuthClient.mint_api_key(
+                        spec, id_token=id_token, client_id=client_id, http=http
                     )
-                minted_key = OAuthClient.mint_api_key(
-                    spec, id_token=id_token, client_id=client_id, http=http
-                )
+                except ValueError:
+                    minted_key = ""  # no API org — ChatGPT-backend fallback
         finally:
             _close(http)
 
-        if spec.oauth_key_exchange:
+        if spec.oauth_key_exchange and minted_key:
             # Store the MINTED KEY as the credential (kind api_key) — the OAuth
             # token itself is deliberately NOT persisted (it can't run
             # inference, and credential() would prefer it over the key).
@@ -314,7 +319,8 @@ class ConnectionRegistry:
         secret_name = f"{provider}_oauth"
         scope = token.get("scope")
         scopes = scope.split() if isinstance(scope, str) and scope else list(spec.scopes)
-        account = _account_label(token)
+        # ChatGPT-backend fallback tokens carry the email in the id_token JWT.
+        account = _account_label(token) or _jwt_claim_email(token.get("id_token") or "")
         with self._lock:  # token write + status row commit together (atomic connect)
             self.secrets.set_oauth(secret_name, token)
             return self._upsert(
