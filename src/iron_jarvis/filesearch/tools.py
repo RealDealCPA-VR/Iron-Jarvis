@@ -57,8 +57,12 @@ class FileSearchTool(Tool):
                 )
         roots = [Path(root)] if root else None
         try:
-            results = self.service.search(
-                args["query"], mode=mode, limit=limit, roots=roots
+            # Offload the os.walk + byte reads over up to 20k files to a thread so a
+            # content search doesn't freeze the daemon's single event loop.
+            import asyncio
+
+            results = await asyncio.to_thread(
+                self.service.search, args["query"], mode=mode, limit=limit, roots=roots
             )
         except Exception as exc:  # never crash the runtime
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")

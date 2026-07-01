@@ -781,8 +781,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
         return PlainTextResponse("\n".join(lines), media_type="text/markdown")
 
     @app.get("/sessions")
-    def list_sessions() -> dict[str, Any]:
-        return {"sessions": [_session_view(s) for s in orchestrator.list_sessions()]}
+    def list_sessions(limit: int = 200) -> dict[str, Any]:
+        # Bounded window (default 200 most-recent) so the polled list stays cheap as
+        # sessions accumulate over weeks; clients page for more via ?limit=.
+        lim = None if limit <= 0 else limit
+        return {"sessions": [_session_view(s) for s in orchestrator.list_sessions(limit=lim)]}
 
     @app.get("/sessions/{session_id}")
     def get_session(session_id: str) -> dict[str, Any]:
@@ -922,7 +925,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
         out: dict[str, Any] = {}
         try:
             with platform.engine.connect() as conn:
-                out["db_integrity"] = conn.execute(text("PRAGMA integrity_check")).scalar()
+                # Cheap liveness probe only — a full PRAGMA integrity_check is a
+                # whole-DB page scan (hundreds of ms on a large DB) and this endpoint
+                # is polled ~every 15s app-wide (NotificationBell). Deep integrity is
+                # on-demand via POST /diagnostics/repair {db_integrity}.
+                conn.execute(text("SELECT 1")).scalar()
+            out["db_integrity"] = "ok"
         except Exception as exc:  # noqa: BLE001
             out["db_integrity"] = f"error: {exc}"
         try:

@@ -136,14 +136,21 @@ class ShellTool(Tool):
     }
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        import asyncio
+
         try:
-            proc = subprocess.run(
-                args["command"],
-                shell=True,
-                cwd=ctx.workspace,
-                capture_output=True,
-                text=True,
-                timeout=60,
+            # Offload to a thread: subprocess.run blocks its OS thread for up to 60s,
+            # and the tool runs on the daemon's single event loop — inline it would
+            # freeze ALL requests, WS event delivery, and every other session.
+            proc = await asyncio.to_thread(
+                lambda: subprocess.run(
+                    args["command"],
+                    shell=True,
+                    cwd=ctx.workspace,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
             )
         except subprocess.TimeoutExpired:
             return ToolResult(ok=False, error="command timed out")

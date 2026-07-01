@@ -240,11 +240,18 @@ class WebSearchTool(Tool):
             provider = "duckduckgo"
             url, params = _DDG_ENDPOINT, {"q": query}
 
-        # Network + parse are wrapped so the runtime never crashes (§19).
-        try:
+        # Network + parse are wrapped so the runtime never crashes (§19). The fetch
+        # is a SYNC httpx call, so run it off the event loop (up to a 15s round-trip
+        # would otherwise freeze the whole daemon).
+        def _fetch_and_parse() -> Any:
             resp = self._http_get(url, params)
             text = getattr(resp, "text", "") or ""
-            results = _parse_brave_json(text) if provider == "brave" else _parse_ddg_html(text)
+            return _parse_brave_json(text) if provider == "brave" else _parse_ddg_html(text)
+
+        try:
+            import asyncio
+
+            results = await asyncio.to_thread(_fetch_and_parse)
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
 

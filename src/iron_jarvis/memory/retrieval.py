@@ -20,6 +20,13 @@ from .embeddings import Embedder
 from .models import MemoryRecord
 
 
+#: Cap the candidate rows a single recall loads + cosines in Python. Without it,
+#: every recall (which runs INSIDE an agent turn) loads and scores EVERY memory row
+#: — O(store size) per call, growing forever. The most-recent N is a recency-biased
+#: approximation; layer/scope filters usually narrow it well below this anyway.
+_MAX_RECALL_CANDIDATES = 2000
+
+
 def _cosine(a: np.ndarray, b: np.ndarray) -> float:
     na = float(np.linalg.norm(a))
     nb = float(np.linalg.norm(b))
@@ -77,6 +84,9 @@ class SqliteVectorRetriever(Retriever):
             stmt = stmt.where(MemoryRecord.layer == layer)
         if scope_id is not None:
             stmt = stmt.where(MemoryRecord.scope_id == scope_id)
+        # Bound to the most-recent candidates so recall cost stays flat as the store
+        # grows (was: load + cosine EVERY row on every call, inside the agent turn).
+        stmt = stmt.order_by(MemoryRecord.created_at.desc()).limit(_MAX_RECALL_CANDIDATES)
         with session_scope(self.engine) as db:
             rows = list(db.exec(stmt))  # full-entity select loads all columns
         scored: list[tuple[MemoryRecord, float]] = []

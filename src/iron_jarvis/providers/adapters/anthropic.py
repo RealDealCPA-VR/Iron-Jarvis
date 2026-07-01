@@ -125,19 +125,32 @@ class AnthropicAdapter(LLMAdapter):
         # Build the client off the loop — credential resolution may trigger a
         # blocking OAuth token refresh that must not stall the event loop.
         client = await asyncio.to_thread(self._client)
+        tool_defs: list[dict[str, Any]] = [
+            {
+                "name": t["name"],
+                "description": t["description"],
+                "input_schema": t["input_schema"],
+            }
+            for t in tools
+        ]
+        # Prompt caching: mark the STABLE prefix (tool schemas + system prompt) with a
+        # cache breakpoint so Anthropic bills it at the ~10% cache-read rate on every
+        # step after the first, instead of re-billing the full ~5k-token prefix each
+        # turn of a multi-step agent loop. Cache_control on a too-small prefix is a
+        # silent no-op, so this is always safe.
+        system_param: Any = system or ""
+        if system:
+            system_param = [
+                {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+            ]
+        if tool_defs:
+            tool_defs[-1] = {**tool_defs[-1], "cache_control": {"type": "ephemeral"}}
         resp = await client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
-            system=system or "",
+            system=system_param,
             messages=self._to_anthropic_messages(messages),
-            tools=[
-                {
-                    "name": t["name"],
-                    "description": t["description"],
-                    "input_schema": t["input_schema"],
-                }
-                for t in tools
-            ],
+            tools=tool_defs,
         )
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []

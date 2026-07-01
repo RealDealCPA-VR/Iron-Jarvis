@@ -12,6 +12,7 @@ Three tools that let agents work with a user's real files:
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -59,7 +60,7 @@ class ReadDocumentTool(Tool):
         if not allowed:
             return ToolResult(ok=False, error=reason)
         try:
-            text = extract_text(path)
+            text = await asyncio.to_thread(extract_text, path)  # CPU-bound parse off the loop
         except Exception as exc:  # reading real files must never crash the runtime
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
         out, truncated = _truncate(text)
@@ -129,7 +130,7 @@ class ExtractPdfTool(Tool):
         if not allowed:
             return ToolResult(ok=False, error=reason)
         try:
-            text = extract_text(path)
+            text = await asyncio.to_thread(extract_text, path)  # CPU-bound parse off the loop
         except Exception as exc:
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
         out, truncated = _truncate(text)

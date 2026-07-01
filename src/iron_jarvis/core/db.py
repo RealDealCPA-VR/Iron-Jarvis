@@ -58,9 +58,32 @@ SCHEMA_VERSION = 1
 _MIGRATIONS: dict[int, "callable"] = {}
 
 
+#: Hot ordering/filter columns that lack an index (the *_id columns are already
+#: indexed in the models). Backs the event feed + prune (created_at), list_sessions
+#: ordering, and transcript queries — unindexed they full-scan a growing table.
+_HOT_INDEXES = (
+    ("ix_eventrecord_created_at", "eventrecord", "created_at"),
+    ("ix_session_created_at", "session", "created_at"),
+    ("ix_agentrun_created_at", "agentrun", "created_at"),
+    ("ix_memoryrecord_created_at", "memoryrecord", "created_at"),
+)
+
+
+def _ensure_indexes(engine: Engine) -> None:
+    """Create the hot-column indexes if missing (idempotent — runs every boot;
+    create_all won't add a new index to an already-existing table)."""
+    with engine.begin() as conn:
+        for name, table, column in _HOT_INDEXES:
+            try:
+                conn.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({column})"))
+            except Exception:  # noqa: BLE001 — a missing table/column must never brick boot
+                pass
+
+
 def init_db(engine: Engine) -> None:
     SQLModel.metadata.create_all(engine)
     _reconcile_additive_columns(engine)
+    _ensure_indexes(engine)
     run_migrations(engine)
 
 

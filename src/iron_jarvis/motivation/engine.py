@@ -332,6 +332,12 @@ class IntentEngine:
         goals = self.list_goals(status="active")
         if not goals:
             return {"ran": False, "reason": "no_active_goals"}
+        # Skip the (expensive Opus) PLANNER call when every active goal already has a
+        # full pending backlog: deliberation could only dedupe or hit the cap, so the
+        # call is pure waste. This stops the steady-state token burn on an idle
+        # daily driver where suggestions accumulate faster than they're reviewed.
+        if self._all_backlogs_full(goals):
+            return {"ran": False, "reason": "backlog_full"}
 
         context = self._gather_context(goals)
         decision = await self._decide(context, goals)
@@ -367,6 +373,26 @@ class IntentEngine:
                 out["executed"] = True
                 out["session_id"] = session.id if session else None
         return out
+
+    def _all_backlogs_full(self, goals: list[GoalRecord]) -> bool:
+        """True if EVERY active goal already has a full pending backlog — a fresh
+        deliberation could only dedupe or be capped, so the LLM call is pure waste."""
+        goal_ids = [g.id for g in goals]
+        if not goal_ids:
+            return False
+        with session_scope(self.p.engine) as db:
+            rows = list(
+                db.exec(
+                    select(ProposalRecord).where(
+                        ProposalRecord.goal_id.in_(goal_ids),
+                        ProposalRecord.status == "pending",
+                    )
+                )
+            )
+        counts: dict[str, int] = {}
+        for r in rows:
+            counts[r.goal_id] = counts.get(r.goal_id, 0) + 1
+        return all(counts.get(gid, 0) >= _MAX_PENDING_PER_GOAL for gid in goal_ids)
 
     def _find_or_create_proposal(
         self, goal: GoalRecord, decision: dict

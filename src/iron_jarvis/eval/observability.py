@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 
-from sqlalchemy import Engine
+from sqlalchemy import Engine, func
 from sqlmodel import select
 
 from ..core.db import session_scope
@@ -54,18 +54,21 @@ class Observability:
     def metrics(self) -> dict:
         """Aggregate metrics across every Evaluation + the event log (§30)."""
         with session_scope(self.engine) as db:
-            evals = list(db.exec(select(Evaluation)))
-            tool_count = len(list(db.exec(select(ToolInvocation))))
-            event_count = len(list(db.exec(select(EventRecord))))
-
-        def avg(values: list[float]) -> float:
-            return sum(values) / len(values) if values else 0.0
+            # COUNT/AVG in SQLite (rowid/index-cheap) instead of materializing these
+            # tables — ToolInvocation and EventRecord are UNBOUNDED and this endpoint
+            # is polled every few seconds by the dashboard. Was O(rows) + full alloc.
+            sessions_evaluated = db.scalar(select(func.count()).select_from(Evaluation)) or 0
+            avg_completion = db.scalar(select(func.avg(Evaluation.completion)))
+            avg_tool_success = db.scalar(select(func.avg(Evaluation.tool_success_rate)))
+            avg_latency = db.scalar(select(func.avg(Evaluation.latency_s)))
+            tool_count = db.scalar(select(func.count()).select_from(ToolInvocation)) or 0
+            event_count = db.scalar(select(func.count()).select_from(EventRecord)) or 0
 
         return {
-            "sessions_evaluated": len(evals),
-            "avg_completion": avg([e.completion for e in evals]),
-            "avg_tool_success_rate": avg([e.tool_success_rate for e in evals]),
-            "avg_latency_s": avg([e.latency_s for e in evals]),
+            "sessions_evaluated": sessions_evaluated,
+            "avg_completion": float(avg_completion or 0.0),
+            "avg_tool_success_rate": float(avg_tool_success or 0.0),
+            "avg_latency_s": float(avg_latency or 0.0),
             "total_tool_invocations": tool_count,
             "event_count": event_count,
         }

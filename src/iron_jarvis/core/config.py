@@ -159,7 +159,12 @@ class Config(BaseModel):
     notion_database_id: str | None = None  # long-term memory Notion DB
     computer_use: dict[str, Any] = Field(default_factory=default_computer_use)
     mcp_servers: list[dict[str, Any]] = Field(default_factory=list)  # external MCP servers (mcp_call)
-    event_retention_days: int = 0  # 0 = keep forever; >0 prunes old events on boot
+    # Bounded rolling window (was 0 = keep-forever). The persisted event log grows
+    # with every session/tool/autonomous tick and is the root of the unbounded
+    # EventRecord table that made /metrics, memory-recall, integrity_check and
+    # backups scale with uptime. 90 days keeps ample history while capping growth;
+    # set 0 to keep forever, or lower to stay leaner. Pruned on boot.
+    event_retention_days: int = 90
     ollama_base_url: str | None = None  # local OpenAI-compatible (Ollama) endpoint URL
     ollama_model: str = "llama3.1"  # default model for the local "ollama" provider
     # Self-tuning router (§6 phase-1) — OFF by default. When enabled AND the local

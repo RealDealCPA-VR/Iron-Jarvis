@@ -487,9 +487,16 @@ class Orchestrator:
         with session_scope(self.p.engine) as db:
             return db.get(Session, session_id)
 
-    def list_sessions(self) -> list[Session]:
+    def list_sessions(self, limit: int | None = 200) -> list[Session]:
+        # Bounded by default: this feeds the dashboard's 4s-polled /sessions list, so
+        # an unbounded SELECT would load + serialize every session ever, growing
+        # without limit over weeks. 200 most-recent is the UI window; pass limit=None
+        # for the full set.
         with session_scope(self.p.engine) as db:
-            return list(db.exec(select(Session).order_by(Session.created_at.desc())))
+            stmt = select(Session).order_by(Session.created_at.desc())
+            if limit is not None:
+                stmt = stmt.limit(limit)
+            return list(db.exec(stmt))
 
     def transcript(self, session_id: str) -> dict:
         with session_scope(self.p.engine) as db:
