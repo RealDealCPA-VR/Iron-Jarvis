@@ -74,13 +74,18 @@ function signalAuth(unauthorized: boolean): void {
   authListeners.forEach((fn) => fn(unauthorized));
 }
 
-// Abort a request that hangs (a frozen/slow daemon) so polls surface "offline"
-// instead of spinning forever with stale data and a false-green status.
+// Abort a hanging GET (a frozen/slow daemon) so background polls surface "offline"
+// instead of spinning forever with stale data and a false-green status. Only GETs:
+// a mutation (start session, apply update) can legitimately run much longer and
+// must not be aborted mid-flight.
 const REQUEST_TIMEOUT_MS = 15000;
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const method = (init?.method || "GET").toUpperCase();
+  const controller = method === "GET" ? new AbortController() : null;
+  const timer = controller
+    ? setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+    : null;
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {
@@ -91,13 +96,13 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
         ...(init?.headers || {}),
       },
       cache: "no-store",
-      signal: controller.signal,
+      ...(controller ? { signal: controller.signal } : {}),
     });
   } catch {
     // Network error or timeout => daemon offline / not responding.
     throw new ApiError("daemon offline", 0);
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
   }
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) signalAuth(true);
