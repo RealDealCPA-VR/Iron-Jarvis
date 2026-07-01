@@ -53,7 +53,9 @@ Write-Host "==> [0/4] Syncing version..." -ForegroundColor Cyan
 $PyProject = Join-Path $Root "pyproject.toml"
 $pyVer = (Select-String -Path $PyProject -Pattern '^version\s*=\s*"([^"]+)"' |
     Select-Object -First 1).Matches.Groups[1].Value
-$tag = $env:GITHUB_REF_NAME
+# Only a TAG ref names a version -- on a branch push GITHUB_REF_NAME is the
+# branch itself ("master"), which must never be mistaken for a version.
+$tag = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME } else { $null }
 if ($tag -and $tag -match '^v?(.+)$') { $ver = $Matches[1] } else { $ver = $pyVer }
 if ($Publish -and $ver -ne $pyVer) {
     throw "version mismatch: release tag '$ver' != pyproject '$pyVer' -- tag must match pyproject.toml."

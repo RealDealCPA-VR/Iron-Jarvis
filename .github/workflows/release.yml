@@ -1,14 +1,23 @@
 name: Release
 
 # Builds the self-contained Windows installer and publishes it to GitHub
-# Releases — ONLY when you push a version tag (e.g. `git tag v0.1.0 && git push
-# --tags`). Nothing is published on a normal push. The packaged app then
-# auto-updates from these releases via electron-updater.
+# Releases — the installed app then auto-updates from these via electron-updater.
+#
+# Publishes when ANY of:
+#   * master is pushed with a pyproject.toml version that has NO release yet
+#     (i.e. bump the version + push -> your installed app auto-updates);
+#   * a version tag (v1.2.3, must match pyproject.toml) is pushed;
+#   * the workflow is dispatched manually (Actions -> Release -> Run workflow).
+#
+# A master push WITHOUT a version bump is a no-op (the gate below skips the
+# whole build), so routine pushes cost nothing and never re-publish a version.
 
 on:
   push:
+    branches: [master]
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write # create the GitHub Release + upload the installer
@@ -19,28 +28,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Gate — publish only unreleased versions
+        id: gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ver="$(grep -Po '^version\s*=\s*"\K[^"]+' pyproject.toml | head -1)"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"   # explicit tag always builds
+          elif gh release view "v$ver" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release v$ver already exists — bump pyproject.toml to ship an update."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Python 3.12
+        if: steps.gate.outputs.publish == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Set up uv
+        if: steps.gate.outputs.publish == 'true'
         uses: astral-sh/setup-uv@v3
 
       - name: Set up Node 20
+        if: steps.gate.outputs.publish == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - name: Set up pnpm
+        if: steps.gate.outputs.publish == 'true'
         uses: pnpm/action-setup@v4
         with:
           version: 10
 
       - name: Sync Python deps (creates .venv with pyinstaller)
+        if: steps.gate.outputs.publish == 'true'
         run: uv sync --extra dev
 
       - name: Build + publish the installer
+        if: steps.gate.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: powershell -ExecutionPolicy Bypass -File desktop/build-installer.ps1 -Publish
