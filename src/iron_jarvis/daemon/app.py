@@ -1498,6 +1498,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
         await ws.accept()
 
         async def pump_output() -> None:  # PTY -> client
+            # 10ms idle poll: measured end-to-end, the shell's own echo is
+            # ~50ms (ConPTY/PowerShell), so our added worst-case latency should
+            # stay well under it. 100 wakeups/s per idle terminal is noise.
             while True:
                 data = session.read()
                 if data:
@@ -1505,7 +1508,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 elif not session.alive:
                     break
                 else:
-                    await asyncio.sleep(0.02)
+                    await asyncio.sleep(0.01)
 
         out = asyncio.create_task(pump_output())
         try:
