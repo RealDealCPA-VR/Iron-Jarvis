@@ -40,6 +40,7 @@
       "loading.html",
       "assets/**"
     ],
+    "afterPack": "./afterPack.js",
     "extraResources": [
       { "from": "../packaging/dist/ironjarvis", "to": "daemon" },
       { "from": "../dashboard/.next/standalone", "to": "dashboard" }
