@@ -176,6 +176,15 @@ class WebActionTool(_GatedTool):
         "required": ["kind"],
     }
 
+    def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        # `value` is text typed into a DOM field — can be a password/credential.
+        # Never persist it verbatim to the invocation transcript (DB/export/backup).
+        if not args.get("value"):
+            return args
+        red = dict(args)
+        red["value"] = "***REDACTED***"
+        return red
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         refusal = self._refuse_if_disabled()
         if refusal:

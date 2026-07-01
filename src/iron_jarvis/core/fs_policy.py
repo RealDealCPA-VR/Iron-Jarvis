@@ -53,10 +53,42 @@ def _canonical(path: str | Path) -> Path:
 
 
 def _within(target: Path, root: Path) -> bool:
-    """Case-insensitive (on Windows) containment of ``target`` within ``root``."""
+    """Containment of ``target`` within ``root`` — robust to path-spelling tricks.
+
+    First a case-insensitive string-prefix check (fast path), then an INODE
+    IDENTITY check: walk target's ancestors and compare ``(st_dev, st_ino)`` to
+    ``root``. Two spellings of the same directory (drive-letter ``C:\\...`` vs a
+    local admin share ``\\\\localhost\\C$\\...``, an 8.3 short name, or a symlink)
+    have the same inode, so this catches containment even when the strings diverge.
+    """
     t = os.path.normcase(str(target))
     r = os.path.normcase(str(root))
-    return t == r or t.startswith(r + os.sep)
+    if t == r or t.startswith(r + os.sep):
+        return True
+    # The string prefix only diverges from a drive-letter root for a Windows UNC /
+    # admin-share spelling (\\host\C$\...) — resolve() normalizes everything else.
+    # Restrict the (per-ancestor stat) identity walk to that case so normal reads
+    # keep the cheap string check.
+    if os.name != "nt" or not str(target).startswith("\\\\"):
+        return False
+    try:
+        st = os.stat(root)
+        root_id = (st.st_dev, st.st_ino)
+    except OSError:
+        return False  # root not statable → rely on the (failed) string check
+    cur = target
+    for _ in range(64):  # bounded ancestor walk
+        try:
+            s = os.stat(cur)
+            if (s.st_dev, s.st_ino) == root_id:
+                return True
+        except OSError:
+            pass
+        parent = cur.parent
+        if parent == cur:
+            break
+        cur = parent
+    return False
 
 
 def register_protected_root(path: str | Path) -> None:

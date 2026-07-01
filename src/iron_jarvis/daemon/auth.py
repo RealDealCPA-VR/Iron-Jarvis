@@ -123,6 +123,41 @@ _EXEMPT_EXACT = frozenset(
 _TOKEN_ENV = "IRONJARVIS_TOKEN"
 
 
+def _max_body_bytes() -> int:
+    """Global request-body ceiling (default 256 MB); override IRONJARVIS_MAX_BODY_MB."""
+    try:
+        mb = int(os.environ.get("IRONJARVIS_MAX_BODY_MB", "256"))
+    except ValueError:
+        mb = 256
+    return max(1, mb) * 1024 * 1024
+
+
+class BodyLimitMiddleware:
+    """Pure-ASGI guard: reject an HTTP request whose Content-Length exceeds the cap
+    (413) BEFORE the body is buffered, so an oversized JSON/base64 body (e.g. to
+    /documents/write or /documents/upload) can't OOM/fill-disk the daemon."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+        self.max_bytes = _max_body_bytes()
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") == "http":
+            for k, v in scope.get("headers") or []:
+                if k == b"content-length":
+                    try:
+                        if int(v) > self.max_bytes:
+                            await JSONResponse(
+                                {"detail": f"request body too large (limit {self.max_bytes} bytes)"},
+                                status_code=413,
+                            )(scope, receive, send)
+                            return
+                    except ValueError:
+                        pass
+                    break
+        await self.app(scope, receive, send)
+
+
 def _configured_token() -> str:
     """The active token, or ``""`` when auth is disabled."""
     return (os.environ.get(_TOKEN_ENV) or "").strip()

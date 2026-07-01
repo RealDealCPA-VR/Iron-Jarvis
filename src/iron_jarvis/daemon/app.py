@@ -571,7 +571,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
     app = FastAPI(title="Iron Jarvis", version=__version__, lifespan=lifespan)
     # Optional bearer-token auth (env IRONJARVIS_TOKEN) — required for a public
     # deployment; no-op locally.
-    from .auth import HostOriginGuardMiddleware, TokenAuthMiddleware
+    from .auth import BodyLimitMiddleware, HostOriginGuardMiddleware, TokenAuthMiddleware
 
     app.add_middleware(TokenAuthMiddleware)  # inner: token check
     # CORS: default to loopback dashboard origins ONLY (never wildcard, since the
@@ -597,6 +597,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
             allow_methods=_methods,
             allow_headers=["*"],
         )
+    # Reject an oversized request body (413) before it is buffered — DoS guard.
+    app.add_middleware(BodyLimitMiddleware)
     # OUTERMOST (added last): reject non-loopback Host (DNS rebinding) + untrusted
     # cross-origin browser requests (drive-by RCE) before anything — covers WS.
     app.add_middleware(HostOriginGuardMiddleware)

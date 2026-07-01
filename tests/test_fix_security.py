@@ -162,3 +162,40 @@ def test_rest_integration_refuses_ssrf_metadata_url():
     )
     res = integ.test_connection()
     assert res["ok"] is False and "unsafe" in res["detail"].lower()
+
+
+# --- Security lens round 1: residual/backlog burndown -------------------------
+
+
+def test_web_action_redacts_typed_value():
+    # SECDISC-1: a value typed into a DOM field (may be a credential) must not be
+    # persisted verbatim to the tool transcript.
+    from iron_jarvis.computeruse.tools import WebActionTool
+
+    red = WebActionTool.redact_args(
+        WebActionTool.__new__(WebActionTool), {"kind": "type", "value": "hunter2"}
+    )
+    assert red["value"] == "***REDACTED***"
+    # Nothing to redact when there's no typed value.
+    assert WebActionTool.redact_args(
+        WebActionTool.__new__(WebActionTool), {"kind": "click"}
+    ) == {"kind": "click"}
+
+
+def test_body_limit_middleware_rejects_oversized(tmp_path, monkeypatch):
+    # DOS-2 / CONV1-01: an oversized body is rejected (413) before buffering.
+    monkeypatch.setenv("IRONJARVIS_MAX_BODY_MB", "1")
+    client = TestClient(create_app(str(tmp_path)))
+    big = "x" * (2 * 1024 * 1024)  # 2 MB > 1 MB cap
+    r = client.post("/documents/write", json={"path": "a.txt", "content": big})
+    assert r.status_code == 413
+
+
+def test_fs_policy_name_denylist_blocks_keys_anywhere(tmp_path):
+    # AGE-1 residual hardening: key files are protected by NAME regardless of the
+    # directory spelling (drive-letter or UNC), independent of registered roots.
+    from iron_jarvis.core import fs_policy
+
+    assert fs_policy.is_protected_path(str(tmp_path / "anywhere" / ".secrets.key")) is True
+    assert fs_policy.is_protected_path(str(tmp_path / "x" / ".vault.key.bak")) is True
+    assert fs_policy.is_protected_path(str(tmp_path / "x" / "normal.txt")) is False
