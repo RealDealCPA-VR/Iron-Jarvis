@@ -45,6 +45,19 @@ jobs:
             echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # electron-builder with releaseType "release" refuses to CREATE a
+      # published release for a tag that doesn't exist yet (GitHub 422:
+      # "Published releases must have a valid tag"). On branch pushes the tag
+      # doesn't exist, so create it here first. Safe: pushes made with the
+      # workflow's GITHUB_TOKEN never trigger new workflow runs (no loop).
+      - name: Ensure the release tag exists
+        if: steps.gate.outputs.publish == 'true' && github.ref_type != 'tag'
+        shell: bash
+        run: |
+          ver="${{ steps.gate.outputs.version }}"
+          git tag -f "v$ver"
+          git push -f origin "v$ver"
+
       - name: Set up Python 3.12
         if: steps.gate.outputs.publish == 'true'
         uses: actions/setup-python@v5
