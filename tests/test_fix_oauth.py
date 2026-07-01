@@ -60,7 +60,12 @@ class FakeAsyncHTTP:
 
 
 class FakeSyncHTTP:
-    """Sync ``post`` recorder for token exchange/refresh (registry transport)."""
+    """Sync ``post`` recorder for token exchange/refresh (registry transport).
+
+    Records BOTH body encodings: ``data`` (form, the RFC default) and ``json``
+    (Anthropic's console token endpoint) — the ``json`` param shadows the module
+    only inside this method, which never uses it.
+    """
 
     def __init__(self, payload, status_code=200):
         self.payload = payload
@@ -68,8 +73,10 @@ class FakeSyncHTTP:
         self.calls: list[dict] = []
         self.closed = False
 
-    def post(self, url, data=None, headers=None):
-        self.calls.append({"url": url, "data": dict(data or {})})
+    def post(self, url, data=None, headers=None, json=None):
+        self.calls.append(
+            {"url": url, "data": dict(data or {}), "json": dict(json or {})}
+        )
         return FakeResponse(self.payload, self.status_code)
 
     def close(self):
@@ -256,6 +263,167 @@ def test_has_credential_api_key_presence(engine, secrets):
     registry = _registry(engine, secrets, BoomHTTP())
     registry.set_api_key("anthropic", "sk-x")
     assert registry.has_credential("anthropic") is True
+
+
+# --- Anthropic manual-code flow (redirect-URI fix) ------------------------
+# The public Claude Code client hard-rejects any unregistered redirect_uri
+# ("Redirect URI http://localhost:8787/... is not supported by client"), so the
+# flow now uses the registered console callback + a pasted code#state.
+
+
+_ANTHROPIC_TOKEN_OK = {
+    "access_token": "sk-ant-oat01-fresh",
+    "refresh_token": "sk-ant-ort01-r",
+    "expires_in": 3600,
+}
+
+
+def _anthropic_registry(engine, secrets, http):
+    # No custom OAuth app registered — mimics the platform resolver's behavior
+    # for embedded public clients (empty redirect -> spec.oauth_redirect_uri).
+    return ConnectionRegistry(
+        engine,
+        secrets,
+        http_factory=lambda: http,
+        oauth_app=lambda p: {"client_id": None, "client_secret": None, "redirect_uri": ""},
+    )
+
+
+def test_anthropic_authorize_url_uses_registered_console_redirect(engine, secrets):
+    registry = _anthropic_registry(engine, secrets, FakeSyncHTTP(_ANTHROPIC_TOKEN_OK))
+    out = registry.start_oauth("anthropic")
+    url = out["authorization_url"]
+    assert out["manual_code"] is True
+    assert "redirect_uri=https%3A%2F%2Fconsole.anthropic.com%2Foauth%2Fcode%2Fcallback" in url
+    assert "localhost" not in url  # the daemon callback must NEVER be sent
+    assert "code=true" in url  # display-the-code switch
+    assert "access_type=" not in url  # Google-ism must not leak in
+
+
+def test_anthropic_manual_code_splits_state_and_exchanges_json(engine, secrets):
+    http = FakeSyncHTTP(_ANTHROPIC_TOKEN_OK)
+    registry = _anthropic_registry(engine, secrets, http)
+    state = registry.start_oauth("anthropic")["state"]
+
+    # The user pastes exactly what claude.ai displayed: "<code>#<state>".
+    rec = registry.complete_oauth("anthropic", code=f"the-auth-code#{state}", state="")
+    assert rec.status == "connected"
+
+    sent = http.calls[0]
+    assert sent["url"] == "https://console.anthropic.com/v1/oauth/token"
+    body = sent["json"]  # JSON body — Anthropic's endpoint rejects form encoding
+    assert sent["data"] == {}
+    assert body["grant_type"] == "authorization_code"
+    assert body["code"] == "the-auth-code"  # state split off the pasted blob
+    assert body["state"] == state  # ...and sent as its own field
+    assert body["redirect_uri"] == "https://console.anthropic.com/oauth/code/callback"
+    assert body["client_id"] == "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    assert "client_secret" not in body  # public PKCE client has no secret
+    assert secrets.get_oauth("anthropic_oauth")["access_token"] == "sk-ant-oat01-fresh"
+
+
+def test_anthropic_manual_code_bad_state_still_raises(engine, secrets):
+    registry = _anthropic_registry(engine, secrets, FakeSyncHTTP(_ANTHROPIC_TOKEN_OK))
+    registry.start_oauth("anthropic")
+    with pytest.raises(ValueError):
+        registry.complete_oauth("anthropic", code="code#wrong-state", state="")
+
+
+# --- OpenAI Codex flow: loopback redirect + API-key mint -------------------
+
+
+class SeqHTTP:
+    """Sync ``post`` recorder returning a QUEUE of canned responses (multi-step
+    flows: code exchange, then the key-mint token exchange)."""
+
+    def __init__(self, payloads):
+        self.payloads = list(payloads)
+        self.calls: list[dict] = []
+        self.closed = False
+
+    def post(self, url, data=None, headers=None, json=None):
+        self.calls.append(
+            {"url": url, "data": dict(data or {}), "json": dict(json or {})}
+        )
+        return FakeResponse(self.payloads.pop(0))
+
+    def close(self):
+        self.closed = True
+
+
+def _fake_jwt(claims: dict) -> str:
+    """header.payload.signature — only the (unverified) payload matters here."""
+    import base64
+
+    seg = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
+    return f"e30.{seg}.sig"
+
+
+def _openai_registry(engine, secrets, http):
+    # No custom OAuth app — mimics the platform resolver for embedded clients.
+    return ConnectionRegistry(
+        engine,
+        secrets,
+        http_factory=lambda: http,
+        oauth_app=lambda p: {"client_id": None, "client_secret": None, "redirect_uri": ""},
+    )
+
+
+def test_openai_login_mints_api_key(engine, secrets):
+    id_tok = _fake_jwt({"email": "user@example.com"})
+    http = SeqHTTP(
+        [
+            # 1) code exchange: account token + id_token (can't call the API)
+            {"access_token": "chatgpt-token", "id_token": id_tok,
+             "refresh_token": "r1", "expires_in": 3600},
+            # 2) RFC 8693 token exchange: the minted REAL API key
+            {"access_token": "sk-proj-minted-key"},
+        ]
+    )
+    registry = _openai_registry(engine, secrets, http)
+    state = registry.start_oauth("openai")["state"]
+
+    rec = registry.complete_oauth("openai", code="auth-code", state=state)
+    assert rec.status == "connected"
+    assert rec.account == "user@example.com"  # display label from the id_token
+
+    assert len(http.calls) == 2
+    mint = http.calls[1]["data"]
+    assert mint["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
+    assert mint["requested_token"] == "openai-api-key"
+    assert mint["subject_token"] == id_tok
+    assert mint["subject_token_type"] == "urn:ietf:params:oauth:token-type:id_token"
+
+    # The MINTED KEY is the credential; the account token is NOT persisted
+    # (credential() would prefer it — and it can't run inference).
+    assert secrets.get("openai_api_key") == "sk-proj-minted-key"
+    assert secrets.get_oauth("openai_oauth") is None
+    assert registry.credential("openai") == "sk-proj-minted-key"
+    assert registry.has_credential("openai") is True
+
+
+def test_openai_login_without_id_token_fails_closed(engine, secrets):
+    http = SeqHTTP([{"access_token": "chatgpt-token", "expires_in": 3600}])
+    registry = _openai_registry(engine, secrets, http)
+    state = registry.start_oauth("openai")["state"]
+
+    with pytest.raises(ValueError):
+        registry.complete_oauth("openai", code="c", state=state)
+    # Nothing persisted, nothing connected.
+    assert secrets.get("openai_api_key") is None
+    assert secrets.get_oauth("openai_oauth") is None
+    by_provider = {s["provider"]: s for s in registry.status()}
+    assert by_provider["openai"]["connected"] is False
+
+
+def test_google_keeps_offline_access_params(engine, secrets):
+    # The Google-isms moved from the OAuth client into Google's OWN spec — they
+    # are what make Google return a refresh_token, so they must survive.
+    http = FakeSyncHTTP(_ANTHROPIC_TOKEN_OK)
+    registry = _registry(engine, secrets, http)
+    url = registry.start_oauth("google")["authorization_url"]
+    assert "access_type=offline" in url
+    assert "prompt=consent" in url
 
 
 def test_provider_manager_availability_is_presence_only(engine, secrets):

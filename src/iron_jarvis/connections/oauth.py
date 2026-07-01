@@ -75,7 +75,13 @@ class OAuthClient:
         state: str,
         code_challenge: str,
     ) -> str:
-        """Build the provider's authorization URL for the PKCE auth-code flow."""
+        """Build the provider's authorization URL for the PKCE auth-code flow.
+
+        Provider-specific params come from ``spec.oauth_extra_auth_params``
+        (e.g. Google's ``access_type``/``prompt``, Anthropic's ``code=true``) —
+        NOT hardcoded here, since Google-isms sent to another provider can
+        invalidate the whole authorize request.
+        """
         params = {
             "response_type": "code",
             "client_id": client_id,
@@ -84,9 +90,8 @@ class OAuthClient:
             "state": state,
             "code_challenge": code_challenge,
             "code_challenge_method": "S256",
-            "access_type": "offline",
-            "prompt": "consent",
         }
+        params.update(spec.oauth_extra_auth_params or {})
         return f"{spec.auth_url}?{urlencode(params)}"
 
     @staticmethod
@@ -99,22 +104,58 @@ class OAuthClient:
         client_secret: str,
         redirect_uri: str,
         http,
+        state: str = "",
     ) -> dict:
-        """Exchange an authorization ``code`` for a token dict at ``token_url``."""
+        """Exchange an authorization ``code`` for a token dict at ``token_url``.
+
+        Public PKCE clients have NO secret — an empty ``client_secret`` is
+        omitted from the request (some servers reject a literal empty value).
+        ``state`` is sent when provided (Anthropic's manual-code exchange
+        requires it alongside the code). ``spec.oauth_token_format`` picks the
+        body encoding: form (RFC 6749 default) or JSON (Anthropic's console
+        token endpoint).
+        """
         data = {
             "grant_type": "authorization_code",
             "code": code,
             "code_verifier": code_verifier,
             "client_id": client_id,
-            "client_secret": client_secret,
             "redirect_uri": redirect_uri,
         }
-        resp = http.post(
-            spec.token_url,
-            data=data,
-            headers={"Accept": "application/json"},
-        )
+        if client_secret:
+            data["client_secret"] = client_secret
+        if state:
+            data["state"] = state
+        headers = {"Accept": "application/json"}
+        if spec.oauth_token_format == "json":
+            resp = http.post(spec.token_url, json=data, headers=headers)
+        else:
+            resp = http.post(spec.token_url, data=data, headers=headers)
         return _require_token(resp)
+
+    @staticmethod
+    def mint_api_key(spec: ConnectionSpec, *, id_token: str, client_id: str, http) -> str:
+        """Mint a REAL API key from a login's ``id_token`` (OpenAI Codex flow).
+
+        A ChatGPT-account access token is NOT accepted by api.openai.com — the
+        Codex CLI makes account login usable by exchanging the id_token for an
+        API key via the RFC 8693 token-exchange grant. Returns the minted key
+        (the response's ``access_token``). Raises ``ValueError`` on failure so
+        a broken mint is never silently persisted.
+        """
+        data = {
+            "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+            "client_id": client_id,
+            "requested_token": "openai-api-key",
+            "subject_token": id_token,
+            "subject_token_type": "urn:ietf:params:oauth:token-type:id_token",
+        }
+        headers = {"Accept": "application/json"}
+        if spec.oauth_token_format == "json":
+            resp = http.post(spec.token_url, json=data, headers=headers)
+        else:
+            resp = http.post(spec.token_url, data=data, headers=headers)
+        return _require_token(resp)["access_token"]
 
     @staticmethod
     def refresh(
@@ -130,13 +171,14 @@ class OAuthClient:
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
             "client_id": client_id,
-            "client_secret": client_secret,
         }
-        resp = http.post(
-            spec.token_url,
-            data=data,
-            headers={"Accept": "application/json"},
-        )
+        if client_secret:  # public PKCE clients have no secret — omit, not empty
+            data["client_secret"] = client_secret
+        headers = {"Accept": "application/json"}
+        if spec.oauth_token_format == "json":
+            resp = http.post(spec.token_url, json=data, headers=headers)
+        else:
+            resp = http.post(spec.token_url, data=data, headers=headers)
         # A successful refresh always returns a fresh access_token; treat a
         # non-2xx / {"error": ...} / missing access_token response as a failure
         # rather than silently caching a bad/empty token.

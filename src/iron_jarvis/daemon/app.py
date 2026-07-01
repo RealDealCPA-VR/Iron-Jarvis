@@ -125,6 +125,28 @@ class ConnectionKeyBody(BaseModel):
     key: str
 
 
+class OAuthCompleteBody(BaseModel):
+    """Manual-code OAuth completion: the pasted code may embed state (code#state)."""
+
+    code: str
+    state: str = ""
+
+
+def _graceful_stop() -> None:  # pragma: no cover — exercised via monkeypatch
+    """Ask uvicorn to exit cleanly: SIGTERM -> lifespan shutdown -> exit 0.
+
+    ``raise_signal`` triggers uvicorn's own signal handler (installed by
+    ``uvicorn.run``) so open requests drain and the lifespan shutdown runs —
+    the same path as Ctrl+C. Falls back to a hard exit if signaling fails.
+    """
+    import signal as _signal
+
+    try:
+        _signal.raise_signal(_signal.SIGTERM)
+    except Exception:
+        os._exit(0)
+
+
 class ComputerUseEnable(BaseModel):
     enabled: bool = False
     domain_allowlist: list[str] | None = None
@@ -1232,12 +1254,68 @@ def create_app(project_root: str | None = None) -> FastAPI:
         platform.connections.disconnect(provider)
         return {"provider": provider, "status": "disconnected"}
 
+    # One live loopback listener per provider (see connections/loopback.py) —
+    # restarted on every new flow, self-expiring on TTL.
+    _loopback_servers: dict[str, Any] = {}
+
     @app.get("/oauth/{provider}/start")
     def oauth_start(provider: str) -> dict[str, Any]:
         try:
-            return platform.connections.start_oauth(provider)
+            out = platform.connections.start_oauth(provider)
         except (KeyError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+        # RFC 8252 loopback: embedded public clients registered against a FIXED
+        # localhost port (OpenAI's :1455) need a one-shot listener to catch the
+        # redirect — it completes the flow server-side, then shuts down.
+        loop = platform.connections.loopback_redirect(provider)
+        if loop:
+            from ..connections.loopback import OAuthLoopbackServer
+
+            port, cb_path = loop
+            old = _loopback_servers.pop(provider, None)
+            if old:
+                old.stop()
+
+            def _complete(code: str, state: str, _p: str = provider) -> None:
+                platform.connections.complete_oauth(_p, code=code, state=state)
+                _maybe_autopromote_default(_p)
+
+            srv = OAuthLoopbackServer(
+                port=port, path=cb_path, provider=provider, on_code=_complete
+            )
+            try:
+                srv.start()
+            except OSError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"port {port} is busy (another app — e.g. Codex CLI — is "
+                        "using it). Close it and try again."
+                    ),
+                )
+            _loopback_servers[provider] = srv
+        return out
+
+    @app.post("/oauth/{provider}/complete")
+    def oauth_complete(provider: str, body: OAuthCompleteBody) -> dict[str, Any]:
+        """Manual-code OAuth completion (e.g. Anthropic's paste-the-code flow).
+
+        The provider showed the user an authorization code (``code#state``);
+        the Connections page posts it here instead of a browser redirect ever
+        reaching the daemon.
+        """
+        try:
+            rec = platform.connections.complete_oauth(
+                provider, code=body.code, state=body.state
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        promoted = _maybe_autopromote_default(provider)
+        return {
+            "provider": rec.provider,
+            "status": rec.status,
+            "promoted_default": promoted,
+        }
 
     @app.get("/oauth/{provider}/callback")
     def oauth_callback(provider: str, code: str = "", state: str = "") -> HTMLResponse:
@@ -1275,6 +1353,22 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 "X-Content-Type-Options": "nosniff",
             },
         )
+
+    # --- Graceful shutdown (desktop Quit) ----------------------------------
+
+    @app.post("/shutdown")
+    def shutdown_daemon() -> dict[str, Any]:
+        """Gracefully stop the daemon — used by the desktop app on Quit.
+
+        Token-guarded like every other route. The response returns FIRST (the
+        Timer defers the signal) so the caller sees the ack instead of a reset
+        connection; the desktop app then waits for process exit and only
+        force-kills as a fallback.
+        """
+        import threading as _threading
+
+        _threading.Timer(0.2, _graceful_stop).start()
+        return {"ok": True, "detail": "daemon shutting down"}
 
     # --- Onboarding / first-run / doctor ----------------------------------
 

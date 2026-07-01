@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   PlugZap,
@@ -139,6 +139,42 @@ function ConnectionCard({
   const [error, setError] = useState<string | null>(null);
   const [needsSecrets, setNeedsSecrets] = useState(false);
   const [test, setTest] = useState<ConnectionTestResult | null>(null);
+  // Manual-code OAuth (Anthropic): the provider shows a code to paste back —
+  // completion arrives via POST /oauth/{provider}/complete, not a redirect.
+  const manualCodeFlow = conn.oauth_manual_code === true;
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualCode, setManualCode] = useState("");
+  // Redirect-based flows in the DESKTOP app open the provider in the external
+  // browser — no window.opener, so no postMessage back. Poll until connected.
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(
+    () => () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    },
+    [],
+  );
+
+  function startCompletionPoll() {
+    if (pollRef.current) clearInterval(pollRef.current);
+    const startedAt = Date.now();
+    pollRef.current = setInterval(async () => {
+      try {
+        const d = await get<{ connections: Connection[] }>("/connections");
+        const me = d.connections.find((c) => c.provider === conn.provider);
+        if (me?.connected) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          setTest({ ok: true, detail: `${conn.display_name} connected via OAuth.` });
+          onChanged();
+        } else if (Date.now() - startedAt > 120_000) {
+          if (pollRef.current) clearInterval(pollRef.current); // give up quietly
+          pollRef.current = null;
+        }
+      } catch {
+        /* daemon hiccup — keep polling until the cap */
+      }
+    }, 2000);
+  }
 
   const isMock = conn.provider === "mock";
   // A provider may offer account-login (OAuth), an API key, or BOTH.
@@ -208,12 +244,35 @@ function ConnectionCard({
         "ironjarvis-oauth",
         "width=520,height=640,menubar=no,toolbar=no",
       );
+      // Manual-code providers never redirect back — open the paste box now.
+      // Redirect flows may complete in an external browser — poll for it.
+      if (manualCodeFlow) setManualOpen(true);
+      else startCompletionPoll();
     } catch (err) {
       if (err instanceof ApiError && err.status === 400) {
         setNeedsSecrets(true);
       } else {
         setError(err instanceof ApiError ? err.message : String(err));
       }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /* --- Manual-code OAuth completion (paste the code the provider showed) --- */
+  async function submitManualCode(e: React.FormEvent) {
+    e.preventDefault();
+    if (!manualCode.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await post(`/oauth/${conn.provider}/complete`, { code: manualCode.trim() });
+      setTest({ ok: true, detail: `${conn.display_name} connected via OAuth.` });
+      setManualCode("");
+      setManualOpen(false);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -288,6 +347,44 @@ function ConnectionCard({
               <button onClick={connectOAuth} disabled={busy} className="btn-accent w-full py-1.5 text-xs">
                 {busy ? <LoaderInline label="Starting…" /> : <><ShieldCheck size={14} /> Log in with your account</>}
               </button>
+              {manualOpen && (
+                <form onSubmit={submitManualCode} className="space-y-2">
+                  <input
+                    type="text"
+                    value={manualCode}
+                    onChange={(e) => setManualCode(e.target.value)}
+                    placeholder="Paste the authorization code"
+                    aria-label="Authorization code"
+                    autoComplete="off"
+                    autoFocus
+                    className="field font-mono text-xs"
+                  />
+                  <p className="text-[11px] leading-relaxed text-zinc-500">
+                    After you approve access, {conn.display_name} shows an authorization
+                    code — copy it and paste it here to finish connecting.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="submit"
+                      disabled={busy || !manualCode.trim()}
+                      className="btn-accent flex-1 py-1.5 text-xs"
+                    >
+                      {busy ? <LoaderInline label="Connecting…" /> : <><Plug size={14} /> Complete sign-in</>}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setManualOpen(false);
+                        setManualCode("");
+                        setError(null);
+                      }}
+                      className="btn-ghost py-1.5 text-xs"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              )}
               {conn.oauth_help && (
                 <p className="text-[11px] leading-relaxed text-zinc-500">{conn.oauth_help}</p>
               )}

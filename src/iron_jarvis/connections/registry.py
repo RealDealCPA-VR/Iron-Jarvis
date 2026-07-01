@@ -18,9 +18,11 @@ The registry is transport- and config-injected so it runs fully offline in tests
 
 from __future__ import annotations
 
+import base64
 import json
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 from sqlalchemy import Engine
 from sqlmodel import select
@@ -33,6 +35,21 @@ from .specs import BUILTIN_SPECS, ConnectionSpec
 
 #: ``oauth_app(provider) -> {"client_id", "client_secret", "redirect_uri"}``
 OAuthAppResolver = Callable[[str], dict]
+
+
+def _jwt_claim_email(id_token: str) -> str:
+    """Best-effort ``email`` claim from a JWT, for DISPLAY only.
+
+    No signature verification — the token arrived from the provider over TLS
+    and this value gates nothing (it labels the connection in the UI).
+    """
+    try:
+        payload = id_token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")))
+        return str(claims.get("email") or "")
+    except Exception:  # noqa: BLE001 — display-only, never fail the flow
+        return ""
 
 
 def _default_http_factory():
@@ -111,6 +128,9 @@ class ConnectionRegistry:
                     "supports_oauth": spec.supports_oauth,
                     "supports_api_key": spec.supports_api_key,
                     "oauth_help": spec.oauth_help,
+                    # Manual-code providers (Anthropic) show the user a code to
+                    # paste back instead of redirecting to a local callback.
+                    "oauth_manual_code": spec.oauth_manual_code,
                     "key_help": spec.key_help,
                     "connected": connected,
                     "status": status,
@@ -172,12 +192,19 @@ class ConnectionRegistry:
             url = OAuthClient.authorization_url(
                 spec,
                 client_id=client_id,
-                redirect_uri=app.get("redirect_uri", ""),
+                # A custom-registered app carries its own redirect; the embedded
+                # public client falls back to ITS registered redirect (the OAuth
+                # server hard-rejects any redirect_uri not on the client's list).
+                redirect_uri=app.get("redirect_uri") or spec.oauth_redirect_uri,
                 state=state,
                 code_challenge=challenge,
             )
             self._upsert(provider, method="oauth", status="needs_auth")
-            return {"authorization_url": url, "state": state}
+            return {
+                "authorization_url": url,
+                "state": state,
+                "manual_code": spec.oauth_manual_code,
+            }
 
     def complete_oauth(
         self, provider: str, *, code: str, state: str
@@ -187,39 +214,82 @@ class ConnectionRegistry:
         Looks up the PKCE verifier by ``state`` (raising on an unknown/expired
         state), exchanges the code at the provider's token endpoint, stores the
         token dict in the vault, and marks the provider connected.
+
+        MANUAL-CODE flow (``spec.oauth_manual_code``): the user pastes the code
+        the provider displayed, which embeds the state as ``code#state`` — split
+        it here so the paste-code UI only has to send one field.
         """
         spec = self._require_spec(provider)
+        code = (code or "").strip()
+        if "#" in code and not state:
+            code, _, state = code.partition("#")
+            code, state = code.strip(), state.strip()
         with self._lock:
             pending = self._pending.pop(state, None)
         if pending is None or pending.get("provider") != provider:
             raise ValueError("unknown or expired OAuth state")
         app = self._oauth_app(provider) or {}
+        client_id = app.get("client_id") or spec.oauth_client_id
         http = self._http_factory()
+        minted_key = ""
         try:
             token = OAuthClient.exchange_code(
                 spec,
                 code=code,
                 code_verifier=pending["verifier"],
-                client_id=app.get("client_id") or spec.oauth_client_id,
-                client_secret=app.get("client_secret", ""),
-                redirect_uri=app.get("redirect_uri", ""),
+                client_id=client_id,
+                client_secret=app.get("client_secret") or "",
+                redirect_uri=app.get("redirect_uri") or spec.oauth_redirect_uri,
                 http=http,
+                # Anthropic's manual-code token exchange requires the state field.
+                state=state if spec.oauth_manual_code else "",
             )
+            # Defense-in-depth: never persist a failed/empty exchange as a
+            # credential (that would flip the provider to "connected" but
+            # always fall to mock).
+            token = dict(token or {})
+            if "error" in token or not token.get("access_token"):
+                raise ValueError(
+                    "OAuth token exchange failed: "
+                    + (
+                        token.get("error_description")
+                        or token.get("error")
+                        or "no access_token in token response"
+                    )
+                )
+            # KEY MINT (OpenAI Codex flow): the account token can't call the
+            # inference API — exchange the id_token for a REAL API key while
+            # the HTTP client is still open. Fails closed: no id_token / a
+            # failed mint raises and nothing is persisted.
+            if spec.oauth_key_exchange:
+                id_token = token.get("id_token") or ""
+                if not id_token:
+                    raise ValueError(
+                        "no id_token in the token response — cannot mint an API key"
+                    )
+                minted_key = OAuthClient.mint_api_key(
+                    spec, id_token=id_token, client_id=client_id, http=http
+                )
         finally:
             _close(http)
 
-        # Defense-in-depth: never persist a failed/empty exchange as a credential
-        # (which would flip the provider to "connected" but always fall to mock).
-        token = dict(token or {})
-        if "error" in token or not token.get("access_token"):
-            raise ValueError(
-                "OAuth token exchange failed: "
-                + (
-                    token.get("error_description")
-                    or token.get("error")
-                    or "no access_token in token response"
+        if spec.oauth_key_exchange:
+            # Store the MINTED KEY as the credential (kind api_key) — the OAuth
+            # token itself is deliberately NOT persisted (it can't run
+            # inference, and credential() would prefer it over the key).
+            account = _jwt_claim_email(token.get("id_token") or "")
+            secret_name = spec.key_secret_name or f"{provider}_api_key"
+            with self._lock:
+                self.secrets.set(secret_name, minted_key, kind="api_key")
+                return self._upsert(
+                    provider,
+                    method="oauth",
+                    status="connected",
+                    secret_name=secret_name,
+                    account=account,
+                    scopes_json=json.dumps(list(spec.scopes)),
+                    connected_at=utcnow(),
                 )
-            )
 
         token = self._stamp_expiry(token)
         secret_name = f"{provider}_oauth"
@@ -237,6 +307,26 @@ class ConnectionRegistry:
                 scopes_json=json.dumps(scopes),
                 connected_at=utcnow(),
             )
+
+    def loopback_redirect(self, provider: str) -> tuple[int, str] | None:
+        """``(port, path)`` for a one-shot RFC 8252 loopback listener, or None.
+
+        Only embedded public clients registered against a FIXED localhost port
+        (OpenAI's :1455) need one. Custom user-registered apps redirect to the
+        daemon's own ``/oauth/{provider}/callback``; manual-code providers
+        (Anthropic) never redirect anywhere.
+        """
+        spec = self.get_spec(provider)
+        if spec is None or not spec.supports_oauth or spec.oauth_manual_code:
+            return None
+        app = self._oauth_app(provider) or {}
+        if app.get("client_id") or app.get("redirect_uri"):
+            return None  # custom app — the daemon callback / user redirect handles it
+        redirect = spec.oauth_redirect_uri
+        if not redirect.startswith(("http://localhost", "http://127.0.0.1")):
+            return None
+        parsed = urlparse(redirect)
+        return (parsed.port or 80, parsed.path or "/")
 
     # --- credential resolution -------------------------------------------
 
@@ -299,7 +389,7 @@ class ConnectionRegistry:
                     spec,
                     refresh_token=token["refresh_token"],
                     client_id=app.get("client_id") or spec.oauth_client_id,
-                    client_secret=app.get("client_secret", ""),
+                    client_secret=app.get("client_secret") or "",
                     http=http,
                 )
             except Exception:

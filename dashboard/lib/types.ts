@@ -284,6 +284,8 @@ export interface Connection {
   supports_api_key?: boolean;
   oauth_help?: string;
   key_help?: string;
+  /** Manual-code OAuth (Anthropic): the provider shows a code to paste back. */
+  oauth_manual_code?: boolean;
   connected: boolean;
   status: string; // "connected" | "disconnected" | "needs_auth"
   account: string;

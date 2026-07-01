@@ -174,6 +174,27 @@ def build_platform(
     secrets = SecretsManager(config.home, engine)
     from .connections.probe import live_probe
 
+    def _oauth_app(provider: str) -> dict:
+        """Resolve user-registered OAuth app credentials from the vault.
+
+        The daemon-callback redirect default applies ONLY to a user-registered
+        custom app (which the user registers WITH that callback). Embedded
+        public clients (e.g. Claude Code's) only accept their OWN registered
+        redirects — sending the daemon's localhost callback gets a hard
+        "Redirect URI ... is not supported by client" — so with no custom
+        client id the redirect is left empty and the registry falls back to
+        ``spec.oauth_redirect_uri``.
+        """
+        client_id = secrets.get(f"{provider}_oauth_client_id")
+        redirect = secrets.get(f"{provider}_oauth_redirect_uri") or (
+            f"http://localhost:8787/oauth/{provider}/callback" if client_id else ""
+        )
+        return {
+            "client_id": client_id,
+            "client_secret": secrets.get(f"{provider}_oauth_client_secret"),
+            "redirect_uri": redirect,
+        }
+
     connections = ConnectionRegistry(
         engine,
         secrets,
@@ -181,14 +202,7 @@ def build_platform(
         # Real network reachability for the Connections "Test" button so a bad key
         # is caught at Test, not silently at first session.
         prober=live_probe,
-        oauth_app=lambda provider: {
-            "client_id": secrets.get(f"{provider}_oauth_client_id"),
-            "client_secret": secrets.get(f"{provider}_oauth_client_secret"),
-            "redirect_uri": (
-                secrets.get(f"{provider}_oauth_redirect_uri")
-                or f"http://localhost:8787/oauth/{provider}/callback"
-            ),
-        },
+        oauth_app=_oauth_app,
     )
 
     providers = ProviderManager(
