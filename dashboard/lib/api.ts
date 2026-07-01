@@ -117,7 +117,9 @@ export async function api<T>(path: string, init?: ApiInit): Promise<T> {
   }
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) signalAuth(true);
-    else signalError(true); // a non-auth server error — surface it globally
+    else if (res.status >= 500) signalError(true); // SERVER error — surface globally
+    // (a 4xx like 404/400/422 is a normal per-request condition the page handles —
+    //  never flash a global banner for it)
     let detail = `${res.status} ${res.statusText}`;
     try {
       const body = await res.json();
