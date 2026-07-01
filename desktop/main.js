@@ -26,7 +26,7 @@ const {
   screen,
   nativeImage,
 } = require("electron");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const http = require("http");
@@ -168,12 +168,15 @@ function killChild(child, label) {
   if (!pid) return;
   try {
     if (process.platform === "win32") {
-      // shell:true means `pid` is the cmd.exe wrapper; /T kills the whole tree.
-      spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true });
+      // SYNCHRONOUS: an auto-update must overwrite the running frozen daemon exe
+      // (resources/daemon/ironjarvis.exe) — if we return before the process tree
+      // dies, NSIS hits a file lock and CORRUPTS the upgrade. spawnSync blocks
+      // until taskkill has force-terminated the tree. /T = tree, /F = force.
+      spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true });
     } else {
       child.kill("SIGTERM");
     }
-    console.log(`[${label}] kill signal sent (pid=${pid})`);
+    console.log(`[${label}] killed (pid=${pid})`);
   } catch (err) {
     console.error(`[${label}] failed to kill (pid=${pid}):`, err.message);
   }
@@ -207,6 +210,73 @@ function waitForDashboard(timeoutMs, intervalMs) {
     };
     attempt();
   });
+}
+
+// --- Daemon readiness polling -------------------------------------------
+// A foreign process (or a stale daemon) squatting on port 8787 must NOT be
+// mistaken for a healthy Iron Jarvis: the client URL is baked to 127.0.0.1:8787,
+// so if the wrong thing answers there, the whole app is silently broken. We
+// require a real /health 200 from OUR daemon (bearer token) before proceeding.
+function waitForDaemon(timeoutMs, intervalMs) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve, reject) => {
+    const attempt = () => {
+      const req = http.get(
+        `http://127.0.0.1:${DAEMON_PORT}/health`,
+        { headers: authToken ? { Authorization: `Bearer ${authToken}` } : {} },
+        (res) => {
+          res.resume();
+          if (res.statusCode === 200) resolve();
+          else retry();
+        }
+      );
+      req.on("error", retry);
+      req.setTimeout(2500, () => req.destroy(new Error("probe timeout")));
+      function retry() {
+        if (Date.now() >= deadline) reject(new Error(`daemon /health not 200 within ${timeoutMs}ms`));
+        else setTimeout(attempt, intervalMs);
+      }
+    };
+    attempt();
+  });
+}
+
+// --- Failed-update recovery sentinel ------------------------------------
+// electron-updater/NSIS keep no prior version, so a bad auto-update that won't
+// boot would strand the user. Before installing we drop a marker; each launch
+// bumps its attempt count; a clean boot clears it; repeated boot failures with
+// the marker present trigger a recovery dialog (reinstall the previous release).
+function updatePendingFile() {
+  return path.join(userDataDir, ".update-pending.json");
+}
+function markUpdatePending(version) {
+  try {
+    fs.writeFileSync(updatePendingFile(), JSON.stringify({ version: version || null, attempts: 0 }), "utf8");
+  } catch (err) {
+    console.error("[update] could not write pending marker:", err && err.message);
+  }
+}
+function readAndBumpUpdatePending() {
+  let rec;
+  try {
+    rec = JSON.parse(fs.readFileSync(updatePendingFile(), "utf8"));
+  } catch {
+    return null; // no pending update
+  }
+  rec.attempts = (rec.attempts || 0) + 1;
+  try {
+    fs.writeFileSync(updatePendingFile(), JSON.stringify(rec), "utf8");
+  } catch {
+    /* best effort */
+  }
+  return rec;
+}
+function clearUpdatePending() {
+  try {
+    fs.unlinkSync(updatePendingFile());
+  } catch {
+    /* not present */
+  }
 }
 
 // --- Window-state persistence -------------------------------------------
@@ -438,8 +508,14 @@ function checkForUpdates() {
     });
     if (choice === 0) {
       isQuitting = true; // allow the window to actually close
-      shuttingDown = true; // ensure the daemon/dashboard children are killed
-      autoUpdater.quitAndInstall();
+      // Drop a recovery marker so the NEXT boot can detect a broken update.
+      markUpdatePending(info && info.version);
+      // Kill the daemon+dashboard SYNCHRONOUSLY first (shutdown() now blocks until
+      // the process tree is dead) so NSIS can overwrite the locked frozen exe;
+      // do NOT pre-set shuttingDown (that would make shutdown() early-return and
+      // orphan the children — the very bug that bricks the update).
+      shutdown();
+      autoUpdater.quitAndInstall(false, true);
     }
   });
   autoUpdater
@@ -492,6 +568,9 @@ async function startup() {
   userDataDir = app.getPath("userData"); // writable per-user state dir
   authToken = getOrCreateToken();
   installAuthHeaderInjection();
+  // If a just-applied update exists, bump its attempt count now; a clean boot
+  // below clears it, repeated failures trigger the recovery dialog.
+  const pendingUpdate = readAndBumpUpdatePending();
 
   buildMenu();
   createTray();
@@ -561,26 +640,67 @@ async function startup() {
     });
   }
 
-  // 3) Wait for the dashboard, then swap the splash for the real window.
+  // 3) Health-gate the DAEMON first (guards a foreign process squatting on the
+  //    baked port), then the dashboard, then swap the splash for the real window.
+  try {
+    await waitForDaemon(STARTUP_TIMEOUT_MS, 500);
+  } catch (err) {
+    handleStartupFailure(
+      "Iron Jarvis — daemon did not start",
+      `The Iron Jarvis daemon did not answer on http://127.0.0.1:${DAEMON_PORT} within ` +
+        `${Math.round(STARTUP_TIMEOUT_MS / 1000)}s.\n\n` +
+        `Most common cause: another program is already using port ${DAEMON_PORT}. Close it, ` +
+        "then relaunch. Check the [daemon] logs for details.",
+      pendingUpdate
+    );
+    return;
+  }
   try {
     await waitForDashboard(STARTUP_TIMEOUT_MS, 500);
   } catch (err) {
-    dialog.showErrorBox(
+    handleStartupFailure(
       "Iron Jarvis — dashboard did not start",
       `The dashboard at ${DASHBOARD_PROBE_URL} did not respond within ` +
         `${Math.round(STARTUP_TIMEOUT_MS / 1000)}s.\n\n` +
-        "Most common cause: the dashboard has not been built yet. Build it once:\n\n" +
-        "    cd dashboard\n    pnpm install\n    pnpm build\n\n" +
-        "Then relaunch Iron Jarvis. Check the terminal for [daemon]/[dashboard] logs."
+        (IS_PACKAGED
+          ? "Check the [dashboard] logs for details."
+          : "Most common cause: the dashboard has not been built yet. Build it once:\n\n" +
+            "    cd dashboard\n    pnpm install\n    pnpm build\n\n" +
+            "Then relaunch Iron Jarvis. Check the terminal for [daemon]/[dashboard] logs."),
+      pendingUpdate
     );
-    isQuitting = true;
-    shutdown();
-    app.quit();
     return;
   }
 
+  clearUpdatePending(); // a clean, healthy boot means the current version is good
   createMainWindow();
   checkForUpdates();
+}
+
+// Shared startup-failure path. After a just-applied update that repeatedly fails
+// to boot, offer a concrete recovery (reinstall the previous release) instead of
+// looping on a generic error — electron-updater/NSIS keep no prior version.
+function handleStartupFailure(title, message, pendingUpdate) {
+  if (pendingUpdate && pendingUpdate.attempts >= 2) {
+    const choice = dialog.showMessageBoxSync({
+      type: "error",
+      buttons: ["Open Releases page", "Quit"],
+      defaultId: 0,
+      title: "Iron Jarvis — update failed to start",
+      message: `The update to version ${pendingUpdate.version || "(unknown)"} is not starting.`,
+      detail:
+        "Reinstall the previous working version from the Releases page, then relaunch. " +
+        "Your data (settings, sessions, keys) is untouched.",
+    });
+    if (choice === 0) {
+      shell.openExternal("https://github.com/RealDealCPA-VR/Iron-Jarvis/releases");
+    }
+  } else {
+    dialog.showErrorBox(title, message);
+  }
+  isQuitting = true;
+  shutdown();
+  app.quit();
 }
 
 // --- Global hotkey -------------------------------------------------------

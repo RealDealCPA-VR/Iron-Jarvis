@@ -44,6 +44,26 @@ $Root      = Split-Path -Parent $Desktop
 $Dashboard = Join-Path $Root "dashboard"
 $Packaging = Join-Path $Root "packaging"
 
+# 0) Single-source version -------------------------------------------------
+# electron-updater compares the app version from desktop/package.json against
+# the GitHub release; if it drifts from pyproject/the daemon, the update channel
+# silently no-ops. Stamp package.json from the pushed tag (CI) or pyproject, and
+# on a publish REFUSE a tag that doesn't match pyproject.
+Write-Host "==> [0/4] Syncing version..." -ForegroundColor Cyan
+$PyProject = Join-Path $Root "pyproject.toml"
+$pyVer = (Select-String -Path $PyProject -Pattern '^version\s*=\s*"([^"]+)"' |
+    Select-Object -First 1).Matches.Groups[1].Value
+$tag = $env:GITHUB_REF_NAME
+if ($tag -and $tag -match '^v?(.+)$') { $ver = $Matches[1] } else { $ver = $pyVer }
+if ($Publish -and $ver -ne $pyVer) {
+    throw "version mismatch: release tag '$ver' != pyproject '$pyVer' — tag must match pyproject.toml."
+}
+$PkgJson = Join-Path $Desktop "package.json"
+$pkgText = Get-Content $PkgJson -Raw
+$pkgText = $pkgText -replace '("version":\s*")[^"]+(")', "`${1}$ver`${2}"
+Set-Content -Path $PkgJson -Value $pkgText -Encoding utf8 -NoNewline
+Write-Host "    desktop/package.json version = $ver (pyproject $pyVer)" -ForegroundColor Green
+
 # 1) Freeze the daemon -----------------------------------------------------
 if (-not $SkipDaemon) {
     Write-Host "==> [1/4] Freezing the daemon (PyInstaller)..." -ForegroundColor Cyan

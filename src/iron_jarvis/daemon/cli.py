@@ -45,6 +45,25 @@ def _port_in_use(host: str, port: int) -> bool:
             return False
 
 
+def _is_ironjarvis_daemon(host: str, port: int) -> bool:
+    """True only if the listener on host:port is actually an Iron Jarvis daemon
+    (probes the auth-exempt /health). Distinguishes 'already running' from an
+    UNRELATED program squatting on the baked port — which must fail loudly rather
+    than be mistaken for us (the packaged client is hard-wired to this port)."""
+    import json
+    import urllib.request
+
+    try:
+        req = urllib.request.Request(f"http://{host}:{port}/health")
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            if resp.status != 200:
+                return False
+            data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+        return isinstance(data, dict) and data.get("status") == "ok" and "version" in data
+    except Exception:  # noqa: BLE001 — any failure = not our daemon
+        return False
+
+
 def _home_for(root: str) -> Path:
     """The state home for a root — WITHOUT building the platform, so recovery
     commands work even when the platform/config can't load. Honors IRONJARVIS_HOME
@@ -254,11 +273,21 @@ def serve(
     # whole lifespan startup (auto-backup, rehydration) only to die on bind with a
     # raw WinError 10048. Tell the user plainly and exit cleanly.
     if _port_in_use(host, port):
+        if _is_ironjarvis_daemon(host, port):
+            console.print(
+                f"[yellow]Iron Jarvis is already running[/yellow] on http://{host}:{port} "
+                "— not starting a second instance."
+            )
+            raise typer.Exit(code=0)
+        # A FOREIGN program holds the port — the packaged client is hard-wired to
+        # it, so this is a real failure, not a benign "already running". Exit
+        # non-zero so the desktop shell surfaces a clear error instead of assuming
+        # a healthy daemon came up.
         console.print(
-            f"[yellow]Iron Jarvis is already running[/yellow] on http://{host}:{port} "
-            "— not starting a second instance."
+            f"[red]Port {port} on {host} is in use by another program.[/red] Iron Jarvis "
+            "needs this port — close the other program (or set IJ_DAEMON_PORT) and retry."
         )
-        raise typer.Exit(code=0)
+        raise typer.Exit(code=1)
 
     resolved_root = str(Path(root).resolve())
     os.environ["IRONJARVIS_ROOT"] = resolved_root
