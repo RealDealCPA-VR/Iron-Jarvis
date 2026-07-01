@@ -64,6 +64,81 @@ def init_db(engine: Engine) -> None:
     run_migrations(engine)
 
 
+def quarantine_db(db_path: str | Path, reason: str) -> "Path | None":
+    """Rename a corrupt DB (and drop its -wal/-shm) so a fresh one can take its
+    place. Returns the quarantine path. The corrupt file is KEPT (never deleted)
+    so data can be salvaged / restored later."""
+    from .ids import utcnow
+
+    path = Path(db_path)
+    try:
+        stamp = utcnow().strftime("%Y%m%d-%H%M%S")
+    except Exception:  # noqa: BLE001
+        stamp = "corrupt"
+    dead = path.with_name(path.name + f".corrupt-{stamp}")
+    try:
+        if path.exists():
+            path.replace(dead)
+        for sfx in ("-wal", "-shm"):
+            s = Path(str(path) + sfx)
+            if s.exists():
+                s.unlink()
+    except OSError:
+        return None
+    logger.error(
+        "QUARANTINED corrupt database %s -> %s (%s). Starting with a fresh DB; "
+        "run `ironjarvis repair` to restore your latest backup.",
+        path, dead, reason,
+    )
+    return dead
+
+
+def open_db(db_path: str | Path) -> Engine:
+    """Open + initialize the DB, SELF-HEALING a corrupt one so the daemon ALWAYS
+    boots. If init fails because the file is malformed (header/schema corruption),
+    the corrupt DB is quarantined and a fresh one is created — the daemon comes up
+    (empty) instead of being wedged, and the quarantined file + auto-backups allow
+    recovery via `ironjarvis repair` / `ironjarvis restore`."""
+    from sqlalchemy.exc import DatabaseError, OperationalError
+
+    engine = make_engine(db_path)
+    try:
+        init_db(engine)
+        return engine
+    except (DatabaseError, OperationalError) as exc:
+        if str(db_path) == ":memory:":
+            raise
+        reason = f"init: {type(exc).__name__}: {exc}"
+        engine.dispose()
+        # The exception's traceback pins the failed sqlite3 connection (and thus the
+        # OS file handle), which blocks the rename on Windows — drop it, then GC.
+        exc = None
+        import gc
+
+        gc.collect()
+        quarantine_db(db_path, reason)
+        engine = make_engine(db_path)
+        try:
+            init_db(engine)  # fresh DB
+        except (DatabaseError, OperationalError):
+            # Quarantine couldn't free the path (locked) — last resort: truncate to
+            # 0 bytes (an empty file is a valid new SQLite DB) and retry.
+            engine.dispose()
+            gc.collect()
+            with open(db_path, "wb"):
+                pass
+            for sfx in ("-wal", "-shm"):
+                s = Path(str(db_path) + sfx)
+                try:
+                    if s.exists():
+                        s.unlink()
+                except OSError:
+                    pass
+            engine = make_engine(db_path)
+            init_db(engine)
+        return engine
+
+
 def _ensure_meta(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(

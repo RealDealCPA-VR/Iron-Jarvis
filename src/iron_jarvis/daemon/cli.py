@@ -647,17 +647,26 @@ def backup(
     ),
     root: str = typer.Option("."),
 ) -> None:
-    """Back up the .ironjarvis state (DB + memory + artifacts) to a tar.gz."""
+    """Back up the .ironjarvis state (DB + memory + config) to a tar.gz.
+
+    Does NOT build the platform, so it still works when the app can't boot (a
+    corrupt DB just makes the snapshot fall back to a raw file copy)."""
+    from ..core.db import make_engine
     from ..maintenance import create_backup
 
-    platform = build_platform(root)
+    home = _home_for(root)
+    if not home.exists():
+        console.print(f"[red]no state to back up[/red] at {home}")
+        raise typer.Exit(code=1)
+    engine = None
+    db_path = home / "ironjarvis.db"
+    if db_path.exists():
+        try:
+            engine = make_engine(db_path)
+        except Exception:  # noqa: BLE001 — corrupt DB → snapshot falls back to file copy
+            engine = None
     out_path = Path(out) if out else Path("ironjarvis-backup.tar.gz")
-    out_path, n = create_backup(
-        platform.config.home,
-        out_path,
-        engine=platform.engine,
-        include_keys=include_keys,
-    )
+    out_path, n = create_backup(home, out_path, engine=engine, include_keys=include_keys)
     note = "" if include_keys else " (encryption keys excluded)"
     console.print(f"[green]backed up[/green] {n} files -> {out_path}{note}")
 
@@ -668,20 +677,27 @@ def restore(
     force: bool = typer.Option(False, "--force", help="Overwrite existing state."),
     root: str = typer.Option("."),
 ) -> None:
-    """Restore .ironjarvis state from a backup tar.gz."""
+    """Restore .ironjarvis state from a backup tar.gz.
+
+    Does NOT build the platform (which would open the possibly-corrupt DB and
+    crash) — it extracts the archive over the home directly, so it works exactly
+    when it's most needed: recovering a DB too corrupt to boot."""
     import tarfile
 
-    platform = build_platform(root)
-    home = platform.config.home
+    home = _home_for(root)
     if home.exists() and any(home.iterdir()) and not force:
         console.print("[red]refusing[/red]: .ironjarvis is not empty; pass --force")
         raise typer.Exit(code=1)
     dest = home.parent
-    with tarfile.open(file, "r:gz") as tar:
-        # filter="data" (Python 3.12+) is tarfile's vetted extractor: it rejects
-        # absolute paths, '..' traversal, AND symlink/hardlink escapes — far safer
-        # than a hand-rolled prefix check.
-        tar.extractall(path=dest, filter="data")
+    dest.mkdir(parents=True, exist_ok=True)
+    try:
+        with tarfile.open(file, "r:gz") as tar:
+            # filter="data" (Python 3.12+) rejects absolute paths, '..' traversal,
+            # and symlink/hardlink escapes.
+            tar.extractall(path=dest, filter="data")
+    except (tarfile.TarError, OSError) as exc:
+        console.print(f"[red]restore failed[/red]: cannot read backup {file}: {exc}")
+        raise typer.Exit(code=1)
     console.print(f"[green]restored[/green] from {file} into {home}")
 
 
@@ -821,48 +837,124 @@ def repair(
         else:
             console.print("  [yellow]skip uv sync[/yellow] — not a source checkout")
 
-    # 2. Database integrity + compaction (no platform needed; raw sqlite3).
-    db = _home_for(root) / "ironjarvis.db"
+    # 2. Database integrity + recovery (no platform needed; raw sqlite3).
+    home = _home_for(root)
+    db = home / "ironjarvis.db"
     if not db.exists():
         console.print(f"  [yellow]no database[/yellow] at {db}")
         return
     try:
         con = sqlite3.connect(str(db))
-        integ = con.execute("PRAGMA integrity_check").fetchone()[0]
+        try:
+            integ = con.execute("PRAGMA integrity_check").fetchone()[0]
+        finally:
+            con.close()
+    except Exception as exc:  # noqa: BLE001 — header/not-a-database corruption
+        integ = f"unreadable: {exc}"
+
+    if integ == "ok":
+        con = sqlite3.connect(str(db))
         con.isolation_level = None  # VACUUM cannot run inside a transaction
         con.execute("VACUUM")
         con.close()
-        mark = "[green]OK[/green]" if integ == "ok" else "[red]FAIL[/red]"
-        console.print(f"  {mark} database integrity: {integ}; vacuumed")
-    except Exception as exc:  # noqa: BLE001
-        console.print(f"  [red]database repair failed[/red]: {exc}")
+        console.print("  [green]OK[/green] database integrity: ok; vacuumed")
+        console.print("[green]repair complete[/green]")
+        return
+
+    # Corrupt DB → recover. Prefer restoring the newest backup; else quarantine the
+    # corrupt file and let the next boot create a fresh DB (daemon recovers, data
+    # lost only if there was no backup).
+    console.print(f"  [red]FAIL[/red] database integrity: {integ}")
+    backups_dir = home / "backups"
+    snaps = sorted(
+        backups_dir.glob("ironjarvis-backup-*.tar.gz"), key=lambda p: p.stat().st_mtime, reverse=True
+    ) if backups_dir.exists() else []
+    if snaps:
+        import tarfile
+
+        newest = snaps[0]
+        console.print(f"  restoring newest backup: {newest.name}")
+        from ..core.db import quarantine_db
+
+        quarantine_db(db, "corrupt (pre-restore)")
+        try:
+            with tarfile.open(newest, "r:gz") as tar:
+                tar.extractall(path=home.parent, filter="data")
+            con = sqlite3.connect(str(db))
+            ok = con.execute("PRAGMA integrity_check").fetchone()[0]
+            con.close()
+            if ok == "ok":
+                console.print(f"  [green]OK[/green] restored a healthy DB from {newest.name}")
+                console.print("[green]repair complete[/green] — restart the daemon.")
+                return
+            console.print(f"  [red]restored DB still fails integrity[/red]: {ok}")
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"  [red]restore failed[/red]: {exc}")
         raise typer.Exit(code=1)
-    console.print("[green]repair complete[/green]")
+
+    from ..core.db import quarantine_db
+
+    dead = quarantine_db(db, f"corrupt: {integ}")
+    console.print(
+        f"  [yellow]no backup to restore[/yellow] — quarantined the corrupt DB"
+        + (f" as {dead.name}" if dead else "")
+        + "; the next `ironjarvis serve` will start with a fresh (empty) DB."
+    )
+    console.print("[green]repair complete[/green] — restart the daemon.")
 
 
 @app.command()
 def rollback(
     to: str = typer.Option(
-        "HEAD@{1}", "--to", help="Commit to reset to (default: the commit before the last pull)."
+        "", "--to", help="Commit to reset to (default: the pre-update commit)."
     ),
 ) -> None:
-    """OFFLINE: undo a bad self-update — git reset --hard <to> + uv sync.
+    """OFFLINE: undo a bad self-update — git reset --hard to the pre-update commit.
 
-    Use after an update bricked the checkout. Default ``HEAD@{1}`` is the commit
-    that was current before the most recent ``git pull`` (the self-update)."""
+    Resolves the target in order: --to if given → the ``ironjarvis/pre-update`` tag
+    that self-update writes before it pulls → git's ``ORIG_HEAD`` (set by the pull)
+    → ``HEAD@{1}``. This targets the ACTUAL last-known-good commit rather than a
+    fragile reflog position."""
     repo = _source_repo_root()
     if repo is None:
         console.print("[red]not a source checkout[/red] — nothing to roll back.")
         raise typer.Exit(code=1)
-    from ..core.updates import _subprocess_runner
+    from ..core.updates import _subprocess_runner, _out
 
-    console.print(f"[cyan]Rolling back[/cyan] {repo} -> {to}")
-    reset = _subprocess_runner(["git", "reset", "--hard", to], repo)
-    mark = "[green]OK[/green]" if reset.returncode == 0 else "[red]FAIL[/red]"
-    console.print(f"  {mark} git reset --hard {to} (rc={reset.returncode})")
+    def _resolves(ref: str) -> str | None:
+        res = _subprocess_runner(["git", "rev-parse", "--verify", "--quiet", ref], repo)
+        return _out(res)
+
+    target = to.strip()
+    if not target:
+        for cand in ("ironjarvis/pre-update", "ORIG_HEAD", "HEAD@{1}"):
+            if _resolves(cand):
+                target = cand
+                break
+    resolved = _resolves(target) if target else None
+    if not resolved:
+        console.print(
+            "[red]cannot roll back[/red] — no pre-update commit found "
+            "(no ironjarvis/pre-update tag, ORIG_HEAD, or HEAD@{1}). "
+            "Pass --to <known-good-sha>."
+        )
+        raise typer.Exit(code=1)
+    head = _resolves("HEAD")
+    if resolved == head:
+        console.print(f"[cyan]already at[/cyan] {resolved[:10]} — nothing to roll back.")
+        return
+
+    console.print(f"[cyan]Rolling back[/cyan] {repo}: {target} -> {resolved[:10]}")
+    reset = _subprocess_runner(["git", "reset", "--hard", resolved], repo)
     if reset.returncode != 0:
+        console.print(f"  [red]FAIL[/red] git reset --hard (rc={reset.returncode})")
         console.print(f"      [dim]{(reset.stderr or '').strip()[:400]}[/dim]")
         raise typer.Exit(code=1)
+    # Verify HEAD actually moved to the target before claiming success.
+    if _resolves("HEAD") != resolved:
+        console.print("[red]rollback did not land[/red] — HEAD is not at the target.")
+        raise typer.Exit(code=1)
+    console.print(f"  [green]OK[/green] git reset --hard -> {resolved[:10]}")
     sync = _subprocess_runner(["uv", "sync", "--extra", "dev"], repo)
     console.print(
         f"  {'[green]OK[/green]' if sync.returncode == 0 else '[red]FAIL[/red]'} uv sync"

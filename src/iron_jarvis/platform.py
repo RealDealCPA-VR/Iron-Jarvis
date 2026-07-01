@@ -16,7 +16,7 @@ import httpx
 from sqlalchemy import Engine
 
 from .core.config import Config, load_config
-from .core.db import init_db, make_engine, persist_event
+from .core.db import open_db, persist_event
 from .core.events import EventBus
 from .core.fs_policy import register_protected_root
 from .core.logging import get_logger
@@ -151,8 +151,9 @@ def build_platform(
     config.ensure_dirs()
 
     event_bus = EventBus()
-    engine = make_engine(config.db_path)
-    init_db(engine)
+    # open_db self-heals a corrupt DB (quarantine + fresh) so the daemon always
+    # boots instead of wedging on a malformed file.
+    engine = open_db(config.db_path)
 
     # Observability (§30): persist every event + log it.
     log = get_logger("events")

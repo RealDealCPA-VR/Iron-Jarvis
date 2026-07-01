@@ -203,8 +203,12 @@ def apply_update(
                 "reason": "working tree has uncommitted changes — commit or stash before updating",
             }
 
-        # Record the exact commit we can roll back to if anything below fails.
+        # Record the exact commit we can roll back to if anything below fails, AND
+        # persist it as a durable tag so a LATER manual `ironjarvis rollback` targets
+        # the real pre-update commit (not a fragile reflog position like HEAD@{1}).
         pre_sha = _out(runner(["git", "rev-parse", "HEAD"], repo_root))
+        if pre_sha:
+            runner(["git", "tag", "-f", "ironjarvis/pre-update", pre_sha], repo_root)
 
         # A failed --ff-only pull leaves HEAD unmoved, so no rollback is needed.
         if not step("git pull --ff-only", ["git", "pull", "--ff-only"], repo_root)[0]:

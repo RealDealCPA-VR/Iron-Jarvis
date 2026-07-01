@@ -65,6 +65,10 @@ def create_backup(
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     backups_dir = (home / BACKUP_DIRNAME).resolve()
+    # Disposable per-session scratch — never in a backup (it grows without bound and
+    # would multiply the archive ~keep× ; a backup captures DB + secrets + config +
+    # memory, not regeneratable session workspaces).
+    workspaces_dir = (home / "workspaces").resolve()
     db_path = (home / _DB_NAME).resolve()
     snapshot = _consistent_db_snapshot(engine, home) if (engine is not None and db_path.exists()) else None
 
@@ -78,6 +82,8 @@ def create_backup(
                 rp = p.resolve()
                 if rp in (out_path.resolve(), tmp_out.resolve()) or backups_dir in rp.parents:
                     continue  # never archive the backups themselves
+                if workspaces_dir in rp.parents:
+                    continue  # skip disposable session scratch (unbounded growth)
                 if snapshot is not None and rp == snapshot.resolve():
                     continue  # the snapshot temp is added below, not as itself
                 if snapshot is not None and (
