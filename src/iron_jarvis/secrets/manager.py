@@ -48,12 +48,14 @@ class SecretsManager:
 
     @staticmethod
     def _atomic_write_key(path: Path, data: bytes) -> None:
-        """Write a keyfile crash-safely (unique temp + os.replace)."""
+        """Write a keyfile crash-safely (unique temp + os.replace) with 0600 perms
+        so the Fernet key is never world-readable."""
         import os
         import tempfile
 
         fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
         try:
+            os.chmod(tmp, 0o600)  # owner-only before it becomes the live key
             with os.fdopen(fd, "wb") as fh:
                 fh.write(data)
             os.replace(tmp, path)
@@ -123,7 +125,7 @@ class SecretsManager:
                     "fix). See /diagnostics secrets_key_valid.",
                     key_path,
                 )
-            key_path.write_bytes(Fernet.generate_key())
+            self._atomic_write_key(key_path, Fernet.generate_key())  # 0600, not world-readable
         return Fernet(key_path.read_bytes())
 
     def _has_secret_rows(self) -> bool:

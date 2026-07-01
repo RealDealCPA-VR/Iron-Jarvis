@@ -64,6 +64,14 @@ class SecretSetTool(Tool):
     def __init__(self, manager: SecretsManager) -> None:
         self.manager = manager
 
+    def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        # The secret VALUE must never be persisted to the invocation transcript
+        # (DB at rest / export / backups) — that would defeat the encrypted vault.
+        red = dict(args)
+        if "value" in red:
+            red["value"] = "***REDACTED***"
+        return red
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         record = self.manager.set(
             args["name"],

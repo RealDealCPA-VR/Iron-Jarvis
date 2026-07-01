@@ -106,11 +106,16 @@ class ToolRegistry:
         ok: bool,
         output: str,
     ) -> None:
+        # Redact secret-bearing args BEFORE persisting — args_json is stored in the
+        # DB at rest, returned by /sessions/{id}/export, and included in backups, so
+        # a plaintext credential here would defeat the encrypted vault.
+        tool = self._tools.get(name)
+        safe_args = tool.redact_args(args) if tool is not None else args
         record = ToolInvocation(
             session_id=ctx.session_id,
             agent_run_id=ctx.agent_run_id,
             tool=name,
-            args_json=dumps(args),
+            args_json=dumps(safe_args),
             verdict=mode,
             ok=ok,
             output=output[:4000],

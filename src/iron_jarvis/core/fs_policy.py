@@ -26,27 +26,59 @@ from pathlib import Path
 # platform via :func:`register_protected_root` at boot.
 _PROTECTED_ROOTS: set[Path] = set()
 
+#: Key files that are never agent-readable by NAME, as a belt-and-suspenders
+#: layer independent of directory containment (covers .bak/.new/.tmp siblings).
+_PROTECTED_NAME_PREFIXES = (".secrets.key", ".vault.key")
+
+
+def _canonical(path: str | Path) -> Path:
+    """Resolve a path to a canonical form, FIRST stripping Windows device /
+    extended-length prefixes that otherwise bypass the protected-root check.
+
+    ``\\\\?\\C:\\...`` resolves with an anchor of ``\\\\?\\C:\\`` (not ``C:\\``), so
+    ``is_relative_to`` / string containment against a normal root silently returns
+    False while ``open()`` still honors the path — a real protected-root bypass.
+    Stripping ``\\\\?\\``, ``\\\\.\\`` and ``\\\\?\\UNC\\`` (and forward-slash
+    variants) before ``resolve()`` makes the anchors line up again."""
+    s = os.fspath(path)
+    if os.name == "nt":
+        t = s.replace("/", "\\")
+        low = t.lower()
+        if low.startswith("\\\\?\\unc\\"):
+            t = "\\\\" + t[len("\\\\?\\UNC\\"):]
+        elif low.startswith("\\\\?\\") or low.startswith("\\\\.\\"):
+            t = t[4:]
+        s = t
+    return Path(s).resolve()
+
+
+def _within(target: Path, root: Path) -> bool:
+    """Case-insensitive (on Windows) containment of ``target`` within ``root``."""
+    t = os.path.normcase(str(target))
+    r = os.path.normcase(str(root))
+    return t == r or t.startswith(r + os.sep)
+
 
 def register_protected_root(path: str | Path) -> None:
     """Mark *path* (and everything under it) as never agent-readable."""
     try:
-        _PROTECTED_ROOTS.add(Path(path).resolve())
+        _PROTECTED_ROOTS.add(_canonical(path))
     except Exception:  # pragma: no cover - defensive
         pass
 
 
 def is_protected_path(path: str | Path) -> bool:
-    """True if *path* resolves inside any registered protected root."""
-    if not _PROTECTED_ROOTS:
-        return False
+    """True if *path* resolves inside any registered protected root (or is a key
+    file by name), robust to Windows ``\\\\?\\`` device-prefix and case tricks."""
     try:
-        target = Path(path).resolve()
+        target = _canonical(path)
     except Exception:
         return True  # un-resolvable → treat as protected (fail-closed)
-    for root in _PROTECTED_ROOTS:
-        if target == root or target.is_relative_to(root):
-            return True
-    return False
+    if any(target.name.startswith(p) for p in _PROTECTED_NAME_PREFIXES):
+        return True
+    if not _PROTECTED_ROOTS:
+        return False
+    return any(_within(target, root) for root in _PROTECTED_ROOTS)
 
 
 def fs_path_allowed(path: str | Path) -> bool:
@@ -59,13 +91,12 @@ def fs_path_allowed(path: str | Path) -> bool:
     if not allow:
         return True
     try:
-        target = Path(path).resolve()
+        target = _canonical(path)
     except Exception:
         return False
     for root in (r.strip() for r in allow.split(",") if r.strip()):
         try:
-            rp = Path(root).resolve()
-            if target == rp or target.is_relative_to(rp):
+            if _within(target, _canonical(root)):
                 return True
         except Exception:
             continue

@@ -94,6 +94,18 @@ class RestApiIntegration(Integration):
         if not base_url:
             return {"ok": False, "detail": "missing 'base_url' in config"}
 
+        # SSRF guard: the daemon issues this GET from its trusted loopback host, so
+        # refuse private/loopback/link-local/metadata targets (169.254.169.254 etc.)
+        # unless the config explicitly opts in — the same guard the webhooks use.
+        from ..webhooks.validate import assert_safe_webhook_url
+
+        try:
+            assert_safe_webhook_url(
+                base_url, allow_internal=bool(self.config.get("allow_internal"))
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "detail": f"refused unsafe base_url: {exc}"}
+
         headers: dict[str, str] = {}
         auth_secret = self.config.get("auth_secret")
         token = self.secret(auth_secret) if auth_secret else None

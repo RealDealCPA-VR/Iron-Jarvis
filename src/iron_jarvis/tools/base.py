@@ -54,6 +54,14 @@ class Tool(ABC):
             "input_schema": self.input_schema,
         }
 
+    def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Return a copy of ``args`` safe to PERSIST/return — the tool-invocation
+        transcript is written to the DB at rest, returned by session export, and
+        baked into backups. Override to drop plaintext secrets so a credential
+        never lands unencrypted (which would defeat the Fernet vault). Default:
+        unchanged."""
+        return args
+
     @abstractmethod
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         ...

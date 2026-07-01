@@ -37,6 +37,7 @@ class BrowserVault:
 
         fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
         try:
+            os.chmod(tmp, 0o600)  # keys/blobs owner-only, never world-readable
             with os.fdopen(fd, "wb") as fh:
                 fh.write(data)
             os.replace(tmp, path)
