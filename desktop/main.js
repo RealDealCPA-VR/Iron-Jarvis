@@ -106,16 +106,23 @@ function getOrCreateToken() {
 // localStorage-driven ?token= query, which the preload sets pre-bundle).
 function installAuthHeaderInjection() {
   if (!authToken) return;
-  const filter = {
-    urls: [`*://127.0.0.1:${DAEMON_PORT}/*`, `*://localhost:${DAEMON_PORT}/*`],
-  };
-  session.defaultSession.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
-    const headers = details.requestHeaders || {};
-    if (!headers.Authorization && !headers.authorization) {
-      headers.Authorization = `Bearer ${authToken}`;
-    }
-    callback({ requestHeaders: headers });
-  });
+  // A webRequest match pattern matches ANY port on the host and must NOT contain a
+  // port — Electron 42 hard-rejects `*://127.0.0.1:8787/*` ("Invalid port"), which
+  // previously threw here and aborted startup BEFORE the daemon was ever spawned.
+  const filter = { urls: ["*://127.0.0.1/*", "*://localhost/*"] };
+  try {
+    session.defaultSession.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
+      const headers = details.requestHeaders || {};
+      if (!headers.Authorization && !headers.authorization) {
+        headers.Authorization = `Bearer ${authToken}`;
+      }
+      callback({ requestHeaders: headers });
+    });
+  } catch (err) {
+    // Non-fatal: the renderer also carries the token via localStorage / ?token=.
+    // Never let this stop the app from booting the daemon + dashboard.
+    console.error("[auth] header injection unavailable:", err && err.message);
+  }
 }
 
 // --- Child process helpers ----------------------------------------------
