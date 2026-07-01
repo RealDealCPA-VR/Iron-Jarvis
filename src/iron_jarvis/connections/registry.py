@@ -37,6 +37,25 @@ from .specs import BUILTIN_SPECS, ConnectionSpec
 OAuthAppResolver = Callable[[str], dict]
 
 
+def _account_label(token: dict) -> str:
+    """Human label for the connected account, ALWAYS a string.
+
+    Anthropic returns ``account`` as a DICT ({uuid, email_address}); binding
+    that into the TEXT column crashed the final "mark connected" write AFTER
+    the token was already vaulted (live-hit 2026-07-01). Normalize every shape.
+    """
+    acct = token.get("account")
+    if isinstance(acct, dict):
+        acct = (
+            acct.get("email_address")
+            or acct.get("email")
+            or acct.get("name")
+            or acct.get("uuid")
+            or ""
+        )
+    return str(acct or token.get("email") or "")
+
+
 def _jwt_claim_email(id_token: str) -> str:
     """Best-effort ``email`` claim from a JWT, for DISPLAY only.
 
@@ -295,7 +314,7 @@ class ConnectionRegistry:
         secret_name = f"{provider}_oauth"
         scope = token.get("scope")
         scopes = scope.split() if isinstance(scope, str) and scope else list(spec.scopes)
-        account = token.get("account") or token.get("email") or ""
+        account = _account_label(token)
         with self._lock:  # token write + status row commit together (atomic connect)
             self.secrets.set_oauth(secret_name, token)
             return self._upsert(

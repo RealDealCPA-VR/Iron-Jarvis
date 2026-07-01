@@ -322,6 +322,31 @@ def test_anthropic_manual_code_splits_state_and_exchanges_json(engine, secrets):
     assert secrets.get_oauth("anthropic_oauth")["access_token"] == "sk-ant-oat01-fresh"
 
 
+def test_anthropic_dict_account_is_normalized_not_crashed(engine, secrets):
+    # LIVE-HIT regression (2026-07-01): Anthropic returns account as a DICT
+    # ({uuid, email_address}); binding it into the TEXT account column raised
+    # sqlite3.ProgrammingError on the final "mark connected" write — AFTER the
+    # token was already vaulted, stranding a working token behind needs_auth.
+    token = {
+        "access_token": "sk-ant-oat01-live",
+        "refresh_token": "sk-ant-ort01-r",
+        "expires_in": 3600,
+        "scope": "user:inference user:profile",
+        "account": {
+            "uuid": "254b8f09-81f5-4cdb-bd3d-eb8c49192f42",
+            "email_address": "user@example.com",
+        },
+    }
+    http = FakeSyncHTTP(token)
+    registry = _anthropic_registry(engine, secrets, http)
+    state = registry.start_oauth("anthropic")["state"]
+
+    rec = registry.complete_oauth("anthropic", code=f"code#{state}", state="")
+    assert rec.status == "connected"  # the write no longer crashes
+    assert rec.account == "user@example.com"  # dict normalized to the email
+    assert secrets.get_oauth("anthropic_oauth")["access_token"] == "sk-ant-oat01-live"
+
+
 def test_anthropic_manual_code_bad_state_still_raises(engine, secrets):
     registry = _anthropic_registry(engine, secrets, FakeSyncHTTP(_ANTHROPIC_TOKEN_OK))
     registry.start_oauth("anthropic")
