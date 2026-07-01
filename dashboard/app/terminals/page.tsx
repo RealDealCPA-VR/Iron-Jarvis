@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { Loader2, Plus, SquareTerminal } from "lucide-react";
 import { ApiError, del, get, post } from "@/lib/api";
-import type { Shell, TerminalInfo } from "@/lib/types";
+import type { ModelOption, Shell, TerminalInfo } from "@/lib/types";
 import { Card, OfflineHint, ErrorNote, Spinner, ConfirmButton } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -30,6 +30,7 @@ const TerminalPane = dynamic(
 export default function TerminalsPage() {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   const [shells, setShells] = useState<Shell[]>([]);
+  const [models, setModels] = useState<ModelOption[]>([]); // per-pane AI picker
   const [shell, setShell] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [focusedId, setFocusedId] = useState<string | null>(null);
@@ -47,9 +48,10 @@ export default function TerminalsPage() {
     let cancelled = false;
     (async () => {
       try {
-        const [terms, sh] = await Promise.all([
+        const [terms, sh, mods] = await Promise.all([
           get<{ terminals: TerminalInfo[] }>("/terminals"),
           get<{ shells: Shell[] }>("/terminals/shells").catch(() => ({ shells: [] })),
+          get<{ models: ModelOption[] }>("/models").catch(() => ({ models: [] })),
         ]);
         if (cancelled) return;
         const alive = terms.terminals.filter((t) => t.alive);
@@ -57,6 +59,7 @@ export default function TerminalsPage() {
         setFocusedId(alive[0]?.id ?? null);
         setShells(sh.shells);
         setShell(sh.shells[0]?.name ?? "");
+        setModels(mods.models);
         setOffline(false);
       } catch (e) {
         if (cancelled) return;
@@ -173,6 +176,7 @@ export default function TerminalsPage() {
                       focused={focusedId === t.id}
                       onFocus={() => setFocusedId(t.id)}
                       onClose={() => setPendingClose(t.id)}
+                      models={models}
                     />
                     {pendingClose === t.id && (
                       <div className="absolute inset-0 z-20 grid place-items-center rounded-2xl bg-black/70 backdrop-blur-sm">

@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 from ..core.ids import new_id, utcnow
 from .backend import PtyBackend, default_backend
 from .shells import resolve_shell
+
+#: How much recent output a session retains for the per-terminal AI assist.
+TAIL_MAX_BYTES = 16 * 1024
+
+#: ANSI escape sequences (CSI + OSC) — stripped from the AI-facing tail so the
+#: model reads clean text instead of color/cursor noise.
+_ANSI_RE = re.compile(
+    r"\x1b\[[0-9;?]*[ -/]*[@-~]"  # CSI ... final byte
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC ... BEL / ST
+    r"|\x1b[@-_]"  # lone two-byte escapes
+)
 
 
 class TerminalSession:
@@ -38,6 +50,8 @@ class TerminalSession:
         self.created_at = utcnow()
         self.backend: PtyBackend = backend if backend is not None else default_backend()
         self._started = False
+        # Bounded tail of recent output — context for the per-terminal AI assist.
+        self._tail = bytearray()
 
     def start(self, env: dict | None = None) -> "TerminalSession":
         """Spawn the shell (idempotent)."""
@@ -51,7 +65,17 @@ class TerminalSession:
 
     def read(self, max_bytes: int = 65536) -> bytes:
         """Non-blocking read of pending output (``b""`` if nothing ready)."""
-        return self.backend.read_nonblocking(max_bytes)
+        data = self.backend.read_nonblocking(max_bytes)
+        if data:
+            self._tail += data
+            if len(self._tail) > TAIL_MAX_BYTES:
+                del self._tail[: len(self._tail) - TAIL_MAX_BYTES]
+        return data
+
+    def output_tail(self) -> str:
+        """Recent output as CLEAN text (ANSI stripped) for the AI assist."""
+        text = bytes(self._tail).decode("utf-8", "replace")
+        return _ANSI_RE.sub("", text)
 
     def resize(self, cols: int, rows: int) -> None:
         self.cols = cols

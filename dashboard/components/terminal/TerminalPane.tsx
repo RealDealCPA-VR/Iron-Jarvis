@@ -6,9 +6,20 @@
 
 import { useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
-import { Loader2, Plug, PlugZap, Terminal as TerminalIcon, X } from "lucide-react";
-import { wsUrl } from "@/lib/api";
-import type { TerminalInfo } from "@/lib/types";
+import {
+  CornerDownLeft,
+  Loader2,
+  Play,
+  Plug,
+  PlugZap,
+  Sparkles,
+  Terminal as TerminalIcon,
+  X,
+} from "lucide-react";
+import { ApiError, post, wsUrl } from "@/lib/api";
+import type { ModelOption, TerminalInfo } from "@/lib/types";
+
+type AIResult = { reply: string; command: string; provider: string; model: string };
 
 type ConnState = "connecting" | "open" | "reconnecting" | "closed";
 
@@ -42,14 +53,58 @@ export function TerminalPane({
   focused,
   onFocus,
   onClose,
+  models = [],
 }: {
   info: TerminalInfo;
   focused: boolean;
   onFocus: () => void;
   onClose: () => void;
+  /** Model catalog for the PER-PANE AI assist picker (from /models). */
+  models?: ModelOption[];
 }) {
   const holderRef = useRef<HTMLDivElement | null>(null);
   const [state, setState] = useState<ConnState>("connecting");
+  // The live WS, exposed to the AI bar so "Run" can type into THIS shell.
+  const wsRef = useRef<WebSocket | null>(null);
+
+  // --- Per-pane AI assist (suggest-only; Run is an explicit click) ---------
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiResult, setAiResult] = useState<AIResult | null>(null);
+  const [choice, setChoice] = useState(""); // "" = the app's default model
+
+  async function askAI(e: React.FormEvent) {
+    e.preventDefault();
+    if (!aiPrompt.trim() || aiBusy) return;
+    setAiBusy(true);
+    setAiError(null);
+    setAiResult(null);
+    try {
+      const [provider, model] = choice ? choice.split("::") : ["", ""];
+      const res = await post<AIResult>(`/terminals/${info.id}/ai`, {
+        prompt: aiPrompt.trim(),
+        provider,
+        model,
+      });
+      setAiResult(res);
+    } catch (err) {
+      setAiError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  function runSuggested() {
+    const ws = wsRef.current;
+    if (!aiResult?.command || !ws || ws.readyState !== WebSocket.OPEN) return;
+    // Type the command into the shell WITHOUT submitting it — the user presses
+    // Enter themselves (a last look before anything executes).
+    ws.send(aiResult.command);
+    setAiResult(null);
+    setAiPrompt("");
+  }
 
   useEffect(() => {
     const holder = holderRef.current;
@@ -84,6 +139,7 @@ export function TerminalPane({
 
     const connect = () => {
       ws = new WebSocket(wsUrl(`/terminals/${info.id}/ws`));
+      wsRef.current = ws; // the AI bar's "Run" types through this socket
       ws.binaryType = "arraybuffer";
       ws.onopen = () => {
         attempts = 0;
@@ -158,6 +214,7 @@ export function TerminalPane({
 
     return () => {
       disposed = true;
+      wsRef.current = null;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       window.removeEventListener("resize", onWinResize);
       ro?.disconnect();
@@ -200,6 +257,35 @@ export function TerminalPane({
         >
           {info.cwd}
         </span>
+        {/* Per-pane AI model — THIS terminal's assist uses THIS model. */}
+        <select
+          aria-label="AI model for this terminal"
+          value={choice}
+          onChange={(e) => setChoice(e.target.value)}
+          onMouseDown={(e) => e.stopPropagation()}
+          className="field w-auto max-w-[10rem] shrink-0 py-0.5 text-[10px]"
+        >
+          <option value="">default model</option>
+          {models.map((m) => (
+            <option key={`${m.provider}::${m.model}`} value={`${m.provider}::${m.model}`}>
+              {m.provider} · {m.model}
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setAiOpen((v) => !v);
+          }}
+          title="Ask AI about this terminal"
+          className={`grid h-5 w-5 shrink-0 place-items-center rounded-md transition-colors ${
+            aiOpen
+              ? "bg-accent/15 text-accent"
+              : "text-zinc-500 hover:bg-accent/15 hover:text-accent-soft"
+          }`}
+        >
+          <Sparkles size={13} />
+        </button>
         <ConnPill state={state} />
         <button
           onClick={(e) => {
@@ -212,6 +298,59 @@ export function TerminalPane({
           <X size={13} />
         </button>
       </header>
+
+      {/* AI assist bar — asks about THIS terminal's recent output; the answer's
+          command is only ever TYPED into the shell (never auto-submitted). */}
+      {aiOpen && (
+        <div className="shrink-0 border-b border-white/[0.06] bg-ink-900/40 px-3 py-2">
+          <form onSubmit={askAI} className="flex items-center gap-2">
+            <Sparkles size={12} className="shrink-0 text-accent-soft" />
+            <input
+              type="text"
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              placeholder="Ask about this terminal — e.g. “why did that fail?” or “command to list the 5 biggest files”"
+              aria-label="Ask AI about this terminal"
+              className="field flex-1 py-1 text-[12px]"
+            />
+            <button
+              type="submit"
+              disabled={aiBusy || !aiPrompt.trim()}
+              className="btn-accent shrink-0 px-2 py-1 text-[11px]"
+            >
+              {aiBusy ? <Loader2 size={12} className="animate-spin" /> : <CornerDownLeft size={12} />}
+              Ask
+            </button>
+          </form>
+          {aiError && (
+            <p role="alert" className="mt-1.5 text-[11px] leading-relaxed text-rose-300">
+              {aiError}
+            </p>
+          )}
+          {aiResult && (
+            <div className="mt-1.5 space-y-1.5">
+              <p className="max-h-24 overflow-y-auto whitespace-pre-wrap text-[11px] leading-relaxed text-zinc-300">
+                {aiResult.reply}
+              </p>
+              <div className="flex items-center gap-2">
+                {aiResult.command && (
+                  <button
+                    onClick={runSuggested}
+                    disabled={state !== "open"}
+                    className="btn-accent px-2 py-1 text-[11px]"
+                    title="Types the command into the shell — press Enter yourself to run it"
+                  >
+                    <Play size={11} /> Type it in
+                  </button>
+                )}
+                <span className="text-[10px] text-zinc-600">
+                  {aiResult.provider} · {aiResult.model}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Terminal surface */}
       <div className="relative flex-1 overflow-hidden px-2 py-1.5">

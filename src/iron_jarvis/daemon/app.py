@@ -132,6 +132,28 @@ class OAuthCompleteBody(BaseModel):
     state: str = ""
 
 
+class TerminalAIBody(BaseModel):
+    """Per-terminal AI assist: a question + an optional per-PANE model choice."""
+
+    prompt: str
+    provider: str = ""
+    model: str = ""
+
+
+_CODE_BLOCK_RE = None  # compiled lazily in _first_code_block
+
+
+def _first_code_block(text: str) -> str:
+    """The first fenced code block's content (the AI's suggested command), or ''."""
+    global _CODE_BLOCK_RE
+    if _CODE_BLOCK_RE is None:
+        import re as _re
+
+        _CODE_BLOCK_RE = _re.compile(r"```[a-zA-Z0-9_+-]*\n(.*?)```", _re.DOTALL)
+    m = _CODE_BLOCK_RE.search(text or "")
+    return m.group(1).strip() if m else ""
+
+
 def _graceful_stop() -> None:  # pragma: no cover — exercised via monkeypatch
     """Ask uvicorn to exit cleanly: SIGTERM -> lifespan shutdown -> exit 0.
 
@@ -1536,6 +1558,56 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 await ws.close()
             except Exception:
                 pass
+
+    @app.post("/terminals/{term_id}/ai")
+    async def terminal_ai(term_id: str, body: TerminalAIBody) -> dict[str, Any]:
+        """Per-terminal AI assist with a PER-PANE model choice.
+
+        Sends the terminal's recent (ANSI-stripped) output tail + the user's
+        question to the chosen model and returns the reply plus the first
+        fenced code block as a suggested command. SUGGEST-ONLY: nothing is ever
+        written into the shell here — running the suggestion is an explicit
+        click in the UI, which types it through the normal WebSocket path.
+        """
+        session = platform.terminals.get(term_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="no such terminal")
+        provider = body.provider or platform.config.default_provider
+        model = body.model or platform.config.default_model
+        try:
+            adapter = platform.providers.get(provider, model)
+        except Exception as exc:  # unknown provider / no credential
+            raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+        from ..providers.adapters.base import LLMMessage
+
+        tail = session.output_tail()[-6000:]  # bound the context we bill for
+        shell_os = "Windows" if os.name == "nt" else "POSIX"
+        system = (
+            "You are a terminal assistant embedded in a dashboard shell pane "
+            f"(shell: {session.shell}, OS: {shell_os}). "
+            "Answer the user's question about their recent terminal output "
+            "briefly and concretely. When the best answer is a command to run, "
+            "put EXACTLY ONE command alone in a fenced code block; explain in "
+            "one or two sentences at most. Never invent output."
+        )
+        user = (
+            f"Recent terminal output (truncated):\n\n{tail}\n\n"
+            f"Request: {body.prompt}"
+        )
+        try:
+            resp = await adapter.complete(
+                system=system,
+                messages=[LLMMessage(role="user", content=user)],
+                tools=[],
+            )
+        except Exception as exc:  # provider/network error — surface, don't 500
+            raise HTTPException(status_code=502, detail=str(exc))
+        return {
+            "reply": resp.text,
+            "command": _first_code_block(resp.text),
+            "provider": provider,
+            "model": model,
+        }
 
     # --- Filesystem tree (directory browser for the terminals panel) ------
 
