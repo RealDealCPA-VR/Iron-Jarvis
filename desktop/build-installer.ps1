@@ -27,7 +27,7 @@ param([switch]$SkipDaemon, [switch]$SkipDashboard, [switch]$Publish)
 $ErrorActionPreference = "Stop"
 
 # Run a native command (pnpm/electron-builder) WITHOUT letting its stderr abort
-# the script — Windows PowerShell wraps native stderr in a terminating
+# the script -- Windows PowerShell wraps native stderr in a terminating
 # NativeCommandError under EAP=Stop. We relax EAP for the call and check the
 # real exit code.
 function Invoke-Native {
@@ -56,12 +56,12 @@ $pyVer = (Select-String -Path $PyProject -Pattern '^version\s*=\s*"([^"]+)"' |
 $tag = $env:GITHUB_REF_NAME
 if ($tag -and $tag -match '^v?(.+)$') { $ver = $Matches[1] } else { $ver = $pyVer }
 if ($Publish -and $ver -ne $pyVer) {
-    throw "version mismatch: release tag '$ver' != pyproject '$pyVer' — tag must match pyproject.toml."
+    throw "version mismatch: release tag '$ver' != pyproject '$pyVer' -- tag must match pyproject.toml."
 }
 $PkgJson = Join-Path $Desktop "package.json"
 $pkgText = Get-Content $PkgJson -Raw
 $pkgText = $pkgText -replace '("version":\s*")[^"]+(")', "`${1}$ver`${2}"
-# Write WITHOUT a BOM: Windows PowerShell 5.1's `Set-Content -Encoding utf8`
+# Write WITHOUT a BOM: Windows PowerShell 5.1 Set-Content -Encoding utf8
 # prepends EF BB BF, which corrupts package.json for strict JSON parsers (and the
 # version-drift test). UTF8Encoding($false) = no BOM.
 [IO.File]::WriteAllText($PkgJson, $pkgText, (New-Object Text.UTF8Encoding($false)))
