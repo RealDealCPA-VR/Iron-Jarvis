@@ -102,6 +102,9 @@ let keepRunningPref = null;
 let bootComplete = false;
 // before-quit runs async teardown (graceful daemon stop) exactly once.
 let quitProcessed = false;
+// {version} once an update has finished downloading and is ready to install —
+// surfaced as a clickable notification + a top-of-tray "Restart to update" item.
+let pendingUpdateInfo = null;
 
 // --- Per-install auth token ---------------------------------------------
 // The local daemon is RCE-by-design; a token blocks drive-by requests from any
@@ -803,7 +806,19 @@ function showMainWindow() {
 // Built fresh each time so the "Keep running in background" checkbox reflects
 // the current preference (toggled from either menu or set by the close prompt).
 function buildTrayContextMenu() {
-  const template = [
+  const template = [];
+  // A downloaded update surfaces as a PROMINENT, one-click tray item at the very
+  // top (plus the OS notification) so it's never buried in an easy-to-miss modal.
+  if (pendingUpdateInfo) {
+    template.push(
+      {
+        label: `Restart to update (v${pendingUpdateInfo.version})`,
+        click: () => applyPendingUpdate(),
+      },
+      { type: "separator" }
+    );
+  }
+  template.push(
     { label: "Open Iron Jarvis", click: () => showMainWindow() },
     { type: "separator" },
     {
@@ -811,8 +826,8 @@ function buildTrayContextMenu() {
       type: "checkbox",
       checked: keepRunningPref === true,
       click: (item) => setKeepRunningPref(item.checked),
-    },
-  ];
+    }
+  );
   if (IS_PACKAGED) {
     template.push({
       label: "Start at login",
@@ -882,9 +897,28 @@ function createTray() {
 // electron-updater (publish config in package.json -> build.publish).
 
 // A tray app can stay resident for WEEKS — checking only at boot means never
-// seeing an update. init once (listeners), then re-check every 12h.
-const UPDATE_RECHECK_MS = 12 * 60 * 60 * 1000;
+// seeing an update. init once (listeners), then re-check every 30 minutes so a
+// freshly-pushed release is detected + downloaded promptly (not up to 12h later).
+const UPDATE_RECHECK_MS = 30 * 60 * 1000;
 let _autoUpdater = null;
+
+// Install a downloaded update: kill the daemon+dashboard SYNCHRONOUSLY first
+// (shutdown() blocks until the process tree is dead) so NSIS can overwrite the
+// locked frozen exe — do NOT pre-set shuttingDown (that would make shutdown()
+// early-return and ORPHAN the children, the very bug that bricks the update) —
+// then quit + install + relaunch. Shared by the notification click, the tray
+// item, and the in-app "Restart to update" affordance.
+function applyPendingUpdate() {
+  if (!pendingUpdateInfo || !_autoUpdater) return;
+  isQuitting = true; // allow the window to actually close
+  markUpdatePending(pendingUpdateInfo.version); // recovery marker for a bad update
+  shutdown();
+  try {
+    _autoUpdater.quitAndInstall(false, true);
+  } catch (err) {
+    console.error("[update] quitAndInstall failed:", err && err.message);
+  }
+}
 
 function initUpdater() {
   if (_autoUpdater || !IS_PACKAGED) return _autoUpdater;
@@ -896,36 +930,38 @@ function initUpdater() {
   }
   const autoUpdater = _autoUpdater;
   autoUpdater.autoDownload = true;
+  // Also apply a downloaded update on a REAL Quit (tray/menu Quit) as a bonus.
+  autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.on("error", (err) => console.error("[update] error:", err && err.message));
   autoUpdater.on("update-available", (info) =>
     console.log("[update] available:", info && info.version)
   );
   autoUpdater.on("update-downloaded", (info) => {
-    // Parent the dialog to a visible main window so it doesn't pop up behind
-    // everything; hidden-in-tray falls back to an unparented (top-level) dialog.
-    const opts = {
-      type: "info",
-      buttons: ["Restart now", "Later"],
-      defaultId: 0,
-      title: "Iron Jarvis — update ready",
-      message: `Version ${info && info.version} has been downloaded.`,
-      detail: "Restart to install the update.",
-    };
-    const parent =
-      mainWin && !mainWin.isDestroyed() && mainWin.isVisible() ? mainWin : null;
-    const choice = parent
-      ? dialog.showMessageBoxSync(parent, opts)
-      : dialog.showMessageBoxSync(opts);
-    if (choice === 0) {
-      isQuitting = true; // allow the window to actually close
-      // Drop a recovery marker so the NEXT boot can detect a broken update.
-      markUpdatePending(info && info.version);
-      // Kill the daemon+dashboard SYNCHRONOUSLY first (shutdown() now blocks until
-      // the process tree is dead) so NSIS can overwrite the locked frozen exe;
-      // do NOT pre-set shuttingDown (that would make shutdown() early-return and
-      // orphan the children — the very bug that bricks the update).
-      shutdown();
-      autoUpdater.quitAndInstall(false, true);
+    // Surface a ready update PROMINENTLY but non-intrusively (the user chose
+    // notify + one-click): a clickable OS notification + a top-of-tray
+    // "Restart to update" item. NOTHING restarts until they choose to — so a
+    // running agent session is never interrupted by surprise.
+    pendingUpdateInfo = { version: (info && info.version) || "" };
+    console.log("[update] downloaded + ready:", pendingUpdateInfo.version);
+    refreshTrayMenu(); // inserts the "Restart to update (vX)" item
+    try {
+      if (tray) {
+        tray.setToolTip(
+          `Iron Jarvis — update v${pendingUpdateInfo.version} ready (restart to install)`
+        );
+      }
+    } catch {
+      /* tray may be gone */
+    }
+    try {
+      const note = new Notification({
+        title: `Iron Jarvis v${pendingUpdateInfo.version} is ready`,
+        body: "Click to restart and install now — or do it later from the tray icon.",
+      });
+      note.on("click", () => applyPendingUpdate());
+      note.show();
+    } catch (err) {
+      console.error("[update] notification unavailable:", err && err.message);
     }
   });
   return autoUpdater;
@@ -934,8 +970,11 @@ function initUpdater() {
 function checkForUpdates() {
   const autoUpdater = initUpdater();
   if (!autoUpdater) return;
+  // checkForUpdates (not ...AndNotify): autoDownload fetches it, and our own
+  // update-downloaded handler shows the clickable notification — we don't want
+  // electron-updater's separate default notification competing with ours.
   autoUpdater
-    .checkForUpdatesAndNotify()
+    .checkForUpdates()
     .catch((err) => console.error("[update] check failed:", err && err.message));
 }
 
