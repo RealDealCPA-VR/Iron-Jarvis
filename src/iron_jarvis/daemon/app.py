@@ -1343,6 +1343,25 @@ def create_app(project_root: str | None = None) -> FastAPI:
         _persist_config(["default_provider", "default_model"])
         return True
 
+    @app.post("/connections/{provider}/default")
+    def set_default_provider(provider: str) -> dict[str, Any]:
+        """Make a CONNECTED provider the active default (+ a sensible model).
+
+        One-click from the Connections page so a user with several accounts
+        chooses which one runs their sessions — instead of the confusing
+        auto-promote (which just picked whichever connected first)."""
+        if platform.connections.get_spec(provider) is None:
+            raise HTTPException(status_code=404, detail="unknown provider")
+        if not platform.providers.available(provider):
+            raise HTTPException(
+                status_code=400, detail=f"connect {provider} before making it the default"
+            )
+        cfg = platform.config
+        cfg.default_provider = provider
+        cfg.default_model = _PROMOTE_DEFAULT_MODEL.get(provider, cfg.default_model)
+        _persist_config(["default_provider", "default_model"])
+        return {"default_provider": provider, "default_model": cfg.default_model}
+
     @app.post("/connections/{provider}/key")
     def connect_key(provider: str, body: ConnectionKeyBody) -> dict[str, Any]:
         try:

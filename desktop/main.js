@@ -35,6 +35,7 @@ const {
   screen,
   nativeImage,
   Notification,
+  ipcMain,
 } = require("electron");
 const { spawn, spawnSync } = require("child_process");
 const crypto = require("crypto");
@@ -74,7 +75,8 @@ const DASHBOARD_PROBE_URL = `http://127.0.0.1:${DASHBOARD_PORT}/`;
 // daemon exe) — give them 90s; dev keeps the tight 30s feedback loop.
 const STARTUP_TIMEOUT_MS = IS_PACKAGED ? 90000 : 30000;
 
-const HOTKEY = "CommandOrControl+Shift+J";
+const HOTKEY = "CommandOrControl+Shift+J"; // show/focus the main window
+const SPOTLIGHT_HOTKEY = "CommandOrControl+Shift+Space"; // quick-task overlay
 
 // --hidden: boot straight to the tray with no window (start-at-login mode).
 const START_HIDDEN = process.argv.includes("--hidden");
@@ -85,6 +87,7 @@ let daemonProc = null;
 let dashboardProc = null;
 let loadingWin = null;
 let mainWin = null;
+let spotlightWin = null;
 let tray = null;
 let shuttingDown = false;
 // isQuitting distinguishes "user wants to fully exit" (tear everything down)
@@ -824,6 +827,163 @@ function showMainWindow() {
   }
 }
 
+// --- Spotlight: global quick-task overlay --------------------------------
+// A frameless always-on-top input that opens ANYWHERE in Windows on
+// Ctrl+Shift+Space: type a task, Enter, and an agent runs it in the
+// background — a notification (click -> the session) fires when it's done. This
+// is the daily-driver gesture that makes Iron Jarvis ambient, not an app you
+// have to go open.
+
+// A tiny promise-based HTTP call to OUR daemon from the MAIN process (Node http,
+// so no browser Origin/CORS — the Host/Origin guard passes) with the bearer.
+function daemonRequest(method, apiPath, body) {
+  return new Promise((resolve, reject) => {
+    const payload = body ? Buffer.from(JSON.stringify(body)) : null;
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port: DAEMON_PORT,
+        path: apiPath,
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          ...(payload ? { "Content-Length": payload.length } : {}),
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        },
+      },
+      (res) => {
+        let data = "";
+        res.setEncoding("utf8");
+        res.on("data", (c) => (data += c));
+        res.on("end", () => {
+          let json = null;
+          try {
+            json = data ? JSON.parse(data) : null;
+          } catch {
+            /* non-JSON */
+          }
+          if (res.statusCode >= 200 && res.statusCode < 300) resolve(json);
+          else reject(new Error((json && json.detail) || `HTTP ${res.statusCode}`));
+        });
+      }
+    );
+    req.on("error", reject);
+    req.setTimeout(15000, () => req.destroy(new Error("daemon request timed out")));
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+function createSpotlightWindow() {
+  if (spotlightWin && !spotlightWin.isDestroyed()) return spotlightWin;
+  const { width } = screen.getPrimaryDisplay().workAreaSize;
+  const w = 620;
+  spotlightWin = new BrowserWindow({
+    width: w,
+    height: 150,
+    x: Math.round((width - w) / 2),
+    y: 180,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: true,
+    show: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    fullscreenable: false,
+    backgroundColor: "#00000000",
+    webPreferences: {
+      preload: path.join(__dirname, "spotlight-preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  spotlightWin.setAlwaysOnTop(true, "screen-saver");
+  spotlightWin.loadFile(path.join(__dirname, "spotlight.html"));
+  // Close it if it loses focus (feels like a real spotlight).
+  spotlightWin.on("blur", () => {
+    if (spotlightWin && !spotlightWin.isDestroyed()) spotlightWin.hide();
+  });
+  spotlightWin.on("closed", () => {
+    spotlightWin = null;
+  });
+  return spotlightWin;
+}
+
+function toggleSpotlight() {
+  const win = createSpotlightWindow();
+  if (win.isVisible()) {
+    win.hide();
+    return;
+  }
+  win.show();
+  win.focus();
+  win.webContents.send("spotlight:show"); // clear + focus the input
+}
+
+// Run a spotlight task: start a background session, then poll for completion and
+// fire a clickable "done" notification (click -> open the session).
+async function runSpotlightTask(task) {
+  const created = await daemonRequest("POST", "/sessions", {
+    task,
+    agent_type: "builder",
+    wait: false,
+  });
+  const id = created && created.id;
+  if (!id) throw new Error("could not start the task");
+  // Poll for completion (up to ~15 min) then notify. Best-effort — a failure to
+  // poll/notify never surfaces to the user beyond the "started" they already saw.
+  let elapsed = 0;
+  const timer = setInterval(async () => {
+    elapsed += 4000;
+    let s = null;
+    try {
+      s = await daemonRequest("GET", `/sessions/${id}`, null);
+    } catch {
+      /* transient */
+    }
+    const status = s && s.status;
+    if (status === "completed" || status === "failed" || elapsed > 15 * 60 * 1000) {
+      clearInterval(timer);
+      try {
+        const note = new Notification({
+          title:
+            status === "failed"
+              ? "Task failed"
+              : `Task done: ${String(task).slice(0, 60)}`,
+          body:
+            (s && s.summary ? String(s.summary).slice(0, 140) : "Click to open the result."),
+        });
+        note.on("click", () => {
+          showMainWindow();
+          if (mainWin && !mainWin.isDestroyed()) {
+            mainWin.loadURL(`${DASHBOARD_URL}/sessions/${id}`);
+          }
+        });
+        note.show();
+      } catch {
+        /* notifications unavailable */
+      }
+    }
+  }, 4000);
+  return { ok: true, id };
+}
+
+function installSpotlightIpc() {
+  ipcMain.handle("spotlight:submit", async (_e, task) => {
+    const t = String(task || "").trim();
+    if (!t) return { ok: false, error: "empty task" };
+    try {
+      return await runSpotlightTask(t);
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) };
+    }
+  });
+  ipcMain.on("spotlight:close", () => {
+    if (spotlightWin && !spotlightWin.isDestroyed()) spotlightWin.hide();
+  });
+}
+
 // --- System tray ---------------------------------------------------------
 
 // Built fresh each time so the "Keep running in background" checkbox reflects
@@ -843,6 +1003,7 @@ function buildTrayContextMenu() {
   }
   template.push(
     { label: "Open Iron Jarvis", click: () => showMainWindow() },
+    { label: "Quick task…  (Ctrl+Shift+Space)", click: () => toggleSpotlight() },
     { type: "separator" },
     {
       label: "Keep running in background",
@@ -1073,6 +1234,7 @@ async function startup() {
   const pendingUpdate = readAndBumpUpdatePending();
 
   buildMenu();
+  installSpotlightIpc(); // wire the quick-task overlay's IPC before the hotkey
   createTray();
   if (!START_HIDDEN) createLoadingWindow(); // login-boot goes straight to tray
   registerHotkey();
@@ -1228,6 +1390,13 @@ function handleStartupFailure(title, message, pendingUpdate) {
 // --- Global hotkey -------------------------------------------------------
 
 function registerHotkey() {
+  // The Spotlight quick-task overlay — best-effort; a taken combo just no-ops
+  // (the tray "Quick task…" item + the in-app UI still work).
+  try {
+    globalShortcut.register(SPOTLIGHT_HOTKEY, () => toggleSpotlight());
+  } catch (err) {
+    console.error("[hotkey] spotlight registration error:", err && err.message);
+  }
   try {
     const ok = globalShortcut.register(HOTKEY, () => showMainWindow());
     if (!ok) {

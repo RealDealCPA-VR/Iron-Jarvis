@@ -15,10 +15,13 @@ import {
   Plug,
   CheckCircle2,
   Zap,
+  Star,
+  Check,
   type LucideIcon,
 } from "lucide-react";
 import { get, post, del, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
+import { useDaemon } from "@/lib/daemon";
 import type { Connection, ConnectionTestResult, OAuthStart } from "@/lib/types";
 import {
   Card,
@@ -145,6 +148,12 @@ function ConnectionCard({
   const meta = metaFor(conn.provider);
   const Icon = meta.icon;
 
+  // The active default provider comes from the shared /health poll. Calling
+  // refresh() after switching keeps this card's badge and the topbar model
+  // switcher in lock-step.
+  const { health, refresh: refreshDaemon } = useDaemon();
+  const isDefault = health?.default_provider === conn.provider;
+
   const [open, setOpen] = useState(false);
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
@@ -236,6 +245,21 @@ function ConnectionCard({
     try {
       await del(`/connections/${conn.provider}`);
       onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /* --- Make default -------------------------------------------------------- */
+  async function makeDefault() {
+    setBusy(true);
+    setError(null);
+    try {
+      await post(`/connections/${conn.provider}/default`);
+      onChanged(); // reload the connections list (this card's badge)
+      refreshDaemon(); // re-poll /health so the topbar model switcher updates too
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
     } finally {
@@ -341,6 +365,23 @@ function ConnectionCard({
         </p>
       ) : conn.connected ? (
         <div className="flex items-center gap-2">
+          {isDefault ? (
+            <span
+              title="Sessions use this provider by default"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-300"
+            >
+              <Check size={14} /> Default
+            </span>
+          ) : (
+            <button
+              onClick={makeDefault}
+              disabled={busy}
+              title={`Use ${conn.display_name} for new sessions`}
+              className="btn-ghost py-1.5 text-xs"
+            >
+              {busy ? <LoaderInline label="Setting…" /> : <><Star size={14} /> Make default</>}
+            </button>
+          )}
           <button onClick={runTest} disabled={busy} className="btn-ghost flex-1 py-1.5 text-xs">
             {busy ? <LoaderInline label="Testing…" /> : <><CheckCircle2 size={14} /> Test</>}
           </button>

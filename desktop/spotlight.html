@@ -1,0 +1,90 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Iron Jarvis — Quick task</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  body {
+    font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+    display: grid; place-items: start center; padding-top: 0;
+  }
+  .card {
+    width: 100%; box-sizing: border-box;
+    background: rgba(10, 12, 17, 0.92);
+    border: 1px solid rgba(34, 211, 238, 0.28);
+    border-radius: 16px;
+    box-shadow: 0 20px 60px -12px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.03) inset,
+                0 0 40px -8px rgba(34,211,238,0.25);
+    backdrop-filter: blur(14px);
+    padding: 14px 16px;
+  }
+  .row { display: flex; align-items: center; gap: 12px; }
+  .orb {
+    width: 26px; height: 26px; flex: 0 0 auto; border-radius: 50%;
+    background: radial-gradient(circle at 50% 45%, #67e8f9 0%, #22d3ee 40%, rgba(34,211,238,0.15) 70%, transparent 72%);
+    box-shadow: 0 0 14px 2px rgba(34,211,238,0.55);
+  }
+  input {
+    flex: 1 1 auto; background: transparent; border: none; outline: none;
+    color: #e5e7eb; font-size: 17px; letter-spacing: 0.1px;
+  }
+  input::placeholder { color: #64748b; }
+  .hint {
+    margin-top: 8px; display: flex; justify-content: space-between;
+    font-size: 11px; color: #64748b;
+  }
+  kbd {
+    font-family: inherit; font-size: 10px; color: #94a3b8;
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 5px; padding: 1px 5px;
+  }
+  .status { color: #22d3ee; }
+  .status.err { color: #fb7185; }
+</style>
+<div class="card">
+  <div class="row">
+    <div class="orb" id="orb"></div>
+    <input id="task" autofocus placeholder="Tell Iron Jarvis what to do…" autocomplete="off" spellcheck="false" />
+  </div>
+  <div class="hint">
+    <span id="status">Runs in the background — you'll get a notification when it's done.</span>
+    <span><kbd>Enter</kbd> run &nbsp; <kbd>Esc</kbd> close</span>
+  </div>
+</div>
+<script>
+  const input = document.getElementById("task");
+  const status = document.getElementById("status");
+  function setStatus(text, err) {
+    status.textContent = text;
+    status.className = "status" + (err ? " err" : "");
+  }
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { window.spotlight?.close(); }
+  });
+  input.addEventListener("keydown", async (e) => {
+    if (e.key !== "Enter") return;
+    const task = input.value.trim();
+    if (!task) return;
+    input.disabled = true;
+    setStatus("Starting…");
+    try {
+      const res = await window.spotlight.submit(task);
+      if (res && res.ok) {
+        setStatus("✓ Started — closing…");
+        setTimeout(() => window.spotlight?.close(), 550);
+      } else {
+        setStatus((res && res.error) || "Could not start the task.", true);
+        input.disabled = false;
+      }
+    } catch (err) {
+      setStatus(String(err && err.message || err), true);
+      input.disabled = false;
+    }
+  });
+  // Clear + refocus each time the overlay is shown.
+  window.spotlight?.onShow(() => {
+    input.disabled = false; input.value = "";
+    setStatus("Runs in the background — you'll get a notification when it's done.");
+    setTimeout(() => input.focus(), 30);
+  });
+</script>
