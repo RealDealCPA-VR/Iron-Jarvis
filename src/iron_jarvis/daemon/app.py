@@ -144,6 +144,24 @@ class SkillCreate(BaseModel):
     instructions: str
 
 
+class ChannelCreate(BaseModel):
+    """Add a comm channel. ``config`` carries every field (secret + non-secret);
+    the server routes ``secret`` fields to the vault by name."""
+
+    name: str
+    type: str
+    config: dict[str, Any] = {}
+
+
+class IntegrationCreate(BaseModel):
+    """Add a custom REST integration (bearer token stored in the vault)."""
+
+    name: str
+    base_url: str
+    description: str = ""
+    auth_token: str = ""
+
+
 class TerminalAIBody(BaseModel):
     """Per-terminal AI assist: a question + an optional per-PANE model choice."""
 
@@ -1996,6 +2014,51 @@ def create_app(project_root: str | None = None) -> FastAPI:
     def list_integrations() -> dict[str, Any]:
         return {"integrations": platform.integrations.list_status()}
 
+    @app.post("/integrations")
+    def add_integration(body: IntegrationCreate) -> dict[str, Any]:
+        """Add a custom REST integration (base URL + optional bearer token).
+
+        Registers it live (so it appears + tests immediately), stores the token
+        in the vault, and persists the spec to config so it survives restart.
+        """
+        import re as _re
+
+        from ..integrations.base import IntegrationSpec
+        from ..integrations.builtin import REST_SPEC, RestApiIntegration
+
+        iid = _re.sub(r"[^a-z0-9_]+", "_", (body.name or "").strip().lower()).strip("_")
+        if not iid:
+            raise HTTPException(status_code=400, detail="integration name is required")
+        if not (body.base_url or "").strip():
+            raise HTTPException(status_code=400, detail="base URL is required")
+        if platform.integrations.get_spec(iid) is not None:
+            raise HTTPException(status_code=400, detail=f"'{iid}' already exists")
+
+        platform.integrations.register(
+            IntegrationSpec(
+                id=iid,
+                kind="rest",
+                display_name=body.name.strip(),
+                description=(body.description or "").strip(),
+                required_secrets=[],
+                config_schema=REST_SPEC.config_schema,
+            ),
+            lambda cfg, resolver: RestApiIntegration(cfg, resolver),
+        )
+        config = {"base_url": body.base_url.strip()}
+        if (body.auth_token or "").strip():
+            sname = f"integration_{iid}_token"
+            platform.secrets.set(sname, body.auth_token.strip(), kind="token")
+            config["auth_secret"] = sname
+        platform.integrations.configure(iid, config)
+        platform.integrations.enable(iid, True)
+
+        customs = [c for c in (platform.config.custom_integrations or []) if c.get("id") != iid]
+        customs.append({"id": iid, "name": body.name.strip(), "description": (body.description or "").strip()})
+        platform.config.custom_integrations = customs
+        _persist_config(["custom_integrations"])
+        return {"id": iid, "added": True}
+
     @app.post("/integrations/{iid}/enable")
     def enable_integration(iid: str, body: IntegrationEnableBody) -> dict[str, Any]:
         if platform.integrations.get_spec(iid) is None:
@@ -2018,9 +2081,122 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     # --- Communication channels -------------------------------------------
 
+    #: The user-addable channel types + their form fields. ``secret`` fields are
+    #: stored ENCRYPTED in the vault (referenced by name); the rest live in
+    #: config.comm. This drives the Channels "add" form.
+    _CHANNEL_TYPE_FIELDS = {
+        "slack": [
+            {"key": "webhook_url", "label": "Incoming webhook URL", "secret": False,
+             "help": "Slack → Apps → Incoming Webhooks. Simplest option."},
+        ],
+        "discord": [
+            {"key": "webhook_url", "label": "Webhook URL", "secret": False,
+             "help": "Channel → Edit → Integrations → Webhooks."},
+        ],
+        "telegram": [
+            {"key": "token", "label": "Bot token", "secret": True,
+             "help": "From @BotFather."},
+            {"key": "chat_id", "label": "Chat ID", "secret": False,
+             "help": "Your numeric chat id (message @userinfobot to find it)."},
+        ],
+        "email": [
+            {"key": "host", "label": "SMTP host", "secret": False, "help": "e.g. smtp.gmail.com"},
+            {"key": "port", "label": "SMTP port", "secret": False, "help": "usually 587"},
+            {"key": "username", "label": "Username", "secret": False},
+            {"key": "password", "label": "Password / app password", "secret": True},
+            {"key": "from_addr", "label": "From address", "secret": False},
+            {"key": "to_addr", "label": "Send to", "secret": False},
+        ],
+    }
+
     @app.get("/comm/channels")
     def comm_channels() -> dict[str, Any]:
-        return {"channels": platform.notifier.channels()}
+        # Cross-reference the live channels with their configured type so the UI
+        # can label + delete them (built-in mock/console have no config row).
+        configured = (platform.config.comm or {}).get("channels") or {}
+        out = []
+        for name in platform.notifier.channels():
+            out.append({"name": name, "type": (configured.get(name) or {}).get("type", name)})
+        return {"channels": out}
+
+    @app.get("/comm/channel-types")
+    def comm_channel_types() -> dict[str, Any]:
+        return {
+            "types": [
+                {"type": t, "fields": fields}
+                for t, fields in _CHANNEL_TYPE_FIELDS.items()
+            ]
+        }
+
+    @app.post("/comm/channels")
+    def add_comm_channel(body: ChannelCreate) -> dict[str, Any]:
+        """Add a comm channel (Slack/Discord/Telegram/email).
+
+        Secret fields go to the ENCRYPTED vault (referenced by ``<field>_secret``
+        in the channel config); non-secret fields live in config.comm. The
+        channel is added LIVE (so a Send-test works at once) and persisted so it
+        survives restart.
+        """
+        from ..comm import CHANNEL_TYPES, httpx_get, httpx_post
+
+        ctype = (body.type or "").strip().lower()
+        if ctype not in _CHANNEL_TYPE_FIELDS or ctype not in CHANNEL_TYPES:
+            raise HTTPException(status_code=400, detail=f"unknown channel type '{ctype}'")
+        import re as _re
+
+        name = (body.name or "").strip()
+        if not _re.match(r"^[a-zA-Z][a-zA-Z0-9_-]{0,39}$", name):
+            raise HTTPException(status_code=400, detail="invalid channel name")
+
+        config: dict[str, Any] = {"type": ctype}
+        for field in _CHANNEL_TYPE_FIELDS[ctype]:
+            key = field["key"]
+            value = (body.config or {}).get(key)
+            if value in (None, ""):
+                continue
+            if field.get("secret"):
+                secret_name = f"channel_{name}_{key}"
+                platform.secrets.set(secret_name, str(value), kind="token")
+                config[f"{key}_secret"] = secret_name
+            else:
+                config[key] = value
+
+        # Persist to config.comm.channels (survives restart) + atomic write.
+        comm = dict(platform.config.comm or {})
+        channels = dict(comm.get("channels") or {})
+        channels[name] = config
+        comm["channels"] = channels
+        platform.config.comm = comm
+        _persist_config(["comm"])
+
+        # Add it LIVE so a test message works immediately (no restart needed).
+        channel = CHANNEL_TYPES[ctype](
+            config,
+            http_post=httpx_post,
+            http_get=httpx_get,
+            secret_resolver=platform.secrets.get,
+        )
+        platform.notifier.add_channel(name, channel)
+        return {"name": name, "type": ctype, "added": True}
+
+    @app.delete("/comm/channels/{name}")
+    def delete_comm_channel(name: str) -> dict[str, Any]:
+        removed = platform.notifier.remove_channel(name)
+        comm = dict(platform.config.comm or {})
+        channels = dict(comm.get("channels") or {})
+        cfg = channels.pop(name, None)
+        if cfg is not None:
+            comm["channels"] = channels
+            platform.config.comm = comm
+            _persist_config(["comm"])
+            # Best-effort: drop any vault secrets this channel owned.
+            for key, val in cfg.items():
+                if key.endswith("_secret") and isinstance(val, str):
+                    try:
+                        platform.secrets.delete(val)
+                    except Exception:  # noqa: BLE001
+                        pass
+        return {"name": name, "removed": removed or cfg is not None}
 
     @app.post("/comm/notify")
     def comm_notify(body: NotifyBody) -> dict[str, Any]:

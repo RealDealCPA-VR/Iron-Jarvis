@@ -65,6 +65,13 @@ class Notifier:
         if self.default_channel is None:
             self.default_channel = name
 
+    def remove_channel(self, name: str) -> bool:
+        """Drop a channel; returns whether it existed. Re-points the default."""
+        existed = self._channels.pop(name, None) is not None
+        if self.default_channel == name:
+            self.default_channel = next(iter(sorted(self._channels)), None)
+        return existed
+
     def get(self, name: str) -> Channel | None:
         return self._channels.get(name)
 

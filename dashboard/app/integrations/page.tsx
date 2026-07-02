@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Plug, FlaskConical, Settings2, Power, CheckCircle2 } from "lucide-react";
+import { Plug, FlaskConical, Settings2, Power, CheckCircle2, Plus, Save } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import type { Integration, IntegrationTestResult } from "@/lib/types";
@@ -200,12 +200,169 @@ function IntegrationCard({
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Add a custom REST integration                                              */
+/* -------------------------------------------------------------------------- */
+
+function AddIntegrationForm({
+  onCancel,
+  onAdded,
+}: {
+  onCancel: () => void;
+  onAdded: (name: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [description, setDescription] = useState("");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const canSubmit = name.trim() !== "" && baseUrl.trim() !== "" && !busy;
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || !baseUrl.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const body: {
+        name: string;
+        base_url: string;
+        description?: string;
+        auth_token?: string;
+      } = { name: name.trim(), base_url: baseUrl.trim() };
+      if (description.trim()) body.description = description.trim();
+      if (token.trim()) body.auth_token = token.trim();
+      await post("/integrations", body);
+      // Success: hand the name up so the page can note it, reload and close.
+      onAdded(name.trim());
+    } catch (err) {
+      // Keep the form (and its values) open so the user can fix and retry.
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <form onSubmit={submit} className="space-y-4">
+        <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
+          <Plug size={15} className="text-accent-soft" /> New REST integration
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <label
+              htmlFor="add-integ-name"
+              className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400"
+            >
+              Name
+            </label>
+            <input
+              id="add-integ-name"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Acme CRM"
+              autoComplete="off"
+              autoFocus
+              className="field text-sm"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label
+              htmlFor="add-integ-url"
+              className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400"
+            >
+              Base URL
+            </label>
+            <input
+              id="add-integ-url"
+              type="text"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder="https://api.example.com"
+              autoComplete="off"
+              className="field font-mono text-sm"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <label
+            htmlFor="add-integ-desc"
+            className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400"
+          >
+            Description <span className="text-zinc-600">(optional)</span>
+          </label>
+          <input
+            id="add-integ-desc"
+            type="text"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="What this connector is for"
+            autoComplete="off"
+            className="field text-sm"
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <label
+            htmlFor="add-integ-token"
+            className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400"
+          >
+            Bearer token <span className="text-zinc-600">(optional)</span>
+          </label>
+          <input
+            id="add-integ-token"
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="••••••••"
+            autoComplete="off"
+            className="field font-mono text-sm"
+          />
+          <p className="text-[11px] leading-relaxed text-zinc-500">
+            Stored encrypted in the vault; leave blank for public APIs.
+          </p>
+        </div>
+
+        {error && <ErrorNote>{error}</ErrorNote>}
+
+        <div className="flex items-center gap-2">
+          <button type="submit" disabled={!canSubmit} className="btn-accent px-3 py-1.5 text-xs">
+            {busy ? (
+              <LoaderInline label="Adding…" />
+            ) : (
+              <>
+                <Save size={14} /> Add integration
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="btn-ghost px-3 py-1.5 text-xs"
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
+    </Card>
+  );
+}
+
 export default function IntegrationsPage() {
   const { data, error, loading, reload } = useApi<{ integrations: Integration[] }>(
     "/integrations",
   );
   const offline = error && error.status === 0;
   const integrations = data?.integrations ?? [];
+  const [showAdd, setShowAdd] = useState(false);
+  const [added, setAdded] = useState<string | null>(null);
 
   return (
     <PageShell>
@@ -213,8 +370,51 @@ export default function IntegrationsPage() {
         <PageHeader
           title="Integrations"
           subtitle="Enable, configure and test external connectors. Configure stores connector settings; Test pings the live service."
+          actions={
+            <button
+              onClick={() => {
+                setShowAdd((v) => !v);
+                setAdded(null);
+              }}
+              className="btn-accent px-3 py-1.5 text-xs"
+            >
+              <Plus size={14} /> Add integration
+            </button>
+          }
         />
       </Reveal>
+
+      <Reveal>
+        <p className="flex items-center gap-2 text-xs text-zinc-600">
+          <Plug size={13} />
+          Custom integrations connect any REST API — add a base URL (plus an optional bearer
+          token) and health-check it any time with the Test button.
+        </p>
+      </Reveal>
+
+      {showAdd && (
+        <Reveal>
+          <AddIntegrationForm
+            onCancel={() => setShowAdd(false)}
+            onAdded={(name) => {
+              setShowAdd(false);
+              setAdded(name);
+              reload();
+            }}
+          />
+        </Reveal>
+      )}
+
+      {added && (
+        <Reveal>
+          <SuccessNote>
+            Added{" "}
+            <span className="font-medium text-emerald-100">{added}</span> — find it in the list
+            below and use Test to health-check it.
+          </SuccessNote>
+        </Reveal>
+      )}
+
       {offline && (
         <Reveal>
           <OfflineHint />

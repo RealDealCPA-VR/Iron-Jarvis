@@ -162,6 +162,48 @@ class ConsoleChannel(Channel):
         return {"ok": True, "detail": "printed"}
 
 
+class EmailChannel(Channel):
+    """Email via SMTP.
+
+    config: ``{"host": "smtp.gmail.com", "port": 587, "username": "...",
+    "password_secret": "...", "from_addr": "...", "to_addr": "...",
+    "use_tls": true, "subject": "..."}``. The password is resolved from the vault
+    by name (never stored in config). smtplib is imported lazily inside
+    :meth:`send` so the comm package still imports where it's unavailable and
+    tests that don't send never touch the network.
+    """
+
+    name = "email"
+
+    def send(self, message: str, **kw: Any) -> dict[str, Any]:
+        cfg = self.config
+        host = cfg.get("host")
+        from_addr = cfg.get("from_addr") or cfg.get("username")
+        to_addr = kw.get("to") or cfg.get("to_addr")
+        if not host or not from_addr or not to_addr:
+            return self._fail("email: config needs `host`, `from_addr` and `to_addr`")
+        password = self._resolve_secret(cfg.get("password_secret"))
+        try:
+            import smtplib
+            from email.message import EmailMessage
+
+            msg = EmailMessage()
+            msg["Subject"] = kw.get("subject") or cfg.get("subject") or "Iron Jarvis"
+            msg["From"] = from_addr
+            msg["To"] = to_addr
+            msg.set_content(message)
+            port = int(cfg.get("port") or 587)
+            with smtplib.SMTP(host, port, timeout=15) as smtp:
+                if cfg.get("use_tls", True):
+                    smtp.starttls()
+                if cfg.get("username") and password:
+                    smtp.login(cfg["username"], password)
+                smtp.send_message(msg)
+            return {"ok": True, "detail": f"emailed {to_addr}"}
+        except Exception as exc:  # noqa: BLE001 — surface, never raise to the notifier
+            return self._fail(f"email: {type(exc).__name__}: {exc}")
+
+
 #: registry of channel-type name -> class, for config-driven construction.
 CHANNEL_TYPES: dict[str, type[Channel]] = {
     cls.name: cls
@@ -169,6 +211,7 @@ CHANNEL_TYPES: dict[str, type[Channel]] = {
         SlackChannel,
         DiscordChannel,
         TelegramChannel,
+        EmailChannel,
         MockChannel,
         ConsoleChannel,
     )

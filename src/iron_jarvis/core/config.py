@@ -174,6 +174,10 @@ class Config(BaseModel):
     # work too.
     custom_base_url: str | None = None
     custom_model: str = ""  # default model id for the "custom" provider
+    # User-added REST integrations (id/name/description); re-registered at boot so
+    # they survive a restart. Their per-instance config (base_url, auth secret
+    # NAME) lives in the IntegrationRecord table; the token lives in the vault.
+    custom_integrations: list[dict[str, Any]] = Field(default_factory=list)
     # Self-tuning router (§6 phase-1) — OFF by default. When enabled AND the local
     # Ollama model is configured AND eval/observability shows it has met the
     # quality bar for a task class, the router prefers it for that class. With the

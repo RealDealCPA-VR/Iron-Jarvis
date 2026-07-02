@@ -121,7 +121,9 @@ def test_daemon_boots_with_no_inbound_and_makes_no_channels(tmp_path):
     with TestClient(create_app(str(tmp_path))) as client:
         assert client.get("/health").json()["status"] == "ok"
         # default comm => the mock channel only; nothing inbound-enabled.
-        assert client.get("/comm/channels").json()["channels"] == ["mock"]
+        # (/comm/channels returns {name,type} objects so the UI can label/delete.)
+        channels = client.get("/comm/channels").json()["channels"]
+        assert [c["name"] for c in channels] == ["mock"]
 
 
 # --------------------------------------------------------------------------- #

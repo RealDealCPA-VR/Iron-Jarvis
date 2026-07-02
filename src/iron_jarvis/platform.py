@@ -294,6 +294,27 @@ def build_platform(
     # Integrations framework + built-in generic/mock integrations.
     integrations = IntegrationRegistry(engine)
     register_builtins(integrations)
+    # Re-register user-added REST integrations so they survive restart (their
+    # config + enabled state live in the IntegrationRecord table already).
+    from .integrations.base import IntegrationSpec as _IntgSpec
+    from .integrations.builtin import REST_SPEC as _REST_SPEC
+    from .integrations.builtin import RestApiIntegration as _RestIntg
+
+    for custom in config.custom_integrations or []:
+        cid = str(custom.get("id") or "").strip()
+        if not cid or integrations.get_spec(cid) is not None:
+            continue
+        integrations.register(
+            _IntgSpec(
+                id=cid,
+                kind="rest",
+                display_name=str(custom.get("name") or cid),
+                description=str(custom.get("description") or ""),
+                required_secrets=[],
+                config_schema=_REST_SPEC.config_schema,
+            ),
+            lambda cfg, resolver: _RestIntg(cfg, resolver),
+        )
     for tool in integration_tools(integrations, secrets.get):
         registry.register(tool)
 
