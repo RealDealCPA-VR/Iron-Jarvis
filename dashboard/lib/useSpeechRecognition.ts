@@ -128,12 +128,24 @@ export function useSpeechRecognition(lang = "en-US"): UseSpeechRecognition {
 
     rec.onerror = (ev) => {
       // "no-speech" / "aborted" are benign and self-recover; surface the rest.
-      if (ev.error === "not-allowed" || ev.error === "service-not-allowed") {
+      if (ev.error === "not-allowed") {
         wantRef.current = false;
         setError("Microphone permission denied. Allow mic access and try again.");
       } else if (ev.error === "audio-capture") {
         wantRef.current = false;
-        setError("No microphone found.");
+        setError(
+          "No microphone available. Check that one is connected and enabled in " +
+            "Windows Settings → Privacy → Microphone.",
+        );
+      } else if (ev.error === "service-not-allowed" || ev.error === "network") {
+        // The DESKTOP-APP gap: Electron's Chromium has no built-in cloud speech
+        // service, so recognition can't run even with mic access. Be honest —
+        // this is NOT a mic problem.
+        wantRef.current = false;
+        setError(
+          "Voice recognition isn't available in the desktop app yet. It works in " +
+            "Chrome/Edge; ask to enable built-in transcription for the app.",
+        );
       } else if (ev.error !== "no-speech" && ev.error !== "aborted") {
         setError(ev.message || ev.error || "Speech recognition error.");
       }

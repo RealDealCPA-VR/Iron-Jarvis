@@ -163,6 +163,29 @@ function installAuthHeaderInjection() {
   }
 }
 
+// --- Media (microphone) permission --------------------------------------
+// The dashboard's voice dictation calls getUserMedia. Electron auto-approves
+// permission REQUESTS by default, but with NO permission-CHECK handler a
+// synchronous media check can fail — surfacing to the page as an "audio-capture"
+// error ("No microphone found"). We serve only our own trusted, bundled
+// dashboard over loopback, so grant media (mic/camera) on both the async request
+// AND the sync check. Everything else stays at Electron's default (approved),
+// since the renderer can only ever load the local dashboard (will-navigate
+// keeps it in-origin).
+function installMediaPermissions() {
+  try {
+    const ses = session.defaultSession;
+    // Approve permission REQUESTS (matches Electron's default) AND — the piece
+    // that was missing — the synchronous permission CHECK, which getUserMedia
+    // consults; without it a media check can be denied and the page reports
+    // "No microphone found".
+    ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(true));
+    ses.setPermissionCheckHandler(() => true);
+  } catch (err) {
+    console.error("[permissions] media handler unavailable:", err && err.message);
+  }
+}
+
 // --- Desktop settings: close-to-tray preference -------------------------
 // "Keep running in background" is user-controlled and persisted next to the
 // other per-install state (token.txt, window-state.json). An absent/invalid
@@ -1044,6 +1067,7 @@ async function startup() {
   loadDesktopSettings(); // load the close-to-tray preference before menus/tray
   authToken = getOrCreateToken();
   installAuthHeaderInjection();
+  installMediaPermissions(); // let the dashboard's voice dictation use the mic
   // If a just-applied update exists, bump its attempt count now; a clean boot
   // below clears it, repeated failures trigger the recovery dialog.
   const pendingUpdate = readAndBumpUpdatePending();
