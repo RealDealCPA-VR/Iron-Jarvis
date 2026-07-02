@@ -107,6 +107,25 @@ for pkg in ("pypdf", "docx", "openpyxl", "pptx", "fpdf", "PIL"):
 # --- Windows terminals (PTY) — lazily `import winpty` at runtime -------------
 if os.name == "nt":
     hiddenimports += collect_submodules("winpty")
+    # CRITICAL: pywinpty's ConPTY backend spawns the shell inside a pseudo-
+    # console HOSTED BY OpenConsole.exe; the legacy backend needs
+    # winpty-agent.exe. collect_submodules/collect_all pull in winpty's .py +
+    # .dll + .pyd but NOT these .exe helpers, so a frozen daemon creates a
+    # pseudoconsole with no host and EVERY shell dies instantly (~1s) →
+    # the dashboard terminal shows "session closed" and no work can be done.
+    # Bundle the .exe helpers next to winpty's DLLs (its package dir, which is
+    # _internal/winpty/ at runtime — where pywinpty looks for them).
+    try:
+        import winpty as _wp
+
+        _wpdir = os.path.dirname(_wp.__file__)
+        for _f in ("OpenConsole.exe", "winpty-agent.exe", "winpty.dll", "conpty.dll"):
+            _p = os.path.join(_wpdir, _f)
+            if os.path.exists(_p):
+                datas.append((_p, "winpty"))
+                print(f"[ironjarvis.spec] bundled winpty helper: {_f}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ironjarvis.spec] WARN could not bundle winpty helpers: {exc}")
 
 # --- Excludes: heavy OPTIONAL deps the daemon must boot WITHOUT --------------
 # All are imported lazily (only when a real key / opt-in feature is used), so

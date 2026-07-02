@@ -210,6 +210,8 @@ export interface TerminalInfo {
   rows: number;
   alive: boolean;
   exit_code: number | null;
+  /** True when running on a pipe-based shell (no full TTY) — fallback path. */
+  degraded?: boolean;
   created_at: string;
 }
 

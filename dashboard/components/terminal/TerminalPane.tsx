@@ -298,6 +298,14 @@ export function TerminalPane({
         >
           <Sparkles size={13} />
         </button>
+        {info.degraded && (
+          <span
+            title="Basic shell (no full TTY) — commands run, but interactive TUI apps may not render. The full terminal returns after the next app update."
+            className="inline-flex shrink-0 items-center rounded-full border border-amber-500/25 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-medium text-amber-300"
+          >
+            basic
+          </span>
+        )}
         <ConnPill state={state} />
         <button
           onClick={(e) => {

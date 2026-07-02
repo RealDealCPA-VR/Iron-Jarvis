@@ -52,6 +52,10 @@ class TerminalSession:
         self._started = False
         # Bounded tail of recent output — context for the per-terminal AI assist.
         self._tail = bytearray()
+        # True when we fell back to a pipe-based shell (no real TTY) because the
+        # PTY backend spawned a shell that died immediately (e.g. a frozen build
+        # missing the ConPTY host exe). Commands still run; fancy TTY apps don't.
+        self.degraded = False
 
     def start(self, env: dict | None = None) -> "TerminalSession":
         """Spawn the shell (idempotent)."""
@@ -103,5 +107,6 @@ class TerminalSession:
             "rows": self.rows,
             "alive": self.alive,
             "exit_code": self.exit_code,
+            "degraded": self.degraded,
             "created_at": self.created_at.isoformat(),
         }

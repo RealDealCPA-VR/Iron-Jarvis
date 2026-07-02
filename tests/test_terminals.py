@@ -166,3 +166,47 @@ def test_fake_backend_read_respects_max_bytes():
     assert s.read(max_bytes=3) == b"abc"
     assert s.read(max_bytes=3) == b"def"
     assert s.read() == b"\n"
+
+
+# --- dead-PTY -> pipe fallback (frozen build missing the ConPTY host exe) -------
+
+
+class _DyingBackend(FakeBackend):
+    """Spawns but reports dead immediately — the ConPTY-host-missing failure."""
+
+    def is_alive(self) -> bool:
+        return False
+
+
+def test_dead_pty_falls_back_to_pipe_and_caches(monkeypatch):
+    import iron_jarvis.terminals.manager as mgr
+    import iron_jarvis.terminals.session as sess
+
+    monkeypatch.setattr(mgr, "_PTY_VERIFY_SECONDS", 0.1)
+    monkeypatch.setattr(sess, "default_backend", lambda: _DyingBackend())
+    # The pipe fallback path must NOT spawn a real process in the test.
+    monkeypatch.setattr(mgr, "PipeBackend", FakeBackend)
+
+    m = TerminalManager()
+    s = m.create()  # backend=None -> verify -> dead -> pipe fallback
+    assert s.degraded is True
+    assert m._pty_ok is False
+    assert s.info()["degraded"] is True
+
+    # The verdict is cached: the next create goes straight to pipe (no re-verify).
+    s2 = m.create()
+    assert s2.degraded is True
+
+
+def test_healthy_pty_verified_once_no_degrade(monkeypatch):
+    import iron_jarvis.terminals.manager as mgr
+    import iron_jarvis.terminals.session as sess
+
+    monkeypatch.setattr(mgr, "_PTY_VERIFY_SECONDS", 0.15)
+    monkeypatch.setattr(sess, "default_backend", lambda: FakeBackend())  # stays alive
+
+    m = TerminalManager()
+    s = m.create()
+    assert s.degraded is False
+    assert m._pty_ok is True
+    assert s.info()["degraded"] is False
