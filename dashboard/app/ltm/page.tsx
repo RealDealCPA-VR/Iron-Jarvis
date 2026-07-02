@@ -37,9 +37,10 @@ const SOURCE_TONE: Record<string, Tone> = {
   brain: "cyan",
   obsidian: "violet",
   notion: "slate",
+  ssh: "violet",
 };
 
-type Kind = "markdown" | "notion";
+type Kind = "markdown" | "notion" | "ssh";
 
 export default function LtmPage() {
   const {
@@ -75,6 +76,11 @@ export default function LtmPage() {
   const [srcPath, setSrcPath] = useState("");
   const [srcDb, setSrcDb] = useState("");
   const [srcToken, setSrcToken] = useState("");
+  // SSH (remote) source fields
+  const [srcHost, setSrcHost] = useState("");
+  const [srcPort, setSrcPort] = useState("22");
+  const [srcUser, setSrcUser] = useState("");
+  const [srcPassword, setSrcPassword] = useState("");
   const [srcBusy, setSrcBusy] = useState(false);
   const [srcError, setSrcError] = useState<string | null>(null);
   const [srcOk, setSrcOk] = useState<string | null>(null);
@@ -147,6 +153,10 @@ export default function LtmPage() {
       setSrcError("A Notion source needs a database id.");
       return;
     }
+    if (srcKind === "ssh" && (!srcHost.trim() || !srcPath.trim())) {
+      setSrcError("An SSH source needs a host and a remote folder path.");
+      return;
+    }
     setSrcBusy(true);
     setSrcError(null);
     setSrcOk(null);
@@ -154,15 +164,24 @@ export default function LtmPage() {
       await post("/ltm/sources", {
         name: srcName.trim(),
         kind: srcKind,
-        path: srcKind === "markdown" ? srcPath.trim() : "",
+        // `path` is a LOCAL folder for markdown, the REMOTE folder for ssh.
+        path: srcKind === "markdown" || srcKind === "ssh" ? srcPath.trim() : "",
         database_id: srcKind === "notion" ? srcDb.trim() : "",
         token_secret: srcKind === "notion" ? srcToken.trim() : "",
+        host: srcKind === "ssh" ? srcHost.trim() : "",
+        port: srcKind === "ssh" ? Number(srcPort) || 22 : 22,
+        username: srcKind === "ssh" ? srcUser.trim() : "",
+        password: srcKind === "ssh" ? srcPassword : "",
       });
       setSrcOk(`Source "${srcName.trim()}" added.`);
       setSrcName("");
       setSrcPath("");
       setSrcDb("");
       setSrcToken("");
+      setSrcHost("");
+      setSrcPort("22");
+      setSrcUser("");
+      setSrcPassword("");
       setSrcKind("markdown");
       reloadSources();
     } catch (err) {
@@ -385,6 +404,7 @@ export default function LtmPage() {
                     className="field"
                   >
                     <option value="markdown">Markdown folder</option>
+                    <option value="ssh">Remote folder (SSH)</option>
                     <option value="notion">Notion database</option>
                   </select>
                 </div>
@@ -414,6 +434,72 @@ export default function LtmPage() {
                       A local folder of .md files to index — type a path or Browse to pick one.
                     </div>
                   </div>
+                ) : srcKind === "ssh" ? (
+                  <>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="col-span-2">
+                        <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                          Host
+                        </label>
+                        <input
+                          value={srcHost}
+                          onChange={(e) => setSrcHost(e.target.value)}
+                          placeholder="nas.local"
+                          className="field font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                          Port
+                        </label>
+                        <input
+                          value={srcPort}
+                          onChange={(e) => setSrcPort(e.target.value)}
+                          placeholder="22"
+                          className="field font-mono"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        Username
+                      </label>
+                      <input
+                        value={srcUser}
+                        onChange={(e) => setSrcUser(e.target.value)}
+                        placeholder="me"
+                        className="field font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        Remote folder path
+                      </label>
+                      <input
+                        value={srcPath}
+                        onChange={(e) => setSrcPath(e.target.value)}
+                        placeholder="/home/me/notes"
+                        className="field font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        Password
+                      </label>
+                      <input
+                        type="password"
+                        value={srcPassword}
+                        onChange={(e) => setSrcPassword(e.target.value)}
+                        placeholder="SSH password"
+                        autoComplete="off"
+                        className="field"
+                      />
+                      <div className="mt-1 text-[11px] text-zinc-600">
+                        Stored encrypted in the vault. A remote folder of .md notes,
+                        searched + appended to over SSH.
+                      </div>
+                    </div>
+                  </>
                 ) : (
                   <>
                     <div>
@@ -476,12 +562,17 @@ export default function LtmPage() {
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-semibold text-zinc-100">{s.name}</span>
-                          <Badge value={s.kind} tone={s.kind === "notion" ? "slate" : "cyan"} />
+                          <Badge
+                            value={s.kind}
+                            tone={s.kind === "notion" ? "slate" : s.kind === "ssh" ? "violet" : "cyan"}
+                          />
                         </div>
                         <div className="mt-0.5 truncate font-mono text-[11px] text-zinc-500">
                           {s.kind === "notion"
                             ? s.database_id || "—"
-                            : s.path || "—"}
+                            : s.kind === "ssh"
+                              ? `${s.username ? s.username + "@" : ""}${s.host || "—"}:${s.path || ""}`
+                              : s.path || "—"}
                         </div>
                       </div>
                       <ConfirmButton

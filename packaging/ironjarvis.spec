@@ -98,6 +98,13 @@ hiddenimports += [
 hiddenimports += collect_submodules("websockets")
 hiddenimports += ["httptools"]  # optional fast HTTP parser (uvicorn standard)
 
+# --- SSH/SFTP (lazily imported by the remote LTM source) --------------------
+# paramiko pulls native crypto helpers (bcrypt, pynacl -> _sodium, cffi); collect
+# all three so `import paramiko` works in the FROZEN daemon (it's imported lazily
+# only when a remote-SSH memory source is actually used).
+for pkg in ("paramiko", "bcrypt", "nacl"):
+    _collect(pkg)
+
 # --- Document libraries (lazily imported in iron_jarvis.documents) ----------
 # Included so doc read/write tools work out of the box. They add modest size;
 # drop any you don't need from this tuple to shrink the bundle.

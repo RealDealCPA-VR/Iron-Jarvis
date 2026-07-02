@@ -307,10 +307,16 @@ class LTMAppend(BaseModel):
 
 class LTMSourceBody(BaseModel):
     name: str
-    kind: str = "markdown"  # markdown | notion
-    path: str = ""
+    kind: str = "markdown"  # markdown | notion | ssh
+    path: str = ""  # local folder (markdown) OR remote path (ssh)
     database_id: str = ""
-    token_secret: str = ""
+    token_secret: str = ""  # existing vault secret name (notion/ssh), if reusing one
+    # SSH (remote) source:
+    host: str = ""
+    port: int = 22
+    username: str = ""
+    key_path: str = ""  # local private-key file (alternative to a password)
+    password: str = ""  # a NEW SSH password to store in the vault (write-only)
 
 
 class AgentCreate(BaseModel):
@@ -2458,16 +2464,28 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     @app.post("/ltm/sources")
     def add_ltm_source(body: LTMSourceBody) -> dict[str, Any]:
+        import re
+
         from ..ltm.sources import CustomSourceStore, connector_from_record
 
         store = CustomSourceStore(platform.engine)
+        # A NEW SSH password is stored in the ENCRYPTED vault (never in the DB);
+        # its secret name is what gets persisted on the record.
+        token_secret = body.token_secret
+        if body.kind == "ssh" and body.password.strip():
+            token_secret = f"ltm_{re.sub(r'[^a-zA-Z0-9_]+', '_', body.name.strip().lower())}_ssh"
+            platform.secrets.set(token_secret, body.password.strip(), kind="token")
         try:
             rec = store.add(
                 body.name,
                 body.kind,
                 path=body.path,
                 database_id=body.database_id,
-                token_secret=body.token_secret,
+                token_secret=token_secret,
+                host=body.host,
+                port=body.port,
+                username=body.username,
+                key_path=body.key_path,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))

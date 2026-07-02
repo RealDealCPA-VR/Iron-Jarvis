@@ -30,6 +30,7 @@ from ..core.ids import new_id, utcnow
 from .base import LTMConnector
 from .brain import MarkdownBrainConnector
 from .notion import NotionConnector
+from .ssh import SSHBrainConnector
 
 if TYPE_CHECKING:  # avoid heavy imports at module load
     from sqlalchemy import Engine
@@ -37,7 +38,7 @@ if TYPE_CHECKING:  # avoid heavy imports at module load
     from .manager import LongTermMemory
 
 #: The kinds of custom source a user may register.
-SOURCE_KINDS: tuple[str, ...] = ("markdown", "notion")
+SOURCE_KINDS: tuple[str, ...] = ("markdown", "notion", "ssh")
 
 
 class LTMSourceRecord(SQLModel, table=True):
@@ -45,10 +46,15 @@ class LTMSourceRecord(SQLModel, table=True):
 
     id: str = Field(default_factory=lambda: new_id("ltmsrc"), primary_key=True)
     name: str = Field(index=True, unique=True)
-    kind: str = "markdown"  # markdown | notion
-    path: str = ""  # filesystem path (markdown sources)
+    kind: str = "markdown"  # markdown | notion | ssh
+    path: str = ""  # local path (markdown) OR remote path (ssh)
     database_id: str = ""  # Notion database id (notion sources)
-    token_secret: str = ""  # SecretsManager key holding the Notion token
+    token_secret: str = ""  # vault key: Notion token (notion) / SSH password (ssh)
+    # SSH (remote) source fields:
+    host: str = ""  # ssh host
+    port: int = 22  # ssh port
+    username: str = ""  # ssh username
+    key_path: str = ""  # local private-key file (alternative to a password)
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -72,6 +78,11 @@ class CustomSourceStore:
         path: str = "",
         database_id: str = "",
         token_secret: str = "",
+        *,
+        host: str = "",
+        port: int = 22,
+        username: str = "",
+        key_path: str = "",
     ) -> LTMSourceRecord:
         """Create or update a custom source (upsert by unique ``name``).
 
@@ -84,21 +95,20 @@ class CustomSourceStore:
             raise ValueError(
                 f"unknown LTM source kind {kind!r}; expected one of {SOURCE_KINDS}"
             )
+        if kind == "ssh" and not (host.strip() and path.strip()):
+            raise ValueError("an ssh source needs a host and a remote path")
         with session_scope(self.engine) as db:
             record = self._fetch(db, name)
-            if record is not None:
-                record.kind = kind
-                record.path = path
-                record.database_id = database_id
-                record.token_secret = token_secret
-            else:
-                record = LTMSourceRecord(
-                    name=name,
-                    kind=kind,
-                    path=path,
-                    database_id=database_id,
-                    token_secret=token_secret,
-                )
+            if record is None:
+                record = LTMSourceRecord(name=name)
+            record.kind = kind
+            record.path = path
+            record.database_id = database_id
+            record.token_secret = token_secret
+            record.host = host
+            record.port = int(port or 22)
+            record.username = username
+            record.key_path = key_path
             db.add(record)
             db.commit()
             db.refresh(record)
@@ -150,6 +160,15 @@ def connector_from_record(
             rec.database_id,
             token_resolver=lambda: secret_resolver(rec.token_secret),
             http=http_factory(),
+        )
+    elif rec.kind == "ssh":
+        conn = SSHBrainConnector(
+            rec.host,
+            rec.path,  # remote path
+            port=rec.port,
+            username=rec.username,
+            password_resolver=lambda: secret_resolver(rec.token_secret),
+            key_path=rec.key_path,
         )
     else:  # pragma: no cover — add() validates kind, but stay defensive
         raise ValueError(f"unknown LTM source kind {rec.kind!r}")

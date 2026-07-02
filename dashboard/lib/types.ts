@@ -266,6 +266,9 @@ export interface LtmSource {
   path?: string;
   database_id?: string;
   token_secret?: string;
+  host?: string; // ssh host (remote sources)
+  port?: number;
+  username?: string;
   created_at?: string | null;
   [k: string]: unknown;
 }
