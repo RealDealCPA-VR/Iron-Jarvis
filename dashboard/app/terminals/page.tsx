@@ -6,7 +6,15 @@
 
 import { useCallback, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
-import { Loader2, Plus, SquareTerminal, SlidersHorizontal, Square, Columns2 } from "lucide-react";
+import {
+  Loader2,
+  Plus,
+  SquareTerminal,
+  SlidersHorizontal,
+  Square,
+  Columns2,
+  PanelLeftOpen,
+} from "lucide-react";
 import { ApiError, del, get, post } from "@/lib/api";
 import type { ModelOption, Shell, TerminalInfo } from "@/lib/types";
 import { Card, OfflineHint, ErrorNote, Spinner, ConfirmButton } from "@/components/ui";
@@ -48,12 +56,22 @@ export default function TerminalsPage() {
   // shell (SIGWINCH) automatically, so no server change is needed.
   const [paneHeight, setPaneHeight] = useState(400);
   const [cols, setCols] = useState(2);
+  const [treeCollapsed, setTreeCollapsed] = useState(false);
   useEffect(() => {
     const h = Number(localStorage.getItem("ij_term_height"));
     if (h >= 220 && h <= 1200) setPaneHeight(h);
     const c = Number(localStorage.getItem("ij_term_cols"));
     if (c === 1 || c === 2) setCols(c);
+    setTreeCollapsed(localStorage.getItem("ij_term_tree_collapsed") === "1");
   }, []);
+  function changeTreeCollapsed(v: boolean) {
+    setTreeCollapsed(v);
+    try {
+      localStorage.setItem("ij_term_tree_collapsed", v ? "1" : "0");
+    } catch {
+      /* private mode */
+    }
+  }
   function changeHeight(h: number) {
     setPaneHeight(h);
     try {
@@ -310,14 +328,32 @@ export default function TerminalsPage() {
             )}
           </div>
 
-          {/* Directory tree (right) */}
-          <div className="w-full shrink-0 lg:w-80 xl:w-96">
+          {/* Directory tree (right). Collapsing it shrinks the WHOLE column so
+              the terminals workspace gets the freed horizontal space. */}
+          <div
+            className={`w-full shrink-0 transition-[width] duration-200 ${
+              treeCollapsed ? "lg:w-11" : "lg:w-80 xl:w-96"
+            }`}
+          >
             <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-9rem)]">
-              <DirectoryTree
-                selectedPath={selectedPath}
-                onSelect={setSelectedPath}
-                onOpenTerminal={(p) => addTerminal(p)}
-              />
+              {treeCollapsed ? (
+                <button
+                  onClick={() => changeTreeCollapsed(false)}
+                  title="Show directory"
+                  aria-label="Show directory"
+                  className="flex w-full items-center justify-center gap-2 rounded-2xl border border-white/[0.06] bg-ink-850/60 py-2 text-[12px] text-zinc-400 transition-colors hover:border-accent/30 hover:text-accent-soft lg:h-full lg:flex-col lg:py-4"
+                >
+                  <PanelLeftOpen size={16} />
+                  <span className="lg:hidden">Show directory</span>
+                </button>
+              ) : (
+                <DirectoryTree
+                  selectedPath={selectedPath}
+                  onSelect={setSelectedPath}
+                  onOpenTerminal={(p) => addTerminal(p)}
+                  onCollapse={() => changeTreeCollapsed(true)}
+                />
+              )}
             </div>
           </div>
         </div>

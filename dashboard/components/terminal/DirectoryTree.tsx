@@ -175,6 +175,7 @@ export function DirectoryTree({
   onSelect,
   onOpenTerminal,
   hideAction = false,
+  onCollapse,
 }: {
   selectedPath: string | null;
   onSelect: (path: string) => void;
@@ -184,6 +185,9 @@ export function DirectoryTree({
   onOpenTerminal?: (path: string) => void;
   /** Hide the built-in "Open terminal here" action (picker-only reuse). */
   hideAction?: boolean;
+  /** When provided, the collapse button hands control to the PARENT (which can
+   *  shrink the whole column) instead of just hiding this panel's body. */
+  onCollapse?: () => void;
 }) {
   const { data, error, loading } = useApi<{ drives: Drive[] }>("/fs/drives");
   const drives = data?.drives ?? [];
@@ -202,11 +206,11 @@ export function DirectoryTree({
           Directory
         </h2>
         <button
-          onClick={() => setCollapsed((c) => !c)}
-          title={collapsed ? "Expand panel" : "Collapse panel"}
+          onClick={() => (onCollapse ? onCollapse() : setCollapsed((c) => !c))}
+          title={onCollapse || !collapsed ? "Collapse panel" : "Expand panel"}
           className="ml-auto grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
         >
-          {collapsed ? <PanelRightOpen size={14} /> : <PanelRightClose size={14} />}
+          {!onCollapse && collapsed ? <PanelRightOpen size={14} /> : <PanelRightClose size={14} />}
         </button>
       </header>
 
