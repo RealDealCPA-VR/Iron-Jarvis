@@ -38,9 +38,19 @@ const TerminalPane = dynamic(
 // A pane's position + size on the free-form canvas.
 type Rect = { x: number; y: number; width: number; height: number };
 
-// Cascading default so freshly opened panes stagger instead of stacking exactly.
+// Cascading default (fallback only) so freshly opened panes stagger.
 function cascadeRect(i: number): Rect {
   return { x: 24 + (i % 5) * 34, y: 24 + (i % 5) * 34, width: 620, height: 380 };
+}
+
+// Axis-aligned rectangle overlap test (a small gutter keeps panes from touching).
+function rectsOverlap(a: Rect, b: Rect, gutter = 6): boolean {
+  return (
+    a.x < b.x + b.width + gutter &&
+    a.x + a.width + gutter > b.x &&
+    a.y < b.y + b.height + gutter &&
+    a.y + a.height + gutter > b.y
+  );
 }
 
 export default function TerminalsPage() {
@@ -97,21 +107,42 @@ export default function TerminalsPage() {
     }
   }, [layout]);
 
-  // Ensure every live terminal has a rect — fill missing ids with a cascading
-  // default (never mutate during render; do it in an effect keyed on terminals).
+  // Find a FREE (non-overlapping, in-bounds) slot for a w×h pane given the rects
+  // already placed — scans a coarse grid, falls back to a cascade only if the
+  // canvas is full (the user can Tidy or resize to make room). This is what
+  // keeps freshly-opened panes from spawning on top of existing ones.
+  const findFreeSlot = useCallback((placed: Rect[], w: number, h: number): Rect => {
+    const canvas = canvasRef.current;
+    const cw = canvas?.clientWidth ?? 1200;
+    const ch = canvas?.clientHeight ?? 640;
+    const step = 28;
+    for (let y = 12; y + h <= ch; y += step) {
+      for (let x = 12; x + w <= cw; x += step) {
+        const cand: Rect = { x, y, width: w, height: h };
+        if (!placed.some((p) => rectsOverlap(cand, p))) return cand;
+      }
+    }
+    return cascadeRect(placed.length);
+  }, []);
+
+  // Ensure every live terminal has a rect — fill missing ids with a FREE slot so
+  // re-attached panes on load don't overlap (never mutate during render).
   useEffect(() => {
     setLayout((prev) => {
       let changed = false;
       const next = { ...prev };
-      terminals.forEach((t, i) => {
+      const placed: Rect[] = Object.values(next);
+      terminals.forEach((t) => {
         if (!next[t.id]) {
-          next[t.id] = cascadeRect(i);
+          const r = findFreeSlot(placed, 620, 380);
+          next[t.id] = r;
+          placed.push(r);
           changed = true;
         }
       });
       return changed ? next : prev;
     });
-  }, [terminals]);
+  }, [terminals, findFreeSlot]);
 
   function changeTreeCollapsed(v: boolean) {
     setTreeCollapsed(v);
@@ -140,6 +171,16 @@ export default function TerminalsPage() {
 
   // The rect to render a pane at — persisted layout, else a cascading default.
   const rectFor = (t: TerminalInfo, i: number): Rect => layout[t.id] ?? cascadeRect(i);
+
+  // Would placing pane `id` at `rect` collide with any OTHER pane? (Used to
+  // reject an overlapping drop/resize — the pane then snaps back.)
+  const overlapsOthers = useCallback(
+    (id: string, rect: Rect): boolean =>
+      terminals.some(
+        (t) => t.id !== id && layout[t.id] && rectsOverlap(rect, layout[t.id], 0),
+      ),
+    [terminals, layout],
+  );
 
   // Re-tile every pane into a neat 2-column grid that fits the canvas — the
   // escape hatch when the free-form layout gets messy.
@@ -209,11 +250,11 @@ export default function TerminalsPage() {
           shell: shell || undefined,
         });
         setTerminals((prev) => [...prev, info]);
-        // Give the new pane a fresh cascade rect so it doesn't land exactly on
-        // the last one, and raise it to the front.
+        // Place the new pane in a FREE slot so it never spawns on top of another,
+        // and raise it to the front.
         setLayout((prev) => ({
           ...prev,
-          [info.id]: cascadeRect(Object.keys(prev).length),
+          [info.id]: findFreeSlot(Object.values(prev), 620, 380),
         }));
         zTop.current += 1;
         const z = zTop.current;
@@ -339,15 +380,24 @@ export default function TerminalsPage() {
                         style={{ zIndex: zOrder[t.id] ?? 1 }}
                         onMouseDown={() => bringToFront(t.id)}
                         onDragStart={() => bringToFront(t.id)}
-                        onDragStop={(_e, d) => setRect(t.id, { x: d.x, y: d.y })}
-                        onResizeStop={(_e, _dir, ref, _delta, pos) =>
-                          setRect(t.id, {
-                            width: ref.offsetWidth,
-                            height: ref.offsetHeight,
+                        onDragStop={(_e, d) => {
+                          const next = { ...rectFor(t, i), x: d.x, y: d.y };
+                          // Reject an overlapping drop: don't update the layout
+                          // and force a re-render so the controlled position
+                          // snaps the pane back to where it was.
+                          if (overlapsOthers(t.id, next)) setLayout((prev) => ({ ...prev }));
+                          else setRect(t.id, { x: d.x, y: d.y });
+                        }}
+                        onResizeStop={(_e, _dir, ref, _delta, pos) => {
+                          const next = {
                             x: pos.x,
                             y: pos.y,
-                          })
-                        }
+                            width: ref.offsetWidth,
+                            height: ref.offsetHeight,
+                          };
+                          if (overlapsOthers(t.id, next)) setLayout((prev) => ({ ...prev }));
+                          else setRect(t.id, next);
+                        }}
                       >
                         <div className="relative h-full w-full">
                           <TerminalPane
@@ -392,6 +442,22 @@ export default function TerminalsPage() {
                     );
                   })
                 )}
+
+                {/* Compact floating add button — a small, always-there way to
+                    open a terminal without hunting for the header button. */}
+                <button
+                  onClick={() => addTerminal(selectedPath)}
+                  disabled={busy}
+                  title="Open a new terminal"
+                  className="absolute bottom-3 right-3 z-[9998] flex items-center gap-1.5 rounded-lg border border-accent/30 bg-ink-900/85 px-2.5 py-1.5 text-[12px] font-medium text-accent-soft shadow-card backdrop-blur transition-colors hover:bg-accent/15 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {busy ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <Plus size={13} />
+                  )}
+                  Add
+                </button>
               </div>
             )}
           </div>
