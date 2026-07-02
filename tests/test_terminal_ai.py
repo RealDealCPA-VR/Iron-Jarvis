@@ -80,3 +80,38 @@ def test_terminal_ai_400_on_unknown_provider(tmp_path, monkeypatch):
         json={"prompt": "hi", "provider": "not-a-provider", "model": "x"},
     )
     assert r.status_code == 400
+
+
+# --- zombie-terminal WS behavior (live-hit 2026-07-01) -------------------------
+
+
+def test_ws_refuses_zombie_terminal_with_shell_exited_code(tmp_path, monkeypatch):
+    """Attaching to a DEAD session must send the exit note + close 4000 —
+    re-accepting zombies put the pane in a crash->reconnect loop whose focus
+    steal closed any open dropdown mid-click."""
+    import pytest
+    from starlette.websockets import WebSocketDisconnect
+
+    client = _fake_terminal_app(tmp_path, monkeypatch)
+    term = client.post("/terminals", json={}).json()
+    assert client.delete(f"/terminals/{term['id']}").json()["killed"] is True
+
+    with client.websocket_connect(f"/terminals/{term['id']}/ws") as ws:
+        note = ws.receive_bytes()
+        assert b"shell exited" in note  # human-readable reason in the pane
+        with pytest.raises(WebSocketDisconnect) as exc:
+            ws.receive_bytes()
+        assert exc.value.code == 4000  # the client's "don't reconnect" signal
+
+
+def test_dead_pty_write_never_raises():
+    """WinPtyBackend.write on a dead PTY swallows EOFError (the crash source)."""
+    from iron_jarvis.terminals.backend import WinPtyBackend
+
+    class DeadProc:
+        def write(self, data):
+            raise EOFError("Pty is closed")
+
+    b = WinPtyBackend()
+    b._proc = DeadProc()
+    b.write("ls\n")  # must not raise

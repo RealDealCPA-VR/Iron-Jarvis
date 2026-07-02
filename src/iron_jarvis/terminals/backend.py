@@ -178,7 +178,13 @@ class WinPtyBackend:
             raise RuntimeError("backend not started")
         if isinstance(data, bytes):
             data = data.decode("utf-8", "replace")
-        self._proc.write(data)
+        try:
+            self._proc.write(data)
+        except (EOFError, OSError):
+            # Writing to a DEAD PTY (shell exited/crashed) must not explode —
+            # an uncaught EOFError here crashed the whole WS handler, putting
+            # the pane into a crash->reconnect loop (live-hit 2026-07-01).
+            pass
 
     def read_nonblocking(self, max_bytes: int = 65536) -> bytes:
         if self._proc is None:

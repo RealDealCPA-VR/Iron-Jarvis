@@ -102,6 +102,10 @@ _SETTINGS_KEYS = [
     "sandbox_runtime",
     "ollama_base_url",
     "ollama_model",
+    # Custom OpenAI-compatible endpoint (Ollama Cloud / LM Studio / vLLM /
+    # private gateways) — pairs with the optional custom_api_key vault entry.
+    "custom_base_url",
+    "custom_model",
     "event_retention_days",
     # Motivation Layer (the pulse) — all OFF / conservative by default. Toggling
     # autonomy_enabled at runtime is honoured by the manual /autonomy/tick + the
@@ -1240,7 +1244,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
         "anthropic": "claude-opus-4-8",
         "openai": "gpt-4o-mini",
         "google": "gemini-1.5-flash",
-        "xai": "grok-2-latest",
+        "xai": "grok-4-1-fast",
+        "openrouter": "openrouter/auto",
     }
 
     def _maybe_autopromote_default(provider: str) -> bool:
@@ -1519,6 +1524,27 @@ def create_app(project_root: str | None = None) -> FastAPI:
             return
         await ws.accept()
 
+        # Close code 4000 = "the shell itself exited" — the client shows the
+        # Session-closed overlay and STOPS reconnecting (re-attaching to a dead
+        # PTY put the pane in a crash->reconnect loop that also stole focus on
+        # every cycle, killing open dropdowns — live-hit 2026-07-01).
+        SHELL_EXITED = 4000
+        exit_note = b"\r\n\x1b[33m[shell exited \xe2\x80\x94 close this pane or open a new terminal]\x1b[0m\r\n"
+
+        async def close_exited() -> None:
+            try:
+                await ws.send_bytes(exit_note)
+            except Exception:
+                pass
+            try:
+                await ws.close(code=SHELL_EXITED)
+            except Exception:
+                pass
+
+        if not session.alive:  # refuse a ZOMBIE attach outright
+            await close_exited()
+            return
+
         async def pump_output() -> None:  # PTY -> client
             # 10ms idle poll: measured end-to-end, the shell's own echo is
             # ~50ms (ConPTY/PowerShell), so our added worst-case latency should
@@ -1528,6 +1554,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 if data:
                     await ws.send_bytes(data)
                 elif not session.alive:
+                    await close_exited()  # tell the client WHY, then stop
                     break
                 else:
                     await asyncio.sleep(0.01)
@@ -1539,17 +1566,21 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 if msg["type"] == "websocket.disconnect":
                     break
                 text = msg.get("text")
-                if text is not None:
-                    try:
-                        obj = json.loads(text)
-                    except (ValueError, TypeError):
-                        obj = None
-                    if isinstance(obj, dict) and obj.get("type") == "resize":
-                        session.resize(int(obj["cols"]), int(obj["rows"]))
-                    else:
-                        session.write(text)
-                elif msg.get("bytes") is not None:
-                    session.write(msg["bytes"])
+                try:
+                    if text is not None:
+                        try:
+                            obj = json.loads(text)
+                        except (ValueError, TypeError):
+                            obj = None
+                        if isinstance(obj, dict) and obj.get("type") == "resize":
+                            session.resize(int(obj["cols"]), int(obj["rows"]))
+                        else:
+                            session.write(text)
+                    elif msg.get("bytes") is not None:
+                        session.write(msg["bytes"])
+                except Exception:  # writing to a dying PTY must never crash the WS
+                    await close_exited()
+                    break
         except WebSocketDisconnect:
             pass
         finally:
@@ -2135,7 +2166,18 @@ def create_app(project_root: str | None = None) -> FastAPI:
     def list_models() -> dict[str, Any]:
         from ..agents.dynamic import available_models
 
-        return {"models": available_models()}
+        models = available_models()
+        # Config-driven entries LIGHT UP once configured: the local model and
+        # the custom endpoint appear in every picker (topbar switcher, New
+        # Session, per-terminal AI) without hardcoding dead options.
+        cfg = platform.config
+        if cfg.ollama_base_url:
+            models.append({"provider": "ollama", "model": cfg.ollama_model})
+        if cfg.custom_base_url:
+            models.append(
+                {"provider": "custom", "model": cfg.custom_model or "default"}
+            )
+        return {"models": models}
 
     @app.get("/agents")
     def list_agents() -> dict[str, Any]:

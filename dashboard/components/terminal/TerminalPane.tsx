@@ -117,6 +117,8 @@ export function TerminalPane({
     let ro: ResizeObserver | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let attempts = 0;
+    let focusedOnce = false; // steal focus on FIRST connect only — a reconnect
+    // mid-interaction would close an open dropdown/popup out from under the user
 
     const doFit = () => {
       try {
@@ -146,7 +148,10 @@ export function TerminalPane({
         setState("open");
         doFit();
         sendResize();
-        term?.focus();
+        if (!focusedOnce) {
+          focusedOnce = true;
+          term?.focus();
+        }
       };
       ws.onmessage = (ev: MessageEvent) => {
         if (!term) return;
@@ -154,8 +159,15 @@ export function TerminalPane({
         if (typeof ev.data === "string") term.write(ev.data);
         else term.write(new Uint8Array(ev.data as ArrayBuffer));
       };
-      ws.onclose = () => {
+      ws.onclose = (ev: CloseEvent) => {
         if (disposed) return;
+        // 4000 = the SHELL ITSELF exited (daemon's explicit signal). There is
+        // nothing to reconnect to — retrying just re-attached to a dead PTY in
+        // a crash loop that also stole focus every cycle.
+        if (ev.code === 4000) {
+          setState("closed");
+          return;
+        }
         if (attempts < 4) {
           attempts += 1;
           setState("reconnecting");

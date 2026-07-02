@@ -15,8 +15,13 @@ def available_shells() -> list[dict]:
     """
     shells: list[dict] = []
     if sys.platform == "win32":
-        if shutil.which("pwsh"):
-            shells.append({"name": "pwsh", "argv": ["pwsh", "-NoLogo"]})
+        # Resolve pwsh to its FULL path: it's often a WindowsApps execution
+        # alias (a reparse point) installed AFTER the daemon started — spawning
+        # by bare name through ConPTY is flaky there, and a spawn that dies
+        # instantly leaves a zombie PTY behind the pane.
+        pwsh = shutil.which("pwsh")
+        if pwsh:
+            shells.append({"name": "pwsh", "argv": [pwsh, "-NoLogo"]})
         shells.append({"name": "powershell", "argv": ["powershell", "-NoLogo"]})
         shells.append({"name": "cmd", "argv": ["cmd"]})
     else:
