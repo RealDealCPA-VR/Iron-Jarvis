@@ -216,11 +216,25 @@ function NavLinks({
   );
 }
 
-/** Shared daemon-status footer (connection dot + API host + deploy link). */
+/** Shared daemon-status footer (version + connection dot + API host + deploy). */
 function SidebarFooter() {
-  const { online: connected } = useDaemon();
+  const { online: connected, health } = useDaemon();
+  const version = health?.version;
   return (
     <div className="space-y-2 border-t border-white/[0.06] px-5 py-4">
+      {/* Version — the single source of truth (live from the daemon's /health,
+          so it reflects the ACTUAL running build, not a baked constant). Links
+          to Updates so it doubles as the "am I current?" affordance. */}
+      <Link
+        href="/updates"
+        title="View updates"
+        className="group inline-flex items-center gap-1.5 text-[11px] transition-colors"
+      >
+        <Package size={11} className="text-zinc-600 group-hover:text-accent-soft" />
+        <span className="font-mono text-zinc-500 group-hover:text-accent-soft">
+          {version ? `v${version}` : "—"}
+        </span>
+      </Link>
       <div className="flex items-center gap-2 text-[11px]">
         <span
           className={`h-2 w-2 rounded-full ${
