@@ -215,6 +215,9 @@ def build_platform(
         # Local OpenAI-compatible (Ollama) endpoint — "network optional" local LLM.
         ollama_base_url=config.ollama_base_url,
         ollama_model=config.ollama_model,
+        # Custom OpenAI-compatible endpoint (Ollama Cloud / LM Studio / vLLM...).
+        custom_base_url=config.custom_base_url,
+        custom_model=config.custom_model,
     )
     # Self-tuning router (§6 phase-1), OFF by default: only when the user opts in
     # (prefer_local_when_capable) AND a local Ollama model is configured AND it has

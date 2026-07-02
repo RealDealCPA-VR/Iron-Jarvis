@@ -193,6 +193,31 @@ BUILTIN_SPECS: dict[str, ConnectionSpec] = {
         # refresh_token; other providers reject or ignore these.
         oauth_extra_auth_params={"access_type": "offline", "prompt": "consent"},
     ),
+    "openrouter": ConnectionSpec(
+        provider="openrouter",
+        display_name="OpenRouter",
+        method="api_key",  # one key routes every lab's models (OpenAI-compatible)
+        docs_url="https://openrouter.ai/settings/keys",
+        key_help=(
+            "Get a key at openrouter.ai — one key routes hundreds of models "
+            "from every lab (model ids are namespaced, e.g. "
+            "x-ai/grok-code-fast-1 or openrouter/auto)."
+        ),
+        key_secret_name="openrouter_api_key",
+    ),
+    "custom": ConnectionSpec(
+        provider="custom",
+        display_name="Custom endpoint",
+        method="api_key",
+        key_help=(
+            "Any OpenAI-compatible inference API: Ollama Cloud "
+            "(https://ollama.com), LM Studio, vLLM, llama.cpp server, a private "
+            "gateway... Set the base URL in Settings (custom_base_url) + the "
+            "default model (custom_model); the key here is OPTIONAL — keyless "
+            "local servers work without connecting one."
+        ),
+        key_secret_name="custom_api_key",
+    ),
     "mock": ConnectionSpec(
         provider="mock",
         display_name="Mock (offline)",

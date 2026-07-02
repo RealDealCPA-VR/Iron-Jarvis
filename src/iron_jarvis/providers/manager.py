@@ -26,20 +26,24 @@ PresenceResolver = Callable[[str], bool]
 AdapterFactory = Callable[..., LLMAdapter]
 
 #: API providers whose availability is gated on a real credential.
-API_PROVIDERS = ("anthropic", "openai", "google", "xai")
+API_PROVIDERS = ("anthropic", "openai", "google", "xai", "openrouter")
 
 #: xAI (Grok) is OpenAI-compatible, so it routes through the OpenAI adapter with
 #: a base_url override (same pattern as a local Ollama server).
 XAI_ENDPOINT = "https://api.x.ai/v1/chat/completions"
 
+#: OpenRouter — one key routes every lab's models (OpenAI-compatible aggregator).
+OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+
 
 def _normalize_ollama_url(url: str | None) -> str | None:
     """Accept a host, a ``/v1`` base, or a full chat URL → the chat endpoint.
 
-    Ollama's OpenAI-compatible chat endpoint is ``<host>/v1/chat/completions``.
-    Users naturally enter ``http://localhost:11434`` or ``.../v1``; without this
-    the adapter POSTs to the URL verbatim and every call 404s. Mirrors the
-    host-normalization the embeddings layer already does on the same value.
+    Any OpenAI-compatible server (Ollama, Ollama Cloud, LM Studio, vLLM...)
+    serves chat at ``<host>/v1/chat/completions``. Users naturally enter
+    ``http://localhost:11434`` or ``.../v1``; without this the adapter POSTs to
+    the URL verbatim and every call 404s. Mirrors the host-normalization the
+    embeddings layer already does on the same value.
     """
     if not url:
         return url
@@ -60,6 +64,8 @@ class ProviderManager:
         presence_resolver: PresenceResolver | None = None,
         ollama_base_url: str | None = None,
         ollama_model: str = "llama3.1",
+        custom_base_url: str | None = None,
+        custom_model: str = "",
     ) -> None:
         self.vault = vault
         self._default_model = default_model
@@ -70,6 +76,11 @@ class ProviderManager:
         # to the real /v1/chat/completions endpoint instead of 404-ing.
         self._ollama_base_url = _normalize_ollama_url(ollama_base_url)
         self._ollama_model = ollama_model
+        # CUSTOM OpenAI-compatible endpoint (Ollama Cloud / LM Studio / vLLM /
+        # any aggregator) — same normalization; key is OPTIONAL (resolved from
+        # the vault when connected, keyless local servers just work).
+        self._custom_base_url = _normalize_ollama_url(custom_base_url)
+        self._custom_model = custom_model
         # Presence-only resolver for availability/health: when wired it avoids a
         # blocking OAuth refresh on the async loop. Falls back to the (possibly
         # refreshing) credential check when None, preserving legacy behavior.
@@ -111,6 +122,17 @@ class ProviderManager:
                 provider_name="xai",
             ),
         )
+        # OpenRouter — one key, every lab's models, OpenAI-compatible. Model ids
+        # are namespaced ("x-ai/grok-code-fast-1", "openrouter/auto"...).
+        self.register(
+            "openrouter",
+            lambda model=None: OpenAIAdapter(
+                model=model or "openrouter/auto",
+                base_url=OPENROUTER_ENDPOINT,
+                credential=lambda: self._cred("openrouter"),
+                provider_name="openrouter",
+            ),
+        )
         # Local "ollama" provider — an OpenAI-compatible server reached over a
         # configured base_url, needing no API key. Always registered so get()
         # works once configured; availability is gated on ollama_base_url.
@@ -121,6 +143,18 @@ class ProviderManager:
                 base_url=self._ollama_base_url,
                 api_key=None,
                 provider_name="ollama",
+            ),
+        )
+        # CUSTOM endpoint — user-pointed OpenAI-compatible server/aggregator
+        # (Ollama Cloud, LM Studio, vLLM, llama.cpp...). Key optional: resolved
+        # from the vault when the user connected one on the Connections page.
+        self.register(
+            "custom",
+            lambda model=None: OpenAIAdapter(
+                model=model or self._custom_model or "default",
+                base_url=self._custom_base_url,
+                credential=lambda: self._cred("custom"),
+                provider_name="custom",
             ),
         )
 
@@ -172,6 +206,10 @@ class ProviderManager:
         if name == "ollama":
             # Local provider: available only once a base_url is configured.
             return self._ollama_base_url is not None
+        if name == "custom":
+            # Custom endpoint: gated on the base_url, NOT a key (keyless local
+            # servers are the common case; a vault key is used when present).
+            return self._custom_base_url is not None
         return name in self._factories
 
     def has_available_api_provider(self) -> bool:
@@ -181,7 +219,11 @@ class ProviderManager:
         provider is connected" trap and emit a downgrade signal instead of
         silently returning fabricated mock output.
         """
-        return any(self.available(p) for p in API_PROVIDERS) or self.available("ollama")
+        return (
+            any(self.available(p) for p in API_PROVIDERS)
+            or self.available("ollama")
+            or self.available("custom")
+        )
 
     def get(self, name: str, model: str | None = None) -> LLMAdapter:
         if name not in self._factories:

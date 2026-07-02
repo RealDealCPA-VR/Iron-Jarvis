@@ -77,6 +77,18 @@ const META: Record<string, ProviderMeta> = {
     keyLabel: "console.x.ai",
     placeholder: "xai-…",
   },
+  openrouter: {
+    icon: PlugZap,
+    tint: "text-rose-300",
+    keyUrl: "https://openrouter.ai/settings/keys",
+    keyLabel: "openrouter.ai",
+    placeholder: "sk-or-…",
+  },
+  custom: {
+    icon: Cpu,
+    tint: "text-teal-300",
+    placeholder: "key (optional for local servers)",
+  },
   mock: { icon: MoonStar, tint: "text-amber-300" },
 };
 

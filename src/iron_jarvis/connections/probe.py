@@ -21,7 +21,9 @@ _PROBES: dict[str, tuple[str, str]] = {
     "anthropic": ("https://api.anthropic.com/v1/models", "anthropic"),
     "openai": ("https://api.openai.com/v1/models", "bearer"),
     "xai": ("https://api.x.ai/v1/models", "bearer"),
+    "openrouter": ("https://openrouter.ai/api/v1/models", "bearer"),
     "google": ("https://www.googleapis.com/oauth2/v3/tokeninfo", "google_tokeninfo"),
+    # "custom" has no fixed URL — falls to the no-probe path (connected, unverified).
 }
 
 _TIMEOUT_SECONDS = 12.0

@@ -43,9 +43,15 @@ KNOWN_MODELS: list[dict] = [
     {"provider": "openai", "model": "gpt-5-codex"},
     {"provider": "google", "model": "gemini-2.0-flash"},
     {"provider": "google", "model": "gemini-1.5-pro"},
-    {"provider": "xai", "model": "grok-2-latest"},
-    {"provider": "xai", "model": "grok-2-vision-latest"},
-    {"provider": "xai", "model": "grok-beta"},
+    # xAI (Grok) — current generation: the flagship, the fast agentic model,
+    # and the two coding-agent models (grok-build-0.1 powers the Grok Build CLI).
+    {"provider": "xai", "model": "grok-4"},
+    {"provider": "xai", "model": "grok-4-1-fast"},
+    {"provider": "xai", "model": "grok-code-fast-1"},
+    {"provider": "xai", "model": "grok-build-0.1"},
+    # OpenRouter — namespaced ids; openrouter/auto picks the best model per task.
+    {"provider": "openrouter", "model": "openrouter/auto"},
+    {"provider": "openrouter", "model": "x-ai/grok-code-fast-1"},
 ]
 
 

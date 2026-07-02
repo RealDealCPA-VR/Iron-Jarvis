@@ -167,6 +167,13 @@ class Config(BaseModel):
     event_retention_days: int = 90
     ollama_base_url: str | None = None  # local OpenAI-compatible (Ollama) endpoint URL
     ollama_model: str = "llama3.1"  # default model for the local "ollama" provider
+    # CUSTOM inference endpoint — any OpenAI-compatible API the user points at:
+    # aggregators (OpenRouter has its own built-in provider), Ollama Cloud
+    # (https://ollama.com), LM Studio, vLLM, llama.cpp server... The optional key
+    # lives in the vault (custom_api_key via Connections); keyless local servers
+    # work too.
+    custom_base_url: str | None = None
+    custom_model: str = ""  # default model id for the "custom" provider
     # Self-tuning router (§6 phase-1) — OFF by default. When enabled AND the local
     # Ollama model is configured AND eval/observability shows it has met the
     # quality bar for a task class, the router prefers it for that class. With the
