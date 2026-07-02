@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
-import { Loader2, Plus, SquareTerminal } from "lucide-react";
+import { Loader2, Plus, SquareTerminal, SlidersHorizontal, Square, Columns2 } from "lucide-react";
 import { ApiError, del, get, post } from "@/lib/api";
 import type { ModelOption, Shell, TerminalInfo } from "@/lib/types";
 import { Card, OfflineHint, ErrorNote, Spinner, ConfirmButton } from "@/components/ui";
@@ -42,6 +42,34 @@ export default function TerminalsPage() {
   const [offline, setOffline] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Pane size is user-controlled + persisted. Changing it just resizes the
+  // container; each TerminalPane's ResizeObserver re-fits xterm and tells the
+  // shell (SIGWINCH) automatically, so no server change is needed.
+  const [paneHeight, setPaneHeight] = useState(400);
+  const [cols, setCols] = useState(2);
+  useEffect(() => {
+    const h = Number(localStorage.getItem("ij_term_height"));
+    if (h >= 220 && h <= 1200) setPaneHeight(h);
+    const c = Number(localStorage.getItem("ij_term_cols"));
+    if (c === 1 || c === 2) setCols(c);
+  }, []);
+  function changeHeight(h: number) {
+    setPaneHeight(h);
+    try {
+      localStorage.setItem("ij_term_height", String(h));
+    } catch {
+      /* private mode */
+    }
+  }
+  function changeCols(c: number) {
+    setCols(c);
+    try {
+      localStorage.setItem("ij_term_cols", String(c));
+    } catch {
+      /* private mode */
+    }
+  }
 
   // Re-attach to existing sessions + load the shell list on mount.
   useEffect(() => {
@@ -112,7 +140,45 @@ export default function TerminalsPage() {
           title="Terminals"
           subtitle="Live shell sessions, tiled. Pick a project folder on the right and open a terminal there, or hit + to add one."
           actions={
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Terminal size: drag to make the panes taller/shorter. */}
+              <label
+                className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400"
+                title="Terminal height"
+              >
+                <SlidersHorizontal size={13} className="text-accent-soft/70" />
+                Size
+              </label>
+              <input
+                type="range"
+                min={220}
+                max={900}
+                step={20}
+                value={paneHeight}
+                onChange={(e) => changeHeight(Number(e.target.value))}
+                aria-label="Terminal height"
+                title={`${paneHeight}px tall`}
+                className="w-28 accent-cyan-400"
+              />
+              {/* Columns: 1 = big single pane, 2 = side-by-side. */}
+              <div className="flex overflow-hidden rounded-lg border border-white/10">
+                {[1, 2].map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => changeCols(c)}
+                    title={`${c} column${c > 1 ? "s" : ""}`}
+                    className={`px-2.5 py-1.5 text-[12px] font-medium transition-colors ${
+                      cols === c
+                        ? "bg-accent/15 text-accent-soft"
+                        : "text-zinc-400 hover:bg-white/[0.05]"
+                    }`}
+                  >
+                    {c === 1 ? <Square size={13} /> : <Columns2 size={13} />}
+                  </button>
+                ))}
+              </div>
+              <span className="mx-1 h-5 w-px bg-white/10" />
               <label className="flex items-center gap-2 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                 <SquareTerminal size={13} className="text-accent-soft/70" />
                 Shell
@@ -168,9 +234,12 @@ export default function TerminalsPage() {
                 <Spinner label="Attaching to sessions…" />
               </Card>
             ) : (
-              <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
+              <div
+                className="grid gap-4"
+                style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+              >
                 {terminals.map((t) => (
-                  <div key={t.id} className="relative h-[360px]">
+                  <div key={t.id} className="relative rounded-2xl" style={{ height: paneHeight }}>
                     <TerminalPane
                       info={t}
                       focused={focusedId === t.id}
@@ -216,7 +285,8 @@ export default function TerminalsPage() {
                   data-add-terminal
                   onClick={() => addTerminal(selectedPath)}
                   disabled={busy}
-                  className="group grid h-[360px] place-items-center rounded-2xl border-2 border-dashed border-white/[0.1] bg-white/[0.01] text-zinc-500 transition-colors hover:border-accent/40 hover:bg-accent/[0.04] hover:text-accent-soft disabled:cursor-not-allowed disabled:opacity-50"
+                  style={{ height: paneHeight }}
+                  className="group grid place-items-center rounded-2xl border-2 border-dashed border-white/[0.1] bg-white/[0.01] text-zinc-500 transition-colors hover:border-accent/40 hover:bg-accent/[0.04] hover:text-accent-soft disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <div className="flex flex-col items-center gap-3">
                     <span className="grid h-14 w-14 place-items-center rounded-2xl border border-white/10 bg-white/[0.03] transition-colors group-hover:border-accent/40 group-hover:bg-accent/10">
