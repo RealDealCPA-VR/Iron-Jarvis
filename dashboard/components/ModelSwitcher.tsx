@@ -7,6 +7,50 @@ import { usePolledApi, useApi } from "@/lib/useApi";
 import { put, ApiError } from "@/lib/api";
 import type { Health, ModelOption } from "@/lib/types";
 
+/** Quality tiers, plainly labelled so users pick outcome over model IDs. */
+type Tier = "fast" | "balanced" | "best";
+const TIER_ORDER: Tier[] = ["fast", "balanced", "best"];
+const TIER_LABELS: Record<Tier, string> = {
+  fast: "Fast",
+  balanced: "Balanced",
+  best: "Best",
+};
+
+/**
+ * Per-provider quality → model id. The dial sets the default model for the
+ * CURRENT default provider to the chosen tier's model. Providers NOT listed
+ * here (ollama / custom / unknown) expose a single configured model, so the
+ * dial is hidden for them and only the full model list applies.
+ */
+const TIERS: Record<string, Record<Tier, string>> = {
+  anthropic: {
+    fast: "claude-haiku-4-5",
+    balanced: "claude-sonnet-4-6",
+    best: "claude-opus-4-8",
+  },
+  openai: {
+    fast: "gpt-4o-mini",
+    balanced: "gpt-4o",
+    best: "gpt-5-codex",
+  },
+  google: {
+    fast: "gemini-1.5-flash",
+    balanced: "gemini-2.0-flash",
+    best: "gemini-1.5-pro",
+  },
+  xai: {
+    fast: "grok-code-fast-1",
+    balanced: "grok-4-1-fast",
+    best: "grok-4",
+  },
+  // OpenRouter routes automatically — every tier is the same auto endpoint.
+  openrouter: {
+    fast: "openrouter/auto",
+    balanced: "openrouter/auto",
+    best: "openrouter/auto",
+  },
+};
+
 /**
  * Topbar provider/model switcher — set the ACTIVE default model in one click,
  * across every connected account (beyond the per-session dropdown). Reuses
@@ -29,6 +73,15 @@ export function ModelSwitcher() {
     for (const p of h?.providers ?? []) m.set(p.provider, p.available);
     return m;
   }, [h]);
+
+  // Quality dial: the tier map + which of the current provider's models the
+  // catalog actually offers (so an unavailable tier is greyed like the list).
+  const tiers = h ? TIERS[h.default_provider] : undefined;
+  const providerModels = useMemo(() => {
+    const s = new Set<string>();
+    for (const m of models) if (m.provider === h?.default_provider) s.add(m.model);
+    return s;
+  }, [models, h?.default_provider]);
 
   // Open via a global event so ⌘K can summon it from anywhere.
   useEffect(() => {
@@ -88,6 +141,43 @@ export function ModelSwitcher() {
 
       {open && (
         <div className="absolute right-0 z-50 mt-1.5 w-72 rounded-xl border border-white/10 bg-ink-950/95 p-1.5 shadow-card-hover backdrop-blur-xl">
+          {tiers && (
+            <div className="mb-1 border-b border-white/[0.06] px-1 pb-2">
+              <div className="px-1 py-1.5 text-[10px] uppercase tracking-wider text-zinc-400">
+                Quality
+              </div>
+              <div className="flex gap-0.5 rounded-lg border border-white/10 bg-white/[0.03] p-0.5">
+                {TIER_ORDER.map((tier) => {
+                  const model = tiers[tier];
+                  const active = model === h.default_model;
+                  const ok = providerModels.has(model);
+                  const key = `${h.default_provider}|${model}`;
+                  return (
+                    <button
+                      key={tier}
+                      onClick={() =>
+                        ok && choose({ provider: h.default_provider, model })
+                      }
+                      disabled={!ok || busy === key}
+                      title={ok ? model : `${model} · not available`}
+                      className={`flex-1 rounded-md px-2 py-1 text-center text-[11px] font-medium transition-colors ${
+                        active
+                          ? "bg-accent/[0.18] text-accent-soft"
+                          : ok
+                            ? "text-zinc-300 hover:bg-white/[0.06]"
+                            : "cursor-not-allowed text-zinc-600 opacity-50"
+                      }`}
+                    >
+                      {TIER_LABELS[tier]}
+                      {!ok && (
+                        <span className="ml-1 text-[9px] text-zinc-600">n/a</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           <div className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-zinc-400">
             Active model
           </div>

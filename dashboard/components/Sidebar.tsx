@@ -35,6 +35,7 @@ import {
   LifeBuoy,
   BarChart3,
   LayoutTemplate,
+  SlidersHorizontal,
   Menu,
   X,
   type LucideIcon,
@@ -64,7 +65,7 @@ const NAV: NavSection[] = [
       { href: "/templates", label: "Templates", icon: LayoutTemplate },
       { href: "/agents", label: "Agents", icon: Bot },
       { href: "/tools", label: "Tools", icon: Wrench },
-      { href: "/self-dev", label: "Self-development", icon: GitBranch },
+      { href: "/self-dev", label: "Self-improvement", icon: GitBranch },
       { href: "/autonomy", label: "Autonomy", icon: Gauge },
     ],
   },
@@ -73,7 +74,7 @@ const NAV: NavSection[] = [
     items: [
       { href: "/workflows", label: "Workflows", icon: Workflow },
       { href: "/schedules", label: "Schedules", icon: CalendarClock },
-      { href: "/computeruse", label: "Computer Use", icon: MonitorCog },
+      { href: "/computeruse", label: "Computer Control", icon: MonitorCog },
       { href: "/terminals", label: "Terminals", icon: SquareTerminal },
       { href: "/webhooks", label: "Webhooks", icon: Webhook },
     ],
@@ -82,9 +83,9 @@ const NAV: NavSection[] = [
     label: "Knowledge",
     items: [
       { href: "/skills", label: "Skills", icon: Sparkles },
-      { href: "/memory", label: "Memory", icon: BrainCircuit },
+      { href: "/memory", label: "Working memory", icon: BrainCircuit },
       { href: "/lessons", label: "What I've learned", icon: GraduationCap },
-      { href: "/ltm", label: "Long-term Memory", icon: Database },
+      { href: "/ltm", label: "Memory", icon: Database },
       { href: "/filesearch", label: "File Search", icon: FileSearch },
       { href: "/documents", label: "Documents", icon: FileText },
       { href: "/artifacts", label: "Artifacts", icon: Package },
@@ -109,6 +110,55 @@ const NAV: NavSection[] = [
     ],
   },
 ];
+
+/**
+ * The essentials shown in Simple mode. Everything else in NAV is revealed only
+ * when the "Advanced" toggle is on. Keyed by href so labels can be de-jargoned
+ * freely without breaking the filter.
+ */
+const ESSENTIAL_HREFS = new Set<string>([
+  "/", // Overview
+  "/chat", // Chat
+  "/sessions", // Sessions
+  "/workflows", // Workflows
+  "/terminals", // Terminals
+  "/connections", // Connections
+  "/documents", // Documents
+  "/ltm", // Memory (Long-term Memory)
+  "/settings", // Settings
+  "/help", // Help
+]);
+
+/**
+ * Persisted Simple/Advanced nav mode. Seeded to Simple (false) for a stable SSR
+ * render, then hydrated from localStorage in an effect to avoid a mismatch.
+ * Persists on change. Each rail (desktop / mobile) owns its own copy; only one
+ * is ever visible at a given breakpoint, so they don't need live cross-sync.
+ */
+function useNavMode(): [boolean, () => void] {
+  const [advanced, setAdvanced] = useState(false);
+
+  useEffect(() => {
+    try {
+      setAdvanced(localStorage.getItem("ij_nav_advanced") === "1");
+    } catch {
+      /* localStorage unavailable — stay in Simple mode. */
+    }
+  }, []);
+
+  const toggle = () =>
+    setAdvanced((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("ij_nav_advanced", next ? "1" : "0");
+      } catch {
+        /* ignore persistence failures */
+      }
+      return next;
+    });
+
+  return [advanced, toggle];
+}
 
 /** The arc-reactor brand mark. */
 function ArcMark() {
@@ -162,12 +212,18 @@ function Brand() {
   );
 }
 
-/** The shared nav list, used by both the desktop rail and the mobile drawer. */
+/**
+ * The shared nav list, used by both the desktop rail and the mobile drawer.
+ * In Simple mode (`advanced === false`) only essential items render, and any
+ * section left with no visible items is dropped entirely.
+ */
 function NavLinks({
   layoutId,
+  advanced,
   onNavigate,
 }: {
   layoutId: string;
+  advanced: boolean;
   onNavigate?: () => void;
 }) {
   const pathname = usePathname();
@@ -175,12 +231,17 @@ function NavLinks({
     href === "/" ? pathname === "/" : pathname.startsWith(href);
   return (
     <>
-      {NAV.map((section) => (
+      {NAV.map((section) => {
+        const items = advanced
+          ? section.items
+          : section.items.filter((item) => ESSENTIAL_HREFS.has(item.href));
+        if (items.length === 0) return null;
+        return (
         <div key={section.label} className="space-y-1 pb-2">
           <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600">
             {section.label}
           </div>
-          {section.items.map((item) => {
+          {items.map((item) => {
             const active = isActive(item.href);
             const Icon = item.icon;
             return (
@@ -213,8 +274,69 @@ function NavLinks({
             );
           })}
         </div>
-      ))}
+        );
+      })}
     </>
+  );
+}
+
+/**
+ * The Simple/Advanced switch. Sits at the bottom of the nav (above the footer)
+ * in both rails. Subtle, arc-reactor-cyan when active, with a "showing
+ * essentials" hint while in Simple mode.
+ */
+function NavModeToggle({
+  advanced,
+  onToggle,
+}: {
+  advanced: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="border-t border-white/[0.06] px-3 py-2">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-pressed={advanced}
+        title={advanced ? "Show only the essentials" : "Show every tool"}
+        className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors ${
+          advanced
+            ? "text-accent-soft"
+            : "text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-100"
+        }`}
+      >
+        <span
+          className={`transition-colors ${
+            advanced ? "text-accent" : "text-zinc-500 group-hover:text-zinc-300"
+          }`}
+        >
+          <SlidersHorizontal size={17} strokeWidth={2} />
+        </span>
+        <span className="flex flex-col items-start leading-tight">
+          <span className="font-medium">Advanced</span>
+          {!advanced && (
+            <span className="text-[10px] font-normal text-zinc-600">
+              showing essentials
+            </span>
+          )}
+        </span>
+        <span
+          className={`ml-auto flex h-4 w-7 items-center rounded-full border px-0.5 transition-colors ${
+            advanced
+              ? "justify-end border-accent/40 bg-accent/20"
+              : "justify-start border-white/10 bg-white/[0.03]"
+          }`}
+        >
+          <span
+            className={`h-2.5 w-2.5 rounded-full transition-colors ${
+              advanced
+                ? "bg-accent shadow-[0_0_6px_rgba(34,211,238,0.6)]"
+                : "bg-zinc-600"
+            }`}
+          />
+        </span>
+      </button>
+    </div>
   );
 }
 
@@ -272,6 +394,7 @@ function SidebarFooter() {
 
 /** The desktop sidebar rail. Hidden below the `md` breakpoint (see MobileNav). */
 export function Sidebar() {
+  const [advanced, toggleAdvanced] = useNavMode();
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-r border-white/[0.06] bg-ink-900/70 backdrop-blur-xl md:flex">
       <div className="px-5 py-5">
@@ -279,8 +402,9 @@ export function Sidebar() {
       </div>
       <div className="mx-5 h-px bg-accent-line opacity-60" />
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
-        <NavLinks layoutId="nav-active" />
+        <NavLinks layoutId="nav-active" advanced={advanced} />
       </nav>
+      <NavModeToggle advanced={advanced} onToggle={toggleAdvanced} />
       <SidebarFooter />
     </aside>
   );
@@ -293,6 +417,7 @@ export function Sidebar() {
  */
 export function MobileNav() {
   const [open, setOpen] = useState(false);
+  const [advanced, toggleAdvanced] = useNavMode();
   const pathname = usePathname();
 
   // Close the drawer whenever the route changes.
@@ -365,8 +490,13 @@ export function MobileNav() {
               </div>
               <div className="mx-5 h-px bg-accent-line opacity-60" />
               <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
-                <NavLinks layoutId="nav-active-mobile" onNavigate={() => setOpen(false)} />
+                <NavLinks
+                  layoutId="nav-active-mobile"
+                  advanced={advanced}
+                  onNavigate={() => setOpen(false)}
+                />
               </nav>
+              <NavModeToggle advanced={advanced} onToggle={toggleAdvanced} />
               <SidebarFooter />
             </motion.aside>
           </>
