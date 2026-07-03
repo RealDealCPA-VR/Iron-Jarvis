@@ -172,16 +172,6 @@ export default function TerminalsPage() {
   // The rect to render a pane at — persisted layout, else a cascading default.
   const rectFor = (t: TerminalInfo, i: number): Rect => layout[t.id] ?? cascadeRect(i);
 
-  // Would placing pane `id` at `rect` collide with any OTHER pane? (Used to
-  // reject an overlapping drop/resize — the pane then snaps back.)
-  const overlapsOthers = useCallback(
-    (id: string, rect: Rect): boolean =>
-      terminals.some(
-        (t) => t.id !== id && layout[t.id] && rectsOverlap(rect, layout[t.id], 0),
-      ),
-    [terminals, layout],
-  );
-
   // Re-tile every pane into a neat 2-column grid that fits the canvas — the
   // escape hatch when the free-form layout gets messy.
   function tidy() {
@@ -380,24 +370,18 @@ export default function TerminalsPage() {
                         style={{ zIndex: zOrder[t.id] ?? 1 }}
                         onMouseDown={() => bringToFront(t.id)}
                         onDragStart={() => bringToFront(t.id)}
-                        onDragStop={(_e, d) => {
-                          const next = { ...rectFor(t, i), x: d.x, y: d.y };
-                          // Reject an overlapping drop: don't update the layout
-                          // and force a re-render so the controlled position
-                          // snaps the pane back to where it was.
-                          if (overlapsOthers(t.id, next)) setLayout((prev) => ({ ...prev }));
-                          else setRect(t.id, { x: d.x, y: d.y });
-                        }}
-                        onResizeStop={(_e, _dir, ref, _delta, pos) => {
-                          const next = {
+                        // Free movement: a pane goes exactly where you drop it
+                        // (windows may overlap — the focused one comes to the
+                        // front). No snap-back; use Tidy to re-pack into a grid.
+                        onDragStop={(_e, d) => setRect(t.id, { x: d.x, y: d.y })}
+                        onResizeStop={(_e, _dir, ref, _delta, pos) =>
+                          setRect(t.id, {
                             x: pos.x,
                             y: pos.y,
                             width: ref.offsetWidth,
                             height: ref.offsetHeight,
-                          };
-                          if (overlapsOthers(t.id, next)) setLayout((prev) => ({ ...prev }));
-                          else setRect(t.id, next);
-                        }}
+                          })
+                        }
                       >
                         <div className="relative h-full w-full">
                           <TerminalPane
