@@ -287,8 +287,10 @@ def build_platform(
     for tool in computeruse_tools(computeruse):
         registry.register(tool)
 
-    # Terminals: multiple live shell sessions the dashboard can attach to.
-    terminals = TerminalManager()
+    # Terminals: multiple live shell sessions the dashboard can attach to. The
+    # snapshot file lets them survive a daemon restart / app update — on boot the
+    # panes come back (same id + cwd + prior scrollback, fresh shell).
+    terminals = TerminalManager(state_path=config.home / "terminals.json")
 
     # --- Robust feature set ----------------------------------------------
 

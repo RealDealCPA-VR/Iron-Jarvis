@@ -482,6 +482,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "rehydrate_webhooks",
             lambda: platform.inbound_webhooks.rehydrate(_make_webhook_handler),
         )
+        # Terminal panes survive a restart / app update: re-open each persisted
+        # session (fresh shell, same id + cwd + prior scrollback shown).
+        _rehydrate_step("rehydrate_terminals", platform.terminals.rehydrate)
         try:  # GC worktrees orphaned by a prior restart (failed/missing sessions)
             orchestrator.prune_orphan_worktrees()
         except Exception:  # pragma: no cover - never block boot
@@ -665,6 +668,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 backup_task.cancel()
             try:
                 platform.scheduler.shutdown()
+            except Exception:  # pragma: no cover
+                pass
+            try:
+                # Snapshot terminals (fresh scrollback) BEFORE killing them, so an
+                # app-update restart re-opens the panes with their latest history.
+                platform.terminals.snapshot()
             except Exception:  # pragma: no cover
                 pass
             try:
