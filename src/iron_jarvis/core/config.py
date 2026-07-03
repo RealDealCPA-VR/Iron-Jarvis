@@ -153,6 +153,9 @@ class Config(BaseModel):
     self_dev_enabled: bool = False
     self_dev_root: str | None = None
     default_skills: list[str] = Field(default_factory=list)  # auto-injected (§23)
+    # Extra directories to recursively scan for <..>/SKILL.md, on top of the
+    # built-in Claude (~/.claude/skills, plugins) + Codex (~/.codex/skills) roots.
+    extra_skill_paths: list[str] = Field(default_factory=list)
     comm: dict[str, Any] = Field(default_factory=dict)  # communication channels
     search_roots: list[str] = Field(default_factory=list)  # extra file_search roots
     obsidian_vault: str | None = None  # long-term memory vault path

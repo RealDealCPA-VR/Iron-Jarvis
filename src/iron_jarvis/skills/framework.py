@@ -19,6 +19,24 @@ def builtin_dir() -> Path:
     return Path(__file__).resolve().parent / "builtin"
 
 
+def external_skill_roots() -> list[tuple[Path, str]]:
+    """Well-known external skill locations to pull in, each with a source tag.
+
+    Scanned RECURSIVELY (see ``discover_recursive``) so nested layouts are all
+    found — Claude Code skills (``~/.claude/skills/<name>/SKILL.md``), Claude
+    plugin skills (``~/.claude/plugins/**/SKILL.md``), and Codex skills
+    (``~/.codex/skills/**/SKILL.md``, including its ``.system/`` bundles). Only
+    existing directories are returned.
+    """
+    home = Path.home()
+    candidates = [
+        (home / ".claude" / "skills", "claude"),
+        (home / ".claude" / "plugins", "claude"),
+        (home / ".codex" / "skills", "codex"),
+    ]
+    return [(p, tag) for p, tag in candidates if p.is_dir()]
+
+
 def _tokens(text: str) -> list[str]:
     """Lowercase alphanumeric tokens used for relevance ranking."""
     return re.findall(r"[a-z0-9]+", text.lower())
@@ -33,11 +51,12 @@ class SkillRegistry:
     # Allow both ``SkillRegistry.builtin_dir()`` and ``framework.builtin_dir()``.
     builtin_dir = staticmethod(builtin_dir)
 
-    def discover(self, *dirs: Path) -> "SkillRegistry":
-        """Load every ``<dir>/<name>/SKILL.md`` found under each ``dir``.
+    def discover(self, *dirs: Path, source: str = "user") -> "SkillRegistry":
+        """Load every ``<dir>/<name>/SKILL.md`` (one level) found under each ``dir``.
 
-        Missing directories are skipped so callers can pass an as-yet-uncreated
-        ``config.home/'skills'`` safely. Returns self for chaining.
+        Last-wins on name collision. Missing directories are skipped so callers
+        can pass an as-yet-uncreated ``config.home/'skills'`` safely. Returns
+        self for chaining.
         """
         for d in dirs:
             base = Path(d)
@@ -45,8 +64,60 @@ class SkillRegistry:
                 continue
             for child in sorted(base.iterdir()):
                 if child.is_dir() and (child / SKILL_FILE).is_file():
-                    skill = load_skill(child)
+                    try:
+                        skill = load_skill(child, source=source)
+                    except Exception:  # a malformed SKILL.md shouldn't kill discovery
+                        continue
                     self._skills[skill.name] = skill
+        return self
+
+    def discover_recursive(
+        self, *dirs: Path, source: str = "custom", max_files: int = 2000
+    ) -> "SkillRegistry":
+        """Load EVERY ``<root>/**/SKILL.md`` (any depth) under each root.
+
+        This is what picks up Claude/Codex/plugin skills laid out in nested
+        folders. FIRST-wins on name collision, so already-registered builtin/user
+        skills are never clobbered by an external one of the same name. Bounded
+        (``max_files`` per root) and fault-tolerant (a bad SKILL.md is skipped).
+        """
+        for d in dirs:
+            base = Path(d)
+            if not base.is_dir():
+                continue
+            try:
+                files = sorted(base.rglob(SKILL_FILE))
+            except OSError:
+                continue
+            for md in files[:max_files]:
+                try:
+                    skill = load_skill(md.parent, source=source)
+                except Exception:
+                    continue
+                if skill.name and skill.name not in self._skills:
+                    self._skills[skill.name] = skill
+        return self
+
+    def repopulate(
+        self, home: Path, extra_paths: list[str] | None = None
+    ) -> "SkillRegistry":
+        """Rebuild the WHOLE registry IN PLACE from every source, in precedence
+        order: builtin < user < external (Claude/Codex) < custom paths, with
+        builtin/user winning over external of the same name.
+
+        In-place (clears + refills ``self._skills``) so the two skill tools bound
+        to this registry keep seeing the current set — used at boot and on rescan.
+        """
+        self._skills.clear()
+        self.discover(builtin_dir(), source="builtin")
+        self.discover(Path(home) / "skills", source="user")
+        for root, tag in external_skill_roots():
+            self.discover_recursive(root, source=tag)
+        for extra in extra_paths or []:
+            try:
+                self.discover_recursive(Path(extra).expanduser(), source="custom")
+            except (OSError, ValueError):
+                continue
         return self
 
     def get(self, name: str) -> Skill | None:

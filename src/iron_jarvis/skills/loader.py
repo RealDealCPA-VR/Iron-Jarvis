@@ -61,6 +61,10 @@ class Skill:
     examples: list[str] = field(default_factory=list)
     scripts: list[str] = field(default_factory=list)
     templates: list[str] = field(default_factory=list)
+    #: Where this skill came from — "builtin", "user", "claude", "codex", or
+    #: "custom" (a user-added search path). Surfaced in the dashboard so it's
+    #: clear which skills are Iron Jarvis's own vs pulled in from Claude/Codex.
+    source: str = "user"
 
 
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
@@ -82,9 +86,10 @@ def _list_files(directory: Path) -> list[str]:
     return []
 
 
-def load_skill(dir: Path) -> Skill:
+def load_skill(dir: Path, source: str = "user") -> Skill:
     """Load ``dir/SKILL.md`` into a :class:`Skill` (§23).
 
+    ``source`` tags where the skill came from (builtin/user/claude/codex/custom).
     Raises ``FileNotFoundError`` with a clear message if SKILL.md is missing.
     """
     skill_dir = Path(dir)
@@ -104,4 +109,5 @@ def load_skill(dir: Path) -> Skill:
         examples=_list_files(skill_dir / "examples"),
         scripts=_list_files(skill_dir / "scripts"),
         templates=_list_files(skill_dir / "templates"),
+        source=source,
     )

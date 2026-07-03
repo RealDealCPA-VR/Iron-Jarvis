@@ -1,10 +1,31 @@
 "use client";
 
 import { useState } from "react";
-import { Sparkles, BookOpen, Plus, Save } from "lucide-react";
+import { Sparkles, BookOpen, Plus, Save, RefreshCw } from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { post, ApiError } from "@/lib/api";
 import type { Skill, SkillDetail } from "@/lib/types";
+
+// Where a skill came from — a small colored badge so Claude/Codex skills are
+// visually distinct from Iron Jarvis's own.
+const SOURCE_META: Record<string, { label: string; cls: string }> = {
+  claude: { label: "Claude", cls: "border-orange-500/30 bg-orange-500/10 text-orange-300" },
+  codex: { label: "Codex", cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" },
+  builtin: { label: "Built-in", cls: "border-accent/30 bg-accent/10 text-accent-soft" },
+  user: { label: "Yours", cls: "border-violet-500/30 bg-violet-500/10 text-violet-300" },
+  custom: { label: "Custom", cls: "border-sky-500/30 bg-sky-500/10 text-sky-300" },
+};
+
+function SourceBadge({ source }: { source?: string }) {
+  const meta = SOURCE_META[source ?? "user"] ?? SOURCE_META.user;
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${meta.cls}`}
+    >
+      {meta.label}
+    </span>
+  );
+}
 import {
   Card,
   Spinner,
@@ -19,9 +40,28 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 
 export default function SkillsPage() {
-  const { data, error, loading, reload } = useApi<{ skills: Skill[] }>("/skills");
+  const { data, error, loading, reload } = useApi<{
+    skills: Skill[];
+    counts?: Record<string, number>;
+  }>("/skills");
   const [selected, setSelected] = useState<string | null>(null);
   const detail = useApi<SkillDetail>(selected ? `/skills/${selected}` : null, [selected]);
+
+  // Filter by source (All / Claude / Codex / …) + a re-scan action so newly
+  // added external skills show up without restarting the daemon.
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const [rescanning, setRescanning] = useState(false);
+  async function rescan() {
+    setRescanning(true);
+    try {
+      await post("/skills/rescan");
+      reload();
+    } catch {
+      /* offline — the list just stays as-is */
+    } finally {
+      setRescanning(false);
+    }
+  }
 
   // --- New-skill form state -------------------------------------------------
   const [showForm, setShowForm] = useState(false);
@@ -33,7 +73,15 @@ export default function SkillsPage() {
   const [created, setCreated] = useState<string | null>(null);
 
   const offline = error && error.status === 0;
-  const skills = data?.skills ?? [];
+  const allSkills = data?.skills ?? [];
+  const counts = data?.counts ?? {};
+  const skills =
+    sourceFilter === "all"
+      ? allSkills
+      : allSkills.filter((s) => (s.source ?? "user") === sourceFilter);
+  // Sources present, ordered, for the filter chips (only show chips that exist).
+  const sourceOrder = ["user", "claude", "codex", "builtin", "custom"];
+  const presentSources = sourceOrder.filter((s) => (counts[s] ?? 0) > 0);
   const canSubmit = !busy && name.trim().length > 0 && instructions.trim().length > 0;
 
   function resetForm() {
@@ -71,18 +119,28 @@ export default function SkillsPage() {
       <Reveal>
         <PageHeader
           title="Skills"
-          subtitle="Reusable skills your agents can call on to handle specialized tasks faster."
+          subtitle="Reusable skills your agents call on for specialized tasks — including the ones you already have in Claude Code and Codex, discovered automatically."
           actions={
-            <button
-              onClick={() => {
-                setShowForm((v) => !v);
-                setCreated(null);
-                setFormError(null);
-              }}
-              className={`${showForm ? "btn-ghost" : "btn-accent"} py-1.5 text-xs`}
-            >
-              <Plus size={14} /> New skill
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={rescan}
+                disabled={rescanning}
+                title="Re-scan Claude, Codex, and your skill folders"
+                className="btn-ghost py-1.5 text-xs disabled:opacity-50"
+              >
+                <RefreshCw size={14} className={rescanning ? "animate-spin" : ""} /> Rescan
+              </button>
+              <button
+                onClick={() => {
+                  setShowForm((v) => !v);
+                  setCreated(null);
+                  setFormError(null);
+                }}
+                className={`${showForm ? "btn-ghost" : "btn-accent"} py-1.5 text-xs`}
+              >
+                <Plus size={14} /> New skill
+              </button>
+            </div>
           }
         />
       </Reveal>
@@ -180,13 +238,43 @@ export default function SkillsPage() {
               </Card>
             )}
 
-            <Card title={`Available · ${skills.length}`} icon={<Sparkles size={15} />}>
+            <Card title={`Available · ${allSkills.length}`} icon={<Sparkles size={15} />}>
+              {/* Source filter chips — only sources that actually exist show up. */}
+              {presentSources.length > 1 && (
+                <div className="mb-3 flex flex-wrap gap-1.5">
+                  <button
+                    onClick={() => setSourceFilter("all")}
+                    className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+                      sourceFilter === "all"
+                        ? "border-white/20 bg-white/10 text-zinc-100"
+                        : "border-white/10 text-zinc-400 hover:bg-white/[0.04]"
+                    }`}
+                  >
+                    All {allSkills.length}
+                  </button>
+                  {presentSources.map((src) => {
+                    const meta = SOURCE_META[src] ?? SOURCE_META.user;
+                    const active = sourceFilter === src;
+                    return (
+                      <button
+                        key={src}
+                        onClick={() => setSourceFilter(src)}
+                        className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+                          active ? meta.cls : "border-white/10 text-zinc-400 hover:bg-white/[0.04]"
+                        }`}
+                      >
+                        {meta.label} {counts[src]}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               {loading && !data ? (
                 <SkeletonRows rows={5} />
               ) : skills.length === 0 ? (
                 <Empty icon={<Sparkles size={22} />}>No skills.</Empty>
               ) : (
-                <ul className="space-y-1">
+                <ul className="max-h-[70vh] space-y-1 overflow-auto">
                   {skills.map((s) => (
                     <li key={s.name}>
                       <button
@@ -197,7 +285,10 @@ export default function SkillsPage() {
                             : "border-transparent text-zinc-300 hover:border-white/10 hover:bg-white/[0.04]"
                         }`}
                       >
-                        <div className="font-medium">{s.name}</div>
+                        <div className="flex items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate font-medium">{s.name}</span>
+                          <SourceBadge source={s.source} />
+                        </div>
                         <div className="truncate text-xs text-zinc-500">{s.description}</div>
                       </button>
                     </li>

@@ -8,7 +8,7 @@ that the orchestrator can search and inject into an agent's system prompt.
 
 from __future__ import annotations
 
-from .framework import SkillRegistry, builtin_dir
+from .framework import SkillRegistry, builtin_dir, external_skill_roots
 from .loader import Skill, load_skill, save_skill, slugify
 from .tools import SkillLoadTool, SkillSearchTool, skill_tools
 
@@ -19,6 +19,7 @@ __all__ = [
     "slugify",
     "SkillRegistry",
     "builtin_dir",
+    "external_skill_roots",
     "SkillSearchTool",
     "SkillLoadTool",
     "skill_tools",

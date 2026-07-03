@@ -116,6 +116,8 @@ export interface MemoryResult {
 export interface Skill {
   name: string;
   description: string;
+  /** Where the skill came from: builtin | user | claude | codex | custom. */
+  source?: string;
 }
 
 export interface SkillDetail extends Skill {

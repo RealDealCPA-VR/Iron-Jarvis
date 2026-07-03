@@ -1238,31 +1238,56 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     # --- Skills (§23) -----------------------------------------------------
 
+    def _rescan_skills() -> dict[str, int]:
+        """Rebuild the skill registry IN PLACE from every source and return a
+        per-source tally. Shared by boot-adjacent create/rescan endpoints."""
+        platform.skills.repopulate(
+            platform.config.home, getattr(platform.config, "extra_skill_paths", None)
+        )
+        counts: dict[str, int] = {}
+        for s in platform.skills.list():
+            counts[s.source] = counts.get(s.source, 0) + 1
+        return counts
+
     @app.get("/skills")
     def skills() -> dict[str, Any]:
-        return {
-            "skills": [
-                {"name": s.name, "description": s.description}
-                for s in platform.skills.list()
-            ]
-        }
+        items = [
+            {"name": s.name, "description": s.description, "source": s.source}
+            for s in platform.skills.list()
+        ]
+        # A per-source tally so the dashboard can show "12 Claude · 8 Codex · …".
+        counts: dict[str, int] = {}
+        for it in items:
+            counts[it["source"]] = counts.get(it["source"], 0) + 1
+        return {"skills": items, "counts": counts}
 
     @app.get("/skills/{name}")
     def skill(name: str) -> dict[str, Any]:
         sk = platform.skills.get(name)
         if sk is None:
             raise HTTPException(status_code=404, detail="no such skill")
-        return {"name": sk.name, "description": sk.description, "instructions": sk.instructions}
+        return {
+            "name": sk.name,
+            "description": sk.description,
+            "instructions": sk.instructions,
+            "source": sk.source,
+        }
+
+    @app.post("/skills/rescan")
+    def rescan_skills() -> dict[str, Any]:
+        """Re-scan every source (builtin + user + Claude + Codex + extra paths)
+        so newly-added external skills show up without restarting the daemon."""
+        counts = _rescan_skills()
+        return {"total": sum(counts.values()), "counts": counts}
 
     @app.post("/skills")
     def create_skill(body: SkillCreate) -> dict[str, Any]:
         """Author a new skill (name + description + instructions).
 
-        Persists ``<home>/skills/<slug>/SKILL.md`` and re-discovers so it shows
-        up immediately — user skills sit alongside the built-ins and are
-        searchable/injectable by agents exactly the same way.
+        Persists ``<home>/skills/<slug>/SKILL.md`` and re-scans so it shows up
+        immediately — user skills sit alongside the built-ins and the pulled-in
+        Claude/Codex skills, searchable/injectable by agents the same way.
         """
-        from ..skills import builtin_dir as _builtin_dir
         from ..skills import save_skill as _save_skill
 
         try:
@@ -1274,8 +1299,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        # Re-discover so the new skill is live without a restart.
-        platform.skills.discover(_builtin_dir(), platform.config.home / "skills")
+        # Re-scan so the new skill (and any external ones) are live without a restart.
+        _rescan_skills()
         sk = platform.skills.get(body.name.strip())
         return {"name": sk.name if sk else body.name, "created": True}
 

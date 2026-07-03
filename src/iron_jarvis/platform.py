@@ -37,7 +37,7 @@ from .eval.observability import Observability
 from .memory.layers import MemoryLayers
 from .memory.tools import memory_tools
 from .sandbox.shell_tool import SandboxedShellTool
-from .skills import SkillRegistry, builtin_dir, skill_tools
+from .skills import SkillRegistry, skill_tools
 from .workflows import models as _wf_models  # noqa: F401  (registers WorkflowRunRecord)
 
 # Robust feature set (each importing its package registers any SQLModel tables).
@@ -258,8 +258,13 @@ def build_platform(
     for tool in memory_tools(memory):
         registry.register(tool)
 
-    # Phase 11: skills framework (builtin + project-local), exposed as tools.
-    skills = SkillRegistry().discover(builtin_dir(), config.home / "skills")
+    # Phase 11: skills framework — builtin + user + external Claude/Codex skills
+    # (recursively discovered) + any user-configured extra paths, exposed as the
+    # search/load tools (which read the registry live, so more skills = richer
+    # results, not more tools).
+    skills = SkillRegistry().repopulate(
+        config.home, getattr(config, "extra_skill_paths", None)
+    )
     for tool in skill_tools(skills):
         registry.register(tool)
 
