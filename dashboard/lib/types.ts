@@ -223,6 +223,17 @@ export interface Shell {
   argv: string[];
 }
 
+/** An AI coding CLI (Claude Code, Codex, …) detected on this machine. */
+export interface AiCli {
+  id: string;
+  label: string;
+  command: string; // exact text to type into the shell
+  provider: string;
+  url: string; // install/docs page (for ones not yet installed)
+  installed: boolean;
+  path?: string | null;
+}
+
 /* ---- Filesystem directory browser (terminals tree panel) ----------------- */
 /** A single directory child surfaced by the on-demand tree lister. */
 export interface FsEntry {

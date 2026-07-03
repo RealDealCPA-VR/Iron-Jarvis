@@ -9,17 +9,19 @@ import { useRouter } from "next/navigation";
 import "@xterm/xterm/css/xterm.css";
 import {
   CornerDownLeft,
+  ExternalLink,
   Loader2,
   Play,
   Plug,
   PlugZap,
+  Rocket,
   Sparkles,
   Terminal as TerminalIcon,
   Workflow,
   X,
 } from "lucide-react";
 import { ApiError, post, wsUrl } from "@/lib/api";
-import type { ModelOption, TerminalInfo } from "@/lib/types";
+import type { AiCli, ModelOption, TerminalInfo } from "@/lib/types";
 
 type AIResult = { reply: string; command: string; provider: string; model: string };
 
@@ -56,6 +58,7 @@ export function TerminalPane({
   onFocus,
   onClose,
   models = [],
+  aiClis = [],
 }: {
   info: TerminalInfo;
   focused: boolean;
@@ -63,9 +66,13 @@ export function TerminalPane({
   onClose: () => void;
   /** Model catalog for the PER-PANE AI assist picker (from /models). */
   models?: ModelOption[];
+  /** AI CLIs detected on this machine, for the "Launch" dropdown. */
+  aiClis?: AiCli[];
 }) {
   const router = useRouter();
   const holderRef = useRef<HTMLDivElement | null>(null);
+  // The live xterm instance, so we can refocus it after typing a launch command.
+  const termRef = useRef<{ focus: () => void } | null>(null);
   const [state, setState] = useState<ConnState>("connecting");
   // The live WS, exposed to the AI bar so "Run" can type into THIS shell.
   const wsRef = useRef<WebSocket | null>(null);
@@ -126,6 +133,23 @@ export function TerminalPane({
     } finally {
       setWfBusy(false);
     }
+  }
+
+  // --- Launch an installed AI CLI (claude / codex / …) in THIS shell --------
+  const [launchOpen, setLaunchOpen] = useState(false);
+  const [launchHint, setLaunchHint] = useState<string | null>(null);
+  const installedClis = aiClis.filter((c) => c.installed);
+  const notInstalledClis = aiClis.filter((c) => !c.installed);
+
+  function launchCli(cli: AiCli) {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    // Type the launch command WITHOUT a newline — the user presses Enter to
+    // actually start it (a last look, same as the AI "Run" suggestion).
+    ws.send(cli.command);
+    termRef.current?.focus();
+    setLaunchHint(cli.label);
+    window.setTimeout(() => setLaunchHint(null), 5000);
   }
 
   function runSuggested() {
@@ -238,6 +262,7 @@ export function TerminalPane({
       fit = new FitAddon();
       term.loadAddon(fit);
       term.open(holder);
+      termRef.current = term; // expose for launch-command refocus
       doFit();
 
       // Client -> server: raw keystrokes as text.
@@ -259,6 +284,7 @@ export function TerminalPane({
     return () => {
       disposed = true;
       wsRef.current = null;
+      termRef.current = null;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       window.removeEventListener("resize", onWinResize);
       ro?.disconnect();
@@ -280,7 +306,7 @@ export function TerminalPane({
   return (
     <div
       onMouseDown={onFocus}
-      className={`group flex h-full flex-col overflow-hidden rounded-2xl border bg-[#0a0c11] shadow-card transition-colors ${
+      className={`group relative flex h-full flex-col overflow-hidden rounded-2xl border bg-[#0a0c11] shadow-card transition-colors ${
         focused
           ? "border-accent/50 shadow-glow-sm ring-1 ring-accent/30"
           : "border-white/[0.07] hover:border-white/[0.14]"
@@ -340,6 +366,20 @@ export function TerminalPane({
         >
           {wfBusy ? <Loader2 size={13} className="animate-spin" /> : <Workflow size={13} />}
         </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setLaunchOpen((v) => !v);
+          }}
+          title="Launch an AI CLI in this terminal (Claude, Codex, …)"
+          className={`grid h-5 w-5 shrink-0 place-items-center rounded-md transition-colors ${
+            launchOpen
+              ? "bg-accent/15 text-accent"
+              : "text-zinc-500 hover:bg-accent/15 hover:text-accent-soft"
+          }`}
+        >
+          <Rocket size={13} />
+        </button>
         {info.degraded && (
           <span
             title="Basic shell (no full TTY) — commands run, but interactive TUI apps may not render. The full terminal returns after the next app update."
@@ -360,6 +400,69 @@ export function TerminalPane({
           <X size={13} />
         </button>
       </header>
+
+      {/* Launch dropdown — the AI CLIs actually installed on this machine.
+          Picking one TYPES its command into the shell; the user presses Enter. */}
+      {launchOpen && (
+        <>
+          <button
+            aria-hidden
+            tabIndex={-1}
+            onClick={() => setLaunchOpen(false)}
+            className="fixed inset-0 z-30 cursor-default"
+          />
+          <div className="absolute right-2 top-11 z-40 max-h-[70%] w-60 overflow-auto rounded-xl border border-white/10 bg-ink-900/95 p-1 shadow-card backdrop-blur">
+            {installedClis.length === 0 && notInstalledClis.length === 0 && (
+              <div className="px-2 py-2 text-[11px] text-zinc-500">Detecting…</div>
+            )}
+            {installedClis.length > 0 && (
+              <div className="px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                Installed — click to type, then Enter
+              </div>
+            )}
+            {installedClis.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => {
+                  launchCli(c);
+                  setLaunchOpen(false);
+                }}
+                className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] text-zinc-200 transition-colors hover:bg-accent/10 hover:text-accent-soft"
+              >
+                <span className="flex items-center gap-2">
+                  <Rocket size={12} className="text-accent-soft/80" />
+                  <span className="font-medium">{c.label}</span>
+                </span>
+                <span className="font-mono text-[10px] text-zinc-500">{c.command.trim()}</span>
+              </button>
+            ))}
+            {notInstalledClis.length > 0 && (
+              <div className="px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
+                Not installed
+              </div>
+            )}
+            {notInstalledClis.map((c) => (
+              <a
+                key={c.id}
+                href={c.url}
+                target="_blank"
+                rel="noreferrer"
+                title={`${c.label} isn't on your PATH — get it`}
+                className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.04]"
+              >
+                <span>{c.label}</span>
+                <ExternalLink size={11} />
+              </a>
+            ))}
+          </div>
+        </>
+      )}
+      {launchHint && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-accent/20 bg-accent/[0.06] px-3 py-1 text-[11px] text-accent-soft">
+          <CornerDownLeft size={12} /> Press <span className="font-semibold">Enter</span> in the
+          terminal to start {launchHint}.
+        </div>
+      )}
 
       {/* AI assist bar — asks about THIS terminal's recent output; the answer's
           command is only ever TYPED into the shell (never auto-submitted). */}

@@ -1633,6 +1633,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         return {"shells": available_shells()}
 
+    @app.get("/terminals/ai-clis")
+    def terminal_ai_clis() -> dict[str, Any]:
+        """Which AI coding CLIs (Claude Code, Codex, Grok, opencode, …) are
+        installed on this machine — so a terminal pane can offer a "Launch"
+        dropdown that types the command for the user to run."""
+        from ..terminals.ai_clis import detect_ai_clis
+
+        return {"clis": detect_ai_clis()}
+
     @app.post("/terminals")
     def create_terminal(body: TerminalCreate) -> dict[str, Any]:
         try:
