@@ -145,6 +145,21 @@ class AgentRuntime:
                 system_prompt += self._project_context(session)
             except Exception:  # noqa: BLE001 — the spine must never break a run
                 pass
+        # ENVIRONMENT: agents kept mistaking the scratch workspace for the
+        # user's real files ("list my Downloads" -> listing an empty sandbox,
+        # burning tokens). Spell out the split + the real home directory.
+        try:
+            system_prompt += (
+                "\n\n# Environment\n"
+                f"- The user's real home directory: {Path.home()}\n"
+                "- Your file tools (read_file/write_file/list_files) operate in a "
+                "SCRATCH workspace — it is NOT where the user's files live.\n"
+                "- For the user's REAL folders/files (Downloads, Documents, ...) "
+                "use list_folder / read_document / convert_document with "
+                "ABSOLUTE paths (reads are policy-gated).\n"
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
         for step in range(self.p.config.max_agent_steps):
             route = await self.p.router.complete(

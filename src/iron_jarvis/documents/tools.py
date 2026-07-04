@@ -43,6 +43,58 @@ def _truncate(text: str) -> tuple[str, bool]:
     return text[:_MAX_OUTPUT] + note, True
 
 
+class ListFolderTool(Tool):
+    name = "list_folder"
+    description = (
+        "List a REAL folder anywhere on this machine (e.g. the user's Downloads "
+        "or Documents) — name, size, modified time per entry, biggest first. Use "
+        "ABSOLUTE paths for the user's actual files (the session workspace is "
+        "only a scratch area). Reads are policy-gated."
+    )
+    permission_key = "list_folder"
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Absolute folder path (or workspace-relative)"},
+            "limit": {"type": "number", "description": "Max entries (default 200)"},
+        },
+        "required": ["path"],
+    }
+
+    async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        folder = _resolve_read_path(str(args.get("path", "")), ctx)
+        ok, reason = fs_read_ok(str(folder))
+        if not ok:
+            return ToolResult(ok=False, error=f"read denied: {reason}")
+        if not folder.is_dir():
+            return ToolResult(ok=False, error=f"not a folder: {folder}")
+        limit = max(1, min(int(args.get("limit") or 200), 1000))
+        entries: list[tuple[str, bool, int, float]] = []
+        try:
+            for p in folder.iterdir():
+                try:
+                    st = p.stat()
+                    entries.append((p.name, p.is_dir(), st.st_size, st.st_mtime))
+                except OSError:
+                    continue
+        except OSError as exc:
+            return ToolResult(ok=False, error=f"could not list {folder}: {exc}")
+        entries.sort(key=lambda e: e[2], reverse=True)  # biggest first
+        shown = entries[:limit]
+        from datetime import datetime
+
+        lines = [
+            f"{'DIR  ' if is_dir else ''}{name}  —  {size:,} bytes  —  "
+            f"{datetime.fromtimestamp(mtime):%Y-%m-%d %H:%M}"
+            for name, is_dir, size, mtime in shown
+        ]
+        header = f"{folder} — {len(entries)} entries" + (
+            f" (showing {len(shown)})" if len(shown) < len(entries) else ""
+        )
+        body = header + ("\n" + "\n".join(lines) if lines else "\n(empty)")
+        return ToolResult(ok=True, output=body, data={"path": str(folder), "total": len(entries)})
+
+
 class ReadDocumentTool(Tool):
     name = "read_document"
     returns_untrusted_content = True  # a read file can carry planted instructions
@@ -266,4 +318,5 @@ def document_tools() -> list[Tool]:
         WriteDocumentTool(),
         ExtractPdfTool(),
         ConvertDocumentTool(),
+        ListFolderTool(),
     ]
