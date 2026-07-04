@@ -2747,6 +2747,28 @@ def create_app(project_root: str | None = None) -> FastAPI:
             {"key": "channel", "label": "Channel (option B)", "secret": False,
              "help": "Where messages go, e.g. #general or a channel ID (C0123…). "
                      "Invite the bot to the channel: /invite @Iron Jarvis."},
+            {"key": "signing_secret", "label": "Signing secret (two-way)", "secret": True,
+             "help": "App → Basic Information → Signing Secret. UNLOCKS inbound "
+                     "events: point Slack's Event Subscriptions request URL at "
+                     "/comm/slack/events/<channel-name> (needs a public URL — "
+                     "e.g. a Tailscale funnel); Iron Jarvis verifies every "
+                     "request against this secret."},
+            {"key": "app_id", "label": "App ID (optional)", "secret": False,
+             "help": "Basic Information → App ID (A0…). Stored for reference."},
+            {"key": "client_id", "label": "Client ID (optional)", "secret": False,
+             "help": "Basic Information → Client ID. Stored (vault) for future "
+                     "OAuth installs to other workspaces."},
+            {"key": "client_secret", "label": "Client secret (optional)", "secret": True,
+             "help": "Basic Information → Client Secret. Stored encrypted for "
+                     "future OAuth installs."},
+            {"key": "verification_token", "label": "Verification token (optional)", "secret": True,
+             "help": "Basic Information → Verification Token (legacy — Slack "
+                     "deprecates it in favor of the signing secret). Stored "
+                     "encrypted."},
+            {"key": "app_token", "label": "App-level token (optional)", "secret": True,
+             "help": "xapp-… from Basic Information → App-Level Tokens "
+                     "(connections:write). Stored encrypted for upcoming Socket "
+                     "Mode support (two-way without a public URL)."},
         ],
         "discord": [
             {"key": "webhook_url", "label": "Webhook URL", "secret": False,
@@ -2816,8 +2838,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     "manifest": _CHANNEL_MANIFESTS.get(t),
                     "manifest_help": (
                         "Create the Slack app in one paste: api.slack.com/apps → "
-                        "Create New App → From an app manifest → paste this YAML. "
-                        "Then install it to your workspace and copy the Bot token."
+                        "Create New App → From an app manifest → paste this YAML, "
+                        "then install it to your workspace and copy the Bot token "
+                        "(plus the Signing Secret from Basic Information for "
+                        "two-way events — point Slack's Event Subscriptions "
+                        "request URL at /comm/slack/events/<channel-name> once "
+                        "this machine is reachable, e.g. via a Tailscale funnel)."
                         if t == "slack"
                         else None
                     ),
@@ -2895,6 +2921,60 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     except Exception:  # noqa: BLE001
                         pass
         return {"name": name, "removed": removed or cfg is not None}
+
+    @app.post("/comm/slack/events/{name}")
+    async def slack_events(name: str, request: Request) -> dict[str, Any]:
+        """Slack Events API receiver for channel ``name``.
+
+        The path is token-exempt because Slack cannot carry our bearer — the
+        SLACK SIGNATURE is the auth: fail-closed on the channel's stored
+        signing secret (v0 HMAC-SHA256 over "v0:{ts}:{body}", ±5 min replay
+        window). Handles Slack's url_verification challenge, then publishes
+        real events onto the event bus for the rest of the platform to react.
+        """
+        import hashlib
+        import hmac as _hmac
+        import time as _time
+
+        raw = await request.body()
+        cfg = (((platform.config.comm or {}).get("channels")) or {}).get(name) or {}
+        if cfg.get("type") != "slack":
+            raise HTTPException(status_code=404, detail="no such slack channel")
+        secret_name = cfg.get("signing_secret_secret")
+        signing = platform.secrets.get(secret_name) if secret_name else None
+        if not signing:
+            raise HTTPException(
+                status_code=403,
+                detail="this channel has no signing secret configured — add it "
+                "on the Channels page before enabling Event Subscriptions",
+            )
+        ts = request.headers.get("X-Slack-Request-Timestamp") or ""
+        sig = request.headers.get("X-Slack-Signature") or ""
+        try:
+            if abs(_time.time() - float(ts)) > 300:
+                raise HTTPException(status_code=403, detail="stale slack timestamp")
+        except ValueError:
+            raise HTTPException(status_code=403, detail="bad slack timestamp")
+        base = f"v0:{ts}:".encode() + raw
+        expected = "v0=" + _hmac.new(signing.encode(), base, hashlib.sha256).hexdigest()
+        if not _hmac.compare_digest(expected, sig):
+            raise HTTPException(status_code=403, detail="invalid slack signature")
+
+        body = json.loads(raw or b"{}")
+        if body.get("type") == "url_verification":
+            return {"challenge": body.get("challenge", "")}
+        event = body.get("event") or {}
+        await platform.event_bus.publish(
+            "slack.event",
+            {
+                "channel_name": name,
+                "event_type": str(event.get("type") or ""),
+                "text": str(event.get("text") or "")[:2000],
+                "user": str(event.get("user") or ""),
+                "slack_channel": str(event.get("channel") or ""),
+            },
+        )
+        return {"ok": True}
 
     @app.post("/comm/channels/{name}/test")
     def test_comm_channel(name: str) -> dict[str, Any]:

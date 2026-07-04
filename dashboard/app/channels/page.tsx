@@ -109,7 +109,9 @@ export default function ChannelsPage() {
   const [addSuccess, setAddSuccess] = useState<string | null>(null);
 
   /* --- One-paste app manifest (slack) --------------------------------------- */
-  const [manifestOpen, setManifestOpen] = useState(false);
+  // Open by default — the one-paste manifest is the EASIEST setup path and was
+  // getting missed when tucked behind a collapsed toggle.
+  const [manifestOpen, setManifestOpen] = useState(true);
   const [manifestCopied, setManifestCopied] = useState(false);
 
   /* --- Delete channel ------------------------------------------------------ */

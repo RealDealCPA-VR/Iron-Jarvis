@@ -175,6 +175,11 @@ def _is_exempt(path: str) -> bool:
     # Authorization header; allow /oauth/<provider>/callback through.
     if path.startswith("/oauth/") and path.endswith("/callback"):
         return True
+    # Slack Events API receiver: Slack cannot carry our bearer token — its
+    # REQUEST SIGNATURE is the auth (verified fail-closed in the handler with
+    # the channel's signing secret; no secret configured = 403).
+    if path.startswith("/comm/slack/events/"):
+        return True
     return False
 
 
