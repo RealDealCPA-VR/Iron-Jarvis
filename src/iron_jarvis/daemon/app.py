@@ -1795,6 +1795,47 @@ def create_app(project_root: str | None = None) -> FastAPI:
             except Exception:
                 pass
 
+    def _failover_adapter(exclude: str):
+        """Another AVAILABLE real provider to absorb a rate-limited one-shot
+        call (e.g. Claude Max window exhausted -> use the OpenAI connection).
+        Returns (adapter, provider) or (None, None). Never picks mock."""
+        order = ["anthropic", "openai", "google", "xai", "openrouter", "ollama", "custom"]
+        # Prefer the DEFAULT provider first when it isn't the one that failed.
+        dp = platform.config.default_provider
+        if dp in order:
+            order.remove(dp)
+            order.insert(0, dp)
+        for p in order:
+            if p == exclude or not platform.providers.available(p):
+                continue
+            try:
+                return platform.providers.get(p), p
+            except Exception:  # noqa: BLE001 — try the next one
+                continue
+        return None, None
+
+    async def _one_shot_complete(provider: str, adapter, *, system: str, messages):
+        """Complete a ONE-SHOT utility call (terminal assist / workflow builder)
+        with retry-on-transient, then CROSS-PROVIDER failover when the provider
+        stays rate-limited and another real provider is connected. Returns
+        (response, used_provider, used_model). Raises a clean HTTPException."""
+        try:
+            resp = await _complete_with_retry(
+                adapter, system=system, messages=messages, tools=[]
+            )
+            return resp, provider, getattr(adapter, "model", None)
+        except Exception as exc:  # noqa: BLE001 — classified below
+            if not _is_transient_provider_error(exc):
+                raise _provider_error_http(exc)
+            alt, alt_provider = _failover_adapter(provider)
+            if alt is None:
+                raise _provider_error_http(exc)
+            try:
+                resp = await alt.complete(system=system, messages=messages, tools=[])
+                return resp, alt_provider, getattr(alt, "model", None)
+            except Exception:  # noqa: BLE001 — surface the ORIGINAL rate limit
+                raise _provider_error_http(exc)
+
     @app.post("/terminals/{term_id}/ai")
     async def terminal_ai(term_id: str, body: TerminalAIBody) -> dict[str, Any]:
         """Per-terminal AI assist with a PER-PANE model choice.
@@ -1830,20 +1871,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
             f"Recent terminal output (truncated):\n\n{tail}\n\n"
             f"Request: {body.prompt}"
         )
-        try:
-            resp = await _complete_with_retry(
-                adapter,
-                system=system,
-                messages=[LLMMessage(role="user", content=user)],
-                tools=[],
-            )
-        except Exception as exc:  # provider/network error — surface, don't 500
-            raise _provider_error_http(exc)
+        resp, used_provider, used_model = await _one_shot_complete(
+            provider,
+            adapter,
+            system=system,
+            messages=[LLMMessage(role="user", content=user)],
+        )
         return {
             "reply": resp.text,
             "command": _first_code_block(resp.text),
-            "provider": provider,
-            "model": model,
+            "provider": used_provider,
+            "model": used_model or model,
         }
 
     @app.post("/terminals/{term_id}/workflow")
@@ -1994,15 +2032,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 "\n\nRefine THIS existing workflow (return the full updated "
                 f"workflow):\n{_json.dumps(current)}"
             )
-        try:
-            resp = await _complete_with_retry(
-                adapter,
-                system=system,
-                messages=[LLMMessage(role="user", content=user)],
-                tools=[],
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise _provider_error_http(exc)
+        resp, _used_provider, _used_model = await _one_shot_complete(
+            provider,
+            adapter,
+            system=system,
+            messages=[LLMMessage(role="user", content=user)],
+        )
 
         # Extract the first JSON object from the reply (tolerant of stray prose).
         text = resp.text or ""

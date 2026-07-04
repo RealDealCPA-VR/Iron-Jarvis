@@ -71,3 +71,58 @@ def test_transient_classifier():
 def test_http_mapping():
     assert _provider_error_http(RuntimeError("429 rate_limit_error")).status_code == 429
     assert _provider_error_http(RuntimeError("model not found")).status_code == 502
+
+
+def test_workflow_generate_fails_over_to_another_provider(tmp_path, monkeypatch):
+    """A rate-limited provider fails over to the OTHER connected provider."""
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.daemon.app import create_app
+    import iron_jarvis.daemon.app as appmod
+
+    # Make retries instant.
+    _orig_sleep = appmod.asyncio.sleep
+
+    async def _fast(_d):
+        await _orig_sleep(0)
+
+    monkeypatch.setattr(appmod.asyncio, "sleep", _fast)
+
+    app = create_app(str(tmp_path))
+    client = TestClient(app)
+    platform = app.state.platform
+
+    class _RateLimited:
+        provider, model = "anthropic", "claude-x"
+
+        async def complete(self, *, system, messages, tools):
+            raise RuntimeError("Error code: 429 - rate_limit_error")
+
+    class _Works:
+        provider, model = "openai", "gpt-ok"
+
+        async def complete(self, *, system, messages, tools):
+            from iron_jarvis.providers.adapters.base import LLMResponse
+
+            return LLMResponse(
+                text='{"name":"from-failover","description":"d","steps":'
+                '[{"name":"s1","agent":"builder","task":"do it","tool":null}]}',
+                tool_calls=[],
+                usage={},
+            )
+
+    monkeypatch.setattr(
+        platform.providers,
+        "get",
+        lambda p, m=None: _RateLimited() if p == "anthropic" else _Works(),
+    )
+    monkeypatch.setattr(
+        platform.providers, "available", lambda p: p in {"anthropic", "openai"}
+    )
+
+    r = client.post(
+        "/workflows/generate",
+        json={"description": "x", "provider": "anthropic", "model": "claude-x"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "from-failover"
