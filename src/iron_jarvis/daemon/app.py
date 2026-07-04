@@ -184,6 +184,46 @@ def _first_code_block(text: str) -> str:
     return m.group(1).strip() if m else ""
 
 
+#: Substrings that mark a TRANSIENT provider failure worth retrying (rate
+#: limits and momentary overload — not auth/model errors).
+_TRANSIENT_MARKERS = ("429", "rate_limit", "rate limit", "overloaded", "529", "503")
+
+
+def _is_transient_provider_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(m in msg for m in _TRANSIENT_MARKERS)
+
+
+async def _complete_with_retry(adapter, *, system, messages, tools, attempts: int = 3):
+    """One-shot agent utilities (workflow builder, terminal assist) call the
+    adapter directly — retry TRANSIENT failures (rate limit / overloaded) with
+    backoff instead of surfacing a raw 429 on the first blip. Non-transient
+    errors raise immediately; the last transient error raises after the final
+    attempt (callers map it to a clean HTTP 429)."""
+    delay = 1.5
+    for i in range(attempts):
+        try:
+            return await adapter.complete(system=system, messages=messages, tools=tools)
+        except Exception as exc:  # noqa: BLE001 — classified below
+            if not _is_transient_provider_error(exc) or i == attempts - 1:
+                raise
+            await asyncio.sleep(delay)
+            delay *= 2.5
+
+
+def _provider_error_http(exc: Exception) -> HTTPException:
+    """Map a provider failure to an honest, human-readable HTTP error."""
+    if _is_transient_provider_error(exc):
+        return HTTPException(
+            status_code=429,
+            detail=(
+                "the model is rate-limited right now — wait a minute and try "
+                "again, or pick a different model for this pane"
+            ),
+        )
+    return HTTPException(status_code=502, detail=str(exc))
+
+
 def _graceful_stop() -> None:  # pragma: no cover — exercised via monkeypatch
     """Ask uvicorn to exit cleanly: SIGTERM -> lifespan shutdown -> exit 0.
 
@@ -1791,13 +1831,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
             f"Request: {body.prompt}"
         )
         try:
-            resp = await adapter.complete(
+            resp = await _complete_with_retry(
+                adapter,
                 system=system,
                 messages=[LLMMessage(role="user", content=user)],
                 tools=[],
             )
         except Exception as exc:  # provider/network error — surface, don't 500
-            raise HTTPException(status_code=502, detail=str(exc))
+            raise _provider_error_http(exc)
         return {
             "reply": resp.text,
             "command": _first_code_block(resp.text),
@@ -1954,13 +1995,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 f"workflow):\n{_json.dumps(current)}"
             )
         try:
-            resp = await adapter.complete(
+            resp = await _complete_with_retry(
+                adapter,
                 system=system,
                 messages=[LLMMessage(role="user", content=user)],
                 tools=[],
             )
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=502, detail=str(exc))
+            raise _provider_error_http(exc)
 
         # Extract the first JSON object from the reply (tolerant of stray prose).
         text = resp.text or ""
