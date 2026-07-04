@@ -176,6 +176,52 @@ export function TerminalPane({
     let focusedOnce = false; // steal focus on FIRST connect only — a reconnect
     // mid-interaction would close an open dropdown/popup out from under the user
 
+    // Paste support. A terminal treats Ctrl+V as a control char (0x16), NOT
+    // paste — so pasting looks broken. Wire it explicitly. term.paste() respects
+    // bracketed-paste mode, so a multi-line prompt inserts as ONE block instead
+    // of running line-by-line.
+    // Prefer the desktop app's NATIVE clipboard (via the preload IPC bridge) —
+    // it's never permission-gated; fall back to the Web Clipboard API in a plain
+    // browser.
+    const ijBridge = (
+      window as unknown as {
+        ironjarvis?: {
+          clipboardReadText?: () => Promise<string>;
+          clipboardWriteText?: (t: string) => Promise<unknown>;
+        };
+      }
+    ).ironjarvis;
+    const readClip = (): Promise<string> =>
+      ijBridge?.clipboardReadText
+        ? ijBridge.clipboardReadText()
+        : navigator.clipboard?.readText?.() ?? Promise.resolve("");
+    const writeClip = (t: string): Promise<unknown> =>
+      ijBridge?.clipboardWriteText
+        ? ijBridge.clipboardWriteText(t)
+        : navigator.clipboard?.writeText?.(t) ?? Promise.resolve();
+
+    const pasteFromClipboard = () => {
+      readClip()
+        .then((t) => {
+          if (t && term) term.paste(t);
+        })
+        .catch(() => {
+          /* clipboard blocked / empty — nothing to paste */
+        });
+    };
+    const onContextMenu = (e: MouseEvent) => {
+      // Right-click copies a selection if you have one, else pastes — the
+      // familiar Windows-terminal gesture (no browser context menu here).
+      e.preventDefault();
+      const sel = term?.getSelection();
+      if (sel) {
+        writeClip(sel).catch(() => {});
+        term?.clearSelection();
+      } else {
+        pasteFromClipboard();
+      }
+    };
+
     const doFit = () => {
       try {
         fit?.fit();
@@ -270,6 +316,28 @@ export function TerminalPane({
         if (ws && ws.readyState === WebSocket.OPEN) ws.send(d);
       });
 
+      // Clipboard shortcuts: Ctrl/Cmd+V and Ctrl+Shift+V paste; Ctrl+Shift+C
+      // copies a selection (plain Ctrl+C stays as the interrupt signal).
+      term.attachCustomKeyEventHandler((e) => {
+        if (e.type !== "keydown") return true;
+        const mod = e.ctrlKey || e.metaKey;
+        if (mod && (e.key === "v" || e.key === "V")) {
+          e.preventDefault();
+          pasteFromClipboard();
+          return false; // don't also send the literal control char
+        }
+        if (mod && e.shiftKey && (e.key === "c" || e.key === "C")) {
+          const sel = term?.getSelection();
+          if (sel) {
+            e.preventDefault();
+            writeClip(sel).catch(() => {});
+            return false;
+          }
+        }
+        return true;
+      });
+      holder.addEventListener("contextmenu", onContextMenu);
+
       ro = new ResizeObserver(() => {
         doFit();
         sendResize();
@@ -287,6 +355,7 @@ export function TerminalPane({
       termRef.current = null;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       window.removeEventListener("resize", onWinResize);
+      holder.removeEventListener("contextmenu", onContextMenu);
       ro?.disconnect();
       try {
         ws?.close();

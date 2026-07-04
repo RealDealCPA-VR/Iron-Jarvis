@@ -36,6 +36,7 @@ const {
   nativeImage,
   Notification,
   ipcMain,
+  clipboard,
 } = require("electron");
 const { spawn, spawnSync } = require("child_process");
 const crypto = require("crypto");
@@ -981,6 +982,22 @@ function installSpotlightIpc() {
   });
   ipcMain.on("spotlight:close", () => {
     if (spotlightWin && !spotlightWin.isDestroyed()) spotlightWin.hide();
+  });
+  // Native clipboard for the terminal (paste/copy) — never permission-gated.
+  ipcMain.handle("clipboard:read", () => {
+    try {
+      return clipboard.readText();
+    } catch {
+      return "";
+    }
+  });
+  ipcMain.handle("clipboard:write", (_e, text) => {
+    try {
+      clipboard.writeText(String(text ?? ""));
+    } catch {
+      /* clipboard unavailable */
+    }
+    return true;
   });
 }
 
