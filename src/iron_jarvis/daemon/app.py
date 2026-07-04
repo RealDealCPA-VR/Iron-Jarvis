@@ -766,9 +766,45 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     await asyncio.sleep(interval)
 
             inbound_task = asyncio.create_task(_inbound_loop())
+
+        # Slack SOCKET MODE — two-way Slack with zero internet exposure: the
+        # daemon dials OUT (wss://) so no public URL is ever needed. GUARDED:
+        # only when a slack channel opted in (inbound_enabled + allowlist +
+        # app token), so default installs and tests create nothing. Disable
+        # explicitly via IRONJARVIS_SLACK_SOCKET=off.
+        slack_socket_task = None
+        slack_socket_stop = None
+        if os.environ.get("IRONJARVIS_SLACK_SOCKET", "on").strip().lower() not in (
+            "0", "false", "no", "off",
+        ):
+            from ..comm.slack_socket import SlackSocketMode
+
+            _socket = SlackSocketMode(
+                inbound_poller,
+                platform.notifier,
+                platform.secrets.get,
+                lambda: platform.config.comm or {},
+            )
+            if _socket.enabled():
+                slack_socket_stop = asyncio.Event()
+
+                async def _slack_socket_loop() -> None:
+                    await asyncio.sleep(15)  # let boot settle first
+                    try:
+                        await _socket.run(stop=slack_socket_stop)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:  # noqa: BLE001 — never kill the daemon
+                        log.exception("slack socket mode loop failed")
+
+                slack_socket_task = asyncio.create_task(_slack_socket_loop())
         try:
             yield
         finally:
+            if slack_socket_stop is not None:
+                slack_socket_stop.set()
+            if slack_socket_task is not None:
+                slack_socket_task.cancel()
             if inbound_task is not None:
                 inbound_task.cancel()
             if sentinel_task is not None:
@@ -2765,10 +2801,19 @@ def create_app(project_root: str | None = None) -> FastAPI:
              "help": "Basic Information → Verification Token (legacy — Slack "
                      "deprecates it in favor of the signing secret). Stored "
                      "encrypted."},
-            {"key": "app_token", "label": "App-level token (optional)", "secret": True,
+            {"key": "app_token", "label": "App-level token (two-way, no exposure)", "secret": True,
              "help": "xapp-… from Basic Information → App-Level Tokens "
-                     "(connections:write). Stored encrypted for upcoming Socket "
-                     "Mode support (two-way without a public URL)."},
+                     "(connections:write scope). POWERS SOCKET MODE: Iron Jarvis "
+                     "dials OUT to Slack over a WebSocket — two-way DMs with "
+                     "ZERO public URL / internet exposure. Enable Socket Mode in "
+                     "the app (the manifest below already does)."},
+            {"key": "inbound_enabled", "label": "Enable two-way (true/false)", "secret": False,
+             "help": "Set to true to let allowlisted people DM the bot and get "
+                     "agent replies. Off by default."},
+            {"key": "allowed_senders", "label": "Allowlist (Slack member IDs)", "secret": False,
+             "help": "Comma-separated member IDs (U0123…, profile → three dots → "
+                     "Copy member ID). FAIL-CLOSED: empty allowlist = nobody may "
+                     "command the bot."},
         ],
         "discord": [
             {"key": "webhook_url", "label": "Webhook URL", "secret": False,
@@ -2822,8 +2867,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "      - im:history\n"
             "      - im:write\n"
             "settings:\n"
+            "  event_subscriptions:\n"
+            "    bot_events:\n"
+            "      - message.im\n"
             "  org_deploy_enabled: false\n"
-            "  socket_mode_enabled: false\n"
+            "  # Socket Mode = Iron Jarvis dials OUT to Slack; two-way with no\n"
+            "  # public URL. Create an App-Level Token (connections:write) after\n"
+            "  # installing and paste it into the channel form.\n"
+            "  socket_mode_enabled: true\n"
             "  token_rotation_enabled: false\n"
         ),
     }
@@ -2882,6 +2933,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 secret_name = f"channel_{name}_{key}"
                 platform.secrets.set(secret_name, str(value), kind="token")
                 config[f"{key}_secret"] = secret_name
+            elif key == "allowed_senders":
+                # Comma-separated ids -> the list the fail-closed allowlist reads.
+                config[key] = [s.strip() for s in str(value).split(",") if s.strip()]
+            elif key == "inbound_enabled":
+                config[key] = str(value).strip().lower() in ("1", "true", "yes", "on")
             else:
                 config[key] = value
 

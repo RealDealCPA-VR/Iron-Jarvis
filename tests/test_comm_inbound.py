@@ -272,14 +272,24 @@ def test_build_notifier_preserves_inbound_config():
 
 
 def test_non_inbound_channel_types_never_poll():
-    """Outbound-only channels report no inbound leg and yield nothing on poll."""
+    """Outbound-only channels report no inbound leg and yield nothing on poll.
+
+    Slack moved OUT of this set in v1.16: it is inbound-capable via SOCKET MODE
+    (an outbound WebSocket — see comm/slack_socket.py), though its HTTP poll
+    leg stays a no-op (the socket, not the poller, delivers its messages).
+    """
     from iron_jarvis.comm import DiscordChannel, SlackChannel
 
-    for cls in (SlackChannel, DiscordChannel):
-        ch = cls({"webhook_url": "u", "inbound_enabled": True, "allowed_senders": [1]})
-        assert ch.supports_inbound is False
-        assert ch.inbound_enabled() is False  # type can't receive, so stays off
-        assert ch.poll(0) == ([], 0)
+    ch = DiscordChannel({"webhook_url": "u", "inbound_enabled": True, "allowed_senders": [1]})
+    assert ch.supports_inbound is False
+    assert ch.inbound_enabled() is False  # type can't receive, so stays off
+    assert ch.poll(0) == ([], 0)
+
+    slack = SlackChannel(
+        {"webhook_url": "u", "inbound_enabled": True, "allowed_senders": ["U1"]}
+    )
+    assert slack.supports_inbound is True  # Socket Mode receive leg
+    assert slack.poll(0) == ([], 0)  # but polling delivers nothing — the socket does
 
 
 async def test_group_chat_message_is_refused(platform):

@@ -32,22 +32,30 @@ class SlackChannel(Channel):
     """
 
     name = "slack"
+    #: Socket Mode gives Slack a receive leg (outbound WebSocket — no public
+    #: URL needed); the inbound pipeline gates on inbound_enabled + allowlist.
+    supports_inbound = True
 
     def send(self, message: str, **kw: Any) -> dict[str, Any]:
-        webhook = self.config.get("webhook_url")
-        if webhook:
-            return self._post(webhook, {"text": message})
-
+        # `chat_id` is the inbound pipeline's reply address (a Slack user id —
+        # chat.postMessage with channel=U… delivers to that user's DM). When
+        # present, prefer the token path so the reply reaches the SENDER
+        # instead of the configured broadcast target.
+        reply_target = kw.get("chat_id")
         token_secret = self.config.get("token_secret")
-        if token_secret:
+        if token_secret and (reply_target or not self.config.get("webhook_url")):
             token = self._resolve_secret(token_secret)
             if not token:
                 return self._fail(f"slack: token secret '{token_secret}' did not resolve")
-            channel = kw.get("channel") or self.config.get("channel")
+            channel = reply_target or kw.get("channel") or self.config.get("channel")
             if not channel:
                 return self._fail("slack: chat.postMessage requires a `channel`")
             payload = {"channel": channel, "text": message, "token": token}
             return self._post(SLACK_POST_MESSAGE_URL, payload)
+
+        webhook = self.config.get("webhook_url")
+        if webhook:
+            return self._post(webhook, {"text": message})
 
         return self._fail("slack: config needs `webhook_url` or `token_secret`+`channel`")
 

@@ -69,6 +69,8 @@ for pkg in (
     "h11",
     "tomli_w",
     "yaml",             # pyyaml — skills frontmatter
+    "websockets",       # Slack Socket Mode CLIENT (outbound wss:// — two-way
+                        # Slack with no public URL); also uvicorn's ws impl
 ):
     _collect(pkg)
 
