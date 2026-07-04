@@ -14,23 +14,52 @@
 // /events stream. We finalize when the session's `agent.completed` event
 // arrives (or, as a fallback when the socket is down, by polling the session
 // until its status flips to completed/failed).
+//
+// PERSISTENCE: every completed turn autosaves the whole bubble array to
+// PUT /chat/threads/{id} ("new" creates and returns the real id). A threads
+// sidebar lists saved conversations; clicking one loads it back into chat mode.
+// Saves are queued through a single promise chain so turns can never race two
+// PUTs (the first turn's "new" must resolve to a real id before the second
+// save starts, or we'd mint duplicate threads).
+//
+// Assistant bubbles render MARKDOWN (react-markdown + GFM) with styled code
+// blocks (per-block copy button), tables, lists, and links; user bubbles stay
+// plain pre-wrapped text.
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  isValidElement,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import {
   Bot,
+  Check,
+  Copy,
+  History,
   Loader2,
   MessageSquare,
   Paperclip,
   Plus,
+  RefreshCw,
   Send,
   Sparkles,
   Square,
+  Trash2,
   User,
   Wrench,
   X,
 } from "lucide-react";
-import { get, post, ApiError } from "@/lib/api";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { get, post, put, del, ApiError } from "@/lib/api";
 import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
+import { timeAgo } from "@/lib/format";
 import { useEvents } from "@/lib/useEvents";
 import { Card, Empty, ErrorNote, LoaderInline, OfflineHint } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
@@ -67,6 +96,35 @@ interface ChatResponse {
 interface PersonaOption {
   name: string;
   description: string;
+}
+
+/** One row from GET /chat/threads (newest first). `messages` is a count, but
+ * tolerate a daemon that inlines the array. */
+interface ThreadSummary {
+  id: string;
+  title: string;
+  persona?: string;
+  messages: number | ChatMessage[];
+  updated_at: string;
+}
+
+/** GET /chat/threads/{id}. */
+interface ThreadDetail {
+  id: string;
+  title: string;
+  persona?: string;
+  messages: ChatMessage[];
+}
+
+/** PUT /chat/threads/{id} body + response. */
+interface ThreadSaveBody {
+  messages: ChatMessage[];
+  title?: string;
+  persona?: string;
+}
+interface ThreadSaveResult {
+  id: string;
+  title: string;
 }
 
 /** POST /documents/upload response (same contract NewSessionForm uses). */
@@ -183,6 +241,193 @@ function capitalize(s: string): string {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
 
+/** Message count for a thread row (the list sends a number; tolerate an array). */
+function msgCount(t: ThreadSummary): number {
+  return typeof t.messages === "number" ? t.messages : t.messages.length;
+}
+
+// ------------------------------------------------------------------ markdown
+
+/** Collect the plain text inside rendered markdown children (for copy buttons). */
+function nodeText(node: ReactNode): string {
+  if (node === null || node === undefined || typeof node === "boolean") return "";
+  if (
+    typeof node === "string" ||
+    typeof node === "number" ||
+    typeof node === "bigint"
+  ) {
+    return String(node);
+  }
+  if (Array.isArray(node)) return node.map(nodeText).join("");
+  if (isValidElement(node)) {
+    return nodeText((node as ReactElement<{ children?: ReactNode }>).props.children);
+  }
+  return "";
+}
+
+/** Small clipboard button: copies `text`, flashes a check for a moment. */
+function CopyIconButton({
+  text,
+  title,
+  className,
+}: {
+  text: string;
+  title: string;
+  className?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    },
+    [],
+  );
+  function copy() {
+    navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        setCopied(true);
+        if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+        timerRef.current = window.setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => {
+        /* clipboard unavailable — nothing useful to surface */
+      });
+  }
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title={title}
+      aria-label={title}
+      className={
+        className ??
+        "grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+      }
+    >
+      {copied ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+    </button>
+  );
+}
+
+// Lets the <code> override know it sits inside a <pre> block (block code keeps
+// the pre's styling; standalone inline code gets the accent pill).
+const PreContext = createContext(false);
+
+/** Fenced code block: dark panel + hover copy button. */
+function MarkdownPre({ children }: { children?: ReactNode }) {
+  const text = nodeText(children).replace(/\n$/, "");
+  return (
+    <div className="group/code relative my-2">
+      <CopyIconButton
+        text={text}
+        title="Copy code"
+        className="absolute right-2 top-2 z-10 grid h-6 w-6 place-items-center rounded-md border border-white/10 bg-white/[0.06] text-zinc-400 opacity-0 transition-opacity hover:text-zinc-100 focus-visible:opacity-100 group-hover/code:opacity-100"
+      />
+      <PreContext.Provider value={true}>
+        <pre className="overflow-x-auto rounded bg-black/40 p-3 font-mono text-xs leading-relaxed text-zinc-200">
+          {children}
+        </pre>
+      </PreContext.Provider>
+    </div>
+  );
+}
+
+function MarkdownCode({
+  className,
+  children,
+}: {
+  className?: string;
+  children?: ReactNode;
+}) {
+  const inPre = useContext(PreContext);
+  if (inPre) return <code className={className}>{children}</code>;
+  return (
+    <code className="rounded bg-white/[0.08] px-1.5 py-0.5 font-mono text-[0.85em] text-accent-soft">
+      {children}
+    </code>
+  );
+}
+
+// Explicit dark-theme element overrides (the app has no typography plugin, so
+// this is our "prose-invert").
+const MD_COMPONENTS: Components = {
+  h1: ({ children }) => (
+    <h1 className="mb-1.5 mt-3 text-base font-semibold text-zinc-100 first:mt-0">
+      {children}
+    </h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="mb-1.5 mt-3 text-[15px] font-semibold text-zinc-100 first:mt-0">
+      {children}
+    </h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="mb-1 mt-2.5 text-sm font-semibold text-zinc-100 first:mt-0">
+      {children}
+    </h3>
+  ),
+  p: ({ children }) => (
+    <p className="my-1.5 leading-relaxed first:mt-0 last:mb-0">{children}</p>
+  ),
+  ul: ({ children }) => (
+    <ul className="my-1.5 list-disc space-y-1 pl-5">{children}</ul>
+  ),
+  ol: ({ children }) => (
+    <ol className="my-1.5 list-decimal space-y-1 pl-5">{children}</ol>
+  ),
+  li: ({ children }) => <li className="leading-relaxed [&>p]:my-0">{children}</li>,
+  table: ({ children }) => (
+    <div className="my-2 overflow-x-auto">
+      <table className="w-full border-collapse text-[13px]">{children}</table>
+    </div>
+  ),
+  th: ({ children }) => (
+    <th className="border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-left font-medium text-zinc-100">
+      {children}
+    </th>
+  ),
+  td: ({ children }) => (
+    <td className="border border-white/10 px-2.5 py-1.5 align-top text-zinc-300">
+      {children}
+    </td>
+  ),
+  a: ({ children, href }) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:decoration-accent"
+    >
+      {children}
+    </a>
+  ),
+  blockquote: ({ children }) => (
+    <blockquote className="my-2 border-l-2 border-accent/40 pl-3 text-zinc-400 [&>p]:my-0.5">
+      {children}
+    </blockquote>
+  ),
+  hr: () => <hr className="my-3 border-white/10" />,
+  strong: ({ children }) => (
+    <strong className="font-semibold text-zinc-100">{children}</strong>
+  ),
+  pre: MarkdownPre,
+  code: MarkdownCode,
+};
+
+const REMARK_PLUGINS = [remarkGfm];
+
+function Markdown({ content }: { content: string }) {
+  return (
+    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MD_COMPONENTS}>
+      {content}
+    </ReactMarkdown>
+  );
+}
+
+// ------------------------------------------------------------------- bubbles
+
 function Bubble({ role, children }: { role: ChatMessage["role"]; children: ReactNode }) {
   const isUser = role === "user";
   return (
@@ -197,9 +442,9 @@ function Bubble({ role, children }: { role: ChatMessage["role"]; children: React
         {isUser ? <User size={15} /> : <Bot size={15} />}
       </span>
       <div
-        className={`max-w-[80%] whitespace-pre-wrap rounded-2xl border px-4 py-2.5 text-sm leading-relaxed ${
+        className={`min-w-0 max-w-[80%] rounded-2xl border px-4 py-2.5 text-sm leading-relaxed ${
           isUser
-            ? "border-accent/25 bg-accent/[0.1] text-zinc-100"
+            ? "whitespace-pre-wrap border-accent/25 bg-accent/[0.1] text-zinc-100"
             : "border-white/[0.06] bg-white/[0.03] text-zinc-200"
         }`}
       >
@@ -245,6 +490,10 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
+  // Threads sidebar: the saved-conversation list + which one is loaded.
+  const [threads, setThreads] = useState<ThreadSummary[]>([]);
+  const [threadId, setThreadId] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false); // mobile-only toggle
 
   const { events } = useEvents(150);
 
@@ -258,6 +507,10 @@ export default function ChatPage() {
   // registered once and would otherwise close over a stale array).
   const attachmentsRef = useRef<UploadedFile[]>(attachments);
   attachmentsRef.current = attachments;
+  // Latest messages, readable inside finalize()/stop() (both fire from timers
+  // and event watchers, where `messages` from the closure could be stale).
+  const messagesRef = useRef<ChatMessage[]>(messages);
+  messagesRef.current = messages;
   // Event-id boundary captured at the start of each agent turn: we only treat
   // events NEWER than this as belonging to the current turn. This stops a stale
   // `agent.completed` from the previous turn (same session id, still in the
@@ -265,9 +518,22 @@ export default function ChatPage() {
   const sinceRef = useRef<string | null>(null);
   // Guards against overlapping finalize attempts (events + polling can both fire).
   const finalizingRef = useRef(false);
+  // Mirrors awaitingId so an in-flight finalize() can tell the turn was torn
+  // down (Stop / New chat / thread switch) while its fetch was airborne.
+  const awaitingIdRef = useRef<string | null>(null);
   // Bumped by "New chat" so an in-flight /chat reply from the OLD thread can't
   // land in the fresh one.
   const chatGenRef = useRef(0);
+  // AUTOSAVE machinery. `saveChainRef` serializes every PUT: a turn's save only
+  // starts after the previous one resolved, so the first save's "new" has
+  // already been swapped for the real id before the second save reads it —
+  // rapid turns can never mint two threads (and there is exactly ONE queueSave
+  // call per completed turn, so no turn double-PUTs either). `saveTargetRef`
+  // holds the id for the CURRENT conversation as a mutable box: saves queued
+  // for an old conversation keep writing to the old box even if the user
+  // switches threads before the chain drains.
+  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
+  const saveTargetRef = useRef<{ id: string | null }>({ id: null });
 
   const awaiting = awaitingId !== null;
   const busy = awaiting || chatBusy;
@@ -304,6 +570,21 @@ export default function ChatPage() {
     };
   }, []);
 
+  // Load the saved-thread list once (best-effort — the sidebar just stays empty).
+  useEffect(() => {
+    let cancelled = false;
+    get<{ threads: ThreadSummary[] }>("/chat/threads")
+      .then((d) => {
+        if (!cancelled) setThreads(d.threads ?? []);
+      })
+      .catch(() => {
+        /* sidebar stays empty */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Restore the saved persona choice + custom text (after mount, so SSR markup
   // matches the first client render).
   useEffect(() => {
@@ -332,6 +613,100 @@ export default function ChatPage() {
       window.localStorage.setItem(PERSONA_CUSTOM_KEY, value);
     } catch {
       /* ignore */
+    }
+  }
+
+  // ------------------------------------------------------------------ threads
+
+  /** Silent sidebar refresh — autosaves and deletes call this; failures are moot. */
+  async function refreshThreads() {
+    try {
+      const d = await get<{ threads: ThreadSummary[] }>("/chat/threads");
+      setThreads(d.threads ?? []);
+    } catch {
+      /* quiet — the list just goes stale until the next refresh */
+    }
+  }
+
+  /**
+   * Queue ONE autosave for a completed turn. Called exactly once per turn
+   * (chat success, regenerate success, agent finalize, Stop) with the full
+   * bubble array — never from render — so a turn can never double-PUT.
+   */
+  function queueSave(msgs: ChatMessage[]) {
+    if (msgs.length === 0) return;
+    const target = saveTargetRef.current; // the conversation this save belongs to
+    const personaValue = persona === CUSTOM_PERSONA ? customPersona.trim() : persona;
+    saveChainRef.current = saveChainRef.current.then(async () => {
+      try {
+        const body: ThreadSaveBody = {
+          messages: msgs,
+          ...(personaValue ? { persona: personaValue } : {}),
+        };
+        const res = await put<ThreadSaveResult>(
+          `/chat/threads/${target.id ?? "new"}`,
+          body,
+        );
+        target.id = res.id; // "new" → real id; later saves in this convo reuse it
+        if (saveTargetRef.current === target) setThreadId(res.id);
+        await refreshThreads();
+      } catch {
+        /* autosave is best-effort — never disturb the conversation itself */
+      }
+    });
+  }
+
+  /** Load a saved thread into the pane (chat-mode concern; resets agent state). */
+  async function openThread(id: string) {
+    if (id === threadId) {
+      setSidebarOpen(false);
+      return;
+    }
+    // Orphan anything in flight from the previous conversation.
+    chatGenRef.current += 1;
+    awaitingIdRef.current = null;
+    setAwaitingId(null);
+    setChatBusy(false);
+    setSessionId(null);
+    setAttachments([]);
+    setError(null);
+    setOffline(false);
+    sinceRef.current = null;
+    finalizingRef.current = false;
+    try {
+      const t = await get<ThreadDetail>(`/chat/threads/${id}`);
+      setMessages(t.messages ?? []);
+      setThreadId(t.id);
+      saveTargetRef.current = { id: t.id };
+      setMode("chat"); // saved threads continue as direct chat
+      if (t.persona) {
+        if (personas.some((p) => p.name === t.persona)) {
+          choosePersona(t.persona);
+        } else if (/\s/.test(t.persona) || t.persona.length > 40) {
+          // Free-text instructions round-trip through the Custom slot.
+          choosePersona(CUSTOM_PERSONA);
+          editCustomPersona(t.persona);
+        } else {
+          choosePersona(t.persona); // unlisted name — the select tolerates it
+        }
+      }
+      setSidebarOpen(false);
+      inputRef.current?.focus();
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 0) setOffline(true);
+      else setError(e instanceof ApiError ? e.message : String(e));
+    }
+  }
+
+  async function removeThread(id: string) {
+    try {
+      await del<void>(`/chat/threads/${id}`);
+      setThreads((prev) => prev.filter((t) => t.id !== id));
+      if (id === threadId) newChat(); // the open conversation is gone — clear the pane
+      void refreshThreads();
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 0) setOffline(true);
+      else setError(e instanceof ApiError ? e.message : String(e));
     }
   }
 
@@ -476,6 +851,9 @@ export default function ChatPage() {
       const res = await get<{ session?: SessionView } & Partial<SessionView>>(
         `/sessions/${id}`,
       );
+      // The turn may have been torn down (Stop / New chat / thread switch)
+      // while the fetch was airborne — never append into another conversation.
+      if (awaitingIdRef.current !== id) return;
       const session = (res.session ?? (res as SessionView)) || ({} as SessionView);
       setOffline(false); // the daemon answered — clear any transient-blip banner
       const status = (session.status || "").toLowerCase();
@@ -488,7 +866,13 @@ export default function ChatPage() {
           ? summary || "(no response)"
           : summary ||
             `The agent stopped before finishing (${status}). Please try again.`;
-      setMessages((prev) => [...prev, { role: "assistant", content }]);
+      const full: ChatMessage[] = [
+        ...messagesRef.current,
+        { role: "assistant", content },
+      ];
+      setMessages(full);
+      queueSave(full); // agent turns are conversations worth keeping too
+      awaitingIdRef.current = null;
       setAwaitingId(null);
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) {
@@ -499,6 +883,7 @@ export default function ChatPage() {
       }
       // Hard failure: surface it and stop waiting so the turn doesn't hang forever.
       setError(e instanceof ApiError ? e.message : String(e));
+      awaitingIdRef.current = null;
       setAwaitingId(null);
     } finally {
       finalizingRef.current = false;
@@ -531,17 +916,13 @@ export default function ChatPage() {
 
   // ------------------------------------------------------------------- sending
 
-  /** CHAT MODE: one direct /chat completion with the full local history. */
-  async function sendChat(message: string) {
+  /**
+   * CHAT MODE core: one direct /chat completion over `history` (which must end
+   * with a user message). Shared by sendChat and regenerate. On success the
+   * reply is appended and the turn autosaved (the ONLY chat-mode save site).
+   */
+  async function completeChat(history: ChatMessage[], atts: UploadedFile[]) {
     const gen = chatGenRef.current;
-    const atts = attachments;
-    setAttachments([]); // chips are consumed by this message
-    const userMsg: ChatMessage = {
-      role: "user",
-      content: message,
-      ...(atts.length ? { attachmentNames: atts.map((a) => a.name) } : {}),
-    };
-    const history = [...messages, userMsg];
     setMessages(history);
     setChatBusy(true);
     try {
@@ -558,10 +939,12 @@ export default function ChatPage() {
       };
       const res = await post<ChatResponse>("/chat", body);
       if (chatGenRef.current !== gen) return; // "New chat" happened mid-flight
-      setMessages((prev) => [
-        ...prev,
+      const full: ChatMessage[] = [
+        ...history,
         { role: "assistant", content: (res.reply ?? "").trim() || "(no response)" },
-      ]);
+      ];
+      setMessages(full);
+      queueSave(full); // the turn is complete — persist it
     } catch (e) {
       if (chatGenRef.current !== gen) return;
       // Keep the typed thread intact — only surface the failure (a 502 carries
@@ -571,6 +954,36 @@ export default function ChatPage() {
     } finally {
       if (chatGenRef.current === gen) setChatBusy(false);
     }
+  }
+
+  /** CHAT MODE: append the user's message and run one completion. */
+  async function sendChat(message: string) {
+    const atts = attachments;
+    setAttachments([]); // chips are consumed by this message
+    const userMsg: ChatMessage = {
+      role: "user",
+      content: message,
+      ...(atts.length ? { attachmentNames: atts.map((a) => a.name) } : {}),
+    };
+    await completeChat([...messages, userMsg], atts);
+  }
+
+  /**
+   * Drop the LAST assistant reply and re-run the completion over the history
+   * ending at the preceding user message (chat mode only). The re-run saves
+   * through the same single completeChat site, overwriting the thread with the
+   * regenerated reply.
+   */
+  function regenerate() {
+    if (busy || mode !== "chat") return;
+    const msgs = messages;
+    const last = msgs[msgs.length - 1];
+    if (!last || last.role !== "assistant") return;
+    const history = msgs.slice(0, -1);
+    if (history.length === 0 || history[history.length - 1].role !== "user") return;
+    setError(null);
+    setOffline(false);
+    void completeChat(history, []);
   }
 
   /** AGENT MODE: the original session flow (wait:false + live steps + finalize). */
@@ -614,6 +1027,7 @@ export default function ChatPage() {
       // sticking with the first id would silently drop the intermediate turns.
       setSessionId(session.id);
       // Hand off to the event watcher + polling fallback to surface the reply.
+      awaitingIdRef.current = session.id;
       setAwaitingId(session.id);
     } catch (e) {
       // Keep the typed thread intact — only surface the failure.
@@ -637,7 +1051,13 @@ export default function ChatPage() {
   function stop() {
     if (!awaitingId) return;
     post(`/sessions/${awaitingId}/cancel`).catch(() => {});
-    setMessages((prev) => [...prev, { role: "assistant", content: "Stopped." }]);
+    const full: ChatMessage[] = [
+      ...messagesRef.current,
+      { role: "assistant", content: "Stopped." },
+    ];
+    setMessages(full);
+    queueSave(full); // the (aborted) turn still completed a visible exchange
+    awaitingIdRef.current = null;
     setAwaitingId(null); // also tears down the event watcher + polling interval
   }
 
@@ -645,12 +1065,15 @@ export default function ChatPage() {
     chatGenRef.current += 1; // orphan any in-flight /chat reply
     setMessages([]);
     setSessionId(null);
+    awaitingIdRef.current = null;
     setAwaitingId(null); // also tears down any polling interval
     setChatBusy(false);
     setAttachments([]);
     setInput("");
     setError(null);
     setOffline(false);
+    setThreadId(null);
+    saveTargetRef.current = { id: null }; // next completed turn creates a fresh thread
     sinceRef.current = null;
     finalizingRef.current = false;
   }
@@ -668,7 +1091,7 @@ export default function ChatPage() {
     }
   }
 
-  const started = messages.length > 0 || sessionId !== null;
+  const started = messages.length > 0 || sessionId !== null || threadId !== null;
   const personaNames = personas.map((p) => p.name);
   const selectedPersonaDesc =
     personas.find((p) => p.name === persona)?.description ?? "";
@@ -802,162 +1225,286 @@ export default function ChatPage() {
       )}
 
       <Reveal>
-        <Card
-          pad={false}
-          className={`overflow-hidden transition-shadow ${
-            dragging ? "ring-2 ring-accent/60" : ""
-          }`}
-        >
-          {/* Message thread */}
-          <div className="flex max-h-[60vh] min-h-[24rem] flex-col gap-4 overflow-y-auto p-4 sm:p-5">
-            {messages.length === 0 && !busy ? (
-              <div className="flex flex-1 flex-col items-center justify-center gap-4">
-                <Empty icon={<MessageSquare size={28} />}>
-                  {mode === "chat"
-                    ? "Start a conversation. Ask a question, pick a persona, drop in a file — replies come back in seconds."
-                    : "Start a conversation. Ask a question or describe what you need — your agent replies and reaches for tools on its own when they help."}
-                </Empty>
-                <div className="flex flex-wrap justify-center gap-2">
-                  {EXAMPLES.map((ex) => (
-                    <button
-                      key={ex}
-                      onClick={() => prefill(ex)}
-                      className="rounded-full border border-white/[0.08] bg-white/[0.02] px-3 py-1.5 text-xs text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
+        <div className="flex flex-col gap-4 md:flex-row md:items-start">
+          {/* Mobile-only sidebar toggle (the sidebar is always visible on md+). */}
+          <button
+            type="button"
+            onClick={() => setSidebarOpen((v) => !v)}
+            aria-expanded={sidebarOpen}
+            className="btn-ghost self-start py-1.5 text-[13px] md:hidden"
+          >
+            <History size={14} />{" "}
+            {sidebarOpen
+              ? "Hide chats"
+              : `Chats${threads.length ? ` (${threads.length})` : ""}`}
+          </button>
+
+          {/* Threads sidebar */}
+          <aside
+            className={`${sidebarOpen ? "" : "hidden"} w-full shrink-0 md:block md:w-60`}
+          >
+            <Card pad={false} className="overflow-hidden">
+              <div className="flex items-center justify-between border-b hairline px-3 py-2">
+                <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                  Threads
+                </span>
+                <button
+                  type="button"
+                  onClick={newChat}
+                  className="btn-ghost px-2 py-1 text-[12px]"
+                  title="Start a new conversation"
+                >
+                  <Plus size={13} /> New chat
+                </button>
+              </div>
+              <div className="max-h-[70vh] overflow-y-auto p-1.5">
+                {threads.length === 0 ? (
+                  <p className="px-2.5 py-3 text-xs leading-relaxed text-zinc-500">
+                    No saved chats yet — conversations appear here after the first
+                    reply.
+                  </p>
+                ) : (
+                  <div className="space-y-0.5">
+                    {threads.map((t) => {
+                      const active = t.id === threadId;
+                      const count = msgCount(t);
+                      return (
+                        <div
+                          key={t.id}
+                          className={`group/thread relative rounded-lg border transition-colors ${
+                            active
+                              ? "border-accent/25 bg-accent/[0.08]"
+                              : "border-transparent hover:bg-white/[0.04]"
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => void openThread(t.id)}
+                            className="w-full px-2.5 py-2 pr-7 text-left"
+                            title={t.title || "Untitled chat"}
+                          >
+                            <span
+                              className={`block truncate text-[13px] ${
+                                active ? "text-accent-soft" : "text-zinc-200"
+                              }`}
+                            >
+                              {t.title || "Untitled chat"}
+                            </span>
+                            <span className="block text-[11px] text-zinc-500">
+                              {timeAgo(t.updated_at)} · {count} msg
+                              {count === 1 ? "" : "s"}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void removeThread(t.id)}
+                            aria-label={`Delete ${t.title || "chat"}`}
+                            title="Delete this chat"
+                            className="absolute right-1.5 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md text-zinc-500 opacity-0 transition-opacity hover:bg-white/[0.06] hover:text-rose-300 focus-visible:opacity-100 group-hover/thread:opacity-100"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </Card>
+          </aside>
+
+          {/* Conversation pane */}
+          <div className="min-w-0 flex-1">
+            <Card
+              pad={false}
+              className={`overflow-hidden transition-shadow ${
+                dragging ? "ring-2 ring-accent/60" : ""
+              }`}
+            >
+              {/* Message thread */}
+              <div className="flex max-h-[60vh] min-h-[24rem] flex-col gap-4 overflow-y-auto p-4 sm:p-5">
+                {messages.length === 0 && !busy ? (
+                  <div className="flex flex-1 flex-col items-center justify-center gap-4">
+                    <Empty icon={<MessageSquare size={28} />}>
+                      {mode === "chat"
+                        ? "Start a conversation. Ask a question, pick a persona, drop in a file — replies come back in seconds."
+                        : "Start a conversation. Ask a question or describe what you need — your agent replies and reaches for tools on its own when they help."}
+                    </Empty>
+                    <div className="flex flex-wrap justify-center gap-2">
+                      {EXAMPLES.map((ex) => (
+                        <button
+                          key={ex}
+                          onClick={() => prefill(ex)}
+                          className="rounded-full border border-white/[0.08] bg-white/[0.02] px-3 py-1.5 text-xs text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
+                        >
+                          {ex}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {messages.map((m, i) => {
+                      if (m.role === "user") {
+                        return (
+                          <Bubble key={i} role="user">
+                            {m.content}
+                            {m.attachmentNames && m.attachmentNames.length > 0 && (
+                              <AttachmentFooter names={m.attachmentNames} />
+                            )}
+                          </Bubble>
+                        );
+                      }
+                      // Assistant: markdown + hover actions (copy / regenerate).
+                      const canRegen =
+                        i === messages.length - 1 &&
+                        i > 0 &&
+                        messages[i - 1].role === "user" &&
+                        mode === "chat" &&
+                        !busy;
+                      return (
+                        <div key={i} className="group/msg">
+                          <Bubble role="assistant">
+                            <Markdown content={m.content} />
+                          </Bubble>
+                          <div className="ml-11 mt-1 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100">
+                            <CopyIconButton text={m.content} title="Copy message" />
+                            {canRegen && (
+                              <button
+                                type="button"
+                                onClick={regenerate}
+                                title="Regenerate reply"
+                                aria-label="Regenerate reply"
+                                className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+                              >
+                                <RefreshCw size={12} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {/* CHAT MODE: a subtle thinking shimmer — no step feed needed. */}
+                    {chatBusy && (
+                      <Bubble role="assistant">
+                        <span className="inline-flex items-center gap-2 text-zinc-400">
+                          <Loader2 size={14} className="animate-spin text-accent-soft" />
+                          <span className="animate-pulse">Thinking…</span>
+                        </span>
+                      </Bubble>
+                    )}
+                    {/* AGENT MODE: the live working bubble narrating agent steps. */}
+                    {awaiting && (
+                      <Bubble role="assistant">
+                        <div className="flex flex-col gap-1.5">
+                          <span className="inline-flex items-center gap-2 text-zinc-300">
+                            <Loader2 size={14} className="animate-spin text-accent-soft" />
+                            {progress[0] ?? "Thinking…"}
+                          </span>
+                          {progress.length > 1 && (
+                            <ul className="ml-[22px] space-y-0.5 text-xs text-zinc-500">
+                              {progress.slice(1, 4).map((s, i) => (
+                                <li key={i} className="flex items-center gap-1.5">
+                                  <span className="h-1 w-1 shrink-0 rounded-full bg-zinc-600" />
+                                  {s}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      </Bubble>
+                    )}
+                  </>
+                )}
+                <div ref={bottomRef} />
+              </div>
+
+              {error && (
+                <div className="border-t hairline p-3">
+                  <ErrorNote>{error}</ErrorNote>
+                </div>
+              )}
+
+              {/* Attachment chips — queued for the next message */}
+              {attachments.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 border-t hairline px-3 py-2.5">
+                  {attachments.map((a, i) => (
+                    <span
+                      key={`${a.path}-${i}`}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300"
                     >
-                      {ex}
-                    </button>
+                      <Paperclip size={11} className="shrink-0 text-accent-soft" />
+                      <span className="max-w-[14rem] truncate">{a.name}</span>
+                      <span className="text-zinc-500">{fmtSize(a.bytes)}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeAttachment(i)}
+                        aria-label={`Remove ${a.name}`}
+                        className="text-zinc-500 transition-colors hover:text-rose-300"
+                      >
+                        <X size={11} />
+                      </button>
+                    </span>
                   ))}
                 </div>
-              </div>
-            ) : (
-              <>
-                {messages.map((m, i) => (
-                  <Bubble key={i} role={m.role}>
-                    {m.content}
-                    {m.attachmentNames && m.attachmentNames.length > 0 && (
-                      <AttachmentFooter names={m.attachmentNames} />
-                    )}
-                  </Bubble>
-                ))}
-                {/* CHAT MODE: a subtle thinking shimmer — no step feed needed. */}
-                {chatBusy && (
-                  <Bubble role="assistant">
-                    <span className="inline-flex items-center gap-2 text-zinc-400">
-                      <Loader2 size={14} className="animate-spin text-accent-soft" />
-                      <span className="animate-pulse">Thinking…</span>
-                    </span>
-                  </Bubble>
-                )}
-                {/* AGENT MODE: the live working bubble narrating agent steps. */}
-                {awaiting && (
-                  <Bubble role="assistant">
-                    <div className="flex flex-col gap-1.5">
-                      <span className="inline-flex items-center gap-2 text-zinc-300">
-                        <Loader2 size={14} className="animate-spin text-accent-soft" />
-                        {progress[0] ?? "Thinking…"}
-                      </span>
-                      {progress.length > 1 && (
-                        <ul className="ml-[22px] space-y-0.5 text-xs text-zinc-500">
-                          {progress.slice(1, 4).map((s, i) => (
-                            <li key={i} className="flex items-center gap-1.5">
-                              <span className="h-1 w-1 shrink-0 rounded-full bg-zinc-600" />
-                              {s}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  </Bubble>
-                )}
-              </>
-            )}
-            <div ref={bottomRef} />
-          </div>
-
-          {error && (
-            <div className="border-t hairline p-3">
-              <ErrorNote>{error}</ErrorNote>
-            </div>
-          )}
-
-          {/* Attachment chips — queued for the next message */}
-          {attachments.length > 0 && (
-            <div className="flex flex-wrap items-center gap-2 border-t hairline px-3 py-2.5">
-              {attachments.map((a, i) => (
-                <span
-                  key={`${a.path}-${i}`}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300"
-                >
-                  <Paperclip size={11} className="shrink-0 text-accent-soft" />
-                  <span className="max-w-[14rem] truncate">{a.name}</span>
-                  <span className="text-zinc-500">{fmtSize(a.bytes)}</span>
-                  <button
-                    type="button"
-                    onClick={() => removeAttachment(i)}
-                    aria-label={`Remove ${a.name}`}
-                    className="text-zinc-500 transition-colors hover:text-rose-300"
-                  >
-                    <X size={11} />
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-
-          {/* Composer */}
-          <div className="flex items-end gap-2 border-t hairline p-3">
-            <input
-              ref={fileRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={onPickFiles}
-            />
-            <button
-              type="button"
-              onClick={() => fileRef.current?.click()}
-              disabled={uploading || attachments.length >= MAX_ATTACHMENTS}
-              aria-label="Attach files"
-              title={`Attach files (up to ${MAX_ATTACHMENTS}, 20 MB each) — or drop them anywhere`}
-              className="btn-ghost h-[2.75rem] px-3 py-0"
-            >
-              {uploading ? <LoaderInline /> : <Paperclip size={15} />}
-            </button>
-            <textarea
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={onKeyDown}
-              disabled={busy}
-              rows={1}
-              aria-label="Message"
-              placeholder="Message Iron Jarvis…  (Enter to send · Shift+Enter for a new line)"
-              className="field max-h-40 min-h-[2.75rem] flex-1 resize-none disabled:opacity-60"
-            />
-            {awaiting && (
-              <button
-                onClick={stop}
-                className="btn-ghost h-[2.75rem] px-3 py-0 text-[13px]"
-                title="Stop this turn"
-              >
-                <Square size={14} /> Stop
-              </button>
-            )}
-            <button
-              onClick={() => send(input)}
-              disabled={busy || !input.trim()}
-              className="btn-accent h-[2.75rem] px-4 py-0 text-[13px]"
-            >
-              {busy ? (
-                <LoaderInline />
-              ) : (
-                <>
-                  <Send size={16} /> Send
-                </>
               )}
-            </button>
+
+              {/* Composer */}
+              <div className="flex items-end gap-2 border-t hairline p-3">
+                <input
+                  ref={fileRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={onPickFiles}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileRef.current?.click()}
+                  disabled={uploading || attachments.length >= MAX_ATTACHMENTS}
+                  aria-label="Attach files"
+                  title={`Attach files (up to ${MAX_ATTACHMENTS}, 20 MB each) — or drop them anywhere`}
+                  className="btn-ghost h-[2.75rem] px-3 py-0"
+                >
+                  {uploading ? <LoaderInline /> : <Paperclip size={15} />}
+                </button>
+                <textarea
+                  ref={inputRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={onKeyDown}
+                  disabled={busy}
+                  rows={1}
+                  aria-label="Message"
+                  placeholder="Message Iron Jarvis…  (Enter to send · Shift+Enter for a new line)"
+                  className="field max-h-40 min-h-[2.75rem] flex-1 resize-none disabled:opacity-60"
+                />
+                {awaiting && (
+                  <button
+                    onClick={stop}
+                    className="btn-ghost h-[2.75rem] px-3 py-0 text-[13px]"
+                    title="Stop this turn"
+                  >
+                    <Square size={14} /> Stop
+                  </button>
+                )}
+                <button
+                  onClick={() => send(input)}
+                  disabled={busy || !input.trim()}
+                  className="btn-accent h-[2.75rem] px-4 py-0 text-[13px]"
+                >
+                  {busy ? (
+                    <LoaderInline />
+                  ) : (
+                    <>
+                      <Send size={16} /> Send
+                    </>
+                  )}
+                </button>
+              </div>
+            </Card>
           </div>
-        </Card>
+        </div>
       </Reveal>
     </PageShell>
   );

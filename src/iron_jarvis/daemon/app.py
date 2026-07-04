@@ -423,13 +423,23 @@ class SessionsClearBody(BaseModel):
 class LTMAppend(BaseModel):
     title: str
     content: str
+
+
+class IngestDocumentBody(BaseModel):
+    """A base64 document (PDF/office/HTML/text) to convert to Markdown and store
+    durably in long-term memory (the knowledge base), not just chat grounding."""
+
+    filename: str
+    content_b64: str
+    title: str = ""  # defaults to the filename stem
+    source: str = ""  # LTM source name; defaults to the brain source
     source: str | None = None
 
 
 class LTMSourceBody(BaseModel):
     name: str
-    kind: str = "markdown"  # markdown | notion | ssh
-    path: str = ""  # local folder (markdown) OR remote path (ssh)
+    kind: str = "markdown"  # see ltm.sources.SOURCE_KINDS
+    path: str = ""  # local folder (markdown) / remote path (ssh) / folder scope (cloud)
     database_id: str = ""
     token_secret: str = ""  # existing vault secret name (notion/ssh), if reusing one
     # SSH (remote) source:
@@ -438,6 +448,10 @@ class LTMSourceBody(BaseModel):
     username: str = ""
     key_path: str = ""  # local private-key file (alternative to a password)
     password: str = ""  # a NEW SSH password to store in the vault (write-only)
+    # Offsite HTTP RAG source:
+    endpoint_url: str = ""  # query URL of the external RAG service (http_rag)
+    config: dict[str, Any] = {}  # HttpRagConfig overrides (http_rag)
+    token: str = ""  # a NEW bearer/API token to store in the vault (write-only, http_rag)
 
 
 class AgentCreate(BaseModel):
@@ -1017,6 +1031,84 @@ def create_app(project_root: str | None = None) -> FastAPI:
             ),
         },
     }
+
+    # --- Chat threads (saved conversations) --------------------------------
+
+    @app.get("/chat/threads")
+    def chat_threads() -> dict[str, Any]:
+        from ..core.models import ChatThreadRecord
+
+        with session_scope(platform.engine) as db:
+            rows = list(db.exec(select(ChatThreadRecord)))
+        rows.sort(key=lambda r: r.updated_at, reverse=True)
+        out = []
+        for r in rows[:100]:
+            try:
+                count = len(json.loads(r.messages_json or "[]"))
+            except Exception:  # noqa: BLE001
+                count = 0
+            out.append(
+                {"id": r.id, "title": r.title or "(untitled)",
+                 "persona": r.persona, "messages": count,
+                 "updated_at": r.updated_at.isoformat()}
+            )
+        return {"threads": out}
+
+    @app.get("/chat/threads/{thread_id}")
+    def chat_thread(thread_id: str) -> dict[str, Any]:
+        from ..core.models import ChatThreadRecord
+
+        with session_scope(platform.engine) as db:
+            r = db.get(ChatThreadRecord, thread_id)
+        if r is None:
+            raise HTTPException(status_code=404, detail="no such thread")
+        try:
+            msgs = json.loads(r.messages_json or "[]")
+        except Exception:  # noqa: BLE001
+            msgs = []
+        return {"id": r.id, "title": r.title, "persona": r.persona, "messages": msgs}
+
+    @app.put("/chat/threads/{thread_id}")
+    def save_chat_thread(thread_id: str, body: dict) -> dict[str, Any]:
+        """Upsert a thread (the chat autosaves after every turn). Send
+        {messages, title?, persona?}; 'new' as the id creates a thread."""
+        from ..core.ids import utcnow as _now
+        from ..core.models import ChatThreadRecord
+
+        msgs = body.get("messages")
+        if not isinstance(msgs, list):
+            raise HTTPException(status_code=400, detail="messages list required")
+        with session_scope(platform.engine) as db:
+            r = None if thread_id == "new" else db.get(ChatThreadRecord, thread_id)
+            if r is None:
+                r = ChatThreadRecord()
+            # Auto-title from the first user message when none is set.
+            title = (body.get("title") or r.title or "").strip()
+            if not title:
+                first = next(
+                    (m.get("content", "") for m in msgs if m.get("role") == "user"), ""
+                )
+                title = (first[:48] + ("…" if len(first) > 48 else "")) or "New chat"
+            r.title = title
+            r.persona = str(body.get("persona") or r.persona or "")
+            r.messages_json = json.dumps(msgs[-200:])
+            r.updated_at = _now()
+            db.add(r)
+            db.commit()
+            db.refresh(r)
+        return {"id": r.id, "title": r.title}
+
+    @app.delete("/chat/threads/{thread_id}")
+    def delete_chat_thread(thread_id: str) -> dict[str, Any]:
+        from ..core.models import ChatThreadRecord
+
+        with session_scope(platform.engine) as db:
+            r = db.get(ChatThreadRecord, thread_id)
+            if r is None:
+                raise HTTPException(status_code=404, detail="no such thread")
+            db.delete(r)
+            db.commit()
+        return {"deleted": thread_id}
 
     @app.get("/chat/personas")
     def chat_personas() -> dict[str, Any]:
@@ -3347,6 +3439,71 @@ def create_app(project_root: str | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc))
         return {"ref": ref, "source": src}
 
+    @app.post("/ltm/ingest-document")
+    def ltm_ingest_document(body: IngestDocumentBody) -> dict[str, Any]:
+        """Convert an uploaded document (PDF/office/HTML/text) to clean Markdown
+        and store it DURABLY in long-term memory — so a PDF becomes a searchable
+        knowledge-base note, not throwaway chat grounding. Structure-preserving
+        for PDFs (markitdown); falls back to flattened text on any converter issue.
+        """
+        import base64
+        import re
+        import tempfile
+        from pathlib import Path as _Path
+
+        from ..documents import document_to_markdown
+
+        approx_bytes = (len(body.content_b64) * 3) // 4
+        if approx_bytes > _MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"document too large (~{approx_bytes // (1024 * 1024)} MB); "
+                    f"limit is {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB"
+                ),
+            )
+        safe_name = (
+            re.sub(r"[^A-Za-z0-9._-]", "_", body.filename).strip("._") or "document"
+        )
+        try:
+            data = base64.b64decode(body.content_b64, validate=False)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"invalid base64: {exc}")
+
+        tmpdir = tempfile.mkdtemp(prefix="ij-ingest-")
+        tmp = _Path(tmpdir) / safe_name
+        try:
+            tmp.write_bytes(data)
+            markdown = document_to_markdown(tmp)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=400, detail=f"could not convert document: {exc}"
+            )
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+                _Path(tmpdir).rmdir()
+            except OSError:
+                pass
+
+        if not markdown.strip():
+            raise HTTPException(
+                status_code=422,
+                detail="no extractable text in document (scanned image PDF?)",
+            )
+        title = body.title.strip() or _Path(safe_name).stem
+        try:
+            src = body.source or platform.ltm.default_source()
+            ref = platform.ltm.append(title, markdown, source=src)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {
+            "ref": ref,
+            "source": src,
+            "title": title,
+            "chars": len(markdown),
+        }
+
     @app.get("/ltm/sources")
     def ltm_sources() -> dict[str, Any]:
         from ..ltm.sources import CustomSourceStore
@@ -3362,13 +3519,19 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         from ..ltm.sources import CustomSourceStore, connector_from_record
 
+        import json
+
         store = CustomSourceStore(platform.engine)
-        # A NEW SSH password is stored in the ENCRYPTED vault (never in the DB);
-        # its secret name is what gets persisted on the record.
+        _slug = re.sub(r"[^a-zA-Z0-9_]+", "_", body.name.strip().lower())
+        # A NEW secret (SSH password / http_rag bearer) is stored in the ENCRYPTED
+        # vault (never in the DB); only its secret NAME is persisted on the record.
         token_secret = body.token_secret
         if body.kind == "ssh" and body.password.strip():
-            token_secret = f"ltm_{re.sub(r'[^a-zA-Z0-9_]+', '_', body.name.strip().lower())}_ssh"
+            token_secret = f"ltm_{_slug}_ssh"
             platform.secrets.set(token_secret, body.password.strip(), kind="token")
+        elif body.kind == "http_rag" and body.token.strip():
+            token_secret = f"ltm_{_slug}_http_rag"
+            platform.secrets.set(token_secret, body.token.strip(), kind="token")
         try:
             rec = store.add(
                 body.name,
@@ -3380,6 +3543,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 port=body.port,
                 username=body.username,
                 key_path=body.key_path,
+                endpoint_url=body.endpoint_url,
+                config_json=json.dumps(body.config) if body.config else "",
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
@@ -3388,6 +3553,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 rec,
                 secret_resolver=platform.secrets.get,
                 http_factory=lambda: httpx.Client(timeout=30),
+                credential_resolver=platform.connections.credential,
+                embedder=getattr(getattr(platform, "memory", None), "embedder", None),
             )
             platform.ltm.register(conn)
         except Exception as exc:  # noqa: BLE001
@@ -3421,6 +3588,34 @@ def create_app(project_root: str | None = None) -> FastAPI:
             models.append(
                 {"provider": "custom", "model": cfg.custom_model or "default"}
             )
+        # LIVE DISCOVERY: ask each CONNECTED provider what it actually serves
+        # (cached ~10 min). Discovered ids are ADDED; curated ids drop only when
+        # the live list is non-empty (a failed probe — e.g. an OAuth token that
+        # can't list models — degrades safely to the curated set).
+        from ..providers.discovery import discover_models
+
+        for prov in ("anthropic", "openai", "ollama"):
+            try:
+                if not platform.providers.available(prov):
+                    continue
+                live = discover_models(
+                    prov,
+                    lambda p=prov: platform.providers._cred(p),  # noqa: SLF001
+                    base_url=cfg.ollama_base_url if prov == "ollama" else "",
+                )
+                if not live:
+                    continue
+                live_set = set(live)
+                models = [
+                    m for m in models
+                    if m["provider"] != prov or m["model"] in live_set
+                ]
+                known = {m["model"] for m in models if m["provider"] == prov}
+                for mid in live:
+                    if mid not in known:
+                        models.append({"provider": prov, "model": mid})
+            except Exception:  # noqa: BLE001 — discovery must never break the picker
+                continue
         # Honesty flag: which entries the user can ACTUALLY run right now
         # (provider connected/configured). Pickers show available ones first
         # and grey/hide the rest — no more dead options that silently fail.
@@ -3429,7 +3624,39 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 m["available"] = bool(platform.providers.available(m["provider"]))
             except Exception:  # noqa: BLE001
                 m["available"] = False
+        # Locally-installed CLI providers (e.g. the `grok` CLI) are DETECTED on
+        # disk, not configured — so a CLI a user just installed surfaces in every
+        # picker automatically, no restart. Detection is live + cheap and never
+        # raises; each entry carries its own freshly-computed `available` flag.
+        try:
+            from ..providers.cli_detect import detect_cli_providers
+
+            for dm in detect_cli_providers():
+                models.append(
+                    {
+                        "provider": dm.provider,
+                        "model": dm.model,
+                        "name": dm.name,
+                        "available": bool(dm.available),
+                        "source": "cli",
+                    }
+                )
+        except Exception:  # noqa: BLE001 — detection must never break the picker
+            pass
         return {"models": models}
+
+    @app.post("/providers/rescan")
+    def rescan_cli_providers() -> dict[str, Any]:
+        """Re-scan for locally-installed CLI inference providers (Grok, etc.).
+
+        Idempotent and on-demand: a CLI a user installs mid-session shows up the
+        next time any picker fetches ``/models``, but this lets the dashboard
+        force an immediate refresh (and is what the periodic boot loop calls).
+        """
+        from ..providers.cli_detect import detect_cli_providers
+
+        detected = detect_cli_providers()
+        return {"detected": [dm.as_dict() for dm in detected]}
 
     @app.get("/agents")
     def list_agents() -> dict[str, Any]:

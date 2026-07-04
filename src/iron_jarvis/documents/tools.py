@@ -21,6 +21,7 @@ from typing import Any
 
 from ..core.fs_policy import fs_read_ok
 from ..tools.base import Tool, ToolContext, ToolResult, safe_path
+from .pdf_markdown import MARKITDOWN_SUFFIXES, document_to_markdown
 from .readers import SUPPORTED_READ, extract_text
 from .writers import SUPPORTED_WRITE, write_document
 
@@ -213,6 +214,12 @@ def _load_for_conversion(source: Path, src_suffix: str, tgt_suffix: str) -> Any:
             with open(source, newline="", encoding="utf-8", errors="replace") as f:
                 return [list(row) for row in csv.reader(f)]
         return _xlsx_content(source, keep_sheets=(tgt_suffix == ".xlsx"))
+    # PDF/office/HTML -> Markdown: preserve real structure (headings, lists,
+    # tables) instead of flattening to plain text. Written verbatim into the
+    # .md by write_document's text writer. Falls back to extract_text inside
+    # document_to_markdown if markitdown can't handle the source.
+    if tgt_suffix == ".md" and src_suffix in MARKITDOWN_SUFFIXES:
+        return document_to_markdown(source)
     return extract_text(source)
 
 

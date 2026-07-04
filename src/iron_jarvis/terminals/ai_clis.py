@@ -42,6 +42,11 @@ def _extra_bin_dirs() -> list[Path]:
         home / ".cargo" / "bin",
         home / ".bun" / "bin",
         home / ".deno" / "bin",
+        # Tool-home bin dirs: some CLIs install into their own dot-dir rather
+        # than a shared PATH location. The Grok CLI (~/.grok/bin/grok.exe) is
+        # the driving case — without this it detects as "Not installed".
+        home / ".grok" / "bin",
+        home / ".xai" / "bin",
     ]
     if os.name == "nt":
         appdata = os.environ.get("APPDATA")

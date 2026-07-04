@@ -66,6 +66,7 @@ class ProviderManager:
         ollama_model: str = "llama3.1",
         custom_base_url: str | None = None,
         custom_model: str = "",
+        grok_cli_available: Callable[[], bool] | None = None,
     ) -> None:
         self.vault = vault
         self._default_model = default_model
@@ -81,6 +82,11 @@ class ProviderManager:
         # the vault when connected, keyless local servers just work).
         self._custom_base_url = _normalize_ollama_url(custom_base_url)
         self._custom_model = custom_model
+        # Live availability probe for the locally-installed Grok CLI, INJECTED by
+        # the platform (reads ~/.grok). Kept out of the manager itself so unit
+        # tests that build a bare ProviderManager() stay hermetic — a bare manager
+        # reports grok-cli unavailable regardless of what's installed on the box.
+        self._grok_cli_available_fn = grok_cli_available
         # Presence-only resolver for availability/health: when wired it avoids a
         # blocking OAuth refresh on the async loop. Falls back to the (possibly
         # refreshing) credential check when None, preserving legacy behavior.
@@ -157,6 +163,30 @@ class ProviderManager:
                 provider_name="custom",
             ),
         )
+        # LOCALLY-INSTALLED CLI provider: Grok (xAI's `grok` CLI). Detected on
+        # disk (~/.grok) rather than configured — routes through its own account
+        # session against the CLI chat proxy. Always registered so get() works
+        # the moment the CLI is installed+logged-in; availability is a LIVE check
+        # of the on-disk session (see available()), so it lights up/greys out
+        # without a daemon restart. The adapter import is lazy to avoid pulling
+        # the CLI stack into every manager construction.
+        self.register("grok-cli", lambda model=None: self._make_grok_cli(model))
+
+    def _make_grok_cli(self, model: str | None) -> LLMAdapter:
+        from .adapters.grok_cli import GrokCliAdapter
+
+        return GrokCliAdapter(model=model or "grok-build")
+
+    def _grok_cli_available(self) -> bool:
+        """Availability for the locally-installed Grok CLI via the injected
+        probe. A bare manager (no probe wired — the unit-test path) reports
+        unavailable, so availability never depends on the host's ~/.grok."""
+        if self._grok_cli_available_fn is None:
+            return False
+        try:
+            return bool(self._grok_cli_available_fn())
+        except Exception:  # noqa: BLE001
+            return False
 
     def _cred(self, name: str) -> str | None:
         """Resolve a live credential for an API provider (vault/connections → env)."""
@@ -210,6 +240,9 @@ class ProviderManager:
             # Custom endpoint: gated on the base_url, NOT a key (keyless local
             # servers are the common case; a vault key is used when present).
             return self._custom_base_url is not None
+        if name == "grok-cli":
+            # Locally-installed Grok CLI: live on-disk session check.
+            return self._grok_cli_available()
         return name in self._factories
 
     def has_available_api_provider(self) -> bool:
@@ -223,6 +256,7 @@ class ProviderManager:
             any(self.available(p) for p in API_PROVIDERS)
             or self.available("ollama")
             or self.available("custom")
+            or self.available("grok-cli")
         )
 
     def get(self, name: str, model: str | None = None) -> LLMAdapter:
@@ -246,7 +280,7 @@ class ProviderManager:
                     "api"
                     if name in API_PROVIDERS
                     else "local"
-                    if name == "ollama"
+                    if name in ("ollama", "custom", "grok-cli")
                     else "mock"
                 ),
             }

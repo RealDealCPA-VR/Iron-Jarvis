@@ -225,4 +225,65 @@ BUILTIN_SPECS: dict[str, ConnectionSpec] = {
         key_help="No key required — always connectable for offline testing.",
         key_secret_name="mock_api_key",
     ),
+    # --- Cloud STORAGE providers (memory/RAG sources, NOT LLMs) --------------
+    # Connected as OAuth apps so a Drive/OneDrive/Dropbox folder can be a
+    # long-term-memory source (see ltm/sources.py CLOUD_DRIVE_KINDS). They use a
+    # DISTINCT provider id from any LLM (e.g. Gemini's "google") so credentials
+    # never collide. There's no public CLI client to ride for storage, so the
+    # user registers their own OAuth app (a "Desktop"/"Mobile & desktop" client
+    # that permits a localhost redirect) and supplies its client id/secret via
+    # the <provider>_oauth_client_id / _oauth_client_secret vault entries — the
+    # daemon then rides its own localhost callback + refreshes tokens as usual.
+    "google_drive": ConnectionSpec(
+        provider="google_drive",
+        display_name="Google Drive (memory)",
+        method="oauth",
+        auth_url="https://accounts.google.com/o/oauth2/v2/auth",
+        token_url="https://oauth2.googleapis.com/token",
+        scopes=["https://www.googleapis.com/auth/drive", "openid", "email"],
+        docs_url="https://console.cloud.google.com/apis/credentials",
+        oauth_help=(
+            "Connect a Google Drive to search + ingest its files into memory. "
+            "Register a 'Desktop app' OAuth client in Google Cloud Console and "
+            "paste its client id/secret."
+        ),
+        # offline access_type + forced consent are what make Google return a
+        # refresh_token (so the connection survives token expiry).
+        oauth_extra_auth_params={"access_type": "offline", "prompt": "consent"},
+    ),
+    "onedrive": ConnectionSpec(
+        provider="onedrive",
+        display_name="OneDrive (memory)",
+        method="oauth",
+        auth_url="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+        token_url="https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        # offline_access is what yields a refresh_token on Microsoft identity.
+        scopes=["Files.ReadWrite", "offline_access", "openid"],
+        docs_url="https://portal.azure.com",
+        oauth_help=(
+            "Connect OneDrive to search + ingest its files into memory. Register "
+            "an app in Entra ID (Azure AD) with a 'Mobile and desktop' platform "
+            "and a http://localhost redirect, then paste its client id/secret."
+        ),
+    ),
+    "dropbox": ConnectionSpec(
+        provider="dropbox",
+        display_name="Dropbox (memory)",
+        method="oauth",
+        auth_url="https://www.dropbox.com/oauth2/authorize",
+        token_url="https://api.dropboxapi.com/oauth2/token",
+        scopes=[
+            "files.metadata.read",
+            "files.content.read",
+            "files.content.write",
+        ],
+        docs_url="https://www.dropbox.com/developers/apps",
+        oauth_help=(
+            "Connect Dropbox to search + ingest its files into memory. Create an "
+            "app at dropbox.com/developers/apps with a http://localhost redirect "
+            "and paste its app key/secret."
+        ),
+        # token_access_type=offline is Dropbox's switch for issuing a refresh token.
+        oauth_extra_auth_params={"token_access_type": "offline"},
+    ),
 }

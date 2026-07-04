@@ -113,6 +113,27 @@ for pkg in ("paramiko", "bcrypt", "nacl"):
 for pkg in ("pypdf", "docx", "openpyxl", "pptx", "fpdf", "PIL"):
     _collect(pkg)
 
+# --- markitdown: structure-preserving PDF/office -> Markdown -----------------
+# Lazily imported inside iron_jarvis.documents.pdf_markdown (only when a PDF is
+# ingested into memory), so the daemon still BOOTS without any of these. But
+# `import markitdown` eagerly pulls magika (an onnxruntime model) for content
+# sniffing, so the whole stack must be bundled or structured conversion fails at
+# runtime. NOTE: the converter falls back to flattened pypdf text on ANY import/
+# convert error, so a missed dep here degrades PDF fidelity — it does NOT break
+# ingestion. onnxruntime + magika carry native libs + an .onnx model (data), so
+# collect_all is required to pull those non-Python artifacts.
+for pkg in (
+    "markitdown",
+    "magika",          # ships an onnx model as package data
+    "onnxruntime",     # native runtime for magika
+    "pdfminer",        # pdfminer.six — markitdown's PDF text backend
+    "pdfplumber",
+    "pypdfium2",
+    "markdownify",
+    "bs4",             # beautifulsoup4 — markitdown HTML handling
+):
+    _collect(pkg)
+
 # --- Windows terminals (PTY) — lazily `import winpty` at runtime -------------
 if os.name == "nt":
     hiddenimports += collect_submodules("winpty")

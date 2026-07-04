@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Database,
   Search,
@@ -11,6 +11,12 @@ import {
   FolderOpen,
   Layers,
   X,
+  Upload,
+  Cloud,
+  Globe,
+  ChevronDown,
+  ChevronRight,
+  Info,
 } from "lucide-react";
 import { get, post, del, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
@@ -40,7 +46,31 @@ const SOURCE_TONE: Record<string, Tone> = {
   ssh: "violet",
 };
 
-type Kind = "markdown" | "notion" | "ssh";
+type Kind =
+  | "markdown"
+  | "notion"
+  | "ssh"
+  | "google_drive"
+  | "onedrive"
+  | "dropbox"
+  | "http_rag";
+
+// The three OAuth-backed cloud drives resolve their token from the Connections
+// registry, so the add-source form only needs a folder scope for them.
+const DRIVE_KINDS: Kind[] = ["google_drive", "onedrive", "dropbox"];
+const DRIVE_LABEL: Record<string, string> = {
+  google_drive: "Google Drive (memory)",
+  onedrive: "OneDrive (memory)",
+  dropbox: "Dropbox (memory)",
+};
+
+function sourceTone(kind: string): Tone {
+  if (kind === "notion") return "slate";
+  if (kind === "ssh") return "violet";
+  if (kind === "http_rag") return "amber";
+  if (DRIVE_KINDS.includes(kind as Kind)) return "violet";
+  return "cyan";
+}
 
 export default function LtmPage() {
   const {
@@ -81,9 +111,27 @@ export default function LtmPage() {
   const [srcPort, setSrcPort] = useState("22");
   const [srcUser, setSrcUser] = useState("");
   const [srcPassword, setSrcPassword] = useState("");
+  // Offsite RAG (http_rag) fields
+  const [srcEndpoint, setSrcEndpoint] = useState("");
+  const [srcBearer, setSrcBearer] = useState(""); // write-only bearer token
+  const [ragAdvanced, setRagAdvanced] = useState(false);
+  const [ragQueryField, setRagQueryField] = useState("query");
+  const [ragTopKField, setRagTopKField] = useState("k");
+  const [ragResultsPath, setRagResultsPath] = useState("");
+  const [ragTitleField, setRagTitleField] = useState("");
+  const [ragTextField, setRagTextField] = useState("");
+  const [ragRefField, setRagRefField] = useState("");
+  const [ragAuthScheme, setRagAuthScheme] = useState(""); // "" = auto
+  const [ragAuthHeader, setRagAuthHeader] = useState("");
   const [srcBusy, setSrcBusy] = useState(false);
   const [srcError, setSrcError] = useState<string | null>(null);
   const [srcOk, setSrcOk] = useState<string | null>(null);
+
+  // Ingest-document upload
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [ingestBusy, setIngestBusy] = useState(false);
+  const [ingestError, setIngestError] = useState<string | null>(null);
+  const [ingestOk, setIngestOk] = useState<string | null>(null);
 
   // Folder browser (for the markdown-source path). `browsePick` tracks the
   // directory highlighted in the tree before the user confirms it.
@@ -157,22 +205,52 @@ export default function LtmPage() {
       setSrcError("An SSH source needs a host and a remote folder path.");
       return;
     }
+    if (srcKind === "http_rag" && !srcEndpoint.trim()) {
+      setSrcError("An offsite RAG source needs an endpoint URL.");
+      return;
+    }
     setSrcBusy(true);
     setSrcError(null);
     setSrcOk(null);
     try {
-      await post("/ltm/sources", {
+      // Build only the fields relevant to the chosen kind.
+      const isDrive = DRIVE_KINDS.includes(srcKind);
+      const body: Record<string, unknown> = {
         name: srcName.trim(),
         kind: srcKind,
-        // `path` is a LOCAL folder for markdown, the REMOTE folder for ssh.
-        path: srcKind === "markdown" || srcKind === "ssh" ? srcPath.trim() : "",
-        database_id: srcKind === "notion" ? srcDb.trim() : "",
-        token_secret: srcKind === "notion" ? srcToken.trim() : "",
-        host: srcKind === "ssh" ? srcHost.trim() : "",
-        port: srcKind === "ssh" ? Number(srcPort) || 22 : 22,
-        username: srcKind === "ssh" ? srcUser.trim() : "",
-        password: srcKind === "ssh" ? srcPassword : "",
-      });
+      };
+      if (srcKind === "markdown" || srcKind === "ssh") body.path = srcPath.trim();
+      if (srcKind === "notion") {
+        body.database_id = srcDb.trim();
+        body.token_secret = srcToken.trim();
+      }
+      if (srcKind === "ssh") {
+        body.host = srcHost.trim();
+        body.port = Number(srcPort) || 22;
+        body.username = srcUser.trim();
+        body.password = srcPassword;
+      }
+      if (isDrive) {
+        // A folder id/path to scope the index to; blank = whole drive. The token
+        // is resolved from the Connections registry, not sent here.
+        body.path = srcPath.trim();
+      }
+      if (srcKind === "http_rag") {
+        body.endpoint_url = srcEndpoint.trim();
+        if (srcBearer.trim()) body.token = srcBearer.trim();
+        // Only send non-empty config fields.
+        const cfg: Record<string, string> = {};
+        if (ragQueryField.trim()) cfg.query_field = ragQueryField.trim();
+        if (ragTopKField.trim()) cfg.top_k_field = ragTopKField.trim();
+        if (ragResultsPath.trim()) cfg.results_path = ragResultsPath.trim();
+        if (ragTitleField.trim()) cfg.title_field = ragTitleField.trim();
+        if (ragTextField.trim()) cfg.text_field = ragTextField.trim();
+        if (ragRefField.trim()) cfg.ref_field = ragRefField.trim();
+        if (ragAuthScheme.trim()) cfg.auth_scheme = ragAuthScheme.trim();
+        if (ragAuthHeader.trim()) cfg.auth_header = ragAuthHeader.trim();
+        if (Object.keys(cfg).length) body.config = cfg;
+      }
+      await post("/ltm/sources", body);
       setSrcOk(`Source "${srcName.trim()}" added.`);
       setSrcName("");
       setSrcPath("");
@@ -182,6 +260,17 @@ export default function LtmPage() {
       setSrcPort("22");
       setSrcUser("");
       setSrcPassword("");
+      setSrcEndpoint("");
+      setSrcBearer("");
+      setRagAdvanced(false);
+      setRagQueryField("query");
+      setRagTopKField("k");
+      setRagResultsPath("");
+      setRagTitleField("");
+      setRagTextField("");
+      setRagRefField("");
+      setRagAuthScheme("");
+      setRagAuthHeader("");
       setSrcKind("markdown");
       reloadSources();
     } catch (err) {
@@ -189,6 +278,44 @@ export default function LtmPage() {
     } finally {
       setSrcBusy(false);
     }
+  }
+
+  async function ingestFile(file: File) {
+    setIngestBusy(true);
+    setIngestError(null);
+    setIngestOk(null);
+    try {
+      const content_b64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error("Could not read the file."));
+        reader.onload = () => {
+          const res = String(reader.result || "");
+          // Strip the "data:<mime>;base64," prefix from the data URL.
+          const comma = res.indexOf(",");
+          resolve(comma >= 0 ? res.slice(comma + 1) : res);
+        };
+        reader.readAsDataURL(file);
+      });
+      const res = await post<{ ref: string; source: string; title: string; chars: number }>(
+        "/ltm/ingest-document",
+        { filename: file.name, content_b64 },
+      );
+      setIngestOk(
+        `Added "${res.title}" to memory (${res.chars.toLocaleString()} chars)`,
+      );
+      reloadSources();
+    } catch (err) {
+      setIngestError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setIngestBusy(false);
+    }
+  }
+
+  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    // Reset the input so re-picking the same file fires onChange again.
+    e.target.value = "";
+    if (file) void ingestFile(file);
   }
 
   async function removeSource(nm: string) {
@@ -275,6 +402,48 @@ export default function LtmPage() {
           {error && (
             <div className="mt-3">
               <ErrorNote>{error}</ErrorNote>
+            </div>
+          )}
+        </Card>
+      </Reveal>
+
+      <Reveal>
+        <Card title="Ingest document" icon={<Upload size={15} />}>
+          <div className="flex flex-wrap items-center gap-4">
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".pdf,.docx,.pptx,.xlsx,.html,.txt,.md"
+              onChange={onPickFile}
+              className="hidden"
+            />
+            <p className="min-w-[240px] flex-1 text-sm text-zinc-400">
+              Converts PDFs / office docs (Word, PowerPoint, Excel, HTML) to
+              Markdown and stores them as searchable memory.
+            </p>
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              disabled={ingestBusy}
+              className="btn-accent shrink-0"
+            >
+              {ingestBusy ? (
+                <LoaderInline label="Ingesting…" />
+              ) : (
+                <>
+                  <Upload size={14} /> Choose a document
+                </>
+              )}
+            </button>
+          </div>
+          {ingestOk && (
+            <div className="mt-3">
+              <SuccessNote>{ingestOk}</SuccessNote>
+            </div>
+          )}
+          {ingestError && (
+            <div className="mt-3">
+              <ErrorNote>{ingestError}</ErrorNote>
             </div>
           )}
         </Card>
@@ -403,9 +572,13 @@ export default function LtmPage() {
                     onChange={(e) => setSrcKind(e.target.value as Kind)}
                     className="field"
                   >
+                    <option value="http_rag">Offsite RAG endpoint</option>
                     <option value="markdown">Markdown folder</option>
                     <option value="ssh">Remote folder (SSH)</option>
                     <option value="notion">Notion database</option>
+                    <option value="google_drive">Google Drive (memory)</option>
+                    <option value="onedrive">OneDrive (memory)</option>
+                    <option value="dropbox">Dropbox (memory)</option>
                   </select>
                 </div>
 
@@ -500,7 +673,7 @@ export default function LtmPage() {
                       </div>
                     </div>
                   </>
-                ) : (
+                ) : srcKind === "notion" ? (
                   <>
                     <div>
                       <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
@@ -526,6 +699,186 @@ export default function LtmPage() {
                       <div className="mt-1 text-[11px] text-zinc-600">
                         The name of a stored secret holding the Notion token.
                       </div>
+                    </div>
+                  </>
+                ) : DRIVE_KINDS.includes(srcKind) ? (
+                  <>
+                    <div>
+                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        Folder to index
+                      </label>
+                      <input
+                        value={srcPath}
+                        onChange={(e) => setSrcPath(e.target.value)}
+                        placeholder="folder id or path (blank = whole drive)"
+                        className="field font-mono"
+                      />
+                      <div className="mt-1 text-[11px] text-zinc-600">
+                        Folder to index — blank = whole drive.
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2 rounded-xl border border-accent/20 bg-accent/[0.06] px-3 py-2.5">
+                      <Cloud size={14} className="mt-0.5 shrink-0 text-accent-soft/80" />
+                      <div className="text-[11px] leading-relaxed text-zinc-400">
+                        Connect {DRIVE_LABEL[srcKind]?.replace(" (memory)", "")} on the{" "}
+                        <span className="font-semibold text-accent-soft">Connections</span> page first —
+                        this source resolves its access token from that OAuth connection.
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        Endpoint URL
+                      </label>
+                      <div className="relative">
+                        <Globe
+                          size={14}
+                          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600"
+                        />
+                        <input
+                          value={srcEndpoint}
+                          onChange={(e) => setSrcEndpoint(e.target.value)}
+                          placeholder="https://my-rag.example.com/search"
+                          className="field pl-9 font-mono"
+                        />
+                      </div>
+                      <div className="mt-1 text-[11px] text-zinc-600">
+                        Point Iron Jarvis at your own RAG service — it POSTs the query and reads back matches.
+                      </div>
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        Bearer token
+                        <span className="ml-1.5 normal-case tracking-normal text-zinc-600">(optional)</span>
+                      </label>
+                      <input
+                        type="password"
+                        value={srcBearer}
+                        onChange={(e) => setSrcBearer(e.target.value)}
+                        placeholder="write-only — stored encrypted"
+                        autoComplete="off"
+                        className="field"
+                      />
+                    </div>
+
+                    <div className="rounded-xl border border-white/[0.05] bg-white/[0.02]">
+                      <button
+                        type="button"
+                        onClick={() => setRagAdvanced((v) => !v)}
+                        className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[11px] uppercase tracking-[0.1em] text-zinc-400 transition-colors hover:text-accent-soft"
+                      >
+                        {ragAdvanced ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                        Advanced · request/response mapping
+                      </button>
+                      {ragAdvanced && (
+                        <div className="space-y-3 border-t hairline px-3 py-3">
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                                Query field
+                              </label>
+                              <input
+                                value={ragQueryField}
+                                onChange={(e) => setRagQueryField(e.target.value)}
+                                placeholder="query"
+                                className="field font-mono"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                                Top-k field
+                              </label>
+                              <input
+                                value={ragTopKField}
+                                onChange={(e) => setRagTopKField(e.target.value)}
+                                placeholder="k"
+                                className="field font-mono"
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                              Results path
+                            </label>
+                            <input
+                              value={ragResultsPath}
+                              onChange={(e) => setRagResultsPath(e.target.value)}
+                              placeholder="results / documents / data / matches"
+                              className="field font-mono"
+                            />
+                            <div className="mt-1 flex items-start gap-1 text-[11px] text-zinc-600">
+                              <Info size={12} className="mt-0.5 shrink-0" />
+                              Leave blank to auto-detect where the matches live in the response.
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-3 gap-2">
+                            <div>
+                              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                                Title field
+                              </label>
+                              <input
+                                value={ragTitleField}
+                                onChange={(e) => setRagTitleField(e.target.value)}
+                                placeholder="title"
+                                className="field font-mono"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                                Text field
+                              </label>
+                              <input
+                                value={ragTextField}
+                                onChange={(e) => setRagTextField(e.target.value)}
+                                placeholder="text"
+                                className="field font-mono"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                                Ref field
+                              </label>
+                              <input
+                                value={ragRefField}
+                                onChange={(e) => setRagRefField(e.target.value)}
+                                placeholder="id"
+                                className="field font-mono"
+                              />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                                Auth scheme
+                              </label>
+                              <select
+                                aria-label="Auth scheme"
+                                value={ragAuthScheme}
+                                onChange={(e) => setRagAuthScheme(e.target.value)}
+                                className="field"
+                              >
+                                <option value="">Auto</option>
+                                <option value="bearer">bearer</option>
+                                <option value="header">header</option>
+                                <option value="none">none</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                                Auth header
+                              </label>
+                              <input
+                                value={ragAuthHeader}
+                                onChange={(e) => setRagAuthHeader(e.target.value)}
+                                placeholder="X-Api-Key"
+                                className="field font-mono"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </>
                 )}
@@ -562,17 +915,20 @@ export default function LtmPage() {
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-semibold text-zinc-100">{s.name}</span>
-                          <Badge
-                            value={s.kind}
-                            tone={s.kind === "notion" ? "slate" : s.kind === "ssh" ? "violet" : "cyan"}
-                          />
+                          <Badge value={s.kind} tone={sourceTone(s.kind)} />
                         </div>
                         <div className="mt-0.5 truncate font-mono text-[11px] text-zinc-500">
                           {s.kind === "notion"
                             ? s.database_id || "—"
                             : s.kind === "ssh"
                               ? `${s.username ? s.username + "@" : ""}${s.host || "—"}:${s.path || ""}`
-                              : s.path || "—"}
+                              : s.kind === "http_rag"
+                                ? String(s.endpoint_url || "—")
+                                : DRIVE_KINDS.includes(s.kind as Kind)
+                                  ? s.path
+                                    ? String(s.path)
+                                    : "whole drive"
+                                  : s.path || "—"}
                         </div>
                       </div>
                       <ConfirmButton

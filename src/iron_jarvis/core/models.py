@@ -139,6 +139,19 @@ class DynamicToolRecord(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class ChatThreadRecord(SQLModel, table=True):
+    """A saved chat conversation — frontier parity: threads survive navigation
+    and restarts, listed in a sidebar, resumable any time."""
+
+    id: str = Field(default_factory=lambda: new_id("chat"), primary_key=True)
+    title: str = ""
+    persona: str = ""
+    messages_json: str = "[]"  # [{role, content, attachmentNames?}]
+    project_id: str | None = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 class SavedPromptRecord(SQLModel, table=True):
     """A reusable task template / saved prompt the user can re-run with one
     click (daily-driver: stop retyping the same task into a blank box)."""

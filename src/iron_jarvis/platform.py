@@ -205,6 +205,17 @@ def build_platform(
         oauth_app=_oauth_app,
     )
 
+    def _grok_cli_available() -> bool:
+        """True when the local Grok CLI is installed AND has a valid on-disk
+        account session. Cheap (reads two small JSON files under ~/.grok) and
+        never raises, so it's safe on the availability/health hot path."""
+        try:
+            from .providers.cli_detect import grok_session
+
+            return grok_session() is not None
+        except Exception:  # noqa: BLE001
+            return False
+
     providers = ProviderManager(
         vault=vault,
         default_model=config.default_model,
@@ -218,6 +229,11 @@ def build_platform(
         # Custom OpenAI-compatible endpoint (Ollama Cloud / LM Studio / vLLM...).
         custom_base_url=config.custom_base_url,
         custom_model=config.custom_model,
+        # Locally-installed Grok CLI: live on-disk session probe (binary present
+        # + a valid ~/.grok account session). Injected here so the manager stays
+        # hermetic in unit tests; in the real app grok-cli lights up the moment
+        # the CLI is installed + logged in, no restart.
+        grok_cli_available=_grok_cli_available,
     )
     # Self-tuning router (§6 phase-1), OFF by default: only when the user opts in
     # (prefer_local_when_capable) AND a local Ollama model is configured AND it has
@@ -382,12 +398,17 @@ def build_platform(
                 http=httpx.Client(timeout=30),
             )
         )
-    # User-configured custom LTM sources (markdown dirs / Notion DBs), persisted.
+    # User-configured custom LTM sources (markdown dirs / Notion DBs / cloud
+    # drives / offsite RAG), persisted. Cloud drives resolve their OAuth token
+    # through the Connections registry (auto-refreshing) and rank downloaded
+    # files with the SAME shared embedder used by file-search + Total Recall.
     load_custom_sources(
         ltm,
         engine,
         secret_resolver=secrets.get,
         http_factory=lambda: httpx.Client(timeout=30),
+        credential_resolver=connections.credential,
+        embedder=embedder,
     )
     for tool in ltm_tools(ltm):
         registry.register(tool)

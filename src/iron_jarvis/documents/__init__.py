@@ -10,6 +10,8 @@ Public surface:
 
 * :func:`extract_text` — text out of any supported file.
 * :func:`write_document` — a real file in by suffix/kind.
+* :func:`pdf_to_markdown` / :func:`document_to_markdown` — structure-preserving
+  PDF/office/HTML -> Markdown (via markitdown), with a flattened-text fallback.
 * :func:`parse_markdown` / :class:`Block` — the structured-markdown blocks.
 * :data:`SUPPORTED_READ` / :data:`SUPPORTED_WRITE` — advertised suffixes.
 * :func:`document_tools` — the read/write/extract/convert Tools for the registry.
@@ -18,6 +20,7 @@ Public surface:
 from __future__ import annotations
 
 from .markdown import Block, parse_markdown
+from .pdf_markdown import document_to_markdown, pdf_to_markdown
 from .readers import SUPPORTED_READ, extract_text
 from .tools import (
     ConvertDocumentTool,
@@ -31,6 +34,8 @@ from .writers import SUPPORTED_WRITE, write_document
 __all__ = [
     "extract_text",
     "write_document",
+    "pdf_to_markdown",
+    "document_to_markdown",
     "parse_markdown",
     "Block",
     "SUPPORTED_READ",
