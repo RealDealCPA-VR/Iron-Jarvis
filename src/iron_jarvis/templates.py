@@ -28,6 +28,7 @@ class TemplateStore:
         agent_type: AgentType | str = AgentType.BUILDER,
         provider: str | None = None,
         model: str | None = None,
+        description: str = "",
     ) -> SavedPromptRecord:
         if isinstance(agent_type, str):
             agent_type = AgentType(agent_type)
@@ -38,11 +39,48 @@ class TemplateStore:
                 agent_type=agent_type,
                 provider=provider,
                 model=model,
+                description=(description or "").strip(),
             )
             db.add(row)
             db.commit()
             db.refresh(row)  # un-expire attrs so the detached record stays usable
             return row
+
+    def seed_starters(self) -> int:
+        """First-run only: when the store is EMPTY, add a few self-explanatory
+        starter templates (each says when to use it). Returns how many were
+        added — 0 whenever the user already has any template, so this never
+        re-adds deleted starters."""
+        if self.list():
+            return 0
+        starters = [
+            (
+                "Daily briefing",
+                "Summarize my day so far: recent sessions and their outcomes, "
+                "anything pending review or approval, and suggest the 3 most "
+                "useful next actions.",
+                "Use each morning (or after time away) to get oriented in one click.",
+            ),
+            (
+                "Summarize a document",
+                "Read the file I mention (or the newest file in my workspace) and "
+                "produce a one-page summary: purpose, key numbers, decisions "
+                "needed, and action items.",
+                "Use when you receive a long PDF/Word/Excel file and want the "
+                "essence without reading it all.",
+            ),
+            (
+                "Client follow-up email",
+                "Draft a polite, professional follow-up email to a client about "
+                "the topic I describe. Under 150 words, warm but direct, with a "
+                "clear next step.",
+                "Use when a client has gone quiet or you need a quick, "
+                "well-worded nudge.",
+            ),
+        ]
+        for name, task, description in starters:
+            self.create(name, task, description=description)
+        return len(starters)
 
     def list(self) -> list[SavedPromptRecord]:
         """Return every saved template, newest first."""

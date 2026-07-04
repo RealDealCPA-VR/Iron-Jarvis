@@ -10,6 +10,7 @@ import {
   ChevronUp,
   ChevronDown,
   Square,
+  Trash2,
 } from "lucide-react";
 import { usePolledApi } from "@/lib/useApi";
 import { post, del, ApiError } from "@/lib/api";
@@ -53,12 +54,23 @@ export default function SessionsPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  // Per-row delete: first click arms ("Confirm?"), second click deletes.
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
   // Auto-dismiss the maintenance "toast".
   useEffect(() => {
     if (!notice) return;
     const t = setTimeout(() => setNotice(null), 5000);
     return () => clearTimeout(t);
   }, [notice]);
+
+  // Disarm a pending row-delete confirmation after 3s (mirrors ConfirmButton).
+  useEffect(() => {
+    if (!confirmDeleteId) return;
+    const t = setTimeout(() => setConfirmDeleteId(null), 3000);
+    return () => clearTimeout(t);
+  }, [confirmDeleteId]);
 
   const statusOptions = useMemo(
     () => Array.from(new Set(sessions.map((s) => s.status))).sort(),
@@ -100,8 +112,27 @@ export default function SessionsPage() {
 
   async function deleteSession(id: string) {
     setActionError(null);
+    setDeletingId(id);
     try {
       await del(`/sessions/${id}`);
+      reload();
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setDeletingId(null);
+      setConfirmDeleteId(null);
+    }
+  }
+
+  async function clearFinished() {
+    setActionError(null);
+    setNotice(null);
+    try {
+      const res = await post<{ cleared: number }>("/sessions/clear", {
+        statuses: ["completed", "failed", "cancelled"],
+      });
+      const n = res?.cleared ?? 0;
+      setNotice(`Cleared ${n} finished session${n === 1 ? "" : "s"}.`);
       reload();
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : String(err));
@@ -128,7 +159,19 @@ export default function SessionsPage() {
   return (
     <PageShell>
       <Reveal>
-        <PageHeader title="Sessions" subtitle="Run agents and inspect past sessions." />
+        <PageHeader
+          title="Sessions"
+          subtitle="Run agents and inspect past sessions."
+          actions={
+            <ConfirmButton
+              label="Clear finished"
+              confirmLabel="Clear all finished?"
+              onConfirm={clearFinished}
+              title="Delete all completed, failed and cancelled sessions"
+              className="!text-zinc-400 hover:!text-accent-soft"
+            />
+          }
+        />
       </Reveal>
 
       {offline && (
@@ -309,7 +352,44 @@ export default function SessionsPage() {
                                     )}
                                   </button>
                                 )}
-                                <ConfirmButton onConfirm={() => deleteSession(s.id)} />
+                                {/* Delete is hidden on active sessions (the daemon
+                                    409s on them) — stop it first, then delete. */}
+                                {!active && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      if (confirmDeleteId !== s.id) {
+                                        setConfirmDeleteId(s.id);
+                                        return;
+                                      }
+                                      void deleteSession(s.id);
+                                    }}
+                                    disabled={deletingId === s.id}
+                                    title={
+                                      confirmDeleteId === s.id
+                                        ? "Click again to permanently delete this session"
+                                        : "Delete this session"
+                                    }
+                                    aria-label={`Delete session ${shortId(s.id)}`}
+                                    className={`inline-flex items-center gap-1.5 rounded-lg py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                                      confirmDeleteId === s.id
+                                        ? "border border-rose-500/50 bg-rose-500/15 px-2.5 text-rose-200"
+                                        : "px-1.5 text-zinc-500 hover:bg-rose-500/10 hover:text-rose-300"
+                                    }`}
+                                  >
+                                    {deletingId === s.id ? (
+                                      <LoaderInline />
+                                    ) : confirmDeleteId === s.id ? (
+                                      <>
+                                        <Trash2 size={12} /> Confirm?
+                                      </>
+                                    ) : (
+                                      <Trash2 size={14} />
+                                    )}
+                                  </button>
+                                )}
                               </div>
                             </td>
                           </tr>

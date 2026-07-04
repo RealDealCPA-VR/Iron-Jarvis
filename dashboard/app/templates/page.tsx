@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { BookMarked, Plus, Play, Bot, Cpu } from "lucide-react";
+import { BookMarked, Plus, Play, Bot, Cpu, Info } from "lucide-react";
 import { post, del, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import type { AgentsResponse, ModelOption } from "@/lib/types";
@@ -27,6 +27,8 @@ interface Template {
   name: string;
   agent_type: string;
   task: string;
+  /** "Use this when…" note explaining when to reach for this template. */
+  description: string;
   provider?: string | null;
   model?: string | null;
   created_at: string;
@@ -62,6 +64,7 @@ export default function TemplatesPage() {
   const models = modelsData?.models ?? [];
 
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
   const [agentType, setAgentType] = useState("");
   const [task, setTask] = useState("");
   const [model, setModel] = useState(""); // "provider|model", "" = default
@@ -83,6 +86,7 @@ export default function TemplatesPage() {
       name: name.trim(),
       task: task.trim(),
       agent_type: effectiveAgent,
+      description: description.trim(),
     };
     if (provider) body.provider = provider;
     if (modelName) body.model = modelName;
@@ -90,6 +94,7 @@ export default function TemplatesPage() {
       await post("/templates", body);
       setOk(`Template "${name.trim()}" saved.`);
       setName("");
+      setDescription("");
       setTask("");
       setAgentType("");
       setModel("");
@@ -137,6 +142,23 @@ export default function TemplatesPage() {
       )}
 
       <Reveal>
+        <Card>
+          <div className="flex items-start gap-2.5 text-sm text-zinc-400">
+            <Info
+              size={16}
+              className="mt-0.5 shrink-0 text-accent-soft/80"
+              aria-hidden="true"
+            />
+            <p>
+              A template is a task you run often, saved as one click. Run it
+              from here or from the Overview&apos;s &ldquo;Your apps&rdquo;
+              tiles. The description tells future-you when to use it.
+            </p>
+          </div>
+        </Card>
+      </Reveal>
+
+      <Reveal>
         <div className="grid gap-6 lg:grid-cols-3">
           <div className="lg:col-span-1">
             <Card title="New template" icon={<Plus size={15} />}>
@@ -149,6 +171,19 @@ export default function TemplatesPage() {
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="Daily standup digest"
+                    className="field"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    When to use it{" "}
+                    <span className="text-zinc-600">(description)</span>
+                  </label>
+                  <input
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="e.g. Use each morning to get oriented"
                     className="field"
                   />
                 </div>
@@ -255,6 +290,11 @@ export default function TemplatesPage() {
                               </span>
                             )}
                           </div>
+                          {t.description?.trim() && (
+                            <p className="mt-1 text-[13px] italic text-zinc-400">
+                              &mdash; {t.description.trim()}
+                            </p>
+                          )}
                           <p className="mt-1.5 line-clamp-2 text-sm text-zinc-400">
                             {t.task}
                           </p>

@@ -149,6 +149,9 @@ class SavedPromptRecord(SQLModel, table=True):
     task: str = ""
     provider: str | None = None
     model: str | None = None
+    #: WHEN to reach for this template — shown on the card so templates are
+    #: self-explanatory ("use this when…"), not just a name.
+    description: str = ""
     created_at: datetime = Field(default_factory=utcnow)
 
 

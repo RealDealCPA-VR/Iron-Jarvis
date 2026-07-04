@@ -12,6 +12,7 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/core";
 import { post, ApiError } from "@/lib/api";
+import { ConfirmButton } from "@/components/ui";
 import type { Review, SessionView } from "@/lib/types";
 import {
   LANES,
@@ -21,7 +22,7 @@ import {
   type LaneId,
 } from "@/lib/kanban";
 import { KanbanColumn } from "./KanbanColumn";
-import { CardInner } from "./SessionCard";
+import { CardInner, KanbanActionsContext, type KanbanCardActions } from "./SessionCard";
 
 export function KanbanBoard({
   sessions,
@@ -52,6 +53,33 @@ export function KanbanBoard({
   const draggingFrom: LaneId | null = activeSession
     ? laneFor(activeSession, !!reviews[activeSession.id])
     : null;
+
+  // Card-level actions (failed-lane retry/dismiss, review-lane add-context) reach
+  // the cards via context — KanbanColumn sits between us and them, prop-frozen.
+  const cardActions = useMemo<KanbanCardActions>(
+    () => ({
+      reload,
+      notify: (kind, text) => setToast({ kind, text }),
+    }),
+    [reload],
+  );
+
+  async function clearLane(lane: "completed" | "failed") {
+    setToast(null);
+    // The Failed lane holds both failed AND cancelled sessions (see laneFor).
+    const statuses = lane === "completed" ? ["completed"] : ["failed", "cancelled"];
+    try {
+      const res = await post<{ cleared: number }>("/sessions/clear", { statuses });
+      setToast({
+        kind: "ok",
+        text: `Cleared ${res.cleared} session${res.cleared === 1 ? "" : "s"}.`,
+      });
+      reload();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : String(err);
+      setToast({ kind: "err", text: `Could not clear ${lane}: ${msg}` });
+    }
+  }
 
   async function act(kind: "approve" | "reject", id: string) {
     setBusyId(id);
@@ -94,6 +122,7 @@ export function KanbanBoard({
   }
 
   return (
+    <KanbanActionsContext.Provider value={cardActions}>
     <div className="space-y-3">
       {toast && (
         <div
@@ -104,6 +133,29 @@ export function KanbanBoard({
           }`}
         >
           {toast.text}
+        </div>
+      )}
+
+      {/* Board toolbar — the lane headers live inside KanbanColumn, so the
+          clear affordances sit here, right-aligned above Completed/Failed. */}
+      {(lanes.completed.length > 0 || lanes.failed.length > 0) && (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {lanes.completed.length > 0 && (
+            <ConfirmButton
+              label={`Clear completed (${lanes.completed.length})`}
+              confirmLabel="Confirm clear?"
+              title="Remove every completed session from the board"
+              onConfirm={() => clearLane("completed")}
+            />
+          )}
+          {lanes.failed.length > 0 && (
+            <ConfirmButton
+              label={`Clear failed (${lanes.failed.length})`}
+              confirmLabel="Confirm clear?"
+              title="Remove every failed or cancelled session from the board"
+              onConfirm={() => clearLane("failed")}
+            />
+          )}
         </div>
       )}
 
@@ -136,5 +188,6 @@ export function KanbanBoard({
         </DragOverlay>
       </DndContext>
     </div>
+    </KanbanActionsContext.Provider>
   );
 }

@@ -373,6 +373,37 @@ class TemplateCreateBody(BaseModel):
     agent_type: str = "builder"
     provider: str | None = None
     model: str | None = None
+    description: str = ""  # "use this when…" — makes the template self-explanatory
+
+
+class ToolGenerateBody(BaseModel):
+    """Describe the tool you want in plain language; an LLM designs it."""
+
+    description: str
+    provider: str = ""
+    model: str = ""
+
+
+class McpServerBody(BaseModel):
+    """An external MCP server to register (prebuilt from the catalog, or custom)."""
+
+    name: str
+    command: str
+    args: list[str] = []
+    env: dict[str, str] = {}
+    cwd: str | None = None
+
+
+class McpSuggestBody(BaseModel):
+    description: str
+    provider: str = ""
+    model: str = ""
+
+
+class SessionsClearBody(BaseModel):
+    """Bulk-clear finished sessions (never touches active ones)."""
+
+    statuses: list[str] = ["completed"]  # completed | failed | cancelled
 
 
 class LTMAppend(BaseModel):
@@ -557,6 +588,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # Terminal panes survive a restart / app update: re-open each persisted
         # session (fresh shell, same id + cwd + prior scrollback shown).
         _rehydrate_step("rehydrate_terminals", platform.terminals.rehydrate)
+        # First run only: seed a few self-explanatory starter templates so the
+        # Templates page (and the Overview "Your apps" tiles) start useful.
+        def _seed_templates() -> None:
+            from ..templates import TemplateStore
+
+            TemplateStore(platform.engine).seed_starters()
+
+        _rehydrate_step("seed_starter_templates", _seed_templates)
         try:  # GC worktrees orphaned by a prior restart (failed/missing sessions)
             orchestrator.prune_orphan_worktrees()
         except Exception:  # pragma: no cover - never block boot
@@ -1060,6 +1099,26 @@ def create_app(project_root: str | None = None) -> FastAPI:
         else:
             _spawn_bg(session.id, orchestrator.run_session(session.id))
         return _session_view(session)
+
+    @app.post("/sessions/clear")
+    def clear_sessions(body: SessionsClearBody) -> dict[str, Any]:
+        """Bulk-clear FINISHED sessions by status (completed/failed/cancelled) —
+        the Kanban 'clear completed' / 'dismiss failed' action. Active sessions
+        are never touched; per-session failures are skipped, not fatal."""
+        wanted = {s.lower() for s in (body.statuses or [])} - {"active"}
+        if not wanted:
+            raise HTTPException(status_code=400, detail="no clearable statuses given")
+        cleared = 0
+        for view in orchestrator.list_sessions(limit=1000):
+            status = view.status.value if hasattr(view.status, "value") else str(view.status)
+            if status.lower() not in wanted:
+                continue
+            try:
+                orchestrator.delete_session(view.id)
+                cleared += 1
+            except Exception:  # noqa: BLE001 — skip stragglers (e.g. review-locked)
+                continue
+        return {"cleared": cleared, "statuses": sorted(wanted)}
 
     @app.delete("/sessions/{session_id}")
     def delete_session(session_id: str) -> dict[str, Any]:
@@ -2361,7 +2420,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
         if not (body.task or "").strip():
             raise HTTPException(status_code=400, detail="task is required")
         rec = TemplateStore(platform.engine).create(
-            body.name, body.task, body.agent_type, body.provider, body.model
+            body.name,
+            body.task,
+            body.agent_type,
+            body.provider,
+            body.model,
+            description=body.description,
         )
         return rec.model_dump()
 
@@ -2673,8 +2737,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
     #: config.comm. This drives the Channels "add" form.
     _CHANNEL_TYPE_FIELDS = {
         "slack": [
-            {"key": "webhook_url", "label": "Incoming webhook URL", "secret": False,
-             "help": "Slack → Apps → Incoming Webhooks. Simplest option."},
+            {"key": "webhook_url", "label": "Incoming webhook URL (option A)", "secret": False,
+             "help": "Simplest: Slack app → Incoming Webhooks → Add New Webhook. "
+                     "Fill EITHER this, OR the bot token + channel below."},
+            {"key": "token", "label": "Bot token (option B)", "secret": True,
+             "help": "xoxb-… from your Slack app → OAuth & Permissions → Bot User "
+                     "OAuth Token. Needs the chat:write scope (see the app "
+                     "manifest below — create the app from it in one paste)."},
+            {"key": "channel", "label": "Channel (option B)", "secret": False,
+             "help": "Where messages go, e.g. #general or a channel ID (C0123…). "
+                     "Invite the bot to the channel: /invite @Iron Jarvis."},
         ],
         "discord": [
             {"key": "webhook_url", "label": "Webhook URL", "secret": False,
@@ -2706,11 +2778,50 @@ def create_app(project_root: str | None = None) -> FastAPI:
             out.append({"name": name, "type": (configured.get(name) or {}).get("type", name)})
         return {"channels": out}
 
+    # Pre-formatted app manifests (YAML — Slack's canonical format): paste at
+    # api.slack.com/apps → "Create New App" → "From an app manifest" and every
+    # required scope/setting is configured in one step.
+    _CHANNEL_MANIFESTS = {
+        "slack": (
+            "display_information:\n"
+            "  name: Iron Jarvis\n"
+            "  description: Notifications and two-way chat from your local Iron Jarvis\n"
+            "  background_color: \"#0a0c11\"\n"
+            "features:\n"
+            "  bot_user:\n"
+            "    display_name: Iron Jarvis\n"
+            "    always_online: true\n"
+            "oauth_config:\n"
+            "  scopes:\n"
+            "    bot:\n"
+            "      - chat:write\n"
+            "      - chat:write.public\n"
+            "      - channels:history\n"
+            "      - im:history\n"
+            "      - im:write\n"
+            "settings:\n"
+            "  org_deploy_enabled: false\n"
+            "  socket_mode_enabled: false\n"
+            "  token_rotation_enabled: false\n"
+        ),
+    }
+
     @app.get("/comm/channel-types")
     def comm_channel_types() -> dict[str, Any]:
         return {
             "types": [
-                {"type": t, "fields": fields}
+                {
+                    "type": t,
+                    "fields": fields,
+                    "manifest": _CHANNEL_MANIFESTS.get(t),
+                    "manifest_help": (
+                        "Create the Slack app in one paste: api.slack.com/apps → "
+                        "Create New App → From an app manifest → paste this YAML. "
+                        "Then install it to your workspace and copy the Bot token."
+                        if t == "slack"
+                        else None
+                    ),
+                }
                 for t, fields in _CHANNEL_TYPE_FIELDS.items()
             ]
         }
@@ -3085,6 +3196,216 @@ def create_app(project_root: str | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc))
         platform.registry.register(platform.tools_registry.build_tool(rec), custom=True)
         return {"name": rec.name}
+
+    @app.post("/tools/custom/generate")
+    async def generate_custom_tool(body: ToolGenerateBody) -> dict[str, Any]:
+        """Describe the tool you want in plain language — an LLM designs the
+        command-line tool (name, typed parameters, argv template) and it is
+        registered immediately, usable by every agent."""
+        import json as _json
+
+        from ..providers.adapters.base import LLMMessage
+
+        provider = body.provider or platform.config.default_provider
+        model = body.model or platform.config.default_model
+        try:
+            adapter = platform.providers.get(provider, model)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+
+        system = (
+            "You design COMMAND-LINE tools for an agent platform running on "
+            f"{'Windows' if os.name == 'nt' else 'POSIX'}. A tool runs an argv "
+            "command in a workspace, with {param} placeholders filled from typed "
+            "parameters. Respond with ONLY a JSON object (no prose, no fence): "
+            '{"name": "snake_case_name", "description": "one line: what it does '
+            'and when an agent should use it", "parameters": [{"name": "...", '
+            '"type": "string|number|boolean", "required": true, "description": '
+            '"..."}], "command": ["program", "arg", "{param}"], '
+            '"timeout_seconds": 60}. Prefer python -c or powershell -Command for '
+            "portability; keep it safe (no destructive defaults); every {param} "
+            "in command MUST exist in parameters."
+        )
+        resp, _p, _m = await _one_shot_complete(
+            provider,
+            adapter,
+            system=system,
+            messages=[
+                LLMMessage(role="user", content=f"Design a tool for: {body.description}")
+            ],
+        )
+        text = resp.text or ""
+        start, depth, obj = text.find("{"), 0, ""
+        if start >= 0:
+            for i in range(start, len(text)):
+                depth += (text[i] == "{") - (text[i] == "}")
+                if depth == 0:
+                    obj = text[start : i + 1]
+                    break
+        try:
+            spec = _json.loads(obj)
+        except Exception:  # noqa: BLE001
+            raise HTTPException(
+                status_code=422,
+                detail="the model did not return a valid tool spec — try rephrasing",
+            )
+        # Register through the SAME validated path as a hand-made tool.
+        create = CustomToolCreate(
+            name=str(spec.get("name") or ""),
+            description=str(spec.get("description") or body.description)[:300],
+            parameters=[p for p in (spec.get("parameters") or []) if isinstance(p, dict)],
+            command=[str(c) for c in (spec.get("command") or [])],
+            timeout_seconds=int(spec.get("timeout_seconds") or 60),
+        )
+        result = create_custom_tool(create)
+        return {
+            **result,
+            "spec": create.model_dump(),
+            "reply": (
+                f"Built the `{create.name}` tool — it's live for every agent now. "
+                "Try it, and delete/regenerate if it's not quite right."
+            ),
+        }
+
+    # --- External MCP servers (prebuilt catalog + custom) ------------------
+
+    #: Curated, known-good MCP servers (npx-based, cross-platform). The
+    #: placeholders in `args` are filled by the user in the UI.
+    _MCP_CATALOG = [
+        {
+            "id": "filesystem",
+            "name": "Filesystem",
+            "description": "Read/write files in folders you choose (official server).",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "<folder-path>"],
+        },
+        {
+            "id": "fetch",
+            "name": "Web Fetch",
+            "description": "Fetch and clean web pages for the agent (official server).",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-fetch"],
+        },
+        {
+            "id": "github",
+            "name": "GitHub",
+            "description": "Repos, issues, PRs. Needs a GitHub personal access token.",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-github"],
+            "env_keys": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
+        },
+        {
+            "id": "memory",
+            "name": "Knowledge Graph Memory",
+            "description": "A persistent knowledge-graph memory (official server).",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-memory"],
+        },
+    ]
+
+    @app.get("/mcp/catalog")
+    def mcp_catalog() -> dict[str, Any]:
+        return {"catalog": _MCP_CATALOG}
+
+    @app.get("/mcp/servers")
+    def mcp_servers() -> dict[str, Any]:
+        return {"servers": list(getattr(platform.config, "mcp_servers", None) or [])}
+
+    @app.post("/mcp/servers")
+    def add_mcp_server(body: McpServerBody) -> dict[str, Any]:
+        """Register an external MCP server (persisted; loaded live best-effort,
+        guaranteed on the next restart)."""
+        import re as _re
+
+        name = (body.name or "").strip()
+        if not _re.match(r"^[a-zA-Z][a-zA-Z0-9_-]{0,39}$", name):
+            raise HTTPException(status_code=400, detail="invalid server name")
+        if not (body.command or "").strip():
+            raise HTTPException(status_code=400, detail="command is required")
+        servers = list(getattr(platform.config, "mcp_servers", None) or [])
+        if any(s.get("name") == name for s in servers):
+            raise HTTPException(status_code=400, detail=f"server '{name}' already exists")
+        cfg = {
+            "name": name,
+            "command": body.command.strip(),
+            "args": [str(a) for a in body.args],
+            "env": dict(body.env or {}),
+            **({"cwd": body.cwd} if body.cwd else {}),
+        }
+        servers.append(cfg)
+        platform.config.mcp_servers = servers
+        _persist_config(["mcp_servers"])
+        # Best-effort LIVE load so its tools appear without a restart.
+        loaded = 0
+        try:
+            from ..mcp.tools import mcp_tools as _mcp_tools
+
+            for tool in _mcp_tools([cfg], secret_resolver=platform.secrets.get):
+                platform.registry.register(tool, custom=True)
+                loaded += 1
+        except Exception:  # noqa: BLE001 — persisted config still loads on restart
+            loaded = 0
+        return {
+            "name": name,
+            "added": True,
+            "tools_loaded": loaded,
+            "note": None if loaded else "saved — restart the daemon to load its tools",
+        }
+
+    @app.delete("/mcp/servers/{name}")
+    def delete_mcp_server(name: str) -> dict[str, Any]:
+        servers = list(getattr(platform.config, "mcp_servers", None) or [])
+        kept = [s for s in servers if s.get("name") != name]
+        if len(kept) == len(servers):
+            raise HTTPException(status_code=404, detail="no such server")
+        platform.config.mcp_servers = kept
+        _persist_config(["mcp_servers"])
+        return {"removed": name, "note": "restart the daemon to fully unload its tools"}
+
+    @app.post("/mcp/suggest")
+    async def suggest_mcp_server(body: McpSuggestBody) -> dict[str, Any]:
+        """Describe what you want to connect — an LLM proposes the MCP server
+        config (returned for review; nothing is added until you confirm)."""
+        import json as _json
+
+        from ..providers.adapters.base import LLMMessage
+
+        provider = body.provider or platform.config.default_provider
+        model = body.model or platform.config.default_model
+        try:
+            adapter = platform.providers.get(provider, model)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+        system = (
+            "You configure MCP (Model Context Protocol) stdio servers. Respond "
+            "with ONLY a JSON object: {\"name\": \"kebab-name\", \"command\": "
+            "\"npx\", \"args\": [\"-y\", \"<package>\", ...], \"env\": "
+            "{\"KEY\": \"<what to put here>\"}, \"reply\": \"one short line: "
+            "what this connects and any credential the user must supply\"}. "
+            "Prefer well-known official/community MCP packages; if none fits, "
+            "say so in reply and return an empty command."
+        )
+        resp, _p, _m = await _one_shot_complete(
+            provider,
+            adapter,
+            system=system,
+            messages=[LLMMessage(role="user", content=body.description)],
+        )
+        text = resp.text or ""
+        start, depth, obj = text.find("{"), 0, ""
+        if start >= 0:
+            for i in range(start, len(text)):
+                depth += (text[i] == "{") - (text[i] == "}")
+                if depth == 0:
+                    obj = text[start : i + 1]
+                    break
+        try:
+            spec = _json.loads(obj)
+        except Exception:  # noqa: BLE001
+            raise HTTPException(
+                status_code=422, detail="no valid suggestion — try rephrasing"
+            )
+        return {"suggestion": spec}
 
     @app.delete("/tools/custom/{name}")
     def delete_custom_tool(name: str) -> dict[str, Any]:

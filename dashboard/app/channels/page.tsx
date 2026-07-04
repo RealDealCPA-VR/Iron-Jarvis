@@ -1,7 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import { Megaphone, Send, Radio, Plus } from "lucide-react";
+import {
+  Megaphone,
+  Send,
+  Radio,
+  Plus,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  FileCode2,
+} from "lucide-react";
 import { get, post, del, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import {
@@ -36,6 +46,10 @@ interface ChannelField {
 interface ChannelType {
   type: string;
   fields: ChannelField[];
+  /** One-paste app manifest (YAML) for types that support it (slack); null otherwise. */
+  manifest?: string | null;
+  /** Human instructions for where to paste the manifest. */
+  manifest_help?: string | null;
 }
 
 interface ChannelResult {
@@ -94,6 +108,10 @@ export default function ChannelsPage() {
   const [addError, setAddError] = useState<string | null>(null);
   const [addSuccess, setAddSuccess] = useState<string | null>(null);
 
+  /* --- One-paste app manifest (slack) --------------------------------------- */
+  const [manifestOpen, setManifestOpen] = useState(false);
+  const [manifestCopied, setManifestCopied] = useState(false);
+
   /* --- Delete channel ------------------------------------------------------ */
   const [listError, setListError] = useState<string | null>(null);
 
@@ -127,6 +145,18 @@ export default function ChannelsPage() {
   }
 
   const selectedType = channelTypes.find((t) => t.type === addType);
+
+  async function copyManifest() {
+    const manifest = selectedType?.manifest;
+    if (!manifest) return;
+    try {
+      await navigator.clipboard.writeText(manifest);
+      setManifestCopied(true);
+      window.setTimeout(() => setManifestCopied(false), 2000);
+    } catch {
+      /* clipboard blocked — the YAML is still selectable in the <pre> */
+    }
+  }
 
   async function send(e: React.FormEvent) {
     e.preventDefault();
@@ -232,6 +262,8 @@ export default function ChannelsPage() {
                   onChange={(e) => {
                     setAddType(e.target.value);
                     setAddValues({});
+                    setManifestOpen(false);
+                    setManifestCopied(false);
                   }}
                   className="field"
                 >
@@ -282,6 +314,54 @@ export default function ChannelsPage() {
                   )}
                 </div>
               ))}
+
+              {/* One-paste app setup: only for types that ship a manifest (slack). */}
+              {selectedType?.manifest && (
+                <div className="rounded-xl border border-white/[0.06] bg-white/[0.02]">
+                  <button
+                    type="button"
+                    onClick={() => setManifestOpen((v) => !v)}
+                    aria-expanded={manifestOpen}
+                    className="flex w-full items-center justify-between gap-2 px-3.5 py-2.5 text-left text-xs font-medium text-zinc-300 transition-colors hover:text-accent-soft"
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      <FileCode2 size={13} className="text-accent-soft/80" />
+                      One-paste Slack app setup
+                    </span>
+                    {manifestOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  </button>
+                  {manifestOpen && (
+                    <div className="space-y-2 border-t hairline px-3.5 pb-3.5 pt-2.5">
+                      {selectedType.manifest_help && (
+                        <p className="text-[11px] leading-relaxed text-zinc-500">
+                          {selectedType.manifest_help}
+                        </p>
+                      )}
+                      <div className="relative">
+                        <pre className="max-h-72 overflow-auto rounded-xl border border-white/[0.06] bg-ink-900/80 px-3.5 py-3 font-mono text-[11px] leading-relaxed text-zinc-300">
+                          {selectedType.manifest}
+                        </pre>
+                        <button
+                          type="button"
+                          onClick={copyManifest}
+                          title="Copy the manifest YAML to your clipboard"
+                          className="absolute right-2 top-2 inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-ink-950/90 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
+                        >
+                          {manifestCopied ? (
+                            <>
+                              <Check size={12} className="text-emerald-300" /> Copied
+                            </>
+                          ) : (
+                            <>
+                              <Copy size={12} /> Copy
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="flex items-center gap-2">
                 <button
