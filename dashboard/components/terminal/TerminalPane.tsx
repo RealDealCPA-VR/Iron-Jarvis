@@ -221,6 +221,17 @@ export function TerminalPane({
         pasteFromClipboard();
       }
     };
+    const onWheel = (e: WheelEvent) => {
+      // Guarantee scrollback scrolling on the mouse wheel — capture it here so
+      // it can't be swallowed by the container/react-rnd. Only in the NORMAL
+      // buffer; full-screen TUI apps (alt-screen) own the wheel themselves.
+      if (!term || term.buffer.active.type !== "normal") return;
+      e.preventDefault();
+      e.stopPropagation();
+      const amount = e.deltaMode === 1 ? e.deltaY : e.deltaY / 40; // lines vs px
+      const n = Math.trunc(amount);
+      term.scrollLines(n !== 0 ? n : e.deltaY > 0 ? 1 : -1);
+    };
 
     const doFit = () => {
       try {
@@ -334,9 +345,21 @@ export function TerminalPane({
             return false;
           }
         }
+        // Keyboard scrollback — Shift+PageUp / Shift+PageDown.
+        if (e.shiftKey && e.key === "PageUp") {
+          e.preventDefault();
+          term?.scrollPages(-1);
+          return false;
+        }
+        if (e.shiftKey && e.key === "PageDown") {
+          e.preventDefault();
+          term?.scrollPages(1);
+          return false;
+        }
         return true;
       });
       holder.addEventListener("contextmenu", onContextMenu);
+      holder.addEventListener("wheel", onWheel, { passive: false, capture: true });
 
       ro = new ResizeObserver(() => {
         doFit();
@@ -356,6 +379,7 @@ export function TerminalPane({
       if (reconnectTimer) clearTimeout(reconnectTimer);
       window.removeEventListener("resize", onWinResize);
       holder.removeEventListener("contextmenu", onContextMenu);
+      holder.removeEventListener("wheel", onWheel, { capture: true } as EventListenerOptions);
       ro?.disconnect();
       try {
         ws?.close();

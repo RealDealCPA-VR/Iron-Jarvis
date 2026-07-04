@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   DownloadCloud,
   GitCommitHorizontal,
@@ -8,6 +8,8 @@ import {
   Rocket,
   TriangleAlert,
   Terminal,
+  CheckCircle2,
+  Loader2,
 } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
@@ -56,6 +58,134 @@ function isSourceCheckout(data: UpdateStatus | null): boolean {
   return !!data && !(data.reason ?? "").toLowerCase().includes("not a source checkout");
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Desktop app auto-update (electron-updater) — the packaged-app path.        */
+/*  Distinct from the git self-update below (which is for source checkouts).   */
+/* -------------------------------------------------------------------------- */
+
+type UpdateState = {
+  status:
+    | "idle"
+    | "checking"
+    | "up-to-date"
+    | "available"
+    | "downloading"
+    | "downloaded"
+    | "error"
+    | "unsupported";
+  current?: string | null;
+  version?: string | null;
+  percent?: number;
+  error?: string | null;
+};
+
+interface UpdateBridge {
+  getState: () => Promise<UpdateState>;
+  check: () => Promise<UpdateState>;
+  apply: () => Promise<unknown>;
+  onState: (cb: (s: UpdateState) => void) => () => void;
+}
+
+function updateBridge(): UpdateBridge | undefined {
+  if (typeof window === "undefined") return undefined;
+  return (window as unknown as { ironjarvis?: { update?: UpdateBridge } }).ironjarvis?.update;
+}
+
+function DesktopUpdateCard({ bridge }: { bridge: UpdateBridge }) {
+  const [state, setState] = useState<UpdateState | null>(null);
+  useEffect(() => {
+    bridge.getState().then(setState).catch(() => {});
+    return bridge.onState(setState);
+  }, [bridge]);
+
+  const s = state?.status ?? "idle";
+  const busy = s === "checking" || s === "downloading";
+  const current = state?.current ?? "—";
+
+  return (
+    <Card title="App updates" icon={<DownloadCloud size={15} />}>
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <span className="flex items-center gap-2 text-sm text-zinc-300">
+            <StatusDot
+              status={
+                s === "downloaded" || s === "available"
+                  ? "pending"
+                  : s === "error"
+                    ? "error"
+                    : "ok"
+              }
+            />
+            Installed version
+          </span>
+          <Badge value={`v${current}`} tone="green" />
+        </div>
+
+        {/* Status line */}
+        <div className="text-[13px] text-zinc-400">
+          {s === "idle" && "Click below to check for a new version."}
+          {s === "checking" && (
+            <span className="inline-flex items-center gap-2 text-accent-soft">
+              <Loader2 size={13} className="animate-spin" /> Checking for updates…
+            </span>
+          )}
+          {s === "up-to-date" && (
+            <span className="inline-flex items-center gap-2 text-emerald-300">
+              <CheckCircle2 size={13} /> You&apos;re on the latest version.
+            </span>
+          )}
+          {s === "available" && (
+            <span className="text-amber-200">
+              Update <b>v{state?.version}</b> found — downloading…
+            </span>
+          )}
+          {s === "downloading" && (
+            <div className="space-y-1.5">
+              <span className="text-amber-200">
+                Downloading v{state?.version ?? ""}… {state?.percent ?? 0}%
+              </span>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
+                <div
+                  className="h-full rounded-full bg-accent transition-[width]"
+                  style={{ width: `${state?.percent ?? 0}%` }}
+                />
+              </div>
+            </div>
+          )}
+          {s === "downloaded" && (
+            <span className="inline-flex items-center gap-2 text-emerald-300">
+              <CheckCircle2 size={13} /> v{state?.version} is ready — restart to install.
+            </span>
+          )}
+          {s === "error" && <span className="text-rose-300">Update error: {state?.error}</span>}
+          {s === "unsupported" && "Auto-update isn't available in this build."}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => bridge.check().then(setState).catch(() => {})}
+            disabled={busy}
+            className="btn-ghost text-sm disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={busy ? "animate-spin" : ""} /> Check for updates
+          </button>
+          {s === "downloaded" && (
+            <button type="button" onClick={() => bridge.apply()} className="btn-accent text-sm">
+              <Rocket size={14} /> Restart &amp; install
+            </button>
+          )}
+        </div>
+
+        <p className="text-[11px] leading-relaxed text-zinc-600">
+          Updates download in the background and only install when you choose — a running
+          session is never interrupted by surprise.
+        </p>
+      </div>
+    </Card>
+  );
+}
+
 function ShaPill({ label, sha }: { label: string; sha?: string | null }) {
   return (
     <div className="space-y-1">
@@ -69,6 +199,7 @@ function ShaPill({ label, sha }: { label: string; sha?: string | null }) {
 }
 
 export default function UpdatesPage() {
+  const bridge = updateBridge();
   const { data, error, loading, reload } = useApi<UpdateStatus>("/update/check");
   const offline = error && error.status === 0;
 
@@ -98,16 +229,29 @@ export default function UpdatesPage() {
       <Reveal>
         <PageHeader
           title="Updates"
-          subtitle="Check for and apply updates pushed to the Iron Jarvis repo. Applying pulls the new source (git), re-syncs Python deps, and rebuilds the dashboard — then you restart to load it."
+          subtitle={
+            bridge
+              ? "Keep the Iron Jarvis desktop app up to date — check, download, and install the latest release."
+              : "Check for and apply updates pushed to the Iron Jarvis repo. Applying pulls the new source (git), re-syncs Python deps, and rebuilds the dashboard — then you restart to load it."
+          }
         />
       </Reveal>
 
-      {offline && (
+      {bridge && (
+        <Reveal>
+          <DesktopUpdateCard bridge={bridge} />
+        </Reveal>
+      )}
+
+      {offline && !bridge && (
         <Reveal>
           <OfflineHint />
         </Reveal>
       )}
 
+      {/* The git self-update path only applies to a source checkout (dev). In the
+          packaged desktop app the card above is the real updater. */}
+      {!bridge && (
       <Reveal>
         <div className="grid gap-6 lg:grid-cols-3">
           {/* Status */}
@@ -293,6 +437,7 @@ export default function UpdatesPage() {
           </div>
         </div>
       </Reveal>
+      )}
     </PageShell>
   );
 }

@@ -44,4 +44,16 @@ contextBridge.exposeInMainWorld("ironjarvis", {
   // paste/copy inside Electron (navigator.clipboard can be permission-gated).
   clipboardReadText: () => ipcRenderer.invoke("clipboard:read"),
   clipboardWriteText: (text) => ipcRenderer.invoke("clipboard:write", String(text ?? "")),
+  // App auto-update control for the Updates page (the packaged-app updater).
+  update: {
+    getState: () => ipcRenderer.invoke("update:getState"),
+    check: () => ipcRenderer.invoke("update:check"),
+    apply: () => ipcRenderer.invoke("update:apply"),
+    // Subscribe to live status; returns an unsubscribe fn.
+    onState: (cb) => {
+      const handler = (_e, state) => cb(state);
+      ipcRenderer.on("update:state", handler);
+      return () => ipcRenderer.removeListener("update:state", handler);
+    },
+  },
 });

@@ -999,6 +999,30 @@ function installSpotlightIpc() {
     }
     return true;
   });
+  // Update control for the dashboard Updates page (the packaged-app updater —
+  // distinct from the git self-update the page previously only knew about).
+  ipcMain.handle("update:getState", () => ({
+    ..._updateState,
+    current: _updateState.current || safeAppVersion(),
+  }));
+  ipcMain.handle("update:check", async () => {
+    const au = initUpdater();
+    if (!au) {
+      _emitUpdateState({ status: "unsupported" });
+      return _updateState;
+    }
+    _emitUpdateState({ status: "checking", error: null });
+    try {
+      await au.checkForUpdates();
+    } catch (err) {
+      _emitUpdateState({ status: "error", error: (err && err.message) || "check failed" });
+    }
+    return _updateState;
+  });
+  ipcMain.handle("update:apply", () => {
+    if (pendingUpdateInfo) applyPendingUpdate();
+    return true;
+  });
 }
 
 // --- System tray ---------------------------------------------------------
@@ -1103,6 +1127,35 @@ function createTray() {
 const UPDATE_RECHECK_MS = 30 * 60 * 1000;
 let _autoUpdater = null;
 
+// Live update state, mirrored to the dashboard's Updates page (so the packaged
+// app finally has a real "check for updates" UI instead of the git-only page).
+let _updateState = {
+  status: "idle", // idle | checking | up-to-date | available | downloading | downloaded | error | unsupported
+  current: null,
+  version: null,
+  percent: 0,
+  error: null,
+};
+
+function _emitUpdateState(patch) {
+  _updateState = { ..._updateState, ...patch, current: _updateState.current || safeAppVersion() };
+  try {
+    if (mainWin && !mainWin.isDestroyed()) {
+      mainWin.webContents.send("update:state", _updateState);
+    }
+  } catch {
+    /* window gone */
+  }
+}
+
+function safeAppVersion() {
+  try {
+    return app.getVersion();
+  } catch {
+    return null;
+  }
+}
+
 // Install a downloaded update: kill the daemon+dashboard SYNCHRONOUSLY first
 // (shutdown() blocks until the process tree is dead) so NSIS can overwrite the
 // locked frozen exe — do NOT pre-set shuttingDown (that would make shutdown()
@@ -1133,11 +1186,25 @@ function initUpdater() {
   autoUpdater.autoDownload = true;
   // Also apply a downloaded update on a REAL Quit (tray/menu Quit) as a bonus.
   autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.on("error", (err) => console.error("[update] error:", err && err.message));
-  autoUpdater.on("update-available", (info) =>
-    console.log("[update] available:", info && info.version)
+  autoUpdater.on("checking-for-update", () =>
+    _emitUpdateState({ status: "checking", error: null })
   );
+  autoUpdater.on("update-not-available", (info) => {
+    _emitUpdateState({ status: "up-to-date", version: (info && info.version) || null });
+  });
+  autoUpdater.on("download-progress", (p) =>
+    _emitUpdateState({ status: "downloading", percent: Math.round((p && p.percent) || 0) })
+  );
+  autoUpdater.on("error", (err) => {
+    console.error("[update] error:", err && err.message);
+    _emitUpdateState({ status: "error", error: (err && err.message) || "update failed" });
+  });
+  autoUpdater.on("update-available", (info) => {
+    console.log("[update] available:", info && info.version);
+    _emitUpdateState({ status: "available", version: (info && info.version) || null });
+  });
   autoUpdater.on("update-downloaded", (info) => {
+    _emitUpdateState({ status: "downloaded", version: (info && info.version) || null, percent: 100 });
     // Surface a ready update PROMINENTLY but non-intrusively (the user chose
     // notify + one-click): a clickable OS notification + a top-of-tray
     // "Restart to update" item. NOTHING restarts until they choose to — so a
