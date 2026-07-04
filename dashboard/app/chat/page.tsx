@@ -182,7 +182,15 @@ export default function ChatPage() {
     if (finalizingRef.current) return;
     finalizingRef.current = true;
     try {
-      const session = await get<SessionView>(`/sessions/${id}`);
+      // GET /sessions/{id} returns { session, transcript } — the session is
+      // NESTED (unlike POST /sessions, which returns it flat). Read from the
+      // wrapper, tolerating both shapes, so completion is actually detected
+      // (reading a top-level `status` here always returned undefined => the
+      // chat spun forever even though the session had finished).
+      const res = await get<{ session?: SessionView } & Partial<SessionView>>(
+        `/sessions/${id}`,
+      );
+      const session = (res.session ?? (res as SessionView)) || ({} as SessionView);
       const status = (session.status || "").toLowerCase();
       if (status !== "completed" && status !== "failed" && status !== "cancelled") {
         return; // still running — leave the working bubble up; retry later

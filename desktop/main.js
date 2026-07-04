@@ -943,7 +943,11 @@ async function runSpotlightTask(task) {
     } catch {
       /* transient */
     }
-    const status = s && s.status;
+    // GET /sessions/{id} returns { session, transcript } — read the NESTED
+    // session (a top-level s.status was always undefined, so the "done"
+    // notification never fired until the 15-min cap).
+    const sess = (s && s.session) || s || {};
+    const status = sess.status;
     if (status === "completed" || status === "failed" || elapsed > 15 * 60 * 1000) {
       clearInterval(timer);
       try {
@@ -952,8 +956,9 @@ async function runSpotlightTask(task) {
             status === "failed"
               ? "Task failed"
               : `Task done: ${String(task).slice(0, 60)}`,
-          body:
-            (s && s.summary ? String(s.summary).slice(0, 140) : "Click to open the result."),
+          body: sess.summary
+            ? String(sess.summary).slice(0, 140)
+            : "Click to open the result.",
         });
         note.on("click", () => {
           showMainWindow();

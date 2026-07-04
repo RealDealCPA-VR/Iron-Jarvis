@@ -74,14 +74,32 @@ export function ModelSwitcher() {
     return m;
   }, [h]);
 
+  // Optimistic selection: reflect a click INSTANTLY (the /health poll is every
+  // 5s, so without this the button label + highlights look inert for seconds —
+  // which reads as "the switcher does nothing"). Reconciled once /health agrees.
+  const [optimistic, setOptimistic] = useState<{ provider: string; model: string } | null>(
+    null,
+  );
+  const activeProvider = optimistic?.provider ?? h?.default_provider;
+  const activeModel = optimistic?.model ?? h?.default_model;
+  useEffect(() => {
+    if (
+      optimistic &&
+      h?.default_provider === optimistic.provider &&
+      h?.default_model === optimistic.model
+    ) {
+      setOptimistic(null); // server caught up
+    }
+  }, [h?.default_provider, h?.default_model, optimistic]);
+
   // Quality dial: the tier map + which of the current provider's models the
   // catalog actually offers (so an unavailable tier is greyed like the list).
-  const tiers = h ? TIERS[h.default_provider] : undefined;
+  const tiers = activeProvider ? TIERS[activeProvider] : undefined;
   const providerModels = useMemo(() => {
     const s = new Set<string>();
-    for (const m of models) if (m.provider === h?.default_provider) s.add(m.model);
+    for (const m of models) if (m.provider === activeProvider) s.add(m.model);
     return s;
-  }, [models, h?.default_provider]);
+  }, [models, activeProvider]);
 
   // Open via a global event so ⌘K can summon it from anywhere.
   useEffect(() => {
@@ -109,6 +127,7 @@ export function ModelSwitcher() {
     const key = `${m.provider}|${m.model}`;
     setBusy(key);
     setErr(null);
+    setOptimistic({ provider: m.provider, model: m.model }); // instant feedback
     try {
       await put("/settings", {
         values: { default_provider: m.provider, default_model: m.model },
@@ -116,6 +135,7 @@ export function ModelSwitcher() {
       await health.reload?.();
       setOpen(false);
     } catch (e) {
+      setOptimistic(null); // revert the label on failure
       setErr(e instanceof ApiError ? e.message : String(e));
     } finally {
       setBusy(null);
@@ -134,7 +154,7 @@ export function ModelSwitcher() {
       >
         <Cpu size={13} className="text-accent-soft" />
         <span className="hidden max-w-[150px] truncate font-mono text-[11px] sm:inline">
-          {h.default_model}
+          {activeModel}
         </span>
         <ChevronDown size={12} className="text-zinc-500" />
       </button>
@@ -149,14 +169,16 @@ export function ModelSwitcher() {
               <div className="flex gap-0.5 rounded-lg border border-white/10 bg-white/[0.03] p-0.5">
                 {TIER_ORDER.map((tier) => {
                   const model = tiers[tier];
-                  const active = model === h.default_model;
+                  const active = model === activeModel;
                   const ok = providerModels.has(model);
-                  const key = `${h.default_provider}|${model}`;
+                  const key = `${activeProvider}|${model}`;
                   return (
                     <button
                       key={tier}
                       onClick={() =>
-                        ok && choose({ provider: h.default_provider, model })
+                        ok &&
+                        activeProvider &&
+                        choose({ provider: activeProvider, model })
                       }
                       disabled={!ok || busy === key}
                       title={ok ? model : `${model} · not available`}
@@ -187,7 +209,7 @@ export function ModelSwitcher() {
             ) : (
               models.map((m) => {
                 const active =
-                  m.provider === h.default_provider && m.model === h.default_model;
+                  m.provider === activeProvider && m.model === activeModel;
                 const ok = avail.get(m.provider) ?? false;
                 const key = `${m.provider}|${m.model}`;
                 return (
