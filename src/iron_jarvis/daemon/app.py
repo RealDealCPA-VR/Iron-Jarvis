@@ -74,6 +74,25 @@ class SessionCreate(BaseModel):
     project_id: str = ""
 
 
+class ChatMessageBody(BaseModel):
+    role: str  # user | assistant
+    content: str
+
+
+class ChatBody(BaseModel):
+    """A DIRECT conversational turn — frontier-chat style: full history in,
+    one reply out. No agent loop, no workspace; fast."""
+
+    messages: list[ChatMessageBody]
+    provider: str = ""
+    model: str = ""
+    #: A builtin persona name (see /chat/personas) or FREE TEXT used verbatim
+    #: as the persona ("" = the default assistant).
+    persona: str = ""
+    #: Workspace/absolute paths of uploaded files to ground this turn on.
+    attachments: list[str] = []
+
+
 class ProjectCreate(BaseModel):
     """A context-spine project: brief + activity shared across all surfaces."""
 
@@ -952,6 +971,167 @@ def create_app(project_root: str | None = None) -> FastAPI:
     @app.get("/providers")
     def providers() -> dict[str, Any]:
         return {"providers": _visible_providers()}
+
+    # --- Chat (direct conversation — frontier-chat parity) -----------------
+
+    _PERSONAS: dict[str, dict[str, str]] = {
+        "assistant": {
+            "description": "Sharp, friendly general assistant (default)",
+            "prompt": (
+                "You are Iron Jarvis, the user's personal AI running on their own "
+                "machine. Answer directly and conversationally — helpful, sharp, "
+                "warm, concise but complete. Use markdown when it helps."
+            ),
+        },
+        "developer": {
+            "description": "Senior software engineer — code, debugging, architecture",
+            "prompt": (
+                "You are a pragmatic senior software engineer. Give working code, "
+                "concrete diagnoses, and honest trade-offs. Prefer minimal examples "
+                "over prose; call out pitfalls."
+            ),
+        },
+        "accountant": {
+            "description": "CPA-grade accounting, tax, and business analysis",
+            "prompt": (
+                "You are a meticulous CPA and business advisor. Be precise with "
+                "numbers, cite the relevant rules/forms when applicable, show your "
+                "work, and flag anything requiring professional judgment. Never "
+                "invent figures."
+            ),
+        },
+        "writer": {
+            "description": "Editor and wordsmith — drafts, tone, clarity",
+            "prompt": (
+                "You are a skilled editor and writer. Produce clean, natural prose "
+                "matched to the requested tone and audience; offer sharper "
+                "alternatives when the user's draft can be improved."
+            ),
+        },
+        "researcher": {
+            "description": "Structured analysis — thorough, sourced, balanced",
+            "prompt": (
+                "You are a careful researcher. Structure answers, distinguish fact "
+                "from inference, state confidence levels, and note what you'd need "
+                "to verify. Never present speculation as fact."
+            ),
+        },
+    }
+
+    @app.get("/chat/personas")
+    def chat_personas() -> dict[str, Any]:
+        return {
+            "personas": [
+                {"name": k, "description": v["description"]}
+                for k, v in _PERSONAS.items()
+            ]
+        }
+
+    @app.post("/chat")
+    async def chat_complete(body: ChatBody) -> dict[str, Any]:
+        """One conversational turn: full history in → one reply out.
+
+        DIRECT completion through the router (retry + failover included) — no
+        agent loop, no workspace, so replies come back in seconds and read like
+        a chat, not a work summary. Personas + file attachments (text extracted;
+        images passed to vision) + active-project context all fold into the
+        system prompt.
+        """
+        from ..providers.adapters.base import LLMMessage
+
+        if not body.messages:
+            raise HTTPException(status_code=400, detail="messages is required")
+
+        # Persona: builtin name, or free text used verbatim.
+        want = (body.persona or "").strip()
+        persona = (
+            _PERSONAS[want]["prompt"]
+            if want in _PERSONAS
+            else (want or _PERSONAS["assistant"]["prompt"])
+        )
+        system = persona + (
+            "\n\n# Environment\n"
+            f"- You run locally on the user's machine; their home directory is {Path.home()}.\n"
+            "- You are the CHAT surface: answer directly. For multi-step jobs "
+            "with tools, the user can switch this conversation to Agent mode."
+        )
+        # Context spine: the active project rides along.
+        pid = getattr(platform.config, "active_project_id", None)
+        if pid:
+            try:
+                from ..core.models import Project
+
+                with session_scope(platform.engine) as db:
+                    proj = db.get(Project, pid)
+                if proj is not None:
+                    system += (
+                        f"\n\n# Project context\nActive project: {proj.name}."
+                        + (f" Brief: {proj.brief[:1500]}" if proj.brief else "")
+                    )
+            except Exception:  # noqa: BLE001 — never block a chat turn
+                pass
+
+        # Attachments: text formats extracted inline; images go to VISION.
+        images: list[dict[str, str]] = []
+        attach_block = ""
+        _IMG = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".webp": "image/webp", ".gif": "image/gif"}
+        for raw in (body.attachments or [])[:4]:
+            p = Path(raw)
+            if not p.is_absolute():
+                p = platform.config.home / "uploads" / p.name
+            ok, _reason = fs_read_ok(str(p))
+            if not ok or not p.is_file():
+                continue
+            suffix = p.suffix.lower()
+            if suffix in _IMG:
+                import base64 as _b64
+
+                if p.stat().st_size <= 8 * 1024 * 1024:
+                    images.append(
+                        {"data_b64": _b64.b64encode(p.read_bytes()).decode("ascii"),
+                         "media_type": _IMG[suffix]}
+                    )
+            else:
+                try:
+                    from ..documents.readers import extract_text
+
+                    text = extract_text(p)[:6000]
+                    attach_block += f"\n\n## Attached file: {p.name}\n{text}"
+                except Exception as exc:  # noqa: BLE001
+                    attach_block += f"\n\n## Attached file: {p.name}\n(could not read: {exc})"
+        if attach_block:
+            system += "\n\n# Attachments (provided by the user this turn)" + attach_block
+
+        # Full multi-turn history (bounded), images ride on the LAST user turn.
+        msgs: list[LLMMessage] = []
+        for m in body.messages[-30:]:
+            role = m.role if m.role in ("user", "assistant") else "user"
+            msgs.append(LLMMessage(role=role, content=(m.content or "")[:12000]))
+        if images and msgs:
+            for m in reversed(msgs):
+                if m.role == "user":
+                    m.images = images
+                    break
+
+        try:
+            route = await platform.router.complete(
+                provider=body.provider or None,
+                model=body.model or None,
+                system=system,
+                messages=msgs,
+                tools=[],
+                task_class="chat",
+            )
+        except Exception as exc:  # noqa: BLE001 — honest, human error
+            raise HTTPException(status_code=502, detail=str(exc))
+        return {
+            "reply": route.response.text or "(no reply)",
+            "provider": route.provider,
+            "model": route.model,
+            "attached": len(body.attachments or []),
+            "images": len(images),
+        }
 
     # --- Projects (§spine) — the shared context every surface tags into ----
 
