@@ -8,8 +8,11 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import "@xterm/xterm/css/xterm.css";
 import {
+  Check,
+  ClipboardCopy,
   CornerDownLeft,
   ExternalLink,
+  Layers,
   Loader2,
   Play,
   Plug,
@@ -20,7 +23,7 @@ import {
   Workflow,
   X,
 } from "lucide-react";
-import { ApiError, post, wsUrl } from "@/lib/api";
+import { ApiError, get, post, wsUrl } from "@/lib/api";
 import type { AiCli, ModelOption, Skill, TerminalInfo } from "@/lib/types";
 
 type AIResult = {
@@ -67,6 +70,7 @@ export function TerminalPane({
   models = [],
   aiClis = [],
   skills = [],
+  otherTerminals = [],
 }: {
   info: TerminalInfo;
   focused: boolean;
@@ -78,6 +82,9 @@ export function TerminalPane({
   aiClis?: AiCli[];
   /** The discovered skill library — usable by ANY provider via the AI assist. */
   skills?: Skill[];
+  /** All live terminals (self included; filtered here) — lets THIS pane's AI
+   *  see what's happening in other panes when the user opts in. */
+  otherTerminals?: { id: string; shell: string; cwd: string }[];
 }) {
   const router = useRouter();
   const holderRef = useRef<HTMLDivElement | null>(null);
@@ -97,6 +104,38 @@ export function TerminalPane({
   // Skill for the assist: "" = Auto (search the library), "none" = off,
   // anything else = that exact skill. Works with EVERY provider (prompt-side).
   const [skillChoice, setSkillChoice] = useState("");
+  // Cross-terminal sharing: other pane ids whose output THIS ask should see.
+  const [ctxIds, setCtxIds] = useState<string[]>([]);
+  const [ctxOpen, setCtxOpen] = useState(false);
+  const [ctxCopied, setCtxCopied] = useState(false);
+  const peers = otherTerminals.filter((t) => t.id !== info.id);
+
+  function toggleCtx(id: string) {
+    setCtxIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id].slice(-3),
+    );
+  }
+
+  // Copy this pane's CLEAN context (ANSI-stripped) for pasting into any other
+  // AI — a claude/codex CLI in another pane, or anything else.
+  async function copyContext(e: React.MouseEvent) {
+    e.stopPropagation();
+    try {
+      const res = await get<{ text: string }>(`/terminals/${info.id}/context`);
+      const bridge = (
+        window as unknown as {
+          ironjarvis?: { clipboardWriteText?: (t: string) => Promise<unknown> };
+        }
+      ).ironjarvis;
+      if (bridge?.clipboardWriteText) await bridge.clipboardWriteText(res.text);
+      else await navigator.clipboard?.writeText?.(res.text);
+      setCtxCopied(true);
+      window.setTimeout(() => setCtxCopied(false), 2500);
+    } catch (err) {
+      setAiError(err instanceof ApiError ? err.message : String(err));
+      setAiOpen(true);
+    }
+  }
 
   async function askAI(e: React.FormEvent) {
     e.preventDefault();
@@ -111,6 +150,7 @@ export function TerminalPane({
         provider,
         model,
         skill: skillChoice,
+        include_terminals: ctxIds,
       });
       setAiResult(res);
     } catch (err) {
@@ -605,6 +645,69 @@ export function TerminalPane({
                 ))}
               </select>
             )}
+            {/* Share ANOTHER terminal's work into this ask (cross-pane context). */}
+            {peers.length > 0 && (
+              <div className="relative shrink-0">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setCtxOpen((v) => !v);
+                  }}
+                  title="Include another terminal's recent output in this ask"
+                  className={`flex items-center gap-1 rounded-md border px-1.5 py-1 text-[10px] transition-colors ${
+                    ctxIds.length
+                      ? "border-accent/40 bg-accent/10 text-accent-soft"
+                      : "border-white/10 text-zinc-400 hover:border-accent/30"
+                  }`}
+                >
+                  <Layers size={11} />
+                  {ctxIds.length ? `+${ctxIds.length} ctx` : "+ctx"}
+                </button>
+                {ctxOpen && (
+                  <div className="absolute right-0 top-7 z-40 w-56 rounded-xl border border-white/10 bg-ink-900/95 p-1 shadow-card backdrop-blur">
+                    <div className="px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                      Share context from…
+                    </div>
+                    {peers.map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => toggleCtx(t.id)}
+                        className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] text-zinc-300 transition-colors hover:bg-accent/10"
+                      >
+                        <span
+                          className={`grid h-3.5 w-3.5 shrink-0 place-items-center rounded border ${
+                            ctxIds.includes(t.id)
+                              ? "border-accent bg-accent/20 text-accent"
+                              : "border-white/20 text-transparent"
+                          }`}
+                        >
+                          <Check size={10} />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block font-mono text-[10px] text-zinc-200">
+                            {t.shell}
+                          </span>
+                          <span className="block truncate text-[10px] text-zinc-500">
+                            {t.cwd}
+                          </span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {/* Copy this pane's clean context — paste it into claude/codex/anything. */}
+            <button
+              type="button"
+              onClick={copyContext}
+              title="Copy this terminal's context — paste it into another terminal's AI CLI (claude, codex…) or anywhere else"
+              className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-accent/15 hover:text-accent-soft"
+            >
+              {ctxCopied ? <Check size={12} className="text-emerald-300" /> : <ClipboardCopy size={12} />}
+            </button>
             <button
               type="submit"
               disabled={aiBusy || !aiPrompt.trim()}

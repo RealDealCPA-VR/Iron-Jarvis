@@ -399,6 +399,11 @@ export default function TerminalsPage() {
                             models={models}
                             aiClis={aiClis}
                             skills={skills}
+                            otherTerminals={terminals.map((x) => ({
+                              id: x.id,
+                              shell: x.shell,
+                              cwd: x.cwd,
+                            }))}
                           />
                           {pendingClose === t.id && (
                             <div className="absolute inset-0 z-20 grid place-items-center rounded-2xl bg-black/70 backdrop-blur-sm">

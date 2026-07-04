@@ -192,6 +192,10 @@ class TerminalAIBody(BaseModel):
     provider: str = ""
     model: str = ""
     skill: str = ""
+    #: Other terminal ids whose recent output to INCLUDE as context — share
+    #: what's happening in one terminal with another (and with whatever model
+    #: THIS pane uses). Bounded server-side (max 3 terminals, ~4KB each).
+    include_terminals: list[str] = []
 
 
 _CODE_BLOCK_RE = None  # compiled lazily in _first_code_block
@@ -2068,8 +2072,26 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 "follow them when they apply to the request." + skill_block
             )
 
+        # Cross-terminal sharing: fold in the recent output of OTHER terminals
+        # the user selected, clearly labeled, so this pane's model (whichever
+        # provider it is) can reason across sessions. Bounded: max 3, 4KB each.
+        shared = ""
+        for other_id in (body.include_terminals or [])[:3]:
+            if other_id == term_id:
+                continue
+            other = platform.terminals.get(other_id)
+            if other is None:
+                continue
+            other_tail = other.output_tail()[-4000:]
+            if other_tail.strip():
+                shared += (
+                    f"\n\n--- Output from ANOTHER terminal "
+                    f"({other.shell} @ {other.cwd}) ---\n{other_tail}"
+                )
+
         user = (
-            f"Recent terminal output (truncated):\n\n{tail}\n\n"
+            f"Recent terminal output (truncated):\n\n{tail}"
+            f"{shared}\n\n"
             f"Request: {body.prompt}"
         )
         resp, used_provider, used_model = await _one_shot_complete(
@@ -2085,6 +2107,21 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "model": used_model or model,
             "skills": skills_used,
         }
+
+    @app.get("/terminals/{term_id}/context")
+    def terminal_context(term_id: str) -> dict[str, Any]:
+        """This terminal's recent activity as CLEAN text (ANSI-stripped), ready
+        to paste into another terminal's AI CLI (claude/codex/…) or anywhere
+        else — the universal way to share one session's context with any LLM."""
+        session = platform.terminals.get(term_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="no such terminal")
+        tail = session.output_tail()
+        text = (
+            f"[Context from an Iron Jarvis terminal — {session.shell} @ {session.cwd}]\n"
+            f"{tail.strip() or '(no output yet)'}"
+        )
+        return {"text": text, "chars": len(text)}
 
     @app.post("/terminals/{term_id}/workflow")
     async def terminal_to_workflow(
