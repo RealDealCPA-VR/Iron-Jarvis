@@ -21,9 +21,16 @@ import {
   X,
 } from "lucide-react";
 import { ApiError, post, wsUrl } from "@/lib/api";
-import type { AiCli, ModelOption, TerminalInfo } from "@/lib/types";
+import type { AiCli, ModelOption, Skill, TerminalInfo } from "@/lib/types";
 
-type AIResult = { reply: string; command: string; provider: string; model: string };
+type AIResult = {
+  reply: string;
+  command: string;
+  provider: string;
+  model: string;
+  /** Skill playbooks injected into this answer (names). */
+  skills?: string[];
+};
 
 type ConnState = "connecting" | "open" | "reconnecting" | "closed";
 
@@ -59,6 +66,7 @@ export function TerminalPane({
   onClose,
   models = [],
   aiClis = [],
+  skills = [],
 }: {
   info: TerminalInfo;
   focused: boolean;
@@ -68,6 +76,8 @@ export function TerminalPane({
   models?: ModelOption[];
   /** AI CLIs detected on this machine, for the "Launch" dropdown. */
   aiClis?: AiCli[];
+  /** The discovered skill library — usable by ANY provider via the AI assist. */
+  skills?: Skill[];
 }) {
   const router = useRouter();
   const holderRef = useRef<HTMLDivElement | null>(null);
@@ -84,6 +94,9 @@ export function TerminalPane({
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiResult, setAiResult] = useState<AIResult | null>(null);
   const [choice, setChoice] = useState(""); // "" = the app's default model
+  // Skill for the assist: "" = Auto (search the library), "none" = off,
+  // anything else = that exact skill. Works with EVERY provider (prompt-side).
+  const [skillChoice, setSkillChoice] = useState("");
 
   async function askAI(e: React.FormEvent) {
     e.preventDefault();
@@ -97,6 +110,7 @@ export function TerminalPane({
         prompt: aiPrompt.trim(),
         provider,
         model,
+        skill: skillChoice,
       });
       setAiResult(res);
     } catch (err) {
@@ -571,6 +585,26 @@ export function TerminalPane({
               aria-label="Ask AI about this terminal"
               className="field flex-1 py-1 text-[12px]"
             />
+            {/* Skill for this ask: Auto searches the whole discovered library
+                (Claude + Codex + yours) — works with ANY provider. */}
+            {skills.length > 0 && (
+              <select
+                aria-label="Skill for this ask"
+                title="Apply a skill playbook from your library (Auto picks the best match)"
+                value={skillChoice}
+                onChange={(e) => setSkillChoice(e.target.value)}
+                onMouseDown={(e) => e.stopPropagation()}
+                className="field w-auto max-w-[9rem] shrink-0 py-1 text-[10px]"
+              >
+                <option value="">skill: auto</option>
+                <option value="none">skill: none</option>
+                {skills.map((s) => (
+                  <option key={s.name} value={s.name} title={s.description}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            )}
             <button
               type="submit"
               disabled={aiBusy || !aiPrompt.trim()}
@@ -604,6 +638,15 @@ export function TerminalPane({
                 <span className="text-[10px] text-zinc-600">
                   {aiResult.provider} · {aiResult.model}
                 </span>
+                {(aiResult.skills ?? []).map((s) => (
+                  <span
+                    key={s}
+                    title="Skill playbook applied to this answer"
+                    className="inline-flex items-center rounded-full border border-accent/25 bg-accent/[0.08] px-1.5 py-0.5 text-[9px] font-medium text-accent-soft"
+                  >
+                    skill: {s}
+                  </span>
+                ))}
               </div>
             </div>
           )}

@@ -163,11 +163,18 @@ class IntegrationCreate(BaseModel):
 
 
 class TerminalAIBody(BaseModel):
-    """Per-terminal AI assist: a question + an optional per-PANE model choice."""
+    """Per-terminal AI assist: a question + an optional per-PANE model choice.
+
+    ``skill``: "" = AUTO (search the skill library for the best match to the
+    prompt and inject it), "none" = no skill injection, anything else = force
+    that exact skill by name. Injection is PROMPT-side, so every provider
+    (Claude, OpenAI, Grok, Ollama, custom) can use every discovered skill.
+    """
 
     prompt: str
     provider: str = ""
     model: str = ""
+    skill: str = ""
 
 
 _CODE_BLOCK_RE = None  # compiled lazily in _first_code_block
@@ -1867,6 +1874,34 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "put EXACTLY ONE command alone in a fenced code block; explain in "
             "one or two sentences at most. Never invent output."
         )
+        # Skills: make the WHOLE discovered library (builtin + user + Claude +
+        # Codex) usable by ANY provider — as prompt injection, not tool calls,
+        # so it works identically on models with weak/no tool support.
+        skills_used: list[str] = []
+        chosen = []
+        want = (body.skill or "").strip()
+        if want.lower() == "none":
+            chosen = []
+        elif want:
+            sk = platform.skills.get(want)
+            if sk is None:
+                raise HTTPException(status_code=404, detail=f"no such skill: {want}")
+            chosen = [sk]
+        else:  # AUTO: best matches for the request (quietly none if no hit)
+            try:
+                chosen = platform.skills.search(body.prompt, k=2)
+            except Exception:  # noqa: BLE001 — skills must never break assist
+                chosen = []
+        skill_block = ""
+        for sk in chosen[:2]:
+            skills_used.append(sk.name)
+            skill_block += f"\n\n## Skill: {sk.name}\n{sk.instructions[:6000]}"
+        if skill_block:
+            system += (
+                "\n\n# Skills\nThe user's skill library provides these playbooks — "
+                "follow them when they apply to the request." + skill_block
+            )
+
         user = (
             f"Recent terminal output (truncated):\n\n{tail}\n\n"
             f"Request: {body.prompt}"
@@ -1882,6 +1917,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "command": _first_code_block(resp.text),
             "provider": used_provider,
             "model": used_model or model,
+            "skills": skills_used,
         }
 
     @app.post("/terminals/{term_id}/workflow")
