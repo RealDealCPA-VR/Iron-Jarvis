@@ -138,6 +138,7 @@ const STATUS_TONE: Record<string, Tone> = {
   failed: "red",
   error: "red",
   rejected: "red",
+  cancelled: "red",
   denied: "red",
   deny: "red",
   high: "red",

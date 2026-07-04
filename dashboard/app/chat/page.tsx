@@ -12,7 +12,7 @@
 // session until its status flips to completed/failed).
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Bot, Loader2, MessageSquare, Plus, Send, Sparkles, User } from "lucide-react";
+import { Bot, Loader2, MessageSquare, Plus, Send, Sparkles, Square, User } from "lucide-react";
 import { get, post, ApiError } from "@/lib/api";
 import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
 import { useEvents } from "@/lib/useEvents";
@@ -64,6 +64,12 @@ function stepLabel(e: IJEvent): string | null {
       const tool = p.tool as string | undefined;
       return tool ? `Skipped ${tool} (not permitted)` : "Skipped a tool";
     }
+    case "provider.failed": {
+      const provider = p.provider as string | undefined;
+      return `Provider ${provider} failed — ${String(p.error || "").slice(0, 120)}`;
+    }
+    case "provider.downgraded":
+      return "Model not connected — using offline mock (connect a model)";
     case "agent.completed":
       return "Finishing up…";
     default:
@@ -191,6 +197,7 @@ export default function ChatPage() {
         `/sessions/${id}`,
       );
       const session = (res.session ?? (res as SessionView)) || ({} as SessionView);
+      setOffline(false); // the daemon answered — clear any transient-blip banner
       const status = (session.status || "").toLowerCase();
       if (status !== "completed" && status !== "failed" && status !== "cancelled") {
         return; // still running — leave the working bubble up; retry later
@@ -204,9 +211,14 @@ export default function ChatPage() {
       setMessages((prev) => [...prev, { role: "assistant", content }]);
       setAwaitingId(null);
     } catch (e) {
-      // Surface the failure and stop waiting so the turn doesn't hang forever.
-      if (e instanceof ApiError && e.status === 0) setOffline(true);
-      else setError(e instanceof ApiError ? e.message : String(e));
+      if (e instanceof ApiError && e.status === 0) {
+        // Transient network blip — keep the turn alive and let the 1.5s poll
+        // retry, so a reply that already completed server-side isn't dropped.
+        setOffline(true);
+        return;
+      }
+      // Hard failure: surface it and stop waiting so the turn doesn't hang forever.
+      setError(e instanceof ApiError ? e.message : String(e));
       setAwaitingId(null);
     } finally {
       finalizingRef.current = false;
@@ -255,7 +267,7 @@ export default function ChatPage() {
           wait: false,
         });
       } else {
-        // First message opens a session; remember its id for follow-ups.
+        // First message opens a session.
         const { provider, model } = splitChoice(choice);
         session = await post<SessionView>("/sessions", {
           task: message,
@@ -264,8 +276,11 @@ export default function ChatPage() {
           ...(provider ? { provider } : {}),
           ...(model ? { model } : {}),
         });
-        setSessionId(session.id);
       }
+      // ALWAYS chain forward to the returned session id: `continue` spawns a NEW
+      // session (recapping the old one), so the next turn must continue from it —
+      // sticking with the first id would silently drop the intermediate turns.
+      setSessionId(session.id);
       // Hand off to the event watcher + polling fallback to surface the reply.
       setAwaitingId(session.id);
     } catch (e) {
@@ -273,6 +288,15 @@ export default function ChatPage() {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
       else setError(e instanceof ApiError ? e.message : String(e));
     }
+  }
+
+  // Ask the daemon to cancel the in-flight turn, then release the composer.
+  // Cancel is best-effort — even if it fails server-side we stop waiting locally.
+  function stop() {
+    if (!awaitingId) return;
+    post(`/sessions/${awaitingId}/cancel`).catch(() => {});
+    setMessages((prev) => [...prev, { role: "assistant", content: "Stopped." }]);
+    setAwaitingId(null); // also tears down the event watcher + polling interval
   }
 
   function newChat() {
@@ -329,7 +353,7 @@ export default function ChatPage() {
               </select>
               <button
                 onClick={newChat}
-                disabled={awaiting || !started}
+                disabled={!started}
                 className="btn-ghost py-1.5 text-[13px]"
               >
                 <Plus size={14} /> New chat
@@ -426,6 +450,15 @@ export default function ChatPage() {
               placeholder="Message Iron Jarvis…  (Enter to send · Shift+Enter for a new line)"
               className="field max-h-40 min-h-[2.75rem] flex-1 resize-none disabled:opacity-60"
             />
+            {awaiting && (
+              <button
+                onClick={stop}
+                className="btn-ghost h-[2.75rem] px-3 py-0 text-[13px]"
+                title="Stop this turn"
+              >
+                <Square size={14} /> Stop
+              </button>
+            )}
             <button
               onClick={() => send(input)}
               disabled={awaiting || !input.trim()}

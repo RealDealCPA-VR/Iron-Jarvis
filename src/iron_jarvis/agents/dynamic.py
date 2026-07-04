@@ -38,9 +38,11 @@ KNOWN_MODELS: list[dict] = [
     {"provider": "anthropic", "model": "claude-fable-5"},
     {"provider": "openai", "model": "gpt-4o"},
     {"provider": "openai", "model": "gpt-4o-mini"},
-    # Served by BOTH api.openai.com and the ChatGPT (Codex) backend — the only
-    # family available to a subscription-only ChatGPT account login.
-    {"provider": "openai", "model": "gpt-5-codex"},
+    # Served by the ChatGPT (Codex) backend — the only family available to a
+    # subscription-only ChatGPT account. OpenAI retires ids there over time
+    # (gpt-5-codex now 400s); gpt-5.5 verified live 2026-07, and the adapter
+    # self-heals via a fallback ladder if it's retired too.
+    {"provider": "openai", "model": "gpt-5.5"},
     {"provider": "google", "model": "gemini-2.0-flash"},
     {"provider": "google", "model": "gemini-1.5-pro"},
     # xAI (Grok) — current generation: the flagship, the fast agentic model,

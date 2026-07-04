@@ -32,7 +32,17 @@ _CHATGPT_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
 
 #: Models the Codex backend serves; anything else maps to the default below.
 _CHATGPT_MODEL_PREFIXES = ("gpt-5", "codex")
-_CHATGPT_DEFAULT_MODEL = "gpt-5-codex"
+#: OpenAI PROGRESSIVELY RETIRES model ids from the ChatGPT-account backend
+#: (gpt-5-codex, gpt-5.1*, codex-mini-latest… all now 400 "not supported").
+#: Verified live 2026-07: "gpt-5.5" is served. On a "model is not supported"
+#: 400 we ladder through the candidates below and CACHE the winner, so the next
+#: retirement degrades gracefully instead of bricking the provider.
+_CHATGPT_DEFAULT_MODEL = "gpt-5.5"
+_CHATGPT_FALLBACK_MODELS = ("gpt-5.5", "gpt-5.5-codex", "gpt-5.6", "gpt-5.4")
+#: Cross-instance cache: model ids the backend has REJECTED this process-life,
+#: and the last id that actually worked (adapters are rebuilt per request).
+_CHATGPT_REJECTED: set[str] = set()
+_CHATGPT_KNOWN_GOOD: list[str] = []
 
 
 def _is_chatgpt_token(credential: str) -> bool:
@@ -371,46 +381,73 @@ class OpenAIAdapter(LLMAdapter):
             "OpenAI-Beta": "responses=experimental",
             "Accept": "text/event-stream",
         }
-        # Only codex-capable models are served by this backend.
-        model = self.model
-        if not model.startswith(_CHATGPT_MODEL_PREFIXES):
-            model = _CHATGPT_DEFAULT_MODEL
-        body: dict[str, Any] = {
-            "model": model,
-            "instructions": system or "",
-            "input": self._to_responses_input(messages),
-            "tools": self._to_responses_tools(tools),
-            "tool_choice": "auto",
-            "parallel_tool_calls": False,
-            "store": False,  # required: the backend keeps no server-side state
-            "stream": True,  # the endpoint is SSE-only
-            "include": ["reasoning.encrypted_content"],
-        }
-        resp = await self._client().post(
-            _CHATGPT_ENDPOINT, headers=headers, json=body
-        )
-        status = getattr(resp, "status_code", 200)
-        if status == 400 and "instruction" in _error_detail(resp).lower():
-            # Some backend revisions validate the instructions field against
-            # the official Codex prompt. Self-heal: retry once with empty
-            # instructions and the system prompt as a developer message.
-            body["instructions"] = ""
-            body["input"] = [
-                {
-                    "type": "message",
-                    "role": "developer",
-                    "content": [{"type": "input_text", "text": system}],
-                },
-                *self._to_responses_input(messages),
-            ]
+        # Only codex-capable models are served by this backend — and OpenAI
+        # retires ids over time, so build a LADDER: the requested model (if
+        # plausibly served + not already known-rejected), the last known-good,
+        # then the fallback candidates. First non-rejected 200 wins.
+        ladder: list[str] = []
+        if self.model.startswith(_CHATGPT_MODEL_PREFIXES):
+            ladder.append(self.model)
+        ladder.extend(_CHATGPT_KNOWN_GOOD)
+        ladder.extend(_CHATGPT_FALLBACK_MODELS)
+        seen: set[str] = set()
+        candidates = [
+            m for m in ladder
+            if not (m in seen or seen.add(m)) and m not in _CHATGPT_REJECTED
+        ] or [_CHATGPT_DEFAULT_MODEL]
+
+        resp: Any = None
+        status = 200
+        last_err = ""
+        for model in candidates:
+            body: dict[str, Any] = {
+                "model": model,
+                "instructions": system or "",
+                "input": self._to_responses_input(messages),
+                "tools": self._to_responses_tools(tools),
+                "tool_choice": "auto",
+                "parallel_tool_calls": False,
+                "store": False,  # required: the backend keeps no server-side state
+                "stream": True,  # the endpoint is SSE-only
+                "include": ["reasoning.encrypted_content"],
+            }
             resp = await self._client().post(
                 _CHATGPT_ENDPOINT, headers=headers, json=body
             )
             status = getattr(resp, "status_code", 200)
+            detail = _error_detail(resp).lower() if status == 400 else ""
+            if status == 400 and "instruction" in detail:
+                # Some backend revisions validate the instructions field against
+                # the official Codex prompt. Self-heal: retry once with empty
+                # instructions and the system prompt as a developer message.
+                body["instructions"] = ""
+                body["input"] = [
+                    {
+                        "type": "message",
+                        "role": "developer",
+                        "content": [{"type": "input_text", "text": system}],
+                    },
+                    *self._to_responses_input(messages),
+                ]
+                resp = await self._client().post(
+                    _CHATGPT_ENDPOINT, headers=headers, json=body
+                )
+                status = getattr(resp, "status_code", 200)
+                detail = _error_detail(resp).lower() if status == 400 else ""
+            if status == 400 and "model is not supported" in detail:
+                # This id has been retired for ChatGPT accounts — remember and
+                # try the next rung.
+                _CHATGPT_REJECTED.add(model)
+                last_err = _error_detail(resp)
+                continue
+            break  # success, or a non-model error worth surfacing as-is
         if status >= 400:
             raise RuntimeError(
-                f"openai (ChatGPT backend) API error {status}: {_error_detail(resp)}"
+                f"openai (ChatGPT backend) API error {status}: "
+                f"{_error_detail(resp) if resp is not None else last_err}"
             )
+        if model not in _CHATGPT_KNOWN_GOOD:
+            _CHATGPT_KNOWN_GOOD.insert(0, model)  # remember what works
         return self._parse_sse(getattr(resp, "text", "") or "")
 
     # -- the interface ------------------------------------------------------

@@ -96,6 +96,21 @@ export function NodeInspector({
             className="field resize-y"
           />
         </div>
+
+        <div>
+          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+            Tool (optional)
+          </label>
+          <input
+            value={data.tool ?? ""}
+            onChange={(e) => onChange({ tool: e.target.value || null })}
+            placeholder="e.g. web_search"
+            className="field"
+          />
+          <p className="mt-1.5 text-[11px] text-zinc-500">
+            Advanced: tag this step with a tool name.
+          </p>
+        </div>
       </div>
 
       <footer className="border-t hairline p-3">

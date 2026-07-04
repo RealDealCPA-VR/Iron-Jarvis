@@ -844,6 +844,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
             session = await orchestrator.continue_session(session_id, body.message)
         except KeyError:
             raise HTTPException(status_code=404, detail="session not found")
+        except ValueError as exc:  # workspace busy — a continuation is running
+            raise HTTPException(status_code=409, detail=str(exc))
         if body.wait:
             session = await orchestrator.run_session(session.id)
         else:
@@ -2054,6 +2056,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
         return {"removed": TemplateStore(platform.engine).remove(prompt_id)}
 
     # --- Review (§27, §28) — approve/reject; agents never auto-merge -------
+
+    @app.get("/reviews")
+    def list_reviews() -> dict[str, Any]:
+        """All PENDING reviews in one call — so the Kanban board can place cards
+        in the In-Review lane without probing /sessions/{id}/review per session."""
+        return {
+            "reviews": [
+                {"session_id": sid, **asdict(rv)}
+                for sid, rv in orchestrator.pending_reviews().items()
+            ]
+        }
 
     @app.get("/sessions/{session_id}/review")
     def get_review(session_id: str) -> dict[str, Any]:

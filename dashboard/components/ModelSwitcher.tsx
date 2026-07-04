@@ -31,7 +31,9 @@ const TIERS: Record<string, Record<Tier, string>> = {
   openai: {
     fast: "gpt-4o-mini",
     balanced: "gpt-4o",
-    best: "gpt-5-codex",
+    // ChatGPT-account backend id (gpt-5-codex was retired there); the adapter
+    // self-heals to whatever the backend serves if this is retired too.
+    best: "gpt-5.5",
   },
   google: {
     fast: "gemini-1.5-flash",

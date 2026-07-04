@@ -520,6 +520,10 @@ class Orchestrator:
     def get_review(self, session_id: str) -> ReviewRequest | None:
         return self._reviews.get(session_id)
 
+    def pending_reviews(self) -> dict[str, ReviewRequest]:
+        """All pending reviews keyed by session id (for GET /reviews)."""
+        return dict(self._reviews)
+
     def approve_review(self, session_id: str) -> str:
         """Merge the session branch into base (explicit human approval)."""
         gs = self._git_sessions[session_id]
@@ -540,6 +544,16 @@ class Orchestrator:
         self._reviews.pop(session_id, None)
         self._git_sessions.pop(session_id, None)
         self._delete_pending_review(session_id)
+        # Rejecting means the work was declined — reflect that on the session so
+        # the Kanban card lands in the Failed lane (the lane the UI promised),
+        # instead of bouncing to Completed as if the work shipped.
+        session = self.get_session(session_id)
+        if session is not None and session.status is SessionStatus.COMPLETED:
+            session.status = SessionStatus.FAILED
+            session.summary = (session.summary or "").strip() or "review rejected"
+            if not (session.summary or "").endswith("(review rejected)"):
+                session.summary = f"{session.summary} (review rejected)"
+            self._save(session)
 
     # --- restart survival: persist + rehydrate review/session state -------
 

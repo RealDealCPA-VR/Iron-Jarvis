@@ -28,7 +28,6 @@ export default function WorkflowsPage() {
     let raw: string | null = null;
     try {
       raw = sessionStorage.getItem("ij_pending_workflow");
-      if (raw) sessionStorage.removeItem("ij_pending_workflow");
     } catch {
       return;
     }
@@ -37,9 +36,23 @@ export default function WorkflowsPage() {
     try {
       def = JSON.parse(raw);
     } catch {
+      // Malformed payload — clear it so it doesn't linger across visits.
+      try {
+        sessionStorage.removeItem("ij_pending_workflow");
+      } catch {
+        /* ignore */
+      }
       return;
     }
+    // Remove only when we actually dispatch: a StrictMode mount → cleanup →
+    // remount cycle cancels this timeout, and the item must survive for the
+    // second mount to consume.
     const t = setTimeout(() => {
+      try {
+        sessionStorage.removeItem("ij_pending_workflow");
+      } catch {
+        /* ignore */
+      }
       window.dispatchEvent(new CustomEvent("ij:load-workflow", { detail: def }));
       window.scrollTo({ top: 0, behavior: "smooth" });
     }, 80);
@@ -231,7 +244,7 @@ function sessionCount(r: WorkflowRun): number {
 
 /** Best-available timestamp (the daemon record uses `started_at`). */
 function runTimestamp(r: WorkflowRun): string | null {
-  const raw = (r.started_at ?? r.created_at ?? r.finished_at) as
+  const raw = (r.started_at ?? r.finished_at ?? r.created_at) as
     | string
     | null
     | undefined;

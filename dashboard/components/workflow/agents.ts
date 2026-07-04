@@ -1,18 +1,24 @@
 // Agent-type metadata shared by the workflow node editor.
 // Each agent type gets an icon, a disciplined accent and chip styling so the
 // graph reads at a glance — cyan builder, violet planner, amber reviewer,
-// emerald supervisor.
+// emerald supervisor, sky researcher.
 
 import type { ComponentType } from "react";
-import { Hammer, MapPinned, ScanEye, ShieldCheck } from "lucide-react";
+import { Hammer, MapPinned, ScanEye, Search, ShieldCheck } from "lucide-react";
 
-export type AgentType = "builder" | "planner" | "reviewer" | "supervisor";
+export type AgentType =
+  | "builder"
+  | "planner"
+  | "reviewer"
+  | "supervisor"
+  | "researcher";
 
 export const AGENT_TYPES: AgentType[] = [
   "builder",
   "planner",
   "reviewer",
   "supervisor",
+  "researcher",
 ];
 
 type IconType = ComponentType<{ size?: number; className?: string }>;
@@ -63,6 +69,14 @@ export const AGENT_META: Record<AgentType, AgentMeta> = {
     glow: "rgba(52,211,153,0.55)",
     hex: "#34d399",
   },
+  researcher: {
+    label: "Researcher",
+    icon: Search,
+    chip: "border-sky-500/30 bg-sky-500/10 text-sky-300",
+    tile: "border-sky-500/30 bg-sky-500/10 text-sky-300",
+    glow: "rgba(56,189,248,0.55)",
+    hex: "#38bdf8",
+  },
 };
 
 export function agentMeta(agent: string): AgentMeta {
@@ -75,6 +89,8 @@ export interface StepNodeData {
   name: string;
   agent: AgentType;
   task: string;
+  /** Optional tool tag carried through load/save/run (generated workflows use it). */
+  tool?: string | null;
   /** 1-based index shown on the card; kept in sync by the canvas. */
   index?: number;
   [key: string]: unknown;

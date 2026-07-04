@@ -134,22 +134,31 @@ class ModelRouter:
                 {"provider": adapter.provider, "error": f"{type(exc).__name__}: {exc}"},
                 session_id=session_id,
             )
-            # Before faking it with mock, try the real DEFAULT provider: a
-            # self-tuned LOCAL pick that's momentarily down must fall back to the
-            # healthy cloud default, not to a fabricated mock answer.
+            # Before failing, try the real DEFAULT provider: a self-tuned LOCAL
+            # pick (or an explicit provider) that's down must fall back to the
+            # healthy cloud default. IMPORTANT: with the default provider's OWN
+            # default model — passing the failed provider's model id across
+            # (e.g. anthropic asked to run "gpt-4o") just fails again.
             if (
                 adapter.provider != self.default_provider
                 and self.default_provider != "mock"
                 and self.manager.available(self.default_provider)
             ):
                 try:
-                    alt = self.manager.get(self.default_provider, model)
+                    alt = self.manager.get(self.default_provider)
                     response = await alt.complete(
                         system=system, messages=messages, tools=tools
                     )
                     return RouteResult(response, alt.provider, alt.model)
-                except Exception:  # noqa: BLE001 — default also failed; use mock
+                except Exception:  # noqa: BLE001 — the default failed too
                     pass
+            # NEVER fabricate: when the caller wanted a REAL provider, surface
+            # the failure (the session fails with the provider's actual error)
+            # instead of silently returning mock's scripted output as if it were
+            # an answer — that fabrication reads as "the app is lying to me".
+            # The mock fallback remains only for the offline/mock-default path.
+            if wanted != "mock":
+                raise
             fallback = self.manager.get("mock")
             if fallback is adapter:
                 raise

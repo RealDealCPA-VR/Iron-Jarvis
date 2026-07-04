@@ -57,8 +57,16 @@ export function KanbanBoard({
     setBusyId(id);
     setToast(null);
     try {
-      await post(`/reviews/${id}/${kind}`);
-      setToast({ kind: "ok", text: kind === "approve" ? "Review approved & merged." : "Review rejected." });
+      // Approve returns { merged: <result string> } — surface the REAL outcome
+      // (a merge can be non-clean) instead of always claiming "merged".
+      const res = await post<{ merged?: string }>(`/reviews/${id}/${kind}`);
+      setToast({
+        kind: "ok",
+        text:
+          kind === "approve"
+            ? `Approved — ${res?.merged || "merged"}.`
+            : "Review rejected — card moved to Failed.",
+      });
       reload();
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : String(err);

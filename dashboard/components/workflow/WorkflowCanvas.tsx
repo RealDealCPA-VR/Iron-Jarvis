@@ -27,6 +27,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
+import Link from "next/link";
 import {
   Workflow,
   Play,
@@ -36,6 +37,7 @@ import {
   ChevronDown,
   Save,
   RefreshCw,
+  CalendarClock,
 } from "lucide-react";
 import { get, post, ApiError } from "@/lib/api";
 import type { WorkflowRun } from "@/lib/types";
@@ -75,8 +77,14 @@ function mkStep(
   task: string,
   x: number,
   y: number,
+  tool?: string | null,
 ): Node {
-  return { id, type: "step", position: { x, y }, data: { name, agent, task } };
+  return {
+    id,
+    type: "step",
+    position: { x, y },
+    data: { name, agent, task, tool: tool ?? null },
+  };
 }
 function mkEdge(source: string, target: string): Edge {
   return { id: `${source}->${target}`, source, target, animated: true };
@@ -106,6 +114,7 @@ interface RawStep {
   name?: string;
   agent?: string;
   task?: string;
+  tool?: string | null;
 }
 
 /** Turn a saved `[{name,agent,task}]` list into a Trigger → step₁ → … chain
@@ -135,6 +144,7 @@ function buildGraph(steps: RawStep[]): { nodes: Node[]; edges: Edge[] } {
         s.task ?? "",
         STEP_X0 + i * STEP_DX,
         STEP_Y,
+        s.tool ?? null,
       ),
     );
     edges.push(mkEdge(prev, id));
@@ -329,16 +339,27 @@ function Canvas() {
   }, [refreshDefs]);
 
   // Bridge: the "Build with chat" panel (workflows/page.tsx) dispatches this
-  // event with a generated {name, description, steps_json} workflow — load it
-  // into the canvas via the SAME path as the Load dropdown, then refresh the
-  // saved list (the workflow was persisted server-side by /workflows/generate).
+  // event with a generated {name, description, steps_json} workflow, and the
+  // terminal "→ Workflow" handoff dispatches {name, description, steps: [...]}
+  // — accept both shapes and load via the SAME path as the Load dropdown, then
+  // refresh the saved list (the workflow was persisted server-side).
   useEffect(() => {
+    type LoadDetail = Omit<WorkflowDef, "steps_json"> & {
+      steps_json?: string;
+      steps?: unknown[];
+    };
     const onLoad = (e: Event) => {
-      const def = (e as CustomEvent).detail as WorkflowDef | undefined;
-      if (def && typeof def.steps_json === "string") {
-        loadDef(def);
-        refreshDefs();
-      }
+      const def = (e as CustomEvent).detail as LoadDetail | undefined;
+      if (!def) return;
+      const steps_json =
+        typeof def.steps_json === "string"
+          ? def.steps_json
+          : Array.isArray(def.steps)
+            ? JSON.stringify(def.steps)
+            : undefined;
+      if (typeof steps_json !== "string") return;
+      loadDef({ ...def, steps_json });
+      refreshDefs();
     };
     window.addEventListener("ij:load-workflow", onLoad);
     return () => window.removeEventListener("ij:load-workflow", onLoad);
@@ -389,6 +410,7 @@ function Canvas() {
         name: d.name?.trim() || `step-${i + 1}`,
         agent: d.agent,
         task: (d.task ?? "").trim(),
+        tool: d.tool ?? null,
       };
     });
     const wfName = name.trim();
@@ -429,6 +451,7 @@ function Canvas() {
         name: d.name?.trim() || `step-${i + 1}`,
         agent: d.agent,
         task: (d.task ?? "").trim(),
+        tool: d.tool ?? null,
       };
     });
     const wfName = name.trim() || "demo-workflow";
@@ -579,6 +602,13 @@ function Canvas() {
           >
             {saving ? <LoaderInline label="Saving…" /> : (<><Save size={15} /> Save</>)}
           </button>
+          <Link
+            href={`/schedules?workflow=${encodeURIComponent(name)}`}
+            title="Run this workflow on a schedule"
+            className="btn-ghost"
+          >
+            <CalendarClock size={15} /> Schedule…
+          </Link>
           <button type="button" onClick={addStep} className="btn-ghost">
             <Plus size={15} /> Add step
           </button>

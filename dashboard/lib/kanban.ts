@@ -21,9 +21,12 @@ export const LANES: LaneDef[] = [
 export function laneFor(session: SessionView, hasReview: boolean): LaneId {
   if (hasReview) return "review";
   const s = session.status.toLowerCase();
-  if (s === "completed" || s === "succeeded" || s === "success") return "completed";
-  if (s === "failed" || s === "error" || s === "rejected") return "failed";
-  return "active"; // active / running / created / pending / unknown
+  if (s === "completed") return "completed";
+  // The backend emits exactly: active | completed | failed | cancelled.
+  // Cancelled belongs with failed ("Errored or rejected"), NOT in Active —
+  // otherwise a cancelled session shows "Running now" forever.
+  if (s === "failed" || s === "cancelled") return "failed";
+  return "active";
 }
 
 export function assignLanes(
