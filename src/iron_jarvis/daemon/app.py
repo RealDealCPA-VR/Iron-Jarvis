@@ -212,14 +212,9 @@ def _first_code_block(text: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-#: Substrings that mark a TRANSIENT provider failure worth retrying (rate
-#: limits and momentary overload — not auth/model errors).
-_TRANSIENT_MARKERS = ("429", "rate_limit", "rate limit", "overloaded", "529", "503")
-
-
-def _is_transient_provider_error(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    return any(m in msg for m in _TRANSIENT_MARKERS)
+#: Transient-failure classification lives with the router (single source of
+#: truth — it now retries/fails-over for full agent sessions too).
+from ..providers.router import is_transient_error as _is_transient_provider_error  # noqa: E402
 
 
 async def _complete_with_retry(adapter, *, system, messages, tools, attempts: int = 3):

@@ -7,6 +7,7 @@ requested provider is unavailable or errors, emitting ``provider.failed`` (§31)
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Callable, Optional
 
 from ..core.events import EventBus, EventType
@@ -20,6 +21,20 @@ from .manager import ProviderManager
 #: ``None`` (the default) routing is byte-for-byte identical to before, so the
 #: mock/default path and the offline test suite are unchanged.
 LocalOracle = Callable[[Optional[str]], "Optional[tuple[str, str]]"]
+
+#: Substrings marking a TRANSIENT provider failure (rate limit / momentary
+#: overload) worth retrying or failing over — never auth/model errors. Single
+#: source of truth; the daemon's one-shot helpers import this via
+#: :func:`is_transient_error`.
+_TRANSIENT_MARKERS = ("429", "rate_limit", "rate limit", "overloaded", "529", "503")
+
+#: Failover candidate order when the wanted provider is rate-limited.
+_FAILOVER_ORDER = ("anthropic", "openai", "google", "xai", "openrouter", "ollama", "custom")
+
+
+def is_transient_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(m in msg for m in _TRANSIENT_MARKERS)
 
 
 class RouteResult:
@@ -124,11 +139,25 @@ class ModelRouter:
                 session_id=session_id,
             )
         try:
-            response = await adapter.complete(
-                system=system, messages=messages, tools=tools
-            )
-            return RouteResult(response, adapter.provider, adapter.model)
+            # TRANSIENT-AWARE first attempt: a 429/overloaded blip retries the
+            # SAME adapter (2 extra attempts, short backoff) before any
+            # fallback — most rate limits clear in seconds.
+            delay = 1.5
+            attempt = 0
+            while True:
+                try:
+                    response = await adapter.complete(
+                        system=system, messages=messages, tools=tools
+                    )
+                    return RouteResult(response, adapter.provider, adapter.model)
+                except Exception as exc:  # noqa: BLE001 — classified below
+                    if not is_transient_error(exc) or attempt >= 2:
+                        raise
+                    attempt += 1
+                    await asyncio.sleep(delay)
+                    delay *= 2.5
         except Exception as exc:
+            transient = is_transient_error(exc)
             await self.event_bus.publish(
                 EventType.PROVIDER_FAILED,
                 {"provider": adapter.provider, "error": f"{type(exc).__name__}: {exc}"},
@@ -152,12 +181,40 @@ class ModelRouter:
                     return RouteResult(response, alt.provider, alt.model)
                 except Exception:  # noqa: BLE001 — the default failed too
                     pass
+            # RATE-LIMIT FAILOVER: when the failure is transient (e.g. the
+            # Claude Max window is exhausted because Claude Code shares it),
+            # try the OTHER connected real providers before giving up — a
+            # working gpt-5.5/gemini answer beats a failed session.
+            if transient:
+                for p in _FAILOVER_ORDER:
+                    if p in (adapter.provider, self.default_provider) or p == "mock":
+                        continue
+                    if not self.manager.available(p):
+                        continue
+                    try:
+                        alt = self.manager.get(p)
+                        response = await alt.complete(
+                            system=system, messages=messages, tools=tools
+                        )
+                        await self.event_bus.publish(
+                            "provider.failover",
+                            {"from": adapter.provider, "to": alt.provider, "reason": "rate limited"},
+                            session_id=session_id,
+                        )
+                        return RouteResult(response, alt.provider, alt.model)
+                    except Exception:  # noqa: BLE001 — try the next candidate
+                        continue
             # NEVER fabricate: when the caller wanted a REAL provider, surface
             # the failure (the session fails with the provider's actual error)
             # instead of silently returning mock's scripted output as if it were
             # an answer — that fabrication reads as "the app is lying to me".
             # The mock fallback remains only for the offline/mock-default path.
             if wanted != "mock":
+                if transient:
+                    raise RuntimeError(
+                        "every connected model is rate-limited or unavailable "
+                        f"right now — wait a minute and try again ({adapter.provider}: {exc})"
+                    ) from exc
                 raise
             fallback = self.manager.get("mock")
             if fallback is adapter:

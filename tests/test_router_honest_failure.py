@@ -107,3 +107,70 @@ async def test_unavailable_provider_still_downgrades_to_mock_prerun():
     router = ModelRouter(mgr, default_provider="mock", event_bus=EventBus())
     res = await router.complete(provider="xai", system="", messages=_msgs(), tools=[])
     assert res.provider == "mock"
+
+
+class _RateLimited(LLMAdapter):
+    def __init__(self, provider="anthropic", model="claude-x", fail_times=999):
+        self.provider, self.model = provider, model
+        self.calls = 0
+        self.fail_times = fail_times
+
+    async def complete(self, *, system, messages, tools):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise RuntimeError("Error code: 429 - rate_limit_error")
+        return LLMResponse(text="recovered", tool_calls=[], usage={})
+
+
+def _fast_sleep(monkeypatch):
+    import iron_jarvis.providers.router as rmod
+
+    async def _no_sleep(_):
+        return None
+
+    monkeypatch.setattr(rmod.asyncio, "sleep", _no_sleep)
+
+
+@pytest.mark.asyncio
+async def test_transient_429_retries_same_adapter_then_succeeds(monkeypatch):
+    _fast_sleep(monkeypatch)
+    flaky = _RateLimited(fail_times=2)
+    mgr = _Manager({"anthropic": flaky, "mock": _Mock()})
+    router = ModelRouter(mgr, default_provider="anthropic", event_bus=EventBus())
+    res = await router.complete(provider="anthropic", system="", messages=_msgs(), tools=[])
+    assert res.response.text == "recovered"
+    assert flaky.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_default_fails_over_to_other_provider(monkeypatch):
+    """The user's exact incident: Claude Max 429s (Claude Code shares the
+    window) -> the session must land on the OTHER connected provider."""
+    _fast_sleep(monkeypatch)
+    mgr = _Manager({"anthropic": _RateLimited(), "openai": _Ok(), "mock": _Mock()})
+    router = ModelRouter(mgr, default_provider="anthropic", event_bus=EventBus())
+    res = await router.complete(system="", messages=_msgs(), tools=[])
+    assert res.provider == "openai"
+    assert res.response.text == "real answer"
+
+
+@pytest.mark.asyncio
+async def test_all_rate_limited_raises_clean_message(monkeypatch):
+    _fast_sleep(monkeypatch)
+    mgr = _Manager(
+        {"anthropic": _RateLimited(), "openai": _RateLimited("openai", "gpt-x"), "mock": _Mock()}
+    )
+    router = ModelRouter(mgr, default_provider="anthropic", event_bus=EventBus())
+    with pytest.raises(RuntimeError) as ei:
+        await router.complete(system="", messages=_msgs(), tools=[])
+    assert "rate-limited or unavailable" in str(ei.value)
+
+
+@pytest.mark.asyncio
+async def test_non_transient_error_never_fails_over_sideways(monkeypatch):
+    """Auth/model errors keep the honest-raise path — no provider roulette."""
+    _fast_sleep(monkeypatch)
+    mgr = _Manager({"anthropic": _Boom(), "openai": _Ok(), "mock": _Mock()})
+    router = ModelRouter(mgr, default_provider="anthropic", event_bus=EventBus())
+    with pytest.raises(RuntimeError):
+        await router.complete(provider="anthropic", model="claude-x", system="", messages=_msgs(), tools=[])
