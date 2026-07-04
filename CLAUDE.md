@@ -102,6 +102,12 @@ cd dashboard && pnpm dev           # dashboard
   agent-facing tools are just search/load. `workflows/` — store + engine
   (note: `POST /workflows/run` blocks until all steps finish). `ltm/`,
   `memory/`, `comm/`, `computeruse/`, `sandbox/`, `scheduling/`.
+- `documents/` — readers (extract_text: pdf/docx/xlsx/pptx/csv/text/images),
+  writers (markdown-AWARE rich creation: headings/lists/tables/code become
+  real structure in docx/pdf/pptx/html; xlsx multi-sheet dict + formulas),
+  markdown.py (the shared block parser), tools (read/write/extract_pdf/
+  convert_document). `tools/images.py` — view_image (vision via the router),
+  image_convert/resize/info (Pillow). `tools/pixio.py` — generative media.
 - `dashboard/app/<route>/page.tsx` per page; shared in `dashboard/components/`
   (`ui.tsx` primitives, `Sidebar.tsx` nav incl. Simple/Advanced mode,
   `ModelSwitcher.tsx` quality dial) and `dashboard/lib/` (`api.ts` fetch+auth,

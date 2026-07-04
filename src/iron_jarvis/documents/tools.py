@@ -1,11 +1,13 @@
 """Document tools (§19).
 
-Three tools that let agents work with a user's real files:
+Four tools that let agents work with a user's real files:
 
-* ``read_document``  — extract text from ANY local path (reading the user's real
-  files is the point), absolute or workspace-relative.
-* ``write_document`` — create a document WITHIN the session workspace only.
-* ``extract_pdf``    — read_document specialised to PDFs.
+* ``read_document``     — extract text from ANY local path (reading the user's
+  real files is the point), absolute or workspace-relative.
+* ``write_document``    — create a document WITHIN the session workspace only.
+* ``extract_pdf``       — read_document specialised to PDFs.
+* ``convert_document``  — read any supported source and re-write it as any
+  supported target format (csv<->xlsx keep real rows/cells).
 
 ``document_tools()`` is a plain factory (no platform needed).
 """
@@ -13,13 +15,14 @@ Three tools that let agents work with a user's real files:
 from __future__ import annotations
 
 import asyncio
+import csv
 from pathlib import Path
 from typing import Any
 
 from ..core.fs_policy import fs_read_ok
 from ..tools.base import Tool, ToolContext, ToolResult, safe_path
-from .readers import extract_text
-from .writers import write_document
+from .readers import SUPPORTED_READ, extract_text
+from .writers import SUPPORTED_WRITE, write_document
 
 #: Cap on tool output to keep large documents from flooding the context window.
 _MAX_OUTPUT = 16_000
@@ -75,9 +78,13 @@ class WriteDocumentTool(Tool):
     name = "write_document"
     description = (
         "Create a document inside the session workspace. The file type follows "
-        "the path suffix (.docx/.xlsx/.pptx/.pdf/.csv/.txt/.md), or the optional "
-        "`kind` override. `content` is a string (paragraphs/lines split on "
-        "newline) or a list of rows (list[list]) for sheets/tables."
+        "the path suffix (.docx/.xlsx/.pptx/.pdf/.csv/.html/.txt/.md), or the "
+        "optional `kind` override. String content is markdown-aware: '# ' "
+        "headings, -/1. lists, **bold**/*italic*, ``` code fences, | pipe | "
+        "tables and '---' rules become REAL headings, lists, tables and slides "
+        "in .docx/.pdf/.pptx/.html (plain text still works everywhere). A list "
+        "of rows (list[list]) writes spreadsheet/CSV rows, and .xlsx also "
+        "accepts {'sheets': {name: rows}} for a multi-sheet workbook."
     )
     input_schema = {
         "type": "object",
@@ -85,8 +92,10 @@ class WriteDocumentTool(Tool):
             "path": {"type": "string"},
             "content": {
                 "description": (
-                    "A string (split into paragraphs/lines on newline) or a list "
-                    "of rows for spreadsheet/CSV output."
+                    "A string (markdown renders as rich formatting; plain text "
+                    "becomes paragraphs/lines), a list of rows for "
+                    "spreadsheet/CSV output, or {'sheets': {name: rows}} for a "
+                    "multi-sheet .xlsx."
                 )
             },
             "kind": {
@@ -141,6 +150,120 @@ class ExtractPdfTool(Tool):
         )
 
 
+#: Formats where a conversion must preserve real rows/cells, not flattened text.
+_TABULAR = {".csv", ".xlsx"}
+
+
+def _load_for_conversion(source: Path, src_suffix: str, tgt_suffix: str) -> Any:
+    """Read ``source`` as the richest content shape the target can accept."""
+    if src_suffix in _TABULAR and tgt_suffix in _TABULAR:
+        if src_suffix == ".csv":  # real csv parsing, not text lines
+            with open(source, newline="", encoding="utf-8", errors="replace") as f:
+                return [list(row) for row in csv.reader(f)]
+        return _xlsx_content(source, keep_sheets=(tgt_suffix == ".xlsx"))
+    return extract_text(source)
+
+
+def _xlsx_content(source: Path, *, keep_sheets: bool) -> Any:
+    """Re-extract real rows from a workbook via openpyxl (not flattened text)."""
+    from openpyxl import load_workbook
+
+    # xlsx->xlsx keeps formulas (data_only=False); xlsx->csv wants cached values.
+    wb = load_workbook(
+        filename=str(source), read_only=True, data_only=not keep_sheets
+    )
+    try:
+        sheets = {
+            ws.title: [
+                ["" if c is None else c for c in row]
+                for row in ws.iter_rows(values_only=True)
+            ]
+            for ws in wb.worksheets
+        }
+    finally:
+        wb.close()
+    if keep_sheets and len(sheets) > 1:
+        return {"sheets": sheets}
+    return [row for rows in sheets.values() for row in rows]
+
+
+class ConvertDocumentTool(Tool):
+    name = "convert_document"
+    description = (
+        "Convert a document from one format to another: read any supported "
+        "source (PDF, .docx, .xlsx, .pptx, .csv, text/code) and re-write it as "
+        "any supported target (.docx/.xlsx/.pptx/.pdf/.csv/.html/.txt/.md). "
+        "csv<->xlsx conversions preserve real rows and cells; other sources "
+        "are extracted to text and rendered with markdown-aware formatting. "
+        "The source may be ANY local path (absolute or workspace-relative); "
+        "the target is created inside the session workspace."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "source": {
+                "type": "string",
+                "description": "Path of the document to read.",
+            },
+            "target": {
+                "type": "string",
+                "description": (
+                    "Path of the document to create; its suffix picks the "
+                    "output format."
+                ),
+            },
+        },
+        "required": ["source", "target"],
+    }
+
+    async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        source = _resolve_read_path(args["source"], ctx)
+        src_suffix = source.suffix.lower()
+        if src_suffix not in SUPPORTED_READ:
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"cannot read {src_suffix or source.name!r} — supported "
+                    f"source formats: {', '.join(sorted(SUPPORTED_READ))}"
+                ),
+            )
+        allowed, reason = fs_read_ok(source)
+        if not allowed:
+            return ToolResult(ok=False, error=reason)
+        try:
+            target = safe_path(ctx.workspace, args["target"])
+        except Exception as exc:
+            return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+        tgt_suffix = target.suffix.lower()
+        if tgt_suffix not in SUPPORTED_WRITE:
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"cannot write {tgt_suffix or target.name!r} — supported "
+                    f"target formats: {', '.join(sorted(SUPPORTED_WRITE))}"
+                ),
+            )
+        try:
+            content = await asyncio.to_thread(  # CPU-bound parse off the loop
+                _load_for_conversion, source, src_suffix, tgt_suffix
+            )
+            out = await asyncio.to_thread(write_document, target, content)
+        except Exception as exc:  # converting real files must never crash the runtime
+            return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+        rel = str(out.relative_to(Path(ctx.workspace).resolve())).replace("\\", "/")
+        size = out.stat().st_size
+        return ToolResult(
+            ok=True,
+            output=f"converted {source.name} -> {rel} ({size} bytes)",
+            data={"source": str(source), "path": rel, "bytes": size},
+        )
+
+
 def document_tools() -> list[Tool]:
     """Build the document tools (no platform dependency)."""
-    return [ReadDocumentTool(), WriteDocumentTool(), ExtractPdfTool()]
+    return [
+        ReadDocumentTool(),
+        WriteDocumentTool(),
+        ExtractPdfTool(),
+        ConvertDocumentTool(),
+    ]

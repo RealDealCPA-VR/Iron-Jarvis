@@ -394,8 +394,17 @@ def build_platform(
     for tool in recall_tools(filesearch, ltm):
         registry.register(tool)
 
-    # Documents: read/write PDF, Word, Excel, PowerPoint, CSV, Markdown, text.
+    # Documents: read/write PDF, Word, Excel, PowerPoint, CSV, Markdown, text
+    # (+ markdown-aware RICH creation and cross-format conversion).
     for tool in document_tools():
+        registry.register(tool)
+
+    # Images: view_image gives any agent EYES (vision via the router — works
+    # with whichever vision-capable model is connected), plus convert/resize/
+    # info via Pillow. The router resolver is lazy so tests can swap it.
+    from .tools.images import image_tools
+
+    for tool in image_tools(lambda: router):
         registry.register(tool)
 
     # Web search: keyless DuckDuckGo by default; Brave if a key is in the vault.
