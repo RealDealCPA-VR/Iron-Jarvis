@@ -147,7 +147,9 @@ export default function ChatPage() {
     let cancelled = false;
     get<{ models: ModelOption[] }>("/models")
       .then((d) => {
-        if (!cancelled) setModels(d.models);
+        // Only offer models the user can ACTUALLY run (provider connected);
+        // tolerate older daemons that don't send the flag.
+        if (!cancelled) setModels(d.models.filter((m) => m.available !== false));
       })
       .catch(() => {
         /* picker just stays on the server default */

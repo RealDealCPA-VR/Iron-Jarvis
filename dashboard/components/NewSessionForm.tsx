@@ -100,7 +100,12 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
   const [attaching, setAttaching] = useState(false);
   const [attachedName, setAttachedName] = useState<string | null>(null);
 
-  const models = useMemo(() => modelsData?.models ?? [], [modelsData]);
+  // Only models the user can ACTUALLY run (provider connected) — dead options
+  // that silently fail are worse than a shorter list.
+  const models = useMemo(
+    () => (modelsData?.models ?? []).filter((m) => m.available !== false),
+    [modelsData],
+  );
 
   // Which providers are actually available (from /health)?
   const availability = useMemo(() => {
@@ -155,6 +160,7 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
       const session = isDynamic
         ? await post<SessionView>(`/agents/${encodeURIComponent(agentType)}/spawn`, {
             task: task.trim(),
+            wait: false, // jump to the live view instead of blocking on the run
           })
         : // wait:false — the session starts and we jump to its detail page so the
           // user watches it run live (and can cancel it).

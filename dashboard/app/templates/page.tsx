@@ -36,7 +36,7 @@ interface Template {
 const modelKey = (m: ModelOption) => `${m.provider}|${m.model}`;
 
 /** Fallback agent types when the daemon hasn't reported any agents yet. */
-const FALLBACK_AGENTS = ["general", "coder", "researcher"];
+const FALLBACK_AGENTS = ["builder", "planner", "researcher", "reviewer", "supervisor"];
 
 export default function TemplatesPage() {
   const { data, error, loading, reload } = useApi<{ templates: Template[] }>(

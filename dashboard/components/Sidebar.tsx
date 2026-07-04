@@ -18,6 +18,7 @@ import {
   CalendarClock,
   FileSearch,
   FileText,
+  FolderKanban,
   GraduationCap,
   Database,
   KeyRound,
@@ -60,6 +61,7 @@ const NAV: NavSection[] = [
     items: [
       { href: "/", label: "Overview", icon: LayoutDashboard },
       { href: "/chat", label: "Chat", icon: MessageSquare },
+      { href: "/projects", label: "Projects", icon: FolderKanban },
       { href: "/sessions", label: "Sessions", icon: Boxes },
       { href: "/kanban", label: "Kanban", icon: SquareKanban },
       { href: "/templates", label: "Templates", icon: LayoutTemplate },
@@ -119,6 +121,7 @@ const NAV: NavSection[] = [
 const ESSENTIAL_HREFS = new Set<string>([
   "/", // Overview
   "/chat", // Chat
+  "/projects", // Projects (context spine)
   "/sessions", // Sessions
   "/workflows", // Workflows
   "/terminals", // Terminals

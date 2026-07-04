@@ -402,6 +402,17 @@ def build_platform(
     for tool in web_search_tools(secret_resolver=secrets.get):
         registry.register(tool)
 
+    # Pixio: generative media (image/video/audio) — the creative arm. Key from
+    # the vault secret 'pixio' (or env PIXIO_API_KEY); the pixio-skill in the
+    # skill library teaches agents the workflow. Tools are safe no-ops without
+    # a key (a clear "not configured" error, never a crash).
+    from .tools.pixio import pixio_tools
+
+    for tool in pixio_tools(
+        key_resolver=lambda: secrets.get("pixio") or os.environ.get("PIXIO_API_KEY")
+    ):
+        registry.register(tool)
+
     # External MCP servers (Gmail/Drive/GitHub/...) as native tools. Empty
     # config (the default) is a safe no-op; an unreachable server is skipped.
     for tool in mcp_tools(getattr(config, "mcp_servers", None), secret_resolver=secrets.get):

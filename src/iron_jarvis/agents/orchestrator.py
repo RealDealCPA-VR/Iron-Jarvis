@@ -106,6 +106,7 @@ class Orchestrator:
         provider: str | None = None,
         model: str | None = None,
         self_dev: bool = False,
+        project_id: str | None = None,
     ) -> Session:
         repo_for_worktree: Path | None = None
         if self_dev:
@@ -122,6 +123,9 @@ class Orchestrator:
             provider=provider or self.p.config.default_provider,
             model=model or self.p.config.default_model,
             status=SessionStatus.ACTIVE,
+            # Context spine: tag into the requested project, else the ACTIVE one
+            # (so chat/Spotlight/kanban inherit it with zero UI changes).
+            project_id=project_id or getattr(self.p.config, "active_project_id", None),
         )
         workspace = self.p.config.workspaces_dir / session.id
         if repo_for_worktree is not None:
@@ -367,6 +371,7 @@ class Orchestrator:
             provider=prev.provider,
             model=prev.model,
             status=SessionStatus.ACTIVE,
+            project_id=prev.project_id,  # a chat stays in its project
         )
         # Reuse the prior workspace so the follow-up sees the earlier files — but
         # ONLY for non-git sessions. A git worktree can be discarded by the

@@ -11,6 +11,8 @@ export interface Health {
   version: string;
   default_provider: string;
   default_model: string;
+  /** The ACTIVE context-spine project new sessions default into (or null). */
+  active_project?: { id: string; name: string } | null;
   providers: ProviderHealth[];
 }
 
@@ -290,6 +292,21 @@ export interface LtmSource {
 export interface ModelOption {
   provider: string;
   model: string;
+  /** Whether this entry's provider is actually connected/configured now. */
+  available?: boolean;
+}
+
+/* ---- Projects (context spine) -------------------------------------------- */
+export interface Project {
+  id: string;
+  name: string;
+  brief: string;
+  root: string;
+  status: string; // active | archived
+  created_at: string;
+  session_count?: number;
+  /** Whether this is the ACTIVE project new sessions default into. */
+  active?: boolean;
 }
 
 /* ---- Connections (LLM connect: API key + OAuth) -------------------------- */

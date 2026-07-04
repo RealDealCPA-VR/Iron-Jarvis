@@ -54,9 +54,16 @@ class PermissionMode(str, enum.Enum):
 
 
 class Project(SQLModel, table=True):
+    """The CONTEXT SPINE: a workspace every session/chat/workflow can tag into.
+
+    The project's brief + recent activity inject into every tagged agent call,
+    so every surface shares one thread of "what the user is working on"."""
+
     id: str = Field(default_factory=lambda: new_id("project"), primary_key=True)
     name: str
-    root: str
+    root: str = ""  # optional folder this project lives in (for terminals etc.)
+    brief: str = ""  # goal + key facts, injected into tagged agent calls
+    status: str = "active"  # active | archived
     created_at: datetime = Field(default_factory=utcnow)
 
 

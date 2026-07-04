@@ -36,6 +36,48 @@ class AgentRuntime:
             db.merge(run)
             db.commit()
 
+    def _project_context(self, session: Session) -> str:
+        """The context-spine block for a project-tagged session: the project's
+        brief + the last few sibling sessions' outcomes (bounded)."""
+        from sqlmodel import select
+
+        from ..core.models import Project
+
+        with session_scope(self.p.engine) as db:
+            project = db.get(Project, session.project_id)
+            if project is None:
+                return ""
+            siblings = list(
+                db.exec(
+                    select(Session)
+                    .where(
+                        Session.project_id == session.project_id,
+                        Session.id != session.id,
+                    )
+                    .order_by(Session.created_at.desc())  # type: ignore[attr-defined]
+                    .limit(5)
+                )
+            )
+        lines = [
+            "\n\n# Project context",
+            f"You are working within the user's project: {project.name}",
+        ]
+        if project.brief.strip():
+            lines.append(f"Project brief: {project.brief.strip()[:2000]}")
+        if project.root.strip():
+            lines.append(f"Project folder: {project.root.strip()}")
+        recent = [
+            f"- [{s.status.value}] {s.task[:80]}: {(s.summary or '(no summary)')[:160]}"
+            for s in siblings
+        ]
+        if recent:
+            lines.append("Recent activity in this project (newest first):")
+            lines.extend(recent)
+        lines.append(
+            "Use this context when relevant; stay consistent with prior work in the project."
+        )
+        return "\n".join(lines)
+
     async def _set_state(
         self, run: AgentRun, state: AgentState, session_id: str
     ) -> None:
@@ -94,6 +136,14 @@ class AgentRuntime:
             try:
                 system_prompt = learning.apply_to_prompt(system_prompt)
             except Exception:  # never block a run on the learning layer
+                pass
+        # CONTEXT SPINE: a session tagged into a project carries the project's
+        # brief + recent activity, so chat/terminals/workflows share one thread
+        # of "what the user is working on". Bounded; never blocks a run.
+        if session.project_id:
+            try:
+                system_prompt += self._project_context(session)
+            except Exception:  # noqa: BLE001 — the spine must never break a run
                 pass
 
         for step in range(self.p.config.max_agent_steps):

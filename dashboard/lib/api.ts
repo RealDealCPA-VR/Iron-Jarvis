@@ -145,4 +145,7 @@ export const get = <T>(path: string, opts?: { timeoutMs?: number }) => api<T>(pa
 export const post = <T>(path: string, body?: unknown) =>
   api<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
 
+export const patch = <T>(path: string, body?: unknown) =>
+  api<T>(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined });
+
 export const del = <T>(path: string) => api<T>(path, { method: "DELETE" });

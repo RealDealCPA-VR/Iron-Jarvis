@@ -70,6 +70,23 @@ class SessionCreate(BaseModel):
     # Opt-in self-development: run a Maintainer on a worktree of Iron Jarvis's
     # OWN source (gated by config.self_dev_enabled; review-gated, never auto-merge).
     self_dev: bool = False
+    # Context spine: tag into a project ("" = the ACTIVE project, if any).
+    project_id: str = ""
+
+
+class ProjectCreate(BaseModel):
+    """A context-spine project: brief + activity shared across all surfaces."""
+
+    name: str
+    brief: str = ""
+    root: str = ""
+
+
+class ProjectPatch(BaseModel):
+    name: str | None = None
+    brief: str | None = None
+    root: str | None = None
+    status: str | None = None  # active | archived
 
 
 class ContinueBody(BaseModel):
@@ -401,6 +418,9 @@ class WebhookCreate(BaseModel):
 
 class SpawnBody(BaseModel):
     task: str
+    # wait=false returns immediately (run continues in the background) so the
+    # UI can jump to the live session view instead of blocking on the run.
+    wait: bool = True
 
 
 class UpdateBody(BaseModel):
@@ -445,6 +465,7 @@ def _agent_type(name: str) -> AgentType:
 def _session_view(session) -> dict[str, Any]:
     return {
         "id": session.id,
+        "project_id": getattr(session, "project_id", None),
         "task": session.task,
         "agent_type": session.agent_type.value,
         "provider": session.provider,
@@ -827,11 +848,26 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, Any]:
+        # The ACTIVE project (context spine) rides along so the UI can show
+        # "working in: X" everywhere without a second poll.
+        active_project = None
+        pid = getattr(platform.config, "active_project_id", None)
+        if pid:
+            from ..core.models import Project
+
+            try:
+                with session_scope(platform.engine) as db:
+                    p = db.get(Project, pid)
+                if p is not None:
+                    active_project = {"id": p.id, "name": p.name}
+            except Exception:  # noqa: BLE001 — health must never fail
+                pass
         return {
             "status": "ok",
             "version": __version__,
             "default_provider": platform.config.default_provider,
             "default_model": platform.config.default_model,
+            "active_project": active_project,
             "providers": _visible_providers(),
         }
 
@@ -843,6 +879,127 @@ def create_app(project_root: str | None = None) -> FastAPI:
     def providers() -> dict[str, Any]:
         return {"providers": _visible_providers()}
 
+    # --- Projects (§spine) — the shared context every surface tags into ----
+
+    @app.get("/projects")
+    def list_projects() -> dict[str, Any]:
+        from ..core.models import Project
+        from ..core.models import Session as SessionModel
+
+        active_id = getattr(platform.config, "active_project_id", None)
+        with session_scope(platform.engine) as db:
+            projects = list(db.exec(select(Project)))
+            out = []
+            for p in projects:
+                ids = list(
+                    db.exec(select(SessionModel.id).where(SessionModel.project_id == p.id))
+                )
+                out.append(
+                    {
+                        **p.model_dump(),
+                        "session_count": len(ids),
+                        "active": p.id == active_id,
+                    }
+                )
+        out.sort(key=lambda x: str(x.get("created_at")), reverse=True)
+        return {"projects": out}
+
+    @app.post("/projects")
+    def create_project(body: ProjectCreate) -> dict[str, Any]:
+        from ..core.models import Project
+
+        name = (body.name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="project name is required")
+        project = Project(name=name, brief=(body.brief or "").strip(), root=(body.root or "").strip())
+        with session_scope(platform.engine) as db:
+            db.add(project)
+            db.commit()
+            db.refresh(project)
+        # First project with nothing active -> make it active, so the spine
+        # starts working immediately (chat/Spotlight tag into it from now on).
+        activated = False
+        if not getattr(platform.config, "active_project_id", None):
+            platform.config.active_project_id = project.id
+            _persist_config(["active_project_id"])
+            activated = True
+        return {**project.model_dump(), "active": activated}
+
+    @app.get("/projects/{project_id}")
+    def get_project(project_id: str) -> dict[str, Any]:
+        from ..core.models import Project
+        from ..core.models import Session as SessionModel
+
+        with session_scope(platform.engine) as db:
+            project = db.get(Project, project_id)
+            if project is None:
+                raise HTTPException(status_code=404, detail="no such project")
+            sessions = list(
+                db.exec(
+                    select(SessionModel)
+                    .where(SessionModel.project_id == project_id)
+                    .order_by(SessionModel.created_at.desc())  # type: ignore[attr-defined]
+                    .limit(20)
+                )
+            )
+        return {
+            "project": {
+                **project.model_dump(),
+                "active": project.id == getattr(platform.config, "active_project_id", None),
+            },
+            "sessions": [_session_view(s) for s in sessions],
+        }
+
+    @app.patch("/projects/{project_id}")
+    def patch_project(project_id: str, body: ProjectPatch) -> dict[str, Any]:
+        from ..core.models import Project
+
+        if body.status is not None and body.status not in ("active", "archived"):
+            raise HTTPException(status_code=400, detail="status must be active|archived")
+        with session_scope(platform.engine) as db:
+            project = db.get(Project, project_id)
+            if project is None:
+                raise HTTPException(status_code=404, detail="no such project")
+            if body.name is not None and body.name.strip():
+                project.name = body.name.strip()
+            if body.brief is not None:
+                project.brief = body.brief.strip()
+            if body.root is not None:
+                project.root = body.root.strip()
+            if body.status is not None:
+                project.status = body.status
+            db.add(project)
+            db.commit()
+            db.refresh(project)
+        # Archiving the ACTIVE project deactivates it (new work shouldn't tag
+        # into something the user closed out).
+        if project.status == "archived" and (
+            getattr(platform.config, "active_project_id", None) == project_id
+        ):
+            platform.config.active_project_id = None
+            _persist_config(["active_project_id"])
+        return project.model_dump()
+
+    @app.post("/projects/{project_id}/activate")
+    def activate_project(project_id: str) -> dict[str, Any]:
+        from ..core.models import Project
+
+        with session_scope(platform.engine) as db:
+            project = db.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="no such project")
+        if project.status != "active":
+            raise HTTPException(status_code=400, detail="unarchive the project first")
+        platform.config.active_project_id = project_id
+        _persist_config(["active_project_id"])
+        return {"active_project_id": project_id, "name": project.name}
+
+    @app.post("/projects/deactivate")
+    def deactivate_project() -> dict[str, Any]:
+        platform.config.active_project_id = None
+        _persist_config(["active_project_id"])
+        return {"active_project_id": None}
+
     @app.post("/sessions")
     async def create_session(body: SessionCreate) -> dict[str, Any]:
         try:
@@ -852,6 +1009,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 body.provider,
                 model=body.model,
                 self_dev=body.self_dev,
+                project_id=body.project_id or None,
             )
         except (PermissionError, RuntimeError) as exc:  # self-dev gating
             raise HTTPException(status_code=400, detail=str(exc))
@@ -2582,6 +2740,18 @@ def create_app(project_root: str | None = None) -> FastAPI:
                         pass
         return {"name": name, "removed": removed or cfg is not None}
 
+    @app.post("/comm/channels/{name}/test")
+    def test_comm_channel(name: str) -> dict[str, Any]:
+        """Send a REAL test message through one channel and report honestly —
+        so 'configured' provably means 'working' before the user relies on it."""
+        if platform.notifier.get(name) is None:
+            raise HTTPException(status_code=404, detail=f"no channel named '{name}'")
+        results = platform.notifier.notify(
+            "✅ Iron Jarvis test — this channel is wired up and working.", [name]
+        )
+        r = results.get(name) or {"ok": False, "detail": "channel produced no result"}
+        return {"name": name, **r}
+
     @app.post("/comm/notify")
     def comm_notify(body: NotifyBody) -> dict[str, Any]:
         return platform.notifier.notify(body.message, body.channels)
@@ -2784,6 +2954,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
             models.append(
                 {"provider": "custom", "model": cfg.custom_model or "default"}
             )
+        # Honesty flag: which entries the user can ACTUALLY run right now
+        # (provider connected/configured). Pickers show available ones first
+        # and grey/hide the rest — no more dead options that silently fail.
+        for m in models:
+            try:
+                m["available"] = bool(platform.providers.available(m["provider"]))
+            except Exception:  # noqa: BLE001
+                m["available"] = False
         return {"models": models}
 
     @app.get("/agents")
@@ -2887,15 +3065,24 @@ def create_app(project_root: str | None = None) -> FastAPI:
         session = await orchestrator.create_session(
             body.task, definition.type, provider=provider
         )
-        run = await AgentRuntime(platform).run(session, definition)
-        session.status = (
-            SessionStatus.COMPLETED
-            if run.state is AgentState.COMPLETED
-            else SessionStatus.FAILED
-        )
-        session.summary = run.result
-        session.finished_at = utcnow()
-        orchestrator._save(session)
+
+        async def _run_spawned() -> None:
+            run = await AgentRuntime(platform).run(session, definition)
+            session.status = (
+                SessionStatus.COMPLETED
+                if run.state is AgentState.COMPLETED
+                else SessionStatus.FAILED
+            )
+            session.summary = run.result
+            session.finished_at = utcnow()
+            orchestrator._save(session)
+
+        if body.wait:
+            await _run_spawned()
+        else:
+            # Non-blocking spawn: the UI jumps straight to the live session view
+            # (parity with POST /sessions wait:false).
+            _spawn_bg(session.id, _run_spawned())
         return _session_view(session)
 
     @app.websocket("/events")

@@ -156,6 +156,9 @@ class Config(BaseModel):
     # Extra directories to recursively scan for <..>/SKILL.md, on top of the
     # built-in Claude (~/.claude/skills, plugins) + Codex (~/.codex/skills) roots.
     extra_skill_paths: list[str] = Field(default_factory=list)
+    # The ACTIVE project (context spine): new sessions/chats default into it,
+    # and its brief + recent activity inject into tagged agent calls.
+    active_project_id: str | None = None
     comm: dict[str, Any] = Field(default_factory=dict)  # communication channels
     search_roots: list[str] = Field(default_factory=list)  # extra file_search roots
     obsidian_vault: str | None = None  # long-term memory vault path

@@ -219,7 +219,8 @@ export default function TerminalsPage() {
         setFocusedId(alive[0]?.id ?? null);
         setShells(sh.shells);
         setShell(sh.shells[0]?.name ?? "");
-        setModels(mods.models);
+        // Only offer models the user can ACTUALLY run (provider connected).
+        setModels(mods.models.filter((m) => m.available !== false));
         setAiClis(clis.clis);
         setSkills(sks.skills);
         setOffline(false);

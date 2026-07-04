@@ -44,6 +44,14 @@ interface ChannelResult {
   [k: string]: unknown;
 }
 
+/** POST /comm/channels/{name}/test — sends a REAL message through the channel. */
+interface ChannelTestResult {
+  name: string;
+  ok: boolean;
+  detail?: string;
+  [k: string]: unknown;
+}
+
 /** Built-in channels have no config; deleting them is a server-side no-op. */
 const BUILTIN = new Set(["mock", "console"]);
 
@@ -88,6 +96,35 @@ export default function ChannelsPage() {
 
   /* --- Delete channel ------------------------------------------------------ */
   const [listError, setListError] = useState<string | null>(null);
+
+  /* --- Per-channel test (real delivery) ------------------------------------ */
+  const [testBusy, setTestBusy] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{
+    name: string;
+    ok: boolean;
+    detail?: string;
+  } | null>(null);
+
+  async function testChannel(name: string) {
+    setTestBusy(name);
+    setTestResult(null);
+    setListError(null);
+    try {
+      const res = await post<ChannelTestResult>(
+        `/comm/channels/${encodeURIComponent(name)}/test`,
+      );
+      setTestResult({ name, ok: res.ok, detail: res.detail });
+    } catch (err) {
+      // Honest failure: surface the daemon's detail instead of pretending.
+      setTestResult({
+        name,
+        ok: false,
+        detail: err instanceof ApiError ? err.message : String(err),
+      });
+    } finally {
+      setTestBusy(null);
+    }
+  }
 
   const selectedType = channelTypes.find((t) => t.type === addType);
 
@@ -295,14 +332,45 @@ export default function ChannelsPage() {
                       {c.type && <Badge value={c.type} tone="cyan" />}
                     </div>
                     {!BUILTIN.has(c.name) && (
-                      <ConfirmButton
-                        onConfirm={() => deleteChannel(c.name)}
-                        title={`Delete channel ${c.name}`}
-                      />
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => testChannel(c.name)}
+                          disabled={testBusy !== null}
+                          title={`Send a real test message through ${c.name}`}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
+                        >
+                          {testBusy === c.name ? (
+                            <LoaderInline label="Testing…" />
+                          ) : (
+                            <>
+                              <Send size={13} /> Test
+                            </>
+                          )}
+                        </button>
+                        <ConfirmButton
+                          onConfirm={() => deleteChannel(c.name)}
+                          title={`Delete channel ${c.name}`}
+                        />
+                      </div>
                     )}
                   </li>
                 ))}
               </ul>
+            )}
+            {testResult && (
+              <div className="mt-3">
+                {testResult.ok ? (
+                  <SuccessNote>
+                    Test message delivered — check {testResult.name}.
+                  </SuccessNote>
+                ) : (
+                  <ErrorNote>
+                    Test to {testResult.name} failed
+                    {testResult.detail ? ` — ${testResult.detail}` : "."}
+                  </ErrorNote>
+                )}
+              </div>
             )}
             {listError && (
               <div className="mt-3">

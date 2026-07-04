@@ -128,6 +128,7 @@ export default function AgentsPage() {
     try {
       const session = await post<SessionView>(`/agents/${encodeURIComponent(agent)}/spawn`, {
         task: task.trim(),
+        wait: false, // non-blocking — the result card links to the LIVE session
       });
       setSpawned(session);
       setTask("");
