@@ -1766,6 +1766,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     # --- Computer use (opt-in; gated by allowlists + human approval) ------
 
+    @app.get("/computeruse/screen")
+    def computeruse_screen() -> dict[str, Any]:
+        """The LIVE VIEW: the most recent browser screenshot (b64 + url + time),
+        refreshed after every page-changing action — lets the dashboard show
+        what the agent's browser sees in near-real-time."""
+        screen = getattr(platform.computeruse, "last_screen", None)
+        return {"screen": screen, "enabled": platform.computeruse.policy.enabled}
+
     def _cu_status() -> dict[str, Any]:
         p = platform.computeruse.policy
         return {

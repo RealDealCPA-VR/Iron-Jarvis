@@ -48,4 +48,7 @@ class ApprovalRequest(SQLModel, table=True):
     action_json: str = "{}"
     reason: str = ""
     status: str = "pending"  # pending|approved|denied|consumed
+    #: What the page looked like when approval was requested (PNG base64) — the
+    #: dashboard shows the human the ACTUAL screen they are approving.
+    screenshot_b64: str = ""
     created_at: datetime = Field(default_factory=utcnow)

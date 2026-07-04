@@ -25,14 +25,18 @@ class ApprovalQueue:
         self.engine = engine
 
     def create_request(
-        self, run_id: str, action: Action, reason: str
+        self, run_id: str, action: Action, reason: str, *, screenshot_b64: str = ""
     ) -> ApprovalRequest:
-        """Create a *pending* approval request for ``action`` and persist it."""
+        """Create a *pending* approval request for ``action`` and persist it.
+
+        ``screenshot_b64``: what the page looked like at request time, so the
+        human approves with eyes on the actual screen."""
         req = ApprovalRequest(
             run_id=run_id,
             action_json=json.dumps(action.to_dict(), default=str),
             reason=reason,
             status="pending",
+            screenshot_b64=screenshot_b64,
         )
         with session_scope(self.engine) as db:
             db.add(req)

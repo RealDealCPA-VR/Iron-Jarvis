@@ -283,6 +283,9 @@ def build_platform(
         cu_browser,
         ApprovalQueue(engine),
         trace=TraceRecorder(artifacts=artifacts),
+        # Vision for `web_look`: screenshots go to whichever vision-capable
+        # model is connected, via the router (lazy so tests can swap it).
+        router_resolver=lambda: router,
     )
     for tool in computeruse_tools(computeruse):
         registry.register(tool)

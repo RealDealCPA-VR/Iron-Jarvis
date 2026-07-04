@@ -21,6 +21,7 @@ import {
   UserCheck,
   Inbox,
   RefreshCw,
+  MonitorPlay,
   type LucideIcon,
 } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
@@ -33,9 +34,32 @@ import {
   ErrorNote,
   Empty,
   LoaderInline,
+  Dot,
 } from "@/components/ui";
+import { timeAgo } from "@/lib/format";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+
+/* -------------------------------------------------------------------------- */
+/*  Local contracts (daemon additions not yet in lib/types)                    */
+/* -------------------------------------------------------------------------- */
+
+/** Approvals now carry the page screenshot taken when approval was requested
+ *  ("" when absent). Optional so older daemons without the field still type. */
+type ApprovalWithScreenshot = Approval & { screenshot_b64?: string };
+
+/** GET /computeruse/screen — the browser's most recent screenshot, refreshed
+ *  after every page-changing agent action. */
+interface LiveScreen {
+  image_b64: string;
+  url: string;
+  at: string;
+}
+
+interface LiveScreenState {
+  screen: LiveScreen | null;
+  enabled: boolean;
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Action vocabulary (mirrors the daemon's ActionKind / READ_ONLY_KINDS)      */
@@ -120,12 +144,14 @@ function ApprovalCard({
   approval,
   onResolved,
 }: {
-  approval: Approval;
+  approval: ApprovalWithScreenshot;
   onResolved: () => void;
 }) {
   const [busy, setBusy] = useState<"approve" | "deny" | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
   const { kind, detail } = prettyAction(approval.action_json);
+  const screenshot = approval.screenshot_b64 ?? "";
 
   async function resolve(verdict: "approve" | "deny") {
     setBusy(verdict);
@@ -157,6 +183,30 @@ function ApprovalCard({
           </div>
         </div>
       </div>
+
+      {screenshot !== "" && (
+        <figure className="space-y-1.5">
+          <button
+            type="button"
+            onClick={() => setExpanded((x) => !x)}
+            title={expanded ? "Click to shrink" : "Click to expand"}
+            className="block w-full overflow-hidden rounded-lg border border-white/[0.08] bg-black/30 transition-colors hover:border-accent/30"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={`data:image/png;base64,${screenshot}`}
+              alt="Screenshot of the page when this approval was requested"
+              className={`w-full object-contain ${expanded ? "" : "max-h-56"}`}
+            />
+          </button>
+          <figcaption className="flex items-center justify-between text-[11px] text-zinc-500">
+            <span>The page at request time</span>
+            <span className="text-zinc-600">
+              {expanded ? "click to shrink" : "click to expand"}
+            </span>
+          </figcaption>
+        </figure>
+      )}
 
       <pre className="overflow-x-auto rounded-lg border border-white/[0.06] bg-black/30 px-3 py-2 font-mono text-[11px] leading-relaxed text-zinc-300">
         {detail}
@@ -203,7 +253,7 @@ const BEST_PRACTICES: { icon: LucideIcon; text: string }[] = [
 
 export default function ComputerUsePage() {
   const { data, error, loading, reload } = useApi<ComputerUseStatus>("/computeruse");
-  const approvalsState = usePolledApi<{ approvals: Approval[] }>(
+  const approvalsState = usePolledApi<{ approvals: ApprovalWithScreenshot[] }>(
     "/computeruse/approvals",
     4000,
   );
@@ -225,6 +275,16 @@ export default function ComputerUsePage() {
   }, [data]);
 
   const enabled = data?.enabled ?? false;
+
+  // Live view: poll the latest browser screenshot every 2s, but ONLY while
+  // computer use is enabled — a null path disables both the fetch and the
+  // interval inside usePolledApi, so a disabled install makes zero requests.
+  const screenState = usePolledApi<LiveScreenState>(
+    enabled ? "/computeruse/screen" : null,
+    2000,
+  );
+  const screen = enabled ? (screenState.data?.screen ?? null) : null;
+
   const dirty = useMemo(
     () =>
       !!data &&
@@ -270,7 +330,7 @@ export default function ComputerUsePage() {
       <Reveal>
         <PageHeader
           title="Computer Use"
-          subtitle="Let agents drive a real browser to finish tasks — gated behind allowlists and your explicit approval."
+          subtitle="Let agents drive a real browser to finish tasks — gated behind allowlists and your explicit approval, with a live view so you can watch the agent work."
           actions={
             data ? (
               <span
@@ -322,6 +382,48 @@ export default function ComputerUsePage() {
           </div>
         </div>
       </Reveal>
+
+      {/* Live view — only exists while computer use is enabled */}
+      {enabled && (
+        <Reveal>
+          <Card
+            title="Live view — what the agent sees"
+            icon={<MonitorPlay size={15} />}
+            right={
+              <span className="flex items-center gap-2 text-[11px] text-zinc-500">
+                <RefreshCw size={12} className="text-accent-soft/70" /> refreshes every 2s
+              </span>
+            }
+          >
+            {screen ? (
+              <div className="space-y-2.5">
+                <div className="overflow-hidden rounded-xl border border-accent/30 shadow-[0_0_28px_-6px_rgba(34,211,238,0.35)]">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`data:image/png;base64,${screen.image_b64}`}
+                    alt={`Live browser view — ${screen.url}`}
+                    className="w-full"
+                  />
+                </div>
+                <div className="flex items-center gap-2.5 text-[11px] text-zinc-500">
+                  <Dot on />
+                  <span
+                    className="min-w-0 flex-1 truncate font-mono text-xs text-zinc-300"
+                    title={screen.url}
+                  >
+                    {screen.url}
+                  </span>
+                  <span className="shrink-0">updated {timeAgo(screen.at)}</span>
+                </div>
+              </div>
+            ) : (
+              <Empty icon={<MonitorPlay size={28} />}>
+                No activity yet — the view appears the moment an agent touches the browser.
+              </Empty>
+            )}
+          </Card>
+        </Reveal>
+      )}
 
       {/* Status + enable toggle */}
       <Reveal>

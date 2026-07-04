@@ -338,26 +338,50 @@ def _latin1(text: str) -> str:
     return text.encode("latin-1", "replace").decode("latin-1")
 
 
+#: Bundled DejaVu TTFs (Bitstream Vera license) for FULL-UNICODE PDF output —
+#: accents, Cyrillic, Greek, symbols. When present, PDFs keep real unicode;
+#: when missing (stripped install), we fall back to the core Latin-1 fonts with
+#: the historical 'replace' sanitiser so nothing ever crashes.
+_FONT_DIR = Path(__file__).resolve().parent / "fonts"
+
+
+def _pdf_fonts(pdf: Any) -> tuple[str, str, Any]:
+    """Register unicode fonts on ``pdf``; return (sans, mono, sanitize)."""
+    try:
+        sans = _FONT_DIR / "DejaVuSans.ttf"
+        bold = _FONT_DIR / "DejaVuSans-Bold.ttf"
+        mono = _FONT_DIR / "DejaVuSansMono.ttf"
+        if sans.is_file() and bold.is_file() and mono.is_file():
+            pdf.add_font("DJSans", "", str(sans))
+            pdf.add_font("DJSans", "B", str(bold))
+            pdf.add_font("DJMono", "", str(mono))
+            return "DJSans", "DJMono", lambda s: s  # true unicode — no mangling
+    except Exception:  # noqa: BLE001 — font trouble must never break a write
+        pass
+    return "Helvetica", "Courier", _latin1
+
+
 def _write_pdf(p: Path, content: Any) -> None:
     from fpdf import FPDF
 
     pdf = FPDF()
+    sans, mono, clean = _pdf_fonts(pdf)
     pdf.add_page()
     if isinstance(content, str):
-        _pdf_render(pdf, parse_markdown(content))
+        _pdf_render(pdf, parse_markdown(content), sans, mono, clean)
     else:
         text = _as_text(content)
-        safe = _latin1(text)
+        safe = clean(text)
         if not safe.strip():
             safe = " "
-        pdf.set_font("Helvetica", size=12)
+        pdf.set_font(sans, size=12)
         pdf.multi_cell(0, 8, safe)
     pdf.output(str(p))
 
 
-def _pdf_render(pdf: Any, blocks: list[Block]) -> None:
+def _pdf_render(pdf: Any, blocks: list[Block], sans: str, mono: str, clean: Any) -> None:
     if not blocks:  # keep the empty-content page valid, as before
-        pdf.set_font("Helvetica", size=12)
+        pdf.set_font(sans, size=12)
         pdf.multi_cell(0, 8, " ")
         return
     number = 0  # running counter for consecutive numbered items
@@ -366,44 +390,44 @@ def _pdf_render(pdf: Any, blocks: list[Block]) -> None:
             number = 0
         if b.kind == "heading":
             size = _PDF_HEADING_SIZES.get(b.level, 12)
-            pdf.set_font("Helvetica", "B", size)
-            pdf.multi_cell(0, size * 0.5 + 2, _latin1(b.text) or " ")
+            pdf.set_font(sans, "B", size)
+            pdf.multi_cell(0, size * 0.5 + 2, clean(b.text) or " ")
             pdf.ln(2)
         elif b.kind == "bullet":
-            pdf.set_font("Helvetica", size=11)
+            pdf.set_font(sans, size=11)
             pdf.set_x(pdf.l_margin + 5 * (b.level + 1))
-            pdf.multi_cell(0, 6, "- " + _latin1(b.text))
+            pdf.multi_cell(0, 6, "- " + clean(b.text))
         elif b.kind == "numbered":
             number += 1
-            pdf.set_font("Helvetica", size=11)
+            pdf.set_font(sans, size=11)
             pdf.set_x(pdf.l_margin + 5 * (b.level + 1))
-            pdf.multi_cell(0, 6, f"{number}. " + _latin1(b.text))
+            pdf.multi_cell(0, 6, f"{number}. " + clean(b.text))
         elif b.kind == "code":
-            pdf.set_font("Courier", size=10)
+            pdf.set_font(mono, size=10)
             pdf.set_fill_color(235, 235, 235)
             for line in b.text.split("\n"):
-                pdf.multi_cell(0, 5, _latin1(line) or " ", fill=True)
+                pdf.multi_cell(0, 5, clean(line) or " ", fill=True)
             pdf.ln(2)
         elif b.kind == "table":
-            _pdf_table(pdf, b.rows)
+            _pdf_table(pdf, b.rows, sans, clean)
         elif b.kind == "hr":
             y = pdf.get_y() + 2
             pdf.line(pdf.l_margin, y, pdf.w - pdf.r_margin, y)
             pdf.set_y(y + 3)
         else:  # paragraph
-            pdf.set_font("Helvetica", size=11)
-            pdf.multi_cell(0, 6, _latin1(b.text) or " ")
+            pdf.set_font(sans, size=11)
+            pdf.multi_cell(0, 6, clean(b.text) or " ")
             pdf.ln(1)
 
 
-def _pdf_table(pdf: Any, rows: list[list[str]]) -> None:
+def _pdf_table(pdf: Any, rows: list[list[str]], sans: str, clean: Any) -> None:
     cols = max(len(r) for r in rows)
     width = (pdf.w - pdf.l_margin - pdf.r_margin) / max(cols, 1)
     for ri, row in enumerate(rows):
-        pdf.set_font("Helvetica", "B" if ri == 0 else "", 10)
+        pdf.set_font(sans, "B" if ri == 0 else "", 10)
         for ci in range(cols):
             cell = row[ci] if ci < len(row) else ""
-            pdf.cell(width, 7, _latin1(cell), border=1)
+            pdf.cell(width, 7, clean(cell), border=1)
         pdf.ln(7)
     pdf.ln(2)
 

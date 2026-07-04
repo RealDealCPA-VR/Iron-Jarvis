@@ -312,3 +312,27 @@ def test_plain_text_compat_every_format(tmp_path):
         write_document(p, "just some plain text\nsecond line")  # must not raise
         assert p.is_file() and p.stat().st_size > 0
         assert "plain" in extract_text(p)
+
+
+def test_pdf_full_unicode_roundtrip(tmp_path):
+    """Bundled DejaVu fonts => PDFs keep real unicode (no more latin-1 mangling)."""
+    from pypdf import PdfReader
+
+    from iron_jarvis.documents.writers import write_document
+
+    md = "# Résumé — München\n\nCafé naïve • Ω ≈ 3.14 → done\n\n- Ærøskøbing\n"
+    p = write_document(tmp_path / "u.pdf", md)
+    text = "".join(page.extract_text() or "" for page in PdfReader(str(p)).pages)
+    for needle in ("Résumé", "München", "naïve", "Ærøskøbing"):
+        assert needle in text, f"missing {needle!r} in extracted PDF text"
+
+
+def test_pdf_falls_back_when_fonts_missing(tmp_path, monkeypatch):
+    """A stripped install (no TTFs) must still write valid PDFs via Latin-1."""
+    import iron_jarvis.documents.writers as w
+    from pypdf import PdfReader
+
+    monkeypatch.setattr(w, "_FONT_DIR", tmp_path / "nope")
+    p = w.write_document(tmp_path / "f.pdf", "# Hello\n\nplain fallback")
+    text = "".join(page.extract_text() or "" for page in PdfReader(str(p)).pages)
+    assert "Hello" in text
