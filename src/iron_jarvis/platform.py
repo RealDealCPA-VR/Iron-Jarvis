@@ -7,6 +7,7 @@ registry, and the permission engine.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from dataclasses import dataclass
@@ -286,6 +287,29 @@ def build_platform(
 
     # Phase 8a / 9: artifact store, evaluation + observability.
     artifacts = ArtifactStore(config.artifacts_dir, engine)
+
+    def _announce_artifact(artifact, session_id=None):  # noqa: ANN001
+        """Publish ``artifact.generated`` for every save — the dashboard's event
+        stream has listened for this type since day one, but nothing emitted it.
+        Saves happen on the loop, in to_thread workers, and in the CLI (no loop);
+        mirror the scheduler's pattern for each case."""
+        coro = event_bus.publish(
+            "artifact.generated",
+            {
+                "name": artifact.name,
+                "version": artifact.version,
+                "kind": artifact.kind,
+                "path": str(artifact.path),
+                "size": artifact.size,
+            },
+            session_id=session_id,
+        )
+        try:
+            asyncio.get_running_loop().create_task(coro)
+        except RuntimeError:  # off-loop (worker thread / CLI): run to completion
+            asyncio.run(coro)
+
+    artifacts.on_save = _announce_artifact
     evaluator = Evaluator(engine)
     observability = Observability(engine)
 

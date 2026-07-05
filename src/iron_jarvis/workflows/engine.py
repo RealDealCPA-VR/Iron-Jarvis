@@ -132,6 +132,8 @@ class WorkflowEngine:
         record = WorkflowRunRecord(
             workflow_name=workflow.name,
             status=status,
+            # Context spine: stamp the project this run happened in.
+            project_id=getattr(self.platform.config, "active_project_id", None),
             session_ids_json=dumps(session_ids),
             outputs_json=dumps(outputs),
             finished_at=utcnow(),

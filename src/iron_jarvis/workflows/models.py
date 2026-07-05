@@ -23,6 +23,9 @@ class WorkflowRunRecord(SQLModel, table=True):
     id: str = Field(default_factory=lambda: new_id("wfrun"), primary_key=True)
     workflow_name: str = Field(default="", index=True)
     status: str = "active"
+    #: Context spine: the project this run happened in (the active project at
+    #: run time). Nullable; old DBs gain the column via _reconcile_additive_columns.
+    project_id: str | None = Field(default=None, index=True)
     session_ids_json: str = "[]"
     outputs_json: str = "{}"
     started_at: datetime = Field(default_factory=utcnow)

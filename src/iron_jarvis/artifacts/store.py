@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from sqlalchemy import Engine
 
@@ -53,6 +54,10 @@ class ArtifactStore:
         self.root = Path(root)
         self.engine = engine
         self.root.mkdir(parents=True, exist_ok=True)
+        #: Optional observer called after every successful ``save`` with
+        #: ``(artifact, session_id)`` — the platform wires this to publish the
+        #: ``artifact.generated`` event. A failing observer never breaks a save.
+        self.on_save: "Callable[[Artifact, str | None], None] | None" = None
 
     def _dir(self, name: str) -> Path:
         return self.root / _safe_name(name)
@@ -118,6 +123,12 @@ class ArtifactStore:
                     )
                 )
                 db.commit()
+
+        if self.on_save is not None:
+            try:
+                self.on_save(artifact, session_id)
+            except Exception:  # noqa: BLE001 - observers never break a save
+                pass
 
         return artifact
 

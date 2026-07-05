@@ -37,7 +37,8 @@ class LessonRecord(SQLModel, table=True):
     id: str = Field(default_factory=lambda: new_id("lesson"), primary_key=True)
     text: str = ""
     scope: str = "user"  # user | project
-    source: str = "reflection"  # feedback | reflection | preference
+    # feedback | reflection | preference | distilled (model-compacted reflections)
+    source: str = "reflection"
     weight: int = 1  # static base priority (preference/feedback = high)
     # Outcome-driven adjustment maintained by the ImprovementEngine: lessons whose
     # sessions beat the baseline gain weight, those that trail it decay. The
