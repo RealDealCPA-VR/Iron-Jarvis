@@ -8,6 +8,8 @@ so the returned record stays usable after the session closes).
 
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import Engine
 from sqlmodel import select
 
@@ -45,6 +47,64 @@ class TemplateStore:
             db.commit()
             db.refresh(row)  # un-expire attrs so the detached record stays usable
             return row
+
+    def suggest_from_history(
+        self, *, min_count: int = 3, limit: int = 5
+    ) -> list[dict]:
+        """WATCH-ME-WORK mining: find task patterns the user keeps repeating
+        in their session history and suggest each as a one-click template.
+
+        Groups session tasks by token-set similarity (Jaccard ≥ 0.55), keeps
+        groups with ``min_count``+ occurrences, and drops anything already
+        covered by an existing template. Suggest-only — nothing is created
+        until the user clicks save."""
+        from .core.models import Session as SessionModel
+
+        def toks(text: str) -> frozenset[str]:
+            words = re.findall(r"[a-z]{3,}", (text or "").lower())
+            stop = {"the", "and", "for", "with", "that", "this", "from", "into",
+                    "please", "then", "them", "your", "file", "files"}
+            return frozenset(w for w in words if w not in stop)
+
+        def sim(a: frozenset, b: frozenset) -> float:
+            if not a or not b:
+                return 0.0
+            return len(a & b) / len(a | b)
+
+        with session_scope(self.engine) as db:
+            tasks = [
+                s.task for s in db.exec(select(SessionModel))
+                if s.task and "[Continuing an earlier session" not in s.task
+            ]
+        existing = [toks(t.task) for t in self.list()]
+        groups: list[dict] = []  # {sig, example, count}
+        for task in tasks:
+            sig = toks(task)
+            if len(sig) < 3:
+                continue
+            for g in groups:
+                if sim(sig, g["sig"]) >= 0.55:
+                    g["count"] += 1
+                    if len(task) < len(g["example"]):
+                        g["example"] = task  # keep the crispest phrasing
+                    break
+            else:
+                groups.append({"sig": sig, "example": task, "count": 1})
+        out = []
+        for g in sorted(groups, key=lambda x: -x["count"]):
+            if g["count"] < min_count:
+                continue
+            if any(sim(g["sig"], e) >= 0.5 for e in existing):
+                continue  # already a template
+            words = [w for w in re.findall(r"[A-Za-z]{3,}", g["example"])][:4]
+            out.append({
+                "name": " ".join(words).title() or "Repeated task",
+                "task": g["example"][:500],
+                "count": g["count"],
+            })
+            if len(out) >= limit:
+                break
+        return out
 
     def seed_starters(self) -> int:
         """First-run only: when the store is EMPTY, add a few self-explanatory

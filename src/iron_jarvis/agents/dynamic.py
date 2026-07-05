@@ -43,6 +43,10 @@ KNOWN_MODELS: list[dict] = [
     # (gpt-5-codex now 400s); gpt-5.5 verified live 2026-07, and the adapter
     # self-heals via a fallback ladder if it's retired too.
     {"provider": "openai", "model": "gpt-5.5"},
+    # Subscription CLIs: FLAT-RATE inference through a logged-in local CLI
+    # (claude -p / codex exec) — zero API keys; light up when the CLI is found.
+    {"provider": "claude-cli", "model": "subscription"},
+    {"provider": "codex-cli", "model": "subscription"},
     {"provider": "google", "model": "gemini-2.0-flash"},
     {"provider": "google", "model": "gemini-1.5-pro"},
     # xAI (Grok) — current generation: the flagship, the fast agentic model,

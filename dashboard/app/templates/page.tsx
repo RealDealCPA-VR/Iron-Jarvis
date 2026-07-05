@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { BookMarked, Plus, Play, Bot, Cpu, Info } from "lucide-react";
-import { post, del, ApiError } from "@/lib/api";
+import { BookMarked, Plus, Play, Bot, Cpu, Info, History } from "lucide-react";
+import { get, post, del, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import type { AgentsResponse, ModelOption } from "@/lib/types";
 import {
@@ -32,6 +32,13 @@ interface Template {
   provider?: string | null;
   model?: string | null;
   created_at: string;
+}
+
+/** A repeated task mined from history (GET /templates/suggestions). */
+interface TemplateSuggestion {
+  name: string;
+  task: string;
+  count: number;
 }
 
 /** A stable key for a {provider, model} pair used as the <select> value. */
@@ -71,6 +78,46 @@ export default function TemplatesPage() {
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
+
+  /* ---- Suggested templates (fetched once; card hidden when empty) -------- */
+  const [suggestions, setSuggestions] = useState<TemplateSuggestion[]>([]);
+  const [sugBusy, setSugBusy] = useState<string | null>(null);
+  const [sugOk, setSugOk] = useState<string | null>(null);
+  const [sugError, setSugError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    get<{ suggestions: TemplateSuggestion[] }>("/templates/suggestions")
+      .then((d) => {
+        if (!cancelled) setSuggestions(d.suggestions ?? []);
+      })
+      .catch(() => {
+        /* best-effort — no suggestions card when unavailable */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function saveSuggestion(s: TemplateSuggestion) {
+    setSugBusy(s.name);
+    setSugOk(null);
+    setSugError(null);
+    try {
+      await post<unknown>("/templates", {
+        name: s.name,
+        task: s.task,
+        description: `Suggested — you've run this ${s.count} times`,
+      });
+      setSuggestions((prev) => prev.filter((x) => x.name !== s.name));
+      setSugOk(`Template "${s.name}" saved.`);
+      reload();
+    } catch (err) {
+      setSugError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setSugBusy(null);
+    }
+  }
 
   // The agent_type to submit: explicit choice, else first known type.
   const effectiveAgent = agentType || agentTypes[0] || "general";
@@ -258,7 +305,53 @@ export default function TemplatesPage() {
             </Card>
           </div>
 
-          <div className="lg:col-span-2">
+          <div className="space-y-6 lg:col-span-2">
+            {suggestions.length > 0 && (
+              <Card
+                title="Suggested from your history"
+                icon={<History size={15} />}
+              >
+                <div className="space-y-2.5">
+                  {suggestions.map((s) => (
+                    <div
+                      key={s.name}
+                      className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-3 transition-colors hover:border-white/10 hover:bg-white/[0.03]"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium text-zinc-100">
+                              {s.name}
+                            </span>
+                            <Badge value={`seen ${s.count}×`} tone="cyan" />
+                          </div>
+                          <p className="mt-1.5 line-clamp-2 text-sm text-zinc-400">
+                            {s.task}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void saveSuggestion(s)}
+                          disabled={sugBusy !== null}
+                          title="Save this repeated task as a one-click template"
+                          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
+                        >
+                          {sugBusy === s.name ? (
+                            <LoaderInline label="Saving…" />
+                          ) : (
+                            <>
+                              <Plus size={13} /> Save as template
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
+            {sugOk && <SuccessNote>{sugOk}</SuccessNote>}
+            {sugError && <ErrorNote>{sugError}</ErrorNote>}
             <Card
               title={`Saved templates${templates.length ? ` · ${templates.length}` : ""}`}
               icon={<BookMarked size={15} />}

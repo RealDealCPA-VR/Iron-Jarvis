@@ -139,6 +139,24 @@ class DynamicToolRecord(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class LiveDocRecord(SQLModel, table=True):
+    """A LIVING document: a prompt + format + optional schedule. Each
+    regeneration rewrites the same output file, so reports stay fresh
+    (weekly client status PDF, daily briefing, …) instead of going stale."""
+
+    id: str = Field(default_factory=lambda: new_id("livedoc"), primary_key=True)
+    name: str = ""
+    prompt: str = ""  # what the document should contain, in plain language
+    format: str = "md"  # md | html | docx | pdf
+    path: str = ""  # the stable output file (rewritten on each regeneration)
+    schedule_name: str = ""  # the scheduler entry driving auto-refresh ("" = manual)
+    provider: str = ""
+    model: str = ""
+    last_error: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime | None = None
+
+
 class ChatThreadRecord(SQLModel, table=True):
     """A saved chat conversation — frontier parity: threads survive navigation
     and restarts, listed in a sidebar, resumable any time."""

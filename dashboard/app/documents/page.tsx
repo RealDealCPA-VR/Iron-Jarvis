@@ -16,9 +16,13 @@ import {
   Archive,
   Brain,
   Lightbulb,
+  RefreshCw,
+  CalendarClock,
   type LucideIcon,
 } from "lucide-react";
-import { get, post, ApiError } from "@/lib/api";
+import { get, post, del, ApiError } from "@/lib/api";
+import { useApi } from "@/lib/useApi";
+import { timeAgo } from "@/lib/format";
 import type { DocumentRead, DocumentWriteResult } from "@/lib/types";
 import {
   Card,
@@ -28,6 +32,8 @@ import {
   ErrorNote,
   SuccessNote,
   LoaderInline,
+  SkeletonRows,
+  ConfirmButton,
   type Tone,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
@@ -97,6 +103,68 @@ interface EnhanceResult {
   filename: string;
   content: string;
   notes: string;
+}
+
+/* ---- Living documents (auto-regenerating reports) ------------------------ */
+
+type LiveFormat = "md" | "html" | "docx" | "pdf";
+type LiveRefresh = "manual" | "hourly" | "daily" | "weekly";
+
+/** One record from GET /documents/live. */
+interface LivingDoc {
+  id: string;
+  name: string;
+  prompt: string;
+  format: string;
+  path: string;
+  schedule_name: string | null;
+  last_error: string | null;
+  updated_at: string;
+  created_at: string;
+}
+
+/** POST /documents/live body — cron and interval_seconds are alternatives. */
+interface LiveCreateBody {
+  name: string;
+  prompt: string;
+  format: LiveFormat;
+  cron?: string;
+  interval_seconds?: number;
+}
+
+/** POST /documents/live and …/regenerate both answer with the file path. */
+interface LivePathResult {
+  path: string;
+}
+
+const LIVE_FORMATS: { value: LiveFormat; label: string }[] = [
+  { value: "md", label: "Markdown (.md)" },
+  { value: "html", label: "HTML (.html)" },
+  { value: "docx", label: "Word (.docx)" },
+  { value: "pdf", label: "PDF (.pdf)" },
+];
+
+const LIVE_REFRESH: { value: LiveRefresh; label: string }[] = [
+  { value: "manual", label: "Manual only" },
+  { value: "hourly", label: "Hourly" },
+  { value: "daily", label: "Daily 7am" },
+  { value: "weekly", label: "Weekly Mon 7am" },
+];
+
+/** Map the refresh choice onto the create-body schedule fields. */
+function refreshFields(
+  r: LiveRefresh,
+): Pick<LiveCreateBody, "cron" | "interval_seconds"> {
+  switch (r) {
+    case "hourly":
+      return { interval_seconds: 3600 };
+    case "daily":
+      return { cron: "0 7 * * *" };
+    case "weekly":
+      return { cron: "0 7 * * 1" };
+    default:
+      return {};
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -245,6 +313,24 @@ export default function DocumentsPage() {
   const [enhanceError, setEnhanceError] = useState<string | null>(null);
   const [suggestion, setSuggestion] = useState<EnhanceResult | null>(null);
 
+  /* ---- Living documents --------------------------------------------------- */
+  const live = useApi<{ docs: LivingDoc[] }>("/documents/live");
+  const [liveName, setLiveName] = useState("");
+  const [livePrompt, setLivePrompt] = useState("");
+  const [liveFormat, setLiveFormat] = useState<LiveFormat>("md");
+  const [liveRefresh, setLiveRefresh] = useState<LiveRefresh>("manual");
+  const [liveBusy, setLiveBusy] = useState(false);
+  const [liveError, setLiveError] = useState<string | null>(null);
+  const [liveOk, setLiveOk] = useState<string | null>(null);
+  const [liveOffline, setLiveOffline] = useState(false);
+  const [regenId, setRegenId] = useState<string | null>(null);
+  const [liveActionError, setLiveActionError] = useState<string | null>(null);
+
+  const liveDocs = [...(live.data?.docs ?? [])].sort(
+    (a, b) =>
+      new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+  );
+
   const writeType = docTypeFor(name);
   const ReadIcon = (readDoneType ?? docTypeFor(readPath)).Icon;
 
@@ -374,6 +460,65 @@ export default function DocumentsPage() {
     setSuggestion(null);
   }
 
+  /** Create a living document — the daemon generates the first version inline. */
+  async function createLive(e: React.FormEvent) {
+    e.preventDefault();
+    if (!liveName.trim() || !livePrompt.trim()) return;
+    setLiveBusy(true);
+    setLiveError(null);
+    setLiveOk(null);
+    setLiveOffline(false);
+    try {
+      const body: LiveCreateBody = {
+        name: liveName.trim(),
+        prompt: livePrompt.trim(),
+        format: liveFormat,
+        ...refreshFields(liveRefresh),
+      };
+      const res = await post<LivePathResult>("/documents/live", body);
+      setLiveOk(res.path);
+      setLiveName("");
+      setLivePrompt("");
+      setLiveFormat("md");
+      setLiveRefresh("manual");
+      live.reload();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 0) setLiveOffline(true);
+      else setLiveError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setLiveBusy(false);
+    }
+  }
+
+  async function regenerateLive(id: string) {
+    setRegenId(id);
+    setLiveActionError(null);
+    try {
+      await post<LivePathResult>(
+        `/documents/live/${encodeURIComponent(id)}/regenerate`,
+      );
+      live.reload();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 0) setLiveOffline(true);
+      else
+        setLiveActionError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setRegenId(null);
+    }
+  }
+
+  async function removeLive(id: string) {
+    setLiveActionError(null);
+    try {
+      await del<unknown>(`/documents/live/${encodeURIComponent(id)}`);
+      live.reload();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 0) setLiveOffline(true);
+      else
+        setLiveActionError(err instanceof ApiError ? err.message : String(err));
+    }
+  }
+
   return (
     <PageShell>
       <Reveal>
@@ -383,7 +528,10 @@ export default function DocumentsPage() {
         />
       </Reveal>
 
-      {(readOffline || writeOffline) && (
+      {(readOffline ||
+        writeOffline ||
+        liveOffline ||
+        live.error?.status === 0) && (
         <Reveal>
           <OfflineHint />
         </Reveal>
@@ -694,6 +842,185 @@ export default function DocumentsPage() {
             </form>
           </Card>
         </div>
+      </Reveal>
+
+      {/* ---- Living documents ------------------------------------------- */}
+      <Reveal>
+        <Card title="Living documents" icon={<RefreshCw size={15} />}>
+          <div className="space-y-5">
+            <p className="text-sm text-zinc-400">
+              A living document regenerates itself on a schedule — reports that
+              stay fresh instead of going stale.
+            </p>
+
+            <form onSubmit={createLive} className="space-y-3.5">
+              <div className="grid gap-3.5 sm:grid-cols-3">
+                <div>
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    Name
+                  </label>
+                  <input
+                    value={liveName}
+                    onChange={(e) => setLiveName(e.target.value)}
+                    placeholder="Weekly status report"
+                    className="field"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    Format
+                  </label>
+                  <select
+                    aria-label="Format"
+                    value={liveFormat}
+                    onChange={(e) =>
+                      setLiveFormat(e.target.value as LiveFormat)
+                    }
+                    className="field"
+                  >
+                    {LIVE_FORMATS.map((f) => (
+                      <option key={f.value} value={f.value}>
+                        {f.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    <CalendarClock size={12} /> Refresh
+                  </label>
+                  <select
+                    aria-label="Refresh schedule"
+                    value={liveRefresh}
+                    onChange={(e) =>
+                      setLiveRefresh(e.target.value as LiveRefresh)
+                    }
+                    className="field"
+                  >
+                    {LIVE_REFRESH.map((r) => (
+                      <option key={r.value} value={r.value}>
+                        {r.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  Prompt
+                </label>
+                <textarea
+                  value={livePrompt}
+                  onChange={(e) => setLivePrompt(e.target.value)}
+                  rows={3}
+                  placeholder="What should this document always contain?"
+                  className="field resize-y"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={liveBusy || !liveName.trim() || !livePrompt.trim()}
+                className="btn-accent"
+              >
+                {liveBusy ? (
+                  <LoaderInline label="Generating first version… (5-30s)" />
+                ) : (
+                  <>
+                    <RefreshCw size={14} /> Create living document
+                  </>
+                )}
+              </button>
+              {liveOk && (
+                <SuccessNote>
+                  First version generated at{" "}
+                  <span className="font-mono text-emerald-100">{liveOk}</span>.
+                </SuccessNote>
+              )}
+              {liveError && <ErrorNote>{liveError}</ErrorNote>}
+            </form>
+
+            <div className="space-y-2.5">
+              <div className="text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                Your living documents
+                {liveDocs.length ? ` · ${liveDocs.length}` : ""}
+              </div>
+              {liveActionError && <ErrorNote>{liveActionError}</ErrorNote>}
+              {live.loading && !live.data ? (
+                <SkeletonRows rows={3} />
+              ) : liveDocs.length === 0 ? (
+                <Empty icon={<RefreshCw size={22} />}>
+                  No living documents yet. Create one above and it keeps itself
+                  up to date.
+                </Empty>
+              ) : (
+                <div className="space-y-2.5">
+                  {liveDocs.map((d) => (
+                    <div
+                      key={d.id}
+                      className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-3 transition-colors hover:border-white/10 hover:bg-white/[0.03]"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium text-zinc-100">
+                              {d.name}
+                            </span>
+                            <Badge
+                              value={d.format}
+                              tone={docTypeFor(`f.${d.format}`).tone}
+                            />
+                            <span className="inline-flex items-center gap-1 rounded-full border border-white/10 px-2 py-0.5 text-[10px] font-medium text-zinc-400">
+                              <CalendarClock size={10} />{" "}
+                              {d.schedule_name?.trim() || "manual"}
+                            </span>
+                            <span className="text-[11px] text-zinc-600">
+                              updated {timeAgo(d.updated_at)}
+                            </span>
+                          </div>
+                          {d.last_error?.trim() && (
+                            <div className="mt-1 text-[11px] text-rose-300">
+                              {d.last_error}
+                            </div>
+                          )}
+                          <div
+                            className="mt-1.5 truncate font-mono text-[11px] text-zinc-500"
+                            title={d.path}
+                          >
+                            {d.path}
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => void regenerateLive(d.id)}
+                            disabled={regenId !== null}
+                            title="Regenerate this document now (5-30s)"
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
+                          >
+                            {regenId === d.id ? (
+                              <LoaderInline label="Regenerating…" />
+                            ) : (
+                              <>
+                                <RefreshCw size={13} /> Regenerate now
+                              </>
+                            )}
+                          </button>
+                          <ConfirmButton
+                            onConfirm={() => removeLive(d.id)}
+                            label="Delete"
+                            title="Removes from Iron Jarvis only — the file stays on disk"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </Card>
       </Reveal>
 
       <FilePickerModal

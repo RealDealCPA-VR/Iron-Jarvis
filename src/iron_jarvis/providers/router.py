@@ -29,7 +29,13 @@ LocalOracle = Callable[[Optional[str]], "Optional[tuple[str, str]]"]
 _TRANSIENT_MARKERS = ("429", "rate_limit", "rate limit", "overloaded", "529", "503")
 
 #: Failover candidate order when the wanted provider is rate-limited.
-_FAILOVER_ORDER = ("anthropic", "openai", "google", "xai", "openrouter", "ollama", "custom")
+#: SUBSCRIPTION ARBITRAGE: the flat-rate CLI providers (claude-cli/codex-cli —
+#: a logged-in local CLI, $0 marginal cost) are tried before the remaining
+#: METERED APIs, so rate-limit spillover lands on plans you already pay for.
+_FAILOVER_ORDER = (
+    "anthropic", "openai", "claude-cli", "codex-cli",
+    "google", "xai", "openrouter", "grok-cli", "ollama", "custom",
+)
 
 
 def is_transient_error(exc: Exception) -> bool:

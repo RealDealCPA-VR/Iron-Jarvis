@@ -171,6 +171,29 @@ class ProviderManager:
         # without a daemon restart. The adapter import is lazy to avoid pulling
         # the CLI stack into every manager construction.
         self.register("grok-cli", lambda model=None: self._make_grok_cli(model))
+        # Subscription CLIs (§arbitrage): a logged-in `claude` / `codex` binary
+        # is a FLAT-RATE provider — headless print-mode, no API key, the CLI
+        # owns auth + model churn. Text-only (no tool calls) by design.
+        self.register("claude-cli", lambda model=None: self._make_subprocess_cli("claude-cli"))
+        self.register("codex-cli", lambda model=None: self._make_subprocess_cli("codex-cli"))
+
+    def _make_subprocess_cli(self, which: str) -> LLMAdapter:
+        from .adapters.subprocess_cli import make_claude_cli, make_codex_cli
+
+        return make_claude_cli() if which == "claude-cli" else make_codex_cli()
+
+    @staticmethod
+    def _cli_binary_present(binary: str) -> bool:
+        """Availability for subscription CLIs — the binary on PATH (or the
+        common per-user bin dirs the terminals launcher already scans)."""
+        try:
+            from ..terminals.ai_clis import _find  # shared detection heuristics
+
+            return _find(binary) is not None
+        except Exception:  # noqa: BLE001
+            import shutil
+
+            return shutil.which(binary) is not None
 
     def _make_grok_cli(self, model: str | None) -> LLMAdapter:
         from .adapters.grok_cli import GrokCliAdapter
@@ -243,6 +266,10 @@ class ProviderManager:
         if name == "grok-cli":
             # Locally-installed Grok CLI: live on-disk session check.
             return self._grok_cli_available()
+        if name == "claude-cli":
+            return self._cli_binary_present("claude")
+        if name == "codex-cli":
+            return self._cli_binary_present("codex")
         return name in self._factories
 
     def has_available_api_provider(self) -> bool:

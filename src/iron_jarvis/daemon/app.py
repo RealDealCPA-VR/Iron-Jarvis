@@ -94,6 +94,18 @@ class MemoryWriteBody(BaseModel):
     text: str
 
 
+class LiveDocCreate(BaseModel):
+    """A living document: prompt + format + optional refresh schedule."""
+
+    name: str
+    prompt: str
+    format: str = "md"  # md | html | docx | pdf
+    cron: str | None = None  # e.g. "0 7 * * 1" — omit for manual-only
+    interval_seconds: int | None = None
+    provider: str = ""
+    model: str = ""
+
+
 class SkillApplyBody(BaseModel):
     """Use a skill directly: the skill's playbook + this request, one shot."""
 
@@ -649,6 +661,34 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # Terminal panes survive a restart / app update: re-open each persisted
         # session (fresh shell, same id + cwd + prior scrollback shown).
         _rehydrate_step("rehydrate_terminals", platform.terminals.rehydrate)
+        # Living documents: their schedules fire event-kind tasks; regenerate
+        # in the background when one lands (sync handler → task on the loop).
+        def _on_livedoc_event(event: Any) -> None:
+            etype = getattr(event, "type", None) or (
+                event.get("type") if isinstance(event, dict) else None
+            )
+            if etype != "livedoc.regenerate":
+                return
+            payload = getattr(event, "payload", None) or (
+                event.get("payload") if isinstance(event, dict) else {}
+            ) or {}
+            doc_id = payload.get("livedoc_id")
+            if not doc_id:
+                return
+
+            async def _regen() -> None:
+                try:
+                    await app.state.regenerate_livedoc(doc_id)
+                except Exception:  # noqa: BLE001 — recorded on the doc row
+                    log.exception("living-doc regeneration failed for %s", doc_id)
+
+            try:
+                asyncio.get_running_loop().create_task(_regen())
+            except RuntimeError:  # no loop (unit tests) — skip silently
+                pass
+
+        platform.event_bus.add_handler(_on_livedoc_event)
+
         # First run only: seed a few self-explanatory starter templates so the
         # Templates page (and the Overview "Your apps" tiles) start useful.
         def _seed_templates() -> None:
@@ -1887,6 +1927,134 @@ def create_app(project_root: str | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc))
         return {"id": rec.id, "layer": body.layer, "key": body.key}
 
+    # --- Living documents (§reports that stay fresh) -----------------------
+
+    async def _regenerate_livedoc(doc_id: str) -> dict[str, Any]:
+        """Regenerate one living doc: prompt → model → rewrite the SAME file."""
+        from datetime import datetime, timezone
+
+        from ..core.ids import utcnow as _now
+        from ..core.models import LiveDocRecord
+        from ..documents.writers import write_document
+        from ..providers.adapters.base import LLMMessage
+
+        with session_scope(platform.engine) as db:
+            doc = db.get(LiveDocRecord, doc_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail="no such living document")
+        provider = doc.provider or platform.config.default_provider
+        model = doc.model or platform.config.default_model
+        adapter = platform.providers.get(provider, model)
+        system = (
+            "You maintain a LIVING DOCUMENT that is regenerated on a schedule. "
+            "Produce the complete, current content as clean markdown ('# ' title "
+            "first). Today is "
+            + datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            + ". Output ONLY the document."
+        )
+        try:
+            resp, _p, _m = await _one_shot_complete(
+                provider, adapter, system=system,
+                messages=[LLMMessage(role="user", content=doc.prompt[:8000])],
+            )
+            out_dir = platform.config.home / "livedocs"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            import re as _re
+
+            slug = _re.sub(r"[^a-zA-Z0-9_-]+", "-", doc.name.lower()).strip("-") or "doc"
+            path = out_dir / f"{slug}.{doc.format}"
+            write_document(path, resp.text or "(empty)")
+            with session_scope(platform.engine) as db:
+                row = db.get(LiveDocRecord, doc_id)
+                row.path = str(path)
+                row.updated_at = _now()
+                row.last_error = ""
+                db.add(row)
+                db.commit()
+            return {"id": doc_id, "path": str(path), "ok": True}
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 — record the failure honestly
+            with session_scope(platform.engine) as db:
+                row = db.get(LiveDocRecord, doc_id)
+                if row is not None:
+                    row.last_error = f"{type(exc).__name__}: {exc}"[:300]
+                    db.add(row)
+                    db.commit()
+            raise HTTPException(status_code=502, detail=str(exc))
+
+    app.state.regenerate_livedoc = _regenerate_livedoc  # for the schedule handler
+
+    @app.get("/documents/live")
+    def list_livedocs() -> dict[str, Any]:
+        from ..core.models import LiveDocRecord
+
+        with session_scope(platform.engine) as db:
+            rows = list(db.exec(select(LiveDocRecord)))
+        rows.sort(key=lambda r: r.created_at, reverse=True)
+        return {"docs": [r.model_dump() for r in rows]}
+
+    @app.post("/documents/live")
+    async def create_livedoc(body: LiveDocCreate) -> dict[str, Any]:
+        from ..core.models import LiveDocRecord
+
+        name = (body.name or "").strip()
+        if not name or not (body.prompt or "").strip():
+            raise HTTPException(status_code=400, detail="name and prompt are required")
+        if body.format not in ("md", "html", "docx", "pdf"):
+            raise HTTPException(status_code=400, detail="format must be md|html|docx|pdf")
+        rec = LiveDocRecord(name=name, prompt=body.prompt.strip(), format=body.format,
+                            provider=body.provider, model=body.model)
+        with session_scope(platform.engine) as db:
+            db.add(rec)
+            db.commit()
+            db.refresh(rec)
+        # Optional auto-refresh: an event-kind schedule the lifespan handler
+        # listens for. Manual-only docs simply skip this.
+        if body.cron or body.interval_seconds:
+            sched_name = f"livedoc_{rec.id}"
+            try:
+                platform.scheduler.add_task(
+                    sched_name, body.cron,
+                    interval_seconds=body.interval_seconds,
+                    kind="event",
+                    payload={"type": "livedoc.regenerate", "livedoc_id": rec.id},
+                )
+                with session_scope(platform.engine) as db:
+                    row = db.get(LiveDocRecord, rec.id)
+                    row.schedule_name = sched_name
+                    db.add(row)
+                    db.commit()
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"bad schedule: {exc}")
+        # First generation now, so the doc exists immediately.
+        result = await _regenerate_livedoc(rec.id)
+        return {**result, "name": name, "schedule": bool(body.cron or body.interval_seconds)}
+
+    @app.post("/documents/live/{doc_id}/regenerate")
+    async def regenerate_livedoc_ep(doc_id: str) -> dict[str, Any]:
+        return await _regenerate_livedoc(doc_id)
+
+    @app.delete("/documents/live/{doc_id}")
+    def delete_livedoc(doc_id: str) -> dict[str, Any]:
+        """Remove the living doc + its schedule from the APP. The generated
+        file stays on disk (never delete the user's files)."""
+        from ..core.models import LiveDocRecord
+
+        with session_scope(platform.engine) as db:
+            row = db.get(LiveDocRecord, doc_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="no such living document")
+            sched = row.schedule_name
+            db.delete(row)
+            db.commit()
+        if sched:
+            try:
+                platform.scheduler.remove(sched)
+            except Exception:  # noqa: BLE001 — schedule may already be gone
+                pass
+        return {"deleted": doc_id, "files_touched": 0}
+
     @app.post("/documents/enhance")
     async def enhance_document(body: DocEnhanceBody) -> dict[str, Any]:
         """Suggest a better filename + polished content BEFORE creating —
@@ -2940,6 +3108,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
         return await _build_workflow(
             body.description, body.provider, body.model, body.name, body.current
         )
+
+    @app.get("/templates/suggestions")
+    def template_suggestions() -> dict[str, Any]:
+        """Watch-me-work: task patterns repeated ≥3× in session history that
+        aren't templates yet — suggest-only; the user clicks save."""
+        from ..templates import TemplateStore
+
+        return {"suggestions": TemplateStore(platform.engine).suggest_from_history()}
 
     # Saved prompts / task templates (one-click re-run of a frequent task).
     @app.get("/templates")
