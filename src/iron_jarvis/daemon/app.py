@@ -74,6 +74,26 @@ class SessionCreate(BaseModel):
     project_id: str = ""
 
 
+class DocEnhanceBody(BaseModel):
+    """AI pass over a document draft BEFORE creation: better name + content."""
+
+    filename: str = ""
+    content: str = ""
+    provider: str = ""
+    model: str = ""
+
+
+class LessonCreateBody(BaseModel):
+    text: str
+    scope: str = "user"
+
+
+class MemoryWriteBody(BaseModel):
+    layer: str = "user"  # whatever layers MemoryLayers accepts
+    key: str
+    text: str
+
+
 class SkillApplyBody(BaseModel):
     """Use a skill directly: the skill's playbook + this request, one shot."""
 
@@ -1754,6 +1774,80 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "lessons": [
                 lr.model_dump() for lr in platform.learning.lessons(scope=scope, limit=limit)
             ]
+        }
+
+    @app.post("/lessons")
+    def create_lesson(body: LessonCreateBody) -> dict[str, Any]:
+        """User-authored lesson ('remember that I prefer…') — injected into
+        future runs like any learned one, weighted as an explicit preference."""
+        from ..learning.models import LessonRecord
+
+        text = (body.text or "").strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="text is required")
+        with session_scope(platform.engine) as db:
+            rec = LessonRecord(text=text[:2000], scope=body.scope or "user",
+                               source="preference", weight=3)
+            db.add(rec)
+            db.commit()
+            db.refresh(rec)
+            return {"id": rec.id, "text": rec.text}
+
+    @app.post("/memory")
+    def memory_write(body: MemoryWriteBody) -> dict[str, Any]:
+        """Write straight into working memory (the layered store agents search)."""
+        try:
+            rec = platform.memory.write(body.layer, body.key.strip() or "note",
+                                        (body.text or "").strip()[:8000])
+        except Exception as exc:  # noqa: BLE001 — bad layer etc.
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"id": rec.id, "layer": body.layer, "key": body.key}
+
+    @app.post("/documents/enhance")
+    async def enhance_document(body: DocEnhanceBody) -> dict[str, Any]:
+        """Suggest a better filename + polished content BEFORE creating —
+        returned for review; nothing is written until the user confirms."""
+        import json as _json
+
+        from ..providers.adapters.base import LLMMessage
+
+        if not (body.content or "").strip() and not (body.filename or "").strip():
+            raise HTTPException(status_code=400, detail="nothing to enhance")
+        provider = body.provider or platform.config.default_provider
+        model = body.model or platform.config.default_model
+        try:
+            adapter = platform.providers.get(provider, model)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+        system = (
+            "You polish document drafts. Respond with ONLY JSON: "
+            '{"filename": "improved-name.ext (keep/choose a sensible extension)", '
+            '"content": "the improved document content (markdown allowed)", '
+            '"notes": "1-3 short bullets on what you changed and why"}. '
+            "Improve clarity/structure/professional tone; NEVER invent facts or "
+            "figures; keep the user's meaning."
+        )
+        user = f"Filename: {body.filename or '(none)'}\n\nContent:\n{(body.content or '')[:10000]}"
+        resp, _p, _m = await _one_shot_complete(
+            provider, adapter, system=system,
+            messages=[LLMMessage(role="user", content=user)],
+        )
+        text = resp.text or ""
+        start, depth, obj = text.find("{"), 0, ""
+        if start >= 0:
+            for i in range(start, len(text)):
+                depth += (text[i] == "{") - (text[i] == "}")
+                if depth == 0:
+                    obj = text[start:i + 1]
+                    break
+        try:
+            out = _json.loads(obj)
+        except Exception:  # noqa: BLE001
+            raise HTTPException(status_code=422, detail="no valid suggestion — try again")
+        return {
+            "filename": str(out.get("filename") or body.filename),
+            "content": str(out.get("content") or body.content),
+            "notes": str(out.get("notes") or ""),
         }
 
     @app.delete("/lessons/{lesson_id}")
