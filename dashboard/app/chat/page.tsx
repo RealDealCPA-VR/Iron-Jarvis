@@ -880,7 +880,9 @@ export default function ChatPage() {
             (s.description || "").toLowerCase().includes(slashQuery),
         )
       : list;
-    return filtered.slice(0, 8);
+    // ALL matches — the dropdown scrolls. (An 8-row cap made the picker look
+    // like it wasn't loading the whole skill library.)
+    return filtered;
   }, [slashActive, slashQuery, skills]);
 
   const toolMatches = useMemo(() => {
@@ -1712,12 +1714,20 @@ export default function ChatPage() {
                         aria-label="Skills"
                         className="max-h-72 overflow-y-auto p-1"
                       >
+                        <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                          {skillMatches.length} skill{skillMatches.length === 1 ? "" : "s"}
+                          {slashQuery ? " matching" : ""} — ↑↓ + Enter, or keep typing
+                        </div>
                         {skillMatches.map((s, i) => (
                           <button
                             key={s.name}
                             type="button"
                             role="option"
                             aria-selected={i === skillIndex}
+                            ref={(el) => {
+                              if (i === skillIndex)
+                                el?.scrollIntoView({ block: "nearest" });
+                            }}
                             onClick={() => pickSkill(s.name)}
                             onMouseEnter={() => setSkillIndex(i)}
                             title={s.description}
