@@ -1341,6 +1341,29 @@ def create_app(project_root: str | None = None) -> FastAPI:
                                            name=tc.name, content=str(content)[:12000]))
         except Exception as exc:  # noqa: BLE001 — honest, human error
             raise HTTPException(status_code=502, detail=str(exc))
+        # USAGE LEDGER: direct chat turns must count like agent runs, or the
+        # Usage page under-reports the user's main surface. Persist a run row
+        # (session_id "chat") with the adapters' reported token usage.
+        try:
+            from ..core.ids import utcnow as _now
+            from ..core.models import AgentRun, AgentState
+
+            usage = route.response.usage or {}
+            with session_scope(platform.engine) as db:
+                db.add(AgentRun(
+                    session_id="chat",
+                    agent_type=AgentType.BUILDER,
+                    provider=route.provider,
+                    model=route.model,
+                    state=AgentState.COMPLETED,
+                    steps=1,
+                    input_tokens=int(usage.get("input_tokens", 0) or 0),
+                    output_tokens=int(usage.get("output_tokens", 0) or 0),
+                    finished_at=_now(),
+                ))
+                db.commit()
+        except Exception:  # noqa: BLE001 — accounting must never break a reply
+            pass
         return {
             "reply": route.response.text or "(no reply)",
             "provider": route.provider,
@@ -4004,7 +4027,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # can't list models — degrades safely to the curated set).
         from ..providers.discovery import discover_models
 
-        for prov in ("anthropic", "openai", "ollama"):
+        for prov in ("anthropic", "openai", "openrouter", "ollama"):
             try:
                 if not platform.providers.available(prov):
                     continue
@@ -4248,6 +4271,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "description": "A persistent knowledge-graph memory (official server).",
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-memory"],
+        },
+        {
+            "id": "box",
+            "name": "Box (client files)",
+            "description": "Search, read, and manage files in Box — Box's own MCP "
+                           "server (Python; needs uv installed). Get a Developer "
+                           "Token from a Box custom app (developer.box.com).",
+            "command": "uvx",
+            "args": ["mcp-server-box"],
+            "env_keys": ["BOX_CLIENT_ID", "BOX_CLIENT_SECRET"],
         },
     ]
 

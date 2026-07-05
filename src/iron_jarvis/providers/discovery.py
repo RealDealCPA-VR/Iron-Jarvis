@@ -53,6 +53,22 @@ def _openai_models(key: str) -> list[str]:
     ]
 
 
+#: OpenRouter serves 300+ models — surface only the families the user actually
+#: wants in pickers (plus the auto router). Extend as tastes change.
+_OPENROUTER_KEEP = ("glm", "minimax", "deepseek", "auto")
+
+
+def _openrouter_models(key: str) -> list[str]:
+    data = _get_json(
+        "https://openrouter.ai/api/v1/models", {"Authorization": f"Bearer {key}"}
+    )
+    ids = [str(m.get("id")) for m in data.get("data", []) if m.get("id")]
+    kept = [i for i in ids if any(k in i.lower() for k in _OPENROUTER_KEEP)]
+    if "openrouter/auto" not in kept:
+        kept.insert(0, "openrouter/auto")
+    return kept[:25]
+
+
 def _ollama_models(base_url: str) -> list[str]:
     data = _get_json(f"{base_url.rstrip('/')}/api/tags", {})
     return [str(m.get("name")) for m in data.get("models", []) if m.get("name")]
@@ -79,6 +95,8 @@ def discover_models(
                 ids = _anthropic_models(key)
             elif provider == "openai":
                 ids = _openai_models(key)
+            elif provider == "openrouter":
+                ids = _openrouter_models(key)
     except Exception as exc:  # noqa: BLE001 — degrade to curated, never break
         log.debug("model discovery failed for %s: %s", provider, exc)
         ids = []

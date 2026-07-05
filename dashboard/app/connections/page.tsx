@@ -18,9 +18,13 @@ import {
   Star,
   Check,
   Plus,
+  ChevronRight,
+  HardDrive,
+  Terminal,
+  Wrench,
   type LucideIcon,
 } from "lucide-react";
-import { get, post, del, ApiError } from "@/lib/api";
+import { get, post, put, del, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { useDaemon } from "@/lib/daemon";
 import type { Connection, ConnectionTestResult, OAuthStart } from "@/lib/types";
@@ -146,11 +150,12 @@ function ConnectionCard({
 }: {
   conn: Connection;
   onChanged: () => void;
-  /** Anchor id (set on the first not-yet-connected card for smooth-scroll). */
-  id?: string;
+  /** Anchor id (`conn-card-${provider}`) the header dropdown smooth-scrolls to. */
+  id: string;
 }) {
   const meta = metaFor(conn.provider);
   const Icon = meta.icon;
+  const isCustom = conn.provider === "custom";
 
   // The active default provider comes from the shared /health poll. Calling
   // refresh() after switching keeps this card's badge and the topbar model
@@ -160,6 +165,9 @@ function ConnectionCard({
 
   const [open, setOpen] = useState(false);
   const [key, setKey] = useState("");
+  // Custom (OpenAI-compatible) endpoint config — lives in /settings, not the vault.
+  const [baseUrl, setBaseUrl] = useState("");
+  const [model, setModel] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [needsSecrets, setNeedsSecrets] = useState(false);
@@ -206,17 +214,54 @@ function ConnectionCard({
   const canOAuth = (conn.supports_oauth ?? conn.method === "oauth") && !isMock;
   const canKey = (conn.supports_api_key ?? conn.method === "api_key") && !isMock;
 
+  // Prefill the custom endpoint fields from the daemon's saved settings.
+  useEffect(() => {
+    if (!isCustom) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const d = await get<{ settings?: Record<string, unknown> }>("/settings");
+        if (cancelled) return;
+        const savedUrl = d.settings?.custom_base_url;
+        const savedModel = d.settings?.custom_model;
+        if (typeof savedUrl === "string" && savedUrl) setBaseUrl((v) => v || savedUrl);
+        if (typeof savedModel === "string" && savedModel) setModel((v) => v || savedModel);
+      } catch {
+        /* prefill is best-effort — the fields just start empty */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isCustom]);
+
   /* --- API key connect ----------------------------------------------------- */
   async function connectKey(e: React.FormEvent) {
     e.preventDefault();
-    if (!key.trim()) return;
+    // For the custom provider the ENDPOINT is the required bit; the key is
+    // optional (local servers like LM Studio / llama.cpp don't need one).
+    if (isCustom ? !baseUrl.trim() : !key.trim()) return;
     setBusy(true);
     setError(null);
     setTest(null);
     try {
-      await post(`/connections/${conn.provider}/key`, { key: key.trim() });
-      const result = await post<ConnectionTestResult>(`/connections/${conn.provider}/test`);
-      setTest(result);
+      if (isCustom) {
+        // Save the endpoint config FIRST so a key-less save still sticks.
+        await put("/settings", {
+          values: { custom_base_url: baseUrl.trim(), custom_model: model.trim() },
+        });
+        if (key.trim()) {
+          await post(`/connections/${conn.provider}/key`, { key: key.trim() });
+        }
+        setTest({
+          ok: true,
+          detail: "Custom endpoint saved — pick 'custom' in any model picker.",
+        });
+      } else {
+        await post(`/connections/${conn.provider}/key`, { key: key.trim() });
+        const result = await post<ConnectionTestResult>(`/connections/${conn.provider}/test`);
+        setTest(result);
+      }
       setKey("");
       setOpen(false);
       onChanged();
@@ -493,18 +538,49 @@ function ConnectionCard({
               </button>
             ) : (
               <form onSubmit={connectKey} className="space-y-2.5">
+                {isCustom && (
+                  <>
+                    <label className="block space-y-1">
+                      <span className="text-[11px] font-medium text-zinc-400">
+                        Endpoint base URL
+                      </span>
+                      <input
+                        type="text"
+                        value={baseUrl}
+                        onChange={(e) => setBaseUrl(e.target.value)}
+                        placeholder="http://localhost:1234/v1 — any OpenAI-compatible server"
+                        autoComplete="off"
+                        autoFocus
+                        className="field font-mono text-xs"
+                      />
+                    </label>
+                    <label className="block space-y-1">
+                      <span className="text-[11px] font-medium text-zinc-400">Model id</span>
+                      <input
+                        type="text"
+                        value={model}
+                        onChange={(e) => setModel(e.target.value)}
+                        placeholder="e.g. glm-4.7-flash / llama3"
+                        autoComplete="off"
+                        className="field font-mono text-xs"
+                      />
+                    </label>
+                  </>
+                )}
                 <input
                   type="password"
                   value={key}
                   onChange={(e) => setKey(e.target.value)}
                   placeholder={meta.placeholder ?? "Paste your API key"}
-                  aria-label="API key"
+                  aria-label={isCustom ? "API key (optional)" : "API key"}
                   autoComplete="off"
-                  autoFocus
+                  autoFocus={!isCustom}
                   className="field font-mono text-xs"
                 />
                 <p className="text-[11px] leading-relaxed text-zinc-500">
-                  Paste your API key — it&apos;s stored encrypted and never shown again.
+                  {isCustom
+                    ? "The key is optional (local servers usually don't need one) — if set, it's stored encrypted and never shown again."
+                    : "Paste your API key — it's stored encrypted and never shown again."}
                   {meta.keyUrl && (
                     <>
                       {" "}Get one at{" "}
@@ -521,8 +597,16 @@ function ConnectionCard({
                   )}
                 </p>
                 <div className="flex items-center gap-2">
-                  <button type="submit" disabled={busy || !key.trim()} className="btn-accent flex-1 py-1.5 text-xs">
-                    {busy ? <LoaderInline label="Connecting…" /> : <><Plug size={14} /> Connect</>}
+                  <button
+                    type="submit"
+                    disabled={busy || (isCustom ? !baseUrl.trim() : !key.trim())}
+                    className="btn-accent flex-1 py-1.5 text-xs"
+                  >
+                    {busy ? (
+                      <LoaderInline label={isCustom ? "Saving…" : "Connecting…"} />
+                    ) : (
+                      <><Plug size={14} /> {isCustom ? "Save endpoint" : "Connect"}</>
+                    )}
                   </button>
                   <button
                     type="button"
@@ -550,19 +634,129 @@ function ConnectionCard({
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Subscription & local providers (CLI-backed — detected, never configured)   */
+/* -------------------------------------------------------------------------- */
+
+interface CliProviderInfo {
+  provider: string;
+  name: string;
+  description: string;
+  hint: string;
+  icon: LucideIcon;
+  tint: string;
+}
+
+const CLI_PROVIDERS: CliProviderInfo[] = [
+  {
+    provider: "claude-cli",
+    name: "Claude Code CLI",
+    description: "Your Claude Max plan",
+    hint: "install / log in via its CLI; appears automatically",
+    icon: Sparkles,
+    tint: "text-orange-300",
+  },
+  {
+    provider: "codex-cli",
+    name: "Codex CLI",
+    description: "Your ChatGPT plan",
+    hint: "install / log in via its CLI; appears automatically",
+    icon: Bot,
+    tint: "text-emerald-300",
+  },
+  {
+    provider: "grok-cli",
+    name: "Grok CLI",
+    description: "Your Grok subscription",
+    hint: "install / log in via its CLI; appears automatically",
+    icon: Zap,
+    tint: "text-violet-300",
+  },
+  {
+    provider: "ollama",
+    name: "Local Ollama",
+    description: "Free models running on this machine",
+    hint: "install Ollama and pull a model; appears automatically",
+    icon: Cpu,
+    tint: "text-teal-300",
+  },
+];
+
+function CliProviderRow({ info, available }: { info: CliProviderInfo; available: boolean }) {
+  const Icon = info.icon;
+  return (
+    <div className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+      <div className="flex min-w-0 items-center gap-3">
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.03]">
+          <Icon size={16} className={info.tint} />
+        </span>
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-zinc-100">{info.name}</div>
+          <div className="truncate text-[11px] text-zinc-500">
+            {info.description}
+            {!available && <span className="text-zinc-600"> · {info.hint}</span>}
+          </div>
+        </div>
+      </div>
+      {available ? (
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-300">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.5)]" />
+          Detected — ready to use
+        </span>
+      ) : (
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-zinc-500/25 bg-zinc-500/10 px-2.5 py-0.5 text-[11px] font-medium text-zinc-400">
+          <span className="h-1.5 w-1.5 rounded-full bg-zinc-500" />
+          Not detected
+        </span>
+      )}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Page                                                                       */
 /* -------------------------------------------------------------------------- */
 
 export default function ConnectionsPage() {
   const { data, error, loading, reload } = useApi<{ connections: Connection[] }>("/connections");
+  const { health } = useDaemon();
   const offline = error && error.status === 0;
   const connections = data?.connections ?? [];
   const connectedCount = connections.filter((c) => c.connected).length;
-  // The "+ Add connection" button smooth-scrolls here: the first card that
-  // isn't connected yet (mock is built-in — nothing to connect).
-  const firstAvailable =
-    connections.find((c) => !c.connected && c.provider !== "mock")?.provider ??
-    null;
+  // The "+ Add connection" dropdown lists these: everything not yet connected
+  // (mock is built-in — nothing to connect).
+  const notConnected = connections.filter((c) => !c.connected && c.provider !== "mock");
+
+  // Subscription / local providers are DETECTED by the daemon, not configured
+  // here — availability comes from the shared /health poll.
+  const daemonProviders = health?.providers ?? [];
+  const isDetected = (provider: string) =>
+    daemonProviders.some((p) => p.provider === provider && p.available);
+
+  /* --- "+ Add connection" dropdown ----------------------------------------- */
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onPointerDown(e: PointerEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setMenuOpen(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen]);
+
+  function scrollToCard(provider: string) {
+    setMenuOpen(false);
+    document
+      .getElementById(`conn-card-${provider}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
 
   return (
     <PageShell>
@@ -578,17 +772,67 @@ export default function ConnectionsPage() {
                   {connectedCount} connected
                 </span>
               ) : null}
-              <button
-                type="button"
-                onClick={() =>
-                  document
-                    .getElementById("available-connections")
-                    ?.scrollIntoView({ behavior: "smooth" })
-                }
-                className="btn-accent px-3 py-1.5 text-xs"
-              >
-                <Plus size={14} /> Add connection
-              </button>
+              <div ref={menuRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setMenuOpen((v) => !v)}
+                  aria-haspopup="menu"
+                  aria-expanded={menuOpen}
+                  className="btn-accent px-3 py-1.5 text-xs"
+                >
+                  <Plus size={14} /> Add connection
+                </button>
+                {menuOpen && (
+                  <div
+                    role="menu"
+                    className="absolute right-0 top-full z-50 mt-2 w-64 rounded-xl border border-white/10 bg-zinc-900/95 p-1.5 shadow-2xl shadow-black/50 backdrop-blur"
+                  >
+                    {notConnected.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-zinc-400">
+                        All providers connected 🎉
+                      </div>
+                    ) : (
+                      notConnected.map((c) => {
+                        const m = metaFor(c.provider);
+                        const MenuIcon = m.icon;
+                        return (
+                          <button
+                            key={c.provider}
+                            type="button"
+                            role="menuitem"
+                            onClick={() => scrollToCard(c.provider)}
+                            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs text-zinc-200 transition-colors hover:bg-white/[0.06]"
+                          >
+                            <MenuIcon size={14} className={m.tint} />
+                            <span className="flex-1 truncate">{c.display_name}</span>
+                          </button>
+                        );
+                      })
+                    )}
+                    <div className="my-1.5 h-px bg-white/[0.08]" />
+                    <Link
+                      href="/ltm"
+                      role="menuitem"
+                      onClick={() => setMenuOpen(false)}
+                      className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-xs text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+                    >
+                      <HardDrive size={14} className="text-sky-300" />
+                      <span className="flex-1">Cloud memory drives</span>
+                      <ChevronRight size={13} className="text-zinc-600" />
+                    </Link>
+                    <Link
+                      href="/tools"
+                      role="menuitem"
+                      onClick={() => setMenuOpen(false)}
+                      className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-xs text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+                    >
+                      <Wrench size={14} className="text-amber-300" />
+                      <span className="flex-1">Tool packs (MCP)</span>
+                      <ChevronRight size={13} className="text-zinc-600" />
+                    </Link>
+                  </div>
+                )}
+              </div>
             </div>
           }
         />
@@ -612,15 +856,31 @@ export default function ConnectionsPage() {
                 key={conn.provider}
                 conn={conn}
                 onChanged={reload}
-                id={
-                  conn.provider === firstAvailable
-                    ? "available-connections"
-                    : undefined
-                }
+                id={`conn-card-${conn.provider}`}
               />
             ))}
           </div>
         )}
+      </Reveal>
+
+      <Reveal>
+        <Card
+          title="Subscription & local providers"
+          icon={<Terminal size={16} className="text-accent-soft" />}
+        >
+          <div className="divide-y divide-white/[0.06]">
+            {CLI_PROVIDERS.map((info) => (
+              <CliProviderRow
+                key={info.provider}
+                info={info}
+                available={isDetected(info.provider)}
+              />
+            ))}
+          </div>
+          <p className="mt-3 text-[11px] leading-relaxed text-zinc-600">
+            These use plans you already pay for — no API keys. Pick them in any model picker.
+          </p>
+        </Card>
       </Reveal>
 
       {!offline && (

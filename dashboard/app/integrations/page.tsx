@@ -1,7 +1,22 @@
 "use client";
 
-import { useState } from "react";
-import { Plug, FlaskConical, Settings2, Power, CheckCircle2, Plus, Save } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import Link from "next/link";
+import {
+  Plug,
+  FlaskConical,
+  Settings2,
+  Power,
+  CheckCircle2,
+  Plus,
+  Save,
+  ArrowRight,
+  Bot,
+  Blocks,
+  MessagesSquare,
+  Cloud,
+  Compass,
+} from "lucide-react";
 import { post, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import type { Integration, IntegrationTestResult } from "@/lib/types";
@@ -18,6 +33,68 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+
+/* -------------------------------------------------------------------------- */
+/*  "Where to connect things" — friendly pointers to the real connection hubs  */
+/* -------------------------------------------------------------------------- */
+
+type ConnectTile = {
+  href: string;
+  title: string;
+  desc: string;
+  icon: ReactNode;
+};
+
+const CONNECT_TILES: ConnectTile[] = [
+  {
+    href: "/connections",
+    title: "AI accounts",
+    desc: "Sign in to Anthropic, OpenAI and other model providers.",
+    icon: <Bot size={17} />,
+  },
+  {
+    href: "/tools",
+    title: "Tool packs (MCP)",
+    desc: "Plug in ready-made tool packs that give Jarvis new abilities.",
+    icon: <Blocks size={17} />,
+  },
+  {
+    href: "/channels",
+    title: "Slack / Telegram / Email",
+    desc: "Get updates and reply to Jarvis where you already chat.",
+    icon: <MessagesSquare size={17} />,
+  },
+  {
+    href: "/ltm",
+    title: "Cloud drives for memory",
+    desc: "Box, Drive, Dropbox and more — long-term memory storage.",
+    icon: <Cloud size={17} />,
+  },
+];
+
+function ConnectTileLink({ tile }: { tile: ConnectTile }) {
+  return (
+    <Link
+      href={tile.href}
+      className="group relative flex items-start gap-3 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3.5 transition-all duration-300 hover:-translate-y-0.5 hover:border-accent/30 hover:bg-accent/[0.05] hover:shadow-card-hover"
+    >
+      <span className="pointer-events-none absolute -right-6 -top-8 h-24 w-24 rounded-full bg-accent/15 opacity-0 blur-2xl transition-opacity duration-300 group-hover:opacity-100" />
+      <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-accent/25 bg-accent/[0.08] text-accent-soft shadow-[0_0_12px_rgba(34,211,238,0.18)]">
+        {tile.icon}
+      </span>
+      <span className="min-w-0">
+        <span className="flex items-center gap-1.5 text-sm font-semibold text-zinc-100">
+          {tile.title}
+          <ArrowRight
+            size={13}
+            className="shrink-0 text-zinc-600 transition-all duration-300 group-hover:translate-x-0.5 group-hover:text-accent-soft"
+          />
+        </span>
+        <span className="mt-0.5 block text-xs leading-relaxed text-zinc-500">{tile.desc}</span>
+      </span>
+    </Link>
+  );
+}
 
 function IntegrationCard({
   integ,
@@ -249,7 +326,7 @@ function AddIntegrationForm({
     <Card>
       <form onSubmit={submit} className="space-y-4">
         <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
-          <Plug size={15} className="text-accent-soft" /> New REST integration
+          <Plug size={15} className="text-accent-soft" /> New REST hookup
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
@@ -313,7 +390,7 @@ function AddIntegrationForm({
             htmlFor="add-integ-token"
             className="block text-[11px] uppercase tracking-[0.1em] text-zinc-400"
           >
-            Bearer token <span className="text-zinc-600">(optional)</span>
+            API key <span className="text-zinc-600">(optional)</span>
           </label>
           <input
             id="add-integ-token"
@@ -325,7 +402,7 @@ function AddIntegrationForm({
             className="field font-mono text-sm"
           />
           <p className="text-[11px] leading-relaxed text-zinc-500">
-            Stored encrypted in the vault; leave blank for public APIs.
+            Sent as a Bearer token and stored encrypted in the vault; leave blank for public APIs.
           </p>
         </div>
 
@@ -337,7 +414,7 @@ function AddIntegrationForm({
               <LoaderInline label="Adding…" />
             ) : (
               <>
-                <Save size={14} /> Add integration
+                <Save size={14} /> Add hookup
               </>
             )}
           </button>
@@ -360,7 +437,9 @@ export default function IntegrationsPage() {
     "/integrations",
   );
   const offline = error && error.status === 0;
-  const integrations = data?.integrations ?? [];
+  const integrations = (data?.integrations ?? []).filter(
+    (integ) => integ.id.toLowerCase() !== "mock" && integ.kind.toLowerCase() !== "mock",
+  );
   const [showAdd, setShowAdd] = useState(false);
   const [added, setAdded] = useState<string | null>(null);
 
@@ -369,7 +448,7 @@ export default function IntegrationsPage() {
       <Reveal>
         <PageHeader
           title="Integrations"
-          subtitle="Enable, configure and test external connectors. Configure stores connector settings; Test pings the live service."
+          subtitle="Hook Iron Jarvis into other services. Most connections live on their own pages — this page is for direct REST API hookups."
           actions={
             <button
               onClick={() => {
@@ -378,18 +457,33 @@ export default function IntegrationsPage() {
               }}
               className="btn-accent px-3 py-1.5 text-xs"
             >
-              <Plus size={14} /> Add integration
+              <Plus size={14} /> Add REST hookup
             </button>
           }
         />
       </Reveal>
 
       <Reveal>
-        <p className="flex items-center gap-2 text-xs text-zinc-600">
-          <Plug size={13} />
-          Custom integrations connect any REST API — add a base URL (plus an optional bearer
-          token) and health-check it any time with the Test button.
-        </p>
+        <Card title="Where to connect things" icon={<Compass size={15} />}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {CONNECT_TILES.map((tile) => (
+              <ConnectTileLink key={tile.href} tile={tile} />
+            ))}
+          </div>
+        </Card>
+      </Reveal>
+
+      <Reveal>
+        <div className="space-y-1">
+          <h2 className="text-sm font-semibold text-zinc-200">
+            Direct REST hookups <span className="font-normal text-zinc-500">(advanced)</span>
+          </h2>
+          <p className="flex items-start gap-2 text-xs leading-relaxed text-zinc-600">
+            <Plug size={13} className="mt-0.5 shrink-0" />
+            Connect any service that has an HTTP API — give it a name, base URL, and an API key.
+            Use Test any time to check the connection is healthy.
+          </p>
+        </div>
       </Reveal>
 
       {showAdd && (
@@ -410,7 +504,7 @@ export default function IntegrationsPage() {
           <SuccessNote>
             Added{" "}
             <span className="font-medium text-emerald-100">{added}</span> — find it in the list
-            below and use Test to health-check it.
+            below and use Test to check the connection.
           </SuccessNote>
         </Reveal>
       )}
@@ -430,7 +524,9 @@ export default function IntegrationsPage() {
       ) : integrations.length === 0 ? (
         <Reveal>
           <Card>
-            <Empty icon={<Plug size={24} />}>No integrations registered.</Empty>
+            <Empty icon={<Plug size={24} />}>
+              Nothing here yet — most people never need this page; start with the tiles above.
+            </Empty>
           </Card>
         </Reveal>
       ) : (

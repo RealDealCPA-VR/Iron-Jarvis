@@ -64,3 +64,53 @@ def test_discovery_failure_keeps_curated(tmp_path, monkeypatch):
     anth = {m["model"] for m in models if m["provider"] == "anthropic"}
     assert "claude-opus-4-8" in anth and "claude-sonnet-4-6" in anth  # curated intact
     discovery.clear_cache()
+
+
+def test_openrouter_discovery_filters_to_wanted_families(tmp_path, monkeypatch):
+    client = _client(tmp_path)
+    client.post("/connections/openrouter/key", json={"key": "sk-or-test"})
+    discovery.clear_cache()
+    monkeypatch.setattr(
+        discovery, "_openrouter_models",
+        lambda key: ["openrouter/auto", "z-ai/glm-5.2", "minimax/minimax-m3",
+                     "deepseek/deepseek-v4-flash"],
+    )
+    models = client.get("/models").json()["models"]
+    orm = {m["model"] for m in models if m["provider"] == "openrouter"}
+    assert {"openrouter/auto", "z-ai/glm-5.2", "minimax/minimax-m3",
+            "deepseek/deepseek-v4-flash"} <= orm
+    discovery.clear_cache()
+
+
+def test_openrouter_keep_filter_unit():
+    raw = ["openrouter/auto", "z-ai/glm-5.2", "meta/llama-4", "minimax/m3",
+           "deepseek/deepseek-v4-flash", "openai/gpt-5.5"]
+    import iron_jarvis.providers.discovery as d
+
+    class _R:
+        def raise_for_status(self): ...
+        def json(self):
+            return {"data": [{"id": i} for i in raw]}
+
+    import httpx
+    orig = httpx.get
+    httpx.get = lambda *a, **k: _R()
+    try:
+        kept = d._openrouter_models("sk-or-x")
+    finally:
+        httpx.get = orig
+    assert "meta/llama-4" not in kept and "openai/gpt-5.5" not in kept
+    assert "z-ai/glm-5.2" in kept and "deepseek/deepseek-v4-flash" in kept
+
+
+def test_chat_turn_posts_usage(tmp_path):
+    client = _client(tmp_path)
+    client.post("/chat", json={"messages": [{"role": "user", "content": "hi"}]})
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.models import AgentRun
+    from sqlmodel import select as _sel
+
+    platform = client.app.state.platform
+    with session_scope(platform.engine) as db:
+        rows = [r for r in db.exec(_sel(AgentRun)) if r.session_id == "chat"]
+    assert len(rows) == 1 and rows[0].state.value == "completed"
