@@ -17,6 +17,7 @@ import {
   Zap,
   Star,
   Check,
+  Plus,
   type LucideIcon,
 } from "lucide-react";
 import { get, post, del, ApiError } from "@/lib/api";
@@ -141,9 +142,12 @@ function StatusPill({ conn }: { conn: Connection }) {
 function ConnectionCard({
   conn,
   onChanged,
+  id,
 }: {
   conn: Connection;
   onChanged: () => void;
+  /** Anchor id (set on the first not-yet-connected card for smooth-scroll). */
+  id?: string;
 }) {
   const meta = metaFor(conn.provider);
   const Icon = meta.icon;
@@ -332,7 +336,10 @@ function ConnectionCard({
   }, [conn.method, conn.provider, conn.display_name, onChanged]);
 
   return (
-    <div className="card-surface flex flex-col gap-4 p-5 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-card-hover">
+    <div
+      id={id}
+      className="card-surface flex scroll-mt-24 flex-col gap-4 p-5 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-card-hover"
+    >
       {/* Header: icon + name + status */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -551,20 +558,38 @@ export default function ConnectionsPage() {
   const offline = error && error.status === 0;
   const connections = data?.connections ?? [];
   const connectedCount = connections.filter((c) => c.connected).length;
+  // The "+ Add connection" button smooth-scrolls here: the first card that
+  // isn't connected yet (mock is built-in — nothing to connect).
+  const firstAvailable =
+    connections.find((c) => !c.connected && c.provider !== "mock")?.provider ??
+    null;
 
   return (
     <PageShell>
       <Reveal>
         <PageHeader
-          title="Connect a model"
-          subtitle="Pick a provider and connect it — paste an API key or run a one-click OAuth flow. Credentials are stored encrypted; this page only ever shows connection state."
+          title="Connections"
+          subtitle="Your accounts — AI models, cloud drives, and services. Connect once; everything in Iron Jarvis can use them."
           actions={
-            data ? (
-              <span className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-zinc-300">
-                <PlugZap size={14} className="text-accent-soft" />
-                {connectedCount} connected
-              </span>
-            ) : null
+            <div className="flex items-center gap-2">
+              {data ? (
+                <span className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-zinc-300">
+                  <PlugZap size={14} className="text-accent-soft" />
+                  {connectedCount} connected
+                </span>
+              ) : null}
+              <button
+                type="button"
+                onClick={() =>
+                  document
+                    .getElementById("available-connections")
+                    ?.scrollIntoView({ behavior: "smooth" })
+                }
+                className="btn-accent px-3 py-1.5 text-xs"
+              >
+                <Plus size={14} /> Add connection
+              </button>
+            </div>
           }
         />
       </Reveal>
@@ -583,7 +608,16 @@ export default function ConnectionsPage() {
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {connections.map((conn) => (
-              <ConnectionCard key={conn.provider} conn={conn} onChanged={reload} />
+              <ConnectionCard
+                key={conn.provider}
+                conn={conn}
+                onChanged={reload}
+                id={
+                  conn.provider === firstAvailable
+                    ? "available-connections"
+                    : undefined
+                }
+              />
             ))}
           </div>
         )}
