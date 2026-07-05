@@ -2,6 +2,8 @@
 
 # ⚡ IRON JARVIS
 
+[![Tests](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml/badge.svg)](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml)
+
 ### Your own local-first AI operating system.
 
 **Agents that plan, build, review, schedule, remember, and wire themselves into your world — running on *your* machine, under *your* control.**
@@ -12,7 +14,9 @@ No cloud lock-in. No black boxes. Every action logged, every change reviewable, 
 
 ---
 
-> **TL;DR** — Iron Jarvis turns a fleet of AI agents into a real operating system: a supervisor delegates to specialist subagents, work runs in sandboxed git worktrees you approve before merge, a layered memory + long-term knowledge base keeps context, and a beautiful Next.js control center (with an **n8n-style workflow canvas** and **voice-to-text**) lets you drive it all. Runs **fully offline** with a deterministic mock model — bring your own Claude key when you want the real thing.
+> **TL;DR** — Iron Jarvis turns a fleet of AI agents into a real operating system: a supervisor delegates to specialist subagents, work runs in sandboxed git worktrees you approve before merge, a layered memory + long-term knowledge base keeps context, and a beautiful Next.js control center (with an **n8n-style workflow canvas** and **voice chat**) lets you drive it all. Runs **fully offline** with a deterministic mock model — bring your own Claude key when you want the real thing.
+
+> **Platform support:** the packaged desktop app (installer + auto-update + multi-terminal ConPTY) ships for **Windows**. On macOS/Linux you can run the daemon + dashboard **from source** (`uv run ironjarvis serve` + `pnpm dev`); no installer is published for those yet.
 
 <div align="center">
 
@@ -43,14 +47,14 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 | 🔒 **Fail-closed permissions** | allow / ask / deny on every tool; `shell` stays locked down |
 | 🌳 **Git-native sessions** | branch → work → diff → **you approve** → merge (no auto-merge) |
 | 🧩 **n8n-style workflows** | drag step-nodes, wire them, run the graph — agents can build them too |
-| 🎙️ **Voice-to-text** | hit the mic and dictate a prompt (local browser speech) |
+| 🎙️ **Voice chat** | hands-free in Chat: speak, it answers out loud — mic works in the desktop app too (daemon transcription) |
 | 🗝️ **Encrypted secrets vault** | API keys / OAuth / tokens, shared by every subsystem, never shown to agents |
 | 📅 **Scheduled tasks** | friendly repeat presets or a specific date/time — no cron syntax required |
 | 🔭 **Observability** | live event stream, traces, per-run evaluation metrics |
 | 🖥️ **Beautiful dashboard** | arc-reactor dark UI, Kanban board, real-time everything |
 | 📄 **Every file type** | read & write **PDF, Word, Excel, PowerPoint, CSV, Markdown, text** — like a colleague would |
-| 🌱 **Self-correcting** | feedback → lessons injected into every future run; it gets **better each time** you use it |
-| 🔌 **Connect a model in seconds** | a Connections page — **log in with your Anthropic (Claude Pro/Max) or OpenAI (ChatGPT/Codex) account** via OAuth 2.0 + PKCE, or paste an **API key** (Anthropic/OpenAI/Google) |
+| 🌱 **Self-correcting** | feedback + reflections become lessons — deduped and **distilled by a real model** into short reusable guidance injected into future runs |
+| 🔌 **Connect a model in seconds** | a Connections page — paste an **API key** (Anthropic/OpenAI/Google, the stable path), or **log in with your Anthropic (Claude Pro/Max) or OpenAI (ChatGPT/Codex) account** *(experimental — rides unofficial public clients)* |
 | 🦙 **Or stay fully local** | point it at a local **Ollama** / OpenAI-compatible endpoint — real intelligence, no cloud, no key |
 | 🔎 **Web search + MCP** | a keyless `web_search` tool for agents, plus an **MCP client** to consume external MCP servers as native tools |
 | 🛠️ **Edits itself** | an opt-in **Maintainer** agent can read/edit/test/fix Iron Jarvis's own source on a review-gated worktree |
@@ -58,7 +62,7 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 | 🖥️ **Multi-terminal workspace** | tiled live terminals with a **+ tile** to add more + a **directory tree** to pick a project per terminal |
 | 🪟 **Runs as a desktop app** | an Electron wrapper opens the whole thing in a native window |
 | 🤖 **Opt-in computer use** | gated, DOM-first browser automation with human-approval for risky actions |
-| ✅ **687 offline tests** | the whole platform runs green with no network and no API keys |
+| ✅ **Tested offline, enforced in CI** | the whole suite runs green with no network and no API keys — the live count is on the [Tests badge](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml), not hand-edited here |
 
 <div align="center">
 
@@ -106,7 +110,7 @@ uv run ironjarvis up                                  # daemon :8787 + dashboard
 
 Prefer two terminals? `uv run ironjarvis serve` + `cd dashboard && pnpm start`. Want a native window over the source checkout? `cd desktop && pnpm install && pnpm start`.
 
-> **Try it with zero setup / zero keys:** `uv run ironjarvis demo` runs end-to-end **offline** with a deterministic mock model, and `uv run pytest -q` runs the full **687-test** suite — all green with no network.
+> **Try it with zero setup / zero keys:** `uv run ironjarvis demo` runs end-to-end **offline** with a deterministic mock model, and `uv run pytest -q` runs the full offline suite — all green with no network.
 
 ### 🧠 One brain across every project
 
@@ -126,7 +130,7 @@ Open the dashboard, hit **New Session**, and watch agents work in real time.
 uv run ironjarvis connect anthropic sk-ant-...   # stored encrypted in the vault
 # the provider flips to "available" instantly — sessions route to it, no env vars
 ```
-- **Log in with your account (OAuth)** — since this runs locally, you can **"Log in with your account"** on the Connections page instead of pasting a key:
+- **Log in with your account (OAuth) — *experimental*** — since this runs locally, you can **"Log in with your account"** on the Connections page instead of pasting a key. Heads-up: these flows ride the providers' *public CLI clients* (not an official Iron Jarvis integration), and the ChatGPT-account backend in particular retires model ids without notice — an **API key is the recommended, stable path**. What works today:
   - **Anthropic** — sign in with your **Claude Pro/Max** account (the public Claude Code OAuth/PKCE client, no app registration). The minted token calls the Messages API with the OAuth beta header — fully wired for inference.
   - **OpenAI** — sign in with your **ChatGPT (Plus/Pro)** account via the public **Codex** OAuth client; the account token is stored and sent as a bearer.
   - **Google/Gemini** — OAuth too (bring your own Google Cloud client id).
@@ -278,7 +282,7 @@ src/iron_jarvis/
 dashboard/     Next.js 15 control center (Kanban, n8n canvas, voice)
 ```
 
-Built from `SPEC.MD` (§10–33) + reconstructed `SPEC-SECTIONS-01-09.md`. See `PLAN.md` / `TASKS.md` for the build log.
+Built from `SPEC.MD` (§10–33) + reconstructed `SPEC-SECTIONS-01-09.md`. See [`docs/`](docs/) for the build log and audit history.
 
 ---
 
@@ -294,7 +298,7 @@ Built from `SPEC.MD` (§10–33) + reconstructed `SPEC-SECTIONS-01-09.md`. See `
 
 ## ✅ Proof it works
 
-- **687 offline tests pass** (`uv run pytest -q`) — no network, no keys.
+- **The full offline suite passes in CI on every push** (`uv run pytest -q`) — no network, no keys; the [Tests workflow](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml) is the source of truth for the count.
 - Live daemon serves every endpoint; the dashboard has a clean production build.
 - Real-Chrome screenshots of every page live in [`dashboard/proof/`](dashboard/proof/).
 
@@ -308,7 +312,7 @@ Built from `SPEC.MD` (§10–33) + reconstructed `SPEC-SECTIONS-01-09.md`. See `
 
 ## 🗺️ Roadmap
 
-Voice *output*, a mobile companion, distributed agent clusters, a skills/agent marketplace, and team-shared org memory. The foundation is built — everything else stacks on top.
+A mobile companion, distributed agent clusters, a skills/agent marketplace, and team-shared org memory. The foundation is built — everything else stacks on top.
 
 ---
 

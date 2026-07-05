@@ -9,7 +9,7 @@ runs the PACKAGED desktop app daily — treat every change as production.
 | Process | What | Port | Source |
 |---|---|---|---|
 | Daemon | FastAPI, all state + agents + tools | 127.0.0.1:8787 | `src/iron_jarvis/` |
-| Dashboard | Next.js 15 (35 routes), arc-reactor-cyan aesthetic | 127.0.0.1:8788 | `dashboard/` |
+| Dashboard | Next.js 15 (36 routes), arc-reactor-cyan aesthetic | 127.0.0.1:8788 | `dashboard/` |
 | Desktop | Electron: spawns both, tray, updates, Spotlight | — | `desktop/main.js` |
 
 Packaged layout: PyInstaller-frozen daemon (`packaging/ironjarvis.spec`) +
@@ -23,9 +23,9 @@ bearer token: `%APPDATA%/Iron Jarvis/token.txt` — every daemon request needs
 ## Commands
 
 ```bash
-# Backend tests (~790, offline, ~70s). ALWAYS run before shipping.
+# Backend tests (~981, offline, ~2min). ALWAYS run before shipping.
 uv run pytest -q --no-header
-# Dashboard build (must show "Generating static pages (35/35)")
+# Dashboard build (must show "Generating static pages (36/36)")
 cd dashboard && pnpm build
 # Syntax-check desktop changes
 cd desktop && node --check main.js
@@ -88,9 +88,13 @@ cd dashboard && pnpm dev           # dashboard
 
 ## Map (where things live)
 
-- `src/iron_jarvis/daemon/app.py` — ~everything HTTP: all endpoints, request
-  models, lifespan (boot rehydration steps + background loops). Biggest file;
-  search by route string.
+- `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
+  lifespan boot-rehydration + background loops, middleware, the shared `d` deps
+  object); the ~170 endpoint handlers live in `routes/<domain>.py` (17 modules;
+  search by route string ACROSS routes/), request models in `schemas.py`.
+  Handlers reach shared state via `d.*`; tests monkeypatch `_MAX_UPLOAD_BYTES`
+  and `_graceful_stop` on the app module, so routes access those via
+  `_app.<name>` at call time — keep that pattern.
 - `agents/` — orchestrator (sessions/reviews/continue), runtime (the
   perceive→act loop), dynamic agents. `providers/` — manager (per-provider
   factories), router (routing/failover), adapters/. `terminals/` — manager
