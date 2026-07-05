@@ -19,14 +19,13 @@ import {
   FileSearch,
   FileText,
   FolderKanban,
-  GraduationCap,
-  Database,
   KeyRound,
   Plug,
   PlugZap,
   Megaphone,
   Webhook,
   MonitorCog,
+  Radar,
   SquareTerminal,
   MoveUpRight,
   GitBranch,
@@ -43,6 +42,7 @@ import {
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 import { useDaemon } from "@/lib/daemon";
+import { ProjectSwitcher } from "@/components/ProjectSwitcher";
 
 interface NavItem {
   href: string;
@@ -55,41 +55,44 @@ interface NavSection {
   items: NavItem[];
 }
 
+// FOUR HERO SURFACES lead the nav: Chat (talk), Build (terminals — make
+// things), Projects (the context spine), Sessions (review the work). Every
+// other page is support cast, grouped behind them and mostly Advanced-only.
 const NAV: NavSection[] = [
   {
     label: "Work",
     items: [
       { href: "/", label: "Overview", icon: LayoutDashboard },
       { href: "/chat", label: "Chat", icon: MessageSquare },
+      { href: "/terminals", label: "Build", icon: SquareTerminal },
       { href: "/projects", label: "Projects", icon: FolderKanban },
       { href: "/sessions", label: "Sessions", icon: Boxes },
+    ],
+  },
+  {
+    label: "Automate",
+    items: [
+      { href: "/workflows", label: "Workflows", icon: Workflow },
+      { href: "/schedules", label: "Schedules", icon: CalendarClock },
       { href: "/kanban", label: "Kanban", icon: SquareKanban },
       { href: "/templates", label: "Templates", icon: LayoutTemplate },
       { href: "/agents", label: "Agents", icon: Bot },
       { href: "/tools", label: "Tools", icon: Wrench },
-      { href: "/self-dev", label: "Self-improvement", icon: GitBranch },
       { href: "/autonomy", label: "Autonomy", icon: Gauge },
-    ],
-  },
-  {
-    label: "Automation",
-    items: [
-      { href: "/workflows", label: "Workflows", icon: Workflow },
-      { href: "/schedules", label: "Schedules", icon: CalendarClock },
+      { href: "/sentinels", label: "Sentinels", icon: Radar },
       { href: "/computeruse", label: "Computer Control", icon: MonitorCog },
-      { href: "/terminals", label: "Terminals", icon: SquareTerminal },
       { href: "/webhooks", label: "Webhooks", icon: Webhook },
+      { href: "/self-dev", label: "Self-improvement", icon: GitBranch },
     ],
   },
   {
     label: "Knowledge",
     items: [
-      { href: "/skills", label: "Skills", icon: Sparkles },
-      { href: "/memory", label: "Working memory", icon: BrainCircuit },
-      { href: "/lessons", label: "What I've learned", icon: GraduationCap },
-      { href: "/ltm", label: "Memory", icon: Database },
-      { href: "/filesearch", label: "File Search", icon: FileSearch },
+      // ONE memory surface (working / lessons / long-term live inside as scopes).
+      { href: "/memory", label: "Memory", icon: BrainCircuit },
       { href: "/documents", label: "Documents", icon: FileText },
+      { href: "/filesearch", label: "File Search", icon: FileSearch },
+      { href: "/skills", label: "Skills", icon: Sparkles },
       { href: "/artifacts", label: "Artifacts", icon: Package },
     ],
   },
@@ -114,20 +117,19 @@ const NAV: NavSection[] = [
 ];
 
 /**
- * The essentials shown in Simple mode. Everything else in NAV is revealed only
- * when the "Advanced" toggle is on. Keyed by href so labels can be de-jargoned
- * freely without breaking the filter.
+ * The essentials shown in Simple mode (the default): the four heroes plus the
+ * bare minimum to connect a model, remember things, and get help. Everything
+ * else in NAV is revealed only when the "Advanced" toggle is on. Keyed by href
+ * so labels can be de-jargoned freely without breaking the filter.
  */
 const ESSENTIAL_HREFS = new Set<string>([
   "/", // Overview
-  "/chat", // Chat
-  "/projects", // Projects (context spine)
-  "/sessions", // Sessions
-  "/workflows", // Workflows
-  "/terminals", // Terminals
+  "/chat", // Chat (hero)
+  "/terminals", // Build (hero)
+  "/projects", // Projects (hero — the context spine)
+  "/sessions", // Sessions (hero)
+  "/memory", // Memory (the one unified surface)
   "/connections", // Connections
-  "/documents", // Documents
-  "/ltm", // Memory (Long-term Memory)
   "/settings", // Settings
   "/help", // Help
 ]);
@@ -404,6 +406,10 @@ export function Sidebar() {
         <Brand />
       </div>
       <div className="mx-5 h-px bg-accent-line opacity-60" />
+      {/* The context spine, always in view: which project everything runs in. */}
+      <div className="pt-3">
+        <ProjectSwitcher />
+      </div>
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
         <NavLinks layoutId="nav-active" advanced={advanced} />
       </nav>
@@ -492,6 +498,9 @@ export function MobileNav() {
                 </button>
               </div>
               <div className="mx-5 h-px bg-accent-line opacity-60" />
+              <div className="pt-3">
+                <ProjectSwitcher />
+              </div>
               <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
                 <NavLinks
                   layoutId="nav-active-mobile"

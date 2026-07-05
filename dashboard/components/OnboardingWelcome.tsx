@@ -23,7 +23,7 @@ const STEP_LINK: Record<string, { href: string; cta: string }> = {
   connect_ai: { href: "/connections", cta: "Connect a model" },
   first_session: { href: "/sessions", cta: "New session" },
   work_with_document: { href: "/documents", cta: "Open Documents" },
-  teach_style: { href: "/lessons", cta: "Review lessons" },
+  teach_style: { href: "/memory?scope=lessons", cta: "Review lessons" },
 };
 
 function stepLink(step: OnboardingStep) {

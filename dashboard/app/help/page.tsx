@@ -61,7 +61,7 @@ const SUBSYSTEMS: Subsystem[] = [
     desc: "Run tasks on a recurring or one-time schedule — pick a friendly preset, no cron syntax needed.",
   },
   {
-    href: "/ltm",
+    href: "/memory?scope=longterm",
     title: "Memory & long-term memory",
     icon: Database,
     desc: "Search and append durable notes across the built-in brain and your own Obsidian or Notion sources.",

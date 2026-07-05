@@ -65,7 +65,7 @@ const CONNECT_TILES: ConnectTile[] = [
     icon: <MessagesSquare size={17} />,
   },
   {
-    href: "/ltm",
+    href: "/memory?scope=longterm",
     title: "Cloud drives for memory",
     desc: "Box, Drive, Dropbox and more — long-term memory storage.",
     icon: <Cloud size={17} />,

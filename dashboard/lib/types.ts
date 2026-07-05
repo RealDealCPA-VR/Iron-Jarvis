@@ -12,7 +12,7 @@ export interface Health {
   default_provider: string;
   default_model: string;
   /** The ACTIVE context-spine project new sessions default into (or null). */
-  active_project?: { id: string; name: string } | null;
+  active_project?: { id: string; name: string; root?: string } | null;
   providers: ProviderHealth[];
 }
 

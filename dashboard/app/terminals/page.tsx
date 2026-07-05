@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { Rnd } from "react-rnd";
 import {
+  Folder,
   LayoutGrid,
   Loader2,
   PanelLeftOpen,
@@ -16,6 +17,7 @@ import {
   SquareTerminal,
 } from "lucide-react";
 import { ApiError, del, get, post } from "@/lib/api";
+import { useDaemon } from "@/lib/daemon";
 import type { AiCli, ModelOption, Shell, Skill, TerminalInfo } from "@/lib/types";
 import { Card, OfflineHint, ErrorNote, Spinner, ConfirmButton } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
@@ -72,6 +74,18 @@ export default function TerminalsPage() {
   const [busy, setBusy] = useState(false);
 
   const [treeCollapsed, setTreeCollapsed] = useState(false);
+
+  // Context spine: the ACTIVE project from the shared /health poll. New
+  // terminals opened WITHOUT an explicit folder pick default into its root.
+  // (/health now includes `root`; the shared Health type hasn't caught up,
+  // so widen it locally instead of touching lib/types.ts.)
+  const { health } = useDaemon();
+  const activeProject: { id: string; name: string; root?: string | null } | null =
+    health?.active_project ?? null;
+  // root may be an empty string when the project has no folder — treat that
+  // as "no default" so the daemon falls back to the home dir as before.
+  const rawRoot = activeProject?.root ?? "";
+  const projectRoot = rawRoot.trim() ? rawRoot : null;
 
   // Per-terminal free-form layout (position + size), persisted to localStorage.
   const [layout, setLayout] = useState<Record<string, Rect>>({});
@@ -242,8 +256,12 @@ export default function TerminalsPage() {
       setBusy(true);
       setError(null);
       try {
+        // No explicit folder pick → default into the active project's root
+        // (when it has one). An explicit pick always wins; with neither, the
+        // daemon falls back to the OS home dir. No client-side path checks —
+        // if the daemon can't spawn there, its own error surfaces below.
         const info = await post<TerminalInfo>("/terminals", {
-          cwd: cwd ?? undefined,
+          cwd: cwd ?? projectRoot ?? undefined,
           shell: shell || undefined,
         });
         setTerminals((prev) => [...prev, info]);
@@ -265,7 +283,7 @@ export default function TerminalsPage() {
         setBusy(false);
       }
     },
-    [shell],
+    [shell, projectRoot],
   );
 
   const closeTerminal = useCallback((id: string) => {
@@ -281,10 +299,28 @@ export default function TerminalsPage() {
     <PageShell>
       <Reveal>
         <PageHeader
-          title="Terminals"
-          subtitle="Live shell sessions on a free-form canvas — drag a pane by its header to move it, drag its edges to resize. Pick a project folder on the right and open a terminal there, or hit + to add one."
+          title="Build"
+          subtitle="Live terminals on a free-form canvas — drag a pane by its header to move it, drag its edges to resize. Pick a project folder on the right and open a terminal there, or hit + to add one."
           actions={
             <div className="flex flex-wrap items-center gap-2">
+              {/* Context-spine chip: the active project new terminals default
+                  into. Rendered only when a project is active. */}
+              {activeProject && (
+                <>
+                  <span
+                    title={
+                      projectRoot
+                        ? `New terminals open in ${projectRoot}`
+                        : "This project has no folder set — new terminals open in your home directory"
+                    }
+                    className="flex max-w-[14rem] items-center gap-1.5 rounded-full border border-accent/25 bg-accent/10 px-2.5 py-1 text-[12px] text-accent-soft"
+                  >
+                    <Folder size={12} className="shrink-0" />
+                    <span className="truncate">{activeProject.name}</span>
+                  </span>
+                  <span className="mx-1 h-5 w-px bg-white/10" />
+                </>
+              )}
               {/* Tidy — re-tile every pane into a neat grid when it gets messy. */}
               <button
                 type="button"

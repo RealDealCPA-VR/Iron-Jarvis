@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  FolderKanban,
   History,
   MessageSquare,
   Send,
@@ -11,6 +12,7 @@ import {
   User,
 } from "lucide-react";
 import { useApi } from "@/lib/useApi";
+import { useDaemon } from "@/lib/daemon";
 import { useEvents } from "@/lib/useEvents";
 import { post, ApiError } from "@/lib/api";
 import type { WorkflowRun } from "@/lib/types";
@@ -19,6 +21,22 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import WorkflowCanvas from "@/components/workflow/WorkflowCanvas";
 import { timeAgo } from "@/lib/format";
+
+/** Context spine: which project workflow runs are stamped into right now. */
+function ActiveProjectChip() {
+  const { health } = useDaemon();
+  const project = health?.active_project ?? null;
+  if (!project) return null;
+  return (
+    <span
+      title={`Working in ${project.name} — runs are tagged to this project. Switch it in the sidebar.`}
+      className="inline-flex max-w-[12rem] items-center gap-1.5 rounded-xl border border-accent/25 bg-accent/[0.07] px-2.5 py-1.5 text-[12px] font-medium text-accent-soft"
+    >
+      <FolderKanban size={12} className="shrink-0" />
+      <span className="truncate">{project.name}</span>
+    </span>
+  );
+}
 
 export default function WorkflowsPage() {
   // Handoff from a terminal pane's "→ Workflow" button: it stashes the generated
@@ -65,6 +83,7 @@ export default function WorkflowsPage() {
         <PageHeader
           title="Workflows"
           subtitle="Wire agents into a visual, multi-step workflow, then run it — describe one below, or send a terminal session here with its → Workflow button."
+          actions={<ActiveProjectChip />}
         />
       </Reveal>
       <Reveal>

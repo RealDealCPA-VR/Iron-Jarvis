@@ -6,6 +6,8 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { NotificationBell } from "@/components/NotificationBell";
 import { MoodOrb } from "@/components/MoodOrb";
 import { ModelSwitcher } from "@/components/ModelSwitcher";
+import { SimulatedBanner } from "@/components/SimulatedBanner";
+import { FirstRunWizard } from "@/components/FirstRunWizard";
 import { DaemonProvider } from "@/lib/daemon";
 
 export const metadata: Metadata = {
@@ -65,6 +67,10 @@ export default function RootLayout({
                     <NotificationBell />
                   </div>
                 </header>
+                {/* Persistent "simulated mode" strip — top of the content
+                    area (not over the sidebar) while no real provider is
+                    connected. Deliberately non-dismissable. */}
+                <SimulatedBanner />
                 <div
                   id="main-content"
                   tabIndex={-1}
@@ -77,6 +83,9 @@ export default function RootLayout({
           </div>
           {/* ⌘K command palette — navigate, new session, connect a model. */}
           <CommandPalette />
+          {/* Blocking first-run overlay (skips /connections + /settings so
+              the user can actually go wire a model). */}
+          <FirstRunWizard />
         </DaemonProvider>
       </body>
     </html>
