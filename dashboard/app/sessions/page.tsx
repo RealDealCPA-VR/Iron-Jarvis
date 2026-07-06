@@ -9,11 +9,14 @@ import {
   Search,
   ChevronUp,
   ChevronDown,
+  Folder,
+  FolderKanban,
   Square,
   Trash2,
 } from "lucide-react";
 import { usePolledApi } from "@/lib/useApi";
 import { post, del, ApiError } from "@/lib/api";
+import { useDaemon } from "@/lib/daemon";
 import type { SessionView } from "@/lib/types";
 import {
   Card,
@@ -35,6 +38,9 @@ import { timeAgo, shortId } from "@/lib/format";
 
 const ACTIVE = new Set(["active", "running", "pending"]);
 
+/** localStorage key for the "active project only" toolbar toggle. */
+const PROJECT_ONLY_KEY = "ironjarvis.sessions.projectOnly";
+
 export default function SessionsPage() {
   const { data, error, loading, reload } = usePolledApi<{
     sessions: SessionView[];
@@ -43,11 +49,37 @@ export default function SessionsPage() {
   const offline = error && error.status === 0;
   const sessions = useMemo(() => data?.sessions ?? [], [data]);
 
+  // Context spine: the ACTIVE project (from the shared /health poll) powers the
+  // "only" toggle + the stray-project marker on rows.
+  const { health } = useDaemon();
+  const activeProject = health?.active_project ?? null;
+
   // Toolbar state (all client-side over the already-fetched list).
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [agentFilter, setAgentFilter] = useState("");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  // "Active project only" — SSR-safe: default off, hydrate from localStorage
+  // in an effect (same pattern as Sidebar's Simple/Advanced mode).
+  const [projectOnly, setProjectOnly] = useState(false);
+  useEffect(() => {
+    try {
+      setProjectOnly(localStorage.getItem(PROJECT_ONLY_KEY) === "1");
+    } catch {
+      /* localStorage unavailable — the filter just stays off */
+    }
+  }, []);
+  function toggleProjectOnly() {
+    setProjectOnly((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem(PROJECT_ONLY_KEY, next ? "1" : "0");
+      } catch {
+        /* non-persistent, still works for this page load */
+      }
+      return next;
+    });
+  }
 
   // Row + maintenance action state.
   const [stoppingId, setStoppingId] = useState<string | null>(null);
@@ -90,12 +122,14 @@ export default function SessionsPage() {
       );
     if (statusFilter) rows = rows.filter((s) => s.status === statusFilter);
     if (agentFilter) rows = rows.filter((s) => s.agent_type === agentFilter);
+    if (projectOnly && activeProject)
+      rows = rows.filter((s) => s.project_id === activeProject.id);
     return [...rows].sort((a, b) => {
       const da = new Date(a.created_at).getTime();
       const db = new Date(b.created_at).getTime();
       return sortDir === "asc" ? da - db : db - da;
     });
-  }, [sessions, query, statusFilter, agentFilter, sortDir]);
+  }, [sessions, query, statusFilter, agentFilter, sortDir, projectOnly, activeProject]);
 
   async function stopSession(id: string) {
     setStoppingId(id);
@@ -243,6 +277,26 @@ export default function SessionsPage() {
                       </option>
                     ))}
                   </select>
+                  {activeProject && (
+                    <button
+                      type="button"
+                      onClick={toggleProjectOnly}
+                      aria-pressed={projectOnly}
+                      title={
+                        projectOnly
+                          ? `Showing only sessions in "${activeProject.name}" — click to show all`
+                          : `Show only sessions in the active project "${activeProject.name}"`
+                      }
+                      className={`inline-flex max-w-[200px] items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-sm transition-colors ${
+                        projectOnly
+                          ? "border-accent/40 bg-accent/[0.12] text-accent-soft"
+                          : "border-white/[0.08] bg-ink-900/80 text-zinc-400 hover:border-white/20 hover:text-zinc-200"
+                      }`}
+                    >
+                      <FolderKanban size={13} className="shrink-0" />
+                      <span className="truncate">{activeProject.name} only</span>
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -323,6 +377,17 @@ export default function SessionsPage() {
                                 <span className="font-mono text-[11px] text-zinc-600">
                                   {shortId(s.id)}
                                 </span>
+                                {/* Stray-project marker: this session is tagged
+                                    into a project OTHER than the active one. */}
+                                {s.project_id &&
+                                  s.project_id !== activeProject?.id && (
+                                    <span
+                                      title={`Project ${s.project_id}`}
+                                      className="shrink-0 text-zinc-600"
+                                    >
+                                      <Folder size={11} aria-hidden />
+                                    </span>
+                                  )}
                                 {s.provider === "mock" && <MockChip />}
                               </span>
                             </td>

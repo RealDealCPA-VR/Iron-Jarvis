@@ -32,6 +32,8 @@ export interface VaultProvider {
 
 export interface SessionView {
   id: string;
+  /** Context spine: the project this session was tagged into (or null). */
+  project_id?: string | null;
   task: string;
   agent_type: string;
   provider: string;
@@ -130,7 +132,10 @@ export interface WorkflowRun {
   id?: string;
   workflow_name?: string;
   status?: string;
+  /** Context spine: the active project at run time (or null). */
+  project_id?: string | null;
   session_ids_json?: string;
+  started_at?: string;
   created_at?: string;
   [k: string]: unknown;
 }

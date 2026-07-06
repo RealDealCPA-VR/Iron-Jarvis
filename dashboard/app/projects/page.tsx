@@ -14,10 +14,12 @@ import {
   Folder,
   FolderOpen,
   History,
+  MessageSquare,
+  Workflow,
 } from "lucide-react";
 import { api, del, get, post, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
-import type { Project, SessionView } from "@/lib/types";
+import type { Project, SessionView, WorkflowRun } from "@/lib/types";
 import {
   Card,
   Badge,
@@ -44,6 +46,17 @@ interface ProjectDetail {
   project: Project;
   sessions: SessionView[];
 }
+
+/** Slim row from GET /chat/threads — just what the hub list renders. */
+interface ProjectThread {
+  id: string;
+  title: string;
+  updated_at: string;
+  project_id?: string | null;
+}
+
+/** How many rows each hub section shows at most. */
+const HUB_LIMIT = 8;
 
 /** POST /projects/{id}/activate & /projects/deactivate response. */
 interface ActivateResult {
@@ -92,11 +105,19 @@ function ProjectCard({
   const [editing, setEditing] = useState(false);
   const [briefDraft, setBriefDraft] = useState(p.brief);
 
-  /* Expandable recent sessions (fetched lazily on first expand) */
+  /* Expandable activity hub (all fetched lazily on first expand) */
   const [expanded, setExpanded] = useState(false);
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  /* Chat threads tagged into this project (null = not fetched yet). */
+  const [threads, setThreads] = useState<ProjectThread[] | null>(null);
+  const [threadsLoading, setThreadsLoading] = useState(false);
+  const [threadsError, setThreadsError] = useState<string | null>(null);
+  /* Workflow runs tagged into this project (null = not fetched yet). */
+  const [runs, setRuns] = useState<WorkflowRun[] | null>(null);
+  const [runsLoading, setRunsLoading] = useState(false);
+  const [runsError, setRunsError] = useState<string | null>(null);
 
   async function run(action: string, fn: () => Promise<unknown>): Promise<boolean> {
     setBusy(action);
@@ -136,7 +157,38 @@ function ProjectCard({
   async function toggleSessions() {
     const next = !expanded;
     setExpanded(next);
-    if (!next || detail || detailLoading) return;
+    if (!next) return;
+    // The three hub sections load independently — one failing endpoint never
+    // blanks the others. A failed section retries on the next expand.
+    if (threads === null && !threadsLoading) {
+      setThreadsLoading(true);
+      setThreadsError(null);
+      get<{ threads: ProjectThread[] }>("/chat/threads")
+        .then((d) =>
+          setThreads((d.threads ?? []).filter((t) => t.project_id === p.id)),
+        )
+        .catch((err) => setThreadsError(errText(err)))
+        .finally(() => setThreadsLoading(false));
+    }
+    if (runs === null && !runsLoading) {
+      setRunsLoading(true);
+      setRunsError(null);
+      get<{ runs: WorkflowRun[] }>("/workflows/runs")
+        .then((d) =>
+          setRuns(
+            (d.runs ?? [])
+              .filter((r) => r.project_id === p.id)
+              .sort(
+                (a, b) =>
+                  new Date(b.started_at ?? 0).getTime() -
+                  new Date(a.started_at ?? 0).getTime(),
+              ),
+          ),
+        )
+        .catch((err) => setRunsError(errText(err)))
+        .finally(() => setRunsLoading(false));
+    }
+    if (detail || detailLoading) return;
     setDetailLoading(true);
     setDetailError(null);
     try {
@@ -299,9 +351,10 @@ function ProjectCard({
           type="button"
           onClick={toggleSessions}
           aria-expanded={expanded}
+          title="Recent sessions, chat threads, and workflow runs in this project"
           className={`${BTN_GHOST} ml-auto`}
         >
-          <History size={13} /> Recent sessions
+          <History size={13} /> Activity
           {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
         </button>
       </div>
@@ -313,37 +366,115 @@ function ProjectCard({
       )}
 
       {expanded && (
-        <div className="mt-3.5 border-t hairline pt-3.5">
-          {detailLoading ? (
-            <Spinner label="Loading sessions…" />
-          ) : detailError ? (
-            <ErrorNote>{detailError}</ErrorNote>
-          ) : !detail || detail.sessions.length === 0 ? (
-            <div className="py-1 text-xs text-zinc-500">
-              No sessions in this project yet — make it active and start a chat.
+        <div className="mt-3.5 space-y-4 border-t hairline pt-3.5">
+          {/* --- Sessions ---------------------------------------------------- */}
+          <section>
+            <div className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+              <History size={11} /> Sessions
             </div>
-          ) : (
-            <ul className="space-y-1.5">
-              {detail.sessions.map((s) => (
-                <li key={s.id}>
-                  <Link
-                    href={`/sessions/${encodeURIComponent(s.id)}`}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2 transition-colors hover:border-accent/25 hover:bg-white/[0.04]"
+            {detailLoading ? (
+              <Spinner label="Loading sessions…" />
+            ) : detailError ? (
+              <ErrorNote>{detailError}</ErrorNote>
+            ) : !detail || detail.sessions.length === 0 ? (
+              <div className="py-1 text-xs text-zinc-500">
+                No sessions in this project yet — make it active and start a chat.
+              </div>
+            ) : (
+              <ul className="space-y-1.5">
+                {detail.sessions.map((s) => (
+                  <li key={s.id}>
+                    <Link
+                      href={`/sessions/${encodeURIComponent(s.id)}`}
+                      className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2 transition-colors hover:border-accent/25 hover:bg-white/[0.04]"
+                    >
+                      <span className="min-w-0 truncate text-xs text-zinc-300">
+                        {s.task || s.id}
+                      </span>
+                      <span className="flex shrink-0 items-center gap-2">
+                        <Badge value={s.status} />
+                        <span className="text-[11px] text-zinc-600">
+                          {timeAgo(s.created_at)}
+                        </span>
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          {/* --- Chat threads ------------------------------------------------ */}
+          <section>
+            <div className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+              <MessageSquare size={11} /> Chat threads
+            </div>
+            {threadsLoading ? (
+              <Spinner label="Loading chat threads…" />
+            ) : threadsError ? (
+              <ErrorNote>{threadsError}</ErrorNote>
+            ) : !threads || threads.length === 0 ? (
+              <div className="py-1 text-xs text-zinc-500">
+                No chat threads tagged yet — new chats tag the ACTIVE project
+                automatically.
+              </div>
+            ) : (
+              <ul className="space-y-1.5">
+                {threads.slice(0, HUB_LIMIT).map((t) => (
+                  <li key={t.id}>
+                    <Link
+                      href="/chat"
+                      title={`Open Chat — "${t.title || "Untitled chat"}" is in the threads sidebar`}
+                      className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2 transition-colors hover:border-accent/25 hover:bg-white/[0.04]"
+                    >
+                      <span className="min-w-0 truncate text-xs text-zinc-300">
+                        {t.title || "Untitled chat"}
+                      </span>
+                      <span className="shrink-0 text-[11px] text-zinc-600">
+                        {timeAgo(t.updated_at)}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          {/* --- Workflow runs ----------------------------------------------- */}
+          <section>
+            <div className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+              <Workflow size={11} /> Workflow runs
+            </div>
+            {runsLoading ? (
+              <Spinner label="Loading workflow runs…" />
+            ) : runsError ? (
+              <ErrorNote>{runsError}</ErrorNote>
+            ) : !runs || runs.length === 0 ? (
+              <div className="py-1 text-xs text-zinc-500">
+                No workflow runs in this project yet — runs started while it is
+                active land here.
+              </div>
+            ) : (
+              <ul className="space-y-1.5">
+                {runs.slice(0, HUB_LIMIT).map((r, i) => (
+                  <li
+                    key={r.id ?? `${r.workflow_name}-${i}`}
+                    className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2"
                   >
                     <span className="min-w-0 truncate text-xs text-zinc-300">
-                      {s.task || s.id}
+                      {r.workflow_name || "—"}
                     </span>
                     <span className="flex shrink-0 items-center gap-2">
-                      <Badge value={s.status} />
+                      <Badge value={r.status || "unknown"} />
                       <span className="text-[11px] text-zinc-600">
-                        {timeAgo(s.created_at)}
+                        {timeAgo(r.started_at)}
                       </span>
                     </span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
         </div>
       )}
     </Card>

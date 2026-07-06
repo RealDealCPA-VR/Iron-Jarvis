@@ -45,6 +45,7 @@ import {
   Bot,
   Check,
   Copy,
+  Folder,
   FolderKanban,
   History,
   Loader2,
@@ -137,6 +138,8 @@ interface ThreadSummary {
   id: string;
   title: string;
   persona?: string;
+  /** Context spine: the project this thread was tagged into (or null). */
+  project_id?: string | null;
   messages: number | ChatMessage[];
   updated_at: string;
 }
@@ -146,6 +149,8 @@ interface ThreadDetail {
   id: string;
   title: string;
   persona?: string;
+  /** Context spine: the project this thread was tagged into (or null). */
+  project_id?: string | null;
   messages: ChatMessage[];
 }
 
@@ -187,6 +192,9 @@ const TOOL_LIST_CAP = 100;
 const PERSONA_KEY = "ij_chat_persona";
 const PERSONA_CUSTOM_KEY = "ij_chat_persona_custom";
 const CUSTOM_PERSONA = "__custom__";
+
+// Threads-sidebar "active project only" toggle persistence.
+const PROJECT_ONLY_KEY = "ironjarvis.chat.projectOnly";
 
 // Fallback until GET /chat/personas answers (or if it never does).
 const DEFAULT_PERSONAS: PersonaOption[] = [
@@ -552,6 +560,32 @@ export default function ChatPage() {
   // threads are tagged with it server-side).
   const { health } = useDaemon();
   const activeProject = health?.active_project ?? null;
+  // Sidebar "active project only" filter — SSR-safe: default off, hydrate from
+  // localStorage in an effect (same pattern as the persona preference).
+  const [projectOnly, setProjectOnly] = useState(false);
+  useEffect(() => {
+    try {
+      setProjectOnly(window.localStorage.getItem(PROJECT_ONLY_KEY) === "1");
+    } catch {
+      /* localStorage unavailable — the filter just stays off */
+    }
+  }, []);
+  function toggleProjectOnly() {
+    setProjectOnly((v) => {
+      const next = !v;
+      try {
+        window.localStorage.setItem(PROJECT_ONLY_KEY, next ? "1" : "0");
+      } catch {
+        /* non-persistent, still works for this page load */
+      }
+      return next;
+    });
+  }
+  // The sidebar list after the project filter (purely client-side).
+  const visibleThreads =
+    projectOnly && activeProject
+      ? threads.filter((t) => t.project_id === activeProject.id)
+      : threads;
 
   // ---- Voice. ONE dictation engine for both the composer mic and hands-free
   // Voice Chat (two instances would fight over the mic / recognition service).
@@ -1597,18 +1631,40 @@ export default function ChatPage() {
             className={`${sidebarOpen ? "" : "hidden"} w-full shrink-0 md:block md:w-60`}
           >
             <Card pad={false} className="overflow-hidden">
-              <div className="flex items-center justify-between border-b hairline px-3 py-2">
-                <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-                  Threads
-                </span>
-                <button
-                  type="button"
-                  onClick={newChat}
-                  className="btn-ghost px-2 py-1 text-[12px]"
-                  title="Start a new conversation"
-                >
-                  <Plus size={13} /> New chat
-                </button>
+              <div className="border-b hairline px-3 py-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                    Threads
+                  </span>
+                  <button
+                    type="button"
+                    onClick={newChat}
+                    className="btn-ghost px-2 py-1 text-[12px]"
+                    title="Start a new conversation"
+                  >
+                    <Plus size={13} /> New chat
+                  </button>
+                </div>
+                {activeProject && (
+                  <button
+                    type="button"
+                    onClick={toggleProjectOnly}
+                    aria-pressed={projectOnly}
+                    title={
+                      projectOnly
+                        ? `Showing only chats in "${activeProject.name}" — click to show all`
+                        : `Show only chats in the active project "${activeProject.name}"`
+                    }
+                    className={`mt-1.5 inline-flex max-w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] transition-colors ${
+                      projectOnly
+                        ? "border-accent/40 bg-accent/[0.12] text-accent-soft"
+                        : "border-white/[0.08] text-zinc-400 hover:border-white/20 hover:text-zinc-200"
+                    }`}
+                  >
+                    <FolderKanban size={11} className="shrink-0" />
+                    <span className="truncate">{activeProject.name} only</span>
+                  </button>
+                )}
               </div>
               <div className="max-h-[70vh] overflow-y-auto p-1.5">
                 {threads.length === 0 ? (
@@ -1616,9 +1672,14 @@ export default function ChatPage() {
                     No saved chats yet — conversations appear here after the first
                     reply.
                   </p>
+                ) : visibleThreads.length === 0 ? (
+                  <p className="px-2.5 py-3 text-xs leading-relaxed text-zinc-500">
+                    No chats in this project yet — new conversations are tagged
+                    into it automatically.
+                  </p>
                 ) : (
                   <div className="space-y-0.5">
-                    {threads.map((t) => {
+                    {visibleThreads.map((t) => {
                       const active = t.id === threadId;
                       const count = msgCount(t);
                       return (
@@ -1637,11 +1698,24 @@ export default function ChatPage() {
                             title={t.title || "Untitled chat"}
                           >
                             <span
-                              className={`block truncate text-[13px] ${
+                              className={`flex items-center gap-1.5 text-[13px] ${
                                 active ? "text-accent-soft" : "text-zinc-200"
                               }`}
                             >
-                              {t.title || "Untitled chat"}
+                              <span className="min-w-0 truncate">
+                                {t.title || "Untitled chat"}
+                              </span>
+                              {/* Stray-project marker: this thread is tagged
+                                  into a project OTHER than the active one. */}
+                              {t.project_id &&
+                                t.project_id !== activeProject?.id && (
+                                  <span
+                                    title={`Project ${t.project_id}`}
+                                    className="shrink-0 text-zinc-600"
+                                  >
+                                    <Folder size={11} aria-hidden />
+                                  </span>
+                                )}
                             </span>
                             <span className="block text-[11px] text-zinc-500">
                               {timeAgo(t.updated_at)} · {count} msg
