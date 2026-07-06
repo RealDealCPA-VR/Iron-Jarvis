@@ -1,7 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { BarChart3, Coins, Hash, Activity, Cpu, CalendarDays } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  BarChart3,
+  Coins,
+  Hash,
+  Activity,
+  Cpu,
+  CalendarDays,
+  RefreshCw,
+} from "lucide-react";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import {
   Card,
@@ -203,15 +211,30 @@ const DAY_OPTIONS = [7, 30, 90] as const;
 
 export default function UsagePage() {
   const [days, setDays] = useState<number>(30);
-  const { data, error, loading } = usePolledApi<UsageResponse>(
+  const { data, error, loading, reload } = usePolledApi<UsageResponse>(
     `/usage?days=${days}`,
     15000,
   );
   // Full-year series for the contribution heatmap (DB-backed, so it covers
   // every restart — not just this run of the daemon).
-  const { data: yearData, loading: yearLoading } = useApi<UsageResponse>(
-    "/usage?days=365",
-  );
+  const {
+    data: yearData,
+    loading: yearLoading,
+    reload: reloadYear,
+  } = useApi<UsageResponse>("/usage?days=365");
+
+  // Manual refresh: reload BOTH data sources; spin only for user-initiated
+  // reloads (the 15s poll also flips `loading`, which shouldn't animate).
+  const [refreshing, setRefreshing] = useState(false);
+  const anyLoading = loading || yearLoading;
+  useEffect(() => {
+    if (!anyLoading) setRefreshing(false);
+  }, [anyLoading]);
+  const refresh = () => {
+    setRefreshing(true);
+    reload();
+    reloadYear();
+  };
 
   const offline = error && error.status === 0;
   const totals = data?.totals;
@@ -247,21 +270,36 @@ export default function UsagePage() {
           title="Usage"
           subtitle="Token spend and run volume across your providers."
           actions={
-            <div className="flex items-center gap-1 rounded-xl border border-white/[0.08] bg-ink-900/80 p-1">
-              {DAY_OPTIONS.map((d) => (
-                <button
-                  key={d}
-                  type="button"
-                  onClick={() => setDays(d)}
-                  className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
-                    days === d
-                      ? "bg-accent/15 text-accent-soft"
-                      : "text-zinc-400 hover:text-zinc-200"
-                  }`}
-                >
-                  {d}d
-                </button>
-              ))}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={refresh}
+                disabled={refreshing}
+                title="Reload usage data"
+                className="btn-ghost py-1.5 text-xs disabled:opacity-50"
+              >
+                <RefreshCw
+                  size={14}
+                  className={refreshing ? "animate-spin" : ""}
+                />{" "}
+                Refresh
+              </button>
+              <div className="flex items-center gap-1 rounded-xl border border-white/[0.08] bg-ink-900/80 p-1">
+                {DAY_OPTIONS.map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setDays(d)}
+                    className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${
+                      days === d
+                        ? "bg-accent/15 text-accent-soft"
+                        : "text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    {d}d
+                  </button>
+                ))}
+              </div>
             </div>
           }
         />

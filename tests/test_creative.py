@@ -155,6 +155,54 @@ def test_file_by_path_guards(tmp_path):
     assert client.get(f"/creative/file-by-path?path={key.with_suffix('.png')}").status_code in (403, 404)
 
 
+def test_thumbnail_endpoint_images_and_fallbacks(tmp_path, monkeypatch):
+    from PIL import Image
+
+    client = TestClient(create_app(str(tmp_path)))
+    big = tmp_path / "big.png"
+    Image.new("RGB", (1600, 900), (10, 200, 220)).save(big)
+
+    r = client.get(f"/creative/thumb?path={big}")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/jpeg"
+    assert 0 < len(r.content) < big.stat().st_size  # actually smaller
+
+    # Cache hit: second call serves the same rendered thumb.
+    assert client.get(f"/creative/thumb?path={big}").content == r.content
+
+    # Video without ffmpeg → honest 404 (the UI falls back client-side).
+    import shutil as _sh
+
+    monkeypatch.setattr(_sh, "which", lambda name: None)
+    vid = tmp_path / "clip.mp4"
+    vid.write_bytes(b"\x00" * 2048)
+    assert client.get(f"/creative/thumb?path={vid}").status_code == 404
+
+    # Guards: both/neither source, non-media, relative.
+    assert client.get("/creative/thumb").status_code == 400
+    assert client.get(f"/creative/thumb?path={big}&name=x").status_code == 400
+    txt = tmp_path / "a.txt"
+    txt.write_text("x")
+    assert client.get(f"/creative/thumb?path={txt}").status_code == 415
+
+
+def test_thumbnail_endpoint_artifact_name(tmp_path):
+    import base64 as _b64
+
+    from PIL import Image
+    import io
+
+    client = TestClient(create_app(str(tmp_path)))
+    buf = io.BytesIO()
+    Image.new("RGB", (800, 600), (200, 30, 30)).save(buf, "PNG")
+    up = client.post(
+        "/creative/upload",
+        json={"filename": "red.png", "content_b64": _b64.b64encode(buf.getvalue()).decode()},
+    ).json()
+    r = client.get(f"/creative/thumb?name={up['name']}")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+
+
 def test_publish_endpoint_honest_without_key(tmp_path, monkeypatch):
     monkeypatch.delenv("PIXIO_API_KEY", raising=False)
     client = TestClient(create_app(str(tmp_path)))

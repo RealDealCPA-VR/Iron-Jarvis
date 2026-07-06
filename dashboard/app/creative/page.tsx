@@ -99,6 +99,22 @@ function filePathSrc(absPath: string): string {
   }`;
 }
 
+/** Cached 512px JPEG thumbnail for a creations artifact (name/version variant). */
+function thumbSrcByName(name: string, version: number): string {
+  const token = ijToken();
+  return `${API_BASE}/creative/thumb?name=${encodeURIComponent(name)}&version=${version}${
+    token ? `&token=${encodeURIComponent(token)}` : ""
+  }`;
+}
+
+/** Cached 512px JPEG thumbnail for any local media file by absolute path. */
+function thumbSrcByPath(absPath: string): string {
+  const token = ijToken();
+  return `${API_BASE}/creative/thumb?path=${encodeURIComponent(absPath)}${
+    token ? `&token=${encodeURIComponent(token)}` : ""
+  }`;
+}
+
 function formatSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
@@ -378,6 +394,109 @@ function ShareRow({
 
 /* ---- Grid tiles --------------------------------------------------------------- */
 
+/** The play-glyph overlay/tile shared by every video presentation. */
+function PlayGlyph() {
+  return (
+    <span
+      aria-hidden="true"
+      className="grid h-12 w-12 place-items-center rounded-full border border-white/15 bg-black/50 text-zinc-200 backdrop-blur transition-colors group-hover:border-accent/40 group-hover:text-accent-soft"
+    >
+      <Play size={20} className="ml-0.5" />
+    </span>
+  );
+}
+
+/**
+ * Shared tile image for ALL media grids — tries the daemon's cached thumbnail
+ * (512px JPEG) first, then degrades gracefully (the endpoint 404s for audio,
+ * SVG, undecodable files, and video without ffmpeg):
+ *
+ * - Images: thumb → the original full file (SVG lands here by design) → glyph.
+ * - Videos: thumb as a real frame poster (play glyph on top) → per-view
+ *   fallback: "video" (Creations) renders the metadata-preload hover-play
+ *   <video>; "glyph" (Library / studio strip) keeps the disk-safe glyph tile.
+ * - Audio never reaches this component (callers keep their icon tiles).
+ */
+function Thumb({
+  thumbUrl,
+  fullUrl,
+  alt,
+  kind,
+  videoFallback,
+}: {
+  thumbUrl: string;
+  /** Original media URL — image fallback src and the fallback <video> src. */
+  fullUrl: string;
+  alt: string;
+  kind: "image" | "video";
+  videoFallback: "video" | "glyph";
+}) {
+  // Fallback ladder: 0 = thumbnail, 1 = full file (images only), 2 = last resort.
+  const [step, setStep] = useState(0);
+
+  if (kind === "image") {
+    if (step >= 2) {
+      return (
+        <div className="flex h-full w-full items-center justify-center">
+          <ImageIcon size={22} className="text-accent-soft/70" aria-hidden="true" />
+        </div>
+      );
+    }
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={step === 0 ? thumbUrl : fullUrl}
+        alt={alt}
+        loading="lazy"
+        onError={() => setStep((s) => s + 1)}
+        className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+      />
+    );
+  }
+
+  // Video.
+  if (step === 0) {
+    return (
+      <>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={thumbUrl}
+          alt={alt}
+          loading="lazy"
+          onError={() => setStep(2)}
+          className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+        />
+        <span className="pointer-events-none absolute inset-0 grid place-items-center">
+          <PlayGlyph />
+        </span>
+      </>
+    );
+  }
+  if (videoFallback === "video") {
+    return (
+      <video
+        src={fullUrl}
+        muted
+        playsInline
+        preload="metadata"
+        className="h-full w-full object-cover"
+        onMouseEnter={(e) => {
+          e.currentTarget.play().catch(() => {});
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.pause();
+          e.currentTarget.currentTime = 0;
+        }}
+      />
+    );
+  }
+  return (
+    <div className="flex h-full w-full items-center justify-center">
+      <PlayGlyph />
+    </div>
+  );
+}
+
 function MediaTile({ item, onOpen }: { item: CreativeItem; onOpen: () => void }) {
   const src = fileSrc(item);
   return (
@@ -394,28 +513,13 @@ function MediaTile({ item, onOpen }: { item: CreativeItem; onOpen: () => void })
       className="card-surface group cursor-pointer overflow-hidden text-left transition-all duration-300 hover:-translate-y-0.5 hover:shadow-card-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
     >
       <div className="relative aspect-video w-full overflow-hidden bg-ink-950">
-        {item.media === "image" ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={src}
+        {item.media !== "audio" ? (
+          <Thumb
+            thumbUrl={thumbSrcByName(item.name, item.version)}
+            fullUrl={src}
             alt={item.filename}
-            loading="lazy"
-            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
-          />
-        ) : item.media === "video" ? (
-          <video
-            src={src}
-            muted
-            playsInline
-            preload="metadata"
-            className="h-full w-full object-cover"
-            onMouseEnter={(e) => {
-              e.currentTarget.play().catch(() => {});
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.pause();
-              e.currentTarget.currentTime = 0;
-            }}
+            kind={item.media}
+            videoFallback="video"
           />
         ) : (
           <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-4">
@@ -445,9 +549,10 @@ function MediaTile({ item, onOpen }: { item: CreativeItem; onOpen: () => void })
 }
 
 /**
- * Library tile — same card language as MediaTile, but disk-friendly: videos and
- * audio render NO media element at all (a big folder of videos must not hammer
- * the drive); they load only when the lightbox opens. Images stay lazy <img>.
+ * Library tile — same card language as MediaTile, but disk-friendly: images and
+ * videos show the daemon's small cached thumbnail; when a video thumbnail isn't
+ * possible (no ffmpeg) the tile stays glyph-only — NO full video element (a big
+ * folder of videos must not hammer the drive); media loads only in the lightbox.
  */
 function LibraryTile({ file, onOpen }: { file: LibraryFile; onOpen: () => void }) {
   return (
@@ -464,23 +569,14 @@ function LibraryTile({ file, onOpen }: { file: LibraryFile; onOpen: () => void }
       className="card-surface group cursor-pointer overflow-hidden text-left transition-all duration-300 hover:-translate-y-0.5 hover:shadow-card-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
     >
       <div className="relative aspect-video w-full overflow-hidden bg-ink-950">
-        {file.kind === "image" ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={filePathSrc(file.path)}
+        {file.kind !== "audio" ? (
+          <Thumb
+            thumbUrl={thumbSrcByPath(file.path)}
+            fullUrl={filePathSrc(file.path)}
             alt={file.name}
-            loading="lazy"
-            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+            kind={file.kind}
+            videoFallback="glyph"
           />
-        ) : file.kind === "video" ? (
-          <div className="flex h-full w-full items-center justify-center">
-            <span
-              aria-hidden="true"
-              className="grid h-12 w-12 place-items-center rounded-full border border-white/15 bg-black/50 text-zinc-200 backdrop-blur transition-colors group-hover:border-accent/40 group-hover:text-accent-soft"
-            >
-              <Play size={20} className="ml-0.5" />
-            </span>
-          </div>
         ) : (
           <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-4">
             <Music size={22} className="text-accent-soft/70" />

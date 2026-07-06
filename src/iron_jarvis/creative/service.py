@@ -41,6 +41,80 @@ def mime_for(name: str) -> str:
     return guessed or "application/octet-stream"
 
 
+#: Longest edge of a generated thumbnail.
+THUMB_SIZE = 512
+#: Cache cap — oldest thumbs are pruned past this (cheap bound, not an LRU).
+_THUMB_CACHE_MAX = 2000
+
+
+def thumbnail_for(platform, src: Path, *, size: int = THUMB_SIZE) -> Path | None:
+    """A small cached JPEG preview for a media file, or ``None`` when one
+    can't be made (audio, SVG, video without ffmpeg, decode failure) — the
+    caller/UI falls back to the original file or a glyph. Cache key includes
+    mtime+size so an edited file re-thumbnails; cache lives under
+    ``home/creative-thumbs`` and is size-capped."""
+    import hashlib
+    import shutil
+    import subprocess
+
+    kind = media_kind(src.name)
+    if kind not in ("image", "video") or src.suffix.lower() == ".svg":
+        return None
+    try:
+        st = src.stat()
+    except OSError:
+        return None
+    cache_dir = Path(platform.config.home) / "creative-thumbs"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha1(
+        f"{src}|{st.st_mtime_ns}|{st.st_size}|{size}".encode("utf-8", "replace")
+    ).hexdigest()
+    out = cache_dir / f"{key}.jpg"
+    if out.is_file():
+        return out
+
+    try:
+        if kind == "image":
+            from PIL import Image
+
+            with Image.open(src) as im:
+                im = im.convert("RGB")
+                im.thumbnail((size, size))
+                im.save(out, "JPEG", quality=82)
+        else:  # video — grab a frame with ffmpeg when the box has it
+            ff = shutil.which("ffmpeg")
+            if not ff:
+                return None
+            for seek in ("1", "0"):  # 1s in; retry at 0 for very short clips
+                subprocess.run(
+                    [ff, "-y", "-ss", seek, "-i", str(src), "-frames:v", "1",
+                     "-vf", f"scale='min({size},iw)':-2", str(out)],
+                    capture_output=True, timeout=30,
+                )
+                if out.is_file() and out.stat().st_size > 0:
+                    break
+            else:  # pragma: no cover - loop always breaks or falls through
+                pass
+    except Exception:  # noqa: BLE001 — a bad file just gets no thumbnail
+        try:
+            out.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+    if not (out.is_file() and out.stat().st_size > 0):
+        return None
+
+    try:  # bound the cache — prune the oldest fifth when past the cap
+        entries = list(cache_dir.glob("*.jpg"))
+        if len(entries) > _THUMB_CACHE_MAX:
+            entries.sort(key=lambda p: p.stat().st_mtime)
+            for old in entries[: _THUMB_CACHE_MAX // 5]:
+                old.unlink(missing_ok=True)
+    except OSError:  # pragma: no cover - pruning is best-effort
+        pass
+    return out
+
+
 def list_media(platform, *, limit: int = 200) -> list[dict[str, Any]]:
     """Every media artifact, newest first: pixio generations, screenshots,
     uploads — anything in the store that IS media (by kind or extension)."""

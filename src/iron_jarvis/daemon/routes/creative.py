@@ -122,6 +122,35 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=415, detail="not a media artifact")
         return FileResponse(path, media_type=mime_for(path.name))
 
+    @app.get("/creative/thumb")
+    def creative_thumb(path: str = "", name: str = "", version: int | None = None):
+        """A small cached JPEG preview for any media item — gallery artifact
+        (``name``) or local file (``path``). 404 = no thumbnail possible
+        (audio/SVG/no-ffmpeg): the UI falls back to the original or a glyph."""
+        from ...creative.service import thumbnail_for
+
+        if bool(path.strip()) == bool(name.strip()):
+            raise HTTPException(status_code=400, detail="give exactly one of path or name")
+        if name.strip():
+            p = d.platform.artifacts.version_path(name.strip(), version)
+            if p is None or not p.is_file():
+                raise HTTPException(status_code=404, detail="no such media")
+        else:
+            p = Path(path.strip())
+            if not p.is_absolute():
+                raise HTTPException(status_code=400, detail="absolute path required")
+            if media_kind(p.name) is None:
+                raise HTTPException(status_code=415, detail="not a media file")
+            ok, reason = fs_read_ok(str(p))
+            if not ok:
+                raise HTTPException(status_code=403, detail=f"blocked: {reason}")
+            if not p.is_file():
+                raise HTTPException(status_code=404, detail="no such file")
+        thumb = thumbnail_for(d.platform, p)
+        if thumb is None:
+            raise HTTPException(status_code=404, detail="no thumbnail for this file")
+        return FileResponse(thumb, media_type="image/jpeg")
+
     @app.get("/creative/file-by-path")
     def creative_file_by_path(path: str):
         """Serve a LOCAL media file (chat replies embed generated media by its

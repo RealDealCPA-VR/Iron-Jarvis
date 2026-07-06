@@ -23,7 +23,7 @@ bearer token: `%APPDATA%/Iron Jarvis/token.txt` — every daemon request needs
 ## Commands
 
 ```bash
-# Backend tests (~1013, offline, ~2min). ALWAYS run before shipping.
+# Backend tests (~1015, offline, ~2min). ALWAYS run before shipping.
 uv run pytest -q --no-header
 # Dashboard build (must show "Generating static pages (37/37)")
 cd dashboard && pnpm build
