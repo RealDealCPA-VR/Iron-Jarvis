@@ -24,3 +24,22 @@ class MemoryRecord(SQLModel, table=True):
     text: str = ""
     embedding_json: str = "[]"
     created_at: datetime = Field(default_factory=utcnow)
+
+
+class MemoryLinkRecord(SQLModel, table=True):
+    """A user-curated edge in the memory GRAPH view.
+
+    ``a``/``b`` are opaque node ids ("lesson:<id>", "wm:<layer>:<scope>:<key>",
+    "ltm:<source>:<ref>") stored in canonical order (``a < b``) so a pair has
+    exactly one row. ``kind``:
+
+    * ``manual``  — the user drew this connection; always shown.
+    * ``blocked`` — the user disconnected an automatic similarity edge; the
+      pair is suppressed so it never reappears.
+    """
+
+    id: str = Field(default_factory=lambda: new_id("mlink"), primary_key=True)
+    a: str = Field(index=True)
+    b: str = Field(index=True)
+    kind: str = "manual"  # manual | blocked
+    created_at: datetime = Field(default_factory=utcnow)

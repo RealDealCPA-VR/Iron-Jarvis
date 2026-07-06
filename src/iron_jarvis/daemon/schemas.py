@@ -169,6 +169,13 @@ class ConnectionKeyBody(BaseModel):
     key: str
 
 
+class GraphLinkBody(BaseModel):
+    """Connect or disconnect two memory-graph nodes (opaque node ids)."""
+
+    a: str
+    b: str
+
+
 class EndpointModelsBody(BaseModel):
     """Probe an OpenAI-compatible endpoint for its model list (setup-form UX:
     the user shouldn't have to type model ids their server can just report).

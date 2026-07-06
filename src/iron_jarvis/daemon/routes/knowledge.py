@@ -203,7 +203,12 @@ def register(app: FastAPI, d) -> None:
                 secret_resolver=d.platform.secrets.get,
                 http_factory=lambda: httpx.Client(timeout=30),
                 credential_resolver=d.platform.connections.credential,
-                embedder=getattr(getattr(d.platform, "memory", None), "embedder", None),
+                # The SHARED embedder (same as the boot-time sources) — falling
+                # back to memory's mock only when the platform predates the field.
+                embedder=(
+                    getattr(d.platform, "embedder", None)
+                    or getattr(getattr(d.platform, "memory", None), "embedder", None)
+                ),
             )
             d.platform.ltm.register(conn)
         except Exception as exc:  # noqa: BLE001

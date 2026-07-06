@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException
 from typing import Any
 
-from ..schemas import LessonCreateBody, MemoryWrite, MemoryWriteBody
+from ..schemas import GraphLinkBody, LessonCreateBody, MemoryWrite, MemoryWriteBody
 from ...core.db import session_scope
 
 
@@ -128,6 +128,39 @@ def register(app: FastAPI, d) -> None:
                 for r, score in hits
             ]
         }
+
+    # NOTE: /memory/graph* must register BEFORE /memory/{layer}/{key}.
+    @app.get("/memory/graph")
+    def memory_graph(threshold: float = 0.45) -> dict[str, Any]:
+        """The graph view of everything remembered: lessons + working memory +
+        enumerable long-term notes as nodes; similarity (shared embedder) and
+        user-drawn manual links as edges. Blocked pairs stay hidden."""
+        from ...memory.graph import build_memory_graph
+
+        return build_memory_graph(
+            d.platform, threshold=max(0.0, min(float(threshold), 1.0))
+        )
+
+    @app.post("/memory/graph/link")
+    def memory_graph_link(body: GraphLinkBody) -> dict[str, Any]:
+        """User-drawn connection between two nodes (lifts any block)."""
+        from ...memory.graph import set_link
+
+        try:
+            return set_link(d.platform, body.a.strip(), body.b.strip())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.post("/memory/graph/unlink")
+    def memory_graph_unlink(body: GraphLinkBody) -> dict[str, Any]:
+        """Disconnect two nodes: manual links are deleted; similarity edges are
+        blocked (persisted) so they never reappear."""
+        from ...memory.graph import remove_link
+
+        try:
+            return remove_link(d.platform, body.a.strip(), body.b.strip())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     @app.post("/memory")
     def memory_write(body: MemoryWrite) -> dict[str, Any]:

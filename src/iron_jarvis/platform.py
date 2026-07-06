@@ -143,6 +143,11 @@ class Platform:
     tools_registry: "DynamicToolRegistry | None" = None
     intent: "IntentEngine | None" = None
     improvement: "ImprovementEngine | None" = None
+    #: The SHARED embedder (real Ollama when reachable, offline mock otherwise;
+    #: persistent-cached). Built once and injected into filesearch/ltm — kept on
+    #: the platform so later consumers (memory graph, runtime-added LTM sources)
+    #: use the SAME one instead of accidentally falling back to the mock.
+    embedder: "object | None" = None
 
 
 def build_platform(
@@ -508,6 +513,7 @@ def build_platform(
         connections=connections,
         computeruse=computeruse,
         terminals=terminals,
+        embedder=embedder,
     )
 
     # Phase 6: the delegate tool needs the assembled platform.
