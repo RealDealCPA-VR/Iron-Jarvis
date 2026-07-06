@@ -27,9 +27,13 @@ import {
   FolderOpen,
   FolderPlus,
   HardDrive,
+  Link2,
+  Mail,
+  MessageCircle,
   Play,
   Rocket,
   Send,
+  Share2,
   Square,
   Star,
   Terminal,
@@ -232,6 +236,146 @@ function PublicUrlBox({ url, autoCopy = false }: { url: string; autoCopy?: boole
   );
 }
 
+/* ---- Share row ---------------------------------------------------------------- */
+
+const SHARE_TEXT = "Made with Iron Jarvis";
+
+/** Letter-glyph chip for brands lucide no longer ships icons for (X, Facebook, LinkedIn). */
+function BrandGlyph({ glyph }: { glyph: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="grid h-4 w-4 shrink-0 place-items-center rounded-[5px] bg-white/10 text-[9px] font-bold leading-none text-zinc-200"
+    >
+      {glyph}
+    </span>
+  );
+}
+
+/**
+ * Social share buttons for a PUBLISHED (public) url. YouTube has no URL-prefill
+ * upload, so that button opens YouTube Studio and triggers the Download action.
+ */
+function ShareRow({
+  url,
+  isVideo,
+  onYouTubeDownload,
+}: {
+  url: string;
+  isVideo: boolean;
+  onYouTubeDownload: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const [ytHint, setYtHint] = useState(false);
+
+  const openShare = (target: string) => {
+    window.open(target, "_blank", "noopener,noreferrer");
+  };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+    } catch {
+      /* clipboard unavailable — never claim "Copied" without the copy */
+    }
+  };
+
+  const enc = encodeURIComponent;
+  const btnClass =
+    "inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-2.5 py-1.5 text-[11px] font-medium text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/[0.04] hover:text-zinc-100";
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => openShare(`https://twitter.com/intent/tweet?url=${enc(url)}&text=${enc(SHARE_TEXT)}`)}
+          title="Share on X (Twitter)"
+          className={btnClass}
+        >
+          <BrandGlyph glyph="X" /> X (Twitter)
+        </button>
+        <button
+          type="button"
+          onClick={() => openShare(`https://www.facebook.com/sharer/sharer.php?u=${enc(url)}`)}
+          title="Share on Facebook"
+          className={btnClass}
+        >
+          <BrandGlyph glyph="f" /> Facebook
+        </button>
+        <button
+          type="button"
+          onClick={() => openShare(`https://www.linkedin.com/sharing/share-offsite/?url=${enc(url)}`)}
+          title="Share on LinkedIn"
+          className={btnClass}
+        >
+          <BrandGlyph glyph="in" /> LinkedIn
+        </button>
+        <button
+          type="button"
+          onClick={() => openShare(`https://wa.me/?text=${enc(url)}`)}
+          title="Share on WhatsApp"
+          className={btnClass}
+        >
+          <MessageCircle size={13} /> WhatsApp
+        </button>
+        <button
+          type="button"
+          onClick={() => openShare(`https://t.me/share/url?url=${enc(url)}`)}
+          title="Share on Telegram"
+          className={btnClass}
+        >
+          <Send size={13} /> Telegram
+        </button>
+        <button
+          type="button"
+          onClick={() => openShare(`mailto:?subject=${enc("Sharing a creation")}&body=${enc(url)}`)}
+          title="Share by email"
+          className={btnClass}
+        >
+          <Mail size={13} /> Email
+        </button>
+        <button
+          type="button"
+          onClick={() => void copy()}
+          title="Copy the public link"
+          className={btnClass}
+        >
+          {copied ? (
+            <>
+              <Check size={13} className="text-emerald-400" /> Copied ✓
+            </>
+          ) : (
+            <>
+              <Link2 size={13} /> Copy link
+            </>
+          )}
+        </button>
+        {isVideo && (
+          <button
+            type="button"
+            onClick={() => {
+              openShare("https://studio.youtube.com/channel/upload");
+              onYouTubeDownload();
+              setYtHint(true);
+            }}
+            title="YouTube can't take a URL — this opens the upload page and downloads the file"
+            className={btnClass}
+          >
+            <Play size={13} /> YouTube
+          </button>
+        )}
+      </div>
+      {ytHint && (
+        <p className="text-[11px] text-zinc-500">
+          YouTube needs the file itself — download it, then drop it into the upload page.
+        </p>
+      )}
+      <p className="text-[11px] text-zinc-500">The link is public — anyone with it can view.</p>
+    </div>
+  );
+}
+
 /* ---- Grid tiles --------------------------------------------------------------- */
 
 function MediaTile({ item, onOpen }: { item: CreativeItem; onOpen: () => void }) {
@@ -385,6 +529,8 @@ function MediaLightbox({
   const [pubBusy, setPubBusy] = useState(false);
   const [pubUrl, setPubUrl] = useState<string | null>(null);
   const [pubErr, setPubErr] = useState<{ detail: string; notConnected: boolean } | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
+  const downloadRef = useRef<HTMLAnchorElement | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -406,6 +552,12 @@ function MediaLightbox({
     } finally {
       setPubBusy(false);
     }
+  };
+
+  /** Sharing needs the PUBLIC url — publish on first click, same 424 handling. */
+  const share = async () => {
+    setShareOpen(true);
+    if (!pubUrl && !pubBusy) await publish();
   };
 
   return (
@@ -473,7 +625,22 @@ function MediaLightbox({
                   </>
                 )}
               </button>
+              <button
+                type="button"
+                onClick={() => void share()}
+                disabled={pubBusy}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/[0.04] disabled:opacity-50"
+              >
+                {pubBusy && shareOpen ? (
+                  <LoaderInline label="Preparing…" />
+                ) : (
+                  <>
+                    <Share2 size={13} /> Share
+                  </>
+                )}
+              </button>
               <a
+                ref={downloadRef}
                 href={src}
                 download={downloadName}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/[0.04]"
@@ -483,6 +650,13 @@ function MediaLightbox({
             </div>
 
             {pubUrl && <PublicUrlBox url={pubUrl} autoCopy />}
+            {shareOpen && pubUrl && (
+              <ShareRow
+                url={pubUrl}
+                isVideo={media === "video"}
+                onYouTubeDownload={() => downloadRef.current?.click()}
+              />
+            )}
             {pubErr && (
               <ErrorNote>
                 {pubErr.detail}
@@ -636,6 +810,10 @@ interface StudioTail {
   tail: string;
   alive: boolean;
   exit_code: number | null;
+  /** Human-readable CLI mode line (e.g. "auto-accept edits on") — null when unknown. */
+  mode: string | null;
+  /** True once the daemon has verified an auto/full-auto mode is engaged. */
+  automode: boolean;
 }
 
 interface StudioStartResult {
@@ -644,6 +822,8 @@ interface StudioStartResult {
   cwd: string;
   autopilot: boolean;
   cli: string;
+  /** How autopilot engages: Shift+Tab after boot (claude), a CLI flag (codex), or null. */
+  automode_method?: "shift-tab" | "flag" | null;
 }
 
 /** In-memory shape of the running session (camelCase mirror of StudioSession). */
@@ -652,6 +832,8 @@ interface LiveSession {
   dest: string;
   cliLabel: string;
   command: string;
+  /** Epoch ms — drives the "auto mode: engaging…" grace window on the badge. */
+  startedAt: number;
 }
 
 /**
@@ -789,6 +971,10 @@ function StudioView({
   const [alive, setAlive] = useState(true);
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [gone, setGone] = useState(false); // tail endpoint 404'd — terminal deleted
+  const [mode, setMode] = useState<string | null>(null);
+  const [automode, setAutomode] = useState(false);
+  // Badge grace window: "engaging…" for ~30s after start, then honest "unverified".
+  const [engaging, setEngaging] = useState(true);
 
   const baselineRef = useRef<Set<string>>(new Set());
   const [newFiles, setNewFiles] = useState<LibraryFile[]>([]);
@@ -822,6 +1008,19 @@ function StudioView({
     return () => clearTimeout(t);
   }, [booting]);
 
+  // Automode badge: "engaging…" for the first ~30s after start, then "unverified".
+  useEffect(() => {
+    if (!session) return;
+    const remaining = session.startedAt + 30_000 - Date.now();
+    if (remaining <= 0) {
+      setEngaging(false);
+      return;
+    }
+    setEngaging(true);
+    const t = setTimeout(() => setEngaging(false), remaining);
+    return () => clearTimeout(t);
+  }, [session]);
+
   // Console tail: poll every 2s while alive; stop (and show exit) when it isn't.
   useEffect(() => {
     if (!session || gone) return;
@@ -837,6 +1036,8 @@ function StudioView({
         setTail(t.tail);
         setAlive(t.alive);
         setExitCode(t.exit_code);
+        setMode(t.mode ?? null);
+        setAutomode(t.automode === true);
         if (t.alive) timer = setTimeout(poll, 2000);
       } catch (e) {
         if (cancelled) return;
@@ -908,6 +1109,8 @@ function StudioView({
     setGone(false);
     setAlive(true);
     setExitCode(null);
+    setMode(null);
+    setAutomode(false);
     setSayErr(null);
     setStudioSelected(null);
   }, []);
@@ -940,6 +1143,7 @@ function StudioView({
         dest: res.cwd || chosenDir,
         cliLabel: engine?.label ?? cli,
         command: res.command,
+        startedAt: Date.now(),
       };
       baselineRef.current = new Set(baseline);
       resetLive(false);
@@ -954,7 +1158,7 @@ function StudioView({
           sent_first: false,
           baseline,
           messages: [],
-          started_at: Date.now(),
+          started_at: live.startedAt,
         },
       });
     } catch (e) {
@@ -980,6 +1184,7 @@ function StudioView({
       dest: resumeOffer.dest,
       cliLabel: resumeOffer.cli_label,
       command: resumeOffer.command,
+      startedAt: resumeOffer.started_at,
     });
     setBooting(false);
     setResumeOffer(null);
@@ -1053,6 +1258,32 @@ function StudioView({
             >
               {session.command}
             </code>
+            {alive &&
+              !gone &&
+              (automode ? (
+                <span
+                  title={mode ?? "auto mode verified"}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-accent/30 bg-accent/[0.1] px-2.5 py-0.5 text-[11px] font-medium text-accent-soft"
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden="true" />
+                  auto mode on
+                </span>
+              ) : (
+                <span
+                  title={
+                    engaging
+                      ? "Waiting for the CLI to confirm its mode…"
+                      : "The CLI never confirmed an auto mode — open the terminal in Build to check."
+                  }
+                  className="inline-flex max-w-[22rem] items-center rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-0.5 text-[11px] font-medium text-zinc-500"
+                >
+                  <span className="truncate">
+                    {engaging
+                      ? "auto mode: engaging…"
+                      : "auto mode unverified — check the terminal in Build"}
+                  </span>
+                </span>
+              ))}
             <code
               className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-500"
               title={session.dest}
@@ -1378,8 +1609,9 @@ function StudioView({
                 className="mt-0.5 h-3.5 w-3.5 accent-cyan-400"
               />
               <span>
-                <span className="font-medium text-zinc-300">Autopilot</span> — launches with the
-                CLI’s skip-permissions flag so it runs to completion unattended.
+                <span className="font-medium text-zinc-300">Autopilot</span> — runs unattended.
+                For Claude: engages auto-accept via Shift+Tab after boot (no permission prompts);
+                for Codex: launches with <code className="font-mono">--full-auto</code>.
               </span>
             </label>
           </div>

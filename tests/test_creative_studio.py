@@ -43,7 +43,7 @@ def test_studio_say_and_tail_relay_into_a_real_terminal(tmp_path):
         t = client.get(f"/creative/studio/{tid}/tail")
         assert t.status_code == 200
         body = t.json()
-        assert set(body) == {"tail", "alive", "exit_code"}
+        assert set(body) == {"tail", "alive", "exit_code", "mode", "automode"}
         assert isinstance(body["tail"], str)
 
         # Newlines are flattened so a multi-line brief can't submit early.
@@ -59,6 +59,31 @@ def test_studio_say_and_tail_relay_into_a_real_terminal(tmp_path):
 
     gone = client.post(f"/creative/studio/{tid}/say", json={"text": "hi"})
     assert gone.status_code in (404, 409)
+
+
+def test_latest_claude_mode_detection():
+    from iron_jarvis.daemon.routes.creative import latest_claude_mode
+
+    assert latest_claude_mode("booting…\n? for shortcuts") is None
+    assert latest_claude_mode("x auto-accept edits on y") == "auto-accept edits on"
+    # The TUI repaints the banner each Shift+Tab — the LATEST occurrence wins.
+    cycled = "auto-accept edits on ... plan mode on"
+    assert latest_claude_mode(cycled) == "plan mode on"
+    back = "plan mode on ......... auto-accept edits on"
+    assert latest_claude_mode(back) == "auto-accept edits on"
+    assert latest_claude_mode("bypass permissions on") == "bypass permissions on"
+
+
+def test_tail_reports_mode_fields(tmp_path):
+    client = TestClient(create_app(str(tmp_path)))
+    term = client.post("/terminals", json={"cwd": str(tmp_path)})
+    tid = term.json()["id"]
+    try:
+        body = client.get(f"/creative/studio/{tid}/tail").json()
+        assert set(body) == {"tail", "alive", "exit_code", "mode", "automode"}
+        assert body["automode"] is False  # a plain shell paints no mode banner
+    finally:
+        client.delete(f"/terminals/{tid}")
 
 
 def test_fs_mkdir_creates_subfolder_with_guards(tmp_path):

@@ -25,12 +25,59 @@ from ..schemas import (
 from ...core.fs_policy import fs_read_ok
 from ...creative.service import list_media, media_kind, mime_for
 
-#: Per-CLI "run without permission prompts" flags for studio autopilot. Only
-#: CLIs listed here get a flag — unknown ones launch plain (still driveable).
+#: Per-CLI "run without permission prompts" LAUNCH FLAGS for studio autopilot.
+#: Claude is deliberately NOT here — its auto mode is engaged the way a human
+#: does it: Shift+Tab cycling after boot (see _engage_claude_automode), which
+#: uses the milder auto-accept mode instead of --dangerously-skip-permissions.
 _AUTOPILOT_FLAGS = {
-    "claude": "--dangerously-skip-permissions",
     "codex": "--full-auto",
 }
+
+#: Shift+Tab as a terminal keystroke (CSI Z) — cycles Claude Code's permission
+#: mode: default → auto-accept edits → plan → default.
+_SHIFT_TAB = "\x1b[Z"
+
+#: Mode banners Claude Code paints (ANSI already stripped by output_tail).
+_MODE_STRINGS = ("auto-accept edits on", "bypass permissions on", "plan mode on")
+
+
+def latest_claude_mode(tail: str) -> str | None:
+    """The MOST RECENT permission-mode banner in the clean tail (the TUI
+    repaints the banner each cycle, so the last occurrence wins), or None
+    when no banner has been seen (default mode)."""
+    best: tuple[int, str] | None = None
+    window = tail[-4000:]
+    for mode in _MODE_STRINGS:
+        idx = window.rfind(mode)
+        if idx >= 0 and (best is None or idx > best[0]):
+            best = (idx, mode)
+    return best[1] if best else None
+
+
+def _engage_claude_automode(session) -> None:
+    """Background: wait for Claude Code to boot, then press Shift+Tab until the
+    tail shows auto-accept (or bypass) engaged. Best-effort and bounded — the
+    tail endpoint reports the detected mode so the UI never has to guess."""
+    import time
+
+    deadline = time.time() + 45
+    while time.time() < deadline:  # wait for the TUI to come up
+        if not session.alive:
+            return
+        tail = session.output_tail()
+        if "? for shortcuts" in tail or "shift+tab" in tail.lower():
+            break
+        time.sleep(1.0)
+    for _ in range(6):  # cycle until an autopilot mode is the latest banner
+        if not session.alive or time.time() > deadline + 30:
+            return
+        if latest_claude_mode(session.output_tail()) in (
+            "auto-accept edits on",
+            "bypass permissions on",
+        ):
+            return
+        session.write(_SHIFT_TAB)
+        time.sleep(1.5)
 
 #: Media-generation skills the studio brief points the CLI at when the user
 #: picks "Auto" — the CLI (e.g. Claude Code) discovers these from
@@ -175,11 +222,22 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=429, detail=str(exc))
         # Type the launch into the shell ("\r" = Enter, same as a keystroke).
         session.write(command + "\r")
+        # Claude's auto mode is engaged like a human does it: Shift+Tab cycles
+        # after boot. Background + best-effort; /tail reports the live mode.
+        automode_method = "flag" if flag else None
+        if body.autopilot and body.cli == "claude":
+            import threading
+
+            threading.Thread(
+                target=_engage_claude_automode, args=(session,), daemon=True
+            ).start()
+            automode_method = "shift-tab"
         return {
             "terminal_id": session.id,
             "command": command,
             "cwd": str(cwd),
-            "autopilot": bool(flag),
+            "autopilot": bool(flag) or automode_method == "shift-tab",
+            "automode_method": automode_method,
             "cli": cli["label"],
         }
 
@@ -217,10 +275,16 @@ def register(app: FastAPI, d) -> None:
         if session is None:
             raise HTTPException(status_code=404, detail="no such terminal")
         chars = max(200, min(int(chars), 32_000))
+        full = session.output_tail()
+        mode = latest_claude_mode(full)
         return {
-            "tail": session.output_tail()[-chars:],
+            "tail": full[-chars:],
             "alive": session.alive,
             "exit_code": session.exit_code,
+            # The LATEST permission-mode banner painted by the CLI (Claude):
+            # lets the UI show an honest "auto mode engaged" badge.
+            "mode": mode,
+            "automode": mode in ("auto-accept edits on", "bypass permissions on"),
         }
 
     @app.post("/creative/upload")
