@@ -169,6 +169,15 @@ class ConnectionKeyBody(BaseModel):
     key: str
 
 
+class EndpointModelsBody(BaseModel):
+    """Probe an OpenAI-compatible endpoint for its model list (setup-form UX:
+    the user shouldn't have to type model ids their server can just report).
+    POST (not GET) so an optional key never rides a query string/log line."""
+
+    base_url: str
+    api_key: str = ""
+
+
 class OAuthCompleteBody(BaseModel):
     """Manual-code OAuth completion: the pasted code may embed state (code#state)."""
 

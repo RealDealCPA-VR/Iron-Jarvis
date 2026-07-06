@@ -67,12 +67,15 @@ def test_models_endpoint_lights_up_local_and_custom(tmp_path):
     before = client.get("/models").json()["models"]
     assert not any(m["provider"] in ("ollama", "custom") for m in before)
 
+    # Loopback dead ports, NOT a real domain: /models now live-discovers the
+    # configured endpoints' model lists, and a reachable host would (correctly)
+    # replace the curated entries below — and break the suite's offline promise.
     r = client.put(
         "/settings",
         json={
             "values": {
-                "ollama_base_url": "http://localhost:11434",
-                "custom_base_url": "https://ollama.com",
+                "ollama_base_url": "http://127.0.0.1:9",
+                "custom_base_url": "http://127.0.0.1:9",
                 "custom_model": "qwen3-coder",
             }
         },

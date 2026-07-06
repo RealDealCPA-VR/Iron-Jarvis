@@ -253,6 +253,33 @@ class ProviderManager:
         for key in [k for k in self._cache if k[0] == name]:
             self._cache.pop(key, None)
 
+    def configure_local(
+        self,
+        *,
+        ollama_base_url: str | None = None,
+        ollama_model: str | None = None,
+        custom_base_url: str | None = None,
+        custom_model: str | None = None,
+    ) -> None:
+        """Re-point the local/custom OpenAI-compatible endpoints LIVE.
+
+        The constructor captured these from config at boot; without this, a
+        user saving an endpoint in Settings/Connections got a provider that
+        stayed unavailable (and adapters bound to stale URLs/models) until the
+        next daemon restart. put_settings calls this on any change to the four
+        keys. Cached adapter instances for the two providers are dropped so the
+        next get() builds against the new values."""
+        # `or None`: clearing a field in Settings sends "" — availability checks
+        # `is not None`, so an empty string must mean "not configured".
+        self._ollama_base_url = _normalize_ollama_url(ollama_base_url) or None
+        if ollama_model:
+            self._ollama_model = ollama_model
+        self._custom_base_url = _normalize_ollama_url(custom_base_url) or None
+        self._custom_model = custom_model or ""
+        for provider in ("ollama", "custom"):
+            for key in [k for k in self._cache if k[0] == provider]:
+                self._cache.pop(key, None)
+
     def available(self, name: str) -> bool:
         if name in API_PROVIDERS:
             return self._present(name)

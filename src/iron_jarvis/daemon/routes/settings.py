@@ -52,6 +52,22 @@ def register(app: FastAPI, d) -> None:
                     fn = d._live_rearm.get(group)
                     if fn is not None:
                         loop.call_soon_threadsafe(fn)
+        # LIVE re-point: the ProviderManager captured the local/custom endpoint
+        # config at boot — without this, a freshly saved endpoint stayed
+        # unavailable (and adapters bound stale URLs/models) until restart.
+        if any(
+            k in ("ollama_base_url", "ollama_model", "custom_base_url", "custom_model")
+            for k in updated
+        ):
+            try:
+                d.platform.providers.configure_local(
+                    ollama_base_url=cfg.ollama_base_url,
+                    ollama_model=cfg.ollama_model,
+                    custom_base_url=cfg.custom_base_url,
+                    custom_model=cfg.custom_model,
+                )
+            except Exception:  # noqa: BLE001 — next boot still picks config up
+                pass
         return {
             "settings": {k: getattr(cfg, k, None) for k in _SETTINGS_KEYS},
             "updated": updated,

@@ -74,6 +74,41 @@ def _ollama_models(base_url: str) -> list[str]:
     return [str(m.get("name")) for m in data.get("models", []) if m.get("name")]
 
 
+def _openai_compatible_models(base_url: str, key: str = "") -> list[str]:
+    """``GET <base>/v1/models`` on ANY OpenAI-compatible server (LM Studio,
+    vLLM, LocalAI, llama.cpp, Ollama's /v1 shim, private gateways). Accepts a
+    bare host, a ``/v1`` base, or a full chat URL — same normalization as the
+    provider manager."""
+    u = (base_url or "").strip().rstrip("/")
+    if u.endswith("/chat/completions"):
+        u = u[: -len("/chat/completions")].rstrip("/")
+    if not u.endswith("/v1"):
+        u += "/v1"
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    data = _get_json(f"{u}/models", headers)
+    return [str(m.get("id")) for m in data.get("data", []) if m.get("id")]
+
+
+def list_endpoint_models(base_url: str, key: str = "") -> list[str]:
+    """UNCACHED model listing for a user-entered endpoint (the setup form's
+    probe — the user shouldn't have to know their server's model ids by
+    heart). Tries the OpenAI-compatible ``/v1/models`` first, then Ollama's
+    native ``/api/tags``; raises the original error when both fail so the
+    caller can surface it honestly."""
+    if not (base_url or "").strip():
+        raise ValueError("base_url is required")
+    try:
+        return _openai_compatible_models(base_url, key)
+    except Exception:
+        # Bare Ollama hosts may predate the /v1 shim — try the native API.
+        host = (base_url or "").strip().rstrip("/")
+        for suffix in ("/v1/chat/completions", "/chat/completions", "/v1"):
+            if host.endswith(suffix):
+                host = host[: -len(suffix)].rstrip("/")
+                break
+        return _ollama_models(host)
+
+
 def discover_models(
     provider: str, credential: Callable[[], str | None], *, base_url: str = ""
 ) -> list[str]:
@@ -87,6 +122,8 @@ def discover_models(
     try:
         if provider == "ollama" and base_url:
             ids = _ollama_models(base_url)
+        elif provider == "custom" and base_url:
+            ids = _openai_compatible_models(base_url, credential() or "")
         else:
             key = credential() or ""
             if not key:

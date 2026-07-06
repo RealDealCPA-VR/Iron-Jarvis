@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from typing import Any
 
-from ..schemas import ConnectionKeyBody, OAuthCompleteBody
+from ..schemas import ConnectionKeyBody, EndpointModelsBody, OAuthCompleteBody
 
 
 def register(app: FastAPI, d) -> None:
@@ -191,14 +191,20 @@ def register(app: FastAPI, d) -> None:
         # can't list models — degrades safely to the curated set).
         from ...providers.discovery import discover_models
 
-        for prov in ("anthropic", "openai", "openrouter", "ollama"):
+        for prov in ("anthropic", "openai", "openrouter", "ollama", "custom"):
             try:
                 if not d.platform.providers.available(prov):
                     continue
                 live = discover_models(
                     prov,
                     lambda p=prov: d.platform.providers._cred(p),  # noqa: SLF001
-                    base_url=cfg.ollama_base_url if prov == "ollama" else "",
+                    base_url=(
+                        cfg.ollama_base_url
+                        if prov == "ollama"
+                        else cfg.custom_base_url
+                        if prov == "custom"
+                        else ""
+                    ),
                 )
                 if not live:
                     continue
@@ -254,3 +260,20 @@ def register(app: FastAPI, d) -> None:
 
         detected = detect_cli_providers()
         return {"detected": [dm.as_dict() for dm in detected]}
+
+    @app.post("/providers/endpoint-models")
+    def endpoint_models(body: EndpointModelsBody) -> dict[str, Any]:
+        """List the models a user-entered OpenAI-compatible endpoint actually
+        serves (``/v1/models``, falling back to Ollama's native ``/api/tags``)
+        — so the setup form offers a picker instead of a blank model-id field.
+        Probe-only: nothing is saved. Always 200; a failed probe returns an
+        honest ``error`` (the form shows it and keeps manual entry)."""
+        from ...providers.discovery import list_endpoint_models
+
+        try:
+            models = list_endpoint_models(body.base_url, body.api_key.strip())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception as exc:  # noqa: BLE001 — unreachable/odd server, be honest
+            return {"models": [], "error": f"{type(exc).__name__}: {exc}"[:300]}
+        return {"models": models}
