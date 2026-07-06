@@ -22,17 +22,24 @@ import {
   X,
   ArrowRight,
   ArrowUp,
+  ExternalLink,
   Folder,
   FolderOpen,
+  FolderPlus,
   HardDrive,
   Play,
+  Rocket,
+  Send,
+  Square,
   Star,
+  Terminal,
+  Wand2,
 } from "lucide-react";
-import { API_BASE, ApiError, get, ijToken, post } from "@/lib/api";
+import { API_BASE, ApiError, del, get, ijToken, post } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
 import { timeAgo } from "@/lib/format";
-import type { Drive, FsEntry, FsListing } from "@/lib/types";
+import type { AiCli, Drive, FsEntry, FsListing, Skill } from "@/lib/types";
 import {
   Card,
   Empty,
@@ -151,7 +158,7 @@ function folderLabel(p: string): string {
   return segs.length ? segs[segs.length - 1] : p;
 }
 
-type View = "creations" | "library";
+type View = "creations" | "library" | "create";
 const VIEW_KEY = "ironjarvis.creative.view";
 const LASTDIR_KEY = "ironjarvis.creative.lastdir";
 const PINS_KEY = "ironjarvis.creative.pins";
@@ -557,6 +564,1027 @@ function PinChips({
   );
 }
 
+/* ---- Create (studio) --------------------------------------------------------- */
+
+const STUDIO_KEY = "ironjarvis.creative.studio";
+/** Snapshot cap — enough to diff any sane destination folder without bloating storage. */
+const STUDIO_BASELINE_CAP = 1000;
+
+/** A live studio session, persisted so a page unmount doesn't lose the terminal. */
+interface StudioSession {
+  terminal_id: string;
+  dest: string;
+  cli_label: string;
+  command: string;
+  sent_first: boolean;
+  /** Media filenames already in the destination when the session started. */
+  baseline: string[];
+  /** Briefs sent so far (the user side of the chat). */
+  messages: string[];
+  started_at: number;
+}
+
+/** Everything the studio remembers between visits (one localStorage key). */
+interface StudioStore {
+  cli?: string;
+  skill?: string;
+  dir?: string;
+  autopilot?: boolean;
+  session?: StudioSession;
+}
+
+function readStudioStore(): StudioStore {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(STUDIO_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as StudioStore) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeStudioStore(patch: Partial<StudioStore>): void {
+  try {
+    window.localStorage.setItem(STUDIO_KEY, JSON.stringify({ ...readStudioStore(), ...patch }));
+  } catch {
+    /* ignore */
+  }
+}
+
+function patchStoredSession(patch: Partial<StudioSession>): void {
+  const cur = readStudioStore().session;
+  if (cur) writeStudioStore({ session: { ...cur, ...patch } });
+}
+
+/** Windows-aware join: "\" when the base uses backslashes, "/" otherwise. */
+function joinPath(base: string, name: string): string {
+  const sep = base.includes("\\") ? "\\" : "/";
+  return base.replace(/[\\/]+$/, "") + sep + name;
+}
+
+/** Media skills only: pixio/seedance families, or media words in the description. */
+function isMediaSkill(s: Skill): boolean {
+  return (
+    /^(pixio|seedance)/i.test(s.name) ||
+    /\b(image|video|audio|music|media|story)\b/i.test(s.description ?? "")
+  );
+}
+
+interface StudioTail {
+  tail: string;
+  alive: boolean;
+  exit_code: number | null;
+}
+
+interface StudioStartResult {
+  terminal_id: string;
+  command: string;
+  cwd: string;
+  autopilot: boolean;
+  cli: string;
+}
+
+/** In-memory shape of the running session (camelCase mirror of StudioSession). */
+interface LiveSession {
+  terminalId: string;
+  dest: string;
+  cliLabel: string;
+  command: string;
+}
+
+/**
+ * The CREATE view: pick an engine (AI CLI) + skill + destination folder, launch
+ * a background terminal (it appears on Build), brief it chat-style, and watch
+ * new media land in the folder — the honest completion signal.
+ */
+function StudioView({
+  pins,
+  onUnpin,
+}: {
+  pins: PinnedFolder[];
+  onUnpin: (path: string) => void;
+}) {
+  // Setup defaults from the last visit (this component only mounts client-side).
+  const [initialStore] = useState<StudioStore>(readStudioStore);
+  const [cli, setCli] = useState<string>(initialStore.cli ?? "");
+  const [skill, setSkill] = useState<string>(initialStore.skill ?? "");
+  const [autopilot, setAutopilot] = useState<boolean>(initialStore.autopilot ?? true);
+  const [pickDir, setPickDir] = useState<string | null>(initialStore.dir ?? null);
+
+  // Engines + skills.
+  const {
+    data: clisData,
+    error: clisError,
+    loading: clisLoading,
+  } = useApi<{ clis: AiCli[] }>("/terminals/ai-clis");
+  const { data: skillsData } = useApi<{ skills: Skill[] }>("/skills");
+  const clis = useMemo(() => clisData?.clis ?? [], [clisData]);
+  const mediaSkills = useMemo(
+    () => (skillsData?.skills ?? []).filter(isMediaSkill),
+    [skillsData],
+  );
+
+  // Default engine: keep a still-installed stored pick, else claude, else first installed.
+  useEffect(() => {
+    if (clis.length === 0) return;
+    setCli((prev) => {
+      if (prev && clis.some((c) => c.id === prev && c.installed)) return prev;
+      const preferred =
+        clis.find((c) => c.id === "claude" && c.installed) ?? clis.find((c) => c.installed);
+      return preferred?.id ?? "";
+    });
+  }, [clis]);
+
+  // Remember setup choices so repeat sessions are two clicks.
+  useEffect(() => {
+    writeStudioStore({ ...(cli ? { cli } : {}), skill, autopilot });
+  }, [cli, skill, autopilot]);
+
+  // Destination picker — same navigation pieces as the Library view, compact.
+  const {
+    data: drivesData,
+    error: drivesError,
+    loading: drivesLoading,
+  } = useApi<{ drives: Drive[] }>(pickDir === null ? "/fs/drives" : null);
+  const drives = drivesData?.drives ?? [];
+
+  const [pickListing, setPickListing] = useState<FsListing | null>(null);
+  const [pickLoading, setPickLoading] = useState(false);
+  const [pickError, setPickError] = useState<ApiError | null>(null);
+
+  useEffect(() => {
+    if (pickDir === null) {
+      setPickListing(null);
+      return;
+    }
+    let cancelled = false;
+    setPickLoading(true);
+    setPickError(null);
+    setPickListing(null);
+    get<FsListing>(`/fs/list?path=${encodeURIComponent(pickDir)}`)
+      .then((d) => {
+        if (cancelled) return;
+        setPickListing(d);
+        writeStudioStore({ dir: d.path });
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setPickError(e instanceof ApiError ? e : new ApiError(String(e), 0));
+      })
+      .finally(() => {
+        if (!cancelled) setPickLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pickDir]);
+
+  const chosenDir = pickListing?.path ?? null;
+  const pickFolders = useMemo(
+    () => (pickListing?.entries ?? []).filter((e) => e.is_dir),
+    [pickListing],
+  );
+
+  // New-subfolder affordance.
+  const [newFolder, setNewFolder] = useState("");
+  const [mkdirBusy, setMkdirBusy] = useState(false);
+  const [mkdirErr, setMkdirErr] = useState<string | null>(null);
+  const createSubfolder = async () => {
+    const name = newFolder.trim();
+    if (!name || !chosenDir || mkdirBusy) return;
+    setMkdirBusy(true);
+    setMkdirErr(null);
+    try {
+      const res = await post<{ path: string; created: boolean }>("/fs/mkdir", {
+        path: joinPath(chosenDir, name),
+      });
+      setNewFolder("");
+      setPickDir(res.path); // descend into the new folder
+    } catch (e) {
+      setMkdirErr(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setMkdirBusy(false);
+    }
+  };
+
+  // LIVE phase state.
+  const [session, setSession] = useState<LiveSession | null>(null);
+  const [resumeOffer, setResumeOffer] = useState<StudioSession | null>(null);
+  const [startBusy, setStartBusy] = useState(false);
+  const [startErr, setStartErr] = useState<{ detail: string; installUrl: string | null } | null>(
+    null,
+  );
+
+  const [booting, setBooting] = useState(false);
+  const [messages, setMessages] = useState<string[]>([]);
+  const [sentFirst, setSentFirst] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sayErr, setSayErr] = useState<string | null>(null);
+  const [ending, setEnding] = useState(false);
+
+  const [tail, setTail] = useState("");
+  const [alive, setAlive] = useState(true);
+  const [exitCode, setExitCode] = useState<number | null>(null);
+  const [gone, setGone] = useState(false); // tail endpoint 404'd — terminal deleted
+
+  const baselineRef = useRef<Set<string>>(new Set());
+  const [newFiles, setNewFiles] = useState<LibraryFile[]>([]);
+  const [studioSelected, setStudioSelected] = useState<LibraryFile | null>(null);
+
+  // Resume detection: a stored session whose terminal is still alive on the daemon.
+  useEffect(() => {
+    const saved = readStudioStore().session;
+    if (!saved) return;
+    let cancelled = false;
+    get<StudioTail>(`/creative/studio/${saved.terminal_id}/tail?chars=1`)
+      .then((t) => {
+        if (cancelled) return;
+        if (t.alive) setResumeOffer(saved);
+        else writeStudioStore({ session: undefined }); // exited — nothing to resume
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        if (e instanceof ApiError && e.status === 404) writeStudioStore({ session: undefined });
+        // Offline/transient errors: keep the stored session for the next visit.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // "Engine starting…" grace period so the first brief lands after the CLI booted.
+  useEffect(() => {
+    if (!booting) return;
+    const t = setTimeout(() => setBooting(false), 3000);
+    return () => clearTimeout(t);
+  }, [booting]);
+
+  // Console tail: poll every 2s while alive; stop (and show exit) when it isn't.
+  useEffect(() => {
+    if (!session || gone) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = async () => {
+      try {
+        const t = await get<StudioTail>(
+          `/creative/studio/${session.terminalId}/tail?chars=4000`,
+          { timeoutMs: 8000 },
+        );
+        if (cancelled) return;
+        setTail(t.tail);
+        setAlive(t.alive);
+        setExitCode(t.exit_code);
+        if (t.alive) timer = setTimeout(poll, 2000);
+      } catch (e) {
+        if (cancelled) return;
+        if (e instanceof ApiError && e.status === 404) {
+          setGone(true);
+          setAlive(false);
+          writeStudioStore({ session: undefined });
+        } else {
+          timer = setTimeout(poll, 2000); // transient — keep watching
+        }
+      }
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [session, gone]);
+
+  // New-media watcher: diff the destination against the session-start snapshot.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    const tick = () => {
+      get<FsListing>(`/fs/list?path=${encodeURIComponent(session.dest)}`, { timeoutMs: 15000 })
+        .then((d) => {
+          if (cancelled) return;
+          const out: LibraryFile[] = [];
+          for (const e of d.entries) {
+            if (e.is_dir) continue;
+            const kind = mediaKindOf(e.name);
+            if (kind && !baselineRef.current.has(e.name))
+              out.push({ path: e.path, name: e.name, kind, size: e.size });
+          }
+          setNewFiles(out);
+        })
+        .catch(() => {
+          /* transient — the next tick retries */
+        });
+    };
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [session]);
+
+  // Console auto-scroll — sticks to the bottom unless the user scrolled up.
+  const consoleRef = useRef<HTMLDivElement | null>(null);
+  const stickRef = useRef(true);
+  const onConsoleScroll = () => {
+    const el = consoleRef.current;
+    if (!el) return;
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  };
+  useEffect(() => {
+    const el = consoleRef.current;
+    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
+  }, [tail]);
+
+  const resetLive = useCallback((clearStore: boolean) => {
+    if (clearStore) writeStudioStore({ session: undefined });
+    setSession(null);
+    setTail("");
+    setMessages([]);
+    setSentFirst(false);
+    setNewFiles([]);
+    setGone(false);
+    setAlive(true);
+    setExitCode(null);
+    setSayErr(null);
+    setStudioSelected(null);
+  }, []);
+
+  const start = async () => {
+    if (!cli || !chosenDir || startBusy) return;
+    setStartBusy(true);
+    setStartErr(null);
+    // Snapshot the destination BEFORE launching — anything after this counts as new.
+    let baseline: string[] = [];
+    try {
+      const d = await get<FsListing>(`/fs/list?path=${encodeURIComponent(chosenDir)}`);
+      baseline = d.entries
+        .filter((e) => !e.is_dir && mediaKindOf(e.name) !== null)
+        .map((e) => e.name)
+        .slice(0, STUDIO_BASELINE_CAP);
+    } catch {
+      /* unlistable folder — diff against empty; /start will surface a real 400 */
+    }
+    try {
+      const res = await post<StudioStartResult>("/creative/studio/start", {
+        cli,
+        cwd: chosenDir,
+        ...(skill ? { skill } : {}),
+        autopilot,
+      });
+      const engine = clis.find((c) => c.id === cli);
+      const live: LiveSession = {
+        terminalId: res.terminal_id,
+        dest: res.cwd || chosenDir,
+        cliLabel: engine?.label ?? cli,
+        command: res.command,
+      };
+      baselineRef.current = new Set(baseline);
+      resetLive(false);
+      setSession(live);
+      setBooting(true);
+      writeStudioStore({
+        session: {
+          terminal_id: live.terminalId,
+          dest: live.dest,
+          cli_label: live.cliLabel,
+          command: live.command,
+          sent_first: false,
+          baseline,
+          messages: [],
+          started_at: Date.now(),
+        },
+      });
+    } catch (e) {
+      const err = e instanceof ApiError ? e : new ApiError(String(e), 0);
+      const engine = clis.find((c) => c.id === cli);
+      setStartErr({
+        detail: err.status === 0 ? "Daemon offline — could not start the session." : err.message,
+        installUrl: err.status === 424 ? (engine?.url ?? null) : null,
+      });
+    } finally {
+      setStartBusy(false);
+    }
+  };
+
+  const resume = () => {
+    if (!resumeOffer) return;
+    baselineRef.current = new Set(resumeOffer.baseline);
+    resetLive(false);
+    setMessages(resumeOffer.messages);
+    setSentFirst(resumeOffer.sent_first);
+    setSession({
+      terminalId: resumeOffer.terminal_id,
+      dest: resumeOffer.dest,
+      cliLabel: resumeOffer.cli_label,
+      command: resumeOffer.command,
+    });
+    setBooting(false);
+    setResumeOffer(null);
+  };
+
+  const send = async () => {
+    const text = draft.trim();
+    if (!text || !session || sending || booting || !alive || gone) return;
+    setSending(true);
+    setSayErr(null);
+    try {
+      await post<{ typed: boolean }>(
+        `/creative/studio/${session.terminalId}/say`,
+        sentFirst
+          ? { text }
+          : { text, first: true, ...(skill ? { skill } : {}), save_dir: session.dest },
+      );
+      const nextMsgs = [...messages, text];
+      setMessages(nextMsgs);
+      setSentFirst(true);
+      setDraft("");
+      patchStoredSession({ sent_first: true, messages: nextMsgs });
+    } catch (e) {
+      const err = e instanceof ApiError ? e : new ApiError(String(e), 0);
+      setSayErr(
+        err.status === 404 || err.status === 409
+          ? `The terminal is gone or has exited — ${err.message}`
+          : err.status === 0
+            ? "Daemon offline — message not sent."
+            : err.message,
+      );
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const endSession = async () => {
+    if (!session || ending) return;
+    if (!window.confirm("End this session? The terminal will be closed.")) return;
+    setEnding(true);
+    try {
+      await del(`/terminals/${session.terminalId}`);
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 404)) {
+        setSayErr(
+          e instanceof ApiError ? `Could not end the session: ${e.message}` : String(e),
+        );
+        setEnding(false);
+        return;
+      }
+      // 404 = already gone — fall through and clean up.
+    }
+    setEnding(false);
+    resetLive(true);
+  };
+
+  /* ---- LIVE phase ---- */
+  if (session) {
+    const inputDisabled = booting || !alive || gone || sending;
+    return (
+      <>
+        <Reveal>
+          <div className="card-surface flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
+            <span className="inline-flex shrink-0 items-center gap-2 text-sm font-semibold text-zinc-200">
+              <Terminal size={15} className="text-accent-soft/80" />
+              {session.cliLabel}
+            </span>
+            <code
+              className="max-w-[18rem] truncate rounded bg-black/40 px-2 py-0.5 font-mono text-[11px] text-zinc-400"
+              title={session.command}
+            >
+              {session.command}
+            </code>
+            <code
+              className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-500"
+              title={session.dest}
+            >
+              → {session.dest}
+            </code>
+            <Link
+              href="/terminals"
+              className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent-soft transition-colors hover:text-accent"
+            >
+              Open in Build <ArrowRight size={12} />
+            </Link>
+            <button
+              type="button"
+              onClick={endSession}
+              disabled={ending}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-rose-500/25 bg-rose-500/[0.06] px-3 py-1.5 text-xs font-medium text-rose-300 transition-colors hover:bg-rose-500/[0.12] disabled:opacity-50"
+            >
+              {ending ? (
+                <LoaderInline label="Ending…" />
+              ) : (
+                <>
+                  <Square size={12} /> End session
+                </>
+              )}
+            </button>
+          </div>
+        </Reveal>
+
+        {(!alive || gone) && (
+          <Reveal>
+            <ErrorNote>
+              {gone
+                ? "This terminal no longer exists on the daemon."
+                : `Terminal exited (code ${exitCode ?? "?"}).`}{" "}
+              <button
+                type="button"
+                onClick={() => resetLive(true)}
+                className="font-medium underline underline-offset-2 hover:text-rose-100"
+              >
+                Set up a new session
+              </button>
+            </ErrorNote>
+          </Reveal>
+        )}
+
+        <Reveal>
+          <Card title="Brief" icon={<Send size={15} />}>
+            <div className="space-y-3">
+              {messages.length === 0 ? (
+                <p className="text-xs text-zinc-500">
+                  Everything you type here is typed straight into the CLI. Your first message
+                  becomes the brief — the daemon wraps it with the chosen skill and the save
+                  folder, and the run continues on autopilot.
+                </p>
+              ) : (
+                <div className="max-h-52 space-y-2 overflow-y-auto pr-1">
+                  {messages.map((m, i) => (
+                    <div key={i} className="flex justify-end">
+                      <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md border border-accent/25 bg-accent/[0.08] px-3.5 py-2 text-[13px] text-zinc-200">
+                        {m}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {sayErr && <ErrorNote>{sayErr}</ErrorNote>}
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void send();
+                    }
+                  }}
+                  disabled={inputDisabled}
+                  placeholder={
+                    booting
+                      ? "engine starting…"
+                      : !alive || gone
+                        ? "terminal ended"
+                        : sentFirst
+                          ? "Send a follow-up…"
+                          : "Describe what to create…"
+                  }
+                  aria-label="Brief"
+                  className="min-w-0 flex-1 rounded-xl border border-white/10 bg-ink-950 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-accent/40 focus:outline-none disabled:opacity-50"
+                />
+                <button
+                  type="button"
+                  onClick={() => void send()}
+                  disabled={inputDisabled || !draft.trim()}
+                  aria-label="Send"
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.08] px-3 py-2 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
+                >
+                  {sending ? <LoaderInline label="Sending…" /> : <Send size={14} />}
+                </button>
+              </div>
+            </div>
+          </Card>
+        </Reveal>
+
+        <Reveal>
+          <Card
+            title="Console"
+            icon={<Terminal size={15} />}
+            right={
+              alive && !gone ? (
+                <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-300">
+                  <span
+                    className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400"
+                    aria-hidden="true"
+                  />
+                  live
+                </span>
+              ) : (
+                <span className="text-[11px] text-zinc-500">
+                  exited{exitCode !== null ? ` (code ${exitCode})` : ""}
+                </span>
+              )
+            }
+          >
+            <div
+              ref={consoleRef}
+              onScroll={onConsoleScroll}
+              className="max-h-[40vh] overflow-y-auto rounded-xl border border-white/[0.06] bg-ink-950 p-3"
+            >
+              <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-zinc-400">
+                {tail || (booting ? "engine starting…" : "waiting for output…")}
+              </pre>
+            </div>
+          </Card>
+        </Reveal>
+
+        <Reveal>
+          <Card
+            title="New media"
+            icon={<Sparkles size={15} />}
+            right={
+              <span className="text-[11px] text-zinc-500">
+                {newFiles.length === 0
+                  ? "watching the folder…"
+                  : `${newFiles.length} file${newFiles.length === 1 ? "" : "s"} created so far`}
+              </span>
+            }
+          >
+            {newFiles.length === 0 ? (
+              <p className="py-4 text-center text-xs text-zinc-500">
+                Nothing yet — media that lands in{" "}
+                <code className="font-mono text-zinc-400">{folderLabel(session.dest)}</code> shows
+                up here as it’s created.
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4">
+                {newFiles.map((f) => (
+                  <LibraryTile key={f.path} file={f} onOpen={() => setStudioSelected(f)} />
+                ))}
+              </div>
+            )}
+          </Card>
+        </Reveal>
+
+        {studioSelected && (
+          <MediaLightbox
+            key={studioSelected.path}
+            media={studioSelected.kind}
+            src={filePathSrc(studioSelected.path)}
+            title={studioSelected.name}
+            downloadName={studioSelected.name}
+            publishBody={{ path: studioSelected.path }}
+            meta={
+              <>
+                {studioSelected.size !== null && (
+                  <span className="font-mono">{formatSize(studioSelected.size)}</span>
+                )}
+                <span
+                  className="min-w-0 max-w-full truncate font-mono"
+                  title={studioSelected.path}
+                >
+                  {studioSelected.path}
+                </span>
+              </>
+            }
+            onClose={() => setStudioSelected(null)}
+          />
+        )}
+      </>
+    );
+  }
+
+  /* ---- Resume offer (a stored session is still running) ---- */
+  if (resumeOffer) {
+    return (
+      <Reveal>
+        <Card title="Session still running" icon={<Terminal size={15} />}>
+          <div className="space-y-3">
+            <p className="text-sm text-zinc-400">
+              Your last studio session — <span className="text-zinc-200">{resumeOffer.cli_label}</span>{" "}
+              in{" "}
+              <code className="font-mono text-xs text-zinc-300" title={resumeOffer.dest}>
+                {resumeOffer.dest}
+              </code>{" "}
+              — is still running in the background.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={resume}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.1] px-4 py-2 text-sm font-semibold text-accent-soft transition-colors hover:bg-accent/[0.16]"
+              >
+                <Play size={14} /> Resume session
+              </button>
+              <Link
+                href="/terminals"
+                className="inline-flex items-center gap-1 rounded-xl border border-white/10 px-3 py-2 text-xs font-medium text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/[0.04]"
+              >
+                Open in Build <ArrowRight size={12} />
+              </Link>
+              <button
+                type="button"
+                onClick={() => {
+                  writeStudioStore({ session: undefined });
+                  setResumeOffer(null);
+                }}
+                className="rounded-xl border border-white/10 px-3 py-2 text-xs font-medium text-zinc-400 transition-colors hover:border-white/20 hover:bg-white/[0.04] hover:text-zinc-200"
+              >
+                Start fresh (leave it running)
+              </button>
+            </div>
+          </div>
+        </Card>
+      </Reveal>
+    );
+  }
+
+  /* ---- SETUP phase ---- */
+  const chosenSkill = skill ? mediaSkills.find((s) => s.name === skill) : undefined;
+  return (
+    <>
+      <Reveal>
+        <Card title="1 · Engine" icon={<Terminal size={15} />}>
+          <div className="space-y-3">
+            {clisError &&
+              (clisError.status === 0 ? (
+                <OfflineHint />
+              ) : (
+                <ErrorNote>Couldn’t detect AI CLIs: {clisError.message}</ErrorNote>
+              ))}
+            {clisLoading && clis.length === 0 ? (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {Array.from({ length: 2 }).map((_, i) => (
+                  <Skeleton key={i} className="h-16 w-full rounded-2xl" />
+                ))}
+              </div>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Engine">
+                {clis.map((c) =>
+                  c.installed ? (
+                    <button
+                      key={c.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={cli === c.id}
+                      onClick={() => setCli(c.id)}
+                      className={`flex items-start gap-2.5 rounded-2xl border px-3.5 py-3 text-left transition-colors ${
+                        cli === c.id
+                          ? "border-accent/40 bg-accent/[0.08]"
+                          : "border-white/10 bg-white/[0.02] hover:border-white/20 hover:bg-white/[0.04]"
+                      }`}
+                    >
+                      <Terminal
+                        size={15}
+                        className={`mt-0.5 shrink-0 ${cli === c.id ? "text-accent-soft" : "text-zinc-500"}`}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium text-zinc-200">{c.label}</span>
+                        <span className="block truncate text-[11px] text-zinc-500">
+                          {c.provider} · <code className="font-mono">{c.command}</code>
+                        </span>
+                      </span>
+                      {cli === c.id && (
+                        <Check size={14} className="mt-0.5 shrink-0 text-accent-soft" />
+                      )}
+                    </button>
+                  ) : (
+                    <div
+                      key={c.id}
+                      className="flex items-start gap-2.5 rounded-2xl border border-white/[0.06] bg-white/[0.01] px-3.5 py-3 opacity-70"
+                    >
+                      <Terminal size={15} className="mt-0.5 shrink-0 text-zinc-600" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium text-zinc-500">{c.label}</span>
+                        <span className="block text-[11px] text-zinc-600">
+                          {c.provider} · not installed
+                        </span>
+                      </span>
+                      <a
+                        href={c.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-accent-soft transition-colors hover:text-accent"
+                      >
+                        Install <ExternalLink size={11} />
+                      </a>
+                    </div>
+                  ),
+                )}
+                {clis.length === 0 && !clisLoading && !clisError && (
+                  <p className="text-xs text-zinc-500 sm:col-span-2">
+                    No AI CLIs detected on this machine.
+                  </p>
+                )}
+              </div>
+            )}
+            <label className="flex cursor-pointer select-none items-start gap-2 text-xs text-zinc-400">
+              <input
+                type="checkbox"
+                checked={autopilot}
+                onChange={(e) => setAutopilot(e.target.checked)}
+                className="mt-0.5 h-3.5 w-3.5 accent-cyan-400"
+              />
+              <span>
+                <span className="font-medium text-zinc-300">Autopilot</span> — launches with the
+                CLI’s skip-permissions flag so it runs to completion unattended.
+              </span>
+            </label>
+          </div>
+        </Card>
+      </Reveal>
+
+      <Reveal>
+        <Card title="2 · Skill" icon={<Wand2 size={15} />}>
+          <div className="space-y-2">
+            <select
+              value={skill}
+              onChange={(e) => setSkill(e.target.value)}
+              aria-label="Skill"
+              className="w-full appearance-none rounded-xl border border-white/10 bg-ink-950 px-3 py-2 text-sm text-zinc-200 focus:border-accent/40 focus:outline-none"
+            >
+              <option value="">Auto — let the agent pick the best skill</option>
+              {skill && !mediaSkills.some((s) => s.name === skill) && (
+                <option value={skill}>{skill}</option>
+              )}
+              {mediaSkills.map((s) => (
+                <option key={s.name} value={s.name}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-zinc-500">
+              {skill
+                ? (chosenSkill?.description ?? "Skill not found in the current registry.")
+                : "The agent reads your brief and chooses the right media skill itself."}
+            </p>
+          </div>
+        </Card>
+      </Reveal>
+
+      <Reveal>
+        <Card title="3 · Destination folder" icon={<FolderOpen size={15} />}>
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPickDir(null)}
+                title="Back to drives"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/[0.04]"
+              >
+                <HardDrive size={13} /> Drives
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const parent = pickListing?.parent ?? null;
+                  if (parent) setPickDir(parent);
+                }}
+                disabled={!pickListing?.parent}
+                title="Up one folder"
+                aria-label="Up one folder"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ArrowUp size={13} /> Up
+              </button>
+              <code
+                className={`min-w-0 flex-1 truncate font-mono text-xs ${chosenDir ? "text-accent-soft" : "text-zinc-500"}`}
+                title={chosenDir ?? undefined}
+              >
+                {chosenDir ?? (pickLoading ? pickDir : "choose a folder below")}
+              </code>
+            </div>
+
+            {pins.length > 0 && <PinChips pins={pins} onGo={setPickDir} onUnpin={onUnpin} />}
+
+            {pickError &&
+              (pickError.status === 0 ? (
+                <OfflineHint />
+              ) : (
+                <ErrorNote>Couldn’t open this folder: {pickError.message}</ErrorNote>
+              ))}
+            {drivesError && pickDir === null && drivesError.status !== 0 && (
+              <ErrorNote>Couldn’t list drives: {drivesError.message}</ErrorNote>
+            )}
+            {drivesError && pickDir === null && drivesError.status === 0 && <OfflineHint />}
+
+            {pickDir === null ? (
+              drivesLoading && drives.length === 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <Skeleton key={i} className="h-8 w-24 rounded-xl" />
+                  ))}
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {drives.map((d) => (
+                    <button
+                      key={d.path}
+                      type="button"
+                      onClick={() => setPickDir(d.path)}
+                      title={d.path}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:border-accent/30 hover:bg-accent/[0.06] hover:text-accent-soft"
+                    >
+                      <HardDrive size={13} className="shrink-0 text-accent-soft/70" />
+                      <span className="truncate">{d.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )
+            ) : pickLoading ? (
+              <LoaderInline label="Listing folder…" />
+            ) : pickFolders.length > 0 ? (
+              <div className="flex max-h-40 flex-wrap content-start gap-2 overflow-y-auto">
+                {pickFolders.map((f: FsEntry) => (
+                  <button
+                    key={f.path}
+                    type="button"
+                    onClick={() => setPickDir(f.path)}
+                    title={f.path}
+                    className="inline-flex max-w-[16rem] items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:border-accent/30 hover:bg-accent/[0.06] hover:text-accent-soft"
+                  >
+                    <Folder size={13} className="shrink-0 text-accent-soft/70" />
+                    <span className="truncate">{f.name}</span>
+                  </button>
+                ))}
+              </div>
+            ) : pickListing ? (
+              <p className="text-[11px] text-zinc-500">No subfolders here.</p>
+            ) : null}
+
+            {chosenDir && (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <FolderPlus size={14} className="shrink-0 text-zinc-500" aria-hidden="true" />
+                  <input
+                    type="text"
+                    value={newFolder}
+                    onChange={(e) => setNewFolder(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void createSubfolder();
+                      }
+                    }}
+                    placeholder="New subfolder name"
+                    aria-label="New subfolder name"
+                    className="min-w-0 max-w-xs flex-1 rounded-xl border border-white/10 bg-ink-950 px-3 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-accent/40 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void createSubfolder()}
+                    disabled={!newFolder.trim() || mkdirBusy}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-white/10 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/[0.04] disabled:opacity-50"
+                  >
+                    {mkdirBusy ? <LoaderInline label="Creating…" /> : "Create"}
+                  </button>
+                </div>
+                {mkdirErr && <ErrorNote>{mkdirErr}</ErrorNote>}
+              </div>
+            )}
+          </div>
+        </Card>
+      </Reveal>
+
+      <Reveal>
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => void start()}
+            disabled={!cli || !chosenDir || startBusy}
+            className="inline-flex items-center gap-2 rounded-xl border border-accent/30 bg-accent/[0.1] px-5 py-2.5 text-sm font-semibold text-accent-soft transition-colors hover:bg-accent/[0.16] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {startBusy ? (
+              <LoaderInline label="Starting…" />
+            ) : (
+              <>
+                <Rocket size={15} /> Start creating
+              </>
+            )}
+          </button>
+          {!startBusy && (!cli || !chosenDir) && (
+            <p className="text-[11px] text-zinc-500">
+              {!cli
+                ? "Pick an installed engine to continue."
+                : "Pick a destination folder to continue."}
+            </p>
+          )}
+          {startErr && (
+            <ErrorNote>
+              {startErr.detail}
+              {startErr.installUrl && (
+                <>
+                  {" "}
+                  <a
+                    href={startErr.installUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-medium text-accent-soft underline underline-offset-2 hover:text-accent"
+                  >
+                    Install it →
+                  </a>
+                </>
+              )}
+            </ErrorNote>
+          )}
+        </div>
+      </Reveal>
+    </>
+  );
+}
+
 /* ---- Page ---------------------------------------------------------------------- */
 
 type Filter = "all" | MediaKind;
@@ -571,6 +1599,7 @@ const FILTERS: { key: Filter; label: string }[] = [
 const VIEWS: { id: View; label: string; icon: ReactNode }[] = [
   { id: "creations", label: "Creations", icon: <Sparkles size={14} /> },
   { id: "library", label: "Library", icon: <FolderOpen size={14} /> },
+  { id: "create", label: "Create", icon: <Wand2 size={14} /> },
 ];
 
 export default function CreativePage() {
@@ -589,7 +1618,7 @@ export default function CreativePage() {
   useEffect(() => {
     try {
       const v = window.localStorage.getItem(VIEW_KEY);
-      if (v === "creations" || v === "library") setView(v);
+      if (v === "creations" || v === "library" || v === "create") setView(v);
       const last = window.localStorage.getItem(LASTDIR_KEY);
       if (last) setLibDir(last);
       setPins(parsePins(window.localStorage.getItem(PINS_KEY)));
@@ -787,7 +1816,9 @@ export default function CreativePage() {
           subtitle={
             view === "library"
               ? "Browse your own media folders — every image, video, and track on this machine. Pin the folders you use most."
-              : "Everything Iron Jarvis has made — generations land here automatically. Ask for media in Chat (arm the pixio tools with the + menu) or in an agent session."
+              : view === "create"
+                ? "Pick an engine, a skill, and a folder — Iron Jarvis launches the CLI in a background terminal (it appears on Build) and new media lands here as it’s created."
+                : "Everything Iron Jarvis has made — generations land here automatically. Ask for media in Chat (arm the pixio tools with the + menu) or in an agent session."
           }
           actions={
             <div className="flex flex-wrap items-center gap-3">
@@ -911,6 +1942,9 @@ export default function CreativePage() {
             )}
           </Reveal>
         </>
+      ) : view === "create" ? (
+        /* ---- Create (studio): engine + skill + folder → live session ------ */
+        <StudioView pins={pins} onUnpin={unpin} />
       ) : libDir === null ? (
         /* ---- Library home: pinned folders + drives ------------------------ */
         <>

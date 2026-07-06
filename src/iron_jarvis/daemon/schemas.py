@@ -193,6 +193,33 @@ class CreativeUploadBody(BaseModel):
     publish: bool = False
 
 
+class StudioStartBody(BaseModel):
+    """Start a Creative Studio session: open a managed terminal in ``cwd``
+    (it shows up on the Build page like any other) and launch the chosen AI
+    CLI in it. ``autopilot`` adds the CLI's run-without-prompts flag."""
+
+    cli: str  # an id from GET /terminals/ai-clis (must be installed)
+    cwd: str  # absolute destination folder — generations save here
+    skill: str = ""  # preferred skill name ("" = let the agent pick)
+    autopilot: bool = True
+
+
+class StudioSayBody(BaseModel):
+    """Type one chat-style message into a studio terminal. The FIRST message
+    is wrapped with the working brief (skill, save-here, run-to-completion)."""
+
+    text: str
+    first: bool = False
+    skill: str = ""
+    save_dir: str = ""
+
+
+class FsMkdirBody(BaseModel):
+    """Create a folder (e.g. a new subfolder for a generation batch)."""
+
+    path: str
+
+
 class GraphLinkBody(BaseModel):
     """Connect or disconnect two memory-graph nodes (opaque node ids)."""
 
