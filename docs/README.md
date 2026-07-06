@@ -1,7 +1,14 @@
 # Internal build docs
 
-Build-time plans and audit reports, kept for history. **None of this is user
-documentation** — start at the repo root [README](../README.md).
+Start at the repo root [README](../README.md) for user documentation.
+
+**Living reference docs:**
+
+| File | What it is |
+|---|---|
+| [SIGNING.md](SIGNING.md) | What code-signing the Windows installer takes (options, costs, CI wiring) |
+
+**Build-time plans and audit reports** (kept for history — not maintained):
 
 | File | What it is |
 |---|---|

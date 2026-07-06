@@ -82,19 +82,41 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 
 A single self-contained installer that bundles a PyInstaller-frozen daemon **and** the Next.js dashboard. **No Python, Node, uv, or pnpm needed on the machine** — install it and it opens in a native window.
 
-1. **Get the installer** — download the latest **`Iron Jarvis Setup 1.0.0.exe`** from the **[Releases page](https://github.com/RealDealCPA-VR/Iron-Jarvis/releases)**. *(No build published there yet? Build one yourself — see below.)*
-2. **Run it.** It isn't code-signed yet, so Windows SmartScreen shows *"Windows protected your PC"* → click **More info → Run anyway** (one time). Install, then launch **Iron Jarvis** from the Start menu.
-3. **Connect a model.** Open the **Connections** page and either **log in with your Claude/OpenAI account** or paste an **API key** (details just below). That's it.
+#### 1 · Download
 
-The app boots the bundled daemon on loopback `127.0.0.1:8787` (token-protected, per-install) plus the dashboard, and **auto-updates** from GitHub Releases on launch.
+Go to the **[Releases page](https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/latest)** and download the one file named **`Iron-Jarvis-Setup-<version>.exe`** (ignore `.blockmap` and `latest.yml` — those are for the auto-updater). Your browser may warn about an uncommonly-downloaded file — choose **Keep**.
 
-> **Always-on.** Closing the window **minimizes to the system tray** so schedules, cron jobs, webhooks, and integrations keep firing for weeks. Reopen from the tray icon or **Ctrl+Shift+J**; choose **Quit Iron Jarvis** in the tray menu to fully stop it.
+#### 2 · Install
 
-**Build the installer yourself** (needs Node 20 + pnpm + uv, once):
+Run the installer. Windows SmartScreen will show *"Windows protected your PC"* because the app isn't code-signed yet ([why, and what signing would take → docs/SIGNING.md](docs/SIGNING.md)) — click **More info → Run anyway**. This happens **once per download**, not every launch. Pick an install folder (or keep the default) and finish; Iron Jarvis appears in the Start menu.
+
+#### 3 · First launch
+
+The app boots its own private daemon on loopback `127.0.0.1:8787` (token-protected, per-install — nothing is exposed to your network) and opens the dashboard in a native window. A **first-run guide** walks you through the two steps that matter:
+
+1. **Connect a model** — on the **Connections** page, either paste an **API key** (Anthropic / OpenAI / Google — the stable path), point it at a **local Ollama** (free, fully private), or try the experimental account login. Until you do, a persistent **"Simulated mode"** banner reminds you that replies come from an offline mock.
+2. **Run one real task** — type anything ("summarize the files on my desktop") and watch it work.
+
+You can skip the guide and explore in demo mode — the banner keeps you honest.
+
+#### 4 · Daily use
+
+- **Closing the window doesn't quit.** Iron Jarvis minimizes to the **system tray** so schedules, webhooks, sentinels, and integrations keep running for weeks. Reopen with the tray icon or **Ctrl+Shift+J**; **Ctrl+Shift+Space** opens Spotlight (quick ask) from anywhere. To fully stop it: tray icon → **Quit Iron Jarvis**.
+- **Updates are automatic.** The app checks GitHub Releases at launch and every 30 minutes, downloads new versions in the background, and installs only when you click **Restart to update** (tray menu, notification, or the Updates page).
+- **Your data lives in `%APPDATA%\Iron Jarvis`** — config, the SQLite database, encrypted secrets, memory, and backups. It survives every update and reinstall. Uninstalling from Windows Settings removes the app but leaves that folder (delete it manually for a full wipe).
+
+#### If something looks wrong
+
+- *"Daemon offline" in the dashboard* → quit from the tray and relaunch; the app supervises and restarts its daemon automatically.
+- *"Port 8787 already in use" on launch* → another program (or a second Iron Jarvis) owns the port; close it and relaunch.
+- The **Settings → System health** card and `docs/`-linked doctor checks show exactly what's unhappy — errors are always shown honestly, never papered over.
+
+#### Build the installer yourself (optional — needs Node 20 + pnpm + uv)
+
 ```powershell
-pnpm --dir desktop run dist:full     # → desktop/release/Iron Jarvis Setup 1.0.0.exe
+pnpm --dir desktop run dist:full     # → desktop/release/Iron-Jarvis-Setup-<version>.exe
 ```
-> Use **`dist:full`**, not bare `pnpm dist` (which ships a broken, daemon-less installer). Building locally needs **Windows Developer Mode** (Settings → Privacy & security → For developers → Developer Mode = On) or an elevated PowerShell — electron-builder unpacks a cache containing macOS symlinks. You only need this to *build* the installer, not to *run* it. Or let CI do it: `git tag v1.0.0 && git push --tags` triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds + publishes the installer on a GitHub runner (no Developer-Mode toggle needed there).
+> Use **`dist:full`**, not bare `pnpm dist` (which ships a broken, daemon-less installer). Building locally needs **Windows Developer Mode** (Settings → Privacy & security → For developers → Developer Mode = On) or an elevated PowerShell — electron-builder unpacks a cache containing macOS symlinks. You only need this to *build* the installer, not to *run* it. Or let CI do it: bump the version in `pyproject.toml` + `src/iron_jarvis/__init__.py` + `desktop/package.json` and push to master — [`.github/workflows/release.yml`](.github/workflows/release.yml) builds and publishes the installer on a GitHub runner.
 
 ### 💻 Option B — run from source (for developers)
 
