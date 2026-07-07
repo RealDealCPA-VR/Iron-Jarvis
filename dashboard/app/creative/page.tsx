@@ -22,6 +22,7 @@ import {
   X,
   ArrowRight,
   ArrowUp,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
@@ -273,17 +274,21 @@ function BrandGlyph({ glyph }: { glyph: string }) {
 }
 
 /**
- * Social share buttons for a PUBLISHED (public) url. YouTube has no URL-prefill
- * upload, so that button opens YouTube Studio and triggers the Download action.
+ * The reusable share-destinations control for a PUBLISHED (public) url — the
+ * SINGLE source of truth for where a creation can be shared. Used by ShareRow
+ * (lightbox) and by TileShare (the per-tile popover) so the two never diverge.
+ * YouTube has no URL-prefill upload, so that button opens YouTube Studio and
+ * triggers the caller's download action.
  */
-function ShareRow({
+function ShareMenu({
   url,
   isVideo,
   onYouTubeDownload,
 }: {
   url: string;
   isVideo: boolean;
-  onYouTubeDownload: () => void;
+  /** YouTube needs the file itself — the caller downloads it. Omit to hide YouTube. */
+  onYouTubeDownload?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const [ytHint, setYtHint] = useState(false);
@@ -371,7 +376,7 @@ function ShareRow({
             </>
           )}
         </button>
-        {isVideo && (
+        {isVideo && onYouTubeDownload && (
           <button
             type="button"
             onClick={() => {
@@ -391,8 +396,174 @@ function ShareRow({
           YouTube needs the file itself — download it, then drop it into the upload page.
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * Lightbox share block: the shared destinations + the "public link" reminder.
+ */
+function ShareRow({
+  url,
+  isVideo,
+  onYouTubeDownload,
+}: {
+  url: string;
+  isVideo: boolean;
+  onYouTubeDownload: () => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <ShareMenu url={url} isVideo={isVideo} onYouTubeDownload={onYouTubeDownload} />
       <p className="text-[11px] text-zinc-500">The link is public — anyone with it can view.</p>
     </div>
+  );
+}
+
+/**
+ * Per-tile Share affordance — a corner button on every media tile that publishes
+ * the item (same /creative/publish endpoint + 424 handling as the lightbox) then
+ * opens a compact popover of the SAME ShareMenu destinations, WITHOUT opening the
+ * lightbox. The popover is fixed-positioned (anchored to the button) so the tile's
+ * overflow-hidden card never clips it.
+ */
+function TileShare({
+  publishBody,
+  isVideo,
+  downloadUrl,
+  downloadName,
+}: {
+  /** { name } for gallery items, { path } for path items — mirrors the lightbox. */
+  publishBody: Record<string, string>;
+  isVideo: boolean;
+  downloadUrl: string;
+  downloadName: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [url, setUrl] = useState<string | null>(null);
+  const [err, setErr] = useState<{ detail: string; notConnected: boolean } | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const popRef = useRef<HTMLDivElement | null>(null);
+  const dlRef = useRef<HTMLAnchorElement | null>(null);
+
+  const publish = useCallback(async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await post<{ url: string }>("/creative/publish", publishBody);
+      setUrl(res.url);
+    } catch (e) {
+      const ae = e instanceof ApiError ? e : new ApiError(String(e), 0);
+      setErr({
+        detail: ae.status === 0 ? "Daemon offline — could not publish." : ae.message,
+        notConnected: ae.status === 424,
+      });
+    } finally {
+      setBusy(false);
+    }
+    // publishBody is a fresh object each render; the tile identity is stable, so
+    // exclude it from deps to avoid re-creating publish every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const toggle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    const r = btnRef.current?.getBoundingClientRect();
+    if (r) setPos({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
+    setOpen(true);
+    if (!url && !busy) void publish();
+  };
+
+  // Close the popover on outside click / Esc / scroll / resize (fixed anchor).
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (popRef.current?.contains(t) || btnRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    const onReflow = () => setOpen(false);
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onReflow, true);
+    window.addEventListener("resize", onReflow);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onReflow, true);
+      window.removeEventListener("resize", onReflow);
+    };
+  }, [open]);
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={toggle}
+        aria-label="Share this item"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Share"
+        className={`absolute left-2 top-2 z-10 grid h-7 w-7 place-items-center rounded-lg border bg-black/50 backdrop-blur transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
+          open
+            ? "border-accent/40 text-accent-soft opacity-100"
+            : "border-white/15 text-zinc-200 opacity-100 hover:border-accent/40 hover:text-accent-soft focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+        }`}
+      >
+        <Share2 size={13} />
+      </button>
+      {open && pos && (
+        <div
+          ref={popRef}
+          role="menu"
+          onClick={(e) => e.stopPropagation()}
+          style={{ position: "fixed", top: pos.top, right: pos.right }}
+          className="z-[70] w-[min(20rem,calc(100vw-1rem))] space-y-2 rounded-xl border border-white/10 bg-ink-950/95 p-3 shadow-card-hover backdrop-blur"
+        >
+          {busy && <LoaderInline label="Preparing share link…" />}
+          {err && (
+            <p className="text-[11px] text-rose-300">
+              {err.detail}
+              {err.notConnected && (
+                <>
+                  {" "}
+                  <Link
+                    href="/connections"
+                    className="font-medium text-accent-soft underline underline-offset-2 hover:text-accent"
+                  >
+                    Connect Pixio →
+                  </Link>
+                </>
+              )}
+            </p>
+          )}
+          {url && (
+            <ShareMenu url={url} isVideo={isVideo} onYouTubeDownload={() => dlRef.current?.click()} />
+          )}
+          <a
+            ref={dlRef}
+            href={downloadUrl}
+            download={downloadName}
+            className="hidden"
+            aria-hidden="true"
+            tabIndex={-1}
+          >
+            download
+          </a>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -517,6 +688,12 @@ function MediaTile({ item, onOpen }: { item: CreativeItem; onOpen: () => void })
       className="card-surface group cursor-pointer overflow-hidden text-left transition-all duration-300 hover:-translate-y-0.5 hover:shadow-card-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
     >
       <div className="relative aspect-video w-full overflow-hidden bg-ink-950">
+        <TileShare
+          publishBody={{ name: item.name }}
+          isVideo={item.media === "video"}
+          downloadUrl={src}
+          downloadName={item.filename}
+        />
         {item.media !== "audio" ? (
           <Thumb
             thumbUrl={thumbSrcByName(item.name, item.version)}
@@ -573,6 +750,12 @@ function LibraryTile({ file, onOpen }: { file: LibraryFile; onOpen: () => void }
       className="card-surface group cursor-pointer overflow-hidden text-left transition-all duration-300 hover:-translate-y-0.5 hover:shadow-card-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
     >
       <div className="relative aspect-video w-full overflow-hidden bg-ink-950">
+        <TileShare
+          publishBody={{ path: file.path }}
+          isVideo={file.kind === "video"}
+          downloadUrl={filePathSrc(file.path)}
+          downloadName={file.name}
+        />
         {file.kind !== "audio" ? (
           <Thumb
             thumbUrl={thumbSrcByPath(file.path)}
@@ -990,6 +1173,8 @@ function PinChips({
 const STUDIO_KEY = "ironjarvis.creative.studio";
 /** Snapshot cap — enough to diff any sane destination folder without bloating storage. */
 const STUDIO_BASELINE_CAP = 1000;
+/** Quiet window after the last tail change / new file before a turn reads as "done". */
+const STUDIO_IDLE_MS = 8000;
 
 /** A live studio session, persisted so a page unmount doesn't lose the terminal. */
 interface StudioSession {
@@ -1055,6 +1240,18 @@ function isMediaSkill(s: Skill): boolean {
   );
 }
 
+/** Agent lifecycle phase, derived server-side from the CLI's own output. */
+type StudioPhase = "booting" | "thinking" | "generating" | "idle" | "done";
+
+/** Phases where the agent is actively busy (vs. idle/done = waiting on us). */
+const PHASE_BUSY: Record<StudioPhase, boolean> = {
+  booting: true,
+  thinking: true,
+  generating: true,
+  idle: false,
+  done: false,
+};
+
 interface StudioTail {
   tail: string;
   alive: boolean;
@@ -1063,6 +1260,17 @@ interface StudioTail {
   mode: string | null;
   /** True once the daemon has verified an auto/full-auto mode is engaged. */
   automode: boolean;
+  /** Authoritative lifecycle phase; ABSENT on older daemons → idle-timer fallback. */
+  phase?: StudioPhase;
+  /** Already-human-readable progress line, e.g. "Rendering shot 3/5…". */
+  status_line?: string | null;
+  /**
+   * Bumps when the agent finishes a reply-turn. INTENTIONALLY UNUSED: our visual
+   * turns are keyed to USER briefs (briefTimes) and media attaches by first-seen
+   * time; turn_seq counts agent-internal reply-turns (different cardinality, no
+   * per-file mapping), so bucketing on it would fight the timestamp model.
+   */
+  turn_seq?: number;
 }
 
 interface StudioStartResult {
@@ -1085,6 +1293,100 @@ interface LiveSession {
   command: string;
   /** Epoch ms — drives the "auto mode: engaging…" grace window on the badge. */
   startedAt: number;
+}
+
+/* ---- Studio chat (LIVE phase) presentational bits ---------------------------- */
+
+/** A brief the user typed — a right-aligned chat bubble. */
+function UserBubble({ text }: { text: string }) {
+  return (
+    <div className="flex justify-end">
+      <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md border border-accent/25 bg-accent/[0.08] px-3.5 py-2 text-[13px] text-zinc-200">
+        {text}
+      </div>
+    </div>
+  );
+}
+
+/** Three staggered pulsing dots — the "Iron Jarvis is working" indicator. */
+function WorkingDots() {
+  return (
+    <span className="inline-flex items-center gap-1" aria-hidden="true">
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent [animation-delay:0ms]" />
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent [animation-delay:150ms]" />
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent [animation-delay:300ms]" />
+    </span>
+  );
+}
+
+/** Left-aligned assistant chat bubble with an Iron Jarvis avatar. */
+function AssistantBubble({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex justify-start gap-2.5">
+      <span className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/[0.08] text-accent-soft">
+        <Sparkles size={14} />
+      </span>
+      <div className="min-w-0 max-w-[42rem] flex-1 space-y-2.5 rounded-2xl rounded-tl-md border border-white/10 bg-white/[0.03] px-3.5 py-2.5">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+type TurnState = "working" | "done" | "ready" | "exited";
+
+/**
+ * The assistant's turn for one brief — a status line (working / done / ready /
+ * exited) plus the media it produced, rendered INLINE as tiles that open the
+ * lightbox. Media is the "wow": generations appear in the conversation as they
+ * land, not as raw console text.
+ */
+function AssistantTurn({
+  state,
+  media,
+  exitCode,
+  statusText,
+  onOpenMedia,
+}: {
+  state: TurnState;
+  media: LibraryFile[];
+  exitCode: number | null;
+  /** Live daemon status_line shown while working (e.g. "Rendering shot 3/5…"). */
+  statusText?: string | null;
+  onOpenMedia: (f: LibraryFile) => void;
+}) {
+  const count = media.length;
+  return (
+    <AssistantBubble>
+      {state === "working" ? (
+        <div className="flex items-center gap-2 text-[13px] text-zinc-300">
+          <WorkingDots />
+          <span>
+            {statusText || "Working in the terminal…"}
+            {count > 0 ? ` · ${count} file${count === 1 ? "" : "s"} so far` : ""}
+          </span>
+        </div>
+      ) : state === "exited" ? (
+        <p className="text-[13px] text-zinc-400">
+          The terminal exited{exitCode !== null ? ` (code ${exitCode})` : ""}.
+        </p>
+      ) : state === "done" ? (
+        <p className="flex items-center gap-1.5 text-[13px] text-zinc-300">
+          <Check size={14} className="shrink-0 text-emerald-400" />
+          {count > 0 ? `Done — created ${count} file${count === 1 ? "" : "s"}.` : "Done."}
+        </p>
+      ) : (
+        <p className="text-[13px] text-zinc-400">Ready — send another instruction.</p>
+      )}
+      {count > 0 && (
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+          {media.map((f) => (
+            <LibraryTile key={f.path} file={f} onOpen={() => onOpenMedia(f)} />
+          ))}
+        </div>
+      )}
+    </AssistantBubble>
+  );
 }
 
 /**
@@ -1214,6 +1516,9 @@ function StudioView({
 
   const [booting, setBooting] = useState(false);
   const [messages, setMessages] = useState<string[]>([]);
+  // Epoch-ms send time per brief (parallel to `messages`), for bucketing media
+  // into turns. In-memory only — resume reconstructs it from the session start.
+  const [briefTimes, setBriefTimes] = useState<number[]>([]);
   const [sentFirst, setSentFirst] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -1228,10 +1533,27 @@ function StudioView({
   const [automode, setAutomode] = useState(false);
   // Badge grace window: "engaging…" for ~30s after start, then honest "unverified".
   const [engaging, setEngaging] = useState(true);
+  // Raw terminal is tucked behind a disclosure — the chat is the main view.
+  const [showRaw, setShowRaw] = useState(false);
+  // Authoritative agent lifecycle from the daemon (null when it doesn't report one).
+  const [phase, setPhase] = useState<StudioPhase | null>(null);
+  const [statusLine, setStatusLine] = useState<string | null>(null);
 
   const baselineRef = useRef<Set<string>>(new Set());
-  const [newFiles, setNewFiles] = useState<LibraryFile[]>([]);
+  // Media the session has produced, with first-seen epoch-ms — the source for
+  // both the inline chat thumbnails and the "N files" counts. A ref tracks
+  // first-seen (stable across the 5s folder diffs); state drives rendering.
+  const mediaSeenRef = useRef<Map<string, number>>(new Map());
+  const mediaSigRef = useRef("");
+  const [mediaTimeline, setMediaTimeline] = useState<{ file: LibraryFile; at: number }[]>([]);
   const [studioSelected, setStudioSelected] = useState<LibraryFile | null>(null);
+
+  // Activity clock: the assistant turn reads as "working" until the tail + the
+  // folder have been quiet for STUDIO_IDLE_MS. lastTailRef detects tail changes;
+  // nowTick re-evaluates idleness once a second while the run is alive.
+  const lastTailRef = useRef("");
+  const [lastActivityAt, setLastActivityAt] = useState(0);
+  const [nowTick, setNowTick] = useState(0);
 
   // Resume detection: a stored session whose terminal is still alive on the daemon.
   useEffect(() => {
@@ -1293,11 +1615,19 @@ function StudioView({
           { timeoutMs: 8000 },
         );
         if (cancelled) return;
-        setTail(t.tail);
         setAlive(t.alive);
         setExitCode(t.exit_code);
         setMode(t.mode ?? null);
         setAutomode(t.automode === true);
+        setPhase(t.phase ?? null);
+        setStatusLine(t.status_line ?? null);
+        // A changed tail = the CLI is doing something → mark activity (keeps the
+        // idle-timer FALLBACK "working"); an unchanged tail leaves state untouched.
+        if (t.tail !== lastTailRef.current) {
+          lastTailRef.current = t.tail;
+          setTail(t.tail);
+          setLastActivityAt(Date.now());
+        }
         if (t.alive) timer = setTimeout(poll, 2000);
       } catch (e) {
         if (cancelled) return;
@@ -1317,7 +1647,9 @@ function StudioView({
     };
   }, [session, gone]);
 
-  // New-media watcher: diff the destination against the session-start snapshot.
+  // New-media watcher: diff the destination against the session-start snapshot,
+  // stamp each first sighting with a time, and only re-render when the media set
+  // actually changes (a new file or a size that's still being written).
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
@@ -1325,14 +1657,28 @@ function StudioView({
       get<FsListing>(`/fs/list?path=${encodeURIComponent(session.dest)}`, { timeoutMs: 15000 })
         .then((d) => {
           if (cancelled) return;
-          const out: LibraryFile[] = [];
+          const now = Date.now();
+          let added = false;
+          const timeline: { file: LibraryFile; at: number }[] = [];
           for (const e of d.entries) {
             if (e.is_dir) continue;
             const kind = mediaKindOf(e.name);
-            if (kind && !baselineRef.current.has(e.name))
-              out.push({ path: e.path, name: e.name, kind, size: e.size });
+            if (!kind || baselineRef.current.has(e.name)) continue;
+            let at = mediaSeenRef.current.get(e.path);
+            if (at === undefined) {
+              at = now;
+              mediaSeenRef.current.set(e.path, at);
+              added = true;
+            }
+            timeline.push({ file: { path: e.path, name: e.name, kind, size: e.size }, at });
           }
-          setNewFiles(out);
+          timeline.sort((a, b) => a.at - b.at || a.file.name.localeCompare(b.file.name));
+          const sig = timeline.map((m) => `${m.file.path}:${m.file.size ?? ""}`).join("|");
+          if (sig !== mediaSigRef.current) {
+            mediaSigRef.current = sig;
+            setMediaTimeline(timeline);
+          }
+          if (added) setLastActivityAt(Date.now());
         })
         .catch(() => {
           /* transient — the next tick retries */
@@ -1346,7 +1692,8 @@ function StudioView({
     };
   }, [session]);
 
-  // Console auto-scroll — sticks to the bottom unless the user scrolled up.
+  // Console auto-scroll — sticks to the bottom unless the user scrolled up (only
+  // matters while the raw-terminal disclosure is open).
   const consoleRef = useRef<HTMLDivElement | null>(null);
   const stickRef = useRef(true);
   const onConsoleScroll = () => {
@@ -1357,22 +1704,53 @@ function StudioView({
   useEffect(() => {
     const el = consoleRef.current;
     if (el && stickRef.current) el.scrollTop = el.scrollHeight;
-  }, [tail]);
+  }, [tail, showRaw]);
+
+  // Transcript auto-scroll — keeps the newest turn / media in view.
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const transcriptStickRef = useRef(true);
+  const onTranscriptScroll = () => {
+    const el = transcriptRef.current;
+    if (!el) return;
+    transcriptStickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
+  };
+  useEffect(() => {
+    const el = transcriptRef.current;
+    if (el && transcriptStickRef.current) el.scrollTop = el.scrollHeight;
+  }, [messages, mediaTimeline, booting, alive, gone]);
+
+  // Idle clock: re-evaluate the "working → done" transition each second while the
+  // run is alive (the tail poll goes quiet when the CLI stops emitting output).
+  useEffect(() => {
+    if (!session || !alive || gone) return;
+    const id = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [session, alive, gone]);
 
   const resetLive = useCallback((clearStore: boolean) => {
     if (clearStore) writeStudioStore({ session: undefined });
     setSession(null);
     setTail("");
+    lastTailRef.current = "";
     setMessages([]);
+    setBriefTimes([]);
     setSentFirst(false);
-    setNewFiles([]);
+    mediaSeenRef.current = new Map();
+    mediaSigRef.current = "";
+    setMediaTimeline([]);
     setGone(false);
     setAlive(true);
     setExitCode(null);
     setMode(null);
     setAutomode(false);
     setSayErr(null);
+    setShowRaw(false);
+    setPhase(null);
+    setStatusLine(null);
     setStudioSelected(null);
+    const now = Date.now();
+    setLastActivityAt(now);
+    setNowTick(now);
   }, []);
 
   const start = async () => {
@@ -1441,7 +1819,12 @@ function StudioView({
     baselineRef.current = new Set(resumeOffer.baseline);
     resetLive(false);
     setMessages(resumeOffer.messages);
+    // No stored per-brief times — anchor them all at the session start so any
+    // media detected now attaches to the LAST brief, and the prior turns start
+    // resolved (done/ready) rather than pretending to still be working.
+    setBriefTimes(resumeOffer.messages.map(() => resumeOffer.started_at));
     setSentFirst(resumeOffer.sent_first);
+    setLastActivityAt(resumeOffer.started_at);
     setSession({
       terminalId: resumeOffer.terminal_id,
       dest: resumeOffer.dest,
@@ -1468,8 +1851,10 @@ function StudioView({
       );
       const nextMsgs = [...messages, text];
       setMessages(nextMsgs);
+      setBriefTimes((prev) => [...prev, Date.now()]);
       setSentFirst(true);
       setDraft("");
+      setLastActivityAt(Date.now()); // a fresh brief = the turn is working again
       patchStoredSession({ sent_first: true, messages: nextMsgs });
     } catch (e) {
       const err = e instanceof ApiError ? e : new ApiError(String(e), 0);
@@ -1505,13 +1890,33 @@ function StudioView({
     resetLive(true);
   };
 
-  /* ---- LIVE phase ---- */
+  /* ---- LIVE phase (a conversation, not a console) ---- */
   if (session) {
     const inputDisabled = booting || !alive || gone || sending;
+    // The daemon's phase is authoritative (idle/done = genuinely waiting, not just
+    // "no bytes for 8s"); the idle timer is only a fallback for older daemons.
+    // Only the LAST turn can ever be "working"; earlier turns are always resolved.
+    const idleByTimer = nowTick - lastActivityAt >= STUDIO_IDLE_MS;
+    const working = phase !== null ? PHASE_BUSY[phase] : !idleByTimer;
+    const activeTurn = alive && !gone && !booting && working;
+
+    // Bucket each produced media file into the turn it belongs to: the most
+    // recent brief sent at-or-before the file's first sighting (anything before
+    // the first brief falls to turn 0). Never orphans a file.
+    const turns = messages.map((text) => ({ text, media: [] as LibraryFile[] }));
+    for (const m of mediaTimeline) {
+      let idx = 0;
+      for (let i = 0; i < turns.length; i++) {
+        if (m.at >= (briefTimes[i] ?? 0)) idx = i;
+      }
+      turns[idx]?.media.push(m.file);
+    }
+    const lastIdx = turns.length - 1;
+
     return (
       <>
         <Reveal>
-          <div className="card-surface flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
+          <div className="card-surface flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5">
             <span className="inline-flex shrink-0 items-center gap-2 text-sm font-semibold text-zinc-200">
               <Terminal size={15} className="text-accent-soft/80" />
               {session.cliLabel}
@@ -1528,12 +1933,6 @@ function StudioView({
                 {session.skillLabel}
               </span>
             )}
-            <code
-              className="max-w-[18rem] truncate rounded bg-black/40 px-2 py-0.5 font-mono text-[11px] text-zinc-400"
-              title={session.command}
-            >
-              {session.command}
-            </code>
             {alive &&
               !gone &&
               (automode ? (
@@ -1567,10 +1966,10 @@ function StudioView({
               → {session.dest}
             </code>
             <Link
-              href="/terminals"
+              href={`/terminals?focus=${encodeURIComponent(session.terminalId)}`}
               className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent-soft transition-colors hover:text-accent"
             >
-              Open in Build <ArrowRight size={12} />
+              Open terminal in Build <ArrowRight size={12} />
             </Link>
             <button
               type="button"
@@ -1607,25 +2006,59 @@ function StudioView({
         )}
 
         <Reveal>
-          <Card title="Brief" icon={<Send size={15} />}>
-            <div className="space-y-3">
-              {messages.length === 0 ? (
-                <p className="text-xs text-zinc-500">
-                  Everything you type here is typed straight into the CLI. Your first message
-                  becomes the brief — the daemon wraps it with the chosen skill and the save
-                  folder, and the run continues on autopilot.
-                </p>
-              ) : (
-                <div className="max-h-52 space-y-2 overflow-y-auto pr-1">
-                  {messages.map((m, i) => (
-                    <div key={i} className="flex justify-end">
-                      <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md border border-accent/25 bg-accent/[0.08] px-3.5 py-2 text-[13px] text-zinc-200">
-                        {m}
-                      </div>
+          <div className="card-surface flex flex-col overflow-hidden">
+            {/* Transcript — the conversation IS the view. */}
+            <div
+              ref={transcriptRef}
+              onScroll={onTranscriptScroll}
+              className="min-h-[38vh] max-h-[60vh] flex-1 space-y-4 overflow-y-auto p-4"
+            >
+              {turns.length === 0 ? (
+                <AssistantBubble>
+                  {booting || (phase !== null && PHASE_BUSY[phase]) ? (
+                    <div className="flex items-center gap-2 text-[13px] text-zinc-300">
+                      <WorkingDots />
+                      <span>{statusLine || `Starting ${session.cliLabel}…`}</span>
                     </div>
-                  ))}
-                </div>
+                  ) : (
+                    <p className="text-[13px] text-zinc-400">
+                      Ready — describe what to create in{" "}
+                      <code className="font-mono text-zinc-300">{folderLabel(session.dest)}</code>.
+                      I’ll run it on autopilot and drop the results right here as they land.
+                    </p>
+                  )}
+                </AssistantBubble>
+              ) : (
+                turns.map((turn, i) => {
+                  const isLast = i === lastIdx;
+                  const state: TurnState =
+                    isLast && (!alive || gone)
+                      ? "exited"
+                      : isLast && activeTurn
+                        ? "working"
+                        : turn.media.length > 0
+                          ? "done"
+                          : isLast
+                            ? "ready"
+                            : "done";
+                  return (
+                    <div key={i} className="space-y-3">
+                      <UserBubble text={turn.text} />
+                      <AssistantTurn
+                        state={state}
+                        media={turn.media}
+                        exitCode={exitCode}
+                        statusText={isLast ? statusLine : null}
+                        onOpenMedia={setStudioSelected}
+                      />
+                    </div>
+                  );
+                })
               )}
+            </div>
+
+            {/* Composer + raw-terminal disclosure. */}
+            <div className="space-y-2.5 border-t hairline p-4">
               {sayErr && <ErrorNote>{sayErr}</ErrorNote>}
               <div className="flex items-center gap-2">
                 <input
@@ -1645,84 +2078,61 @@ function StudioView({
                       : !alive || gone
                         ? "terminal ended"
                         : sentFirst
-                          ? "Send a follow-up…"
+                          ? "Send another instruction…"
                           : "Describe what to create…"
                   }
                   aria-label="Brief"
-                  className="min-w-0 flex-1 rounded-xl border border-white/10 bg-ink-950 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-accent/40 focus:outline-none disabled:opacity-50"
+                  className="min-w-0 flex-1 rounded-xl border border-white/10 bg-ink-950 px-3.5 py-2.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-accent/40 focus:outline-none disabled:opacity-50"
                 />
                 <button
                   type="button"
                   onClick={() => void send()}
                   disabled={inputDisabled || !draft.trim()}
                   aria-label="Send"
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.08] px-3 py-2 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.1] px-4 py-2.5 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.16] disabled:opacity-50"
                 >
                   {sending ? <LoaderInline label="Sending…" /> : <Send size={14} />}
                 </button>
               </div>
-            </div>
-          </Card>
-        </Reveal>
 
-        <Reveal>
-          <Card
-            title="Console"
-            icon={<Terminal size={15} />}
-            right={
-              alive && !gone ? (
-                <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-300">
-                  <span
-                    className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400"
-                    aria-hidden="true"
-                  />
-                  live
-                </span>
-              ) : (
-                <span className="text-[11px] text-zinc-500">
-                  exited{exitCode !== null ? ` (code ${exitCode})` : ""}
-                </span>
-              )
-            }
-          >
-            <div
-              ref={consoleRef}
-              onScroll={onConsoleScroll}
-              className="max-h-[40vh] overflow-y-auto rounded-xl border border-white/[0.06] bg-ink-950 p-3"
-            >
-              <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-zinc-400">
-                {tail || (booting ? "engine starting…" : "waiting for output…")}
-              </pre>
-            </div>
-          </Card>
-        </Reveal>
-
-        <Reveal>
-          <Card
-            title="New media"
-            icon={<Sparkles size={15} />}
-            right={
-              <span className="text-[11px] text-zinc-500">
-                {newFiles.length === 0
-                  ? "watching the folder…"
-                  : `${newFiles.length} file${newFiles.length === 1 ? "" : "s"} created so far`}
-              </span>
-            }
-          >
-            {newFiles.length === 0 ? (
-              <p className="py-4 text-center text-xs text-zinc-500">
-                Nothing yet — media that lands in{" "}
-                <code className="font-mono text-zinc-400">{folderLabel(session.dest)}</code> shows
-                up here as it’s created.
-              </p>
-            ) : (
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4">
-                {newFiles.map((f) => (
-                  <LibraryTile key={f.path} file={f} onOpen={() => setStudioSelected(f)} />
-                ))}
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowRaw((v) => !v)}
+                  aria-expanded={showRaw}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-zinc-500 transition-colors hover:text-zinc-300"
+                >
+                  {showRaw ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                  {showRaw ? "Hide raw terminal output" : "Show raw terminal output"}
+                </button>
+                {alive && !gone ? (
+                  <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-300">
+                    <span
+                      className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400"
+                      aria-hidden="true"
+                    />
+                    live
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-zinc-500">
+                    exited{exitCode !== null ? ` (code ${exitCode})` : ""}
+                  </span>
+                )}
               </div>
-            )}
-          </Card>
+
+              {showRaw && (
+                <div
+                  ref={consoleRef}
+                  onScroll={onConsoleScroll}
+                  className="max-h-[32vh] overflow-y-auto rounded-xl border border-white/[0.06] bg-ink-950 p-3"
+                >
+                  <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-zinc-400">
+                    {tail || (booting ? "engine starting…" : "waiting for output…")}
+                  </pre>
+                </div>
+              )}
+            </div>
+          </div>
         </Reveal>
 
         {studioSelected && (
@@ -1776,7 +2186,7 @@ function StudioView({
                 <Play size={14} /> Resume session
               </button>
               <Link
-                href="/terminals"
+                href={`/terminals?focus=${encodeURIComponent(resumeOffer.terminal_id)}`}
                 className="inline-flex items-center gap-1 rounded-xl border border-white/10 px-3 py-2 text-xs font-medium text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/[0.04]"
               >
                 Open in Build <ArrowRight size={12} />

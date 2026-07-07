@@ -230,7 +230,33 @@ export default function TerminalsPage() {
         if (cancelled) return;
         const alive = terms.terminals.filter((t) => t.alive);
         setTerminals(alive);
-        setFocusedId(alive[0]?.id ?? null);
+        // Deep-link from "Open in Build →" (Creative Studio): ?focus=<id>
+        // brings that terminal to the front + centers it so the user lands
+        // right on the pane they came to watch. Read window.location to avoid a
+        // useSearchParams Suspense boundary under static export.
+        let focusId: string | null = null;
+        try {
+          focusId = new URLSearchParams(window.location.search).get("focus");
+        } catch {
+          /* ignore */
+        }
+        const target = focusId ? alive.find((t) => t.id === focusId) : undefined;
+        if (target) {
+          setFocusedId(target.id);
+          zTop.current += 1;
+          const z = zTop.current;
+          setZOrder((prev) => ({ ...prev, [target.id]: z }));
+          const cw = canvasRef.current?.clientWidth ?? 1200;
+          setLayout((prev) => {
+            const cur = prev[target.id] ?? cascadeRect(0);
+            return {
+              ...prev,
+              [target.id]: { ...cur, x: Math.max(24, Math.round((cw - cur.width) / 2)), y: 24 },
+            };
+          });
+        } else {
+          setFocusedId(alive[0]?.id ?? null);
+        }
         setShells(sh.shells);
         setShell(sh.shells[0]?.name ?? "");
         // Only offer models the user can ACTUALLY run (provider connected).
