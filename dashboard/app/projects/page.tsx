@@ -11,6 +11,11 @@ import {
   ArchiveRestore,
   Folder,
   FolderOpen,
+  ArrowRight,
+  MessageSquare,
+  SquareKanban,
+  ListChecks,
+  BookOpen,
 } from "lucide-react";
 import { del, patch, post, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
@@ -124,6 +129,11 @@ function ProjectTile({
           </span>
           {p.active && <ActiveBadge />}
           {archived && <Badge value="archived" tone="slate" />}
+          {/* An unmistakable "this opens" cue that slides on hover. */}
+          <ArrowRight
+            size={15}
+            className="ml-auto shrink-0 text-zinc-600 transition-all group-hover:translate-x-0.5 group-hover:text-accent-soft"
+          />
         </div>
 
         {p.brief ? (
@@ -141,9 +151,24 @@ function ProjectTile({
           </div>
         )}
 
+        {/* What's inside — makes the tile read as a doorway, not a static card. */}
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500">
+          <span className="inline-flex items-center gap-1"><MessageSquare size={11} /> Chat</span>
+          <span className="inline-flex items-center gap-1"><ListChecks size={11} /> Tasks</span>
+          <span className="inline-flex items-center gap-1"><SquareKanban size={11} /> Board</span>
+          <span className="inline-flex items-center gap-1"><BookOpen size={11} /> Knowledge</span>
+        </div>
+
         <div className="text-[11px] text-zinc-600">
           {sessions} {sessions === 1 ? "session" : "sessions"} · created{" "}
           {timeAgo(p.created_at)}
+        </div>
+
+        {/* Primary CTA — visually a button; the stretched link handles the click. */}
+        <div className="mt-1">
+          <span className="inline-flex items-center gap-1.5 rounded-lg border border-accent/25 bg-accent/[0.08] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors group-hover:border-accent/40 group-hover:bg-accent/[0.14]">
+            Open workspace <ArrowRight size={12} />
+          </span>
         </div>
       </div>
 
@@ -278,7 +303,7 @@ export default function ProjectsPage() {
       <Reveal>
         <PageHeader
           title="Projects"
-          subtitle="Each project is a workspace — instructions, knowledge, conversations, tasks and a board in one place."
+          subtitle="Open a project to its workspace — chat, run tasks, track work on a board, and add knowledge, all grounded in that project."
         />
       </Reveal>
       {offline && (
