@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -34,24 +35,38 @@ _AUTOPILOT_FLAGS = {
 }
 
 #: Shift+Tab as a terminal keystroke (CSI Z) — cycles Claude Code's permission
-#: mode: default → auto-accept edits → plan → default.
+#: mode. The current cycle is: manual → accept-edits → plan → auto → manual.
 _SHIFT_TAB = "\x1b[Z"
 
-#: Mode banners Claude Code paints (ANSI already stripped by output_tail).
-_MODE_STRINGS = ("auto-accept edits on", "bypass permissions on", "plan mode on")
+#: Permission-mode banners Claude Code paints (ANSI already stripped by
+#: output_tail). CURRENT strings first, older aliases kept so a machine on an
+#: earlier Claude still works. Longer alternatives precede their prefixes so the
+#: regex prefers "auto-accept edits on" over the "accept edits on" inside it.
+_MODE_RE = re.compile(
+    r"auto-accept edits on"  # older Claude alias for accept-edits
+    r"|accept edits on"  # current: auto-accepts file edits (the mild autopilot)
+    r"|bypass permissions on"  # older Claude alias for full-auto
+    r"|auto mode on"  # current: full auto, no prompts
+    r"|plan mode on"  # read-only planning — NOT an autopilot mode
+    r"|manual mode on"  # current default: asks every time
+)
+
+#: Modes where the CLI proceeds WITHOUT stopping to ask — the studio waits for
+#: one of these before it fires a brief, and the badge reads "auto mode on".
+#: "plan"/"manual" are deliberately excluded (they'd stall generation).
+_AUTO_MODES = frozenset(
+    {"auto-accept edits on", "accept edits on", "auto mode on", "bypass permissions on"}
+)
 
 
 def latest_claude_mode(tail: str) -> str | None:
     """The MOST RECENT permission-mode banner in the clean tail (the TUI
-    repaints the banner each cycle, so the last occurrence wins), or None
-    when no banner has been seen (default mode)."""
-    best: tuple[int, str] | None = None
-    window = tail[-4000:]
-    for mode in _MODE_STRINGS:
-        idx = window.rfind(mode)
-        if idx >= 0 and (best is None or idx > best[0]):
-            best = (idx, mode)
-    return best[1] if best else None
+    repaints the banner each cycle, so the last match wins), or None when no
+    banner has been seen (default mode)."""
+    last: str | None = None
+    for m in _MODE_RE.finditer(tail[-4000:]):
+        last = m.group(0)
+    return last
 
 
 def _engage_claude_automode(session) -> None:
@@ -72,18 +87,38 @@ def _engage_claude_automode(session) -> None:
         if "? for shortcuts" in tail or "shift+tab" in tail.lower():
             break
         time.sleep(1.0)
-    for _ in range(6):  # cycle until an autopilot mode is the latest banner
+    # Closed loop: press Shift+Tab, then READ the resulting banner (the tail is
+    # live now that the studio auto-drains) and stop the instant we land on an
+    # autopilot mode — instead of counting presses blind, which overshoots into
+    # plan/manual mode and stalls generation. Bounded so a mode-string change
+    # can't spin forever. 8 covers a full cycle-and-a-bit of the 4 modes.
+    for _ in range(8):
         if getattr(session, "_studio_said", False):
             return  # the user is typing/running — never keystroke over them
         if not session.alive or time.time() > deadline + 30:
             return
-        if latest_claude_mode(session.output_tail()) in (
-            "auto-accept edits on",
-            "bypass permissions on",
-        ):
+        if latest_claude_mode(session.output_tail()) in _AUTO_MODES:
             return
         session.write(_SHIFT_TAB)
         time.sleep(1.5)
+
+
+#: A full-screen CLI TUI (Claude Code) ingests a bulk write as a bracketed
+#: PASTE, so a trailing "\r" lands as a newline INSIDE the composer instead of
+#: submitting it. We therefore send the text, let the paste settle, then press
+#: Enter as a SEPARATE keystroke. Without this the brief sits typed-but-unsent
+#: and nothing ever generates — the exact "chat initialises then stops" failure.
+_SUBMIT_SETTLE_SECONDS = 0.3
+
+
+def _type_and_submit(session, text: str) -> None:
+    """Type ``text`` into the CLI, then submit it with a distinct Enter press."""
+    import time
+
+    session.write(text)
+    time.sleep(_SUBMIT_SETTLE_SECONDS)
+    session.write("\r")
+
 
 #: Media-generation skills the studio brief points the CLI at when the user
 #: picks "Auto" — the CLI (e.g. Claude Code) discovers these from
@@ -271,6 +306,13 @@ def register(app: FastAPI, d) -> None:
             session = d.platform.terminals.create(cwd=str(cwd))
         except RuntimeError as exc:  # session cap reached
             raise HTTPException(status_code=429, detail=str(exc))
+        # CRITICAL: the studio drives this terminal purely over HTTP — no Build
+        # WebSocket is attached — so start the background reader NOW, before the
+        # CLI prints anything. Without it the output is never consumed: the tail
+        # stays blank, auto-mode detection never sees Claude boot, and a
+        # full-screen TUI stalls once its output buffer fills (= the "chat
+        # initialises then nothing generates" failure this fixes).
+        session.start_autodrain()
         # Type the launch into the shell ("\r" = Enter, same as a keystroke).
         session.write(command + "\r")
         # Claude's auto mode is engaged like a human does it: Shift+Tab cycles
@@ -319,7 +361,7 @@ def register(app: FastAPI, d) -> None:
         # cycling Shift+Tab (a late cycle would flip Claude into plan mode
         # mid-run). Set BEFORE the write so the thread can't sneak in between.
         setattr(session, "_studio_said", True)
-        session.write(text + "\r")
+        _type_and_submit(session, text)
         return {"typed": True, "chars": len(text)}
 
     @app.get("/creative/studio/{terminal_id}/tail")
@@ -332,6 +374,18 @@ def register(app: FastAPI, d) -> None:
         chars = max(200, min(int(chars), 32_000))
         full = session.output_tail()
         mode = latest_claude_mode(full)
+        low = full.lower()
+        # "The CLI has booted and is ready to accept a brief." A blind boot timer
+        # let the first brief land in a not-yet-listening shell (→ dropped); the
+        # UI gates on this instead. Claude paints "? for shortcuts" / an
+        # "esc to interrupt" hint; any CLI that has printed a screenful is up.
+        ready = (
+            bool(mode)
+            or "? for shortcuts" in low
+            or "shift+tab" in low
+            or "esc to interrupt" in low
+            or len(full.strip()) >= 80
+        )
         return {
             "tail": full[-chars:],
             "alive": session.alive,
@@ -339,7 +393,9 @@ def register(app: FastAPI, d) -> None:
             # The LATEST permission-mode banner painted by the CLI (Claude):
             # lets the UI show an honest "auto mode engaged" badge.
             "mode": mode,
-            "automode": mode in ("auto-accept edits on", "bypass permissions on"),
+            "automode": mode in _AUTO_MODES,
+            # Boot-readiness gate for the composer (see above).
+            "ready": ready,
         }
 
     @app.post("/creative/upload")

@@ -43,7 +43,7 @@ def test_studio_say_and_tail_relay_into_a_real_terminal(tmp_path):
         t = client.get(f"/creative/studio/{tid}/tail")
         assert t.status_code == 200
         body = t.json()
-        assert set(body) == {"tail", "alive", "exit_code", "mode", "automode"}
+        assert set(body) == {"tail", "alive", "exit_code", "mode", "automode", "ready"}
         assert isinstance(body["tail"], str)
 
         # Newlines are flattened so a multi-line brief can't submit early.
@@ -62,16 +62,24 @@ def test_studio_say_and_tail_relay_into_a_real_terminal(tmp_path):
 
 
 def test_latest_claude_mode_detection():
-    from iron_jarvis.daemon.routes.creative import latest_claude_mode
+    from iron_jarvis.daemon.routes.creative import _AUTO_MODES, latest_claude_mode
 
     assert latest_claude_mode("booting…\n? for shortcuts") is None
-    assert latest_claude_mode("x auto-accept edits on y") == "auto-accept edits on"
+    # Current Claude banners.
+    assert latest_claude_mode("x accept edits on y") == "accept edits on"
+    assert latest_claude_mode("auto mode on") == "auto mode on"
+    assert latest_claude_mode("manual mode on") == "manual mode on"
     # The TUI repaints the banner each Shift+Tab — the LATEST occurrence wins.
-    cycled = "auto-accept edits on ... plan mode on"
+    cycled = "accept edits on ... plan mode on"
     assert latest_claude_mode(cycled) == "plan mode on"
-    back = "plan mode on ......... auto-accept edits on"
-    assert latest_claude_mode(back) == "auto-accept edits on"
-    assert latest_claude_mode("bypass permissions on") == "bypass permissions on"
+    back = "plan mode on ......... auto mode on"
+    assert latest_claude_mode(back) == "auto mode on"
+    # Overlap: "accept edits on" is a substring of the older "auto-accept edits
+    # on" alias — the longer banner must win, not the prefix inside it.
+    assert latest_claude_mode("auto-accept edits on") == "auto-accept edits on"
+    # Only hands-off modes count as auto; plan/manual must NOT.
+    assert "accept edits on" in _AUTO_MODES and "auto mode on" in _AUTO_MODES
+    assert "plan mode on" not in _AUTO_MODES and "manual mode on" not in _AUTO_MODES
 
 
 def test_tail_reports_mode_fields(tmp_path):
@@ -80,7 +88,7 @@ def test_tail_reports_mode_fields(tmp_path):
     tid = term.json()["id"]
     try:
         body = client.get(f"/creative/studio/{tid}/tail").json()
-        assert set(body) == {"tail", "alive", "exit_code", "mode", "automode"}
+        assert set(body) == {"tail", "alive", "exit_code", "mode", "automode", "ready"}
         assert body["automode"] is False  # a plain shell paints no mode banner
     finally:
         client.delete(f"/terminals/{tid}")

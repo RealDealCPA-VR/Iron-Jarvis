@@ -168,6 +168,58 @@ def test_fake_backend_read_respects_max_bytes():
     assert s.read() == b"\n"
 
 
+# --- background auto-drain (Creative Studio has NO WebSocket to pump reads) ------
+
+
+def test_autodrain_captures_output_with_no_reader():
+    """The Studio drives the CLI over HTTP with no pane attached, so nothing
+    calls read(). start_autodrain() must keep the PTY drained on its own —
+    without it the tail stays blank, auto-mode detection is blind, and a
+    full-screen TUI stalls once its output buffer fills."""
+    import time
+
+    s = _fake_session()
+    s.start_autodrain()
+    try:
+        s.write("hello from the cli\n")  # no manual read() anywhere
+        deadline = time.monotonic() + 2.0
+        while "hello from the cli" not in s.output_tail() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert "hello from the cli" in s.output_tail()
+    finally:
+        s.kill()
+
+
+def test_autodrain_yields_to_an_attached_consumer():
+    """While a live Build pane is attached it does the reading; the background
+    drain must step aside so the two never race for the same bytes."""
+    import time
+
+    s = _fake_session()
+    s.add_consumer()  # a Build-page pane is attached BEFORE the drain starts
+    s.start_autodrain()
+    try:
+        s.write("owned by the pane\n")
+        time.sleep(0.3)  # generous window for the drain to (wrongly) grab it
+        assert "owned by the pane" not in s.output_tail()  # it yielded
+        assert s.read() == b"owned by the pane\n"  # the pane's read gets them
+    finally:
+        s.remove_consumer()
+        s.kill()
+
+
+def test_autodrain_stops_on_kill():
+    """kill() must halt the background reader (no thread left spinning)."""
+    import time
+
+    s = _fake_session()
+    s.start_autodrain()
+    s.kill()
+    time.sleep(0.1)
+    assert s._drain_thread is not None
+    assert not s._drain_thread.is_alive()
+
+
 # --- dead-PTY -> pipe fallback (frozen build missing the ConPTY host exe) -------
 
 

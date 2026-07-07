@@ -84,6 +84,11 @@ def register(app: FastAPI, d) -> None:
             await close_exited()
             return
 
+        # This pane is now the live reader: the session's background auto-drain
+        # (Creative Studio) steps aside while we're attached so we never race it
+        # for the PTY's bytes. Balanced by remove_consumer() in the finally.
+        session.add_consumer()
+
         # PERSISTENCE: replay the session's scrollback so a RE-ATTACHING pane
         # (the user switched tabs / navigated away and back) shows its history
         # instead of a blank screen. The shell itself never died — only the
@@ -134,6 +139,7 @@ def register(app: FastAPI, d) -> None:
         except WebSocketDisconnect:
             pass
         finally:
+            session.remove_consumer()  # hand the PTY back to the background drain
             out.cancel()
             try:
                 await ws.close()

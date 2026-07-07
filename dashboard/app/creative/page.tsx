@@ -1260,6 +1260,9 @@ interface StudioTail {
   mode: string | null;
   /** True once the daemon has verified an auto/full-auto mode is engaged. */
   automode: boolean;
+  /** True once the CLI has booted and is ready to accept a brief (gates the
+   *  composer instead of a blind boot timer). ABSENT on older daemons. */
+  ready?: boolean;
   /** Authoritative lifecycle phase; ABSENT on older daemons → idle-timer fallback. */
   phase?: StudioPhase;
   /** Already-human-readable progress line, e.g. "Rendering shot 3/5…". */
@@ -1293,6 +1296,10 @@ interface LiveSession {
   command: string;
   /** Epoch ms — drives the "auto mode: engaging…" grace window on the badge. */
   startedAt: number;
+  /** True when this CLI engages autopilot by Shift+Tab (Claude): the composer
+   *  waits for auto mode to actually be CONFIRMED before the first brief, so it
+   *  can't land in a not-yet-ready TUI or stall on a permission prompt. */
+  awaitsAutomode: boolean;
 }
 
 /* ---- Studio chat (LIVE phase) presentational bits ---------------------------- */
@@ -1583,10 +1590,16 @@ function StudioView({
     };
   }, []);
 
-  // "Engine starting…" grace period so the first brief lands after the CLI booted.
+  // The composer stays locked until the CLI is ACTUALLY ready — the tail poll
+  // clears `booting` on the real readiness signal (auto mode confirmed for a
+  // Shift+Tab autopilot like Claude, else the daemon's `ready` flag). A blind
+  // 3s timer used to unlock too early, so the first brief landed in a
+  // not-yet-listening TUI and vanished. This timer is only a SAFETY NET so a
+  // CLI that never reports readiness still unlocks (with the honest "unverified"
+  // badge and the Build handoff to fall back on).
   useEffect(() => {
     if (!booting) return;
-    const t = setTimeout(() => setBooting(false), 3000);
+    const t = setTimeout(() => setBooting(false), 45_000);
     return () => clearTimeout(t);
   }, [booting]);
 
@@ -1621,6 +1634,17 @@ function StudioView({
         setAutomode(t.automode === true);
         setPhase(t.phase ?? null);
         setStatusLine(t.status_line ?? null);
+        // Unlock the composer once the CLI is genuinely ready. For a Shift+Tab
+        // autopilot (Claude) that means auto mode CONFIRMED — firing a brief
+        // before it engages would stall on an unanswered permission prompt;
+        // for other CLIs the daemon's `ready` flag. Only ever CLEARS booting
+        // (the safety-net timer is the sole other path), so a later automode
+        // flicker can't re-lock a composer the user is already typing in.
+        setBooting((b) => {
+          if (!b) return b;
+          const bootReady = session.awaitsAutomode ? t.automode === true : t.ready === true;
+          return bootReady ? false : b;
+        });
         // A changed tail = the CLI is doing something → mark activity (keeps the
         // idle-timer FALLBACK "working"); an unchanged tail leaves state untouched.
         if (t.tail !== lastTailRef.current) {
@@ -1784,6 +1808,7 @@ function StudioView({
         skillLabel,
         command: res.command,
         startedAt: Date.now(),
+        awaitsAutomode: res.automode_method === "shift-tab",
       };
       baselineRef.current = new Set(baseline);
       resetLive(false);
@@ -1832,6 +1857,7 @@ function StudioView({
       skillLabel: resumeOffer.skill ?? null, // legacy stored sessions predate the field
       command: resumeOffer.command,
       startedAt: resumeOffer.started_at,
+      awaitsAutomode: false, // already booted long ago — no boot gate on resume
     });
     setBooting(false);
     setResumeOffer(null);
@@ -1893,6 +1919,13 @@ function StudioView({
   /* ---- LIVE phase (a conversation, not a console) ---- */
   if (session) {
     const inputDisabled = booting || !alive || gone || sending;
+    // Why the composer is locked while booting: waiting on Claude's Shift+Tab
+    // auto mode vs. a plain cold start. Keeps the "nothing's happening" moment
+    // honest instead of a silent disabled box.
+    const awaitingAutomode = booting && session.awaitsAutomode && !automode;
+    const bootStatus = awaitingAutomode
+      ? "Engaging auto mode…"
+      : `Starting ${session.cliLabel}…`;
     // The daemon's phase is authoritative (idle/done = genuinely waiting, not just
     // "no bytes for 8s"); the idle timer is only a fallback for older daemons.
     // Only the LAST turn can ever be "working"; earlier turns are always resolved.
@@ -2018,7 +2051,7 @@ function StudioView({
                   {booting || (phase !== null && PHASE_BUSY[phase]) ? (
                     <div className="flex items-center gap-2 text-[13px] text-zinc-300">
                       <WorkingDots />
-                      <span>{statusLine || `Starting ${session.cliLabel}…`}</span>
+                      <span>{statusLine || bootStatus}</span>
                     </div>
                   ) : (
                     <p className="text-[13px] text-zinc-400">
@@ -2074,7 +2107,9 @@ function StudioView({
                   disabled={inputDisabled}
                   placeholder={
                     booting
-                      ? "engine starting…"
+                      ? awaitingAutomode
+                        ? "engaging auto mode…"
+                        : "engine starting…"
                       : !alive || gone
                         ? "terminal ended"
                         : sentFirst

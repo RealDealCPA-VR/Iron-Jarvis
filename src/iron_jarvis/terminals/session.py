@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,19 @@ class TerminalSession:
         # PTY backend spawned a shell that died immediately (e.g. a frozen build
         # missing the ConPTY host exe). Commands still run; fancy TTY apps don't.
         self.degraded = False
+        # --- Background auto-drain (for the Creative Studio) ------------------
+        # A Build-page pane drains the PTY through its WebSocket; the Studio,
+        # by contrast, drives the CLI purely over HTTP with NO socket attached.
+        # Without a reader the output is never consumed: the tail stays blank,
+        # auto-mode detection is blind, and a chatty full-screen TUI (Claude
+        # Code) STALLS the moment the OS output buffer fills. start_autodrain()
+        # spawns a reader that keeps the PTY flowing regardless. It steps aside
+        # whenever a live pane is attached (see add_consumer) so the two never
+        # race for the same bytes.
+        self._consumers = 0
+        self._consumer_lock = threading.Lock()
+        self._drain_thread: threading.Thread | None = None
+        self._drain_stop = threading.Event()
 
     def start(self, env: dict | None = None) -> "TerminalSession":
         """Spawn the shell (idempotent)."""
@@ -84,6 +98,57 @@ class TerminalSession:
                 del self._tail[: len(self._tail) - TAIL_MAX_BYTES]
         return data
 
+    # --- Live consumers + background auto-drain --------------------------
+
+    def add_consumer(self) -> None:
+        """Register a live output consumer (a Build-page WebSocket pane). While
+        any consumer is attached it does the reading and fills the tail itself,
+        so the background auto-drain steps aside to avoid stealing its bytes."""
+        with self._consumer_lock:
+            self._consumers += 1
+
+    def remove_consumer(self) -> None:
+        """Drop a previously-registered live consumer."""
+        with self._consumer_lock:
+            if self._consumers > 0:
+                self._consumers -= 1
+
+    @property
+    def has_consumer(self) -> bool:
+        with self._consumer_lock:
+            return self._consumers > 0
+
+    def start_autodrain(self) -> None:
+        """Begin draining output in the background so it's captured even when no
+        WebSocket is attached (the Creative Studio case). Idempotent — safe to
+        call more than once on the same session."""
+        if self._drain_thread is not None:
+            return
+        self._drain_stop.clear()
+        thread = threading.Thread(
+            target=self._drain_loop, name=f"drain-{self.id}", daemon=True
+        )
+        self._drain_thread = thread
+        thread.start()
+
+    def _drain_loop(self) -> None:
+        """Keep the PTY flowing into the tail. Yields to a live pane (which
+        reads and fills the tail itself); when alone, reads and discards the
+        live bytes — the scrollback captured in the tail is what the Studio
+        tail endpoint serves and what auto-mode detection reads."""
+        while not self._drain_stop.is_set():
+            if not self.alive:
+                break
+            if self.has_consumer:  # a WS pane is reading — don't steal its bytes
+                time.sleep(0.05)
+                continue
+            try:
+                data = self.read()  # into _tail; live bytes discarded (nobody watching)
+            except Exception:  # pragma: no cover - a dying backend just ends the loop
+                break
+            if not data:
+                time.sleep(0.03)
+
     def output_tail(self) -> str:
         """Recent output as CLEAN text (ANSI stripped) for the AI assist.
 
@@ -103,6 +168,7 @@ class TerminalSession:
         self.backend.resize(cols, rows)
 
     def kill(self) -> None:
+        self._drain_stop.set()  # stop the background reader before the PTY dies
         self.backend.kill()
 
     @property
