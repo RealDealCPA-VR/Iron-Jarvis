@@ -142,8 +142,19 @@ def thumbnail_for(platform, src: Path, *, size: int = THUMB_SIZE) -> Path | None
                 pass
 
     try:  # bound the cache — prune the oldest fifth when past the cap
-        # In-flight *.tmp.jpg files are excluded: pruning one would yank a
-        # render out from under the thread writing it.
+        # In-flight *.tmp.jpg files are excluded from the cap sweep: pruning
+        # one would yank a render out from under the thread writing it. But
+        # STRAY tmps (an AV scanner held the handle when the finally-unlink
+        # ran, or a crash mid-render) would otherwise live forever — collect
+        # any older than 10 minutes; no render takes remotely that long.
+        import time as _time
+
+        for stray in cache_dir.glob("*.tmp.jpg"):
+            try:
+                if _time.time() - stray.stat().st_mtime > 600:
+                    stray.unlink(missing_ok=True)
+            except OSError:
+                continue
         entries = [p for p in cache_dir.glob("*.jpg") if ".tmp." not in p.name]
         if len(entries) > _THUMB_CACHE_MAX:
             entries.sort(key=lambda p: p.stat().st_mtime)

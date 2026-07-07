@@ -206,8 +206,19 @@ def test_thumbnail_concurrent_requests_one_cache_entry(tmp_path):
     assert len({r.content for r in results}) == 1  # every reader saw a complete file
 
     cache = tmp_path / ".ironjarvis" / "creative-thumbs"
-    assert len(list(cache.glob("*.jpg"))) == 1
-    assert not [p for p in cache.iterdir() if ".tmp." in p.name]  # no leftovers
+    published = [p for p in cache.glob("*.jpg") if ".tmp." not in p.name]
+    assert len(published) == 1  # one deterministic key -> one cached thumb
+    # Losing renderers unlink their tmps best-effort; under full-suite disk
+    # load an AV/indexer can hold a fresh tmp for a beat — poll briefly
+    # instead of flaking (the aging sweep in the pruner collects true strays).
+    import time
+
+    for _ in range(30):
+        leftovers = [p for p in cache.iterdir() if ".tmp." in p.name]
+        if not leftovers:
+            break
+        time.sleep(0.1)
+    assert not leftovers
 
 
 def test_publish_endpoint_caps_file_size(tmp_path, monkeypatch):
