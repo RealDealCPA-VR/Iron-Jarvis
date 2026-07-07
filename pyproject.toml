@@ -1,6 +1,6 @@
 [project]
 name = "iron-jarvis"
-version = "1.26.0"
+version = "1.27.0"
 description = "Iron Jarvis - a local-first AI operating system: a multi-agent orchestrator with tools, memory, workflows, a sandbox, git-native review, and a Next.js control center."
 readme = "README.md"
 requires-python = ">=3.12"
