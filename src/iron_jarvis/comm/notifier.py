@@ -19,6 +19,9 @@ DEFAULT_ALERT_EVENTS: frozenset[str] = frozenset(
         EventType.REVIEW_REQUESTED,
         EventType.WORKFLOW_COMPLETED,
         EventType.PROVIDER_FAILED,
+        EventType.SESSION_COMPLETED,
+        EventType.AUTONOMY_EXECUTED,
+        EventType.PROVIDER_FAILOVER,
     }
 )
 

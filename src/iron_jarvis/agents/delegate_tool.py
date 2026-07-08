@@ -129,6 +129,14 @@ class DelegateTool(Tool):
         child_session.finished_at = utcnow()
         orch._save(child_session)
 
+        # Close the learning loop for the child: delegated work teaches the
+        # system too (evaluate -> record outcome -> reflect). Best-effort so a
+        # learning failure never breaks delegation.
+        try:
+            orch._post_run_learning(child_session)
+        except Exception:  # noqa: BLE001
+            pass
+
         ok = run.state is AgentState.COMPLETED
         return ToolResult(
             ok=ok,

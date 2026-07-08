@@ -39,8 +39,12 @@ import {
   DownloadCloud,
   Settings,
   LifeBuoy,
+  FolderKanban,
+  X,
   type LucideIcon,
 } from "lucide-react";
+import { get, post } from "@/lib/api";
+import type { Project } from "@/lib/types";
 
 interface Command {
   id: string;
@@ -103,6 +107,9 @@ export function CommandPalette() {
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const prevFocusRef = useRef<HTMLElement | null>(null);
+  // Dynamic "Switch to project: <name>" actions (the context spine) — fetched
+  // fresh each time the palette opens so the list reflects live projects.
+  const [projectCmds, setProjectCmds] = useState<Command[]>([]);
 
   // ⌘K / Ctrl+K toggles; Esc closes.
   useEffect(() => {
@@ -131,13 +138,53 @@ export function CommandPalette() {
     }
   }, [open]);
 
+  // Load active projects when the palette opens and turn each into a
+  // "Switch to project: <name>" action that activates the context spine, plus
+  // a single "Deactivate project" entry. Actions fire and forget — the daemon
+  // health poll updates the shell pill/switcher labels.
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    get<{ projects: Project[] }>("/projects")
+      .then((d) => {
+        if (!alive) return;
+        const active = d.projects.filter((p) => p.status !== "archived");
+        const cmds: Command[] = active.map((p) => ({
+          id: `switch-project-${p.id}`,
+          label: `Switch to project: ${p.name}`,
+          hint: "Project",
+          icon: FolderKanban,
+          href: "#",
+          keywords: "project workspace context spine switch activate",
+          action: () => void post(`/projects/${encodeURIComponent(p.id)}/activate`),
+        }));
+        if (active.length > 0) {
+          cmds.push({
+            id: "deactivate-project",
+            label: "Deactivate project",
+            hint: "Project",
+            icon: X,
+            href: "#",
+            keywords: "project workspace context spine clear deactivate none",
+            action: () => void post("/projects/deactivate"),
+          });
+        }
+        setProjectCmds(cmds);
+      })
+      .catch(() => alive && setProjectCmds([]));
+    return () => {
+      alive = false;
+    };
+  }, [open]);
+
   const results = useMemo(() => {
+    const all = [...COMMANDS, ...projectCmds];
     const q = query.trim().toLowerCase();
-    if (!q) return COMMANDS;
-    return COMMANDS.filter((c) =>
+    if (!q) return all;
+    return all.filter((c) =>
       `${c.label} ${c.hint ?? ""} ${c.keywords ?? ""}`.toLowerCase().includes(q),
     );
-  }, [query]);
+  }, [query, projectCmds]);
 
   useEffect(() => {
     setActive(0);

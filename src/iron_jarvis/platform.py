@@ -275,8 +275,16 @@ def build_platform(
     # Phase 4: route the shell tool through the Sandbox Manager (same "shell" name).
     registry.register(SandboxedShellTool())
 
-    # Phase 5: layered memory + retrieval, exposed as tools.
-    memory = MemoryLayers(engine, config=config)
+    # The SHARED embedder is chosen ONCE here and reused across every semantic
+    # surface — layered memory (below), file search, and ltm — so they all rank
+    # against the SAME vectors: a real local model (Ollama) when reachable, else
+    # the deterministic offline MockEmbedder, wrapped in the persistent embedding
+    # cache (engine) so re-indexing is incremental and survives restarts (§22).
+    embedder = build_embedder(config, engine)
+
+    # Phase 5: layered memory + retrieval, exposed as tools. Pass the shared
+    # embedder so working-memory semantic search uses real vectors too.
+    memory = MemoryLayers(engine, embedder=embedder, config=config)
     for tool in memory_tools(memory):
         registry.register(tool)
 
@@ -373,12 +381,8 @@ def build_platform(
     for tool in integration_tools(integrations, secrets.get):
         registry.register(tool)
 
-    # File search across configured roots. The embedder is chosen ONCE here and
-    # shared by filesearch + ltm: a real local model (Ollama) when one is
-    # reachable, else the deterministic offline MockEmbedder. Wrapping it in the
-    # persistent embedding cache (engine) makes re-indexing incremental and
-    # survive restarts (§22 Total Recall).
-    embedder = build_embedder(config, engine)
+    # File search across configured roots, sharing the SAME embedder built above
+    # so filesearch + ltm + layered memory all rank against identical vectors.
     search_roots = [Path(r) for r in config.search_roots] or [config.project_root]
     filesearch = FileSearchService(search_roots, embedder=embedder)
     for tool in filesearch_tools(filesearch):

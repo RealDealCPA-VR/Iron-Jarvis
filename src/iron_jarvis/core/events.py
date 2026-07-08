@@ -40,6 +40,7 @@ class EventType:
     WORKFLOW_COMPLETED = "workflow.completed"
     REVIEW_REQUESTED = "review.requested"
     PROVIDER_FAILED = "provider.failed"
+    PROVIDER_FAILOVER = "provider.failover"
     PROVIDER_DOWNGRADED = "provider.downgraded"
     WEBHOOK_RECEIVED = "webhook.received"
     # Two-way comm (inbound): an authorized message arrived on a channel and a

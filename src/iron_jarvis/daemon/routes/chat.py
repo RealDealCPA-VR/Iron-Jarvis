@@ -191,6 +191,16 @@ def register(app: FastAPI, d) -> None:
                 pass
             system += block
 
+        # Self-correction: fold accumulated lessons + user preferences into the
+        # system prompt so the chat surface gets a little smarter every turn
+        # too (same injection the agent runtime does). Never blocks a turn.
+        learning = getattr(d.platform, "learning", None)
+        if learning is not None:
+            try:
+                system = learning.apply_to_prompt(system)
+            except Exception:  # noqa: BLE001 — never block a chat turn
+                pass
+
         # Attachments: text formats extracted inline; images go to VISION.
         images: list[dict[str, str]] = []
         attach_block = ""

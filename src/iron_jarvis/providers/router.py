@@ -203,7 +203,7 @@ class ModelRouter:
                             system=system, messages=messages, tools=tools
                         )
                         await self.event_bus.publish(
-                            "provider.failover",
+                            EventType.PROVIDER_FAILOVER,
                             {"from": adapter.provider, "to": alt.provider, "reason": "rate limited"},
                             session_id=session_id,
                         )

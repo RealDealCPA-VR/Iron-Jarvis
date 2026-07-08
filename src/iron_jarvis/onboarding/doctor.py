@@ -270,6 +270,31 @@ def runtime_checks(platform) -> list[dict]:
     except Exception as exc:  # noqa: BLE001
         checks.append(_result("database", False, f"integrity check failed: {exc}"))
 
+    # Free disk on the state home (a full disk silently breaks the DB, backups,
+    # and every artifact/session write — often with no obvious in-app error).
+    try:
+        home = platform.config.home
+        free_gb = shutil.disk_usage(str(home)).free / (1024**3)
+        if free_gb < 1.0:
+            ok, level = False, REQUIRED
+        elif free_gb < 5.0:
+            ok, level = False, RECOMMENDED
+        else:
+            ok, level = True, RECOMMENDED
+        checks.append(
+            _result(
+                "disk_space",
+                ok,
+                f"{free_gb:.1f} GB free on the state home"
+                if ok
+                else f"only {free_gb:.1f} GB free on the state home — writes may start failing",
+                fix="" if ok else "Free up disk space (clear old backups/sessions) or move the state home to a larger drive.",
+                level=level,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        checks.append(_result("disk_space", False, f"disk-space check failed: {exc}", level=RECOMMENDED))
+
     return checks
 
 

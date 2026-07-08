@@ -35,6 +35,10 @@ class MemoryLayers:
         config: "Config | None" = None,
     ) -> None:
         self.engine = engine
+        # The SHARED embedder (real Ollama when reachable, else the offline mock)
+        # is threaded in from the platform so working-memory recall ranks against
+        # the SAME vectors as file search + Total Recall. None degrades gracefully
+        # to the deterministic offline MockEmbedder (today's default behavior).
         self.embedder = embedder or MockEmbedder()
         self.config = config
         self.retriever = SqliteVectorRetriever(engine, self.embedder)

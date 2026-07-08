@@ -349,6 +349,25 @@ function NavModeToggle({
   );
 }
 
+/** A compact, always-visible pill echoing the active project (context spine) at
+ *  the TOP of the shell, so "what am I working on" is in view without scrolling
+ *  to the footer switcher. Links to /projects; renders nothing when idle. */
+function ActiveProjectPill() {
+  const { health } = useDaemon();
+  const active = health?.active_project ?? null;
+  if (!active) return null;
+  return (
+    <Link
+      href="/projects"
+      title={`Active project: ${active.name}`}
+      className="mb-2 flex items-center gap-2 rounded-lg border border-accent/25 bg-accent/[0.08] px-3 py-2 text-accent-soft transition-colors hover:border-accent/40 hover:bg-accent/[0.12]"
+    >
+      <FolderKanban size={14} className="shrink-0 text-accent" />
+      <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{active.name}</span>
+    </Link>
+  );
+}
+
 /** The active project (context spine), always visible with one-click switching.
  *  Anything the user starts anywhere inherits this project — so it belongs in
  *  the shell chrome, not buried on the Projects page. */
@@ -509,6 +528,7 @@ export function Sidebar() {
       </div>
       <div className="mx-5 h-px bg-accent-line opacity-60" />
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
+        <ActiveProjectPill />
         <NavLinks layoutId="nav-active" advanced={advanced} />
       </nav>
       <NavModeToggle advanced={advanced} onToggle={toggleAdvanced} />

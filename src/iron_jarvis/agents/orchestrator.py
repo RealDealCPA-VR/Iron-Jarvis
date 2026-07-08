@@ -218,6 +218,45 @@ class Orchestrator:
             await self._finalize_failed(session, exc)
             raise
 
+        # Close the measurement->learning loop (evaluate + record outcome +
+        # reflect). Runs for delegated/spawned children too, via the same helper.
+        self._post_run_learning(session)
+
+        # Phase 7: if this ran on a git worktree, build a review — never auto-merge.
+        gs = self._git_sessions.get(session.id)
+        if gs is not None:
+            try:
+                review = build_review(
+                    gs,
+                    session.id,
+                    summary=session.summary,
+                    tool_history=self.transcript(session.id)["tools"],
+                )
+                self._reviews[session.id] = review
+                self._persist_pending_review(session.id, gs)  # survives restart
+                await self.p.event_bus.publish(
+                    EventType.REVIEW_REQUESTED,
+                    {
+                        "branch": review.branch,
+                        "risk": review.risk,
+                        "changed_files": review.changed_files,
+                    },
+                    session_id=session.id,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("failed to build review for session %s", session.id)
+
+        return session
+
+    def _post_run_learning(self, session: Session) -> None:
+        """Post-run learning pipeline: score -> record outcome -> reflect.
+
+        Each step is best-effort and individually guarded so a learning failure
+        never cascades into the run. Shared by solo ``run_session`` AND the
+        delegate/spawn tools, so multi-agent work teaches the system too. Does
+        NOT build a git review — that is git-worktree-only and stays in
+        ``run_session``.
+        """
         # Phase 9: score the run (never fatal to the session).
         try:
             self.p.evaluator.evaluate(session.id)
@@ -245,32 +284,6 @@ class Orchestrator:
             )
         except Exception:  # noqa: BLE001
             log.exception("reflection failed for session %s", session.id)
-
-        # Phase 7: if this ran on a git worktree, build a review — never auto-merge.
-        gs = self._git_sessions.get(session.id)
-        if gs is not None:
-            try:
-                review = build_review(
-                    gs,
-                    session.id,
-                    summary=session.summary,
-                    tool_history=self.transcript(session.id)["tools"],
-                )
-                self._reviews[session.id] = review
-                self._persist_pending_review(session.id, gs)  # survives restart
-                await self.p.event_bus.publish(
-                    EventType.REVIEW_REQUESTED,
-                    {
-                        "branch": review.branch,
-                        "risk": review.risk,
-                        "changed_files": review.changed_files,
-                    },
-                    session_id=session.id,
-                )
-            except Exception:  # noqa: BLE001
-                log.exception("failed to build review for session %s", session.id)
-
-        return session
 
     async def _finalize_failed(self, session: Session, error: Exception) -> None:
         """Mark a crashed run FAILED, persist, emit SESSION_COMPLETED(ok=False), GC

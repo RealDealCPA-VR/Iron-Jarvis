@@ -45,6 +45,45 @@ def register(app: FastAPI, d) -> None:
             "providers": d._visible_providers(),
         }
 
+    @app.get("/diagnostics/reliability")
+    def diagnostics_reliability() -> dict[str, Any]:
+        """Reliability signal (read-only, never raises): free disk on the state
+        home plus a count of recent provider failures/failovers — the two silent
+        degraders (a full disk, a flaky/rate-limited model) a daily driver hits
+        that the polled /diagnostics doesn't surface. Additive to /diagnostics."""
+        import shutil
+        from datetime import timedelta
+
+        from sqlalchemy import func, select
+
+        from ...core.ids import utcnow
+        from ...core.models import EventRecord
+
+        out: dict[str, Any] = {}
+        # Free disk on the state home — a full disk breaks the DB/backups/artifacts.
+        try:
+            usage = shutil.disk_usage(str(d.platform.config.home))
+            out["disk"] = {"free": usage.free, "total": usage.total}
+        except Exception:  # noqa: BLE001 — diagnostics must never raise
+            out["disk"] = {"free": 0, "total": 0}
+        # Recent provider failures/failovers (last 24h) aggregated into one signal.
+        try:
+            cutoff = utcnow() - timedelta(hours=24)
+            with session_scope(d.platform.engine) as db:
+                count = (
+                    db.scalar(
+                        select(func.count())
+                        .select_from(EventRecord)
+                        .where(EventRecord.type.in_(("provider.failed", "provider.failover")))
+                        .where(EventRecord.created_at >= cutoff)
+                    )
+                    or 0
+                )
+            out["recent_provider_failures"] = int(count)
+        except Exception:  # noqa: BLE001
+            out["recent_provider_failures"] = 0
+        return out
+
     @app.get("/blackboard/{board_id}")
     def blackboard(board_id: str) -> dict[str, Any]:
         """Read a department's shared blackboard (notes + messages) for the UI."""
