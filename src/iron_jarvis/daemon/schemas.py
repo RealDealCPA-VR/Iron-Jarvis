@@ -260,6 +260,13 @@ class StudioSayBody(BaseModel):
     save_dir: str = ""
 
 
+class CreativeIngestBody(BaseModel):
+    """Copy a LOCAL media file (e.g. a Studio generation on disk) into the
+    durable gallery (artifact store)."""
+
+    path: str
+
+
 class FsMkdirBody(BaseModel):
     """Create a folder (e.g. a new subfolder for a generation batch)."""
 

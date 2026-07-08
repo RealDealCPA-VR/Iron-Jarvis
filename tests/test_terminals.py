@@ -168,6 +168,16 @@ def test_fake_backend_read_respects_max_bytes():
     assert s.read() == b"\n"
 
 
+def test_output_tail_strips_charset_designation_escapes():
+    """ConPTY interleaves charset escapes (ESC ( B) MID-STRING — unstripped
+    they split mode banners like "auto-accept edits on" so detection missed
+    them (live-hit 2026-07-07)."""
+    s = _fake_session()
+    s.write("auto-\x1b(Baccept edits\x1b(B on\n")
+    s.read()  # drain the echo into the tail
+    assert "auto-accept edits on" in s.output_tail()
+
+
 # --- background auto-drain (Creative Studio has NO WebSocket to pump reads) ------
 
 

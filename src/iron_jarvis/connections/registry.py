@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
@@ -135,6 +136,17 @@ class ConnectionRegistry:
             record = self._get_record(spec.provider)
             status = record.status if record else "disconnected"
             connected = status == "connected"
+            account = record.account if record else ""
+            # Pixio honors a PIXIO_API_KEY env fallback everywhere it's used
+            # (tools, publish, the studio's env injection) — the card must not
+            # call a working setup "disconnected" (live-hit 2026-07-07).
+            if (
+                spec.provider == "pixio"
+                and not connected
+                and os.environ.get("PIXIO_API_KEY", "").strip()
+            ):
+                status, connected = "connected", True
+                account = "PIXIO_API_KEY (environment)"
             if record and record.scopes_json and record.scopes_json not in ("[]", ""):
                 scopes = _loads_list(record.scopes_json)
             else:
@@ -153,7 +165,7 @@ class ConnectionRegistry:
                     "key_help": spec.key_help,
                     "connected": connected,
                     "status": status,
-                    "account": record.account if record else "",
+                    "account": account,
                     "scopes": scopes,
                 }
             )
@@ -443,7 +455,12 @@ class ConnectionRegistry:
         if provider == "mock":
             return {"ok": True, "detail": "mock is always connectable (offline)"}
         record = self._get_record(provider)
-        if record is None or record.status != "connected":
+        # Pixio's env fallback counts as connected (see status()) — Test must
+        # probe the key that's actually in use, not report "not connected".
+        env_key = (
+            os.environ.get("PIXIO_API_KEY", "").strip() if provider == "pixio" else ""
+        )
+        if (record is None or record.status != "connected") and not env_key:
             return {
                 "ok": False,
                 "detail": (
@@ -451,7 +468,7 @@ class ConnectionRegistry:
                     "connect it on the Connections page"
                 ),
             }
-        cred = self.credential(provider)
+        cred = self.credential(provider) or env_key
         if not cred:
             return {
                 "ok": False,

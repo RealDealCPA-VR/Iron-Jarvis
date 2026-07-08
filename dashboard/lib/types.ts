@@ -256,6 +256,9 @@ export interface FsListing {
   path: string;
   parent: string | null;
   entries: FsEntry[];
+  /** True when the folder holds MORE children than the listing cap (2000) —
+   *  the entries shown are a partial view. Absent on older daemons. */
+  truncated?: boolean;
 }
 
 /* ---- Schedules ----------------------------------------------------------- */

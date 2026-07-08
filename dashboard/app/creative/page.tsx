@@ -46,6 +46,7 @@ import {
 } from "lucide-react";
 import { API_BASE, ApiError, del, get, ijToken, post } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
+import { useDaemon } from "@/lib/daemon";
 import { useEvents } from "@/lib/useEvents";
 import { timeAgo } from "@/lib/format";
 import type { AiCli, Drive, FsEntry, FsListing, Skill } from "@/lib/types";
@@ -449,6 +450,14 @@ function TileShare({
   const dlRef = useRef<HTMLAnchorElement | null>(null);
 
   const publish = useCallback(async () => {
+    // Publishing is OUTWARD-FACING: a permanent public CDN link anyone can
+    // open. Never do that on a single click without saying so.
+    if (
+      !window.confirm(
+        "Publish this file to Pixio's public CDN? Anyone with the link can view it, and the URL is permanent.",
+      )
+    )
+      return;
     setBusy(true);
     setErr(null);
     try {
@@ -830,15 +839,18 @@ function MediaLightbox({
   const downloadRef = useRef<HTMLAnchorElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
-  // Esc closes; ←/→ step through the caller's visible list (never while typing).
+  // Esc closes; ←/→ step through the caller's visible list — never while
+  // typing (Escape included: it should clear/blur the field, not nuke the
+  // dialog), and never while a video/audio element owns the arrows (seeking).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (e.key === "Escape") {
         onClose();
         return;
       }
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (tag === "VIDEO" || tag === "AUDIO") return;
       if (e.key === "ArrowLeft" && onPrev) onPrev();
       else if (e.key === "ArrowRight" && onNext) onNext();
     };
@@ -1240,8 +1252,11 @@ function isMediaSkill(s: Skill): boolean {
   );
 }
 
-/** Agent lifecycle phase, derived server-side from the CLI's own output. */
-type StudioPhase = "booting" | "thinking" | "generating" | "idle" | "done";
+/** Agent lifecycle phase, derived server-side from the CLI's own output.
+ *  "exited" = the CLI quit back to the shell (the terminal itself is alive) —
+ *  sending another brief would run it as a SHELL COMMAND, so the composer
+ *  refuses honestly. */
+type StudioPhase = "booting" | "thinking" | "generating" | "idle" | "done" | "exited";
 
 /** Phases where the agent is actively busy (vs. idle/done = waiting on us). */
 const PHASE_BUSY: Record<StudioPhase, boolean> = {
@@ -1250,7 +1265,19 @@ const PHASE_BUSY: Record<StudioPhase, boolean> = {
   generating: true,
   idle: false,
   done: false,
+  exited: false,
 };
+
+/** One media file found by the recursive studio-media scan. */
+interface StudioMediaFile {
+  path: string;
+  /** RELATIVE path from the session folder (posix separators) — shows the
+   *  subfolder a generation landed in, e.g. "shots/shot-03.mp4". */
+  name: string;
+  media: "image" | "video" | "audio";
+  size: number | null;
+  mtime: number;
+}
 
 interface StudioTail {
   tail: string;
@@ -1375,7 +1402,7 @@ function AssistantTurn({
         </div>
       ) : state === "exited" ? (
         <p className="text-[13px] text-zinc-400">
-          The terminal exited{exitCode !== null ? ` (code ${exitCode})` : ""}.
+          The engine exited{exitCode !== null ? ` (code ${exitCode})` : ""}.
         </p>
       ) : state === "done" ? (
         <p className="flex items-center gap-1.5 text-[13px] text-zinc-300">
@@ -1404,9 +1431,14 @@ function AssistantTurn({
 function StudioView({
   pins,
   onUnpin,
+  active,
 }: {
   pins: PinnedFolder[];
   onUnpin: (path: string) => void;
+  /** Whether the Create tab is the visible one. The component stays MOUNTED
+   *  across tab switches (a live session must survive a peek at the Gallery);
+   *  `active` only gates focus stealing. */
+  active: boolean;
 }) {
   // Setup defaults from the last visit (this component only mounts client-side).
   const [initialStore] = useState<StudioStore>(readStudioStore);
@@ -1414,6 +1446,17 @@ function StudioView({
   const [skill, setSkill] = useState<string>(initialStore.skill ?? "");
   const [autopilot, setAutopilot] = useState<boolean>(initialStore.autopilot ?? true);
   const [pickDir, setPickDir] = useState<string | null>(initialStore.dir ?? null);
+
+  // Project spine: with no remembered destination, default to the ACTIVE
+  // project's folder — the studio session then creates media where the rest of
+  // the user's work already lives (chat, terminals, tasks all tag into it).
+  const { health } = useDaemon();
+  const projectRoot = health?.active_project?.root ?? null;
+  const projectName = health?.active_project?.name ?? null;
+  useEffect(() => {
+    if (pickDir === null && !initialStore.dir && projectRoot) setPickDir(projectRoot);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- first-signal default only; never override a user's pick
+  }, [projectRoot]);
 
   // Engines + skills.
   const {
@@ -1522,6 +1565,11 @@ function StudioView({
   );
 
   const [booting, setBooting] = useState(false);
+  // A brief typed WHILE the engine boots — the composer never locks; the text
+  // queues here (visible in the transcript) and auto-fires the moment the
+  // readiness gate opens. Multiple sends during boot merge into one brief
+  // (studio_say flattens newlines anyway), so nothing is ever silently lost.
+  const [queuedBrief, setQueuedBrief] = useState<string | null>(null);
   const [messages, setMessages] = useState<string[]>([]);
   // Epoch-ms send time per brief (parallel to `messages`), for bucketing media
   // into turns. In-memory only — resume reconstructs it from the session start.
@@ -1547,6 +1595,9 @@ function StudioView({
   const [statusLine, setStatusLine] = useState<string | null>(null);
 
   const baselineRef = useRef<Set<string>>(new Set());
+  // Files already pushed into the gallery (auto-ingest is fire-and-forget and
+  // idempotent server-side; this just avoids re-POSTing every poll).
+  const ingestedRef = useRef<Set<string>>(new Set());
   // Media the session has produced, with first-seen epoch-ms — the source for
   // both the inline chat thumbnails and the "N files" counts. A ref tracks
   // first-seen (stable across the 5s folder diffs); state drives rendering.
@@ -1554,6 +1605,14 @@ function StudioView({
   const mediaSigRef = useRef("");
   const [mediaTimeline, setMediaTimeline] = useState<{ file: LibraryFile; at: number }[]>([]);
   const [studioSelected, setStudioSelected] = useState<LibraryFile | null>(null);
+
+  // Composer focus: give the input focus when the tab is visible and typing is
+  // possible — after a send round-trips, and right when a session starts. The
+  // browser drops focus every time `disabled` flips on, so restore it.
+  const composerRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (active && session && alive && !gone && !sending) composerRef.current?.focus();
+  }, [active, session, alive, gone, sending, booting]);
 
   // Activity clock: the assistant turn reads as "working" until the tail + the
   // folder have been quiet for STUDIO_IDLE_MS. lastTailRef detects tail changes;
@@ -1671,30 +1730,46 @@ function StudioView({
     };
   }, [session, gone]);
 
-  // New-media watcher: diff the destination against the session-start snapshot,
-  // stamp each first sighting with a time, and only re-render when the media set
-  // actually changes (a new file or a size that's still being written).
+  // New-media watcher: RECURSIVELY diff the destination against the
+  // session-start snapshot (skills save into subfolders — a flat listing
+  // missed them), stamp each first sighting, auto-ingest it into the durable
+  // gallery, and only re-render when the media set actually changes.
   useEffect(() => {
-    if (!session) return;
+    if (!session || gone) return;
     let cancelled = false;
     const tick = () => {
-      get<FsListing>(`/fs/list?path=${encodeURIComponent(session.dest)}`, { timeoutMs: 15000 })
+      get<{ files: StudioMediaFile[]; truncated: boolean }>(
+        `/creative/studio-media?path=${encodeURIComponent(session.dest)}`,
+        { timeoutMs: 15000 },
+      )
         .then((d) => {
           if (cancelled) return;
           const now = Date.now();
           let added = false;
           const timeline: { file: LibraryFile; at: number }[] = [];
-          for (const e of d.entries) {
-            if (e.is_dir) continue;
-            const kind = mediaKindOf(e.name);
-            if (!kind || baselineRef.current.has(e.name)) continue;
-            let at = mediaSeenRef.current.get(e.path);
+          for (const f of d.files) {
+            if (baselineRef.current.has(f.name)) continue;
+            let at = mediaSeenRef.current.get(f.path);
             if (at === undefined) {
               at = now;
-              mediaSeenRef.current.set(e.path, at);
+              mediaSeenRef.current.set(f.path, at);
               added = true;
+              // Studio → Gallery bridge: every generation becomes a durable
+              // artifact, so the Create tab's output shows up in Gallery /
+              // Share / chat like every other creation. Fire-and-forget +
+              // idempotent server-side; oversized files stay disk-only.
+              if (
+                !ingestedRef.current.has(f.path) &&
+                (f.size ?? 0) <= 200 * 1024 * 1024
+              ) {
+                ingestedRef.current.add(f.path);
+                void post("/creative/ingest", { path: f.path }).catch(() => {});
+              }
             }
-            timeline.push({ file: { path: e.path, name: e.name, kind, size: e.size }, at });
+            timeline.push({
+              file: { path: f.path, name: f.name, kind: f.media, size: f.size },
+              at,
+            });
           }
           timeline.sort((a, b) => a.at - b.at || a.file.name.localeCompare(b.file.name));
           const sig = timeline.map((m) => `${m.file.path}:${m.file.size ?? ""}`).join("|");
@@ -1709,12 +1784,19 @@ function StudioView({
         });
     };
     tick();
+    // A dead terminal makes no new media: take the one final diff above (a
+    // file may have landed in the exit instant) and stop polling.
+    if (!alive) {
+      return () => {
+        cancelled = true;
+      };
+    }
     const id = setInterval(tick, 5000);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [session]);
+  }, [session, gone, alive]);
 
   // Console auto-scroll — sticks to the bottom unless the user scrolled up (only
   // matters while the raw-terminal disclosure is open).
@@ -1741,7 +1823,7 @@ function StudioView({
   useEffect(() => {
     const el = transcriptRef.current;
     if (el && transcriptStickRef.current) el.scrollTop = el.scrollHeight;
-  }, [messages, mediaTimeline, booting, alive, gone]);
+  }, [messages, mediaTimeline, booting, alive, gone, queuedBrief]);
 
   // Idle clock: re-evaluate the "working → done" transition each second while the
   // run is alive (the tail poll goes quiet when the CLI stops emitting output).
@@ -1758,9 +1840,11 @@ function StudioView({
     lastTailRef.current = "";
     setMessages([]);
     setBriefTimes([]);
+    setQueuedBrief(null);
     setSentFirst(false);
     mediaSeenRef.current = new Map();
     mediaSigRef.current = "";
+    ingestedRef.current = new Set();
     setMediaTimeline([]);
     setGone(false);
     setAlive(true);
@@ -1781,14 +1865,15 @@ function StudioView({
     if (!cli || !chosenDir || startBusy) return;
     setStartBusy(true);
     setStartErr(null);
-    // Snapshot the destination BEFORE launching — anything after this counts as new.
+    // Snapshot the destination BEFORE launching — anything after this counts
+    // as new. Recursive (rel-path keys) to match the recursive watcher.
     let baseline: string[] = [];
     try {
-      const d = await get<FsListing>(`/fs/list?path=${encodeURIComponent(chosenDir)}`);
-      baseline = d.entries
-        .filter((e) => !e.is_dir && mediaKindOf(e.name) !== null)
-        .map((e) => e.name)
-        .slice(0, STUDIO_BASELINE_CAP);
+      const d = await get<{ files: StudioMediaFile[] }>(
+        `/creative/studio-media?path=${encodeURIComponent(chosenDir)}`,
+        { timeoutMs: 10000 },
+      );
+      baseline = d.files.map((f) => f.name).slice(0, STUDIO_BASELINE_CAP);
     } catch {
       /* unlistable folder — diff against empty; /start will surface a real 400 */
     }
@@ -1863,9 +1948,11 @@ function StudioView({
     setResumeOffer(null);
   };
 
-  const send = async () => {
-    const text = draft.trim();
-    if (!text || !session || sending || booting || !alive || gone) return;
+  /** POST one brief into the studio terminal and record the turn. Shared by
+   *  the composer's send and the boot-queue auto-fire. Returns false on error
+   *  (sayErr is set and the text is put back in the draft so nothing is lost). */
+  const postBrief = async (text: string): Promise<boolean> => {
+    if (!session) return false;
     setSending(true);
     setSayErr(null);
     try {
@@ -1874,16 +1961,20 @@ function StudioView({
         sentFirst
           ? { text }
           : { text, first: true, ...(skill ? { skill } : {}), save_dir: session.dest },
+        // A hung request must not lock the composer forever — `sending` only
+        // clears in finally, so bound the wait.
+        { timeoutMs: 15000 },
       );
       const nextMsgs = [...messages, text];
       setMessages(nextMsgs);
       setBriefTimes((prev) => [...prev, Date.now()]);
       setSentFirst(true);
-      setDraft("");
       setLastActivityAt(Date.now()); // a fresh brief = the turn is working again
       patchStoredSession({ sent_first: true, messages: nextMsgs });
+      return true;
     } catch (e) {
       const err = e instanceof ApiError ? e : new ApiError(String(e), 0);
+      setDraft(text); // never lose typed work — put it back for a manual retry
       setSayErr(
         err.status === 404 || err.status === 409
           ? `The terminal is gone or has exited — ${err.message}`
@@ -1891,10 +1982,42 @@ function StudioView({
             ? "Daemon offline — message not sent."
             : err.message,
       );
+      return false;
     } finally {
       setSending(false);
     }
   };
+
+  const send = async () => {
+    const text = draft.trim();
+    if (!text || !session || sending || !alive || gone) return;
+    if (booting) {
+      // Engine still starting — the composer stays interactive: queue the brief
+      // (shown in the transcript) and the auto-fire effect sends it on ready.
+      setQueuedBrief((prev) => (prev ? `${prev} ${text}` : text));
+      setDraft("");
+      return;
+    }
+    setDraft("");
+    const ok = await postBrief(text);
+    if (!ok) return; // postBrief restored the draft + set sayErr
+  };
+
+  // Auto-fire the boot-queued brief the moment the readiness gate opens (or
+  // surface an honest error if the engine died before it ever became ready).
+  useEffect(() => {
+    if (booting || !queuedBrief || !session) return;
+    if (!alive || gone || phase === "exited") {
+      setQueuedBrief(null);
+      setDraft(queuedBrief); // keep the text — the user can start a new session
+      setSayErr("The engine exited before your queued brief could be sent.");
+      return;
+    }
+    const text = queuedBrief;
+    setQueuedBrief(null); // clear FIRST so a re-run of this effect can't double-send
+    void postBrief(text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- postBrief reads fresh state; queuedBrief is cleared synchronously above
+  }, [booting, queuedBrief, session, alive, gone, phase]);
 
   const endSession = async () => {
     if (!session || ending) return;
@@ -1918,10 +2041,13 @@ function StudioView({
 
   /* ---- LIVE phase (a conversation, not a console) ---- */
   if (session) {
-    const inputDisabled = booting || !alive || gone || sending;
-    // Why the composer is locked while booting: waiting on Claude's Shift+Tab
-    // auto mode vs. a plain cold start. Keeps the "nothing's happening" moment
-    // honest instead of a silent disabled box.
+    // The CLI quit back to the shell (terminal still alive): another brief
+    // would run as a SHELL COMMAND — the daemon refuses it and so do we.
+    const engineExited = phase === "exited" && alive && !gone;
+    // The composer NEVER locks for boot — a brief typed while the engine starts
+    // is queued (visible in the transcript) and auto-fires on ready. Only a
+    // dead terminal/engine or an in-flight send disables input.
+    const inputDisabled = !alive || gone || sending || engineExited;
     const awaitingAutomode = booting && session.awaitsAutomode && !automode;
     const bootStatus = awaitingAutomode
       ? "Engaging auto mode…"
@@ -2021,12 +2147,14 @@ function StudioView({
           </div>
         </Reveal>
 
-        {(!alive || gone) && (
+        {(!alive || gone || engineExited) && (
           <Reveal>
             <ErrorNote>
               {gone
                 ? "This terminal no longer exists on the daemon."
-                : `Terminal exited (code ${exitCode ?? "?"}).`}{" "}
+                : !alive
+                  ? `Terminal exited (code ${exitCode ?? "?"}).`
+                  : "The engine exited in this terminal — its shell is still open on Build."}{" "}
               <button
                 type="button"
                 onClick={() => resetLive(true)}
@@ -2046,12 +2174,15 @@ function StudioView({
               onScroll={onTranscriptScroll}
               className="min-h-[38vh] max-h-[60vh] flex-1 space-y-4 overflow-y-auto p-4"
             >
-              {turns.length === 0 ? (
+              {turns.length === 0 && !queuedBrief ? (
                 <AssistantBubble>
                   {booting || (phase !== null && PHASE_BUSY[phase]) ? (
                     <div className="flex items-center gap-2 text-[13px] text-zinc-300">
                       <WorkingDots />
-                      <span>{statusLine || bootStatus}</span>
+                      <span>
+                        {statusLine || bootStatus}
+                        {booting ? " — type your brief now; it sends the moment the engine is ready." : ""}
+                      </span>
                     </div>
                   ) : (
                     <p className="text-[13px] text-zinc-400">
@@ -2065,7 +2196,7 @@ function StudioView({
                 turns.map((turn, i) => {
                   const isLast = i === lastIdx;
                   const state: TurnState =
-                    isLast && (!alive || gone)
+                    isLast && (!alive || gone || engineExited)
                       ? "exited"
                       : isLast && activeTurn
                         ? "working"
@@ -2088,6 +2219,17 @@ function StudioView({
                   );
                 })
               )}
+              {queuedBrief && (
+                <div className="space-y-3">
+                  <UserBubble text={queuedBrief} />
+                  <AssistantBubble>
+                    <div className="flex items-center gap-2 text-[13px] text-zinc-300">
+                      <WorkingDots />
+                      <span>Queued — sending the moment the engine is ready…</span>
+                    </div>
+                  </AssistantBubble>
+                </div>
+              )}
             </div>
 
             {/* Composer + raw-terminal disclosure. */}
@@ -2095,6 +2237,7 @@ function StudioView({
               {sayErr && <ErrorNote>{sayErr}</ErrorNote>}
               <div className="flex items-center gap-2">
                 <input
+                  ref={composerRef}
                   type="text"
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
@@ -2106,15 +2249,15 @@ function StudioView({
                   }}
                   disabled={inputDisabled}
                   placeholder={
-                    booting
-                      ? awaitingAutomode
-                        ? "engaging auto mode…"
-                        : "engine starting…"
-                      : !alive || gone
-                        ? "terminal ended"
-                        : sentFirst
-                          ? "Send another instruction…"
-                          : "Describe what to create…"
+                    !alive || gone
+                      ? "terminal ended"
+                      : engineExited
+                        ? "engine exited — start a new session"
+                        : booting
+                          ? "Describe what to create — sends when the engine is ready…"
+                          : sentFirst
+                            ? "Send another instruction…"
+                            : "Describe what to create…"
                   }
                   aria-label="Brief"
                   className="min-w-0 flex-1 rounded-xl border border-white/10 bg-ink-950 px-3.5 py-2.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-accent/40 focus:outline-none disabled:opacity-50"
@@ -2417,6 +2560,16 @@ function StudioView({
               >
                 {chosenDir ?? (pickLoading ? pickDir : "choose a folder below")}
               </code>
+              {projectRoot && chosenDir !== projectRoot && (
+                <button
+                  type="button"
+                  onClick={() => setPickDir(projectRoot)}
+                  title={`Create inside the active project: ${projectRoot}`}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/25 bg-accent/[0.06] px-2.5 py-1.5 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.12]"
+                >
+                  <FolderOpen size={13} /> Use project{projectName ? ` · ${projectName}` : ""}
+                </button>
+              )}
             </div>
 
             {pins.length > 0 && <PinChips pins={pins} onGo={setPickDir} onUnpin={onUnpin} />}
@@ -2617,7 +2770,7 @@ const VIEWS: { id: View; label: string; icon: ReactNode }[] = [
 
 export default function CreativePage() {
   const { data, error, loading, reload } = useApi<{ items: CreativeItem[]; count: number }>(
-    "/creative/items?limit=200",
+    "/creative/items?limit=500",
   );
   const [filter, setFilter] = useState<Filter>("all");
   const [selected, setSelected] = useState<CreativeItem | null>(null);
@@ -3068,6 +3221,13 @@ export default function CreativePage() {
         </Reveal>
       )}
 
+      {/* The studio stays MOUNTED across tab switches — unmounting killed the
+          live conversation (messages, media timeline, polls) every time the
+          user peeked at the Gallery, leaving only the lossy resume flow. */}
+      <div className={view === "create" ? "contents" : "hidden"}>
+        <StudioView pins={pins} onUnpin={unpin} active={view === "create"} />
+      </div>
+
       {view === "creations" ? (
         /* ---- Creations (everything exactly as before) --------------------- */
         <>
@@ -3119,8 +3279,8 @@ export default function CreativePage() {
           </Reveal>
         </>
       ) : view === "create" ? (
-        /* ---- Create (studio): engine + skill + folder → live session ------ */
-        <StudioView pins={pins} onUnpin={unpin} />
+        /* ---- Create (studio): rendered ABOVE the chain, always mounted ---- */
+        null
       ) : libDir === null ? (
         /* ---- Library home: pinned folders + drives ------------------------ */
         <>
@@ -3237,6 +3397,14 @@ export default function CreativePage() {
           {libError && !libOffline && (
             <Reveal>
               <ErrorNote>Couldn’t open this folder: {libError.message}</ErrorNote>
+            </Reveal>
+          )}
+          {listing?.truncated && (
+            <Reveal>
+              <p className="rounded-xl border border-amber-500/20 bg-amber-500/[0.06] px-3.5 py-2 text-xs text-amber-200/90">
+                This folder holds more than the 2,000 entries shown — the view is
+                partial. Open a subfolder to narrow it down.
+              </p>
             </Reveal>
           )}
 

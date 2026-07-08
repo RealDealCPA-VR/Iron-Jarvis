@@ -463,10 +463,11 @@ const MD_COMPONENTS: Components = {
   img: MarkdownMedia,
 };
 
-/** Media extensions the daemon's /creative/file-by-path endpoint will serve. */
+/** Media extensions the daemon's /creative/file-by-path endpoint will serve.
+ *  Keep in sync with creative/service.py IMAGE/VIDEO/AUDIO_EXTS. */
 const MEDIA_EXT_RX =
-  /\.(png|jpe?g|webp|gif|bmp|svg|mp4|webm|mov|m4v|mkv|mp3|wav|ogg|m4a|flac|aac|opus)$/i;
-const VIDEO_EXT_RX = /\.(mp4|webm|mov|m4v|mkv)$/i;
+  /\.(png|jpe?g|webp|gif|bmp|svg|mp4|webm|mov|m4v|avi|mkv|mp3|wav|ogg|m4a|flac|aac|opus)$/i;
+const VIDEO_EXT_RX = /\.(mp4|webm|mov|m4v|avi|mkv)$/i;
 const AUDIO_EXT_RX = /\.(mp3|wav|ogg|m4a|flac|aac|opus)$/i;
 
 /**

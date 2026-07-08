@@ -152,7 +152,7 @@ def list_dir(
     try:
         scanner = os.scandir(p)
     except (PermissionError, OSError):
-        return {"path": str(p), "parent": parent_str, "entries": entries}
+        return {"path": str(p), "parent": parent_str, "entries": entries, "truncated": False}
 
     with scanner:
         for entry in scanner:
@@ -186,4 +186,11 @@ def list_dir(
             )
 
     entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
-    return {"path": str(p), "parent": parent_str, "entries": entries}
+    # Honest cap: past MAX_ENTRIES the listing is partial (raw scandir order) —
+    # say so instead of silently pretending the folder ends here.
+    return {
+        "path": str(p),
+        "parent": parent_str,
+        "entries": entries,
+        "truncated": len(entries) >= MAX_ENTRIES,
+    }

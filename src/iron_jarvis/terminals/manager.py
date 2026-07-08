@@ -296,7 +296,14 @@ class TerminalManager:
             if not isinstance(entry, dict):
                 continue
             try:
-                if self.restore(entry, env=env, backend=backend) is not None:
+                session = self.restore(entry, env=env, backend=backend)
+                if session is not None:
+                    # No pane is attached at boot, so without a reader the fresh
+                    # shell's output (banner + prompt) never reaches the tail —
+                    # a studio session resumed against the STALE replayed tail
+                    # would then type briefs into a bare shell. Drain from the
+                    # start; it yields whenever a Build pane attaches.
+                    session.start_autodrain()
                     restored += 1
             except Exception:  # pragma: no cover - one bad entry mustn't skip the rest
                 log.debug("failed to restore a terminal", exc_info=True)

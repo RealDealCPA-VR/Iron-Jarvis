@@ -22,6 +22,9 @@ TAIL_MAX_BYTES = 256 * 1024
 _ANSI_RE = re.compile(
     r"\x1b\[[0-9;?]*[ -/]*[@-~]"  # CSI ... final byte
     r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC ... BEL / ST
+    r"|\x1b[()#%*+][0-9A-Za-z]"  # charset designation (ESC ( B …) — ConPTY
+    # interleaves these MID-STRING, which used to split mode banners like
+    # "auto-accept edits on" so detection missed them (live-hit 2026-07-07)
     r"|\x1b[@-_]"  # lone two-byte escapes
 )
 
@@ -77,6 +80,10 @@ class TerminalSession:
         self._consumer_lock = threading.Lock()
         self._drain_thread: threading.Thread | None = None
         self._drain_stop = threading.Event()
+        # monotonic timestamp of the last NON-EMPTY read — "is the CLI actively
+        # printing?" signal for the studio's phase detection (a running TUI
+        # repaints its status bar about once a second).
+        self.last_output_at: float = 0.0
 
     def start(self, env: dict | None = None) -> "TerminalSession":
         """Spawn the shell (idempotent)."""
@@ -96,6 +103,7 @@ class TerminalSession:
             self._tail += data
             if len(self._tail) > TAIL_MAX_BYTES:
                 del self._tail[: len(self._tail) - TAIL_MAX_BYTES]
+            self.last_output_at = time.monotonic()
         return data
 
     # --- Live consumers + background auto-drain --------------------------
