@@ -46,7 +46,6 @@ import {
 } from "lucide-react";
 import { API_BASE, ApiError, del, get, ijToken, post } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
-import { useDaemon } from "@/lib/daemon";
 import { useEvents } from "@/lib/useEvents";
 import { timeAgo } from "@/lib/format";
 import type { AiCli, Drive, FsEntry, FsListing, Skill } from "@/lib/types";
@@ -1447,17 +1446,6 @@ function StudioView({
   const [autopilot, setAutopilot] = useState<boolean>(initialStore.autopilot ?? true);
   const [pickDir, setPickDir] = useState<string | null>(initialStore.dir ?? null);
 
-  // Project spine: with no remembered destination, default to the ACTIVE
-  // project's folder — the studio session then creates media where the rest of
-  // the user's work already lives (chat, terminals, tasks all tag into it).
-  const { health } = useDaemon();
-  const projectRoot = health?.active_project?.root ?? null;
-  const projectName = health?.active_project?.name ?? null;
-  useEffect(() => {
-    if (pickDir === null && !initialStore.dir && projectRoot) setPickDir(projectRoot);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- first-signal default only; never override a user's pick
-  }, [projectRoot]);
-
   // Engines + skills.
   const {
     data: clisData,
@@ -2560,16 +2548,6 @@ function StudioView({
               >
                 {chosenDir ?? (pickLoading ? pickDir : "choose a folder below")}
               </code>
-              {projectRoot && chosenDir !== projectRoot && (
-                <button
-                  type="button"
-                  onClick={() => setPickDir(projectRoot)}
-                  title={`Create inside the active project: ${projectRoot}`}
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/25 bg-accent/[0.06] px-2.5 py-1.5 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.12]"
-                >
-                  <FolderOpen size={13} /> Use project{projectName ? ` · ${projectName}` : ""}
-                </button>
-              )}
             </div>
 
             {pins.length > 0 && <PinChips pins={pins} onGo={setPickDir} onUnpin={onUnpin} />}

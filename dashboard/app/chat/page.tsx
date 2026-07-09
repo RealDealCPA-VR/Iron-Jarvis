@@ -45,8 +45,6 @@ import {
   Bot,
   Check,
   Copy,
-  Folder,
-  FolderKanban,
   History,
   Loader2,
   MessageSquare,
@@ -72,7 +70,6 @@ import { get, post, put, del, ApiError, API_BASE, ijToken } from "@/lib/api";
 import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
 import { timeAgo } from "@/lib/format";
 import { useEvents } from "@/lib/useEvents";
-import { useDaemon } from "@/lib/daemon";
 import { useDictation } from "@/lib/useDictation";
 import { useTTS } from "@/lib/useTTS";
 import { appendDictation } from "@/components/VoiceInput";
@@ -193,8 +190,6 @@ const PERSONA_KEY = "ij_chat_persona";
 const PERSONA_CUSTOM_KEY = "ij_chat_persona_custom";
 const CUSTOM_PERSONA = "__custom__";
 
-// Threads-sidebar "active project only" toggle persistence.
-const PROJECT_ONLY_KEY = "ironjarvis.chat.projectOnly";
 
 // Fallback until GET /chat/personas answers (or if it never does).
 const DEFAULT_PERSONAS: PersonaOption[] = [
@@ -611,36 +606,9 @@ export default function ChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false); // mobile-only toggle
 
   const { events } = useEvents(150);
-  // Context spine: which project this conversation is happening in (new
-  // threads are tagged with it server-side).
-  const { health } = useDaemon();
-  const activeProject = health?.active_project ?? null;
-  // Sidebar "active project only" filter — SSR-safe: default off, hydrate from
-  // localStorage in an effect (same pattern as the persona preference).
-  const [projectOnly, setProjectOnly] = useState(false);
-  useEffect(() => {
-    try {
-      setProjectOnly(window.localStorage.getItem(PROJECT_ONLY_KEY) === "1");
-    } catch {
-      /* localStorage unavailable — the filter just stays off */
-    }
-  }, []);
-  function toggleProjectOnly() {
-    setProjectOnly((v) => {
-      const next = !v;
-      try {
-        window.localStorage.setItem(PROJECT_ONLY_KEY, next ? "1" : "0");
-      } catch {
-        /* non-persistent, still works for this page load */
-      }
-      return next;
-    });
-  }
-  // The sidebar list after the project filter (purely client-side).
-  const visibleThreads =
-    projectOnly && activeProject
-      ? threads.filter((t) => t.project_id === activeProject.id)
-      : threads;
+  // The main chat is project-agnostic — a project applies only inside the
+  // Projects module. All saved conversations show here.
+  const visibleThreads = threads;
 
   // ---- Voice. ONE dictation engine for both the composer mic and hands-free
   // Voice Chat (two instances would fight over the mic / recognition service).
@@ -1493,16 +1461,6 @@ export default function ChatPage() {
           subtitle="Talk to Iron Jarvis. Chat mode answers directly in seconds; Agent mode does real work with tools."
           actions={
             <div className="flex flex-wrap items-center gap-2">
-              {/* Context spine: the project this conversation is tagged into. */}
-              {activeProject && (
-                <span
-                  title={`Working in ${activeProject.name} — new chats are tagged to this project. Switch it in the sidebar.`}
-                  className="inline-flex max-w-[12rem] items-center gap-1.5 rounded-xl border border-accent/25 bg-accent/[0.07] px-2.5 py-1.5 text-[12px] font-medium text-accent-soft"
-                >
-                  <FolderKanban size={12} className="shrink-0" />
-                  <span className="truncate">{activeProject.name}</span>
-                </span>
-              )}
               {/* Voice: hands-free Voice Chat + spoken-replies toggle. */}
               <button
                 type="button"
@@ -1700,26 +1658,6 @@ export default function ChatPage() {
                     <Plus size={13} /> New chat
                   </button>
                 </div>
-                {activeProject && (
-                  <button
-                    type="button"
-                    onClick={toggleProjectOnly}
-                    aria-pressed={projectOnly}
-                    title={
-                      projectOnly
-                        ? `Showing only chats in "${activeProject.name}" — click to show all`
-                        : `Show only chats in the active project "${activeProject.name}"`
-                    }
-                    className={`mt-1.5 inline-flex max-w-full items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] transition-colors ${
-                      projectOnly
-                        ? "border-accent/40 bg-accent/[0.12] text-accent-soft"
-                        : "border-white/[0.08] text-zinc-400 hover:border-white/20 hover:text-zinc-200"
-                    }`}
-                  >
-                    <FolderKanban size={11} className="shrink-0" />
-                    <span className="truncate">{activeProject.name} only</span>
-                  </button>
-                )}
               </div>
               <div className="max-h-[70vh] overflow-y-auto p-1.5">
                 {threads.length === 0 ? (
@@ -1760,17 +1698,6 @@ export default function ChatPage() {
                               <span className="min-w-0 truncate">
                                 {t.title || "Untitled chat"}
                               </span>
-                              {/* Stray-project marker: this thread is tagged
-                                  into a project OTHER than the active one. */}
-                              {t.project_id &&
-                                t.project_id !== activeProject?.id && (
-                                  <span
-                                    title={`Project ${t.project_id}`}
-                                    className="shrink-0 text-zinc-600"
-                                  >
-                                    <Folder size={11} aria-hidden />
-                                  </span>
-                                )}
                             </span>
                             <span className="block text-[11px] text-zinc-500">
                               {timeAgo(t.updated_at)} · {count} msg

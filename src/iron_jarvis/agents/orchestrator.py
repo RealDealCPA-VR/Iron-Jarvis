@@ -134,9 +134,12 @@ class Orchestrator:
             provider=provider or self.p.config.default_provider,
             model=model or self.p.config.default_model,
             status=SessionStatus.ACTIVE,
-            # Context spine: tag into the requested project, else the ACTIVE one
-            # (so chat/Spotlight/kanban inherit it with zero UI changes).
-            project_id=project_id or getattr(self.p.config, "active_project_id", None),
+            # A project only applies INSIDE the Projects module: a session carries
+            # a project ONLY when one is passed explicitly (project tasks, and
+            # delegated/spawned children inheriting their parent's). Sessions
+            # started anywhere else are project-agnostic — the globally "active"
+            # project never leaks in.
+            project_id=project_id,
             allow_tools_json=_json.dumps(list(allow_tools or [])),
         )
         if direct_root is not None:

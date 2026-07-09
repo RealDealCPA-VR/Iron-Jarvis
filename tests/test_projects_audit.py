@@ -109,10 +109,11 @@ def test_list_reports_counts_and_root_existence(tmp_path):
 
 
 def test_artifact_inherits_session_project(tmp_path):
-    """An artifact saved with a project-tagged session inherits its project."""
+    """An artifact from a project TASK (a session EXPLICITLY in a project)
+    inherits that project — the in-module path, still scoped to the workspace."""
     client = _client(tmp_path)
     pid = client.post("/projects", json={"name": "Media"}).json()["id"]
-    s = client.post("/sessions", json={"task": "make", "wait": True}).json()
+    s = client.post("/sessions", json={"task": "make", "wait": True, "project_id": pid}).json()
     assert s["project_id"] == pid
     platform = client.app.state.platform
     platform.artifacts.save("clip", b"\x89PNG bytes", kind="image", filename="clip.png", session_id=s["id"])
@@ -123,11 +124,15 @@ def test_artifact_inherits_session_project(tmp_path):
     assert client.get(f"/creative/items?project_id={other}").json()["items"] == []
 
 
-def test_direct_creative_ingest_tags_active_project(tmp_path):
+def test_direct_creative_ingest_is_project_agnostic(tmp_path):
+    """Creative is its OWN module: a direct ingest/upload does NOT get tagged to
+    whatever project happens to be active — only in-project TASK output is
+    scoped to a project."""
     client = _client(tmp_path)
-    pid = client.post("/projects", json={"name": "Active"}).json()["id"]
+    pid = client.post("/projects", json={"name": "Active"}).json()["id"]  # auto-active
     src = tmp_path / "gen.png"
     src.write_bytes(b"\x89PNG synthetic")
-    client.post("/creative/ingest", json={"path": str(src)})
-    scoped = client.get(f"/creative/items?project_id={pid}").json()["items"]
-    assert any(i["project_id"] == pid for i in scoped)
+    out = client.post("/creative/ingest", json={"path": str(src)}).json()
+    # Present in the un-scoped gallery, but NOT tagged to the active project.
+    assert any(i["name"] == out["name"] for i in client.get("/creative/items").json()["items"])
+    assert client.get(f"/creative/items?project_id={pid}").json()["items"] == []

@@ -1,4 +1,6 @@
-"""Context spine: chat threads + workflow runs carry the active project."""
+"""A project applies ONLY inside the Projects module: chat threads and workflow
+runs started elsewhere are project-agnostic and never inherit the globally-active
+project. Only an EXPLICIT project_id tags a thread."""
 
 from __future__ import annotations
 
@@ -11,44 +13,49 @@ def _mk(tmp_path):
     return TestClient(create_app(str(tmp_path)))
 
 
-def test_new_chat_thread_inherits_active_project(tmp_path):
+def test_new_chat_thread_is_project_agnostic(tmp_path):
     client = _mk(tmp_path)
     p = client.post("/projects", json={"name": "Acme"}).json()
     pid = p.get("id") or p.get("project", {}).get("id")
     assert pid  # first project auto-activates
 
+    # A main-chat thread (no explicit project_id) is NOT tagged to the active one.
     saved = client.put(
         "/chat/threads/new", json={"messages": [{"role": "user", "content": "hi"}]}
     ).json()
-    assert saved["project_id"] == pid
-
-    listed = client.get("/chat/threads").json()["threads"]
-    assert listed[0]["project_id"] == pid
+    assert saved["project_id"] is None
     detail = client.get(f"/chat/threads/{saved['id']}").json()
-    assert detail["project_id"] == pid
+    assert detail["project_id"] is None
 
 
-def test_thread_explicit_project_tag_and_clear(tmp_path):
+def test_thread_tagged_only_when_project_id_is_explicit(tmp_path):
+    """The in-project chat sends an explicit project_id — that DOES tag the
+    thread. An explicit null clears it; an update without the key preserves it."""
     client = _mk(tmp_path)
-    client.post("/projects", json={"name": "Acme"})
-    saved = client.put(
+    pid = client.post("/projects", json={"name": "Acme"}).json()["id"]
+
+    tagged = client.put(
+        "/chat/threads/new",
+        json={"messages": [{"role": "user", "content": "hi"}], "project_id": pid},
+    ).json()
+    assert tagged["project_id"] == pid
+
+    # Explicit null clears; a later update WITHOUT project_id doesn't clobber.
+    cleared = client.put(
         "/chat/threads/new",
         json={"messages": [{"role": "user", "content": "hi"}], "project_id": None},
     ).json()
-    assert saved["project_id"] is None  # explicit null beats the active default
-
-    # Updating WITHOUT project_id must not clobber an existing tag.
+    assert cleared["project_id"] is None
     client.put(
-        f"/chat/threads/{saved['id']}",
+        f"/chat/threads/{tagged['id']}",
         json={"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]},
     )
-    assert client.get(f"/chat/threads/{saved['id']}").json()["project_id"] is None
+    assert client.get(f"/chat/threads/{tagged['id']}").json()["project_id"] == pid
 
 
-def test_workflow_run_stamped_with_active_project(tmp_path):
+def test_workflow_run_is_project_agnostic(tmp_path):
     client = _mk(tmp_path)
-    p = client.post("/projects", json={"name": "Acme"}).json()
-    pid = p.get("id") or p.get("project", {}).get("id")
+    client.post("/projects", json={"name": "Acme"})  # auto-active
 
     r = client.post(
         "/workflows/run",
@@ -56,4 +63,5 @@ def test_workflow_run_stamped_with_active_project(tmp_path):
     )
     assert r.status_code == 200
     runs = client.get("/workflows/runs").json()["runs"]
-    assert runs and any(run.get("project_id") == pid for run in runs)
+    # A workflow run is NOT stamped with whatever project happens to be active.
+    assert runs and all(run.get("project_id") is None for run in runs)

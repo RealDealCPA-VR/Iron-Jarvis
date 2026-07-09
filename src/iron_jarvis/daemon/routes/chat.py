@@ -92,10 +92,11 @@ def register(app: FastAPI, d) -> None:
                 title = (first[:48] + ("…" if len(first) > 48 else "")) or "New chat"
             r.title = title
             r.persona = str(body.get("persona") or r.persona or "")
+            # A thread is tagged to a project ONLY when saved with an explicit
+            # project_id (the in-project chat does this). Threads from the main
+            # chat stay project-agnostic — no leaking the globally-active one.
             if "project_id" in body:  # explicit tag (or explicit null to clear)
                 r.project_id = body.get("project_id") or None
-            elif created:  # new conversations inherit the active project
-                r.project_id = getattr(d.platform.config, "active_project_id", None)
             r.messages_json = json.dumps(msgs[-200:])
             r.updated_at = _now()
             db.add(r)
@@ -152,13 +153,11 @@ def register(app: FastAPI, d) -> None:
             "- You are the CHAT surface: answer directly. For multi-step jobs "
             "with tools, the user can switch this conversation to Agent mode."
         )
-        # Context spine: ground THIS turn in a SPECIFIC project (body.project_id)
-        # or fall back to the globally-active one. An in-project conversation
-        # carries its OWN instructions + brief + knowledge, independent of what's
-        # active elsewhere — explicit project_id always wins.
-        pid = (body.project_id or "").strip() or getattr(
-            d.platform.config, "active_project_id", None
-        )
+        # A project only applies INSIDE the Projects module: the in-project chat
+        # sends an explicit project_id and grounds in that project's
+        # instructions + brief + knowledge. The MAIN chat sends none and stays
+        # project-agnostic — the globally "active" project never leaks in here.
+        pid = (body.project_id or "").strip() or None
         resolved_proj = None
         if pid:
             try:

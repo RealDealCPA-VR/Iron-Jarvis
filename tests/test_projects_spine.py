@@ -28,30 +28,30 @@ def test_project_crud_and_first_becomes_active(tmp_path):
     assert client.get("/health").json()["active_project"] is None
 
 
-def test_sessions_inherit_active_project(tmp_path):
+def test_sessions_do_not_inherit_the_active_project(tmp_path):
+    """A project applies ONLY inside the Projects module: a plain session does
+    NOT inherit the globally-active project. Only an explicit project_id tags a
+    session, and continue preserves that explicit project."""
     client = _client(tmp_path)
-    pid = client.post("/projects", json={"name": "Spine"}).json()["id"]
+    pid = client.post("/projects", json={"name": "Spine"}).json()["id"]  # auto-active
+    # No project_id -> untagged, even though a project is active.
     s = client.post("/sessions", json={"task": "do a thing", "wait": True}).json()
-    assert s["project_id"] == pid  # inherited from the ACTIVE project
+    assert s["project_id"] is None
 
-    # Continue keeps the project.
-    c = client.post(f"/sessions/{s['id']}/continue", json={"message": "more", "wait": True}).json()
+    # Explicit project_id tags it (this is the in-project path); continue keeps it.
+    s2 = client.post("/sessions", json={"task": "x", "wait": True, "project_id": pid}).json()
+    assert s2["project_id"] == pid
+    c = client.post(f"/sessions/{s2['id']}/continue", json={"message": "more", "wait": True}).json()
     assert c["project_id"] == pid
 
-    # Explicit project_id wins; deactivate -> untagged sessions.
-    p2 = client.post("/projects", json={"name": "Other"}).json()["id"]
-    s2 = client.post("/sessions", json={"task": "x", "wait": True, "project_id": p2}).json()
-    assert s2["project_id"] == p2
-    client.post("/projects/deactivate")
-    s3 = client.post("/sessions", json={"task": "y", "wait": True}).json()
-    assert s3["project_id"] is None
 
-
-def test_project_context_injected_into_prompt(tmp_path, monkeypatch):
+def test_project_context_injected_when_session_is_in_a_project(tmp_path, monkeypatch):
+    """Grounding still works when a session is EXPLICITLY in a project (the
+    in-module path) — brief + recent project activity ride into the prompt."""
     client = _client(tmp_path)
-    client.post("/projects", json={"name": "Dance App", "brief": "SPINE-MARKER-99"})
-    # Prior activity in the project (becomes "recent activity" context).
-    client.post("/sessions", json={"task": "step one", "wait": True})
+    pid = client.post("/projects", json={"name": "Dance App", "brief": "SPINE-MARKER-99"}).json()["id"]
+    # Prior activity IN the project (becomes "recent activity" context).
+    client.post("/sessions", json={"task": "step one", "wait": True, "project_id": pid})
 
     captured = {}
     platform = client.app.state.platform
@@ -69,7 +69,7 @@ def test_project_context_injected_into_prompt(tmp_path, monkeypatch):
         return adapter
 
     monkeypatch.setattr(platform.providers, "get", spy_get)
-    client.post("/sessions", json={"task": "step two", "wait": True})
+    client.post("/sessions", json={"task": "step two", "wait": True, "project_id": pid})
     assert "SPINE-MARKER-99" in captured["system"]  # project brief injected
     assert "step one" in captured["system"]  # recent project activity injected
 
@@ -104,7 +104,7 @@ def test_delete_project_interface_only(tmp_path):
     (root / "keep-me.txt").write_text("important")
     client = _client(tmp_path)
     pid = client.post("/projects", json={"name": "Del", "root": str(root)}).json()["id"]
-    s = client.post("/sessions", json={"task": "x", "wait": True}).json()
+    s = client.post("/sessions", json={"task": "x", "wait": True, "project_id": pid}).json()
     assert s["project_id"] == pid
     r = client.delete(f"/projects/{pid}").json()
     assert r["deleted"] == pid and r["files_touched"] == 0

@@ -204,11 +204,6 @@ def register(app: FastAPI, d) -> None:
             key = None
         return key or os.environ.get("PIXIO_API_KEY") or None
 
-    def _active_project() -> str | None:
-        """The project a direct gallery save (studio ingest / upload) belongs to
-        — the active one, so creations join the same spine as everything else."""
-        return getattr(d.platform.config, "active_project_id", None)
-
     @app.get("/creative/items")
     def creative_items(limit: int = 200, project_id: str = "") -> dict[str, Any]:
         """The gallery: every media artifact, newest first. ``project_id`` scopes
@@ -643,9 +638,7 @@ def register(app: FastAPI, d) -> None:
         existing = d.platform.artifacts.versions(name)
         if existing:
             return {"name": name, "version": existing[-1], "media": kind, "ingested": False}
-        artifact = d.platform.artifacts.save(
-            name, blob, kind=kind, filename=p.name, project_id=_active_project()
-        )
+        artifact = d.platform.artifacts.save(name, blob, kind=kind, filename=p.name)
         return {
             "name": artifact.name,
             "version": artifact.version,
@@ -683,7 +676,6 @@ def register(app: FastAPI, d) -> None:
             blob,
             kind=media_kind(name) or "file",
             filename=name,
-            project_id=_active_project(),
         )
         out: dict[str, Any] = {
             "name": artifact.name,
