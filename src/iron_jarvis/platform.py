@@ -69,6 +69,7 @@ from .memory.fabric import MemoryFabric
 from .memory.recall import recall_tools
 from .scheduling import Scheduler
 from .scheduling import models as _sched_models  # noqa: F401
+from .reflex import models as _reflex_models  # noqa: F401  (registers ReflexRule)
 from .sentinels import SentinelService, sentinel_tools
 from .sentinels import models as _sentinel_models  # noqa: F401
 from .secrets import SecretsManager, secret_tools
@@ -155,6 +156,9 @@ class Platform:
     #: notes, memory graph, project knowledge, lessons, sessions). Powers the
     #: ``recall`` tool and the auto-grounding folded into chat + agent runs.
     fabric: "MemoryFabric | None" = None
+    #: The Reflex Loop's durable rule store (signal→action bindings). The
+    #: executing ReflexRouter is built by the daemon (it needs the orchestrator).
+    reflex: "object | None" = None
 
 
 def build_platform(
@@ -631,6 +635,13 @@ def build_platform(
         )
     for tool in dynamic_tool_tools(platform):
         platform.registry.register(tool)
+
+    # Reflex Loop: the durable rule store (signal→action bindings). The executing
+    # ReflexRouter is built by the daemon (it needs the orchestrator + task
+    # launcher); the store is enough for CRUD + rule matching.
+    from .reflex.store import ReflexStore
+
+    platform.reflex = ReflexStore(engine)
 
     # Agent self-service: create schedules / webhooks / workflows (needs scheduler).
     from .scheduling.tools import schedule_tools

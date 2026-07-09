@@ -47,6 +47,9 @@ class EventType:
     # session was spawned for it; or a sender was refused (not on the allowlist).
     COMM_RECEIVED = "comm.received"
     COMM_REJECTED = "comm.rejected"
+    # Reflex Loop (the ambient operator): an inbound signal (webhook / comm)
+    # matched a rule and fired a bound action (workflow / remote agent / session).
+    REFLEX_FIRED = "reflex.fired"
     SCHEDULE_FIRED = "schedule.fired"
     COMPUTERUSE_RUN_FINISHED = "computeruse.run_finished"
     # Motivation Layer (the pulse): a deliberation tick produced a candidate

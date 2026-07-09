@@ -57,6 +57,8 @@ class InboundPoller:
         agent_type: AgentType = AgentType.SUPERVISOR,
         reply_prefix: str = "Iron Jarvis: ",
         max_reply_chars: int = 3500,
+        command_interpreter: Any = None,
+        reflex_router: Any = None,
     ) -> None:
         self.notifier = notifier
         self.orchestrator = orchestrator
@@ -66,6 +68,14 @@ class InboundPoller:
         self.agent_type = agent_type
         self.reply_prefix = reply_prefix
         self.max_reply_chars = max_reply_chars
+        #: The Reflex command grammar (``/status``, ``/run`` …). When set, an
+        #: authorized message that starts with ``/`` is handled as a fast,
+        #: deterministic command instead of spawning a full agent session.
+        self.command_interpreter = command_interpreter
+        #: The Reflex router. When set, an authorized NON-command message that
+        #: matches a ``comm`` reflex rule (keyword) fires that rule instead of a
+        #: free-form session — so "any message mentioning X → run workflow Y".
+        self.reflex_router = reflex_router
 
     # -- discovery ---------------------------------------------------------
     def inbound_channels(self) -> list[tuple[str, Channel]]:
@@ -176,6 +186,48 @@ class InboundPoller:
         text = (msg.text or "").strip()
         if not text:
             return {"channel": name, "status": "empty"}
+
+        # COMMAND GRAMMAR: an authorized "/command" is a fast, deterministic
+        # operation (status / run a workflow / cancel / ask a remote agent),
+        # replied immediately — no agent session spun up. Non-command text falls
+        # through to the normal session path below.
+        if self.command_interpreter is not None and text.startswith("/"):
+            reply = await self.command_interpreter.interpret(text)
+            if reply is not None:
+                body = f"{self.reply_prefix}{reply}"[: self.max_reply_chars]
+                send_res = await asyncio.to_thread(ch.send, body, chat_id=msg.reply_to)
+                await self._publish(
+                    EventType.COMM_RECEIVED,
+                    {"channel": name, "sender": msg.sender_id, "command": text},
+                )
+                return {
+                    "channel": name,
+                    "status": "command",
+                    "command": text.split()[0],
+                    "sent": bool(send_res.get("ok")),
+                }
+
+        # REFLEX (comm): a non-command message that matches a keyword rule fires
+        # that rule (run a workflow / remote agent / session) instead of a
+        # free-form chat — the ambient-operator path for "mention X → do Y".
+        if self.reflex_router is not None:
+            try:
+                fired = await self.reflex_router.on_comm(text)
+            except Exception:  # noqa: BLE001 — a reflex must never break comm
+                fired = []
+            fired = [f for f in fired if f.get("ok")]
+            if fired:
+                summary = "; ".join(
+                    f"{f.get('kind', 'action')} {f.get('rule', '')}".strip() for f in fired
+                )
+                body = f"{self.reply_prefix}Triggered: {summary}"[: self.max_reply_chars]
+                send_res = await asyncio.to_thread(ch.send, body, chat_id=msg.reply_to)
+                return {
+                    "channel": name,
+                    "status": "reflex",
+                    "fired": len(fired),
+                    "sent": bool(send_res.get("ok")),
+                }
 
         # Spawn a NORMAL supervised session (same orchestrator + permission
         # engine as a local user) and await its result.

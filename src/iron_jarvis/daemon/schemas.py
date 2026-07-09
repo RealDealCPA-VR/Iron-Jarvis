@@ -458,6 +458,23 @@ class ToolGenerateBody(BaseModel):
     model: str = ""
 
 
+class ReflexRuleBody(BaseModel):
+    """A Reflex rule: bind an inbound signal (webhook slug / comm keyword) to an
+    action (run a workflow / remote agent / session)."""
+
+    name: str = ""
+    source: str = "webhook"       # webhook | comm
+    match: str = ""               # webhook slug, or comm keyword
+    action: str = "workflow"      # workflow | remote_agent | session
+    target: str = ""              # workflow name / remote agent name
+    task_template: str = ""
+    enabled: bool = True
+
+
+class ReflexToggleBody(BaseModel):
+    enabled: bool
+
+
 class McpServerBody(BaseModel):
     """An external MCP server to register (prebuilt from the catalog, or custom)."""
 

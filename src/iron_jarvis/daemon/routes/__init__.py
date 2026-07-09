@@ -17,6 +17,7 @@ from . import (  # noqa: F401
     knowledge,
     learning,
     projects,
+    reflex,
     sessions,
     settings,
     system,

@@ -249,6 +249,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # Two-way comm: the inbound poller. Constructed always (cheap), but it only
     # does anything when a channel has inbound_enabled + credentials; the loop
     # below is created ONLY when poller.enabled() — off-by-default, no network.
+    # Reflex Loop / Ambient Operator: the router turns an inbound signal (webhook
+    # or comm) into a workflow / remote-agent / session run; the interpreter is
+    # the phone command grammar. ``spawn_bg`` is set once it's defined below (the
+    # router only needs it at fire time, never at construction).
+    from ..reflex import CommandInterpreter, ReflexRouter
+
+    reflex_router = ReflexRouter(platform, orchestrator, spawn_bg=None)
+    command_interpreter = CommandInterpreter(platform, orchestrator, reflex_router)
+
     from ..comm import InboundPoller
 
     inbound_poller = InboundPoller(
@@ -256,6 +265,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
         orchestrator,
         platform.engine,
         event_bus=platform.event_bus,
+        command_interpreter=command_interpreter,
+        reflex_router=reflex_router,
     )
 
     # LIVE re-arm bridge: lifespan drops its event loop + the autonomy/sentinel
@@ -322,7 +333,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 await platform.event_bus.publish(
                     "webhook.received", {"slug": _slug, "body": body}
                 )
-                return {"ok": True}
+                # Reflex Loop: fire any rule bound to this webhook (run a
+                # workflow / remote agent / session). Best-effort — a reflex
+                # failure never fails the webhook ack.
+                fired: list[Any] = []
+                try:
+                    fired = await app.state.reflex_router.on_webhook(_slug, body)
+                except Exception:  # noqa: BLE001 — never break the ack
+                    log.exception("reflex on_webhook failed for %r", _slug)
+                return {"ok": True, "reflexes_fired": len(fired)}
 
             return _handler
 
@@ -746,6 +765,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     app.state.platform = platform
     app.state.orchestrator = orchestrator
+    # Reflex Loop: the webhook handler + reflex routes reach these via app.state.
+    app.state.reflex_router = reflex_router
+    app.state.command_interpreter = command_interpreter
     # Background session tasks are registered on the orchestrator keyed by
     # session_id (a strong ref preventing premature GC, and the handle the
     # cancel endpoint uses). Exceptions are surfaced (logged), not swallowed.
@@ -764,6 +786,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         task.add_done_callback(_done)
         return task
+
+    # The Reflex Router launches its long-running actions through the daemon's
+    # background task launcher (now that it exists), so a webhook POST returns
+    # immediately while the bound workflow/session runs in the background.
+    reflex_router.spawn_bg = _spawn_bg
 
     def _visible_providers() -> list[dict[str, Any]]:
         """Provider health with the internal 'mock' offline model hidden.
@@ -1373,5 +1400,6 @@ def create_app(project_root: str | None = None) -> FastAPI:
     _routes.connections.register(app, d)
     _routes.comm.register(app, d)
     _routes.agents.register(app, d)
+    _routes.reflex.register(app, d)
     _routes.system.register(app, d)
     return app
