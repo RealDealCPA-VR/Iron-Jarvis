@@ -83,11 +83,19 @@ export function agentMeta(agent: string): AgentMeta {
   return AGENT_META[(agent as AgentType)] ?? AGENT_META.builder;
 }
 
+/** Display label for an agent: the friendly built-in label, else the raw name
+ *  (dynamic/unknown agents are shown as-is rather than coerced to Builder). */
+export function agentLabel(agent: string): string {
+  return AGENT_META[(agent as AgentType)]?.label ?? agent;
+}
+
 /* ---- Node data shapes ---------------------------------------------------- */
 
 export interface StepNodeData {
   name: string;
-  agent: AgentType;
+  /** Built-in AgentType OR a dynamic/agent-authored agent name — kept verbatim
+   *  through load/save/run (never coerced to "builder"). */
+  agent: string;
   task: string;
   /** Optional tool tag carried through load/save/run (generated workflows use it). */
   tool?: string | null;

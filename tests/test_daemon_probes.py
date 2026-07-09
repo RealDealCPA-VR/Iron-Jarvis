@@ -104,20 +104,34 @@ def test_daemon_error_paths(tmp_path):
 
 
 def test_workflow_run_over_http(tmp_path):
-    client = TestClient(create_app(str(tmp_path)))
-    rec = client.post(
-        "/workflows/run",
-        json={
-            "name": "wf",
-            "steps": [
-                {"name": "s1", "agent": "builder", "task": "create a file"},
-                {"name": "s2", "agent": "builder", "task": "create another"},
-            ],
-        },
-    ).json()
-    assert rec["status"] == "completed"
-    runs = client.get("/workflows/runs").json()["runs"]
-    assert any(r["id"] == rec["id"] for r in runs)
+    """POST /workflows/run returns IMMEDIATELY (status running) and the run
+    completes in the background — poll the record to its terminal state."""
+    import time
+
+    # Context-managed client: the lifespan portal keeps the event loop alive so
+    # the BACKGROUND run actually progresses between polls.
+    with TestClient(create_app(str(tmp_path))) as client:
+        rec = client.post(
+            "/workflows/run",
+            json={
+                "name": "wf",
+                "steps": [
+                    {"name": "s1", "agent": "builder", "task": "create a file"},
+                    {"name": "s2", "agent": "builder", "task": "create another"},
+                ],
+            },
+        ).json()
+        assert rec["status"] == "running"  # async: the request no longer blocks
+        status = rec["status"]
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            status = client.get(f"/workflows/runs/{rec['id']}").json()["status"]
+            if status in ("completed", "failed", "cancelled", "interrupted"):
+                break
+            time.sleep(0.1)
+        assert status == "completed"
+        runs = client.get("/workflows/runs").json()["runs"]
+        assert any(r["id"] == rec["id"] for r in runs)
 
 
 # --- 4. WebSocket /events streams -------------------------------------------

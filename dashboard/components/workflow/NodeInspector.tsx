@@ -5,7 +5,14 @@
 
 import { X, Trash2, SlidersHorizontal } from "lucide-react";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
-import { AGENT_TYPES, agentMeta, type AgentType, type StepNodeData } from "./agents";
+import { useApi } from "@/lib/useApi";
+import type { AgentsResponse } from "@/lib/types";
+import {
+  AGENT_TYPES,
+  agentMeta,
+  agentLabel,
+  type StepNodeData,
+} from "./agents";
 
 export function NodeInspector({
   data,
@@ -18,6 +25,16 @@ export function NodeInspector({
   onDelete: () => void;
   onClose: () => void;
 }) {
+  // Live agent roster: built-ins + user/agent-authored dynamic agents. Merge in
+  // the step's CURRENT agent so an unknown/dynamic value stays selectable (and
+  // isn't silently coerced to Builder) even before /agents resolves.
+  const { data: agentsData } = useApi<AgentsResponse>("/agents");
+  const builtin = agentsData?.builtin ?? AGENT_TYPES;
+  const dynamic = (agentsData?.dynamic ?? []).map((d) => d.name);
+  const agentOptions = Array.from(
+    new Set([...builtin, ...dynamic, data.agent].filter(Boolean)),
+  );
+
   return (
     <div className="card-surface absolute right-3 top-3 bottom-3 z-20 flex w-[300px] flex-col overflow-hidden">
       <header className="flex items-center justify-between gap-3 border-b hairline px-4 py-3">
@@ -53,7 +70,7 @@ export function NodeInspector({
             Agent type
           </label>
           <div className="grid grid-cols-2 gap-2">
-            {AGENT_TYPES.map((a) => {
+            {agentOptions.map((a) => {
               const meta = agentMeta(a);
               const Icon = meta.icon;
               const active = data.agent === a;
@@ -61,7 +78,7 @@ export function NodeInspector({
                 <button
                   key={a}
                   type="button"
-                  onClick={() => onChange({ agent: a as AgentType })}
+                  onClick={() => onChange({ agent: a })}
                   className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs font-medium transition-all ${
                     active
                       ? `${meta.chip} ring-1 ring-inset ring-white/10`
@@ -69,7 +86,7 @@ export function NodeInspector({
                   }`}
                 >
                   <Icon size={14} />
-                  {meta.label}
+                  <span className="truncate">{agentLabel(a)}</span>
                 </button>
               );
             })}

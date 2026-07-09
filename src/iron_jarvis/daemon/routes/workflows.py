@@ -31,16 +31,67 @@ def register(app: FastAPI, d) -> None:
             wf = load_workflow({"name": body.name, "steps": body.steps})
         else:
             raise HTTPException(status_code=400, detail="provide `toml` or `name`+`steps`")
-        rec = await WorkflowEngine(d.platform).run(wf)
+        # Create the record synchronously (validating steps), then run it in the
+        # BACKGROUND: the HTTP request no longer blocks for the multi-minute run
+        # (which was aborting clients into a false "couldn't reach the daemon").
+        engine = WorkflowEngine(d.platform, d.orchestrator)
+        try:
+            rec = engine.create_record(wf)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        d._spawn_bg(rec.id, engine.run_record(rec, wf))
         return rec.model_dump()
 
     @app.get("/workflows/runs")
-    def workflow_runs() -> dict[str, Any]:
+    def workflow_runs(limit: int = 50) -> dict[str, Any]:
+        from ...workflows.models import WorkflowRunRecord
+
+        limit = max(1, min(200, limit))  # clamp: newest-first, bounded
+        with session_scope(d.platform.engine) as db:
+            rows = list(
+                db.exec(
+                    select(WorkflowRunRecord)
+                    .order_by(WorkflowRunRecord.started_at.desc())  # type: ignore[attr-defined]
+                    .limit(limit)
+                )
+            )
+        return {"runs": [r.model_dump() for r in rows]}
+
+    @app.get("/workflows/runs/{run_id}")
+    def workflow_run_detail(run_id: str) -> dict[str, Any]:
         from ...workflows.models import WorkflowRunRecord
 
         with session_scope(d.platform.engine) as db:
-            rows = list(db.exec(select(WorkflowRunRecord)))
-        return {"runs": [r.model_dump() for r in rows]}
+            rec = db.get(WorkflowRunRecord, run_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="no such run")
+        return rec.model_dump()
+
+    @app.post("/workflows/runs/{run_id}/cancel")
+    def workflow_run_cancel(run_id: str) -> dict[str, Any]:
+        """Ask a live run to stop. Flips status to 'cancelling' (the engine
+        checks it before each step) AND best-effort cancels the in-flight step
+        session. Cancelling a finished run → 409."""
+        from ...workflows.models import WorkflowRunRecord
+
+        with session_scope(d.platform.engine) as db:
+            rec = db.get(WorkflowRunRecord, run_id)
+            if rec is None:
+                raise HTTPException(status_code=404, detail="no such run")
+            if rec.status in ("completed", "failed", "cancelled", "interrupted"):
+                raise HTTPException(status_code=409, detail=f"run already {rec.status}")
+            rec.status = "cancelling"
+            current = rec.current_session_id
+            db.add(rec)
+            db.commit()
+            db.refresh(rec)
+            status = rec.status
+        if current:
+            try:
+                d.orchestrator.cancel_session(current)
+            except Exception:  # noqa: BLE001 — best-effort; the pre-step check still stops it
+                pass
+        return {"id": run_id, "status": status}
 
     # Saved workflow definitions (agents author these; the editor loads/saves them).
     @app.get("/workflows")
@@ -68,6 +119,15 @@ def register(app: FastAPI, d) -> None:
         if rec is None:
             raise HTTPException(status_code=404, detail="no such workflow")
         return rec.model_dump()
+
+    @app.delete("/workflows/{name}")
+    def delete_workflow(name: str) -> dict[str, Any]:
+        """Delete a saved workflow definition by name (404 when absent)."""
+        from ...workflows.store import WorkflowStore
+
+        if not WorkflowStore(d.platform.engine).remove(name):
+            raise HTTPException(status_code=404, detail="no such workflow")
+        return {"deleted": name}
 
     @app.post("/workflows/generate")
     async def generate_workflow(body: WorkflowGenerateBody) -> dict[str, Any]:

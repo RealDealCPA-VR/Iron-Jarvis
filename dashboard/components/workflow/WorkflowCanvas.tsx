@@ -33,13 +33,20 @@ import {
   Play,
   Plus,
   CircleCheck,
+  CircleX,
+  Circle,
+  MinusCircle,
+  Loader2,
+  Ban,
+  Trash2,
+  ChevronRight,
   FolderOpen,
   ChevronDown,
   Save,
   RefreshCw,
   CalendarClock,
 } from "lucide-react";
-import { get, post, ApiError } from "@/lib/api";
+import { get, post, del, ApiError } from "@/lib/api";
 import type { WorkflowRun } from "@/lib/types";
 import {
   Badge,
@@ -53,8 +60,6 @@ import { TriggerNode } from "./TriggerNode";
 import { NodeInspector } from "./NodeInspector";
 import {
   agentMeta,
-  AGENT_TYPES,
-  type AgentType,
   type StepNodeData,
   type WorkflowDef,
 } from "./agents";
@@ -73,7 +78,7 @@ const defaultEdgeOptions: DefaultEdgeOptions = {
 function mkStep(
   id: string,
   name: string,
-  agent: AgentType,
+  agent: string,
   task: string,
   x: number,
   y: number,
@@ -95,7 +100,7 @@ const SEED_NODES: Node[] = [
     id: "trigger",
     type: "trigger",
     position: { x: 40, y: 168 },
-    data: { label: "Trigger" },
+    data: { label: "Manual run" },
     deletable: false,
   },
   mkStep("s1", "Gather", "planner", "Gather the context and requirements needed for the task.", 320, 148),
@@ -125,7 +130,7 @@ function buildGraph(steps: RawStep[]): { nodes: Node[]; edges: Edge[] } {
       id: "trigger",
       type: "trigger",
       position: { x: 40, y: 168 },
-      data: { label: "Trigger" },
+      data: { label: "Manual run" },
       deletable: false,
     },
   ];
@@ -133,9 +138,9 @@ function buildGraph(steps: RawStep[]): { nodes: Node[]; edges: Edge[] } {
   let prev = "trigger";
   steps.forEach((s, i) => {
     const id = `s${i + 1}`;
-    const agent: AgentType = (AGENT_TYPES as string[]).includes(String(s.agent))
-      ? (s.agent as AgentType)
-      : "builder";
+    // Preserve the saved agent verbatim (built-in OR dynamic) — never coerce an
+    // unknown agent to "builder"; the inspector renders it as-is.
+    const agent = String(s.agent || "builder");
     nodes.push(
       mkStep(
         id,
@@ -204,13 +209,237 @@ function topoOrder(nodes: Node[], edges: Edge[]): Node[] {
 const orderedSteps = (nodes: Node[], edges: Edge[]) =>
   topoOrder(nodes, edges).filter((n) => n.type === "step");
 
+/* ---- Layout persistence (node positions per workflow name) --------------- */
+
+const layoutKey = (name: string) => `ij.wf.layout.${name}`;
+
+/** Persist each node's position so a reload/Load doesn't reset a hand-tuned
+ *  layout back to the auto left-to-right chain. */
+function saveLayout(name: string, nodes: Node[]) {
+  if (!name) return;
+  try {
+    const pos: Record<string, { x: number; y: number }> = {};
+    for (const n of nodes) pos[n.id] = { x: n.position.x, y: n.position.y };
+    localStorage.setItem(layoutKey(name), JSON.stringify(pos));
+  } catch {
+    /* ignore (private mode / quota) */
+  }
+}
+
+function loadLayout(name: string): Record<string, { x: number; y: number }> | null {
+  try {
+    const raw = localStorage.getItem(layoutKey(name));
+    if (!raw) return null;
+    const p = JSON.parse(raw);
+    return p && typeof p === "object" && !Array.isArray(p) ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Overlay saved positions onto a freshly-built graph (ids are deterministic:
+ *  trigger, s1, s2, …), leaving edges — rebuilt from step order — untouched. */
+function applyLayout(
+  nodes: Node[],
+  layout: Record<string, { x: number; y: number }> | null,
+): Node[] {
+  if (!layout) return nodes;
+  return nodes.map((n) => {
+    const p = layout[n.id];
+    return p && typeof p.x === "number" && typeof p.y === "number"
+      ? { ...n, position: { x: p.x, y: p.y } }
+      : n;
+  });
+}
+
+/* ---- Live run: derive per-step chips from a run record ------------------- */
+
+const RUN_TERMINAL = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+  "error",
+]);
+
+interface StepOutput {
+  session_id?: string | null;
+  status?: string;
+  summary?: string;
+  tool?: string | null;
+}
+
+interface RunStepView {
+  name: string;
+  agent?: string;
+  status: string;
+  summary?: string;
+  session_id?: string | null;
+}
+
+/** Parse an `outputs_json` object string into a stepName → output map. */
+function parseOutputs(json: unknown): Record<string, StepOutput> {
+  try {
+    const p = JSON.parse(String(json ?? "{}"));
+    return p && typeof p === "object" && !Array.isArray(p) ? p : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Merge the ordered steps_json with the live outputs_json into one view list.
+ *  While the run is active, the first step lacking an output entry is the one
+ *  currently "running"; later un-entered steps are "pending". */
+function runStepViews(run: WorkflowRun): RunStepView[] {
+  const steps = parseSteps((run as { steps_json?: string }).steps_json);
+  const outputs = parseOutputs((run as { outputs_json?: string }).outputs_json);
+  const active = !RUN_TERMINAL.has(String(run.status ?? ""));
+  let runningAssigned = false;
+  return steps.map((s, i) => {
+    const nm = s.name?.trim() || `step-${i + 1}`;
+    const out = outputs[nm];
+    let status: string;
+    if (out?.status) status = out.status;
+    else if (active && !runningAssigned) {
+      status = "running";
+      runningAssigned = true;
+    } else status = "pending";
+    return {
+      name: nm,
+      agent: s.agent,
+      status,
+      summary: out?.summary,
+      session_id: out?.session_id,
+    };
+  });
+}
+
+const CHIP_TONE: Record<string, string> = {
+  completed: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+  running: "border-accent/40 bg-accent/10 text-accent-soft animate-pulse",
+  failed: "border-rose-500/30 bg-rose-500/10 text-rose-300",
+  skipped: "border-white/[0.08] bg-white/[0.02] text-zinc-500",
+  pending: "border-white/[0.08] bg-white/[0.02] text-zinc-500",
+};
+
+function ChipIcon({ status }: { status: string }) {
+  if (status === "completed") return <CircleCheck size={12} />;
+  if (status === "failed") return <CircleX size={12} />;
+  if (status === "running") return <Loader2 size={12} className="animate-spin" />;
+  if (status === "skipped") return <MinusCircle size={12} />;
+  return <Circle size={12} />;
+}
+
+/** The live run strip: a status header + cancel, a chip per step, and an
+ *  honest collapsible per-step results panel (summaries; failures in red). */
+function RunProgress({
+  run,
+  onCancel,
+  cancelling,
+}: {
+  run: WorkflowRun;
+  onCancel: () => void;
+  cancelling: boolean;
+}) {
+  const steps = runStepViews(run);
+  const status = String(run.status ?? "running");
+  const active = !RUN_TERMINAL.has(status);
+  const [open, setOpen] = useState<string | null>(null);
+  const hasResults = steps.some((s) => s.summary || s.status === "failed");
+
+  return (
+    <div className="space-y-2.5 rounded-xl border border-white/[0.08] bg-ink-950/40 px-3 py-2.5">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <Badge value={status} />
+        <span className="text-zinc-300">
+          Run <b className="font-semibold text-zinc-100">{run.workflow_name}</b>
+        </span>
+        {active && <LoaderInline />}
+        {active && (
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={cancelling}
+            className="ml-auto flex items-center gap-1.5 rounded-lg border border-rose-500/25 bg-rose-500/[0.07] px-2.5 py-1 text-xs font-medium text-rose-200 transition-colors hover:border-rose-500/50 hover:bg-rose-500/[0.12] disabled:opacity-50"
+          >
+            <Ban size={13} /> {cancelling ? "Cancelling…" : "Cancel"}
+          </button>
+        )}
+      </div>
+
+      {/* One chip per step */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {steps.map((s) => (
+          <span
+            key={s.name}
+            title={`${s.name} — ${s.status}`}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+              CHIP_TONE[s.status] ?? CHIP_TONE.pending
+            }`}
+          >
+            <ChipIcon status={s.status} />
+            <span className="max-w-[140px] truncate">{s.name}</span>
+          </span>
+        ))}
+      </div>
+
+      {/* Honest per-step results (collapsible summaries; failures in red) */}
+      {hasResults && (
+        <div className="space-y-1">
+          {steps
+            .filter((s) => s.summary || s.status === "failed")
+            .map((s) => {
+              const failed = s.status === "failed";
+              const isOpen = open === s.name;
+              return (
+                <div
+                  key={s.name}
+                  className={`rounded-lg border ${
+                    failed
+                      ? "border-rose-500/25 bg-rose-500/[0.05]"
+                      : "border-white/[0.06] bg-white/[0.02]"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setOpen(isOpen ? null : s.name)}
+                    className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px]"
+                  >
+                    <ChevronRight
+                      size={13}
+                      className={`shrink-0 text-zinc-500 transition-transform ${
+                        isOpen ? "rotate-90" : ""
+                      }`}
+                    />
+                    <span
+                      className={`font-medium ${failed ? "text-rose-200" : "text-zinc-200"}`}
+                    >
+                      {s.name}
+                    </span>
+                    <Badge value={s.status} />
+                  </button>
+                  {isOpen && (
+                    <p
+                      className={`whitespace-pre-wrap px-3 pb-2.5 pt-0.5 text-[12px] leading-relaxed ${
+                        failed ? "text-rose-200/90" : "text-zinc-400"
+                      }`}
+                    >
+                      {s.summary || (failed ? "Step failed." : "No summary.")}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 
 interface RunResult {
   offline?: boolean;
-  name?: string;
-  status?: string;
-  sessions?: number;
 }
 
 function Canvas() {
@@ -223,6 +452,19 @@ function Canvas() {
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  /* Live run: the polled record + a Cancel-in-flight flag + the poll handle. */
+  const [activeRun, setActiveRun] = useState<WorkflowRun | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+  // Stop the poll loop if the editor unmounts mid-run.
+  useEffect(() => stopPolling, [stopPolling]);
 
   /* Saved/agent-authored workflow defs for the Load ▾ dropdown. */
   const [defs, setDefs] = useState<WorkflowDef[]>([]);
@@ -382,17 +624,30 @@ function Canvas() {
     (def: WorkflowDef) => {
       const steps = parseSteps(def.steps_json);
       const { nodes: nn, edges: ee } = buildGraph(steps);
+      // Restore a hand-tuned layout (positions saved under this name) if present.
       idRef.current = steps.length + 1;
-      setNodes(nn);
+      setNodes(applyLayout(nn, loadLayout(def.name)));
       setEdges(ee);
       setName(def.name);
       setSelectedId(null);
       setLoadOpen(false);
       setResult(null);
+      setActiveRun(null);
       setError(null);
       setSuccess(
         `Loaded “${def.name}” — ${steps.length} step${steps.length === 1 ? "" : "s"}.`,
       );
+      // Tell the "Build with chat" panel what's loaded so a follow-up refines
+      // THIS workflow instead of minting a context-free new one.
+      try {
+        window.dispatchEvent(
+          new CustomEvent("ij:workflow-changed", {
+            detail: { name: def.name, steps },
+          }),
+        );
+      } catch {
+        /* ignore */
+      }
       setTimeout(() => fitView({ padding: 0.22, duration: 480 }), 80);
     },
     [setNodes, setEdges, fitView],
@@ -429,9 +684,20 @@ function Canvas() {
         steps,
         description: "saved from the workflow editor",
       });
+      // Persist the current node layout so a later Load restores it verbatim.
+      saveLayout(wfName, nodes);
       setSuccess(
         `Saved “${wfName}” — ${steps.length} step${steps.length === 1 ? "" : "s"}. It’s in the Load list.`,
       );
+      try {
+        window.dispatchEvent(
+          new CustomEvent("ij:workflow-changed", {
+            detail: { name: wfName, steps },
+          }),
+        );
+      } catch {
+        /* ignore */
+      }
       await refreshDefs();
     } catch (err) {
       if (err instanceof ApiError && err.status === 0) setResult({ offline: true });
@@ -445,6 +711,9 @@ function Canvas() {
     setError(null);
     setResult(null);
     setSuccess(null);
+    setActiveRun(null);
+    setCancelling(false);
+    stopPolling();
     const steps = orderedSteps(nodes, edges).map((n, i) => {
       const d = n.data as StepNodeData;
       return {
@@ -461,26 +730,79 @@ function Canvas() {
     }
     setBusy(true);
     try {
+      // POST returns the freshly-created record AT ONCE (status "running"); the
+      // engine runs the steps in the background. Poll for progress every 2s.
       const rec = await post<WorkflowRun>("/workflows/run", { name: wfName, steps });
-      let sessions = 0;
-      try {
-        const ids = JSON.parse(String(rec.session_ids_json ?? "[]"));
-        sessions = Array.isArray(ids) ? ids.length : 0;
-      } catch {
-        /* ignore */
+      setActiveRun(rec);
+      const runId = rec.id ? String(rec.id) : "";
+      if (!runId || RUN_TERMINAL.has(String(rec.status ?? ""))) {
+        setBusy(false);
+        return;
       }
-      setResult({
-        name: rec.workflow_name ?? wfName,
-        status: rec.status ?? "done",
-        sessions,
-      });
+      pollRef.current = setInterval(async () => {
+        try {
+          const fresh = await get<WorkflowRun>(
+            `/workflows/runs/${encodeURIComponent(runId)}`,
+          );
+          setActiveRun(fresh);
+          if (RUN_TERMINAL.has(String(fresh.status ?? ""))) {
+            stopPolling();
+            setBusy(false);
+            setCancelling(false);
+          }
+        } catch {
+          // Transient fetch error (daemon busy/restarting) — keep polling.
+        }
+      }, 2000);
     } catch (err) {
       if (err instanceof ApiError && err.status === 0) setResult({ offline: true });
       else setError(err instanceof ApiError ? err.message : String(err));
-    } finally {
       setBusy(false);
     }
-  }, [nodes, edges, name]);
+  }, [nodes, edges, name, stopPolling]);
+
+  const cancelRun = useCallback(async () => {
+    const id = activeRun?.id ? String(activeRun.id) : "";
+    if (!id) return;
+    setCancelling(true);
+    try {
+      const res = await post<{ id: string; status: string }>(
+        `/workflows/runs/${encodeURIComponent(id)}/cancel`,
+      );
+      // Reflect "cancelling" immediately; the poll loop lands the final state.
+      setActiveRun((r) => (r ? { ...r, status: res.status } : r));
+    } catch (err) {
+      // 409 = the run already finished; surface it and stop the spinner.
+      setCancelling(false);
+      setError(err instanceof ApiError ? err.message : String(err));
+    }
+  }, [activeRun]);
+
+  /* ---- Delete a saved workflow from the Load list ------------------------ */
+
+  const deleteDef = useCallback(
+    async (defName: string) => {
+      if (
+        typeof window !== "undefined" &&
+        !window.confirm(`Delete workflow “${defName}”? This can't be undone.`)
+      )
+        return;
+      try {
+        await del(`/workflows/${encodeURIComponent(defName)}`);
+        try {
+          localStorage.removeItem(layoutKey(defName));
+        } catch {
+          /* ignore */
+        }
+        setSuccess(`Deleted “${defName}”.`);
+        await refreshDefs();
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) await refreshDefs();
+        else setError(err instanceof ApiError ? err.message : String(err));
+      }
+    },
+    [refreshDefs],
+  );
 
   const selected = nodes.find((n) => n.id === selectedId && n.type === "step");
   const selData = selected?.data as StepNodeData | undefined;
@@ -490,10 +812,6 @@ function Canvas() {
     if (node.type === "trigger") return "#22d3ee";
     return agentMeta(String((node.data as StepNodeData).agent)).hex;
   }, []);
-
-  const goodRun =
-    !!result && !result.offline &&
-    /^(completed|ok|succeeded|success)$/i.test(result.status ?? "");
 
   return (
     <div className="card-surface flex h-[calc(100vh-12.5rem)] min-h-[560px] flex-col overflow-hidden">
@@ -568,25 +886,38 @@ function Canvas() {
                   {defs.map((d) => {
                     const n = parseSteps(d.steps_json).length;
                     return (
-                      <button
+                      <div
                         key={d.id ?? d.name}
-                        type="button"
-                        onClick={() => loadDef(d)}
-                        className="group flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-white/[0.05]"
+                        className="group flex items-center gap-1 rounded-lg pr-1 transition-colors hover:bg-white/[0.05]"
                       >
-                        <span className="mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-md border border-accent/30 bg-accent/10 text-accent-soft">
-                          <Workflow size={13} />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[13px] font-medium text-zinc-100 group-hover:text-white">
-                            {d.name}
+                        <button
+                          type="button"
+                          onClick={() => loadDef(d)}
+                          className="flex min-w-0 flex-1 items-start gap-2.5 rounded-lg px-2.5 py-2 text-left"
+                        >
+                          <span className="mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-md border border-accent/30 bg-accent/10 text-accent-soft">
+                            <Workflow size={13} />
                           </span>
-                          <span className="block truncate text-[11px] text-zinc-500">
-                            {n} step{n === 1 ? "" : "s"}
-                            {d.description ? ` · ${d.description}` : ""}
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[13px] font-medium text-zinc-100 group-hover:text-white">
+                              {d.name}
+                            </span>
+                            <span className="block truncate text-[11px] text-zinc-500">
+                              {n} step{n === 1 ? "" : "s"}
+                              {d.description ? ` · ${d.description}` : ""}
+                            </span>
                           </span>
-                        </span>
-                      </button>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteDef(d.name)}
+                          aria-label={`Delete ${d.name}`}
+                          title={`Delete “${d.name}”`}
+                          className="shrink-0 rounded-md p-1.5 text-zinc-600 opacity-0 transition-all hover:bg-rose-500/10 hover:text-rose-300 focus-visible:opacity-100 group-hover:opacity-100"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -670,29 +1001,18 @@ function Canvas() {
       </div>
 
       {/* Result strip */}
-      {(result || error || success) && (
-        <div className="border-t hairline p-3">
+      {(activeRun || result || error || success) && (
+        <div className="space-y-2 border-t hairline p-3">
           {result?.offline && (
             <OfflineHint detail="couldn't reach the daemon for this workflow." />
           )}
           {success && !error && <SuccessNote>{success}</SuccessNote>}
-          {result && !result.offline && (
-            <div
-              className={`flex flex-wrap items-center gap-2.5 rounded-xl border px-3 py-2.5 text-sm ${
-                goodRun
-                  ? "border-emerald-500/25 bg-emerald-500/[0.07] text-emerald-200"
-                  : "border-amber-500/25 bg-amber-500/[0.07] text-amber-100"
-              }`}
-            >
-              <CircleCheck size={16} className="shrink-0" />
-              <span>
-                Ran <b className="font-semibold">{result.name}</b>
-              </span>
-              {result.status && <Badge value={result.status} />}
-              <span className="opacity-70">
-                · {result.sessions} session{result.sessions === 1 ? "" : "s"} spawned
-              </span>
-            </div>
+          {activeRun && (
+            <RunProgress
+              run={activeRun}
+              onCancel={cancelRun}
+              cancelling={cancelling}
+            />
           )}
           {error && <ErrorNote>{error}</ErrorNote>}
         </div>

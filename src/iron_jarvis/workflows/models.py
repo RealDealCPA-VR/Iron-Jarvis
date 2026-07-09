@@ -12,13 +12,20 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlmodel import Field, SQLModel
+from sqlalchemy import Engine
+from sqlmodel import Field, SQLModel, select
 
+from ..core.db import session_scope
 from ..core.ids import new_id, utcnow
 
 
 class WorkflowRunRecord(SQLModel, table=True):
-    """One execution of a workflow (SPEC §24)."""
+    """One execution of a workflow (SPEC §24).
+
+    Runs are ASYNC: the record is created ``running`` up front, updated in place
+    as each step lands, then finalized. ``status`` is a plain string spanning
+    running/completed/failed/cancelled/cancelling/interrupted (no enum migration).
+    """
 
     id: str = Field(default_factory=lambda: new_id("wfrun"), primary_key=True)
     workflow_name: str = Field(default="", index=True)
@@ -26,10 +33,42 @@ class WorkflowRunRecord(SQLModel, table=True):
     #: Context spine: the project this run happened in (the active project at
     #: run time). Nullable; old DBs gain the column via _reconcile_additive_columns.
     project_id: str | None = Field(default=None, index=True)
+    #: The ordered step plan captured at create time: [{name, agent}]. Lets the
+    #: dashboard render the run's shape while it's still executing. Additive
+    #: column; old DBs self-heal it as nullable.
+    steps_json: str = "[]"
     session_ids_json: str = "[]"
     outputs_json: str = "{}"
+    #: The step session currently executing, so the cancel route can stop it
+    #: mid-run. Nullable; cleared once the run settles.
+    current_session_id: str | None = None
     started_at: datetime = Field(default_factory=utcnow)
     finished_at: datetime | None = None
+
+
+def reconcile_interrupted_runs(engine: Engine) -> int:
+    """On boot, mark runs left ``running``/``cancelling`` by a crash/restart as
+    ``interrupted`` (none are actually executing on a fresh process) so they
+    don't linger as forever-spinning rows. Returns how many were flipped."""
+    marked = 0
+    with session_scope(engine) as db:
+        rows = list(
+            db.exec(
+                select(WorkflowRunRecord).where(
+                    WorkflowRunRecord.status.in_(("running", "cancelling"))
+                )
+            )
+        )
+        for r in rows:
+            r.status = "interrupted"
+            r.current_session_id = None
+            if r.finished_at is None:
+                r.finished_at = utcnow()
+            db.add(r)
+            marked += 1
+        if marked:
+            db.commit()
+    return marked
 
 
 class WorkflowRecord(SQLModel, table=True):

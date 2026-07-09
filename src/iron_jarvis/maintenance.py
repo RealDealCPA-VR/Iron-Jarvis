@@ -55,12 +55,14 @@ def create_backup(
     engine=None,
     include_keys: bool = False,
 ) -> tuple[Path, int]:
-    """Tar the ``.ironjarvis`` home (DB + memory + artifacts + config) to
+    """Tar the ``.ironjarvis`` home (DB + memory + config + secrets + skills) to
     ``out_path``. When an ``engine`` is given, the DB is archived as a CONSISTENT
     ``VACUUM INTO`` snapshot (not the live ``.db``/``-wal``/``-shm``, which a
     concurrent checkpoint could leave internally inconsistent → a malformed restore).
     Excludes the Fernet keys unless ``include_keys``, ALWAYS excludes ``backups/``,
-    and writes the tar atomically (temp+os.replace). Returns ``(out_path, count)``."""
+    ``workspaces/``, and the regenerable media library (``artifacts/`` +
+    ``creative-thumbs/``), and writes the tar atomically (temp+os.replace). Returns
+    ``(out_path, count)``."""
     home = Path(home)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -69,6 +71,11 @@ def create_backup(
     # would multiply the archive ~keep× ; a backup captures DB + secrets + config +
     # memory, not regeneratable session workspaces).
     workspaces_dir = (home / "workspaces").resolve()
+    # The generated-media library (gallery images/video/audio + their thumbnails)
+    # dwarfs the state that actually matters (DB, config, secrets, skills,
+    # terminals.json) — hundreds of MB per snapshot. It's the user's own,
+    # regeneratable/gallery data, so it stays out of the archive.
+    media_dirs = ((home / "artifacts").resolve(), (home / "creative-thumbs").resolve())
     db_path = (home / _DB_NAME).resolve()
     snapshot = _consistent_db_snapshot(engine, home) if (engine is not None and db_path.exists()) else None
 
@@ -84,6 +91,8 @@ def create_backup(
                     continue  # never archive the backups themselves
                 if workspaces_dir in rp.parents:
                     continue  # skip disposable session scratch (unbounded growth)
+                if any(m in rp.parents for m in media_dirs):
+                    continue  # skip regenerable media library (dwarfs the real state)
                 if snapshot is not None and rp == snapshot.resolve():
                     continue  # the snapshot temp is added below, not as itself
                 if snapshot is not None and (

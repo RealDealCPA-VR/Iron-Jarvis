@@ -147,6 +147,85 @@ def _session_view(session) -> dict[str, Any]:
     }
 
 
+def _extract_workflow_json(text: str) -> dict[str, Any]:
+    """Pull the workflow JSON object out of a model reply.
+
+    Prefers a fenced ```json … ``` block; otherwise scans for the FIRST
+    balanced ``{…}`` with a string-aware state machine (so braces or quotes
+    inside step text don't corrupt extraction, and a truncated reply that
+    never closes simply fails). Raises :class:`ValueError` when nothing
+    parseable is found so callers surface the honest error path — never
+    returns a partial/garbled object.
+    """
+    import json as _json
+    import re as _re
+
+    text = text or ""
+    # 1) A fenced code block is the cleanest signal when present.
+    for m in _re.finditer(r"```(?:json)?\s*(.*?)```", text, _re.DOTALL):
+        try:
+            obj = _json.loads(m.group(1).strip())
+        except Exception:  # noqa: BLE001 — fall through to the scanner
+            continue
+        if isinstance(obj, dict):
+            return obj
+    # 2) Scan for the first balanced object, ignoring braces inside strings.
+    start, depth, in_str, escape = -1, 0, False, False
+    for i, ch in enumerate(text):
+        if start < 0:
+            if ch == "{":
+                start, depth = i, 1
+            continue
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+        elif in_str:
+            if ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    obj = _json.loads(text[start : i + 1])
+                    if isinstance(obj, dict):
+                        return obj
+                except Exception:  # noqa: BLE001 — keep scanning for the next one
+                    pass
+                start, in_str, escape = -1, False, False
+    raise ValueError("no parseable workflow JSON object found")
+
+
+def _unique_workflow_name(store, base: str, explicit: bool) -> str:
+    """Normalized, collision-safe workflow name.
+
+    When the caller is REFINING a named workflow (``explicit``), the name is
+    kept so :meth:`WorkflowStore.save` upserts the SAME row. Otherwise a
+    GENERATED name that already exists is suffixed ``-2``/``-3``… so we never
+    silently clobber a saved workflow (the ``generated-workflow`` fallback
+    included).
+    """
+    import re as _re
+
+    name = (
+        _re.sub(r"[^a-zA-Z0-9_-]+", "-", str(base).strip().lower()).strip("-")
+        or "workflow"
+    )
+    if explicit:
+        return name
+    if store.get(name) is None:
+        return name
+    n = 2
+    while store.get(f"{name}-{n}") is not None:
+        n += 1
+    return f"{name}-{n}"
+
+
 def create_app(project_root: str | None = None) -> FastAPI:
     # Headless mode: no human can answer an "ask", so wire a resolver that
     # auto-approves only low-risk orchestration (delegate) and keeps dangerous
@@ -225,6 +304,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 d._persist_config(["active_project_id"])
 
         _rehydrate_step("revalidate_active_project", _revalidate_active_project)
+
+        def _reconcile_workflow_runs() -> None:
+            """A daemon restart kills any in-flight background workflow run —
+            mark stale 'running'/'cancelling' records 'interrupted' so the UI
+            never shows a zombie run as live."""
+            from ..workflows.models import reconcile_interrupted_runs
+
+            reconcile_interrupted_runs(platform.engine)
+
+        _rehydrate_step("reconcile_workflow_runs", _reconcile_workflow_runs)
         if platform.intent is not None:  # reset proposals stranded 'executing' by a crash
             _rehydrate_step("reconcile_proposals", platform.intent.reconcile_executing_proposals)
 
@@ -952,6 +1041,21 @@ def create_app(project_root: str | None = None) -> FastAPI:
             adapter = platform.providers.get(provider, model)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+        # Honest offline hint: when the RESOLVED adapter is the built-in offline
+        # mock (a fresh/SIMULATED install) and no real provider exists to fail
+        # over to, say "connect a model" instead of building a fabricated
+        # workflow (and later blaming the reply). Checking the resolved adapter
+        # — not the provider NAME — keeps an explicitly supplied working adapter
+        # (as tests inject) on the normal path.
+        from ..providers.adapters.mock import MockLLMAdapter
+
+        if isinstance(adapter, MockLLMAdapter):
+            _alt_adapter, _alt_provider = _failover_adapter("mock")
+            if _alt_adapter is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="connect a model on the Connections page to build workflows",
+                )
 
         system = (
             "You design Iron Jarvis workflows. A workflow is a repeatable, ordered "
@@ -976,19 +1080,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
             messages=[LLMMessage(role="user", content=user)],
         )
 
-        # Extract the first JSON object from the reply (tolerant of stray prose).
-        text = resp.text or ""
-        start, depth, obj = text.find("{"), 0, ""
-        if start >= 0:
-            for i in range(start, len(text)):
-                depth += (text[i] == "{") - (text[i] == "}")
-                if depth == 0:
-                    obj = text[start : i + 1]
-                    break
+        # Extract the workflow JSON from the reply (string-aware; tolerant of
+        # stray prose, fenced blocks, and braces inside step text).
         try:
-            wf = _json.loads(obj)
-            raw_steps = wf.get("steps") or []
-        except Exception:  # noqa: BLE001
+            wf = _extract_workflow_json(resp.text or "")
+            raw_steps = wf.get("steps")
+        except Exception:  # noqa: BLE001 — no parseable object (garbled/truncated)
+            raise HTTPException(
+                status_code=422,
+                detail="the model did not return a valid workflow — try rephrasing",
+            )
+        if not isinstance(raw_steps, list) or not raw_steps:
             raise HTTPException(
                 status_code=422,
                 detail="the model did not return a valid workflow — try rephrasing",
@@ -1011,18 +1113,19 @@ def create_app(project_root: str | None = None) -> FastAPI:
         if not steps:
             raise HTTPException(status_code=422, detail="no usable steps were generated")
 
-        import re as _re
+        from ..workflows.store import WorkflowStore
 
-        wf_name = name or wf.get("name") or "generated-workflow"
-        wf_name = (
-            _re.sub(r"[^a-zA-Z0-9_-]+", "-", str(wf_name).strip().lower()).strip("-")
-            or "workflow"
+        # Unique name: refinement (explicit ``name``) upserts the SAME workflow;
+        # a fresh generated name that collides is suffixed -2/-3… (never clobbers
+        # a saved workflow — the "generated-workflow" fallback included).
+        store = WorkflowStore(platform.engine)
+        explicit = bool(name)
+        wf_name = _unique_workflow_name(
+            store, name or wf.get("name") or "generated-workflow", explicit
         )
         wf_desc = str(wf.get("description") or description)[:200]
 
-        from ..workflows.store import WorkflowStore
-
-        WorkflowStore(platform.engine).save(wf_name, steps, description=wf_desc)
+        store.save(wf_name, steps, description=wf_desc)
         return {
             "name": wf_name,
             "description": wf_desc,

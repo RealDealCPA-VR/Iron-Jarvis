@@ -287,4 +287,13 @@ def register(app: FastAPI, d) -> None:
         if note:
             description += f"What this session was doing: {note}\n\n"
         description += f"Terminal transcript:\n```\n{tail}\n```"
-        return await d._build_workflow(description, body.provider, body.model)
+        result = await d._build_workflow(description, body.provider, body.model)
+        # Never save/return an empty definition: if the model couldn't extract
+        # any runnable steps from the transcript, surface an honest upstream
+        # error rather than a hollow workflow.
+        if not (result.get("steps") if isinstance(result, dict) else None):
+            raise HTTPException(
+                status_code=502,
+                detail="could not extract any workflow steps from this terminal session",
+            )
+        return result

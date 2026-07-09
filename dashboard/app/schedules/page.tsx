@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CalendarClock, Plus, Play, Clock, Repeat, Timer } from "lucide-react";
 import { post, del, ApiError } from "@/lib/api";
 import { usePolledApi, useApi } from "@/lib/useApi";
@@ -76,6 +76,21 @@ export default function SchedulesPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
+
+  // Deep-link from the workflow editor's "Schedule…" button: ?workflow=<name>
+  // prefills the create form for that workflow. Read window.location to avoid a
+  // useSearchParams Suspense boundary under static export.
+  useEffect(() => {
+    try {
+      const wf = new URLSearchParams(window.location.search).get("workflow");
+      if (wf) {
+        setKind("workflow");
+        setWorkflowName(wf);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const isOnce = repeat === ONCE;
   const isAdvanced = repeat === ADVANCED;

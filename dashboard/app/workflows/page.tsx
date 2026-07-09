@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   History,
   MessageSquare,
@@ -9,6 +9,7 @@ import {
   Loader2,
   Bot,
   User,
+  ChevronRight,
 } from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
@@ -97,11 +98,31 @@ function WorkflowBuilderChat() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  // The workflow currently loaded in the editor (name + steps). Sent back on a
+  // follow-up so /workflows/generate REFINES it instead of minting a new one.
+  const currentRef = useRef<{ name: string; steps: WfStep[] } | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, busy]);
+
+  // Track what the canvas has loaded (via Load, terminal handoff, or a prior
+  // generate) so refinements carry the current workflow as context.
+  useEffect(() => {
+    const onChanged = (e: Event) => {
+      const d = (e as CustomEvent).detail as
+        | { name?: string; steps?: WfStep[] }
+        | undefined;
+      if (d?.name)
+        currentRef.current = {
+          name: d.name,
+          steps: Array.isArray(d.steps) ? d.steps : [],
+        };
+    };
+    window.addEventListener("ij:workflow-changed", onChanged);
+    return () => window.removeEventListener("ij:workflow-changed", onChanged);
+  }, []);
 
   async function send(text: string) {
     const msg = text.trim();
@@ -110,10 +131,15 @@ function WorkflowBuilderChat() {
     setMessages((m) => [...m, { role: "user", content: msg }]);
     setBusy(true);
     try {
+      const cur = currentRef.current;
       const res = await post<{ name: string; description: string; steps: WfStep[]; reply: string }>(
         "/workflows/generate",
-        { description: msg },
+        // On a follow-up, hand the daemon the loaded workflow so it refines it.
+        cur
+          ? { description: msg, current: cur.steps, name: cur.name }
+          : { description: msg },
       );
+      currentRef.current = { name: res.name, steps: res.steps };
       // Load the generated steps into the editor above (WorkflowCanvas listens
       // for this event and rebuilds its graph — the same code path as "Load").
       window.dispatchEvent(
@@ -232,14 +258,44 @@ function WorkflowBuilderChat() {
   );
 }
 
-/** Count the sessions a run spawned (`session_ids_json` is a JSON array string). */
+type StepDef = { name?: string; agent?: string };
+type StepOut = {
+  session_id?: string | null;
+  status?: string;
+  summary?: string;
+  tool?: string | null;
+};
+
+/** The ordered step definitions the run was created with. */
+function parseStepDefs(r: WorkflowRun): StepDef[] {
+  try {
+    const p = JSON.parse(String((r as { steps_json?: string }).steps_json ?? "[]"));
+    return Array.isArray(p) ? p : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The per-step outputs the engine wrote as it ran (stepName → result). */
+function parseStepOuts(r: WorkflowRun): Record<string, StepOut> {
+  try {
+    const p = JSON.parse(String((r as { outputs_json?: string }).outputs_json ?? "{}"));
+    return p && typeof p === "object" && !Array.isArray(p) ? p : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Count the sessions a run spawned — from `session_ids_json`, falling back to
+ *  the per-step outputs (each completed step carries its session id). */
 function sessionCount(r: WorkflowRun): number {
   try {
     const arr = JSON.parse(String(r.session_ids_json ?? "[]"));
-    return Array.isArray(arr) ? arr.length : 0;
+    if (Array.isArray(arr) && arr.length) return arr.length;
   } catch {
-    return 0;
+    /* fall through */
   }
+  return Object.values(parseStepOuts(r)).filter((o) => o?.session_id).length;
 }
 
 /** Best-available timestamp (the daemon record uses `started_at`). */
@@ -252,9 +308,11 @@ function runTimestamp(r: WorkflowRun): string | null {
 }
 
 function RunHistory() {
+  // Newest-first, capped server-side.
   const { data, error, loading, reload } = useApi<{ runs: WorkflowRun[] }>(
-    "/workflows/runs",
+    "/workflows/runs?limit=50",
   );
+  const [expanded, setExpanded] = useState<string | null>(null);
 
   // Refetch the moment a workflow finishes (the engine emits workflow.completed).
   const { events } = useEvents(50);
@@ -293,6 +351,7 @@ function RunHistory() {
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                <th className="px-2 py-2.5 font-medium" />
                 <th className="px-2 py-2.5 font-medium">Workflow</th>
                 <th className="px-2 py-2.5 font-medium">Status</th>
                 <th className="px-2 py-2.5 font-medium">Sessions</th>
@@ -303,24 +362,93 @@ function RunHistory() {
               {ordered.map((r, i) => {
                 const ts = runTimestamp(r);
                 const n = sessionCount(r);
+                const key = String(r.id ?? `${r.workflow_name}-${i}`);
+                const defs = parseStepDefs(r);
+                const outs = parseStepOuts(r);
+                const isOpen = expanded === key;
+                const canExpand = defs.length > 0;
                 return (
-                  <tr
-                    key={r.id ?? `${r.workflow_name}-${i}`}
-                    className="border-b border-white/[0.04] last:border-0 hover:bg-white/[0.02]"
-                  >
-                    <td className="px-2 py-2.5 text-zinc-100">
-                      {r.workflow_name || "—"}
-                    </td>
-                    <td className="px-2 py-2.5">
-                      <Badge value={r.status || "unknown"} />
-                    </td>
-                    <td className="px-2 py-2.5 text-zinc-400">
-                      {n} session{n === 1 ? "" : "s"}
-                    </td>
-                    <td className="px-2 py-2.5 text-zinc-500">
-                      {ts ? timeAgo(ts) : "—"}
-                    </td>
-                  </tr>
+                  <Fragment key={key}>
+                    <tr
+                      onClick={() =>
+                        canExpand && setExpanded(isOpen ? null : key)
+                      }
+                      className={`border-b border-white/[0.04] last:border-0 hover:bg-white/[0.02] ${
+                        canExpand ? "cursor-pointer" : ""
+                      }`}
+                    >
+                      <td className="px-2 py-2.5 text-zinc-500">
+                        {canExpand && (
+                          <ChevronRight
+                            size={14}
+                            className={`transition-transform ${isOpen ? "rotate-90" : ""}`}
+                          />
+                        )}
+                      </td>
+                      <td className="px-2 py-2.5 text-zinc-100">
+                        {r.workflow_name || "—"}
+                      </td>
+                      <td className="px-2 py-2.5">
+                        <Badge value={r.status || "unknown"} />
+                      </td>
+                      <td className="px-2 py-2.5 text-zinc-400">
+                        {n} session{n === 1 ? "" : "s"}
+                      </td>
+                      <td className="px-2 py-2.5 text-zinc-500">
+                        {ts ? timeAgo(ts) : "—"}
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr className="border-b border-white/[0.04] bg-ink-950/30">
+                        <td colSpan={5} className="px-3 py-2.5">
+                          {r.status === "interrupted" && (
+                            <div className="mb-2 text-[12px] text-amber-300/80">
+                              This run was interrupted (the daemon restarted
+                              mid-run) — steps below reflect how far it got.
+                            </div>
+                          )}
+                          <ol className="space-y-1.5">
+                            {defs.map((d, di) => {
+                              const nm = d.name?.trim() || `step-${di + 1}`;
+                              const o = outs[nm];
+                              const st = o?.status ?? "pending";
+                              const failed = st === "failed";
+                              return (
+                                <li
+                                  key={`${nm}-${di}`}
+                                  className="rounded-lg border border-white/[0.05] bg-white/[0.02] px-2.5 py-2"
+                                >
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white/[0.05] text-[10px] font-semibold text-zinc-400">
+                                      {di + 1}
+                                    </span>
+                                    <span className="text-[13px] font-medium text-zinc-100">
+                                      {nm}
+                                    </span>
+                                    {d.agent && (
+                                      <span className="text-[11px] text-zinc-500">
+                                        · {d.agent}
+                                      </span>
+                                    )}
+                                    <Badge value={st} />
+                                  </div>
+                                  {o?.summary && (
+                                    <p
+                                      className={`mt-1.5 whitespace-pre-wrap text-[12px] leading-relaxed ${
+                                        failed ? "text-rose-200/90" : "text-zinc-400"
+                                      }`}
+                                    >
+                                      {o.summary}
+                                    </p>
+                                  )}
+                                </li>
+                              );
+                            })}
+                          </ol>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>
