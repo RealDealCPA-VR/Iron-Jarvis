@@ -6,6 +6,7 @@ Start at the repo root [README](../README.md) for user documentation.
 
 | File | What it is |
 |---|---|
+| [REFLEX.md](REFLEX.md) | Reflexes / the Ambient Operator — webhooks & messages that run workflows, remote agents, or sessions, plus the phone command grammar |
 | [SIGNING.md](SIGNING.md) | What code-signing the Windows installer takes (options, costs, CI wiring) |
 
 **Build-time plans and audit reports** (kept for history — not maintained):

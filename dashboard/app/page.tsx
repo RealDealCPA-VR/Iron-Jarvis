@@ -140,6 +140,15 @@ const QUICK_ACTIONS: {
 /** Event types that describe an agent starting or finishing a run. */
 const LIVE_EVENT_TYPES = new Set(["agent.started", "agent.completed"]);
 
+/** Just the reflex-rule fields the Overview needs (see GET /reflex/rules). */
+type ReflexRuleLite = {
+  id: string;
+  name: string;
+  source: string;
+  action: string;
+  enabled: boolean;
+};
+
 /** The truthful state of a live-activity row. */
 type LiveState = "running" | "completed" | "failed";
 
@@ -239,6 +248,9 @@ export default function OverviewPage() {
 
   const router = useRouter();
   const templates = useApi<{ templates: Template[] }>("/templates");
+  // Ambient Operator: the enabled reflex rules (signal→action bindings) so the
+  // Overview shows what Iron Jarvis will do on its own, and recent fires.
+  const reflexes = usePolledApi<{ rules: ReflexRuleLite[] }>("/reflex/rules", 15000);
   const { events, connected } = useEvents(40);
 
   // Respect the Sidebar's Simple/Advanced mode (seeded Simple for stable SSR,
@@ -337,6 +349,17 @@ export default function OverviewPage() {
     }
     return rows;
   }, [events]);
+
+  // Ambient Operator surfacing: enabled reflexes + their recent fires (from the
+  // live event stream — reflex.fired carries {rule, action, ok, detail}).
+  const activeReflexes = useMemo(
+    () => (reflexes.data?.rules ?? []).filter((r) => r.enabled).length,
+    [reflexes.data],
+  );
+  const reflexFires = useMemo(
+    () => events.filter((e) => e.type === "reflex.fired").slice(0, 4),
+    [events],
+  );
 
   const templateList = templates.data?.templates ?? [];
 
@@ -563,6 +586,64 @@ export default function OverviewPage() {
               );
             })}
           </div>
+        </Card>
+      </Reveal>
+
+      {/* Ambient operator — the reflexes that act on their own + recent fires. */}
+      <Reveal>
+        <Card
+          title="Ambient operator"
+          icon={<Zap size={15} />}
+          right={
+            <Link
+              href="/reflex"
+              className="text-xs text-accent transition-colors hover:text-accent/80"
+            >
+              Manage →
+            </Link>
+          }
+        >
+          <Link
+            href="/reflex"
+            className="flex items-center justify-between rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2 transition-colors hover:border-accent/25 hover:bg-accent/[0.05]"
+          >
+            <span className="text-sm text-zinc-300">
+              {activeReflexes > 0
+                ? `${activeReflexes} active ${activeReflexes === 1 ? "reflex" : "reflexes"}`
+                : "No reflexes yet"}
+            </span>
+            <span className="text-xs text-zinc-500">
+              {activeReflexes > 0
+                ? "webhooks & messages that run work on their own"
+                : "Set one up →"}
+            </span>
+          </Link>
+
+          {reflexFires.length > 0 && (
+            <ul className="mt-3 space-y-1.5">
+              {reflexFires.map((e) => {
+                const p = e.payload || {};
+                const ok = p.ok !== false;
+                return (
+                  <li
+                    key={e.id}
+                    className="flex items-center gap-2.5 rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2 text-xs"
+                  >
+                    <StatusDot status={ok ? "completed" : "failed"} />
+                    <span className="shrink-0 font-medium text-zinc-200">
+                      {String(p.rule ?? "reflex")}
+                    </span>
+                    <span className="truncate text-zinc-500">
+                      {ok ? "fired" : "failed"} → {String(p.action ?? p.detail ?? "action")}
+                    </span>
+                    <span className="ml-auto shrink-0 tabular-nums text-[11px] text-zinc-600">
+                      {clockTime(e.ts)}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </Card>
       </Reveal>
 
