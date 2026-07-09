@@ -264,10 +264,22 @@ def register(app: FastAPI, d) -> None:
         if armed:
             from ...tools.base import ToolContext
 
-            scratch = d.platform.config.home / "uploads"
-            scratch.mkdir(parents=True, exist_ok=True)
+            # Run the tools IN the grounded project's folder when it has one, so
+            # read_file / list_files / edit_file / write_document reach the
+            # user's REAL files (file_search returns their absolute paths, which
+            # then resolve inside this workspace). Without this the tools confine
+            # to a throwaway scratch dir and every read of a project file fails
+            # with "escapes the session workspace". Confinement still holds — the
+            # tools cannot escape the chosen folder.
+            tool_ws = d.platform.config.home / "uploads"
+            in_project_folder = False
+            if resolved_proj is not None and (resolved_proj.root or "").strip():
+                proot = Path(resolved_proj.root)
+                if proot.is_dir():
+                    tool_ws, in_project_folder = proot, True
+            tool_ws.mkdir(parents=True, exist_ok=True)
             ctx = ToolContext(
-                workspace=scratch, session_id="chat", agent_run_id="chat",
+                workspace=tool_ws, session_id="chat", agent_run_id="chat",
                 config=d.platform.config, event_bus=d.platform.event_bus,
                 engine=d.platform.engine,
             )
@@ -275,6 +287,13 @@ def register(app: FastAPI, d) -> None:
                 "\n\n# Tools\nThe user armed these tools for this chat: "
                 + ", ".join(armed)
                 + ". Use them when they help; answer directly when they don't."
+                + (
+                    f"\nYour file tools operate INSIDE the project folder ({resolved_proj.root}); "
+                    "read, edit, and create files there directly, and use the absolute paths "
+                    "that file_search returns."
+                    if in_project_folder
+                    else ""
+                )
             )
         overrides = {t: "allow" for t in armed}
         # Routing: an explicit body choice always wins; otherwise fall back to

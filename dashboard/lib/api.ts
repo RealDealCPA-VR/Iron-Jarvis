@@ -142,7 +142,11 @@ export async function api<T>(path: string, init?: ApiInit): Promise<T> {
 
 export const get = <T>(path: string, opts?: { timeoutMs?: number }) => api<T>(path, opts);
 
-export const post = <T>(path: string, body?: unknown, opts?: { timeoutMs?: number }) =>
+export const post = <T>(
+  path: string,
+  body?: unknown,
+  opts?: { timeoutMs?: number; signal?: AbortSignal },
+) =>
   api<T>(path, {
     method: "POST",
     body: body ? JSON.stringify(body) : undefined,

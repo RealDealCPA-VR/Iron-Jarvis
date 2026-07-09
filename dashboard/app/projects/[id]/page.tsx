@@ -806,6 +806,7 @@ export default function ProjectWorkspacePage({
                         projectId={id}
                         defaultProvider={project.default_provider}
                         defaultModel={project.default_model}
+                        hasRoot={!!project.root}
                       />
                     )}
                     {tab === "tasks" && <ProjectTasks projectId={id} hasRoot={!!project.root} />}

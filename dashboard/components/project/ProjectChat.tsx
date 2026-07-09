@@ -26,6 +26,7 @@ import {
   Paperclip,
   Plus,
   Send,
+  Square,
   Trash2,
   User,
   X,
@@ -311,10 +312,14 @@ export function ProjectChat({
   projectId,
   defaultProvider,
   defaultModel,
+  hasRoot = false,
 }: {
   projectId: string;
   defaultProvider?: string;
   defaultModel?: string;
+  /** True when the project has a folder — the chat then arms file tools so the
+   *  model can read, edit, and create files directly in that folder. */
+  hasRoot?: boolean;
 }) {
   const [threads, setThreads] = useState<ThreadRow[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
@@ -329,6 +334,8 @@ export function ProjectChat({
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // The in-flight request's aborter — a Stop button calls abort() to cancel.
+  const abortRef = useRef<AbortController | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // Bumped on New chat / thread switch so an in-flight reply from the OLD thread
   // can't land in the fresh one.
@@ -401,6 +408,8 @@ export function ProjectChat({
 
   function newChat() {
     chatGenRef.current += 1;
+    abortRef.current?.abort(); // cancel any in-flight reply
+    setBusy(false);
     setMessages([]);
     setThreadId(null);
     setInput("");
@@ -414,6 +423,7 @@ export function ProjectChat({
   async function openThread(id: string) {
     if (id === threadId) return;
     chatGenRef.current += 1;
+    abortRef.current?.abort(); // cancel any in-flight reply
     setBusy(false);
     setError(null);
     setOffline(false);
@@ -448,6 +458,8 @@ export function ProjectChat({
     setBusy(true);
     setError(null);
     setOffline(false);
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const body: Record<string, unknown> = {
         messages: history.map(({ role, content }) => ({ role, content })),
@@ -455,8 +467,24 @@ export function ProjectChat({
         ...(defaultProvider ? { provider: defaultProvider } : {}),
         ...(defaultModel ? { model: defaultModel } : {}),
         ...(atts.length ? { attachments: atts.map((a) => a.path) } : {}),
+        // A project with a folder gets file tools, so the model can find, read,
+        // EXTRACT (read_document handles PDF/Word/Excel/PowerPoint), and GENERATE
+        // files directly in the folder (run there server-side). Capped at 6 —
+        // the tool loop enforces it — covering search + text/doc read + write.
+        ...(hasRoot
+          ? {
+              tools: [
+                "file_search",
+                "read_document",
+                "read_file",
+                "list_files",
+                "write_document",
+                "write_file",
+              ],
+            }
+          : {}),
       };
-      const res = await post<ChatResponse>("/chat", body);
+      const res = await post<ChatResponse>("/chat", body, { signal: controller.signal });
       if (chatGenRef.current !== gen) return; // switched away mid-flight
       const reply = (res.reply ?? "").trim() || "(no response)";
       const full: ChatMessage[] = [...history, { role: "assistant", content: reply }];
@@ -464,11 +492,20 @@ export function ProjectChat({
       queueSave(full);
     } catch (e) {
       if (chatGenRef.current !== gen) return;
+      // A user-initiated Stop surfaces as an aborted signal — that's a clean
+      // cancel, not an error/offline. Just keep the conversation as-is.
+      if (controller.signal.aborted) return;
       if (e instanceof ApiError && e.status === 0) setOffline(true);
       else setError(e instanceof ApiError ? e.message : String(e));
     } finally {
+      if (abortRef.current === controller) abortRef.current = null;
       if (chatGenRef.current === gen) setBusy(false);
     }
+  }
+
+  /** Stop the in-flight reply — aborts the request and hands control back. */
+  function stop() {
+    abortRef.current?.abort();
   }
 
   function send() {
@@ -586,7 +623,7 @@ export function ProjectChat({
                   <button
                     type="button"
                     onClick={() => setPendingDelete(t.id)}
-                    className="shrink-0 rounded p-1 text-zinc-600 opacity-0 transition-opacity hover:text-rose-300 group-hover:opacity-100"
+                    className="shrink-0 rounded p-1 text-zinc-500 transition-colors hover:text-rose-300"
                     title="Delete conversation"
                   >
                     <Trash2 size={12} />
@@ -669,15 +706,27 @@ export function ProjectChat({
               placeholder="Message this project…"
               className="field min-w-0 flex-1 resize-none text-sm"
             />
-            <button
-              type="button"
-              onClick={send}
-              disabled={busy || !input.trim()}
-              className="btn-accent shrink-0"
-              aria-label="Send"
-            >
-              <Send size={14} />
-            </button>
+            {busy ? (
+              <button
+                type="button"
+                onClick={stop}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-500/[0.08] px-4 py-2.5 text-xs font-medium text-rose-300 transition-colors hover:bg-rose-500/[0.16]"
+                aria-label="Stop generating"
+                title="Stop"
+              >
+                <Square size={13} className="fill-current" /> Stop
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={send}
+                disabled={!input.trim()}
+                className="btn-accent shrink-0"
+                aria-label="Send"
+              >
+                <Send size={14} />
+              </button>
+            )}
           </div>
         </div>
       </div>
