@@ -23,6 +23,7 @@ import { WorkingMemory } from "./WorkingMemory";
 import { Lessons } from "./Lessons";
 import { LongTerm } from "./LongTerm";
 import MemoryGraph from "./MemoryGraph";
+import { RecallSearch } from "./RecallSearch";
 
 export type MemoryScope = "working" | "lessons" | "longterm";
 export type MemoryView = "list" | "graph";
@@ -149,6 +150,10 @@ function ScopedMemory({ initialScope }: { initialScope: MemoryScope }) {
 
   return (
     <>
+      {/* Recall spans every store, so it sits ABOVE the scope tabs and shows in
+          both list and graph views — "search everything" regardless of scope. */}
+      <RecallSearch />
+
       <Reveal>
         <div>
           <div className="flex flex-wrap items-center justify-between gap-3">

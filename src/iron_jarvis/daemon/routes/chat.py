@@ -200,6 +200,28 @@ def register(app: FastAPI, d) -> None:
             except Exception:  # noqa: BLE001 — never block a chat turn
                 pass
 
+        # MEMORY FABRIC: fold in the most relevant snippets from every store
+        # (files, notes, memory graph, lessons, past sessions — project
+        # knowledge is already injected above when a project is set) so a plain
+        # chat turn is grounded in what the user knows, without arming a tool.
+        fabric = getattr(d.platform, "fabric", None)
+        if fabric is not None:
+            last_user = next(
+                (m.content or "" for m in reversed(body.messages) if m.role == "user"),
+                "",
+            )
+            if last_user.strip():
+                try:
+                    grounding = fabric.ground(
+                        last_user,
+                        project_id=pid,
+                        sources=["files", "notes", "memory", "lessons", "sessions"],
+                    )
+                    if grounding:
+                        system += grounding
+                except Exception:  # noqa: BLE001 — retrieval must never break a turn
+                    pass
+
         # Attachments: text formats extracted inline; images go to VISION.
         images: list[dict[str, str]] = []
         attach_block = ""

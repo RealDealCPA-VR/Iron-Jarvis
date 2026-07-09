@@ -129,6 +129,34 @@ def register(app: FastAPI, d) -> None:
             ]
         }
 
+    @app.get("/memory/recall")
+    def memory_recall(
+        q: str,
+        k: int = 8,
+        project_id: str | None = None,
+        sources: str | None = None,
+    ) -> dict[str, Any]:
+        """Federated recall across EVERY memory store via the Memory Fabric:
+        files, notes (LTM), the memory graph, a project's knowledge, lessons,
+        and past sessions — ranked + de-duplicated. ``sources`` optionally filters
+        by a comma-separated subset (files,notes,memory,knowledge,lessons,sessions)."""
+        fabric = getattr(d.platform, "fabric", None)
+        if fabric is None:
+            raise HTTPException(status_code=503, detail="memory fabric unavailable")
+        want = [s.strip() for s in (sources or "").split(",") if s.strip()] or None
+        hits = fabric.recall(
+            q, k=max(1, min(int(k), 50)), project_id=(project_id or None), sources=want
+        )
+        by_source: dict[str, int] = {}
+        for h in hits:
+            by_source[h.source] = by_source.get(h.source, 0) + 1
+        return {
+            "results": [h.as_dict() for h in hits],
+            "by_source": by_source,
+            "count": len(hits),
+            "query": q,
+        }
+
     # NOTE: /memory/graph* must register BEFORE /memory/{layer}/{key}.
     @app.get("/memory/graph")
     def memory_graph(threshold: float = 0.45) -> dict[str, Any]:

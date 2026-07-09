@@ -25,6 +25,7 @@ from iron_jarvis.memory.embeddings import (
     OllamaEmbedder,
     build_embedder,
 )
+from iron_jarvis.memory.fabric import MemoryFabric
 from iron_jarvis.memory.recall import recall_tools
 from iron_jarvis.tools.base import ToolContext
 
@@ -283,16 +284,23 @@ async def test_recall_tool_blends_files_and_ltm(tmp_path: Path, engine):
     ltm.register(brain)
     brain.append("Operating System Notes", "Local-first AI operating system design")
 
-    tool = recall_tools(svc, ltm)[0]
+    # The recall tool now federates every store through the Memory Fabric.
+    fabric = MemoryFabric(filesearch=svc, ltm=ltm)
+    tool = recall_tools(fabric)[0]
     assert tool.name == "recall"
     res = await tool.execute({"query": "local first operating system", "k": 3}, _ctx(engine, tmp_path))
     assert res.ok
     assert res.data["count"] >= 1
-    # File hits present (readme.md) and a long-term-memory hit (brain) present.
+    # Files (readme.md) and long-term memory (brain) both surface — the Fabric
+    # tags them "files" and "notes" respectively.
     sources = {r["source"] for r in res.data["results"]}
-    assert "file" in sources
-    assert "brain" in sources
-    assert any("readme.md" in (r.get("ref") or "") for r in res.data["file_results"])
+    assert "files" in sources
+    assert "notes" in sources
+    assert any(
+        "readme.md" in (r.get("ref") or "")
+        for r in res.data["results"]
+        if r["source"] == "files"
+    )
 
 
 async def test_recall_tool_survives_no_ltm(tmp_path: Path, engine):
@@ -300,10 +308,12 @@ async def test_recall_tool_survives_no_ltm(tmp_path: Path, engine):
     config = load_config(tmp_path)
     emb = build_embedder(config, engine)
     svc = FileSearchService([root], embedder=emb)
-    tool = recall_tools(svc, None)[0]
+    fabric = MemoryFabric(filesearch=svc, ltm=None)
+    tool = recall_tools(fabric)[0]
     res = await tool.execute({"query": "operating system"}, _ctx(engine, tmp_path))
     assert res.ok
-    assert res.data["ltm_results"] == []
+    # With no LTM wired, no "notes" hits can surface.
+    assert all(r["source"] != "notes" for r in res.data["results"])
 
 
 # --- swarm-review fixes: strong probe + URL normalization -------------------

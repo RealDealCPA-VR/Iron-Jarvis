@@ -65,6 +65,7 @@ from .ltm import (
 )
 from .ltm import sources as _ltm_sources  # noqa: F401  (registers LTMSourceRecord)
 from .memory.embeddings import build_embedder
+from .memory.fabric import MemoryFabric
 from .memory.recall import recall_tools
 from .scheduling import Scheduler
 from .scheduling import models as _sched_models  # noqa: F401
@@ -150,6 +151,10 @@ class Platform:
     #: the platform so later consumers (memory graph, runtime-added LTM sources)
     #: use the SAME one instead of accidentally falling back to the mock.
     embedder: "object | None" = None
+    #: The Memory Fabric — one federated ``recall()`` across every store (files,
+    #: notes, memory graph, project knowledge, lessons, sessions). Powers the
+    #: ``recall`` tool and the auto-grounding folded into chat + agent runs.
+    fabric: "MemoryFabric | None" = None
 
 
 def build_platform(
@@ -448,10 +453,9 @@ def build_platform(
     for tool in ltm_tools(ltm):
         registry.register(tool)
 
-    # Total Recall: one semantic "remember anything" tool over the SAME embedder,
-    # spanning the indexed file roots + long-term memory.
-    for tool in recall_tools(filesearch, ltm):
-        registry.register(tool)
+    # The ``recall`` tool is registered further down, once the learning engine
+    # exists — it federates EVERY store through the Memory Fabric, not just
+    # files + long-term memory (see the MemoryFabric build after LearningEngine).
 
     # Documents: read/write PDF, Word, Excel, PowerPoint, CSV, Markdown, text
     # (+ markdown-aware RICH creation and cross-format conversion).
@@ -503,6 +507,21 @@ def build_platform(
     for tool in learning_tools(learning):
         registry.register(tool)
 
+    # Memory Fabric: ONE federated recall over every store (files, notes, memory
+    # graph, project knowledge, lessons, past sessions), sharing the same
+    # embedder. Powers the ``recall`` tool below AND the auto-grounding folded
+    # into chat + agent runs — so every surface remembers everything at once.
+    fabric = MemoryFabric(
+        filesearch=filesearch,
+        ltm=ltm,
+        memory=memory,
+        learning=learning,
+        embedder=embedder,
+        engine=engine,
+    )
+    for tool in recall_tools(fabric):
+        registry.register(tool)
+
     # MCP auto-approve: a server the user explicitly marked trusted lets the
     # headless daemon run its tools without an interactive prompt, so autonomous
     # agents (and the Reflex Loop) can actually USE it — not just chat, which
@@ -547,6 +566,7 @@ def build_platform(
         computeruse=computeruse,
         terminals=terminals,
         embedder=embedder,
+        fabric=fabric,
     )
 
     # Phase 6: the delegate tool needs the assembled platform.

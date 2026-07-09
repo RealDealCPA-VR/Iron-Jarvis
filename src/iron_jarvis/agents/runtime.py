@@ -186,6 +186,18 @@ class AgentRuntime:
             )
         except Exception:  # noqa: BLE001
             pass
+        # MEMORY FABRIC: fold in the most relevant snippets from every store
+        # (files, notes, memory graph, this project's knowledge, lessons, past
+        # sessions) so the run starts already grounded in what the user knows —
+        # no explicit `recall` call needed. Bounded, best-effort, never blocks.
+        fabric = getattr(self.p, "fabric", None)
+        if fabric is not None:
+            try:
+                grounding = fabric.ground(session.task, project_id=session.project_id)
+                if grounding:
+                    system_prompt += grounding
+            except Exception:  # noqa: BLE001 — grounding must never break a run
+                pass
 
         for step in range(self.p.config.max_agent_steps):
             route = await self.p.router.complete(
