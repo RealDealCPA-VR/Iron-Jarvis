@@ -9,9 +9,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { Rnd } from "react-rnd";
 import {
+  FileText,
+  FolderTree,
   LayoutGrid,
   Loader2,
   PanelLeftOpen,
+  PanelRightClose,
   Plus,
   SquareTerminal,
 } from "lucide-react";
@@ -21,6 +24,7 @@ import { Card, OfflineHint, ErrorNote, Spinner, ConfirmButton } from "@/componen
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
+import { FilesPanel } from "@/components/terminal/FilesPanel";
 
 // xterm only runs in the browser — never during SSR / `next build`.
 const TerminalPane = dynamic(
@@ -72,6 +76,10 @@ export default function TerminalsPage() {
   const [busy, setBusy] = useState(false);
 
   const [treeCollapsed, setTreeCollapsed] = useState(false);
+  // Right-column tab: "folders" (the picker) or "files" (live folder contents).
+  const [treeTab, setTreeTab] = useState<"folders" | "files">("folders");
+  // Once the user manually picks a tab, stop auto-defaulting it (session-sticky).
+  const tabTouched = useRef(false);
 
   // Per-terminal free-form layout (position + size), persisted to localStorage.
   const [layout, setLayout] = useState<Record<string, Rect>>({});
@@ -153,6 +161,23 @@ export default function TerminalsPage() {
     } catch {
       /* private mode */
     }
+  }
+
+  // The folder the Files tab watches: the focused terminal's cwd, else the
+  // folder picked in the tree.
+  const focusedFolder =
+    terminals.find((t) => t.id === focusedId)?.cwd ?? selectedPath ?? null;
+
+  // Default to Files when working in a folder, Folders otherwise — until the
+  // user manually chooses a tab, after which their choice sticks for the session.
+  useEffect(() => {
+    if (tabTouched.current) return;
+    setTreeTab(focusedFolder ? "files" : "folders");
+  }, [focusedFolder]);
+
+  function chooseTab(tab: "folders" | "files") {
+    tabTouched.current = true;
+    setTreeTab(tab);
   }
 
   // Focus + raise a pane to the front of the stack.
@@ -500,20 +525,66 @@ export default function TerminalsPage() {
               {treeCollapsed ? (
                 <button
                   onClick={() => changeTreeCollapsed(false)}
-                  title="Show directory"
-                  aria-label="Show directory"
+                  title="Show panel"
+                  aria-label="Show panel"
                   className="flex w-full items-center justify-center gap-2 rounded-2xl border border-white/[0.06] bg-ink-850/60 py-2 text-[12px] text-zinc-400 transition-colors hover:border-accent/30 hover:text-accent-soft lg:h-full lg:flex-col lg:py-4"
                 >
                   <PanelLeftOpen size={16} />
-                  <span className="lg:hidden">Show directory</span>
+                  <span className="lg:hidden">Show panel</span>
                 </button>
               ) : (
-                <DirectoryTree
-                  selectedPath={selectedPath}
-                  onSelect={setSelectedPath}
-                  onOpenTerminal={(p) => addTerminal(p)}
-                  onCollapse={() => changeTreeCollapsed(true)}
-                />
+                <div className="flex h-full flex-col gap-2">
+                  {/* Tab bar: Folders (picker) / Files (live folder contents). */}
+                  <div className="flex shrink-0 items-center gap-1 rounded-xl border border-white/[0.06] bg-ink-850/60 p-1">
+                    <button
+                      type="button"
+                      onClick={() => chooseTab("folders")}
+                      className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-[12px] font-medium transition-colors ${
+                        treeTab === "folders"
+                          ? "bg-accent/[0.12] text-accent-soft ring-1 ring-inset ring-accent/30"
+                          : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
+                      }`}
+                    >
+                      <FolderTree size={13} /> Folders
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => chooseTab("files")}
+                      className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-[12px] font-medium transition-colors ${
+                        treeTab === "files"
+                          ? "bg-accent/[0.12] text-accent-soft ring-1 ring-inset ring-accent/30"
+                          : "text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-200"
+                      }`}
+                    >
+                      <FileText size={13} /> Files
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => changeTreeCollapsed(true)}
+                      title="Collapse panel"
+                      aria-label="Collapse panel"
+                      className="ml-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+                    >
+                      <PanelRightClose size={14} />
+                    </button>
+                  </div>
+
+                  <div className="min-h-0 flex-1">
+                    {treeTab === "folders" ? (
+                      <DirectoryTree
+                        selectedPath={selectedPath}
+                        onSelect={setSelectedPath}
+                        onOpenTerminal={(p) => addTerminal(p)}
+                        onCollapse={() => changeTreeCollapsed(true)}
+                      />
+                    ) : (
+                      <FilesPanel
+                        folder={focusedFolder}
+                        onOpenTerminal={(p) => addTerminal(p)}
+                      />
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           </div>

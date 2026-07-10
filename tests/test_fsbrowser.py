@@ -12,6 +12,7 @@ from iron_jarvis.fsbrowser import (
     drives,
     home,
     list_dir,
+    list_files_recursive,
 )
 
 
@@ -71,6 +72,72 @@ def test_list_dir_marks_git_project(tree: Path) -> None:
     assert by_name["gitproj"]["size"] is None
     # A plain dir is not a project.
     assert by_name["plain"]["is_project"] is None
+
+
+# -- list_files_recursive ---------------------------------------------------
+
+
+def test_list_files_recursive_newest_first_and_recurses(tmp_path: Path) -> None:
+    import time
+
+    (tmp_path / "a.txt").write_text("a", encoding="utf-8")
+    time.sleep(0.02)
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "b.py").write_text("b", encoding="utf-8")
+    time.sleep(0.02)
+    (tmp_path / "c.md").write_text("c", encoding="utf-8")  # newest
+
+    result = list_files_recursive(str(tmp_path))
+    rels = [f["rel"] for f in result["files"]]
+    # Newest first, and nested files are included with a forward-slash rel path.
+    assert rels[0] == "c.md"
+    assert "sub/b.py" in rels
+    assert "a.txt" in rels
+    # Every file carries size + epoch mtime.
+    assert all("size" in f and "mtime" in f and f["path"] for f in result["files"])
+
+
+def test_list_files_recursive_skips_noise_dirs(tmp_path: Path) -> None:
+    (tmp_path / "keep.txt").write_text("k", encoding="utf-8")
+    for noise in ("node_modules", ".git", "__pycache__"):
+        d = tmp_path / noise
+        d.mkdir()
+        (d / "junk").write_text("x", encoding="utf-8")
+
+    rels = [f["rel"] for f in list_files_recursive(str(tmp_path))["files"]]
+    assert "keep.txt" in rels
+    assert not any(
+        n in r for r in rels for n in ("node_modules", ".git", "__pycache__")
+    )
+
+
+def test_list_files_recursive_missing_and_not_a_dir(tmp_path: Path) -> None:
+    f = tmp_path / "f.txt"
+    f.write_text("x", encoding="utf-8")
+    with pytest.raises(FileNotFoundError):
+        list_files_recursive(str(tmp_path / "nope"))
+    with pytest.raises(NotADirectoryError):
+        list_files_recursive(str(f))
+
+
+def test_fs_files_endpoint(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.daemon.app import create_app
+
+    (tmp_path / "hello.txt").write_text("hi", encoding="utf-8")
+    with TestClient(create_app(str(tmp_path))) as client:
+        r = client.get("/fs/files", params={"path": str(tmp_path)})
+        assert r.status_code == 200
+        body = r.json()
+        assert set(body) >= {"root", "files", "count", "truncated"}
+        assert any(f["rel"] == "hello.txt" for f in body["files"])
+        # Missing directory → 404.
+        assert (
+            client.get("/fs/files", params={"path": str(tmp_path / "nope")}).status_code
+            == 404
+        )
 
 
 def test_list_dir_files_have_size(tree: Path) -> None:

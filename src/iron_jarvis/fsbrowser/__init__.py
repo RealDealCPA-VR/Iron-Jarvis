@@ -9,7 +9,14 @@ Independent of the file-search subsystem on purpose (no shared imports).
 
 from __future__ import annotations
 
-from .browser import FsEntry, detect_project, drives, home, list_dir
+from .browser import (
+    FsEntry,
+    detect_project,
+    drives,
+    home,
+    list_dir,
+    list_files_recursive,
+)
 
 __all__ = [
     "FsEntry",
@@ -17,4 +24,5 @@ __all__ = [
     "drives",
     "home",
     "list_dir",
+    "list_files_recursive",
 ]

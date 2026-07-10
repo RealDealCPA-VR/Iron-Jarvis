@@ -194,3 +194,68 @@ def list_dir(
         "entries": entries,
         "truncated": len(entries) >= MAX_ENTRIES,
     }
+
+
+#: Directories skipped by the recursive file walk — heavy/noise trees that would
+#: bury the files a user actually created with dependency/VCS churn.
+_WALK_SKIP_DIRS = frozenset({
+    "node_modules", ".git", "__pycache__", ".venv", "venv", ".next", "dist",
+    "build", ".turbo", ".cache", ".idea", ".vscode", "target", ".pytest_cache",
+    ".mypy_cache", ".gradle", "vendor", ".terraform",
+})
+
+
+def list_files_recursive(
+    path: str, *, depth: int = 4, limit: int = 600, show_hidden: bool = False
+) -> dict:
+    """Every FILE under ``path`` (bounded), NEWEST FIRST — so files a CLI just
+    created surface at the top. Walks at most ``depth`` levels, returns at most
+    ``limit`` files, and skips heavy/noise dirs (node_modules/.git/…). Each file:
+    ``{name, path, rel, size, mtime}``. Unreadable children are skipped."""
+    root = Path(path)
+    if not root.exists():
+        raise FileNotFoundError(f"no such directory: {path}")
+    if not root.is_dir():
+        raise NotADirectoryError(f"not a directory: {path}")
+    depth = max(1, min(int(depth), 8))
+    limit = max(1, min(int(limit), MAX_ENTRIES))
+
+    files: list[dict] = []
+    root_str = str(root)
+
+    def _walk(d: str, level: int) -> None:
+        if level > depth or len(files) >= limit:
+            return
+        try:
+            it = list(os.scandir(d))
+        except OSError:
+            return
+        for e in it:
+            if len(files) >= limit:
+                return
+            name = e.name
+            if not show_hidden and name.startswith("."):
+                continue
+            try:
+                if e.is_dir(follow_symlinks=False):
+                    if name in _WALK_SKIP_DIRS:
+                        continue
+                    _walk(e.path, level + 1)
+                elif e.is_file(follow_symlinks=False):
+                    st = e.stat()
+                    files.append(
+                        {
+                            "name": name,
+                            "path": e.path,
+                            "rel": os.path.relpath(e.path, root_str).replace("\\", "/"),
+                            "size": st.st_size,
+                            "mtime": st.st_mtime,
+                        }
+                    )
+            except OSError:
+                continue
+
+    _walk(root_str, 1)
+    files.sort(key=lambda f: f["mtime"], reverse=True)  # newest created first
+    truncated = len(files) >= limit
+    return {"root": root_str, "files": files[:limit], "count": len(files), "truncated": truncated}
