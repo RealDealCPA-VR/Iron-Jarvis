@@ -1,7 +1,7 @@
 {
   "name": "iron-jarvis-desktop",
   "productName": "Iron Jarvis",
-  "version": "1.38.0",
+  "version": "1.39.0",
   "private": true,
   "description": "Native desktop wrapper for Iron Jarvis. Boots the local Python daemon (uv run ironjarvis serve) and the Next.js dashboard (pnpm start), then opens them in a native window.",
   "main": "main.js",
