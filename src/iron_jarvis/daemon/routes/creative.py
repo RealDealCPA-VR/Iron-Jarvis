@@ -19,7 +19,9 @@ from fastapi.responses import FileResponse
 
 from ..schemas import (
     CreativeIngestBody,
+    CreativeIntakeBody,
     CreativePublishBody,
+    CreativeTranscodeBody,
     CreativeUploadBody,
     StudioSayBody,
     StudioStartBody,
@@ -28,11 +30,17 @@ from ...core.fs_policy import fs_read_ok
 from ...creative.service import list_media, media_kind, mime_for
 
 #: Per-CLI "run without permission prompts" LAUNCH FLAGS for studio autopilot.
-#: Claude is deliberately NOT here — its auto mode is engaged the way a human
-#: does it: Shift+Tab cycling after boot (see _engage_claude_automode), which
-#: uses the milder auto-accept mode instead of --dangerously-skip-permissions.
+#: Claude uses --dangerously-skip-permissions: on current Claude Code, Shift+Tab
+#: only cycles normal → accept-edits → plan → normal, and "accept edits" STILL
+#: prompts on every shell command (python/ffmpeg/curl — exactly what media skills
+#: run), so cycling could never reach a truly hands-off mode and a generation
+#: stalled at the first command prompt (the "stuck, go to Build" failure). The
+#: flag launches Claude genuinely hands-off from boot; its one-time acceptance
+#: screen is auto-answered by _engage_claude_automode. It's opt-in (the autopilot
+#: toggle) and scoped to the studio's chosen folder.
 _AUTOPILOT_FLAGS = {
     "codex": "--full-auto",
+    "claude": "--dangerously-skip-permissions",
 }
 
 #: Shift+Tab as a terminal keystroke (CSI Z) — cycles Claude Code's permission
@@ -127,27 +135,53 @@ def derive_phase(
 _SAY_QUIET_SECONDS = 2.5
 
 
+#: Claude Code's one-time "--dangerously-skip-permissions" warning screen. We
+#: only act when BOTH the warning AND its accept option are on screen, then
+#: select "Yes, I accept" (the menu takes number keys — "2" picks option 2).
+_BYPASS_WARNING_RE = re.compile(r"bypass permissions|skip permissions|dangerously.skip", re.I)
+_BYPASS_ACCEPT_RE = re.compile(r"yes,?\s*i\s*accept|accept.*(risk|responsib)", re.I)
+
+
 def _engage_claude_automode(session) -> None:
-    """Background: wait for Claude Code to boot, then press Shift+Tab until the
-    tail shows an autopilot mode engaged. Closed loop — each press is verified
-    against the repainted banner, so it can't overshoot into plan mode. Keeps
-    trying even after the user's first brief (a manual-mode run stalls at its
-    first permission prompt), but NEVER keystrokes within _SAY_QUIET_SECONDS of
-    a say — that's the window where a Shift+Tab could land inside a brief."""
+    """Background watcher that gets Claude Code into a genuinely hands-off mode.
+
+    Claude is launched with ``--dangerously-skip-permissions`` (see
+    _AUTOPILOT_FLAGS), which engages hands-off mode from boot but shows a
+    ONE-TIME acceptance screen the first time it's used on a machine/folder. This
+    thread: (1) waits for boot, (2) auto-answers that acceptance screen ("Yes, I
+    accept"), (3) confirms an autopilot banner. As a belt-and-suspenders fallback
+    for older CLIs where the flag isn't honored, it also cycles Shift+Tab. Every
+    keystroke is held out of the _SAY_QUIET_SECONDS window so it can never land
+    inside a typed brief."""
     import time
 
     def quiet() -> bool:
         return time.time() - getattr(session, "_last_say_ts", 0.0) >= _SAY_QUIET_SECONDS
 
-    deadline = time.time() + 45
-    while time.time() < deadline:  # wait for the TUI to come up
+    deadline = time.time() + 60
+    accepted = False
+    while time.time() < deadline:  # wait for boot OR the acceptance screen
         if not session.alive:
             return
         tail = session.output_tail()
-        if "? for shortcuts" in tail or "shift+tab" in tail.lower():
+        low = tail.lower()
+        if latest_claude_mode(tail) in _AUTO_MODES:
+            return  # the flag already engaged hands-off mode — done
+        # Auto-accept the bypass warning (gated on BOTH the warning and its
+        # accept option being present, so we never send a stray key elsewhere).
+        if not accepted and _BYPASS_WARNING_RE.search(low) and _BYPASS_ACCEPT_RE.search(low):
+            if quiet():
+                session.write("2")  # "2. Yes, I accept" — number-key selection
+                time.sleep(0.3)
+                session.write("\r")
+                accepted = True
+                time.sleep(1.8)
+            continue
+        if "? for shortcuts" in low or "shift+tab" in low:
             break
         time.sleep(1.0)
-    # Bounded press-and-verify: 8 covers a full cycle-and-a-bit of the 4 modes.
+    # Fallback: if the flag didn't land us hands-off (older Claude), cycle
+    # Shift+Tab to the best reachable mode. Bounded press-and-verify.
     presses = 0
     while presses < 8:
         if not session.alive or time.time() > deadline + 30:
@@ -159,7 +193,7 @@ def _engage_claude_automode(session) -> None:
             continue
         session.write(_SHIFT_TAB)
         presses += 1
-        time.sleep(1.5)
+        time.sleep(1.8)
 
 
 #: A full-screen CLI TUI (Claude Code) ingests a bulk write as a bracketed
@@ -282,6 +316,171 @@ def register(app: FastAPI, d) -> None:
         if not p.is_file():
             raise HTTPException(status_code=404, detail="no such file")
         return FileResponse(p, media_type=mime_for(p.name))
+
+    def _resolve_media_source(name: str, path: str, version: int | None) -> Path:
+        """Resolve exactly one of (gallery name, local path) to a readable video
+        file — the shared front-door for /creative/playable and /creative/transcode."""
+        sources = [bool(name.strip()), bool(path.strip())]
+        if sum(sources) != 1:
+            raise HTTPException(status_code=400, detail="give exactly one of name or path")
+        if name.strip():
+            p = d.platform.artifacts.version_path(name.strip(), version)
+            if p is None or not p.is_file():
+                raise HTTPException(status_code=404, detail="no such media")
+        else:
+            p = Path(path.strip())
+            if not p.is_absolute():
+                raise HTTPException(status_code=400, detail="absolute path required")
+            ok, reason = fs_read_ok(str(p))
+            if not ok:
+                raise HTTPException(status_code=403, detail=f"blocked: {reason}")
+            if not p.is_file():
+                raise HTTPException(status_code=404, detail="no such file")
+        if media_kind(p.name) != "video":
+            raise HTTPException(status_code=415, detail="not a video file")
+        return p
+
+    @app.get("/creative/playable")
+    def creative_playable(path: str = "", name: str = "", version: int | None = None):
+        """Is this video broadly playable (Windows Media Player / <video>)? Lets
+        the UI show a 'Make playable' button only when the encoding needs it."""
+        from ...creative.service import video_playability
+
+        p = _resolve_media_source(name, path, version)
+        return video_playability(p)
+
+    @app.post("/creative/transcode")
+    def creative_transcode(body: CreativeTranscodeBody) -> dict[str, Any]:
+        """Re-encode a video to a universally-playable MP4 (H.264 / yuv420p /
+        +faststart) — the cure for 'can't open, unsupported encoding 0x80004005'.
+        A local file gets a '<name>.playable.mp4' sibling in the same folder (so
+        it's right there when you open the folder); a gallery item becomes a new
+        gallery artifact. Honest 424 when ffmpeg isn't installed."""
+        from ...core.fs_policy import fs_path_allowed, is_protected_path
+        from ...creative.service import ffmpeg_exe, transcode_to_playable
+
+        # Validate the request (400/415/403/404) BEFORE the capability check, so a
+        # malformed request always reads 400 regardless of whether ffmpeg exists.
+        src = _resolve_media_source(body.name, body.path, body.version)
+        if ffmpeg_exe() is None:
+            raise HTTPException(
+                status_code=424,
+                detail="ffmpeg isn't available — install it (winget install Gyan.FFmpeg) to make videos playable.",
+            )
+        if body.path.strip():
+            # Local file → a playable sibling next to it (must be an allowed,
+            # non-protected write target).
+            dst = src.with_name(f"{src.stem}.playable.mp4")
+            if is_protected_path(str(dst)) or not fs_path_allowed(str(dst)):
+                raise HTTPException(status_code=403, detail="cannot write next to that file")
+            try:
+                transcode_to_playable(src, dst)
+            except RuntimeError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+            return {
+                "path": str(dst),
+                "filename": dst.name,
+                "url": f"/creative/file-by-path?path={dst}",
+            }
+        # Gallery item → transcode into a temp, then save as a new artifact.
+        import tempfile
+
+        tmp = Path(tempfile.gettempdir()) / f"ij-playable-{src.stem}.mp4"
+        try:
+            transcode_to_playable(src, tmp)
+            blob = tmp.read_bytes()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+        new_name = f"{body.name.strip()}-playable"
+        rec = d.platform.artifacts.save(
+            new_name, blob, kind="video", filename=f"{new_name}.mp4"
+        )
+        return {
+            "name": getattr(rec, "name", new_name),
+            "filename": f"{new_name}.mp4",
+            "url": f"/creative/file/{getattr(rec, 'name', new_name)}",
+        }
+
+    #: Sensible clarifying questions when no real model is connected (or as a
+    #: fallback). Answering these folds concrete direction into the brief.
+    _DEFAULT_INTAKE = [
+        {"key": "duration", "label": "How long should it be?",
+         "options": ["5 seconds", "10 seconds", "15 seconds", "30 seconds"], "allow_custom": True},
+        {"key": "style", "label": "What visual style?",
+         "options": ["Cinematic", "Photorealistic", "Anime", "3D render", "Illustrated", "Minimal"], "allow_custom": True},
+        {"key": "aspect", "label": "Aspect ratio?",
+         "options": ["16:9 (landscape)", "9:16 (vertical)", "1:1 (square)"], "allow_custom": True},
+        {"key": "mood", "label": "Mood / tone?",
+         "options": ["Upbeat", "Dramatic", "Calm", "Playful", "Epic"], "allow_custom": True},
+    ]
+
+    @app.post("/creative/intake")
+    async def creative_intake(body: CreativeIntakeBody) -> dict[str, Any]:
+        """Propose a few targeted questions (duration, style, aspect, mood, …) to
+        sharpen a brief BEFORE generating — answers fold in for far better
+        results. Uses the connected model when there is one; always falls back to
+        a sensible default set so the step works offline."""
+        brief = (body.brief or "").strip()
+        if not brief:
+            raise HTTPException(status_code=400, detail="brief is required")
+        provider = (body.provider or "").strip() or d.platform.config.default_provider
+        model = (body.model or "").strip() or d.platform.config.default_model
+        # No real model? Return the defaults rather than failing the step.
+        from ...providers.adapters.mock import MockLLMAdapter
+
+        try:
+            adapter = d.platform.providers.get(provider, model)
+        except Exception:  # noqa: BLE001 — provider unavailable → defaults
+            adapter = None
+        if adapter is None or isinstance(adapter, MockLLMAdapter):
+            return {"questions": _DEFAULT_INTAKE, "source": "default"}
+
+        import json as _json
+
+        from ...providers.adapters.base import LLMMessage
+
+        skill_note = f" The chosen tool/skill is '{body.skill.strip()}'." if body.skill.strip() else ""
+        system = (
+            "You help refine a MEDIA GENERATION brief (image/video/music). Given "
+            "the brief, return 3-5 SHORT clarifying questions that would most "
+            "improve the result — things like duration, visual style, aspect "
+            "ratio, mood, or key subject details. Respond with ONLY JSON of the "
+            'form {"questions":[{"key":"duration","label":"How long?",'
+            '"options":["5 seconds","10 seconds"],"allow_custom":true}]}. '
+            "Keep each label under 8 words and give 3-6 quick options each."
+        )
+        try:
+            resp, _p, _m = await d._one_shot_complete(
+                provider,
+                adapter,
+                system=system,
+                messages=[LLMMessage(role="user", content=f"Brief: {brief}.{skill_note}")],
+            )
+            text = resp.text or ""
+            start, end = text.find("{"), text.rfind("}")
+            data = _json.loads(text[start : end + 1]) if start != -1 and end > start else {}
+            questions = data.get("questions")
+            if isinstance(questions, list) and questions:
+                clean = []
+                for q in questions[:6]:
+                    if not isinstance(q, dict) or not q.get("label"):
+                        continue
+                    clean.append({
+                        "key": str(q.get("key") or q.get("label"))[:40],
+                        "label": str(q["label"])[:120],
+                        "options": [str(o)[:60] for o in (q.get("options") or [])][:8],
+                        "allow_custom": bool(q.get("allow_custom", True)),
+                    })
+                if clean:
+                    return {"questions": clean, "source": "model", "model": _m}
+        except Exception:  # noqa: BLE001 — any failure → the reliable defaults
+            pass
+        return {"questions": _DEFAULT_INTAKE, "source": "default"}
 
     @app.post("/creative/publish")
     async def creative_publish(body: CreativePublishBody) -> dict[str, Any]:
@@ -409,16 +608,18 @@ def register(app: FastAPI, d) -> None:
         # after boot. Background + best-effort; /tail reports the live mode.
         automode_method = "flag" if flag else None
         if flag:
-            # Flag-launched autopilot paints no mode banner — reflect it in the
-            # sticky verdict so the badge doesn't dishonestly read "unverified".
+            # Flag-launched autopilot paints no mode banner immediately — reflect
+            # it in the sticky verdict so the badge doesn't read "unverified".
             setattr(session, "_studio_automode", True)
         if body.autopilot and body.cli == "claude":
+            # Claude launches with --dangerously-skip-permissions (a flag), but
+            # its one-time acceptance screen must be answered + the mode confirmed
+            # — the watcher does both (and Shift+Tab-cycles as a fallback).
             import threading
 
             threading.Thread(
                 target=_engage_claude_automode, args=(session,), daemon=True
             ).start()
-            automode_method = "shift-tab"
         return {
             "terminal_id": session.id,
             "command": command,
@@ -478,9 +679,12 @@ def register(app: FastAPI, d) -> None:
             where = (body.save_dir or "").strip() or "the current working directory"
             text = (
                 f"{skill_line}{pixio_note} Save every final media file into {where} "
-                "(you are already in it). Work autonomously until the generation is "
-                "fully complete — make reasonable creative choices instead of asking "
-                f"me questions. Here is the brief: {text}"
+                "(you are already in it). For any FINAL video, encode it as MP4 "
+                "H.264 with pixel format yuv420p, AAC audio, and +faststart "
+                "(ffmpeg: -c:v libx264 -pix_fmt yuv420p -movflags +faststart) so it "
+                "plays everywhere including Windows Media Player. Work autonomously "
+                "until the generation is fully complete — make reasonable creative "
+                f"choices instead of asking me questions. Here is the brief: {text}"
             )
         # Open the quiet window BEFORE typing: the automode thread never sends a
         # Shift+Tab within _SAY_QUIET_SECONDS of this stamp, so a mode keystroke

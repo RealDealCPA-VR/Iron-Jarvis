@@ -203,6 +203,26 @@ class CreativePublishBody(BaseModel):
     endpoint: str = "media"
 
 
+class CreativeTranscodeBody(BaseModel):
+    """Re-encode a video to a universally-playable MP4 (H.264 / yuv420p /
+    +faststart). Exactly one source: a gallery ``name`` or a local ``path``."""
+
+    name: str = ""
+    version: int | None = None
+    path: str = ""
+
+
+class CreativeIntakeBody(BaseModel):
+    """Ask for clarifying questions to sharpen a generation brief. The model
+    proposes a few targeted questions (duration, style, aspect, …) with quick
+    options, given the brief + chosen skill/model."""
+
+    brief: str = ""
+    skill: str = ""
+    provider: str = ""
+    model: str = ""
+
+
 class CreativeUploadBody(BaseModel):
     """Add a media file to the Creative gallery (same b64-JSON wire pattern as
     UploadBody — no multipart dependency). ``publish=True`` also pushes it to

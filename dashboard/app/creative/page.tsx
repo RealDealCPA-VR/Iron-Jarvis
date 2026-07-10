@@ -120,6 +120,15 @@ function thumbSrcByPath(absPath: string): string {
   }`;
 }
 
+/** Full, token-carrying URL for a daemon-relative media path (e.g. the `url`
+ *  a /creative/transcode gallery result hands back). */
+function apiSrc(relUrl: string): string {
+  const token = ijToken();
+  if (!token) return `${API_BASE}${relUrl}`;
+  const sep = relUrl.includes("?") ? "&" : "?";
+  return `${API_BASE}${relUrl}${sep}token=${encodeURIComponent(token)}`;
+}
+
 function formatSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
@@ -680,7 +689,264 @@ function Thumb({
   );
 }
 
-function MediaTile({ item, onOpen }: { item: CreativeItem; onOpen: () => void }) {
+/* ---- Make playable (the "can't open — unsupported encoding 0x80004005" fix) --- */
+
+interface PlayableInfo {
+  playable: boolean;
+  reason: string;
+  codec: string;
+  pix_fmt: string;
+  can_transcode: boolean;
+}
+
+/** Exactly one of a local absolute path or a gallery artifact (+ optional version). */
+type PlayableTarget = { path: string } | { name: string; version?: number };
+
+interface TranscodeResult {
+  path?: string; // local: the new "<name>.playable.mp4" sibling's absolute path
+  name?: string; // gallery: the new artifact's name
+  filename: string;
+  url: string;
+}
+
+function playableQuery(t: PlayableTarget): string {
+  if ("path" in t) return `path=${encodeURIComponent(t.path)}`;
+  return `name=${encodeURIComponent(t.name)}${
+    t.version !== undefined ? `&version=${t.version}` : ""
+  }`;
+}
+
+/** Probe whether a video is broadly playable (short ffprobe — bounded 25s). */
+function probePlayable(t: PlayableTarget): Promise<PlayableInfo> {
+  return get<PlayableInfo>(`/creative/playable?${playableQuery(t)}`, { timeoutMs: 25000 });
+}
+
+/** Re-encode to a universally-playable MP4 and hand back a token-carrying src for
+ *  the result (local → the sibling by path; gallery → the new artifact's url). */
+async function requestTranscode(t: PlayableTarget): Promise<{ src: string; filename: string }> {
+  const body =
+    "path" in t
+      ? { path: t.path }
+      : { name: t.name, ...(t.version !== undefined ? { version: t.version } : {}) };
+  // A real re-encode can take minutes; match the daemon's 900s ceiling.
+  const res = await post<TranscodeResult>("/creative/transcode", body, { timeoutMs: 900_000 });
+  const src = res.path ? filePathSrc(res.path) : apiSrc(res.url);
+  return { src, filename: res.filename };
+}
+
+/** Honest message for a failed probe/transcode — 424 (no ffmpeg) / 422 (encode
+ *  failure) details come straight from the daemon. */
+function transcodeError(e: unknown): string {
+  const ae = e instanceof ApiError ? e : new ApiError(String(e), 0);
+  return ae.status === 0 ? "Daemon offline — could not convert." : ae.message;
+}
+
+/**
+ * Lightbox "Make playable" control — probes ONCE on open (one video at a time,
+ * so no probe stampede) and, when the encoding is one Windows / `<video>` may
+ * refuse, offers a prominent re-encode that re-points the player at the result.
+ */
+function MakePlayable({
+  target,
+  onTranscoded,
+}: {
+  target: PlayableTarget;
+  onTranscoded: (src: string, filename: string) => void;
+}) {
+  const [info, setInfo] = useState<PlayableInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [doneName, setDoneName] = useState<string | null>(null);
+  const key = playableQuery(target);
+
+  useEffect(() => {
+    let cancelled = false;
+    setInfo(null);
+    setDoneName(null);
+    setErr(null);
+    probePlayable(target)
+      .then((i) => {
+        if (!cancelled) setInfo(i);
+      })
+      .catch(() => {
+        /* probe failed — leave the control hidden rather than nag on an unknown */
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- key encodes target
+  }, [key]);
+
+  const convert = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const { src, filename } = await requestTranscode(target);
+      setDoneName(filename);
+      onTranscoded(src, filename);
+    } catch (e) {
+      setErr(transcodeError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (doneName) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-300">
+        <Check size={13} className="shrink-0" /> Converted — now playing a playable copy (
+        <code className="font-mono text-emerald-200/90">{doneName}</code>).
+      </span>
+    );
+  }
+  if (busy) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.08] px-3 py-1.5 text-xs font-medium text-accent-soft">
+        <LoaderInline label="Converting… (re-encoding to H.264)" />
+      </span>
+    );
+  }
+  if (!info) return null; // not probed yet — never flash a button that then vanishes
+  if (info.playable) {
+    // Broadly playable already — a subtle note, with a quiet "convert anyway"
+    // escape hatch for the rare file that still won't open locally.
+    return (
+      <span className="inline-flex items-center gap-2 text-[11px] text-zinc-500">
+        <Check size={12} className="text-emerald-400/80" /> Plays everywhere
+        {info.can_transcode && (
+          <button
+            type="button"
+            onClick={() => void convert()}
+            className="underline underline-offset-2 transition-colors hover:text-zinc-300"
+          >
+            convert anyway
+          </button>
+        )}
+        {err && <span className="text-rose-300">{err}</span>}
+      </span>
+    );
+  }
+  if (!info.can_transcode) {
+    return (
+      <span
+        title={info.reason}
+        className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-1.5 text-[11px] text-zinc-500"
+      >
+        <Wand2 size={13} /> Can’t play ({info.codec || "unknown"}) — install ffmpeg to fix
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex flex-col items-start gap-1">
+      <button
+        type="button"
+        onClick={() => void convert()}
+        title={info.reason}
+        className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-3 py-1.5 text-xs font-medium text-amber-200 transition-colors hover:bg-amber-500/[0.14]"
+      >
+        <Wand2 size={13} /> Make playable
+      </button>
+      <span className="text-[10px] text-zinc-500">{info.reason}</span>
+      {err && <span className="text-[11px] text-rose-300">{err}</span>}
+    </span>
+  );
+}
+
+/**
+ * Compact per-tile "Make playable" affordance for VIDEO tiles. On-demand
+ * (probe → transcode on click) rather than probing every tile on mount, so a
+ * folder of videos never stampedes the daemon. The new file surfaces through the
+ * same channels every other creation does (gallery reload / studio watcher).
+ */
+function MakePlayableChip({
+  target,
+  onConverted,
+}: {
+  target: PlayableTarget;
+  onConverted?: () => void;
+}) {
+  const [state, setState] = useState<"idle" | "busy" | "ok" | "playable" | "noffmpeg">("idle");
+  const [err, setErr] = useState<string | null>(null);
+
+  const run = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (state === "busy") return;
+    setErr(null);
+    setState("busy");
+    try {
+      const info = await probePlayable(target);
+      if (info.playable) {
+        setState("playable");
+        return;
+      }
+      if (!info.can_transcode) {
+        setState("noffmpeg");
+        return;
+      }
+      await requestTranscode(target);
+      setState("ok");
+      onConverted?.();
+    } catch (e2) {
+      setErr(transcodeError(e2));
+      setState("idle");
+    }
+  };
+
+  const label =
+    state === "busy"
+      ? "Converting…"
+      : state === "ok"
+        ? "Playable ✓"
+        : state === "playable"
+          ? "Already playable"
+          : state === "noffmpeg"
+            ? "Needs ffmpeg"
+            : "Make playable";
+
+  return (
+    <button
+      type="button"
+      onClick={(e) => void run(e)}
+      title={err ?? chipTitle(state)}
+      className={`absolute bottom-2 left-2 z-10 inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-medium backdrop-blur transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
+        state === "ok"
+          ? "border-emerald-400/40 bg-black/55 text-emerald-300 opacity-100"
+          : err
+            ? "border-rose-500/40 bg-black/55 text-rose-300 opacity-100"
+            : "border-white/15 bg-black/55 text-zinc-200 opacity-100 hover:border-accent/40 hover:text-accent-soft md:opacity-0 md:group-hover:opacity-100"
+      }`}
+    >
+      {state === "busy" ? (
+        <span className="h-2.5 w-2.5 animate-spin rounded-full border border-current border-t-transparent" />
+      ) : (
+        <Wand2 size={11} />
+      )}
+      {label}
+    </button>
+  );
+}
+
+/** Tooltip copy for the compact chip's current state. */
+function chipTitle(
+  state: "idle" | "busy" | "ok" | "playable" | "noffmpeg",
+): string {
+  if (state === "ok") return "Converted — a playable copy was created";
+  if (state === "playable") return "Already plays everywhere";
+  if (state === "noffmpeg") return "Install ffmpeg to make videos playable";
+  if (state === "busy") return "Converting…";
+  return "Re-encode to a universally-playable MP4 (H.264)";
+}
+
+function MediaTile({
+  item,
+  onOpen,
+  onConverted,
+}: {
+  item: CreativeItem;
+  onOpen: () => void;
+  onConverted?: () => void;
+}) {
   const src = fileSrc(item);
   return (
     <div
@@ -726,6 +992,9 @@ function MediaTile({ item, onOpen }: { item: CreativeItem; onOpen: () => void })
         <span className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full border border-white/10 bg-black/50 px-2 py-0.5 text-[10px] font-medium capitalize text-zinc-300 backdrop-blur">
           {mediaIcon(item.media, 10)} {item.media}
         </span>
+        {item.media === "video" && (
+          <MakePlayableChip target={{ name: item.name }} onConverted={onConverted} />
+        )}
       </div>
       <div className="flex items-center justify-between gap-2 px-3 py-2.5">
         <span className="min-w-0 truncate text-xs text-zinc-300" title={item.filename}>
@@ -743,7 +1012,15 @@ function MediaTile({ item, onOpen }: { item: CreativeItem; onOpen: () => void })
  * possible (no ffmpeg) the tile stays glyph-only — NO full video element (a big
  * folder of videos must not hammer the drive); media loads only in the lightbox.
  */
-function LibraryTile({ file, onOpen }: { file: LibraryFile; onOpen: () => void }) {
+function LibraryTile({
+  file,
+  onOpen,
+  onConverted,
+}: {
+  file: LibraryFile;
+  onOpen: () => void;
+  onConverted?: () => void;
+}) {
   return (
     <div
       role="button"
@@ -781,6 +1058,9 @@ function LibraryTile({ file, onOpen }: { file: LibraryFile; onOpen: () => void }
         <span className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full border border-white/10 bg-black/50 px-2 py-0.5 text-[10px] font-medium capitalize text-zinc-300 backdrop-blur">
           {mediaIcon(file.kind, 10)} {file.kind}
         </span>
+        {file.kind === "video" && (
+          <MakePlayableChip target={{ path: file.path }} onConverted={onConverted} />
+        )}
       </div>
       <div className="flex items-center justify-between gap-2 px-3 py-2.5">
         <span className="min-w-0 truncate text-xs text-zinc-300" title={file.name}>
@@ -835,8 +1115,17 @@ function MediaLightbox({
   const [confirmDel, setConfirmDel] = useState(false);
   const [delBusy, setDelBusy] = useState(false);
   const [delErr, setDelErr] = useState<string | null>(null);
+  // Once a video is re-encoded to a playable copy, the player points here instead.
+  const [playableSrc, setPlayableSrc] = useState<string | null>(null);
   const downloadRef = useRef<HTMLAnchorElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
+
+  // "Make playable" target — a gallery name or a local path, mirroring publishBody.
+  const playableTarget: PlayableTarget | null = publishBody.path
+    ? { path: publishBody.path }
+    : publishBody.name
+      ? { name: publishBody.name }
+      : null;
 
   // Esc closes; ←/→ step through the caller's visible list — never while
   // typing (Escape included: it should clear/blur the field, not nuke the
@@ -1001,7 +1290,14 @@ function MediaLightbox({
                 className="max-h-[55vh] w-auto max-w-full object-contain"
               />
             ) : media === "video" ? (
-              <video src={src} controls autoPlay playsInline className="max-h-[55vh] w-full" />
+              <video
+                key={playableSrc ?? src}
+                src={playableSrc ?? src}
+                controls
+                autoPlay
+                playsInline
+                className="max-h-[55vh] w-full"
+              />
             ) : (
               <div className="w-full px-6 py-10">
                 <audio src={src} controls autoPlay className="w-full" />
@@ -1051,6 +1347,12 @@ function MediaLightbox({
               >
                 <Download size={13} /> Download
               </a>
+              {media === "video" && playableTarget && (
+                <MakePlayable
+                  target={playableTarget}
+                  onTranscoded={(newSrc) => setPlayableSrc(newSrc)}
+                />
+              )}
               {deleteName !== undefined && !confirmDel && (
                 <button
                   type="button"
@@ -1312,6 +1614,14 @@ interface StudioStartResult {
   automode_method?: "shift-tab" | "flag" | null;
 }
 
+/** One clarifying question the intake step proposes for the FIRST brief. */
+interface IntakeQuestion {
+  key: string;
+  label: string;
+  options: string[];
+  allow_custom: boolean;
+}
+
 /** In-memory shape of the running session (camelCase mirror of StudioSession). */
 interface LiveSession {
   terminalId: string;
@@ -1568,6 +1878,13 @@ function StudioView({
   const [sayErr, setSayErr] = useState<string | null>(null);
   const [ending, setEnding] = useState(false);
 
+  // FIRST-brief clarifying-questions intake (Fix 1). `intakeBrief` holds the
+  // pending first brief while we ask; `intakeQuestions` drives the inline panel.
+  const [intakeBrief, setIntakeBrief] = useState<string | null>(null);
+  const [intakeBusy, setIntakeBusy] = useState(false);
+  const [intakeQuestions, setIntakeQuestions] = useState<IntakeQuestion[] | null>(null);
+  const [intakeAnswers, setIntakeAnswers] = useState<Record<string, string>>({});
+
   const [tail, setTail] = useState("");
   const [alive, setAlive] = useState(true);
   const [exitCode, setExitCode] = useState<number | null>(null);
@@ -1581,6 +1898,8 @@ function StudioView({
   // Authoritative agent lifecycle from the daemon (null when it doesn't report one).
   const [phase, setPhase] = useState<StudioPhase | null>(null);
   const [statusLine, setStatusLine] = useState<string | null>(null);
+  // Daemon "ready to accept input" flag — drives the "engine may be waiting" hint.
+  const [ready, setReady] = useState(false);
 
   const baselineRef = useRef<Set<string>>(new Set());
   // Files already pushed into the gallery (auto-ingest is fire-and-forget and
@@ -1681,6 +2000,7 @@ function StudioView({
         setAutomode(t.automode === true);
         setPhase(t.phase ?? null);
         setStatusLine(t.status_line ?? null);
+        setReady(t.ready === true);
         // Unlock the composer once the CLI is genuinely ready. For a Shift+Tab
         // autopilot (Claude) that means auto mode CONFIRMED — firing a brief
         // before it engages would stall on an unanswered permission prompt;
@@ -1843,6 +2163,11 @@ function StudioView({
     setShowRaw(false);
     setPhase(null);
     setStatusLine(null);
+    setReady(false);
+    setIntakeBrief(null);
+    setIntakeBusy(false);
+    setIntakeQuestions(null);
+    setIntakeAnswers({});
     setStudioSelected(null);
     const now = Date.now();
     setLastActivityAt(now);
@@ -1976,19 +2301,93 @@ function StudioView({
     }
   };
 
+  /** Route a brief to the terminal: queue it while the engine boots (the
+   *  auto-fire effect sends it on ready), else POST it right now. `booting`
+   *  only ever flips true→false, so a stale-true read just defers to the queue. */
+  const dispatchBrief = (text: string) => {
+    if (!session) return;
+    if (booting) {
+      setQueuedBrief((prev) => (prev ? `${prev} ${text}` : text));
+      return;
+    }
+    void postBrief(text);
+  };
+
+  const closeIntake = () => {
+    setIntakeBrief(null);
+    setIntakeQuestions(null);
+    setIntakeAnswers({});
+  };
+
+  /** FIRST brief only: fetch a few quick clarifying questions, then either show
+   *  them inline (compact panel) or — no questions / any error — send the brief
+   *  straight through. Intake must NEVER block generation. */
+  const beginIntake = async (brief: string) => {
+    setIntakeBrief(brief);
+    setIntakeQuestions(null);
+    setIntakeAnswers({});
+    setIntakeBusy(true);
+    try {
+      const res = await post<{ questions?: IntakeQuestion[] }>(
+        "/creative/intake",
+        { brief, ...(skill ? { skill } : {}) },
+        { timeoutMs: 15000 },
+      );
+      const qs = Array.isArray(res.questions)
+        ? res.questions.filter((q) => q && q.label && Array.isArray(q.options))
+        : [];
+      if (qs.length === 0) {
+        setIntakeBrief(null);
+        dispatchBrief(brief); // nothing to ask — go straight to generation
+        return;
+      }
+      setIntakeQuestions(qs);
+    } catch {
+      setIntakeBrief(null);
+      dispatchBrief(brief); // intake failed — never block the user; just generate
+    } finally {
+      setIntakeBusy(false);
+    }
+  };
+
+  /** Fold the answered questions into a concise "Preferences:" line and send. */
+  const submitIntake = () => {
+    if (intakeBrief === null) return;
+    const prefs: string[] = [];
+    for (const q of intakeQuestions ?? []) {
+      const ans = (intakeAnswers[q.key] ?? "").trim();
+      if (ans) prefs.push(`${q.key} = ${ans}`);
+    }
+    const brief = prefs.length
+      ? `${intakeBrief}\n\nPreferences: ${prefs.join("; ")}`
+      : intakeBrief;
+    closeIntake();
+    dispatchBrief(brief);
+  };
+
+  /** Skip the questions — send the original brief unchanged. */
+  const skipIntake = () => {
+    if (intakeBrief === null) return;
+    const brief = intakeBrief;
+    closeIntake();
+    dispatchBrief(brief);
+  };
+
   const send = async () => {
     const text = draft.trim();
     if (!text || !session || sending || !alive || gone) return;
-    if (booting) {
-      // Engine still starting — the composer stays interactive: queue the brief
-      // (shown in the transcript) and the auto-fire effect sends it on ready.
-      setQueuedBrief((prev) => (prev ? `${prev} ${text}` : text));
-      setDraft("");
+    // The intake panel owns the send while it's open/loading.
+    if (intakeBrief !== null || intakeBusy) return;
+    setDraft("");
+    if (!sentFirst) {
+      // First brief → optional, fast clarifying-questions step (works while the
+      // engine is still booting — the answers fold in, then it queues/sends).
+      void beginIntake(text);
       return;
     }
-    setDraft("");
-    const ok = await postBrief(text);
-    if (!ok) return; // postBrief restored the draft + set sayErr
+    // Follow-ups go straight through (queued if still booting) — a full two-way
+    // conduit, so there's never a need to detour to the Build terminal.
+    dispatchBrief(text);
   };
 
   // Auto-fire the boot-queued brief the moment the readiness gate opens (or
@@ -2032,10 +2431,13 @@ function StudioView({
     // The CLI quit back to the shell (terminal still alive): another brief
     // would run as a SHELL COMMAND — the daemon refuses it and so do we.
     const engineExited = phase === "exited" && alive && !gone;
+    // While the clarifying-questions panel is open/loading, its own controls
+    // drive the send, so the free-text composer is inert.
+    const intakeOpen = intakeBrief !== null || intakeBusy;
     // The composer NEVER locks for boot — a brief typed while the engine starts
     // is queued (visible in the transcript) and auto-fires on ready. Only a
-    // dead terminal/engine or an in-flight send disables input.
-    const inputDisabled = !alive || gone || sending || engineExited;
+    // dead terminal/engine, an in-flight send, or the intake panel disables input.
+    const inputDisabled = !alive || gone || sending || engineExited || intakeOpen;
     const awaitingAutomode = booting && session.awaitsAutomode && !automode;
     const bootStatus = awaitingAutomode
       ? "Engaging auto mode…"
@@ -2046,6 +2448,31 @@ function StudioView({
     const idleByTimer = nowTick - lastActivityAt >= STUDIO_IDLE_MS;
     const working = phase !== null ? PHASE_BUSY[phase] : !idleByTimer;
     const activeTurn = alive && !gone && !booting && working;
+
+    // Fix 3 — surface when the engine looks like it's waiting on the user (a
+    // prompt/question in the tail, or a ready+idle daemon signal) so they answer
+    // in-place instead of opening the Build terminal. Only after the first brief,
+    // never while booting/sending/working, and never once the engine has exited.
+    const lastTailLine = (() => {
+      const trimmed = tail.trimEnd();
+      const nl = trimmed.lastIndexOf("\n");
+      return (nl >= 0 ? trimmed.slice(nl + 1) : trimmed).trim();
+    })();
+    const tailLooksLikePrompt =
+      /[?:]$|\(y\/n\)|\[y\/n\]|press enter|your answer|continue\??$|waiting for/i.test(
+        lastTailLine,
+      );
+    const idlePhase = phase === "idle" || phase === "done";
+    const maybeWaiting =
+      alive &&
+      !gone &&
+      !booting &&
+      !engineExited &&
+      !intakeOpen &&
+      sentFirst &&
+      !sending &&
+      !activeTurn &&
+      (tailLooksLikePrompt || (ready && idlePhase));
 
     // Bucket each produced media file into the turn it belongs to: the most
     // recent brief sent at-or-before the file's first sighting (anything before
@@ -2222,6 +2649,110 @@ function StudioView({
 
             {/* Composer + raw-terminal disclosure. */}
             <div className="space-y-2.5 border-t hairline p-4">
+              {/* Fix 1 — clarifying-questions intake before the FIRST brief. */}
+              {intakeBusy && !intakeQuestions && (
+                <div className="rounded-xl border border-accent/20 bg-accent/[0.05] px-3.5 py-3 text-[13px] text-accent-soft/90">
+                  <LoaderInline label="A couple quick questions to sharpen your brief…" />
+                </div>
+              )}
+              {intakeQuestions && intakeBrief !== null && (
+                <div className="space-y-3 rounded-xl border border-accent/25 bg-accent/[0.05] p-3.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="min-w-0 flex-1 text-[13px] text-zinc-300">
+                      <Sparkles
+                        size={13}
+                        className="mr-1 inline align-[-1px] text-accent-soft/80"
+                        aria-hidden="true"
+                      />
+                      A couple quick questions to sharpen your brief — all optional.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={skipIntake}
+                      className="shrink-0 rounded-lg border border-white/10 px-2.5 py-1 text-[11px] font-medium text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/[0.04]"
+                    >
+                      Skip — just generate
+                    </button>
+                  </div>
+                  <div className="space-y-3">
+                    {intakeQuestions.map((q) => {
+                      const answer = intakeAnswers[q.key] ?? "";
+                      const isCustom = answer !== "" && !q.options.includes(answer);
+                      return (
+                        <div key={q.key} className="space-y-1.5">
+                          <p className="text-[12px] font-medium text-zinc-400">{q.label}</p>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {q.options.map((opt) => {
+                              const on = answer === opt;
+                              return (
+                                <button
+                                  key={opt}
+                                  type="button"
+                                  onClick={() =>
+                                    setIntakeAnswers((prev) => ({
+                                      ...prev,
+                                      [q.key]: prev[q.key] === opt ? "" : opt,
+                                    }))
+                                  }
+                                  className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                                    on
+                                      ? "border-accent/40 bg-accent/[0.14] text-accent-soft"
+                                      : "border-white/10 bg-white/[0.02] text-zinc-300 hover:border-white/20 hover:bg-white/[0.04]"
+                                  }`}
+                                >
+                                  {opt}
+                                </button>
+                              );
+                            })}
+                            {q.allow_custom && (
+                              <input
+                                type="text"
+                                value={isCustom ? answer : ""}
+                                onChange={(e) =>
+                                  setIntakeAnswers((prev) => ({ ...prev, [q.key]: e.target.value }))
+                                }
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    submitIntake();
+                                  }
+                                }}
+                                placeholder="or type your own…"
+                                aria-label={`Custom answer for ${q.label}`}
+                                className="min-w-0 max-w-[12rem] flex-1 rounded-full border border-white/10 bg-ink-950 px-2.5 py-1 text-[11px] text-zinc-200 placeholder:text-zinc-600 focus:border-accent/40 focus:outline-none"
+                              />
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="flex items-center gap-2 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={submitIntake}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.12] px-3.5 py-1.5 text-xs font-semibold text-accent-soft transition-colors hover:bg-accent/[0.18]"
+                    >
+                      <Send size={13} /> Generate with these
+                    </button>
+                    <button
+                      type="button"
+                      onClick={skipIntake}
+                      className="rounded-xl border border-white/10 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/[0.04]"
+                    >
+                      Skip
+                    </button>
+                  </div>
+                </div>
+              )}
+              {/* Fix 3 — gentle "engine may be waiting" nudge so the user answers here. */}
+              {maybeWaiting && (
+                <div className="flex items-center gap-2 rounded-xl border border-accent/20 bg-accent/[0.05] px-3 py-2 text-[11px] text-accent-soft/90">
+                  <MessageCircle size={13} className="shrink-0" aria-hidden="true" />
+                  The engine may be waiting for your input — type your answer below to keep going
+                  here.
+                </div>
+              )}
               {sayErr && <ErrorNote>{sayErr}</ErrorNote>}
               <div className="flex items-center gap-2">
                 <input
@@ -2241,11 +2772,13 @@ function StudioView({
                       ? "terminal ended"
                       : engineExited
                         ? "engine exited — start a new session"
-                        : booting
-                          ? "Describe what to create — sends when the engine is ready…"
-                          : sentFirst
-                            ? "Send another instruction…"
-                            : "Describe what to create…"
+                        : intakeOpen
+                          ? "Answer the quick questions above (or skip)…"
+                          : booting
+                            ? "Describe what to create — sends when the engine is ready…"
+                            : sentFirst
+                              ? "Send another instruction…"
+                              : "Describe what to create…"
                   }
                   aria-label="Brief"
                   className="min-w-0 flex-1 rounded-xl border border-white/10 bg-ink-950 px-3.5 py-2.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-accent/40 focus:outline-none disabled:opacity-50"
@@ -2764,6 +3297,9 @@ export default function CreativePage() {
   // effect (this page is statically prerendered, so no lazy-initializer reads).
   const [view, setView] = useState<View>("creations");
   const [libDir, setLibDir] = useState<string | null>(null);
+  // Bumped after a "make playable" conversion to re-list the folder (the new
+  // `.playable.mp4` sibling then shows up without a manual navigation).
+  const [libRefresh, setLibRefresh] = useState(0);
   const [libSelected, setLibSelected] = useState<LibraryFile | null>(null);
   const [pins, setPins] = useState<PinnedFolder[]>([]);
   useEffect(() => {
@@ -2849,7 +3385,7 @@ export default function CreativePage() {
     return () => {
       cancelled = true;
     };
-  }, [view, libDir]);
+  }, [view, libDir, libRefresh]);
 
   // Live: refetch the moment the daemon emits artifact.generated (dedupe by event id).
   const { events } = useEvents(50);
@@ -3250,6 +3786,7 @@ export default function CreativePage() {
                     key={`${item.name}:${item.version}`}
                     item={item}
                     onOpen={() => setSelected(item)}
+                    onConverted={reload}
                   />
                 ))}
               </div>
@@ -3432,7 +3969,12 @@ export default function CreativePage() {
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4">
                   {libShown.map((f) => (
-                    <LibraryTile key={f.path} file={f} onOpen={() => setLibSelected(f)} />
+                    <LibraryTile
+                      key={f.path}
+                      file={f}
+                      onOpen={() => setLibSelected(f)}
+                      onConverted={() => setLibRefresh((n) => n + 1)}
+                    />
                   ))}
                 </div>
                 {libRemaining > 0 && (
