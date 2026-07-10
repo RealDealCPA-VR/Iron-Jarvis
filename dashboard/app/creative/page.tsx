@@ -2214,7 +2214,13 @@ function StudioView({
         skillLabel,
         command: res.command,
         startedAt: Date.now(),
-        awaitsAutomode: res.automode_method === "shift-tab",
+        // Claude ALWAYS needs its autopilot confirmed before the first brief —
+        // whether engaged by the --dangerously-skip-permissions flag or Shift+Tab
+        // cycling. Gating on the daemon's `ready` flag instead would fire the
+        // brief during boot / the flag's acceptance screen, where the CLI eats
+        // it (the "only a partial of one word reached the terminal" failure).
+        awaitsAutomode:
+          cli === "claude" || res.automode_method === "shift-tab",
       };
       baselineRef.current = new Set(baseline);
       resetLive(false);

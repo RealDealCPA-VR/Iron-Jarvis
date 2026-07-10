@@ -142,58 +142,89 @@ _BYPASS_WARNING_RE = re.compile(r"bypass permissions|skip permissions|dangerousl
 _BYPASS_ACCEPT_RE = re.compile(r"yes,?\s*i\s*accept|accept.*(risk|responsib)", re.I)
 
 
-def _engage_claude_automode(session) -> None:
-    """Background watcher that gets Claude Code into a genuinely hands-off mode.
+#: Signals that Claude's interactive COMPOSER is up (past boot + any acceptance
+#: screen) and ready to accept a brief.
+_COMPOSER_MARKERS = ("? for shortcuts", "esc to interrupt", "shift+tab")
 
-    Claude is launched with ``--dangerously-skip-permissions`` (see
-    _AUTOPILOT_FLAGS), which engages hands-off mode from boot but shows a
-    ONE-TIME acceptance screen the first time it's used on a machine/folder. This
-    thread: (1) waits for boot, (2) auto-answers that acceptance screen ("Yes, I
-    accept"), (3) confirms an autopilot banner. As a belt-and-suspenders fallback
-    for older CLIs where the flag isn't honored, it also cycles Shift+Tab. Every
-    keystroke is held out of the _SAY_QUIET_SECONDS window so it can never land
-    inside a typed brief."""
+
+def _acceptance_screen_showing(recent_low: str) -> bool:
+    """True when the bypass acceptance MENU is the CURRENT screen (both the
+    warning and its accept option are in the recent tail window)."""
+    return bool(_BYPASS_WARNING_RE.search(recent_low)) and bool(
+        _BYPASS_ACCEPT_RE.search(recent_low)
+    )
+
+
+def _engage_claude_automode(session) -> None:
+    """Background watcher that confirms Claude is genuinely hands-off and ready.
+
+    Claude launches with ``--dangerously-skip-permissions`` (see _AUTOPILOT_FLAGS)
+    — hands-off from boot, but with a ONE-TIME acceptance screen the first time
+    it's used. The frontend fires the first brief the instant auto-mode reads
+    confirmed, so this thread must NOT confirm it until the real composer is up
+    (else the brief lands in the boot/acceptance menu and is eaten). Steps:
+    (1) wait for boot, (2) auto-answer the acceptance screen, (3) confirm
+    auto-mode only once the composer is up — the flag guarantees the mode, so no
+    dependency on exact banner text. Falls back to Shift+Tab cycling for an older
+    Claude that doesn't honor the flag. Keystrokes are held out of the
+    _SAY_QUIET_SECONDS window so they can never land inside a typed brief."""
     import time
 
     def quiet() -> bool:
         return time.time() - getattr(session, "_last_say_ts", 0.0) >= _SAY_QUIET_SECONDS
 
-    deadline = time.time() + 60
+    deadline = time.time() + 90
     accepted = False
-    while time.time() < deadline:  # wait for boot OR the acceptance screen
+    while time.time() < deadline:
         if not session.alive:
             return
         tail = session.output_tail()
         low = tail.lower()
-        if latest_claude_mode(tail) in _AUTO_MODES:
-            return  # the flag already engaged hands-off mode — done
-        # Auto-accept the bypass warning (gated on BOTH the warning and its
-        # accept option being present, so we never send a stray key elsewhere).
-        if not accepted and _BYPASS_WARNING_RE.search(low) and _BYPASS_ACCEPT_RE.search(low):
+        recent = low[-1500:]  # only the CURRENT screen, not scrolled history
+        # Auto-accept the bypass warning while it IS the current screen.
+        if not accepted and _acceptance_screen_showing(recent):
             if quiet():
                 session.write("2")  # "2. Yes, I accept" — number-key selection
                 time.sleep(0.3)
                 session.write("\r")
                 accepted = True
-                time.sleep(1.8)
+                time.sleep(2.0)
+            else:
+                time.sleep(0.4)
             continue
-        if "? for shortcuts" in low or "shift+tab" in low:
+        mode = latest_claude_mode(tail)
+        if mode in _AUTO_MODES:
+            setattr(session, "_studio_automode", True)  # a real hands-off banner
+            return
+        composer_up = (mode is not None) or any(m in low for m in _COMPOSER_MARKERS)
+        if composer_up and not _acceptance_screen_showing(recent):
+            if mode is None:
+                # The flag's bypass mode frequently shows no cycleable banner —
+                # the composer is up, so trust the flag and confirm now.
+                setattr(session, "_studio_automode", True)
+                return
+            # A NON-auto banner (manual/accept-edits/plan) is showing → the flag
+            # didn't put this Claude in bypass; cycle Shift+Tab to reach it.
             break
-        time.sleep(1.0)
-    # Fallback: if the flag didn't land us hands-off (older Claude), cycle
-    # Shift+Tab to the best reachable mode. Bounded press-and-verify.
+        time.sleep(0.8)
+    # Fallback (older Claude without the flag): cycle Shift+Tab to a hands-off
+    # mode, verifying against the repainted banner.
     presses = 0
     while presses < 8:
         if not session.alive or time.time() > deadline + 30:
             return
         if latest_claude_mode(session.output_tail()) in _AUTO_MODES:
+            setattr(session, "_studio_automode", True)
             return
-        if not quiet():  # a brief is being typed — wait, don't keystroke over it
+        if not quiet():
             time.sleep(0.5)
             continue
         session.write(_SHIFT_TAB)
         presses += 1
         time.sleep(1.8)
+    # Last resort: if the composer is clearly up, trust the flag.
+    if any(m in session.output_tail().lower() for m in _COMPOSER_MARKERS):
+        setattr(session, "_studio_automode", True)
 
 
 #: A full-screen CLI TUI (Claude Code) ingests a bulk write as a bracketed
@@ -205,12 +236,34 @@ _SUBMIT_SETTLE_SECONDS = 0.3
 
 
 def _type_and_submit(session, text: str) -> None:
-    """Type ``text`` into the CLI, then submit it with a distinct Enter press."""
+    """Type ``text`` into the CLI, submit it with a distinct Enter press, and
+    VERIFY the turn actually started — retrying once if it didn't. The verify
+    step is what turns a silently-dropped brief (typed into a still-settling
+    composer) into a reliable send: after Enter we watch for the CLI to react
+    (its output grows / it paints the 'esc to interrupt' working bar); if nothing
+    happens we clear the composer (Ctrl-U) and re-send once."""
     import time
 
-    session.write(text)
-    time.sleep(_SUBMIT_SETTLE_SECONDS)
-    session.write("\r")
+    def _reacted(baseline_len: int) -> bool:
+        tail = session.output_tail()
+        return (_WORKING_MARKER in tail.lower()) or (len(tail) > baseline_len + 40)
+
+    for attempt in range(2):
+        baseline = len(session.output_tail())
+        session.write(text)
+        time.sleep(_SUBMIT_SETTLE_SECONDS)
+        session.write("\r")
+        # Watch briefly for the CLI to react. A real turn starts within ~1-2s.
+        for _ in range(12):
+            time.sleep(0.25)
+            if _reacted(baseline):
+                return
+            if not session.alive:
+                return
+        # No reaction — the composer likely swallowed a partial. Clear it
+        # (Ctrl-U) and try once more, then give up (the next /tail is honest).
+        session.write("\x15")
+        time.sleep(0.3)
 
 
 #: Media-generation skills the studio brief points the CLI at when the user
@@ -607,14 +660,23 @@ def register(app: FastAPI, d) -> None:
         # Claude's auto mode is engaged like a human does it: Shift+Tab cycles
         # after boot. Background + best-effort; /tail reports the live mode.
         automode_method = "flag" if flag else None
-        if flag:
-            # Flag-launched autopilot paints no mode banner immediately — reflect
-            # it in the sticky verdict so the badge doesn't read "unverified".
+        # A flag-launched autopilot paints no mode banner immediately. For
+        # NON-Claude CLIs (codex --full-auto) there's no acceptance screen and no
+        # further confirmation, so mark it engaged up front. For Claude we do NOT
+        # claim auto-mode yet: the flag shows a one-time acceptance screen and the
+        # composer takes a moment to come up, and the frontend fires the first
+        # brief the instant auto-mode reads confirmed — claiming it prematurely
+        # sent the brief into the booting CLI / acceptance menu, where it was
+        # eaten (only a fragment reached the composer). The watcher confirms
+        # auto-mode below, once the composer is genuinely ready.
+        if flag and body.cli != "claude":
             setattr(session, "_studio_automode", True)
         if body.autopilot and body.cli == "claude":
-            # Claude launches with --dangerously-skip-permissions (a flag), but
-            # its one-time acceptance screen must be answered + the mode confirmed
-            # — the watcher does both (and Shift+Tab-cycles as a fallback).
+            # Claude launches with --dangerously-skip-permissions (a flag). The
+            # watcher answers its one-time acceptance screen, waits for the real
+            # composer, THEN confirms auto-mode (the flag guarantees the mode, so
+            # no dependency on exact banner text) — and Shift+Tab-cycles as a
+            # fallback for an older Claude that doesn't honor the flag.
             import threading
 
             threading.Thread(

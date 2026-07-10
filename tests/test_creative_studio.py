@@ -175,6 +175,41 @@ def test_automode_cycles_past_mild_modes_to_full_auto():
     assert session.writes == [_SHIFT_TAB, _SHIFT_TAB, _SHIFT_TAB]
 
 
+def test_automode_trusts_flag_when_composer_up_without_banner():
+    """With --dangerously-skip-permissions the composer can come up showing no
+    cycleable mode banner. The watcher must trust the flag and confirm auto-mode
+    WITHOUT pressing Shift+Tab (a press would cycle OUT of bypass). Confirming
+    only once the composer is up is what stops the first brief from being fired
+    into the still-booting CLI (the 'only a fragment reached the terminal' bug)."""
+    from iron_jarvis.daemon.routes.creative import _engage_claude_automode
+
+    session = _FakeAutomodeSession("? for shortcuts · esc to interrupt")
+    _engage_claude_automode(session)
+    assert getattr(session, "_studio_automode", False) is True
+    assert session.writes == []  # no Shift+Tab — the flag already engaged it
+
+
+def test_automode_answers_bypass_acceptance_then_confirms():
+    """The one-time --dangerously-skip-permissions acceptance screen is answered
+    ('2' = Yes, I accept) and, once the composer comes up, auto-mode confirms."""
+    from iron_jarvis.daemon.routes.creative import _engage_claude_automode
+
+    session = _FakeAutomodeSession(
+        "WARNING: Bypass Permissions mode\n 1. No, exit\n 2. Yes, I accept the risks"
+    )
+    real_write = session.write
+
+    def write_and_advance(data) -> None:
+        real_write(data)
+        if data == "\r":  # after accepting, the composer paints
+            session.tail = "? for shortcuts · esc to interrupt"
+
+    session.write = write_and_advance
+    _engage_claude_automode(session)
+    assert "2" in session.writes and "\r" in session.writes  # answered the menu
+    assert getattr(session, "_studio_automode", False) is True
+
+
 def test_derive_phase_lifecycle():
     """booting → thinking (fresh esc-to-interrupt) → idle → exited, with the
     freshness guard keeping a STALE marker from reading as a live turn."""
