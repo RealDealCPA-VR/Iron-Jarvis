@@ -22,6 +22,13 @@ from .manager import ProviderManager
 #: mock/default path and the offline test suite are unchanged.
 LocalOracle = Callable[[Optional[str]], "Optional[tuple[str, str]]"]
 
+#: Auto routing hook (§6 — the routing model). Given the request, returns a
+#: routing DECISION dict ``{provider, model, tier, classifier}`` naming the real
+#: model to serve it — or ``None`` to let the router fall back. Invoked ONLY when
+#: the resolved provider is ``"auto"`` (the user selected Auto), so with Auto off
+#: routing is byte-for-byte unchanged. Async: it may call a cheap classifier.
+AutoRoute = Callable[..., "Any"]
+
 #: Substrings marking a TRANSIENT provider failure (rate limit / momentary
 #: overload) worth retrying or failing over — never auth/model errors. Single
 #: source of truth; the daemon's one-shot helpers import this via
@@ -58,8 +65,13 @@ class ModelRouter:
         event_bus: EventBus,
         *,
         local_oracle: LocalOracle | None = None,
+        auto_route: AutoRoute | None = None,
     ) -> None:
         self.manager = manager
+        # Auto routing (opt-in): consulted only when the resolved provider is
+        # "auto". None (default) => the "auto" pseudo-provider is never selected,
+        # so this is inert and routing is identical to before.
+        self._auto_route = auto_route
         # Resolve the default provider LIVE on every request: accept either a
         # plain string or a zero-arg callable (the platform passes
         # ``lambda: config.default_provider``). Switching the model in the UI then
@@ -105,6 +117,50 @@ class ModelRouter:
             return self.manager.get("mock"), wanted, True
         return self.manager.get(wanted, model), wanted, False
 
+    def _first_available_real(self) -> str | None:
+        """The strongest connected REAL provider (capability-ordered failover
+        list), used as the Auto fallback so a request never drops to mock while a
+        real model is connected."""
+        for p in _FAILOVER_ORDER:
+            if p != "mock" and self.manager.available(p):
+                return p
+        return None
+
+    async def _resolve_auto(
+        self, system, messages, tools, task_class
+    ) -> tuple[LLMAdapter, str, bool, "dict | None"]:
+        """Auto route: ask the routing model for a target, else fall back to the
+        strongest available real provider. Returns (adapter, wanted, downgraded,
+        routed_event | None)."""
+        decision: dict | None = None
+        if self._auto_route is not None:
+            try:
+                decision = await self._auto_route(system, messages, tools, task_class)
+            except Exception:  # never let routing break a request
+                decision = None
+        if decision:
+            tp = str(decision.get("provider") or "")
+            tm = decision.get("model") or None
+            if tp and tp != "mock" and self.manager.available(tp):
+                return self.manager.get(tp, tm), tp, False, {
+                    "tier": decision.get("tier", ""),
+                    "provider": tp,
+                    "model": tm or "",
+                    "classifier": decision.get("classifier", ""),
+                }
+        # Fallback: the strongest connected real provider (its own default model).
+        fp = self._first_available_real()
+        if fp is not None:
+            return self.manager.get(fp), fp, False, {
+                "tier": (decision or {}).get("tier", "") if decision else "",
+                "provider": fp,
+                "model": "",
+                "classifier": (decision or {}).get("classifier", "") if decision else "",
+                "fallback": True,
+            }
+        # Nothing real connected → offline mock (downgraded surfaces the banner).
+        return self.manager.get("mock"), "auto", True, None
+
     async def complete(
         self,
         *,
@@ -116,7 +172,19 @@ class ModelRouter:
         session_id: str | None = None,
         task_class: str | None = None,
     ) -> RouteResult:
-        adapter, wanted, downgraded = self._resolve(provider, model, task_class)
+        # AUTO ROUTING: only when the resolved provider is the "auto" pseudo-
+        # provider (the user selected Auto). Any other path is byte-for-byte the
+        # prior behaviour — an explicit provider/model is always honoured as-is.
+        if (provider or self.default_provider) == "auto":
+            adapter, wanted, downgraded, routed = await self._resolve_auto(
+                system, messages, tools, task_class
+            )
+            if routed is not None:
+                await self.event_bus.publish(
+                    EventType.PROVIDER_ROUTED, routed, session_id=session_id
+                )
+        else:
+            adapter, wanted, downgraded = self._resolve(provider, model, task_class)
         if downgraded:
             # Never silently fake it: tell the user their model isn't connected.
             await self.event_bus.publish(

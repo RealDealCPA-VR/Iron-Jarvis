@@ -42,6 +42,9 @@ class EventType:
     PROVIDER_FAILED = "provider.failed"
     PROVIDER_FAILOVER = "provider.failover"
     PROVIDER_DOWNGRADED = "provider.downgraded"
+    # Auto routing (§6): the routing model classified a request into a tier and
+    # sent it to a specific model. Carries {tier, provider, model, classifier}.
+    PROVIDER_ROUTED = "provider.routed"
     WEBHOOK_RECEIVED = "webhook.received"
     # Two-way comm (inbound): an authorized message arrived on a channel and a
     # session was spawned for it; or a sender was refused (not on the allowlist).

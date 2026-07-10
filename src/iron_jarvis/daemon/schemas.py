@@ -156,6 +156,10 @@ class RepairBody(BaseModel):
 _SETTINGS_KEYS = [
     "default_provider",
     "default_model",
+    # Auto model routing — the classifier + optional tier overrides. "auto" as
+    # the default_provider is the ON switch.
+    "routing_model",
+    "routing_tiers_json",
     "max_agent_steps",
     "git_native",
     "self_dev_enabled",
@@ -474,6 +478,21 @@ class ToolGenerateBody(BaseModel):
     """Describe the tool you want in plain language; an LLM designs it."""
 
     description: str
+    provider: str = ""
+    model: str = ""
+
+
+class RoutingEnableBody(BaseModel):
+    """Turn ON Auto routing. ``routing_model`` ("provider:model") is the cheap
+    classifier; blank = use the suggested cheapest connected model."""
+
+    routing_model: str = ""
+
+
+class RoutingDisableBody(BaseModel):
+    """Turn OFF Auto routing and pin a concrete default model. Blank = revert to
+    the suggested/first connected model."""
+
     provider: str = ""
     model: str = ""
 

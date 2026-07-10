@@ -275,11 +275,63 @@ def build_platform(
             return ("ollama", config.ollama_model)
         return None
 
+    async def _auto_route(system, messages, tools, task_class):
+        """The routing model at work (§6): decide a difficulty tier for the
+        request (a zero-cost heuristic first, else a cheap classifier call to the
+        user's routing model) and map it to the best CONNECTED model. Returns
+        ``{provider, model, tier, classifier}`` or ``None`` to let the router fall
+        back. Never raises — the router treats a raised/None result as fallback."""
+        from .providers import routing as _routing
+        from .providers.adapters.base import LLMMessage
+
+        connected = _routing.connected_real_models(providers, config)
+        if not connected:
+            return None
+        tiers = _routing.parse_tiers_json(
+            getattr(config, "routing_tiers_json", "") or ""
+        ) or _routing.derive_tiers(connected)
+        if not tiers:
+            return None
+        classifier = _routing.parse_pm(getattr(config, "routing_model", "") or "")
+        used_classifier = ""
+        tier = _routing.heuristic_tier(messages, tools, task_class)
+        if tier is None:
+            # Ambiguous → ask the cheap routing model to classify.
+            if classifier and providers.available(classifier[0]):
+                try:
+                    adapter = providers.get(classifier[0], classifier[1] or None)
+                    resp = await adapter.complete(
+                        system=_routing.CLASSIFY_SYSTEM,
+                        messages=[
+                            LLMMessage(role="user", content=_routing.classify_input(messages))
+                        ],
+                        tools=[],
+                    )
+                    tier = _routing.parse_tier(resp.text)
+                    used_classifier = _routing.format_pm(classifier)
+                except Exception:  # classifier hiccup → sensible default
+                    tier = "standard"
+            else:
+                tier = "standard"
+        target = tiers.get(tier) or tiers.get("standard") or tiers.get("heavy")
+        if target is None:
+            return None
+        return {
+            "provider": target[0],
+            "model": target[1] or "",
+            "tier": tier,
+            "classifier": used_classifier,
+        }
+
     # Pass the default provider as a LIVE callable so a model switch in the UI
     # (PUT /settings mutates config) reaches provider-less callers — routing and
     # the motivation/improvement loops — without a daemon restart.
     router = ModelRouter(
-        providers, lambda: config.default_provider, event_bus, local_oracle=_local_oracle
+        providers,
+        lambda: config.default_provider,
+        event_bus,
+        local_oracle=_local_oracle,
+        auto_route=_auto_route,
     )
     registry = default_registry()
 

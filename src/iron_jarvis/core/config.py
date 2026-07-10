@@ -191,6 +191,13 @@ class Config(BaseModel):
     prefer_local_when_capable: bool = False
     local_quality_bar: float = 0.75  # avg completion a local model must clear
     local_quality_min_samples: int = 3  # evaluated sessions needed before trusting
+    # Auto model routing (§6 — the routing model). OFF unless the user selects
+    # "Auto" (``default_provider == "auto"``). ``routing_model`` is the cheap
+    # classifier ("provider:model"); ``routing_tiers_json`` optionally overrides
+    # the light/standard/heavy targets (else derived from connected models). With
+    # Auto off, routing is byte-for-byte identical to before.
+    routing_model: str = ""
+    routing_tiers_json: str = ""
     # Embeddings (§22 Total Recall): pick a real local embedder when one is
     # reachable, else the offline MockEmbedder. "auto" probes Ollama once and
     # falls back silently; "ollama" forces the real path (still safe-fallback if

@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Cpu, Check, PlugZap, ChevronDown } from "lucide-react";
+import { Cpu, Check, PlugZap, ChevronDown, Sparkles } from "lucide-react";
 import { usePolledApi, useApi } from "@/lib/useApi";
-import { put, ApiError } from "@/lib/api";
+import { put, post, ApiError } from "@/lib/api";
 import type { Health, ModelOption } from "@/lib/types";
 
 /** Quality tiers, plainly labelled so users pick outcome over model IDs. */
@@ -53,12 +53,83 @@ const TIERS: Record<string, Record<Tier, string>> = {
   },
 };
 
+/* ---- Auto (smart routing) ------------------------------------------------- */
+/** A connected/routing model, matching the daemon's `{provider, model}` shape. */
+type PM = { provider: string; model: string };
+
+/** The `/routing` view the daemon returns (and echoes from enable/disable). */
+interface RoutingView {
+  enabled: boolean; // default_provider === "auto"
+  routing_model: string; // "provider:model" | ""
+  connected: PM[];
+  suggested: PM | null; // the cheapest connected model
+  tiers: { light?: PM; standard?: PM; heavy?: PM };
+}
+
+/** Difficulty tiers Auto routes into, cheapest → most capable. */
+const ROUTE_TIERS = ["light", "standard", "heavy"] as const;
+const ROUTE_TIER_LABELS: Record<(typeof ROUTE_TIERS)[number], string> = {
+  light: "Light",
+  standard: "Standard",
+  heavy: "Heavy",
+};
+
+/** Serialize a model as the daemon's "provider:model" routing id. */
+const fmtPM = (pm: PM): string => (pm.model ? `${pm.provider}:${pm.model}` : pm.provider);
+
+/** One selectable routing-model row in the "Turn on Auto" chooser. */
+function RoutingChoice({
+  pm,
+  selected,
+  recommended,
+  onClick,
+}: {
+  pm: PM;
+  selected: boolean;
+  recommended?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex w-full items-center justify-between gap-2 rounded-md border px-1.5 py-1 text-left transition-colors ${
+        selected
+          ? "border-accent/50 bg-accent/[0.12]"
+          : "border-transparent hover:bg-white/[0.06]"
+      }`}
+    >
+      <span className="min-w-0">
+        <span className="block truncate font-mono text-[11px] text-zinc-200">
+          {pm.model || pm.provider}
+        </span>
+        <span className="text-[9px] text-zinc-500">
+          {recommended ? "Recommended · " : ""}
+          {pm.provider}
+        </span>
+      </span>
+      <span className="flex shrink-0 items-center gap-1">
+        {recommended && (
+          <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-emerald-300">
+            cheapest
+          </span>
+        )}
+        {selected && <Check size={12} className="text-accent-soft" />}
+      </span>
+    </button>
+  );
+}
+
 /**
  * Topbar provider/model switcher — set the ACTIVE default model in one click,
  * across every connected account (beyond the per-session dropdown). Reuses
  * /health (current default + availability) + /models (catalog) and persists the
  * choice via PUT /settings. Opens on the global `ij:open-switcher` event (the
  * ⌘K palette dispatches it).
+ *
+ * Also hosts **Auto — smart routing**: when `default_provider === "auto"` a
+ * cheap user-chosen routing model classifies each request and forwards it to the
+ * best connected model. The Auto row (top of the panel) turns it on/off and shows
+ * where requests go; picking any specific model below turns Auto back off.
  */
 export function ModelSwitcher() {
   const health = usePolledApi<Health>("/health", 5000);
@@ -93,6 +164,27 @@ export function ModelSwitcher() {
       setOptimistic(null); // server caught up
     }
   }, [h?.default_provider, h?.default_model, optimistic]);
+
+  // Auto is ON when the active provider is the "auto" sentinel.
+  const autoOn = activeProvider === "auto";
+
+  // Lazy /routing view: fetched while Auto is ON (so the topbar button can name
+  // the routing model) or while the panel is open (for the chooser / tiers).
+  const routing = useApi<RoutingView>(autoOn || open ? "/routing" : null, [autoOn, open]);
+  const rv = routing.data;
+  const [pick, setPick] = useState<string>(""); // chosen routing id, "provider:model"
+  const [routingBusy, setRoutingBusy] = useState(false);
+  const [routingErr, setRoutingErr] = useState<string | null>(null);
+
+  // Chooser selection: the user's pick, else the suggested cheapest.
+  const suggestedRM = rv?.suggested ? fmtPM(rv.suggested) : "";
+  const selectedRM = pick || suggestedRM;
+
+  // Routing model shown in the topbar (just the model part, dropping provider).
+  const routingModelStr = rv?.routing_model ?? "";
+  const rmShort = routingModelStr.includes(":")
+    ? routingModelStr.slice(routingModelStr.indexOf(":") + 1)
+    : routingModelStr;
 
   // Quality dial: the tier map + which of the current provider's models the
   // catalog actually offers (so an unavailable tier is greyed like the list).
@@ -144,6 +236,26 @@ export function ModelSwitcher() {
     }
   }
 
+  // Turn Auto ON (or, while on, re-point it at a different routing model). Blank
+  // `routingModel` lets the daemon default to the suggested cheapest. Optimistic:
+  // the topbar flips to "Auto" instantly, reconciled once /health agrees.
+  async function enableAuto(routingModel: string, close: boolean) {
+    setRoutingBusy(true);
+    setRoutingErr(null);
+    setOptimistic({ provider: "auto", model: h?.default_model ?? "" });
+    try {
+      await post("/routing/enable", { routing_model: routingModel });
+      health.reload?.();
+      routing.reload?.();
+      if (close) setOpen(false);
+    } catch (e) {
+      setOptimistic(null); // revert the "Auto" label on failure
+      setRoutingErr(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setRoutingBusy(false);
+    }
+  }
+
   if (!h) return null; // until /health loads (the offline banner covers downtime)
 
   return (
@@ -151,18 +263,173 @@ export function ModelSwitcher() {
       <button
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-zinc-300 transition-colors hover:border-white/20"
-        title="Switch the active model"
-        aria-label="Switch the active model"
+        title={
+          autoOn
+            ? `Auto — smart routing${rv?.routing_model ? ` · via ${rv.routing_model}` : ""}`
+            : "Switch the active model"
+        }
+        aria-label={autoOn ? "Auto — smart routing" : "Switch the active model"}
       >
-        <Cpu size={13} className="text-accent-soft" />
-        <span className="hidden max-w-[150px] truncate font-mono text-[11px] sm:inline">
-          {activeModel}
-        </span>
+        {autoOn ? (
+          <Sparkles size={13} className="text-accent-soft" />
+        ) : (
+          <Cpu size={13} className="text-accent-soft" />
+        )}
+        {autoOn ? (
+          <span className="hidden items-baseline gap-1 sm:inline-flex">
+            <span className="text-[11px] font-medium text-accent-soft">Auto</span>
+            {rmShort && (
+              <span className="max-w-[110px] truncate font-mono text-[10px] text-zinc-500">
+                {rmShort}
+              </span>
+            )}
+          </span>
+        ) : (
+          <span className="hidden max-w-[150px] truncate font-mono text-[11px] sm:inline">
+            {activeModel}
+          </span>
+        )}
         <ChevronDown size={12} className="text-zinc-500" />
       </button>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-1.5 w-72 rounded-xl border border-white/10 bg-ink-950/95 p-1.5 shadow-card-hover backdrop-blur-xl">
+        <div className="absolute right-0 z-50 mt-1.5 w-80 rounded-xl border border-white/10 bg-ink-950/95 p-1.5 shadow-card-hover backdrop-blur-xl">
+          {/* Auto — smart routing (top, accent-tinted) */}
+          <div className="mb-1.5 rounded-lg border border-accent/30 bg-accent/[0.08] p-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
+                <Sparkles size={13} className="text-accent-soft" />
+                <span className="text-[12px] font-medium text-zinc-100">
+                  Auto — smart routing
+                </span>
+              </div>
+              {autoOn && (
+                <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-300">
+                  On
+                </span>
+              )}
+            </div>
+            <p className="mt-1 text-[10px] leading-snug text-zinc-400">
+              Routes each request to the best model — cheap for simple, strong for
+              complex.
+            </p>
+
+            {/* /routing fetch states */}
+            {routing.loading && !rv && (
+              <div className="mt-2 text-[11px] text-zinc-500">Loading routing options…</div>
+            )}
+            {routing.error && !rv && (
+              <div className="mt-2 text-[11px] text-rose-300">{routing.error.message}</div>
+            )}
+
+            {/* OFF → chooser + "Turn on Auto" */}
+            {rv && !autoOn && (
+              <div className="mt-2">
+                <div className="mb-1 text-[10px] uppercase tracking-wider text-zinc-400">
+                  Routing model
+                </div>
+                {rv.connected.length === 0 ? (
+                  <div className="text-[11px] text-zinc-500">
+                    Connect a model to enable Auto.
+                  </div>
+                ) : (
+                  <div className="space-y-0.5">
+                    {rv.suggested && (
+                      <RoutingChoice
+                        pm={rv.suggested}
+                        recommended
+                        selected={selectedRM === fmtPM(rv.suggested)}
+                        onClick={() => setPick(fmtPM(rv.suggested!))}
+                      />
+                    )}
+                    {rv.connected
+                      .filter(
+                        (c) => !rv.suggested || fmtPM(c) !== fmtPM(rv.suggested),
+                      )
+                      .map((c) => (
+                        <RoutingChoice
+                          key={fmtPM(c)}
+                          pm={c}
+                          selected={selectedRM === fmtPM(c)}
+                          onClick={() => setPick(fmtPM(c))}
+                        />
+                      ))}
+                  </div>
+                )}
+                <button
+                  onClick={() => enableAuto(selectedRM, true)}
+                  disabled={routingBusy || !selectedRM}
+                  className="mt-2 w-full rounded-lg bg-accent/90 px-2 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {routingBusy ? "Turning on…" : "Turn on Auto"}
+                </button>
+              </div>
+            )}
+
+            {/* ON → active state: routing model, tiers, change routing model */}
+            {rv && autoOn && (
+              <div className="mt-2">
+                <div className="text-[11px] text-zinc-300">
+                  Routing via{" "}
+                  <span className="font-mono text-accent-soft">
+                    {rmShort || rv.routing_model || "cheapest"}
+                  </span>
+                </div>
+                <div className="mt-2 space-y-0.5 rounded-lg border border-white/[0.06] bg-white/[0.02] p-1.5">
+                  {ROUTE_TIERS.map((t) => {
+                    const pm = rv.tiers[t];
+                    return (
+                      <div
+                        key={t}
+                        className="flex items-center justify-between gap-2 text-[10px]"
+                      >
+                        <span className="text-zinc-400">{ROUTE_TIER_LABELS[t]}</span>
+                        <span className="ml-2 min-w-0 truncate font-mono text-zinc-300">
+                          {pm ? pm.model : "—"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+                {rv.connected.length > 1 && (
+                  <div className="mt-2">
+                    <div className="mb-1 text-[10px] uppercase tracking-wider text-zinc-400">
+                      Change routing model
+                    </div>
+                    <div className="space-y-0.5">
+                      {rv.connected.map((c) => {
+                        const isCur = rv.routing_model === fmtPM(c);
+                        return (
+                          <button
+                            key={fmtPM(c)}
+                            onClick={() => !isCur && enableAuto(fmtPM(c), false)}
+                            disabled={routingBusy || isCur}
+                            className={`flex w-full items-center justify-between gap-2 rounded-md px-1.5 py-1 text-left text-[11px] transition-colors ${
+                              isCur
+                                ? "bg-accent/[0.12] text-accent-soft"
+                                : "text-zinc-300 hover:bg-white/[0.06]"
+                            }`}
+                          >
+                            <span className="min-w-0 truncate font-mono text-[10px]">
+                              {c.model}
+                            </span>
+                            {isCur && (
+                              <Check size={12} className="shrink-0 text-accent-soft" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {routingErr && (
+              <div className="mt-2 text-[11px] text-rose-300">{routingErr}</div>
+            )}
+          </div>
+
           {tiers && (
             <div className="mb-1 border-b border-white/[0.06] px-1 pb-2">
               <div className="px-1 py-1.5 text-[10px] uppercase tracking-wider text-zinc-400">
@@ -205,6 +472,11 @@ export function ModelSwitcher() {
           <div className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-zinc-400">
             Active model
           </div>
+          {autoOn && (
+            <div className="px-2 pb-1 text-[10px] text-zinc-500">
+              Pick a model to turn Auto off.
+            </div>
+          )}
           <div className="max-h-80 overflow-y-auto">
             {models.length === 0 ? (
               <div className="px-2 py-2 text-[11px] text-zinc-500">No models.</div>

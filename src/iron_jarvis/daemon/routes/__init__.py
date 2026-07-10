@@ -19,6 +19,7 @@ from . import (  # noqa: F401
     learning,
     projects,
     reflex,
+    routing,
     sessions,
     settings,
     system,

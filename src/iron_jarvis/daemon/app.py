@@ -1399,6 +1399,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
     _routes.creative.register(app, d)
     _routes.connections.register(app, d)
     _routes.connectors.register(app, d)
+    _routes.routing.register(app, d)
     _routes.comm.register(app, d)
     _routes.agents.register(app, d)
     _routes.reflex.register(app, d)

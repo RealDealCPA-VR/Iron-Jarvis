@@ -313,7 +313,26 @@ class ProviderManager:
             or self.available("grok-cli")
         )
 
+    #: When Auto routing is the default, a ONE-SHOT utility caller (skill apply,
+    #: terminal assist, intake, …) may ask for the "auto" pseudo-provider without
+    #: a request to classify. Resolve it to the cheapest available REAL provider
+    #: (flat-rate CLIs / local first), so those callers just work instead of
+    #: KeyError-ing. The router's per-request auto path is unaffected — it never
+    #: calls get("auto").
+    _AUTO_DEFAULT_ORDER = (
+        "claude-cli", "codex-cli", "ollama", "custom", "openrouter",
+        "google", "openai", "anthropic", "xai",
+    )
+
+    def _auto_concrete_default(self) -> tuple[str, "str | None"]:
+        for p in self._AUTO_DEFAULT_ORDER:
+            if self.available(p):
+                return (p, None)  # the provider's own default model
+        return ("mock", None)
+
     def get(self, name: str, model: str | None = None) -> LLMAdapter:
+        if name == "auto":
+            name, model = self._auto_concrete_default()
         if name not in self._factories:
             raise KeyError(f"unknown provider '{name}'")
         key = (name, model)
