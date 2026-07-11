@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from ..core.fs_policy import fs_read_ok
-from ..tools.base import Tool, ToolContext, ToolResult, safe_path
+from ..tools.base import Reversibility, Tool, ToolContext, ToolResult, safe_path
+from ..tools.undo import make_file_descriptor, revert_workspace_file, sha256_bytes
 from .pdf_markdown import MARKITDOWN_SUFFIXES, document_to_markdown
 from .readers import SUPPORTED_READ, extract_text
 from .writers import SUPPORTED_WRITE, write_document
@@ -46,6 +47,7 @@ def _truncate(text: str) -> tuple[str, bool]:
 
 class ListFolderTool(Tool):
     name = "list_folder"
+    reversibility = Reversibility.READONLY  # a listing has no side effect
     description = (
         "List a REAL folder anywhere on this machine (e.g. the user's Downloads "
         "or Documents) — name, size, modified time per entry, biggest first. Use "
@@ -98,6 +100,7 @@ class ListFolderTool(Tool):
 
 class ReadDocumentTool(Tool):
     name = "read_document"
+    reversibility = Reversibility.READONLY  # extraction has no side effect
     returns_untrusted_content = True  # a read file can carry planted instructions
     description = (
         "Extract text from a document of any type — PDF, Word (.docx), Excel "
@@ -149,6 +152,7 @@ class ReadDocumentTool(Tool):
 
 class WriteDocumentTool(Tool):
     name = "write_document"
+    reversibility = Reversibility.REVERSIBLE  # TX-01: prior file bytes are captured
     description = (
         "Create a document inside the session workspace. The file type follows "
         "the path suffix (.docx/.xlsx/.pptx/.pdf/.csv/.html/.txt/.md), or the "
@@ -179,6 +183,41 @@ class WriteDocumentTool(Tool):
         "required": ["path", "content"],
     }
 
+    async def capture_undo(
+        self, args: dict[str, Any], ctx: ToolContext
+    ) -> "dict[str, Any] | None":
+        """Snapshot the inverse: prior RAW bytes when overwriting an existing
+        document (``file_restore``), else a delete of the created file
+        (``file_delete``). Documents are binary, so ``mode`` is ``raw`` and no
+        ``post_sha256`` is predicted (the writer's exact bytes aren't known before
+        it runs) — the pre-image still restores the prior file faithfully."""
+        try:
+            target = safe_path(ctx.workspace, args["path"])
+        except Exception:
+            return None
+        if target.is_file():
+            try:
+                prior = target.read_bytes()
+            except OSError:
+                return None
+            return make_file_descriptor(
+                ctx.config.home,
+                kind="file_restore",
+                path=args["path"],
+                mode="raw",
+                prior_bytes=prior,
+                pre_sha256=sha256_bytes(prior),
+            )
+        return make_file_descriptor(
+            ctx.config.home,
+            kind="file_delete",
+            path=args["path"],
+            mode="raw",
+        )
+
+    async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        return await revert_workspace_file(undo, ctx)
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         try:
             target = safe_path(ctx.workspace, args["path"])
@@ -196,6 +235,7 @@ class WriteDocumentTool(Tool):
 
 class ExtractPdfTool(Tool):
     name = "extract_pdf"
+    reversibility = Reversibility.READONLY  # extraction has no side effect
     returns_untrusted_content = True  # a PDF can carry planted instructions
     description = "Extract the text of a PDF file (absolute or workspace-relative path)."
     input_schema = {

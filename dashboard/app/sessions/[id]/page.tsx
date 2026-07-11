@@ -14,6 +14,7 @@ import {
   Send,
   Download,
   Radio,
+  History,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -45,6 +46,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { ReviewPanel } from "@/components/ReviewPanel";
 import { TracesPanel } from "@/components/TracesPanel";
 import { SessionFeedback } from "@/components/SessionFeedback";
+import { TimeTravelFeed } from "@/components/TimeTravelFeed";
 import { PageShell, Reveal } from "@/components/motion";
 import { pct, num, clockTime, shortId } from "@/lib/format";
 
@@ -415,6 +417,21 @@ export default function SessionDetailPage({
                   ))}
                 </div>
               )}
+            </Card>
+          </Reveal>
+
+          {/* Time-travel — replay every action/token/decision, undo what allows */}
+          <Reveal>
+            <Card
+              title="Time-travel"
+              icon={<History size={15} />}
+              right={
+                <span className="text-[11px] text-zinc-500">
+                  replay &amp; undo
+                </span>
+              }
+            >
+              <TimeTravelFeed sessionId={id} />
             </Card>
           </Reveal>
 

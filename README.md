@@ -51,6 +51,7 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 | 🗝️ **Encrypted secrets vault** | API keys / OAuth / tokens, shared by every subsystem, never shown to agents |
 | 📅 **Scheduled tasks** | friendly repeat presets or a specific date/time — no cron syntax required |
 | 🔭 **Observability** | live event stream, traces, per-run evaluation metrics |
+| 🕰️ **Audit + time-travel** | one replayable **Activity** timeline of every action, tool, token & decision — and **undo** any reversible action (file writes, documents, notes, settings) with a since-changed guard so a rollback never clobbers newer work |
 | 🖥️ **Beautiful dashboard** | arc-reactor dark UI, Kanban board, real-time everything |
 | 📄 **Every file type** | read & write **PDF, Word, Excel, PowerPoint, CSV, Markdown, text** — like a colleague would |
 | 🌱 **Self-correcting** | feedback + reflections become lessons — deduped and **distilled by a real model** into short reusable guidance injected into future runs |
@@ -61,6 +62,7 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 | ⏹️ **Full session control** | stop, rerun, continue (multi-turn), delete, and export any run; per-run **token usage** is tracked |
 | 🖥️ **Multi-terminal workspace** | tiled live terminals with a **+ tile** to add more + a **directory tree** to pick a project per terminal |
 | 🪟 **Runs as a desktop app** | an Electron wrapper opens the whole thing in a native window |
+| 🚀 **Guided first run** | a **code-signing-ready** Windows installer + an in-app onboarding wizard — connect a model, test your mic, run your first task, all before you leave the window |
 | 🤖 **Opt-in computer use** | gated, DOM-first browser automation with human-approval for risky actions |
 | ✅ **Tested offline, enforced in CI** | the whole suite runs green with no network and no API keys — the live count is on the [Tests badge](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml), not hand-edited here |
 

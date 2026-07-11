@@ -12,12 +12,23 @@ import re
 import subprocess
 from typing import Any
 
-from .base import Tool, ToolContext, ToolResult, safe_path
+from .base import Reversibility, Tool, ToolContext, ToolResult, safe_path
+from .undo import (
+    make_file_descriptor,
+    revert_workspace_file,
+    sha256_bytes,
+)
+
+
+def _text_sha(content: str) -> str:
+    """Newline-invariant hash of text content — matches ``sha256_target(mode=text)``."""
+    return sha256_bytes(content.encode("utf-8"))
 
 
 class ReadFileTool(Tool):
     name = "read_file"
     description = "Read a UTF-8 text file from the session workspace."
+    reversibility = Reversibility.READONLY  # a read has no side effect to undo
     input_schema = {
         "type": "object",
         "properties": {"path": {"type": "string"}},
@@ -35,11 +46,51 @@ class ReadFileTool(Tool):
 class WriteFileTool(Tool):
     name = "write_file"
     description = "Create or overwrite a UTF-8 text file in the session workspace."
+    reversibility = Reversibility.REVERSIBLE  # TX-01: prior bytes are captured
     input_schema = {
         "type": "object",
         "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
         "required": ["path", "content"],
     }
+
+    async def capture_undo(
+        self, args: dict[str, Any], ctx: ToolContext
+    ) -> "dict[str, Any] | None":
+        """Snapshot the inverse of the write: prior bytes when overwriting an
+        existing file (``file_restore``), or a delete of the path we are about to
+        CREATE (``file_delete``). ``post_sha256`` is the newline-invariant hash of
+        the content we will write, so a later external edit is detected on undo."""
+        try:
+            target = safe_path(ctx.workspace, args["path"])
+        except Exception:
+            return None
+        post = _text_sha(args["content"])
+        if target.is_file():
+            try:
+                prior = target.read_text(encoding="utf-8").encode("utf-8")
+                mode = "text"
+            except (UnicodeDecodeError, OSError):
+                prior = target.read_bytes()
+                mode, post = "raw", None  # can't predict text-write bytes for binary
+            return make_file_descriptor(
+                ctx.config.home,
+                kind="file_restore",
+                path=args["path"],
+                mode=mode,
+                prior_bytes=prior,
+                pre_sha256=sha256_bytes(prior),
+                post_sha256=post,
+            )
+        return make_file_descriptor(
+            ctx.config.home,
+            kind="file_delete",
+            path=args["path"],
+            mode="text",
+            post_sha256=post,
+        )
+
+    async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        return await revert_workspace_file(undo, ctx)
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = safe_path(ctx.workspace, args["path"])
@@ -56,6 +107,7 @@ class WriteFileTool(Tool):
 class EditFileTool(Tool):
     name = "edit_file"
     description = "Replace the first occurrence of `old` with `new` in a workspace file."
+    reversibility = Reversibility.REVERSIBLE  # TX-01: prior bytes are captured
     input_schema = {
         "type": "object",
         "properties": {
@@ -65,6 +117,39 @@ class EditFileTool(Tool):
         },
         "required": ["path", "old", "new"],
     }
+
+    async def capture_undo(
+        self, args: dict[str, Any], ctx: ToolContext
+    ) -> "dict[str, Any] | None":
+        """Snapshot the pre-edit text. ``post_sha256`` is the hash of the exact
+        text ``execute`` will produce (first-occurrence replace), so a concurrent
+        edit is caught on undo. No-op when the edit won't apply (file missing / old
+        text absent) — nothing will change, so there is nothing to undo."""
+        try:
+            target = safe_path(ctx.workspace, args["path"])
+        except Exception:
+            return None
+        if not target.is_file():
+            return None
+        try:
+            text = target.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            return None
+        if args["old"] not in text:
+            return None
+        new_text = text.replace(args["old"], args["new"], 1)
+        return make_file_descriptor(
+            ctx.config.home,
+            kind="file_restore",
+            path=args["path"],
+            mode="text",
+            prior_bytes=text.encode("utf-8"),
+            pre_sha256=_text_sha(text),
+            post_sha256=_text_sha(new_text),
+        )
+
+    async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        return await revert_workspace_file(undo, ctx)
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = safe_path(ctx.workspace, args["path"])
@@ -80,6 +165,7 @@ class EditFileTool(Tool):
 class ListFilesTool(Tool):
     name = "list_files"
     description = "List files under a workspace directory (default: workspace root)."
+    reversibility = Reversibility.READONLY  # a listing has no side effect
     input_schema = {
         "type": "object",
         "properties": {"path": {"type": "string"}},
@@ -100,6 +186,7 @@ class ListFilesTool(Tool):
 class GrepTool(Tool):
     name = "grep"
     description = "Regex-search workspace files; returns matching path:line entries."
+    reversibility = Reversibility.READONLY  # a search has no side effect
     input_schema = {
         "type": "object",
         "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}},

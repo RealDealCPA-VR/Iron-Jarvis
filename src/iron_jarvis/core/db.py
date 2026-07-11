@@ -66,6 +66,9 @@ _HOT_INDEXES = (
     ("ix_session_created_at", "session", "created_at"),
     ("ix_agentrun_created_at", "agentrun", "created_at"),
     ("ix_memoryrecord_created_at", "memoryrecord", "created_at"),
+    # TX-01 audit timeline queries order/filter tool invocations by time over a
+    # table that was previously unbounded + unindexed on created_at.
+    ("ix_toolinvocation_created_at", "toolinvocation", "created_at"),
 )
 
 
@@ -248,24 +251,57 @@ def run_migrations(engine: Engine) -> int:
 
 
 def prune_events(engine: Engine, older_than_days: int, vacuum: bool = False) -> int:
-    """Delete EventRecord rows older than N days (retention). Returns the count."""
+    """Delete EventRecord + the parallel audit tables (ToolInvocation, AgentRun,
+    UndoJournal) older than N days (retention parity). Returns the total count.
+
+    Previously only EventRecord was pruned, so the tool-invocation ledger + run
+    rows grew UNBOUNDED and the audit trail went internally inconsistent (a tool
+    entry whose backing event had aged out). TX-01 prunes all four on the same
+    cutoff so the timeline stays consistent and bounded."""
     from datetime import timedelta
+    from pathlib import Path
 
     from sqlalchemy import delete as sa_delete
+    from sqlmodel import select
 
     from .ids import utcnow
-    from .models import EventRecord
+    from .models import AgentRun, EventRecord, ToolInvocation, UndoJournal
 
     # Clamp the age so a huge value can't underflow datetime (year 1) and raise
     # OverflowError; ~365,000 days (~1000 years) is already before any real event.
     cutoff = utcnow() - timedelta(days=min(max(0, older_than_days), 365_000))
+    deleted = 0
     with Session(engine) as db:
+        # First collect the on-disk pre-image blobs the expiring UndoJournal rows
+        # reference. A pre-image is a verbatim snapshot of prior file content, so
+        # deleting only the SQL row would strand that plaintext on disk (and in
+        # every backup) past its retention window. Reclaim the blobs in lockstep.
+        stale_refs = [
+            r for r in db.exec(
+                select(UndoJournal.pre_ref).where(
+                    UndoJournal.created_at < cutoff, UndoJournal.pre_ref != None  # noqa: E711
+                )
+            ).all()
+            if r
+        ]
         # Bulk DELETE in the engine (returns rowcount) rather than materializing every
         # expired row as an ORM object and deleting one-by-one — the boot prune over a
         # large backlog was O(rows) memory + ~1.3s/33k rows.
-        result = db.execute(sa_delete(EventRecord).where(EventRecord.created_at < cutoff))
+        for model in (EventRecord, ToolInvocation, AgentRun, UndoJournal):
+            result = db.execute(sa_delete(model).where(model.created_at < cutoff))
+            deleted += int(result.rowcount or 0)
         db.commit()
-        deleted = int(result.rowcount or 0)
+    if stale_refs:
+        # The undo blob store lives at <home>/undo/ and the DB at <home>/ironjarvis.db,
+        # so the home is the DB file's parent. Best-effort unlink; never raise here.
+        from ..tools.undo import delete_preimage
+
+        try:
+            home = Path(engine.url.database).parent  # type: ignore[arg-type]
+            for ref in stale_refs:
+                delete_preimage(home, ref)
+        except Exception:  # noqa: BLE001 — blob reclamation must not fail a prune
+            pass
     if vacuum:
         with engine.connect() as conn:
             conn.exec_driver_sql("VACUUM")

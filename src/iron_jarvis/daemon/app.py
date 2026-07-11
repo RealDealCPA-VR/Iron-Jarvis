@@ -1438,5 +1438,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
     _routes.comm.register(app, d)
     _routes.agents.register(app, d)
     _routes.reflex.register(app, d)
+    _routes.audit.register(app, d)
+    _routes.undo.register(app, d)
     _routes.system.register(app, d)
     return app

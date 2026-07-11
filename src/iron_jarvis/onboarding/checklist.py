@@ -15,6 +15,28 @@ from ..core.db import session_scope
 _DOC_TOOLS = {"read_document", "write_document", "create_document", "extract_pdf"}
 
 
+def voice_backend_present(platform) -> tuple[bool, str | None]:
+    """``(available, backend_label)`` for server-side dictation — read-only.
+
+    Mirrors the daemon's ``_voice_backend`` PRESENCE check without touching the
+    network: an OpenAI API key wins ("openai"), else a configured custom
+    OpenAI-compatible endpoint ("custom"). Never raises — a missing vault key or
+    config attribute just reports "no backend".
+    """
+    try:
+        if platform.secrets.get("openai_api_key"):
+            return True, "openai"
+    except Exception:  # noqa: BLE001 — vault miss = not available
+        pass
+    try:
+        base = (getattr(platform.config, "custom_base_url", None) or "").strip()
+    except Exception:  # noqa: BLE001
+        base = ""
+    if base:
+        return True, "custom"
+    return False, None
+
+
 def _provider_connected(platform) -> bool:
     """True if any *real* (non-mock) provider is available or logged in.
 
@@ -86,9 +108,12 @@ def _taught_style(engine) -> bool:
 
 
 def getting_started(platform) -> list[dict]:
-    """The four first-steps-to-value, each with a live ``done`` flag.
+    """The first-steps-to-value, each with a live ``done`` flag.
 
-    Returns a list of ``{key, title, detail, done, action}`` dicts in order.
+    Returns a list of ``{key, title, detail, done, action, optional}`` dicts in
+    order: four core steps followed by the OPTIONAL ``set_up_voice`` step. The
+    optional step never gates ``first_run`` and is never surfaced as ``next_step``
+    (see :func:`readiness`), so voice can be skipped without blocking onboarding.
     """
     from ..core.models import Session
 
@@ -108,6 +133,7 @@ def getting_started(platform) -> list[dict]:
         ),
         "done": connected,
         "action": "Open Connections (or set ANTHROPIC_API_KEY)",
+        "optional": False,
     }
 
     # 2. Run your first session -------------------------------------------
@@ -123,6 +149,7 @@ def getting_started(platform) -> list[dict]:
         ),
         "done": ran_session,
         "action": 'Click "New Session" (or run `ironjarvis run "..."`)',
+        "optional": False,
     }
 
     # 3. Work with a document ---------------------------------------------
@@ -138,6 +165,7 @@ def getting_started(platform) -> list[dict]:
         ),
         "done": touched_doc,
         "action": "Open or create a document (read_document / write_document)",
+        "optional": False,
     }
 
     # 4. Teach it your style ----------------------------------------------
@@ -153,6 +181,27 @@ def getting_started(platform) -> list[dict]:
         ),
         "done": taught,
         "action": "Give feedback or save a preference (remember_preference)",
+        "optional": False,
     }
 
-    return [step_connect, step_session, step_doc, step_learn]
+    # 5. Set up voice (OPTIONAL) ------------------------------------------
+    # Voice is a nice-to-have, never a blocker: this step is marked optional so
+    # readiness() never advertises it as next_step and it never keeps first_run
+    # true. "done" reflects whether a real speech-to-text backend is present.
+    voice_ready, voice_backend = voice_backend_present(platform)
+    step_voice = {
+        "key": "set_up_voice",
+        "title": "Set up voice (optional)",
+        "detail": (
+            f"Voice dictation is ready via {voice_backend}."
+            if voice_ready
+            else "Optional: add an OpenAI API key (or a custom endpoint serving "
+            "/v1/audio/transcriptions) to talk to Iron Jarvis hands-free. You can "
+            "skip this and set it up later."
+        ),
+        "done": voice_ready,
+        "action": "Add an OpenAI key on Connections (or skip — voice is optional)",
+        "optional": True,
+    }
+
+    return [step_connect, step_session, step_doc, step_learn, step_voice]

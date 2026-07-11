@@ -95,8 +95,65 @@ jobs:
         if: steps.gate.outputs.publish == 'true'
         run: uv sync --extra dev
 
+      # Install the Azure Trusted Signing CLI so desktop/sign.js can sign when
+      # the AZURE_*/IJ_SIGN_* secrets are configured. Harmless when they aren't
+      # (sign.js just skips signing) — but pre-installing keeps the signing path
+      # ready the moment the user adds the secrets. Best-effort: a failure here
+      # must not break the (still valid, unsigned) build.
+      - name: Install trusted-signing-cli (for signed builds)
+        if: steps.gate.outputs.publish == 'true'
+        shell: bash
+        run: cargo install trusted-signing-cli || echo "trusted-signing-cli not installed — builds will be unsigned unless signtool creds are set"
+
       - name: Build + publish the installer
         if: steps.gate.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Code-signing secrets. ABSENT secrets expand to empty strings, so the
+          # build stays unsigned + green until the user adds them (see
+          # docs/SIGNING.md). desktop/sign.js reads these; when all Azure vars
+          # (or the signtool pair) are set it signs, otherwise it skips.
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          IJ_SIGN_ENDPOINT: ${{ secrets.IJ_SIGN_ENDPOINT }}
+          IJ_SIGN_ACCOUNT: ${{ secrets.IJ_SIGN_ACCOUNT }}
+          IJ_SIGN_PROFILE: ${{ secrets.IJ_SIGN_PROFILE }}
+          IJ_SIGNTOOL_PATH: ${{ secrets.IJ_SIGNTOOL_PATH }}
+          IJ_SIGN_SHA1: ${{ secrets.IJ_SIGN_SHA1 }}
+          IJ_TIMESTAMP_URL: ${{ secrets.IJ_TIMESTAMP_URL }}
         run: powershell -ExecutionPolicy Bypass -File desktop/build-installer.ps1 -Publish
+
+      # Mirror of the verify step inside build-installer.ps1 — an independent
+      # gate so a signing regression can never publish a release that claims to
+      # be signed but isn't. With no signing secrets this just reports "unsigned"
+      # and passes.
+      - name: Verify installer signature
+        if: steps.gate.outputs.publish == 'true'
+        shell: pwsh
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          IJ_SIGN_ENDPOINT: ${{ secrets.IJ_SIGN_ENDPOINT }}
+          IJ_SIGN_ACCOUNT: ${{ secrets.IJ_SIGN_ACCOUNT }}
+          IJ_SIGN_PROFILE: ${{ secrets.IJ_SIGN_PROFILE }}
+          IJ_SIGNTOOL_PATH: ${{ secrets.IJ_SIGNTOOL_PATH }}
+          IJ_SIGN_SHA1: ${{ secrets.IJ_SIGN_SHA1 }}
+        run: |
+          $signExpected =
+              ($env:AZURE_TENANT_ID -and $env:AZURE_CLIENT_ID -and $env:AZURE_CLIENT_SECRET -and
+               $env:IJ_SIGN_ENDPOINT -and $env:IJ_SIGN_ACCOUNT -and $env:IJ_SIGN_PROFILE) -or
+              ($env:IJ_SIGNTOOL_PATH -and $env:IJ_SIGN_SHA1)
+          $exes = Get-ChildItem desktop/release -Filter *.exe -ErrorAction SilentlyContinue
+          if (-not $exes) { throw "no installer .exe found to verify" }
+          foreach ($exe in $exes) {
+            $sig = Get-AuthenticodeSignature $exe.FullName
+            if ($signExpected) {
+              if ($sig.Status -ne 'Valid') { throw "signing creds present but $($exe.Name) is not validly signed (status: $($sig.Status))" }
+              if ($null -eq $sig.TimeStamperCertificate) { throw "signing creds present but $($exe.Name) has no timestamp" }
+              Write-Host "SIGNED + timestamped: $($exe.Name)"
+            } else {
+              Write-Host "unsigned (no cert configured): $($exe.Name) [status: $($sig.Status)]"
+            }
+          }

@@ -109,6 +109,7 @@ class Orchestrator:
         project_id: str | None = None,
         allow_tools: list[str] | None = None,
         workspace_root: str | None = None,
+        origin: str | None = None,
     ) -> Session:
         import json as _json
 
@@ -141,6 +142,11 @@ class Orchestrator:
             # project never leaks in.
             project_id=project_id,
             allow_tools_json=_json.dumps(list(allow_tools or [])),
+            # TX-01 provenance: WHO/WHAT started this (user_chat, autonomy,
+            # schedule, comm, reflex, …). self_dev is inferable; everything else
+            # is passed by the caller. Defaults None = unattributed (the audit
+            # timeline falls back to inferring from the spawning event).
+            origin=origin or ("self_dev" if self_dev else None),
         )
         if direct_root is not None:
             direct_root.mkdir(parents=True, exist_ok=True)

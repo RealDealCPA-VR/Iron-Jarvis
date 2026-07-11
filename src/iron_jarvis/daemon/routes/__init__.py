@@ -6,6 +6,7 @@ builds the shared deps object ``d`` and calls each register in order.
 
 from . import (  # noqa: F401
     agents,
+    audit,
     autonomy,
     chat,
     comm,
@@ -24,6 +25,7 @@ from . import (  # noqa: F401
     settings,
     system,
     terminals,
+    undo,
     voice,
     workflows,
 )

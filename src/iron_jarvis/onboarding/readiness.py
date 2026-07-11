@@ -7,7 +7,12 @@ and the getting-started checklist into one payload the daemon/CLI can render.
 
 from __future__ import annotations
 
-from .checklist import _provider_connected, _has_any, getting_started
+from .checklist import (
+    _has_any,
+    _provider_connected,
+    getting_started,
+    voice_backend_present,
+)
 from .doctor import doctor
 
 
@@ -32,19 +37,29 @@ def readiness(platform) -> dict:
           "version": str,
           "first_run": bool,
           "doctor": {ok, checks},
-          "checklist": [ {key, title, detail, done, action}, ... ],
-          "next_step": {step dict} | None,   # first incomplete step
+          "checklist": [ {key, title, detail, done, action, optional}, ... ],
+          "next_step": {step dict} | None,   # first incomplete REQUIRED step
+          "voice": {"available": bool, "backend": str | None},
         }
+
+    ``next_step`` skips OPTIONAL steps (e.g. ``set_up_voice``) so voice never
+    becomes the nudged "do this next" — it stays a pure opt-in.
     """
     from .. import __version__
 
     diagnostic = doctor()
     steps = getting_started(platform)
-    next_step = next((s for s in steps if not s["done"]), None)
+    # Only REQUIRED (non-optional) incomplete steps can be the next step: the
+    # optional voice item must never be advertised as "do this next".
+    next_step = next(
+        (s for s in steps if not s["done"] and not s.get("optional")), None
+    )
+    voice_available, voice_backend = voice_backend_present(platform)
     return {
         "version": __version__,
         "first_run": is_first_run(platform),
         "doctor": diagnostic,
         "checklist": steps,
         "next_step": next_step,
+        "voice": {"available": voice_available, "backend": voice_backend},
     }

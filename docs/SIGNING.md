@@ -6,6 +6,58 @@ Iron Jarvis ships unsigned today, so every new download trips SmartScreen
 identity to the binaries and letting Microsoft build reputation for them.
 This page is what it actually takes, as of mid-2026.
 
+## TL;DR — what is already wired vs. what YOU must supply
+
+The build is **already plumbed for signing** and stays green whether or not you
+configure it:
+
+- `desktop/sign.js` is a custom electron-builder signing hook. It signs each
+  artifact **only when signing credentials are in the environment**; with no
+  creds it logs `code-signing skipped (no cert configured) — installer will be
+  unsigned` and returns, so the build still produces a working (unsigned)
+  installer.
+- `desktop/build-installer.ps1` and `.github/workflows/release.yml` both run a
+  `Get-AuthenticodeSignature` verify pass afterward: if creds were present they
+  **fail the build unless the installer is validly signed AND timestamped**; if
+  not, they just report "unsigned" and pass.
+- `release.yml` passes all signing secrets through as env (absent secrets are
+  empty strings, so nothing breaks) and best-effort-installs
+  `trusted-signing-cli` on the runner.
+
+**What is EXTERNAL and user-supplied — Iron Jarvis cannot do this for you:**
+
+1. **Obtain a real code-signing certificate.** This costs money and requires
+   identity validation; no certificate is (or can be) invented here. Azure
+   Trusted Signing (~$9.99/mo) is recommended — see the options table below.
+2. **Add the repo secrets** (GitHub → repo → Settings → Secrets and variables →
+   Actions → New repository secret). For **Azure Trusted Signing** add all six:
+
+   | Secret | Value |
+   |---|---|
+   | `AZURE_TENANT_ID` | service-principal tenant id |
+   | `AZURE_CLIENT_ID` | service-principal (app) client id |
+   | `AZURE_CLIENT_SECRET` | service-principal client secret |
+   | `IJ_SIGN_ENDPOINT` | Trusted Signing endpoint, e.g. `https://wus2.codesigning.azure.net/` |
+   | `IJ_SIGN_ACCOUNT` | Trusted Signing account name |
+   | `IJ_SIGN_PROFILE` | certificate profile name |
+
+   For a **signtool / eSigner** cert instead, add `IJ_SIGNTOOL_PATH` (full path
+   to `signtool.exe` on the runner) and `IJ_SIGN_SHA1` (cert thumbprint).
+   Optional: `IJ_TIMESTAMP_URL` (defaults to
+   `http://timestamp.acs.microsoft.com`).
+3. **Set `publisherName`** in `desktop/package.json` → `build.win` to the
+   **exact subject CN of your certificate** (it is a placeholder today).
+4. **Flip `verifyUpdateCodeSignature` to `true`** in the same block *after* your
+   first signed release ships. It is `false` today on purpose: with a placeholder
+   `publisherName` and unsigned binaries, electron-updater would otherwise reject
+   every self-update. Caveat: the transition update (unsigned → first signed
+   release) is not signature-verified; every release after that must stay signed
+   with the same publisher or installed apps will refuse to update.
+
+Until you do steps 1–3, **builds are unsigned** and Windows shows a SmartScreen
+"unknown publisher" warning on install. That is expected and does not break
+anything.
+
 ## The ground rules (why this isn't just "buy a .pfx")
 
 - Since **June 2023** (CA/Browser Forum rules), ALL publicly-trusted

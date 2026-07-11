@@ -186,6 +186,9 @@ def build_platform(
     # the Fernet key material, regardless of the FS allowlist (security).
     register_protected_root(config.home / "secrets")
     register_protected_root(config.browser_dir)
+    # TX-01 undo journal pre-images can hold prior file content (incl. from the
+    # user's real folders) — never let an agent file tool read them back out.
+    register_protected_root(config.home / "undo")
 
     # Secrets vault + LLM Connections (OAuth2/PKCE + API key) — built early so the
     # provider manager resolves live credentials and reports REAL availability.

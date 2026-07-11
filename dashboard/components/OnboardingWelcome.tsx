@@ -24,6 +24,7 @@ const STEP_LINK: Record<string, { href: string; cta: string }> = {
   first_session: { href: "/sessions", cta: "New session" },
   work_with_document: { href: "/documents", cta: "Open Documents" },
   teach_style: { href: "/memory?scope=lessons", cta: "Review lessons" },
+  set_up_voice: { href: "/connections", cta: "Enable voice" },
 };
 
 function stepLink(step: OnboardingStep) {
@@ -137,6 +138,11 @@ export function OnboardingWelcome() {
                     {isNext && (
                       <span className="rounded-full border border-accent/30 bg-accent/[0.1] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent-soft">
                         next
+                      </span>
+                    )}
+                    {step.optional && !step.done && (
+                      <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                        optional
                       </span>
                     )}
                   </div>

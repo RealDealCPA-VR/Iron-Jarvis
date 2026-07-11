@@ -11,7 +11,57 @@ from pathlib import Path
 from typing import Any
 
 from ..schemas import RepairBody, SettingsBody, _SETTINGS_KEYS
-from ...core.config import persist_config_values
+from ...core.config import capture_config_undo, persist_config_values
+
+
+def _record_settings_undo(platform, prior: "dict[str, Any]") -> None:
+    """Journal a settings change as a reversible ``setting_restore`` action (TX-01),
+    so it appears on the audit timeline and can be reversed from time-travel
+    (``POST /undo`` restores the prior values via ``restore_config_values``).
+
+    ``prior`` holds only NON-SECRET keys whose value actually changed (secret-named
+    keys are refused capture upstream, so no credential lands in the journal).
+    Best-effort — a telemetry failure must never fail the settings write itself."""
+    if not prior:
+        return
+    import json
+
+    from ...core.db import session_scope
+    from ...core.ids import new_id
+    from ...core.models import PermissionMode, ToolInvocation, UndoJournal
+    from ...tools.base import Reversibility
+
+    inv_id = new_id("tool")
+    keys = sorted(prior)
+    try:
+        with session_scope(platform.engine) as db:
+            db.add(
+                ToolInvocation(
+                    id=inv_id,
+                    session_id="settings",
+                    agent_run_id="",
+                    tool="update_settings",
+                    args_json=json.dumps({"changed": keys}),
+                    verdict=PermissionMode.ALLOW,
+                    ok=True,
+                    output="changed " + ", ".join(keys),
+                    reversibility=Reversibility.REVERSIBLE.value,
+                )
+            )
+            db.add(
+                UndoJournal(
+                    action_id=inv_id,
+                    session_id="settings",
+                    agent_run_id="",
+                    tool="update_settings",
+                    kind="setting_restore",
+                    reversible=True,
+                    pre_inline=json.dumps({"prior": prior}),
+                )
+            )
+            db.commit()
+    except Exception:  # noqa: BLE001 — journaling must never break the settings write
+        pass
 
 
 def register(app: FastAPI, d) -> None:
@@ -34,7 +84,10 @@ def register(app: FastAPI, d) -> None:
                 setattr(trial, key, value)
             except Exception:  # noqa: BLE001 - pydantic validation
                 raise HTTPException(status_code=400, detail=f"invalid value for {key}")
-        # Everything validated — commit to the running config.
+        # Everything validated — snapshot the PRIOR values (non-secret keys only)
+        # for a settings-change undo (TX-01) BEFORE mutating, then commit to the
+        # running config.
+        undo_snapshot = capture_config_undo(cfg, list(candidates.keys()))
         updated: list[str] = []
         for key, value in candidates.items():
             setattr(cfg, key, value)
@@ -42,6 +95,14 @@ def register(app: FastAPI, d) -> None:
         # Persist atomically (temp + os.replace) so a crash mid-write can't leave a
         # torn config.toml that aborts the next boot.
         persist_config_values(cfg.home, {k: getattr(cfg, k, None) for k in updated})
+        # TX-01: journal the change (only keys that actually changed value) as a
+        # reversible action so it lands on the audit timeline and can be undone.
+        changed_prior = {
+            k: v
+            for k, v in undo_snapshot.get("prior", {}).items()
+            if getattr(cfg, k, None) != v
+        }
+        _record_settings_undo(d.platform, changed_prior)
         # LIVE re-arm: an autonomy_*/sentinels_* change re-arms its background
         # loop immediately (this endpoint runs in a threadpool, so hop onto the
         # daemon loop). Previously the toggle waited for the next restart.

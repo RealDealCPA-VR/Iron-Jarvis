@@ -323,6 +323,54 @@ def persist_config_values(home: str | Path, values: dict[str, Any]) -> None:
         atomic_write_toml(path, doc)
 
 
+#: A config KEY whose name matches one of these fragments is treated as carrying
+#: a plaintext credential and is NEVER snapshotted into the undo journal (that
+#: would spill a secret into the DB + backups, defeating the encrypted vault).
+#: None of the current settings keys carry secrets — credentials live in the
+#: Fernet vault — but this fails safe if one is ever added.
+_SECRET_KEY_FRAGMENTS = ("key", "secret", "token", "password", "passwd", "credential")
+
+
+def is_secret_config_key(key: str) -> bool:
+    """True when ``key`` looks like it holds a plaintext secret (see above)."""
+    k = key.lower()
+    return any(frag in k for frag in _SECRET_KEY_FRAGMENTS)
+
+
+def capture_config_undo(cfg: "Config", keys: list[str]) -> dict[str, Any]:
+    """Snapshot the PRIOR values of ``keys`` for a settings-change undo (TX-01).
+
+    Returns a ``setting_restore`` descriptor: ``prior`` maps each SAFE key to its
+    value before the change, and ``skipped`` lists secret-looking keys that were
+    deliberately NOT captured (so a credential never lands in the undo journal in
+    plaintext). Reverting applies :func:`restore_config_values` to ``prior``."""
+    prior: dict[str, Any] = {}
+    skipped: list[str] = []
+    for key in keys:
+        if is_secret_config_key(key):
+            skipped.append(key)
+            continue
+        prior[key] = getattr(cfg, key, None)
+    return {"kind": "setting_restore", "prior": prior, "skipped": skipped}
+
+
+def restore_config_values(cfg: "Config", prior: dict[str, Any]) -> list[str]:
+    """Re-apply prior config values (the inverse of a settings change) to the live
+    ``cfg`` AND persist them, so the restore survives a restart. Returns the keys
+    restored. A single invalid value is skipped rather than aborting the whole
+    revert (validate_assignment would raise on assignment)."""
+    updated: list[str] = []
+    for key, value in prior.items():
+        try:
+            setattr(cfg, key, value)
+        except Exception:  # noqa: BLE001 — pydantic validation on assignment
+            continue
+        updated.append(key)
+    if updated:
+        persist_config_values(cfg.home, {k: getattr(cfg, k, None) for k in updated})
+    return updated
+
+
 def global_config_path() -> Path:
     return Path.home() / ".ironjarvis" / "config.toml"
 

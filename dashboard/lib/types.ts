@@ -154,6 +154,51 @@ export interface IJEvent {
   payload: Record<string, unknown>;
 }
 
+/* ---- Audit timeline + time-travel (TX-01) -------------------------------- */
+/**
+ * One row of the canonical audit timeline (`GET /audit`) — a unified projection
+ * over the event log + tool ledger. `kind` is the coarse lane:
+ * tool | token | decision | lifecycle | action.
+ */
+export interface AuditEntry {
+  id: string;
+  ts: string;
+  kind: string;
+  actor: string;
+  session_id: string | null;
+  project_id?: string | null;
+  tool?: string | null;
+  verdict?: string | null;
+  ok?: boolean | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cost_usd?: number | null;
+  /** Recorded reversible at capture time (an inverse was journaled). */
+  reversible?: boolean;
+  /** Eligible to undo RIGHT NOW (reversible AND not yet undone). */
+  undoable?: boolean;
+  /** This action's inverse has actually been applied (do NOT infer from flags). */
+  undone?: boolean;
+  summary?: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface AuditTimeline {
+  entries: AuditEntry[];
+  /** Keyset cursor: pass as `before=` to fetch older entries (null at the end). */
+  next_cursor: string | null;
+  /** Total matching rows — present only on the first page (no `before`). */
+  total?: number;
+}
+
+/** Result of reversing an action (`POST /undo/{action_id}`). */
+export interface UndoResult {
+  undone: string;
+  undo_invocation_id: string;
+  tool: string;
+  output: string;
+}
+
 /* ---- Secrets ------------------------------------------------------------- */
 export interface SecretMeta {
   name: string;
@@ -363,11 +408,19 @@ export interface OAuthMessage {
 
 /* ---- Onboarding / first-run / doctor ------------------------------------- */
 export interface OnboardingStep {
-  key: string; // connect_ai | first_session | work_with_document | teach_style
+  key: string; // connect_ai | first_session | work_with_document | teach_style | set_up_voice
   title: string;
   detail: string;
   done: boolean;
   action: string;
+  /** Optional steps (e.g. set_up_voice) never gate first_run or become next_step. */
+  optional?: boolean;
+}
+
+/** Server-side dictation readiness, surfaced on GET /onboarding. */
+export interface OnboardingVoice {
+  available: boolean;
+  backend: string | null; // "openai" | "custom" | null
 }
 
 export interface DoctorCheck {
@@ -389,6 +442,8 @@ export interface Onboarding {
   doctor: Doctor;
   checklist: OnboardingStep[];
   next_step: OnboardingStep | null;
+  /** Voice readiness (daemon speech-to-text backend presence). Absent on older daemons. */
+  voice?: OnboardingVoice;
 }
 
 /* ---- Documents ----------------------------------------------------------- */

@@ -214,8 +214,32 @@ class AgentRuntime:
             run.steps = step + 1
             run.provider, run.model = route.provider, route.model
             usage = getattr(resp, "usage", None) or {}
-            run.input_tokens += int(usage.get("input_tokens", 0) or 0)
-            run.output_tokens += int(usage.get("output_tokens", 0) or 0)
+            step_in = int(usage.get("input_tokens", 0) or 0)
+            step_out = int(usage.get("output_tokens", 0) or 0)
+            run.input_tokens += step_in
+            run.output_tokens += step_out
+            # TX-01 audit: one persisted event PER LLM call so every token is
+            # individually replayable on the timeline (the per-run aggregate lives
+            # on AgentRun). Best-effort — never let telemetry break a run.
+            try:
+                from ..eval.pricing import cost_for
+
+                await self.p.event_bus.publish(
+                    EventType.LLM_COMPLETED,
+                    {
+                        "run_id": run.id,
+                        "step": step + 1,
+                        "provider": route.provider,
+                        "model": route.model,
+                        "input_tokens": step_in,
+                        "output_tokens": step_out,
+                        "cost_usd": cost_for(route.provider, route.model, step_in, step_out),
+                        "task_class": agent_def.type.value,
+                    },
+                    session_id=session.id,
+                )
+            except Exception:  # noqa: BLE001 — telemetry must never break the loop
+                pass
 
             if not resp.wants_tools:
                 final_text = resp.text

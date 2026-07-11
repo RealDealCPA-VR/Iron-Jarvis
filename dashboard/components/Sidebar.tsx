@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   MessageSquare,
   Boxes,
+  History,
   Images,
   Sparkles,
   BrainCircuit,
@@ -68,6 +69,7 @@ const NAV: NavSection[] = [
       { href: "/terminals", label: "Build", icon: SquareTerminal },
       { href: "/projects", label: "Projects", icon: FolderKanban },
       { href: "/sessions", label: "Sessions", icon: Boxes },
+      { href: "/activity", label: "Activity", icon: History },
       { href: "/creative", label: "Creative", icon: Images },
     ],
   },
@@ -132,6 +134,7 @@ const ESSENTIAL_HREFS = new Set<string>([
   "/terminals", // Build (hero)
   "/projects", // Projects (hero — the context spine)
   "/sessions", // Sessions (hero)
+  "/activity", // Activity — the trust surface (audit + time-travel)
   "/creative", // Creative — see what Iron Jarvis makes
   "/memory", // Memory (the one unified surface)
   "/connections", // Connections

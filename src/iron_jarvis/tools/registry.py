@@ -11,9 +11,11 @@ from typing import Any, Iterable
 
 from ..core.db import dumps, session_scope
 from ..core.events import EventType
-from ..core.models import PermissionMode, ToolInvocation
-from .base import Tool, ToolContext, ToolResult
+from ..core.ids import new_id
+from ..core.models import PermissionMode, ToolInvocation, UndoJournal
+from .base import Reversibility, Tool, ToolContext, ToolResult
 from .permissions import PermissionEngine
+from .undo import finalize_post_hash
 
 
 class ToolRegistry:
@@ -90,31 +92,63 @@ class ToolRegistry:
         decision = perms.authorize(
             tool.perm_key(), args, agent_overrides, session_allow=session_allow
         )
+        reversibility = getattr(tool, "reversibility", Reversibility.IRREVERSIBLE)
+        rev_value = reversibility.value if isinstance(reversibility, Reversibility) else str(reversibility)
+
         if not decision.allowed:
+            inv_id = self._record(
+                ctx, name, args, decision.mode, ok=False,
+                output=decision.reason, reversibility=rev_value,
+            )
             await ctx.event_bus.publish(
                 EventType.TOOL_DENIED,
-                {"tool": name, "mode": decision.mode.value, "reason": decision.reason},
+                {"tool": name, "mode": decision.mode.value, "reason": decision.reason,
+                 "invocation_id": inv_id, "reversibility": rev_value},
                 session_id=ctx.session_id,
             )
-            self._record(ctx, name, args, decision.mode, ok=False, output=decision.reason)
             return ToolResult(ok=False, error=f"permission denied: {decision.reason}")
+
+        # TX-01 undo: snapshot the INVERSE *before* the mutation, for reversible
+        # tools only. Best-effort — a capture failure degrades to no-undo (the
+        # tool still runs) rather than blocking the action, matching the
+        # returns_untrusted_content best-effort discipline.
+        undo_desc: dict[str, Any] | None = None
+        if reversibility == Reversibility.REVERSIBLE:
+            try:
+                undo_desc = await tool.capture_undo(args, ctx)
+            except Exception:  # noqa: BLE001 — capture never blocks the tool
+                undo_desc = None
 
         try:
             result = await tool.execute(args, ctx)
         except Exception as exc:  # tools must not crash the runtime
             result = ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
 
-        self._record(
+        # For a raw/binary write the capture could not predict the post-image, so
+        # re-hash the file NOW (after a successful write) to arm the anti-clobber
+        # guard on a future undo. Best-effort — never blocks the tool.
+        if result.ok and undo_desc is not None:
+            try:
+                finalize_post_hash(undo_desc, ctx)
+            except Exception:  # noqa: BLE001 — telemetry/guard must never break the tool
+                pass
+
+        inv_id = self._record(
             ctx,
             name,
             args,
             decision.mode,
             ok=result.ok,
             output=result.output if result.ok else (result.error or ""),
+            reversibility=rev_value,
+            # Only journal an inverse for a SUCCESSFUL mutation (a failed write
+            # changed nothing, so there is nothing to undo).
+            undo=undo_desc if result.ok else None,
         )
         await ctx.event_bus.publish(
             EventType.TOOL_EXECUTED,
-            {"tool": name, "ok": result.ok, "mode": decision.mode.value},
+            {"tool": name, "ok": result.ok, "mode": decision.mode.value,
+             "invocation_id": inv_id, "reversibility": rev_value},
             session_id=ctx.session_id,
         )
         return result
@@ -127,13 +161,20 @@ class ToolRegistry:
         mode: PermissionMode,
         ok: bool,
         output: str,
-    ) -> None:
+        *,
+        reversibility: str | None = None,
+        undo: "dict[str, Any] | None" = None,
+    ) -> str:
+        """Persist the ToolInvocation (+ an UndoJournal row when an inverse was
+        captured) and return the invocation id so the caller can tag its event."""
         # Redact secret-bearing args BEFORE persisting — args_json is stored in the
         # DB at rest, returned by /sessions/{id}/export, and included in backups, so
         # a plaintext credential here would defeat the encrypted vault.
         tool = self._tools.get(name)
         safe_args = tool.redact_args(args) if tool is not None else args
+        inv_id = new_id("tool")
         record = ToolInvocation(
+            id=inv_id,
             session_id=ctx.session_id,
             agent_run_id=ctx.agent_run_id,
             tool=name,
@@ -141,7 +182,27 @@ class ToolRegistry:
             verdict=mode,
             ok=ok,
             output=output[:4000],
+            reversibility=reversibility,
         )
         with session_scope(ctx.engine) as db:
             db.add(record)
+            if undo:
+                # The inverse descriptor (from Tool.capture_undo) is a small,
+                # redaction-safe dict; the big pre-image itself is already a blob
+                # ref or a small inline value inside it.
+                db.add(
+                    UndoJournal(
+                        action_id=inv_id,
+                        session_id=ctx.session_id,
+                        agent_run_id=ctx.agent_run_id,
+                        tool=name,
+                        kind=str(undo.get("kind") or ""),
+                        reversible=bool(undo.get("reversible", True)),
+                        pre_ref=undo.get("pre_ref"),
+                        pre_inline=undo.get("pre_inline"),
+                        pre_sha256=undo.get("pre_sha256"),
+                        post_sha256=undo.get("post_sha256"),
+                    )
+                )
             db.commit()
+        return inv_id

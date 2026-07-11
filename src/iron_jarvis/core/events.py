@@ -35,6 +35,12 @@ class EventType:
     AGENT_COMPLETED = "agent.completed"
     TOOL_EXECUTED = "tool.executed"
     TOOL_DENIED = "tool.denied"
+    # TX-01 audit: one event per LLM completion so every token is individually
+    # replayable — {run_id, step, provider, model, input_tokens, output_tokens,
+    # cost_usd, task_class}. The per-run AGGREGATE still lives on AgentRun.
+    LLM_COMPLETED = "llm.completed"
+    # TX-01 time-travel: a reversible action's inverse was applied (undone).
+    ACTION_REVERTED = "action.reverted"
     ARTIFACT_GENERATED = "artifact.generated"
     MEMORY_UPDATED = "memory.updated"
     WORKFLOW_COMPLETED = "workflow.completed"

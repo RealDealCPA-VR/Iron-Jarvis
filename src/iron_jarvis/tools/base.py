@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -36,6 +37,27 @@ class ToolResult:
     error: str | None = None
 
 
+class Reversibility(str, Enum):
+    """Whether a tool's effect can be UNDONE (TX-01 time-travel).
+
+    ``READONLY``     — no side effect, so "undo" is a trivial no-op (reads).
+    ``REVERSIBLE``   — mutates state we can capture an inverse for (file write,
+                       memory append, settings change) → the registry snapshots
+                       the pre-image and ``revert`` restores it.
+    ``IRREVERSIBLE`` — the effect leaves the machine (send email/comm, external
+                       API POST, generative spend) and CANNOT be taken back.
+
+    Default is IRREVERSIBLE — FAIL-SAFE: a tool that hasn't declared itself is
+    treated as non-undoable so we never offer a fake "undone" for something that
+    actually left a trace. Str-valued so it serializes straight into the audit
+    ledger + the tool.executed event.
+    """
+
+    READONLY = "readonly"
+    REVERSIBLE = "reversible"
+    IRREVERSIBLE = "irreversible"
+
+
 class Tool(ABC):
     name: str = ""
     description: str = ""
@@ -48,9 +70,34 @@ class Tool(ABC):
     #: model sees it, so imperatives inside it can't be followed as instructions.
     #: (web_search/browse already self-fence, so they leave this False.)
     returns_untrusted_content: bool = False
+    #: TX-01 undo contract. Fail-safe default = IRREVERSIBLE (see enum). A tool
+    #: that sets this to REVERSIBLE MUST also implement ``capture_undo`` (return a
+    #: non-None inverse descriptor) and ``revert`` — the registry snapshots the
+    #: inverse BEFORE the mutation and the /undo endpoint replays it.
+    reversibility: Reversibility = Reversibility.IRREVERSIBLE
 
     def perm_key(self) -> str:
         return self.permission_key or self.name
+
+    async def capture_undo(
+        self, args: dict[str, Any], ctx: "ToolContext"
+    ) -> "dict[str, Any] | None":
+        """Snapshot the INVERSE of this call, taken BEFORE ``execute`` mutates
+        anything. Return a small, redaction-safe descriptor the registry stores
+        in the undo journal (e.g. ``{"kind": "file_restore", "pre_ref": ...,
+        "pre_sha256": ...}``), or ``None`` when there is nothing to undo (a
+        no-op) or the capture failed. Only called for ``REVERSIBLE`` tools; the
+        default no-op keeps every other tool unaffected."""
+        return None
+
+    async def revert(
+        self, undo: dict[str, Any], ctx: "ToolContext"
+    ) -> ToolResult:
+        """Apply the inverse captured by :meth:`capture_undo` — restore the prior
+        bytes, delete the created path, drop the appended memory, etc. Must go
+        through the same fs-policy/safety checks as the forward mutation. Default:
+        honestly report that this tool cannot be undone."""
+        return ToolResult(ok=False, error=f"{self.name}: this action cannot be undone")
 
     def spec(self) -> dict[str, Any]:
         """Schema advertised to the model (§19 inputSchema)."""
