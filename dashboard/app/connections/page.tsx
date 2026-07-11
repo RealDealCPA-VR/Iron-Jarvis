@@ -500,7 +500,10 @@ function ConnectionCard({
         </div>
       ) : (
         <div className="space-y-3">
-          {/* Account login (OAuth) — log in with your Anthropic/OpenAI/Google account */}
+          {/* Account login (OAuth) — only for user-registered-app providers
+              (Google/Gemini, Dropbox, Drive, OneDrive). Anthropic/OpenAI are
+              API-key-only; their subscription is inherited from the CLI, so
+              canOAuth is false and this button never shows for them. */}
           {canOAuth && (
             <div className="space-y-2">
               <button onClick={connectOAuth} disabled={busy} className="btn-accent w-full py-1.5 text-xs">

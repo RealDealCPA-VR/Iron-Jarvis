@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Activity,
   Gauge,
@@ -31,6 +32,7 @@ import {
   HardDrive,
   Zap,
   AlertTriangle,
+  ChevronRight,
 } from "lucide-react";
 import { usePolledApi, useApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
@@ -77,6 +79,9 @@ type Reliability = {
   disk?: { free?: number; total?: number };
   recent_provider_failures?: number;
 };
+
+/** The active project (the "context spine") — carried on /health. */
+type ActiveProject = { id: string; name: string; root?: string };
 
 /** A saved reusable task from GET /templates (mirrors the Templates page). */
 interface Template {
@@ -194,7 +199,7 @@ function HeroStat({
   const tint =
     tone === "bad" ? "text-rose-300" : tone === "accent" ? "text-accent-soft" : "text-zinc-100";
   return (
-    <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2.5">
+    <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2.5 backdrop-blur-sm">
       <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-zinc-500">
         <span className="text-accent-soft/70">{icon}</span>
         {label}
@@ -233,6 +238,229 @@ function HealthItem({
         </span>
       </div>
     </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  ReactorHero — the arc-reactor centerpiece (the visual highlight).          */
+/* -------------------------------------------------------------------------- */
+
+function ReactorHero({
+  statusLine,
+  connected,
+  version,
+  activeProject,
+  model,
+  runningCount,
+  freeDisk,
+  failures,
+  diskLoading,
+}: {
+  statusLine: string;
+  connected: boolean;
+  version?: string;
+  activeProject?: ActiveProject | null;
+  model?: string;
+  runningCount: number;
+  freeDisk?: number;
+  failures: number;
+  diskLoading: boolean;
+}) {
+  return (
+    <div className="card-surface relative overflow-hidden">
+      {/* Ambient arc-reactor bloom. */}
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute -left-24 -top-28 h-72 w-72 rounded-full bg-accent/10 blur-3xl" />
+        <div className="absolute bottom-[-6rem] -right-20 h-72 w-72 rounded-full bg-accent/[0.07] blur-3xl" />
+        <div className="absolute left-[26%] top-1/2 h-[440px] w-[440px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(closest-side,rgba(34,211,238,0.12),transparent)]" />
+      </div>
+
+      <div className="relative grid gap-8 p-8 lg:grid-cols-[auto_1fr] lg:items-center lg:gap-12 lg:p-12">
+        {/* The reactor */}
+        <div className="relative mx-auto grid h-44 w-44 shrink-0 place-items-center sm:h-56 sm:w-56">
+          {/* Static concentric rings. */}
+          <div className="absolute inset-0 rounded-full border border-accent/15" />
+          <div className="absolute inset-[10%] rounded-full border border-accent/10" />
+          <div className="absolute inset-[22%] rounded-full border border-dashed border-accent/20" />
+          {/* Rotating conic sweep (masked to a thin outer ring band). */}
+          <div className="absolute inset-0 animate-spin rounded-full [animation-duration:13s] [background:conic-gradient(from_0deg,transparent_0deg,rgba(34,211,238,0.55)_55deg,transparent_150deg)] [mask:radial-gradient(farthest-side,transparent_calc(100%_-_7px),#000_calc(100%_-_7px))] [-webkit-mask:radial-gradient(farthest-side,transparent_calc(100%_-_7px),#000_calc(100%_-_7px))]" />
+          {/* Reverse inner sweep. */}
+          <div className="absolute inset-[14%] animate-spin rounded-full [animation-direction:reverse] [animation-duration:22s] [background:conic-gradient(from_180deg,transparent,rgba(95,201,221,0.4),transparent_120deg)] [mask:radial-gradient(farthest-side,transparent_calc(100%_-_5px),#000_calc(100%_-_5px))] [-webkit-mask:radial-gradient(farthest-side,transparent_calc(100%_-_5px),#000_calc(100%_-_5px))]" />
+          {/* Orbiting glow node. */}
+          <div className="absolute inset-0 animate-spin [animation-duration:9s]">
+            <span className="absolute left-1/2 top-0 h-2 w-2 -translate-x-1/2 rounded-full bg-accent shadow-[0_0_12px_3px_rgba(34,211,238,0.75)]" />
+          </div>
+          {/* Glowing core with the live MoodOrb. */}
+          <div className="relative grid h-[38%] w-[38%] place-items-center rounded-full border border-accent/25 bg-accent/[0.06] shadow-[0_0_55px_-8px_rgba(34,211,238,0.6)] animate-pulse-glow">
+            <span className="scale-[2.2]">
+              <MoodOrb />
+            </span>
+          </div>
+        </div>
+
+        {/* Wordmark + status + stats */}
+        <div className="min-w-0 text-center lg:text-left">
+          <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-accent-soft/70">
+            Iron Jarvis
+          </div>
+          <h1 className="text-gradient mt-2 text-3xl font-semibold leading-tight tracking-tight sm:text-[2.6rem]">
+            {statusLine}
+          </h1>
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-x-2.5 gap-y-2 text-xs text-zinc-500 lg:justify-start">
+            <span className="inline-flex items-center gap-1.5">
+              <Dot on={connected} />
+              {connected ? "live" : "stream offline"}
+            </span>
+            {version && (
+              <>
+                <span className="text-zinc-700">·</span>
+                <span>v{version}</span>
+              </>
+            )}
+            {activeProject && (
+              <Link
+                href={`/projects/${encodeURIComponent(activeProject.id)}`}
+                title="Your active context spine — new chats, sessions & workflows carry it"
+                className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent/[0.12] px-2.5 py-0.5 font-medium text-accent-soft shadow-[0_0_14px_rgba(34,211,238,0.3)] transition-colors hover:bg-accent/[0.18]"
+              >
+                <FolderKanban size={11} />
+                {activeProject.name}
+              </Link>
+            )}
+          </div>
+
+          <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <HeroStat
+              label="Model"
+              icon={<Cpu size={12} />}
+              tone="accent"
+              value={model ? <span className="font-mono">{model}</span> : "—"}
+              title={model}
+            />
+            <HeroStat
+              label="Running"
+              icon={<Zap size={12} />}
+              tone={runningCount > 0 ? "accent" : "neutral"}
+              value={String(runningCount)}
+            />
+            <HeroStat
+              label="Free disk"
+              icon={<HardDrive size={12} />}
+              value={
+                freeDisk != null ? fmtBytes(freeDisk) : diskLoading ? <Skeleton className="h-4 w-16" /> : "—"
+              }
+            />
+            <HeroStat
+              label="Failures 24h"
+              icon={<AlertTriangle size={12} />}
+              tone={failures > 0 ? "bad" : "neutral"}
+              value={String(failures)}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  CollapsibleCard — a card whose body collapses so the hero stays the star.  */
+/* -------------------------------------------------------------------------- */
+
+function CollapsibleCard({
+  title,
+  icon,
+  right,
+  summary,
+  storageKey,
+  defaultOpen = false,
+  children,
+}: {
+  title: ReactNode;
+  icon?: ReactNode;
+  /** A link/action shown on the right of the header (stays clickable). */
+  right?: ReactNode;
+  /** A compact status shown in the header WHEN COLLAPSED (e.g. a count). */
+  summary?: ReactNode;
+  storageKey: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem(storageKey);
+      if (v != null) setOpen(v === "1");
+    } catch {
+      /* localStorage unavailable — keep the default. */
+    }
+  }, [storageKey]);
+  function toggle() {
+    setOpen((o) => {
+      const next = !o;
+      try {
+        localStorage.setItem(storageKey, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }
+  return (
+    <section className="card-surface">
+      <div
+        className={`flex items-center justify-between gap-3 px-5 py-3.5 ${
+          open ? "border-b hairline" : ""
+        }`}
+      >
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={open}
+          className="group flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          <ChevronRight
+            size={14}
+            className={`shrink-0 text-zinc-500 transition-transform duration-300 group-hover:text-accent-soft ${
+              open ? "rotate-90" : ""
+            }`}
+          />
+          {icon && <span className="text-accent-soft/80">{icon}</span>}
+          <span className="truncate text-[13px] font-semibold tracking-wide text-zinc-200">
+            {title}
+          </span>
+        </button>
+        <div className="flex shrink-0 items-center gap-3">
+          {!open && summary}
+          {right}
+        </div>
+      </div>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            key="body"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+            className="overflow-hidden"
+          >
+            <div className="p-5">{children}</div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </section>
+  );
+}
+
+/** A tiny count pill for a collapsed card header. */
+function CountPill({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "accent" }) {
+  const cls =
+    tone === "accent"
+      ? "border-accent/30 bg-accent/[0.1] text-accent-soft"
+      : "border-white/[0.08] bg-white/[0.03] text-zinc-400";
+  return (
+    <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}>{children}</span>
   );
 }
 
@@ -320,8 +548,6 @@ export default function OverviewPage() {
   }, [sessions.data]);
 
   // Live agent start/finish rows — TRUTHFUL: one row per run, newest event wins.
-  // Because events arrive newest-first, the first event seen for a run is its
-  // latest state, so a run that already completed never also shows as "Running".
   const liveEvents = useMemo(() => {
     const seen = new Set<string>();
     const rows: {
@@ -350,8 +576,7 @@ export default function OverviewPage() {
     return rows;
   }, [events]);
 
-  // Ambient Operator surfacing: enabled reflexes + their recent fires (from the
-  // live event stream — reflex.fired carries {rule, action, ok, detail}).
+  // Ambient Operator surfacing: enabled reflexes + their recent fires.
   const activeReflexes = useMemo(
     () => (reflexes.data?.rules ?? []).filter((r) => r.enabled).length,
     [reflexes.data],
@@ -389,6 +614,13 @@ export default function OverviewPage() {
   const readyCount = realProviders.filter((p) => p.available).length;
   const vaultLoggedIn = (vault.data?.providers ?? []).filter((p) => p.logged_in).length;
 
+  // The active project (context spine) rides on /health.
+  const activeProject = (health.data as (Health & { active_project?: ActiveProject }) | undefined)
+    ?.active_project;
+
+  const recentCount = sessions.data?.sessions.length ?? 0;
+  const awayCount = liveEvents.length + finished.length;
+
   return (
     <PageShell>
       <Reveal>
@@ -422,93 +654,24 @@ export default function OverviewPage() {
         <OnboardingWelcome />
       </Reveal>
 
-      {/* HERO STATUS BAND — arc-reactor MoodOrb + status line + stat tiles. */}
+      {/* THE VISUAL — arc-reactor hero, the highlight of the page. */}
       <Reveal>
-        <div className="card-surface relative overflow-hidden">
-          <div className="pointer-events-none absolute -left-16 -top-24 h-64 w-64 rounded-full bg-accent/10 blur-3xl" />
-          <div className="pointer-events-none absolute -right-10 top-1/2 h-40 w-40 -translate-y-1/2 rounded-full bg-accent/[0.06] blur-3xl" />
-          <div className="relative grid gap-6 p-6 lg:grid-cols-[minmax(0,auto)_1fr] lg:items-center">
-            {/* Orb + one-line mood/status */}
-            <div className="flex items-center gap-5">
-              <span className="relative grid h-20 w-20 shrink-0 place-items-center rounded-full border border-accent/15 bg-accent/[0.04] shadow-[0_0_28px_-6px_rgba(34,211,238,0.35)]">
-                <span className="scale-[2.05]">
-                  <MoodOrb />
-                </span>
-              </span>
-              <div className="min-w-0">
-                <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500">
-                  Iron Jarvis
-                </div>
-                <div className="mt-1 truncate text-lg font-semibold text-zinc-100">
-                  {statusLine}
-                </div>
-                <div className="mt-1.5 flex items-center gap-2 text-xs text-zinc-500">
-                  <Dot on={connected} />
-                  <span>{connected ? "live" : "stream offline"}</span>
-                  {health.data && (
-                    <>
-                      <span>·</span>
-                      <span>v{health.data.version}</span>
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Stat tiles */}
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <HeroStat
-                label="Model"
-                icon={<Cpu size={12} />}
-                tone="accent"
-                value={
-                  health.data ? (
-                    <span className="font-mono">
-                      {health.data.default_provider}/{health.data.default_model}
-                    </span>
-                  ) : health.loading ? (
-                    <Skeleton className="h-4 w-24" />
-                  ) : (
-                    "—"
-                  )
-                }
-                title={
-                  health.data
-                    ? `${health.data.default_provider} / ${health.data.default_model}`
-                    : undefined
-                }
-              />
-              <HeroStat
-                label="Running"
-                icon={<Zap size={12} />}
-                tone={runningCount > 0 ? "accent" : "neutral"}
-                value={String(runningCount)}
-              />
-              <HeroStat
-                label="Free disk"
-                icon={<HardDrive size={12} />}
-                value={
-                  freeDisk != null ? (
-                    fmtBytes(freeDisk)
-                  ) : reliability.loading ? (
-                    <Skeleton className="h-4 w-16" />
-                  ) : (
-                    "—"
-                  )
-                }
-              />
-              <HeroStat
-                label="Failures 24h"
-                icon={<AlertTriangle size={12} />}
-                tone={failures > 0 ? "bad" : "neutral"}
-                value={String(failures)}
-              />
-            </div>
-          </div>
-        </div>
+        <ReactorHero
+          statusLine={statusLine}
+          connected={connected}
+          version={health.data?.version}
+          activeProject={activeProject}
+          model={
+            health.data ? `${health.data.default_provider}/${health.data.default_model}` : undefined
+          }
+          runningCount={runningCount}
+          freeDisk={freeDisk}
+          failures={failures}
+          diskLoading={reliability.loading}
+        />
       </Reveal>
 
-      {/* INTERACTIVE quick actions into the hero surfaces. */}
+      {/* INTERACTIVE quick actions into the hero surfaces (kept visible). */}
       <Reveal>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           {QUICK_ACTIONS.map((a) => (
@@ -522,9 +685,7 @@ export default function OverviewPage() {
                 {a.icon}
               </span>
               <span className="min-w-0">
-                <span className="block truncate text-sm font-semibold text-zinc-100">
-                  {a.title}
-                </span>
+                <span className="block truncate text-sm font-semibold text-zinc-100">{a.title}</span>
                 <span className="block truncate text-xs text-zinc-500">{a.desc}</span>
               </span>
               <ArrowRight
@@ -538,10 +699,11 @@ export default function OverviewPage() {
 
       {/* First-win: one click → a real result. */}
       <Reveal>
-        <Card
+        <CollapsibleCard
           title="Try it now"
           icon={<Rocket size={15} />}
-          right={<span className="text-[11px] text-zinc-500">one click → your first result</span>}
+          storageKey="ij_ov_tryit"
+          summary={<CountPill tone="accent">one click → your first result</CountPill>}
         >
           {startError && (
             <div className="mb-3">
@@ -565,9 +727,7 @@ export default function OverviewPage() {
                   </span>
                   <div className="flex-1">
                     <div className="text-sm font-semibold text-zinc-100">{t.title}</div>
-                    <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-zinc-500">
-                      {t.task}
-                    </p>
+                    <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-zinc-500">{t.task}</p>
                   </div>
                   <span className="flex items-center gap-1.5 text-xs font-medium text-accent-soft">
                     {busy ? (
@@ -586,19 +746,22 @@ export default function OverviewPage() {
               );
             })}
           </div>
-        </Card>
+        </CollapsibleCard>
       </Reveal>
 
       {/* Ambient operator — the reflexes that act on their own + recent fires. */}
       <Reveal>
-        <Card
+        <CollapsibleCard
           title="Ambient operator"
           icon={<Zap size={15} />}
+          storageKey="ij_ov_ambient"
+          summary={
+            <CountPill tone={activeReflexes > 0 ? "accent" : "neutral"}>
+              {activeReflexes > 0 ? `${activeReflexes} active` : "none"}
+            </CountPill>
+          }
           right={
-            <Link
-              href="/reflex"
-              className="text-xs text-accent transition-colors hover:text-accent/80"
-            >
+            <Link href="/reflex" className="text-xs text-accent transition-colors hover:text-accent/80">
               Manage →
             </Link>
           }
@@ -613,9 +776,7 @@ export default function OverviewPage() {
                 : "No reflexes yet"}
             </span>
             <span className="text-xs text-zinc-500">
-              {activeReflexes > 0
-                ? "webhooks & messages that run work on their own"
-                : "Set one up →"}
+              {activeReflexes > 0 ? "webhooks & messages that run work on their own" : "Set one up →"}
             </span>
           </Link>
 
@@ -644,18 +805,22 @@ export default function OverviewPage() {
               })}
             </ul>
           )}
-        </Card>
+        </CollapsibleCard>
       </Reveal>
 
       {/* While you were away — live activity + recently finished sessions. */}
       <Reveal>
-        <Card
+        <CollapsibleCard
           title="While you were away"
           icon={<History size={15} />}
-          right={
-            <span className="flex items-center gap-2 text-xs text-zinc-500">
-              <Dot on={connected} />
-              {connected ? "live" : "offline"}
+          storageKey="ij_ov_away"
+          summary={
+            <span className="flex items-center gap-2">
+              {awayCount > 0 && <CountPill>{awayCount}</CountPill>}
+              <span className="flex items-center gap-1.5 text-xs text-zinc-500">
+                <Dot on={connected} />
+                {connected ? "live" : "offline"}
+              </span>
             </span>
           }
         >
@@ -691,10 +856,7 @@ export default function OverviewPage() {
                     {row}
                   </Link>
                 ) : (
-                  <div
-                    key={e.id}
-                    className={`rounded-xl border px-3 py-2 text-xs ${tone}`}
-                  >
+                  <div key={e.id} className={`rounded-xl border px-3 py-2 text-xs ${tone}`}>
                     {row}
                   </div>
                 );
@@ -738,15 +900,17 @@ export default function OverviewPage() {
           ) : liveEvents.length === 0 ? (
             <Empty icon={<History size={22} />}>Nothing yet — try a task above.</Empty>
           ) : null}
-        </Card>
+        </CollapsibleCard>
       </Reveal>
 
       {/* Your apps — one-click tiles from saved templates (omitted when none). */}
       {templateList.length > 0 && (
         <Reveal>
-          <Card
+          <CollapsibleCard
             title="Your apps"
             icon={<LayoutGrid size={15} />}
+            storageKey="ij_ov_apps"
+            summary={<CountPill>{templateList.length}</CountPill>}
             right={
               <Link
                 href="/templates"
@@ -786,7 +950,7 @@ export default function OverviewPage() {
                 );
               })}
             </div>
-          </Card>
+          </CollapsibleCard>
         </Reveal>
       )}
 
@@ -821,11 +985,17 @@ export default function OverviewPage() {
       )}
 
       <Reveal>
-        <div className="grid gap-4 lg:grid-cols-2">
-          {/* Connections — compact summary + manage link (trimmed from two cards). */}
-          <Card
+        <div className="grid items-start gap-4 lg:grid-cols-2">
+          {/* Connections — compact summary + manage link. */}
+          <CollapsibleCard
             title="Connections"
             icon={<Server size={15} />}
+            storageKey="ij_ov_connections"
+            summary={
+              <CountPill tone={readyCount > 0 ? "accent" : "neutral"}>
+                {readyCount}/{realProviders.length} ready
+              </CountPill>
+            }
             right={
               <Link
                 href="/connections"
@@ -879,12 +1049,14 @@ export default function OverviewPage() {
                 No provider data.
               </Empty>
             )}
-          </Card>
+          </CollapsibleCard>
 
           {/* Recent sessions */}
-          <Card
+          <CollapsibleCard
             title="Recent sessions"
             icon={<Boxes size={15} />}
+            storageKey="ij_ov_recent"
+            summary={recentCount > 0 ? <CountPill>{recentCount}</CountPill> : undefined}
             right={
               <Link
                 href="/sessions"
@@ -928,17 +1100,20 @@ export default function OverviewPage() {
             ) : (
               <Empty icon={<Boxes size={22} />}>No sessions yet.</Empty>
             )}
-          </Card>
+          </CollapsibleCard>
         </div>
       </Reveal>
 
-      {/* System health (the /diagnostics self-test, surfaced at a glance) — Advanced */}
+      {/* System health (the /diagnostics self-test) — Advanced */}
       {advanced && (
         <Reveal>
-          <Card
+          <CollapsibleCard
             title="System health"
             icon={<HeartPulse size={15} />}
-            right={<span className="text-[11px] text-zinc-500">self-test</span>}
+            storageKey="ij_ov_health"
+            summary={
+              <CountPill tone={diag.data?.db_integrity === "ok" ? "neutral" : "neutral"}>self-test</CountPill>
+            }
           >
             {diag.loading && !diag.data ? (
               <SkeletonRows rows={2} />
@@ -959,9 +1134,7 @@ export default function OverviewPage() {
                         : "missing"
                   }
                   status={
-                    diag.data.secrets_key_valid === false || !diag.data.secrets_key_present
-                      ? "bad"
-                      : "ok"
+                    diag.data.secrets_key_valid === false || !diag.data.secrets_key_present ? "bad" : "ok"
                   }
                 />
                 <HealthItem
@@ -999,7 +1172,7 @@ export default function OverviewPage() {
             ) : (
               <Empty icon={<HeartPulse size={22} />}>No diagnostics available.</Empty>
             )}
-          </Card>
+          </CollapsibleCard>
         </Reveal>
       )}
 
