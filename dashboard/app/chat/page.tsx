@@ -46,14 +46,22 @@ import {
   Check,
   ChevronRight,
   Copy,
+  FolderOpen,
+  FolderPen,
   History,
   Loader2,
   MessageSquare,
   Mic,
   MicOff,
+  PanelRight,
+  PanelRightClose,
+  PanelRightOpen,
   Paperclip,
+  Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
+  Save,
   Search,
   Send,
   Sparkles,
@@ -77,6 +85,8 @@ import { appendDictation } from "@/components/VoiceInput";
 import { Card, Empty, ErrorNote, LoaderInline, OfflineHint } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { FilesPanel } from "@/components/terminal/FilesPanel";
+import { DirectoryTree } from "@/components/terminal/DirectoryTree";
 
 type Mode = "chat" | "agent";
 
@@ -85,6 +95,9 @@ interface ChatMessage {
   content: string;
   /** Display names of files attached to this (user) message — footer chips. */
   attachmentNames?: string[];
+  /** Uploaded paths of those attachments, so a Regenerate can re-ground on them
+   *  (the reply is otherwise silently ungrounded while the chip still shows). */
+  attachmentPaths?: string[];
   /** Registry tools the reply actually ran (assistant messages) — footer line. */
   toolsUsed?: string[];
 }
@@ -102,6 +115,7 @@ interface ChatRequestBody {
   attachments?: string[]; // uploaded document paths
   skill?: string; // playbook for the reply (omitted / "" = none)
   tools?: string[]; // armed registry tools (max 6) — the chat runs a tool loop
+  workspace_dir?: string; // absolute folder armed file tools operate in
 }
 interface ChatResponse {
   reply: string;
@@ -113,8 +127,30 @@ interface ChatResponse {
 }
 
 interface PersonaOption {
+  /** Slug id used as the `persona` value on the /chat POST. */
   name: string;
+  /** Human label for the picker (falls back to a capitalized name). */
+  title: string;
   description: string;
+  /** The system prompt the server resolves for this persona. */
+  prompt: string;
+  builtin: boolean;
+  /** A built-in with a saved user override applied on top. */
+  overridden: boolean;
+}
+
+/** PUT/POST /chat/personas body + response. */
+interface PersonaSaveBody {
+  title: string;
+  description?: string;
+  prompt: string;
+}
+interface PersonaSaveResult {
+  persona: PersonaOption;
+}
+interface PersonaDeleteResult {
+  deleted: boolean;
+  reverted_to_builtin: boolean;
 }
 
 /** One row from GET /skills. */
@@ -255,13 +291,23 @@ function conversationRecap(msgs: ChatMessage[]): string {
 
 // Persona persistence (chat mode only).
 const PERSONA_KEY = "ij_chat_persona";
-const PERSONA_CUSTOM_KEY = "ij_chat_persona_custom";
-const CUSTOM_PERSONA = "__custom__";
+// Sentinel select value for the "+ New persona" entry (opens a blank editor).
+const NEW_PERSONA = "__new__";
 
+// Workspace panel persistence (chat mode). The chosen folder + expanded state.
+const WORKSPACE_KEY = "ij_chat_workspace";
+const WORKSPACE_OPEN_KEY = "ij_chat_workspace_open";
 
 // Fallback until GET /chat/personas answers (or if it never does).
 const DEFAULT_PERSONAS: PersonaOption[] = [
-  { name: "assistant", description: "Helpful general-purpose assistant" },
+  {
+    name: "assistant",
+    title: "Assistant",
+    description: "Helpful general-purpose assistant",
+    prompt: "",
+    builtin: true,
+    overridden: false,
+  },
 ];
 
 // Prompts the user can click to prefill the composer on an empty chat.
@@ -653,7 +699,24 @@ export default function ChatPage() {
   const [choice, setChoice] = useState(""); // "" => server default model
   const [personas, setPersonas] = useState<PersonaOption[]>(DEFAULT_PERSONAS);
   const [persona, setPersona] = useState("assistant");
-  const [customPersona, setCustomPersona] = useState("");
+  // PERSONA EDITOR: a collapsible panel that edits the SELECTED persona (or a
+  // brand-new one). Every persona is now savable — built-in edits write an
+  // override, custom personas POST. The draft rides along verbatim as free text
+  // if the user sends before saving, so unsaved tweaks still apply that turn.
+  const [personaEditorOpen, setPersonaEditorOpen] = useState(false);
+  const [isNewPersona, setIsNewPersona] = useState(false);
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftDescription, setDraftDescription] = useState("");
+  const [draftPrompt, setDraftPrompt] = useState("");
+  const [personaSaving, setPersonaSaving] = useState(false);
+  const [personaSaved, setPersonaSaved] = useState(false); // brief success flash
+  const [personaError, setPersonaError] = useState<string | null>(null);
+  // WORKSPACE PANEL: a Build-like folder + live Files panel on the right. When a
+  // folder is chosen it rides along as `workspace_dir` so the chat's armed file
+  // tools write there (and their output surfaces live in the panel).
+  const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [pickingFolder, setPickingFolder] = useState(false); // "change folder"
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -749,6 +812,18 @@ export default function ChatPage() {
   // switches threads before the chain drains.
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
   const saveTargetRef = useRef<{ id: string | null }>({ id: null });
+  // The persona selected before "+ New persona" — restored if the new-persona
+  // editor is closed without saving.
+  const prevPersonaRef = useRef("assistant");
+  // Clears the "Saved" flash; held in a ref so it can be cancelled on unmount.
+  const personaSavedTimerRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (personaSavedTimerRef.current !== null)
+        window.clearTimeout(personaSavedTimerRef.current);
+    },
+    [],
+  );
 
   const awaiting = awaitingId !== null;
   const busy = awaiting || chatBusy;
@@ -800,14 +875,19 @@ export default function ChatPage() {
     };
   }, []);
 
-  // Restore the saved persona choice + custom text (after mount, so SSR markup
+  // Restore the saved persona choice + workspace (after mount, so SSR markup
   // matches the first client render).
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(PERSONA_KEY);
-      if (saved) setPersona(saved);
-      const savedCustom = window.localStorage.getItem(PERSONA_CUSTOM_KEY);
-      if (savedCustom) setCustomPersona(savedCustom);
+      if (saved) {
+        setPersona(saved);
+        prevPersonaRef.current = saved;
+      }
+      const wd = window.localStorage.getItem(WORKSPACE_KEY);
+      if (wd) setWorkspaceDir(wd);
+      const wo = window.localStorage.getItem(WORKSPACE_OPEN_KEY);
+      if (wo === "1") setWorkspaceOpen(true);
     } catch {
       /* ignore */
     }
@@ -815,6 +895,7 @@ export default function ChatPage() {
 
   function choosePersona(value: string) {
     setPersona(value);
+    prevPersonaRef.current = value;
     try {
       window.localStorage.setItem(PERSONA_KEY, value);
     } catch {
@@ -822,10 +903,165 @@ export default function ChatPage() {
     }
   }
 
-  function editCustomPersona(value: string) {
-    setCustomPersona(value);
+  // ------------------------------------------------------------------ personas
+
+  /** Refetch the persona catalog (after any save/revert/delete). */
+  async function refetchPersonas(): Promise<PersonaOption[]> {
     try {
-      window.localStorage.setItem(PERSONA_CUSTOM_KEY, value);
+      const d = await get<{ personas: PersonaOption[] }>("/chat/personas");
+      const list = d.personas?.length ? d.personas : DEFAULT_PERSONAS;
+      setPersonas(list);
+      return list;
+    } catch {
+      return personas;
+    }
+  }
+
+  /** Human label for a persona name (title, else capitalized/clipped name). */
+  function personaTitle(name: string): string {
+    const p = personas.find((x) => x.name === name);
+    if (p) return p.title || capitalize(p.name);
+    // A free-text persona (round-tripped from a saved thread) — clip it.
+    return name.length > 32 ? `${name.slice(0, 32)}…` : capitalize(name);
+  }
+
+  /**
+   * The `persona` value to send this turn. Normally the selected NAME (the
+   * server resolves its prompt). But if the editor has UNSAVED prompt edits,
+   * send the live edited prompt as free text so the tweak still applies —
+   * saving is still preferred.
+   */
+  function personaForSend(): string {
+    if (personaEditorOpen) {
+      const p = draftPrompt.trim();
+      if (isNewPersona) {
+        if (p) return p; // an unsaved new persona is pure free text
+      } else {
+        const saved = (personas.find((x) => x.name === persona)?.prompt ?? "").trim();
+        if (p && p !== saved) return p; // unsaved edits to a known persona
+      }
+    }
+    if (persona === NEW_PERSONA) return ""; // "+ New persona", nothing typed yet
+    return persona;
+  }
+
+  /** Open the editor prefilled from the CURRENTLY selected persona. */
+  function openPersonaEditor() {
+    const p = personas.find((x) => x.name === persona);
+    setIsNewPersona(false);
+    setDraftTitle(p?.title ?? capitalize(persona));
+    setDraftDescription(p?.description ?? "");
+    setDraftPrompt(p?.prompt ?? "");
+    setPersonaError(null);
+    setPersonaSaved(false);
+    setPersonaEditorOpen(true);
+  }
+
+  /** "+ New persona" — remember the current choice, open a blank editor. */
+  function startNewPersona() {
+    prevPersonaRef.current = persona === NEW_PERSONA ? prevPersonaRef.current : persona;
+    setIsNewPersona(true);
+    setDraftTitle("");
+    setDraftDescription("");
+    setDraftPrompt("");
+    setPersonaError(null);
+    setPersonaSaved(false);
+    setPersonaEditorOpen(true);
+    setPersona(NEW_PERSONA); // not persisted — becomes real only on save
+  }
+
+  /** Collapse the editor WITHOUT saving (reverting a throwaway new-persona pick). */
+  function closePersonaEditor() {
+    setPersonaEditorOpen(false);
+    setPersonaError(null);
+    setPersonaSaved(false);
+    if (persona === NEW_PERSONA) {
+      choosePersona(prevPersonaRef.current || personas[0]?.name || "assistant");
+    }
+    setIsNewPersona(false);
+  }
+
+  function flashSaved() {
+    setPersonaSaved(true);
+    if (personaSavedTimerRef.current !== null)
+      window.clearTimeout(personaSavedTimerRef.current);
+    personaSavedTimerRef.current = window.setTimeout(
+      () => setPersonaSaved(false),
+      2200,
+    );
+  }
+
+  /** Save the draft: PUT an existing/built-in name (override), POST a new one. */
+  async function savePersona() {
+    const title = draftTitle.trim();
+    const prompt = draftPrompt.trim();
+    const description = draftDescription.trim();
+    if (!prompt) {
+      setPersonaError("A prompt is required.");
+      return;
+    }
+    setPersonaSaving(true);
+    setPersonaError(null);
+    try {
+      const body: PersonaSaveBody = { title, prompt, ...(description ? { description } : {}) };
+      const res = isNewPersona
+        ? await post<PersonaSaveResult>("/chat/personas", body)
+        : await put<PersonaSaveResult>(
+            `/chat/personas/${encodeURIComponent(persona)}`,
+            body,
+          );
+      const savedName = res.persona?.name ?? persona;
+      await refetchPersonas();
+      choosePersona(savedName); // keep the saved persona selected
+      setIsNewPersona(false); // it's a real persona now — later saves PUT
+      flashSaved();
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 0) setOffline(true);
+      setPersonaError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setPersonaSaving(false);
+    }
+  }
+
+  /** Revert a built-in override / delete a custom persona, then refetch. */
+  async function deletePersona() {
+    setPersonaSaving(true);
+    setPersonaError(null);
+    try {
+      await del<PersonaDeleteResult>(`/chat/personas/${encodeURIComponent(persona)}`);
+      const list = await refetchPersonas();
+      // Built-in revert keeps the name (now the pristine default); a deleted
+      // custom persona is gone — fall back to the first available persona.
+      if (!list.some((p) => p.name === persona)) {
+        choosePersona(list[0]?.name ?? "assistant");
+      }
+      setPersonaEditorOpen(false); // reopen with Modify to see the reverted default
+      setIsNewPersona(false);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 0) setOffline(true);
+      setPersonaError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setPersonaSaving(false);
+    }
+  }
+
+  // ----------------------------------------------------------------- workspace
+
+  /** Pick the workspace folder (from the tree) — persists + returns to Files. */
+  function chooseWorkspace(path: string) {
+    setWorkspaceDir(path);
+    setPickingFolder(false);
+    try {
+      window.localStorage.setItem(WORKSPACE_KEY, path);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function setWorkspaceOpenPersisted(open: boolean) {
+    setWorkspaceOpen(open);
+    try {
+      window.localStorage.setItem(WORKSPACE_OPEN_KEY, open ? "1" : "0");
     } catch {
       /* ignore */
     }
@@ -851,7 +1087,7 @@ export default function ChatPage() {
   function queueSave(msgs: ChatMessage[]) {
     if (msgs.length === 0) return;
     const target = saveTargetRef.current; // the conversation this save belongs to
-    const personaValue = persona === CUSTOM_PERSONA ? customPersona.trim() : persona;
+    const personaValue = personaForSend();
     saveChainRef.current = saveChainRef.current.then(async () => {
       try {
         const body: ThreadSaveBody = {
@@ -900,17 +1136,11 @@ export default function ChatPage() {
       setThreadId(t.id);
       saveTargetRef.current = { id: t.id };
       setMode("chat"); // saved threads continue as direct chat
-      if (t.persona) {
-        if (personas.some((p) => p.name === t.persona)) {
-          choosePersona(t.persona);
-        } else if (/\s/.test(t.persona) || t.persona.length > 40) {
-          // Free-text instructions round-trip through the Custom slot.
-          choosePersona(CUSTOM_PERSONA);
-          editCustomPersona(t.persona);
-        } else {
-          choosePersona(t.persona); // unlisted name — the select tolerates it
-        }
-      }
+      setPersonaEditorOpen(false); // never carry a stale draft into another thread
+      // A known name selects normally; an unlisted name / free-text instructions
+      // are tolerated by the select (and sent verbatim, which the server treats
+      // as free text).
+      if (t.persona) choosePersona(t.persona);
       setSidebarOpen(false);
       inputRef.current?.focus();
     } catch (e) {
@@ -1352,8 +1582,7 @@ export default function ChatPage() {
     setChatBusy(true);
     try {
       const { provider, model } = splitChoice(choice);
-      const personaValue =
-        persona === CUSTOM_PERSONA ? customPersona.trim() : persona;
+      const personaValue = personaForSend();
       const body: ChatRequestBody = {
         // Full conversation every turn — the backend is stateless here.
         messages: history.map(({ role, content }) => ({ role, content })),
@@ -1364,6 +1593,8 @@ export default function ChatPage() {
         // The reply's playbook + armed tool loop (both sticky across turns).
         ...(activeSkill ? { skill: activeSkill } : {}),
         ...(selectedTools.length ? { tools: selectedTools.slice(0, MAX_TOOLS) } : {}),
+        // The workspace folder armed file tools operate in (when chosen).
+        ...(workspaceDir ? { workspace_dir: workspaceDir } : {}),
       };
       const res = await post<ChatResponse>("/chat", body);
       if (chatGenRef.current !== gen) return; // "New chat" happened mid-flight
@@ -1401,7 +1632,12 @@ export default function ChatPage() {
     const userMsg: ChatMessage = {
       role: "user",
       content: message,
-      ...(atts.length ? { attachmentNames: atts.map((a) => a.name) } : {}),
+      ...(atts.length
+        ? {
+            attachmentNames: atts.map((a) => a.name),
+            attachmentPaths: atts.map((a) => a.path),
+          }
+        : {}),
     };
     await completeChat([...messages, userMsg], atts);
   }
@@ -1418,10 +1654,18 @@ export default function ChatPage() {
     const last = msgs[msgs.length - 1];
     if (!last || last.role !== "assistant") return;
     const history = msgs.slice(0, -1);
-    if (history.length === 0 || history[history.length - 1].role !== "user") return;
+    const lastUser = history[history.length - 1];
+    if (history.length === 0 || lastUser.role !== "user") return;
     setError(null);
     setOffline(false);
-    void completeChat(history, []);
+    // Re-ground on the SAME attachments the turn carried — otherwise the re-run
+    // answers blind while the user bubble still shows the file chip.
+    const atts: UploadedFile[] = (lastUser.attachmentPaths ?? []).map((path, i) => ({
+      path,
+      name: lastUser.attachmentNames?.[i] ?? path.split(/[\\/]/).pop() ?? path,
+      bytes: 0,
+    }));
+    void completeChat(history, atts);
   }
 
   /** Re-send the last failed chat turn — same history + attachments, verbatim. */
@@ -1578,8 +1822,14 @@ export default function ChatPage() {
 
   const started = messages.length > 0 || sessionId !== null || threadId !== null;
   const personaNames = personas.map((p) => p.name);
-  const selectedPersonaDesc =
-    personas.find((p) => p.name === persona)?.description ?? "";
+  const curPersona = personas.find((p) => p.name === persona);
+  const selectedPersonaDesc = curPersona?.description ?? "";
+  // Show a Revert/Delete action for custom personas and overridden built-ins
+  // (a pristine built-in has nothing to revert).
+  const showRevertDelete =
+    !isNewPersona &&
+    !!curPersona &&
+    (!curPersona.builtin || curPersona.overridden);
 
   return (
     <PageShell>
@@ -1661,29 +1911,52 @@ export default function ChatPage() {
                 </button>
               </div>
               {mode === "chat" && (
-                <select
-                  aria-label="Persona"
-                  value={persona}
-                  onChange={(e) => choosePersona(e.target.value)}
-                  disabled={busy}
-                  title={
-                    persona === CUSTOM_PERSONA
-                      ? "Your own persona instructions"
-                      : selectedPersonaDesc || "Persona for replies"
-                  }
-                  className="field w-auto py-1.5 text-[13px]"
-                >
-                  {/* Tolerate a saved persona the daemon no longer lists. */}
-                  {!personaNames.includes(persona) && persona !== CUSTOM_PERSONA && (
-                    <option value={persona}>{capitalize(persona)}</option>
-                  )}
-                  {personas.map((p) => (
-                    <option key={p.name} value={p.name} title={p.description}>
-                      {capitalize(p.name)}
-                    </option>
-                  ))}
-                  <option value={CUSTOM_PERSONA}>Custom…</option>
-                </select>
+                <div className="flex items-center gap-1">
+                  <select
+                    aria-label="Persona"
+                    value={persona}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setPersonaEditorOpen(false);
+                      if (v === NEW_PERSONA) startNewPersona();
+                      else choosePersona(v);
+                    }}
+                    disabled={busy}
+                    title={
+                      persona === NEW_PERSONA
+                        ? "Create a new persona"
+                        : selectedPersonaDesc || "Persona for replies"
+                    }
+                    className="field w-auto py-1.5 text-[13px]"
+                  >
+                    {/* Tolerate a saved persona the daemon no longer lists. */}
+                    {!personaNames.includes(persona) && persona !== NEW_PERSONA && (
+                      <option value={persona}>{personaTitle(persona)}</option>
+                    )}
+                    {personas.map((p) => (
+                      <option key={p.name} value={p.name} title={p.description}>
+                        {p.title || capitalize(p.name)}
+                        {p.overridden ? " ·" : ""}
+                      </option>
+                    ))}
+                    <option value={NEW_PERSONA}>+ New persona…</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      personaEditorOpen ? closePersonaEditor() : openPersonaEditor()
+                    }
+                    disabled={busy || persona === NEW_PERSONA}
+                    aria-pressed={personaEditorOpen}
+                    title="Modify this persona"
+                    aria-label="Modify persona"
+                    className={`btn-ghost px-2.5 py-1.5 text-[13px] ${
+                      personaEditorOpen ? "text-accent-soft" : ""
+                    }`}
+                  >
+                    <Pencil size={14} />
+                  </button>
+                </div>
               )}
               <select
                 aria-label="Model"
@@ -1707,6 +1980,21 @@ export default function ChatPage() {
                   );
                 })}
               </select>
+              <button
+                type="button"
+                onClick={() => setWorkspaceOpenPersisted(!workspaceOpen)}
+                aria-pressed={workspaceOpen}
+                title={
+                  workspaceOpen
+                    ? "Hide the workspace panel"
+                    : "Show a folder + live files panel — armed file tools run here"
+                }
+                className={`btn-ghost py-1.5 text-[13px] ${
+                  workspaceOpen || workspaceDir ? "text-accent-soft" : ""
+                }`}
+              >
+                <PanelRight size={14} /> Workspace
+              </button>
               <button
                 onClick={newChat}
                 disabled={
@@ -1733,16 +2021,133 @@ export default function ChatPage() {
         </p>
       </Reveal>
 
-      {mode === "chat" && persona === CUSTOM_PERSONA && (
+      {mode === "chat" && personaEditorOpen && (
         <Reveal>
-          <textarea
-            value={customPersona}
-            onChange={(e) => editCustomPersona(e.target.value)}
-            rows={2}
-            aria-label="Custom persona"
-            placeholder="Describe the persona — e.g. “You are a sharp tax accountant. Be concise and cite the code section.”"
-            className="field resize-y text-[13px]"
-          />
+          <div className="rounded-2xl border border-accent/20 bg-accent/[0.03] p-4">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-2 text-[13px] font-medium text-zinc-200">
+                <Pencil size={13} className="shrink-0 text-accent-soft" />
+                <span className="truncate">
+                  {isNewPersona ? "New persona" : `Editing ${personaTitle(persona)}`}
+                </span>
+                {!isNewPersona && curPersona?.builtin && (
+                  <span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">
+                    {curPersona.overridden ? "customized built-in" : "built-in"}
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={closePersonaEditor}
+                aria-label="Close persona editor"
+                title="Close without saving"
+                className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+              >
+                <X size={15} />
+              </button>
+            </div>
+            <div className="grid gap-3">
+              <div>
+                <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-400">
+                  Title
+                </label>
+                <input
+                  value={draftTitle}
+                  onChange={(e) => {
+                    setDraftTitle(e.target.value);
+                    setPersonaSaved(false);
+                  }}
+                  placeholder="e.g. Tax Accountant"
+                  aria-label="Persona title"
+                  className="field w-full py-1.5 text-[13px]"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-400">
+                  Description <span className="text-zinc-600">(optional)</span>
+                </label>
+                <input
+                  value={draftDescription}
+                  onChange={(e) => {
+                    setDraftDescription(e.target.value);
+                    setPersonaSaved(false);
+                  }}
+                  placeholder="A short line shown in the picker tooltip"
+                  aria-label="Persona description"
+                  className="field w-full py-1.5 text-[13px]"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-400">
+                  Prompt
+                </label>
+                <textarea
+                  value={draftPrompt}
+                  onChange={(e) => {
+                    setDraftPrompt(e.target.value);
+                    setPersonaSaved(false);
+                  }}
+                  rows={5}
+                  aria-label="Persona prompt"
+                  placeholder="You are a sharp tax accountant. Be concise and cite the code section."
+                  className="field w-full resize-y text-[13px]"
+                />
+              </div>
+            </div>
+            {personaError && (
+              <div className="mt-3">
+                <ErrorNote>{personaError}</ErrorNote>
+              </div>
+            )}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={savePersona}
+                disabled={personaSaving || !draftPrompt.trim()}
+                className="btn-accent py-1.5 text-[13px]"
+              >
+                {personaSaving ? (
+                  <LoaderInline />
+                ) : (
+                  <>
+                    <Save size={14} /> Save
+                  </>
+                )}
+              </button>
+              {personaSaved && (
+                <span className="inline-flex items-center gap-1 text-[12px] text-emerald-400">
+                  <Check size={13} /> Saved
+                </span>
+              )}
+              {showRevertDelete && (
+                <button
+                  type="button"
+                  onClick={deletePersona}
+                  disabled={personaSaving}
+                  title={
+                    curPersona?.builtin
+                      ? "Discard your changes to this built-in persona"
+                      : "Delete this custom persona"
+                  }
+                  className="btn-ghost ml-auto py-1.5 text-[13px] text-rose-300 hover:text-rose-200"
+                >
+                  {curPersona?.builtin ? (
+                    <>
+                      <RotateCcw size={14} /> Revert to default
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 size={14} /> Delete
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+            <p className="mt-2 text-[11px] text-zinc-500">
+              Unsaved prompt edits still apply to your next message — but Save to keep
+              this persona for next time.
+            </p>
+          </div>
         </Reveal>
       )}
 
@@ -2408,6 +2813,80 @@ export default function ChatPage() {
               </div>
             </Card>
           </div>
+
+          {/* Workspace panel (right): a Build-like folder chooser + live Files
+              view. The chosen folder rides along as workspace_dir so the chat's
+              armed file tools write here and their output surfaces live below. */}
+          {workspaceOpen ? (
+            <aside className="w-full shrink-0 md:w-80">
+              <div className="flex h-[26rem] flex-col md:h-[60vh]">
+                {workspaceDir && !pickingFolder ? (
+                  <div className="flex h-full flex-col gap-2">
+                    <div className="flex shrink-0 items-center gap-2 rounded-xl border border-white/[0.06] bg-ink-850/60 px-3 py-2">
+                      <FolderOpen size={13} className="shrink-0 text-accent-soft/80" />
+                      <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                        Workspace
+                      </span>
+                      <div className="ml-auto flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setPickingFolder(true)}
+                          title="Change folder"
+                          aria-label="Change workspace folder"
+                          className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
+                        >
+                          <FolderPen size={13} /> Change
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setWorkspaceOpenPersisted(false)}
+                          title="Collapse workspace"
+                          aria-label="Collapse workspace"
+                          className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+                        >
+                          <PanelRightClose size={14} />
+                        </button>
+                      </div>
+                    </div>
+                    <p className="shrink-0 px-1 text-[10px] text-zinc-600">
+                      Files the chat&apos;s armed tools create land here.
+                    </p>
+                    <div className="min-h-0 flex-1">
+                      <FilesPanel folder={workspaceDir} />
+                    </div>
+                  </div>
+                ) : (
+                  <DirectoryTree
+                    selectedPath={workspaceDir}
+                    onSelect={chooseWorkspace}
+                    onOpenTerminal={() => {}}
+                    onCollapse={() => {
+                      // While changing an existing folder, the tree's collapse
+                      // acts as "cancel → back to files"; otherwise it hides the
+                      // whole workspace panel.
+                      if (pickingFolder && workspaceDir) setPickingFolder(false);
+                      else setWorkspaceOpenPersisted(false);
+                    }}
+                  />
+                )}
+              </div>
+            </aside>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setWorkspaceOpenPersisted(true)}
+              title="Show workspace"
+              aria-label="Show workspace"
+              className="hidden shrink-0 self-stretch md:flex"
+            >
+              <span className="flex h-full flex-col items-center gap-2 rounded-2xl border border-white/[0.06] bg-ink-850/60 px-2 py-3 text-zinc-500 transition-colors hover:text-accent-soft">
+                <PanelRightOpen size={16} />
+                <span className="text-[10px] uppercase tracking-wide [writing-mode:vertical-rl]">
+                  Workspace
+                </span>
+              </span>
+            </button>
+          )}
         </div>
       </Reveal>
     </PageShell>

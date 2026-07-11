@@ -13,7 +13,7 @@ from pathlib import Path
 from sqlmodel import select
 from typing import Any
 
-from ..schemas import ChatBody
+from ..schemas import ChatBody, PersonaCreateBody, PersonaSaveBody
 from ...core.db import session_scope
 from ...core.fs_policy import fs_read_ok
 from ...core.models import AgentType
@@ -116,14 +116,69 @@ def register(app: FastAPI, d) -> None:
             db.commit()
         return {"deleted": thread_id}
 
+    def _persona_store():
+        from ...personas import PersonaStore
+
+        return PersonaStore(d.platform.engine)
+
     @app.get("/chat/personas")
     def chat_personas() -> dict[str, Any]:
-        return {
-            "personas": [
-                {"name": k, "description": v["description"]}
-                for k, v in d._PERSONAS.items()
-            ]
-        }
+        """Every persona — built-ins (with any user override applied) + the user's
+        own — each fully editable, carrying its title + prompt."""
+        from ...personas import merged
+
+        return {"personas": merged(_persona_store(), d._PERSONAS)}
+
+    @app.put("/chat/personas/{name}")
+    def save_persona(name: str, body: PersonaSaveBody) -> dict[str, Any]:
+        """Create or update a persona under ``name`` (a built-in name → an
+        override; a new name → a new persona). The saved version wins next time."""
+        from ...personas import merged, slugify
+
+        slug = slugify(name)
+        if not body.prompt.strip():
+            raise HTTPException(status_code=400, detail="a persona prompt is required")
+        _persona_store().upsert(
+            slug,
+            title=(body.title.strip() or slug.capitalize()),
+            description=body.description.strip(),
+            prompt=body.prompt.strip(),
+        )
+        saved = next(
+            (p for p in merged(_persona_store(), d._PERSONAS) if p["name"] == slug), None
+        )
+        return {"saved": slug, "persona": saved}
+
+    @app.post("/chat/personas")
+    def create_persona(body: PersonaCreateBody) -> dict[str, Any]:
+        """Create a NEW persona; its id is slugified from ``name`` or ``title``."""
+        from ...personas import merged, slugify
+
+        if not body.prompt.strip():
+            raise HTTPException(status_code=400, detail="a persona prompt is required")
+        slug = slugify(body.name or body.title)
+        _persona_store().upsert(
+            slug,
+            title=(body.title.strip() or slug.capitalize()),
+            description=body.description.strip(),
+            prompt=body.prompt.strip(),
+        )
+        saved = next(
+            (p for p in merged(_persona_store(), d._PERSONAS) if p["name"] == slug), None
+        )
+        return {"created": slug, "persona": saved}
+
+    @app.delete("/chat/personas/{name}")
+    def delete_persona(name: str) -> dict[str, Any]:
+        """Remove a saved persona — reverts a built-in to its default, or deletes
+        a custom one. 404 only when the name is neither saved nor a built-in."""
+        from ...personas import slugify
+
+        slug = slugify(name)
+        removed = _persona_store().delete(slug)
+        if not removed and slug not in d._PERSONAS:
+            raise HTTPException(status_code=404, detail="no such persona")
+        return {"deleted": slug, "reverted_to_builtin": slug in d._PERSONAS}
 
     @app.post("/chat")
     async def chat_complete(body: ChatBody) -> dict[str, Any]:
@@ -140,13 +195,12 @@ def register(app: FastAPI, d) -> None:
         if not body.messages:
             raise HTTPException(status_code=400, detail="messages is required")
 
-        # Persona: builtin name, or free text used verbatim.
+        # Persona: a user override/creation wins, then a built-in, then the value
+        # is treated as free-text instructions (used verbatim).
+        from ...personas import resolve_prompt
+
         want = (body.persona or "").strip()
-        persona = (
-            d._PERSONAS[want]["prompt"]
-            if want in d._PERSONAS
-            else (want or d._PERSONAS["assistant"]["prompt"])
-        )
+        persona = resolve_prompt(_persona_store(), d._PERSONAS, want)
         system = persona + (
             "\n\n# Environment\n"
             f"- You run locally on the user's machine; their home directory is {Path.home()}.\n"
@@ -243,6 +297,16 @@ def register(app: FastAPI, d) -> None:
                         {"data_b64": _b64.b64encode(p.read_bytes()).decode("ascii"),
                          "media_type": _IMG[suffix]}
                     )
+                else:
+                    # Too large to send to vision — be HONEST rather than answering
+                    # blind on an image the user thinks was seen (>8 MB is dropped
+                    # by every vision API's inline-image cap).
+                    _mb = p.stat().st_size / (1024 * 1024)
+                    attach_block += (
+                        f"\n\n## Attached image: {p.name}\n(NOT analyzed — {_mb:.0f} MB "
+                        "exceeds the 8 MB inline-image limit; ask the user to resize "
+                        "it or describe what they want from it.)"
+                    )
             else:
                 try:
                     from ...documents.readers import extract_text
@@ -296,7 +360,21 @@ def register(app: FastAPI, d) -> None:
             # tools cannot escape the chosen folder.
             tool_ws = d.platform.config.home / "uploads"
             in_project_folder = False
-            if resolved_proj is not None and (resolved_proj.root or "").strip():
+            # Precedence: an explicit chat WORKSPACE folder (the Build-like panel)
+            # wins, then the grounded project root, then the uploads scratch dir.
+            ws = (body.workspace_dir or "").strip()
+            if ws:
+                from ...core.fs_policy import fs_path_allowed, is_protected_path
+
+                wp = Path(ws)
+                if (
+                    wp.is_absolute()
+                    and wp.is_dir()
+                    and fs_path_allowed(str(wp))
+                    and not is_protected_path(str(wp))
+                ):
+                    tool_ws, in_project_folder = wp, True
+            elif resolved_proj is not None and (resolved_proj.root or "").strip():
                 proot = Path(resolved_proj.root)
                 if proot.is_dir():
                     tool_ws, in_project_folder = proot, True
@@ -311,7 +389,7 @@ def register(app: FastAPI, d) -> None:
                 + ", ".join(armed)
                 + ". Use them when they help; answer directly when they don't."
                 + (
-                    f"\nYour file tools operate INSIDE the project folder ({resolved_proj.root}); "
+                    f"\nYour file tools operate INSIDE the folder {tool_ws}; "
                     "read, edit, and create files there directly, and use the absolute paths "
                     "that file_search returns."
                     if in_project_folder
@@ -337,6 +415,10 @@ def register(app: FastAPI, d) -> None:
         model_choice = (body.model or "").strip() or (
             (resolved_proj.default_model or "").strip() if resolved_proj else ""
         )
+        # Accumulate token usage + completion count ACROSS the (up to 4) tool
+        # rounds so the Usage ledger reflects the WHOLE turn — a multi-round
+        # armed-tool turn is several separately-billed completions, not one.
+        usage_in = usage_out = completions = 0
         try:
             for _round in range(4):
                 route = await d.platform.router.complete(
@@ -347,6 +429,10 @@ def register(app: FastAPI, d) -> None:
                     tools=tool_specs,
                     task_class="chat",
                 )
+                _u = route.response.usage or {}
+                usage_in += int(_u.get("input_tokens", 0) or 0)
+                usage_out += int(_u.get("output_tokens", 0) or 0)
+                completions += 1
                 calls = route.response.tool_calls or []
                 if not calls or not armed:
                     break
@@ -376,6 +462,24 @@ def register(app: FastAPI, d) -> None:
                     # or failed call is not honestly reported as run.
                     if ran:
                         tools_used.append(tc.name)
+                        # FENCE externally-sourced tool output before the model
+                        # sees it — a planted file / web page / memory / PDF can't
+                        # inject instructions (the same guard the agent runtime
+                        # applies to returns_untrusted_content tools).
+                        _t = d.platform.registry.get(tc.name)
+                        if getattr(_t, "returns_untrusted_content", False):
+                            from ...computeruse.safety import (
+                                detect_injection,
+                                wrap_untrusted,
+                            )
+
+                            _inj = detect_injection(str(content))
+                            content = wrap_untrusted(
+                                f"[content withheld — suspected {_inj['category']}: "
+                                f"{_inj['reason']}]"
+                                if _inj["flagged"]
+                                else str(content)
+                            )
                     msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
                                            name=tc.name, content=str(content)[:12000]))
         except Exception as exc:  # noqa: BLE001 — honest, human error
@@ -387,7 +491,6 @@ def register(app: FastAPI, d) -> None:
             from ...core.ids import utcnow as _now
             from ...core.models import AgentRun, AgentState
 
-            usage = route.response.usage or {}
             with session_scope(d.platform.engine) as db:
                 db.add(AgentRun(
                     session_id="chat",
@@ -395,9 +498,9 @@ def register(app: FastAPI, d) -> None:
                     provider=route.provider,
                     model=route.model,
                     state=AgentState.COMPLETED,
-                    steps=1,
-                    input_tokens=int(usage.get("input_tokens", 0) or 0),
-                    output_tokens=int(usage.get("output_tokens", 0) or 0),
+                    steps=max(1, completions),
+                    input_tokens=usage_in,
+                    output_tokens=usage_out,
                     finished_at=_now(),
                 ))
                 db.commit()

@@ -93,6 +93,10 @@ class ChatBody(BaseModel):
     #: — an in-project conversation, independent of the globally-active project.
     #: "" = fall back to the active project (unchanged behavior).
     project_id: str = ""
+    #: The chat's WORKSPACE folder (absolute). When set + allowed, armed file
+    #: tools run there so created/edited files land in the folder the user is
+    #: browsing (the Build-like workspace). "" = project root / uploads default.
+    workspace_dir: str = ""
 
 
 class ProjectCreate(BaseModel):
@@ -480,6 +484,24 @@ class ToolGenerateBody(BaseModel):
     description: str
     provider: str = ""
     model: str = ""
+
+
+class PersonaSaveBody(BaseModel):
+    """Create or update a chat persona. ``name`` (slug id) is taken from the URL;
+    editing a built-in name writes an override. ``title`` is the display name."""
+
+    title: str = ""
+    description: str = ""
+    prompt: str = ""
+
+
+class PersonaCreateBody(BaseModel):
+    """Create a NEW persona; the slug id is derived from ``title`` (or ``name``)."""
+
+    name: str = ""
+    title: str = ""
+    description: str = ""
+    prompt: str = ""
 
 
 class RoutingEnableBody(BaseModel):

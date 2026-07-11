@@ -70,6 +70,7 @@ from .memory.recall import recall_tools
 from .scheduling import Scheduler
 from .scheduling import models as _sched_models  # noqa: F401
 from .reflex import models as _reflex_models  # noqa: F401  (registers ReflexRule)
+from .personas import models as _persona_models  # noqa: F401  (registers PersonaRecord)
 from .sentinels import SentinelService, sentinel_tools
 from .sentinels import models as _sentinel_models  # noqa: F401
 from .secrets import SecretsManager, secret_tools
