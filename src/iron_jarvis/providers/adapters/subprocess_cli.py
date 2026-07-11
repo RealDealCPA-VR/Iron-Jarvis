@@ -27,7 +27,7 @@ import shutil
 import subprocess
 from typing import Any, Callable
 
-from .base import LLMAdapter, LLMMessage, LLMResponse, ToolCall
+from .base import LLMAdapter, LLMMessage, LLMResponse, ProviderError, ToolCall
 
 #: Hard wall-clock cap per CLI call — a wedged CLI must never hang a turn. A
 #: tool-using step can legitimately take 10–20s, so this is generous.
@@ -86,6 +86,13 @@ def _flatten(system: str, messages: list[LLMMessage]) -> str:
 class SubprocessCliAdapter(LLMAdapter):
     """A TEXT-ONLY provider backed by a local AI CLI's headless print mode."""
 
+    def capabilities(self) -> dict[str, Any]:
+        # CRITICAL for routing: this adapter (codex-cli) CANNOT call tools — it
+        # returns final text only. The router MUST exclude it from any request
+        # that carries tools, otherwise the agent loop silently stalls on an
+        # empty tool_calls=[]. No vision either.
+        return {"provider": self.provider, "model": self.model, "tool_use": False, "vision": False}
+
     def __init__(
         self,
         provider: str,
@@ -117,8 +124,12 @@ class SubprocessCliAdapter(LLMAdapter):
         argv = [exe] + self._argv_builder(prompt, self.model)
         try:
             code, out, err = await asyncio.to_thread(self._runner, argv)
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(f"{self.provider}: CLI timed out after {_TIMEOUT_S}s")
+        except subprocess.TimeoutExpired as exc:
+            # A wedged CLI is a TRANSIENT failure (typed) — the router should
+            # fail over to another provider, not surface it as a hard error.
+            raise ProviderError(
+                f"{self.provider}: CLI timed out after {_TIMEOUT_S}s", transient=True
+            ) from exc
         if code != 0:
             detail = (err or out).strip()[:400]
             raise RuntimeError(f"{self.provider}: CLI exited {code}: {detail}")
@@ -231,6 +242,13 @@ class ClaudeCliAdapter(LLMAdapter):
 
     provider = "claude-cli"
 
+    def capabilities(self) -> dict[str, Any]:
+        # Claude via the inherited CLI IS a single-step structured completer that
+        # emits tool_use, so it can drive the agent loop (tool_use True). Inline
+        # vision needs the raw Messages API, so vision stays off — the router
+        # prefers an API adapter when images are present.
+        return {"provider": self.provider, "model": self.model, "tool_use": True, "vision": False}
+
     def __init__(
         self,
         *,
@@ -278,8 +296,11 @@ class ClaudeCliAdapter(LLMAdapter):
         argv = self._argv(exe, prompt, tools)
         try:
             code, out, err = await asyncio.to_thread(self._runner, argv)
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(f"claude-cli: CLI timed out after {_TIMEOUT_S}s")
+        except subprocess.TimeoutExpired as exc:
+            # Transient (typed): a wedged CLI should fail over, not hard-error.
+            raise ProviderError(
+                f"claude-cli: CLI timed out after {_TIMEOUT_S}s", transient=True
+            ) from exc
         if code != 0:
             detail = (err or out).strip()[:400]
             raise RuntimeError(f"claude-cli: CLI exited {code}: {detail}")

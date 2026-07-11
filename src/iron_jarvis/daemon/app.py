@@ -1005,29 +1005,62 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     # --- One-shot completion utilities (terminal assist / builders) -------
 
-    def _failover_adapter(exclude: str):
-        """Another AVAILABLE real provider to absorb a rate-limited one-shot
-        call (e.g. Claude Max window exhausted -> use the OpenAI connection).
-        Returns (adapter, provider) or (None, None). Never picks mock."""
-        order = ["anthropic", "openai", "google", "xai", "openrouter", "ollama", "custom"]
-        # Prefer the DEFAULT provider first when it isn't the one that failed.
+    def _failover_candidates(exclude: str):
+        """Ordered, identity-deduped list of AVAILABLE real adapters to absorb a
+        one-shot call, sharing the router's CLI-first arbitrage order (import
+        ``_FAILOVER_ORDER`` — single source of truth) with the DEFAULT provider
+        bumped first. Includes the subscription CLIs (claude-cli/codex-cli/
+        grok-cli — $0 marginal) that the old hardcoded list omitted. Never mock.
+
+        Dedup is by RESOLVED provider identity (not the requested name), so the
+        inherited alias (openai→codex-cli) that ``exclude`` maps to is skipped."""
+        from ..providers.router import _FAILOVER_ORDER
+
+        order = list(_FAILOVER_ORDER)
         dp = platform.config.default_provider
         if dp in order:
             order.remove(dp)
             order.insert(0, dp)
+        # Resolve the excluded provider to its ACTUAL adapter identity so the
+        # failed provider's inherited alias isn't retried under another name.
+        excluded_providers = {exclude}
+        try:
+            if exclude != "mock" and platform.providers.available(exclude):
+                excluded_providers.add(platform.providers.get(exclude).provider)
+        except Exception:  # noqa: BLE001
+            pass
+        out: list[tuple[Any, str]] = []
+        seen_ids: set[int] = set()
+        seen_providers: set[str] = set()
         for p in order:
-            if p == exclude or not platform.providers.available(p):
+            if p == "mock" or p in excluded_providers or not platform.providers.available(p):
                 continue
             try:
-                return platform.providers.get(p), p
+                adapter = platform.providers.get(p)
             except Exception:  # noqa: BLE001 — try the next one
                 continue
-        return None, None
+            if (
+                id(adapter) in seen_ids
+                or adapter.provider in seen_providers
+                or adapter.provider in excluded_providers
+            ):
+                continue
+            seen_ids.add(id(adapter))
+            seen_providers.add(adapter.provider)
+            out.append((adapter, p))
+        return out
+
+    def _failover_adapter(exclude: str):
+        """The single strongest real provider to absorb a rate-limited one-shot
+        call. Returns (adapter, provider) or (None, None). Never picks mock."""
+        cands = _failover_candidates(exclude)
+        return cands[0] if cands else (None, None)
 
     async def _one_shot_complete(provider: str, adapter, *, system: str, messages):
         """Complete a ONE-SHOT utility call (terminal assist / workflow builder)
         with retry-on-transient, then CROSS-PROVIDER failover when the provider
-        stays rate-limited and another real provider is connected. Returns
+        stays rate-limited. Mirrors the router: iterate ALL connected candidates
+        (CLI-first) until one succeeds, not just the first. Returns
         (response, used_provider, used_model). Raises a clean HTTPException."""
         try:
             resp = await _complete_with_retry(
@@ -1037,14 +1070,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
         except Exception as exc:  # noqa: BLE001 — classified below
             if not _is_transient_provider_error(exc):
                 raise _provider_error_http(exc)
-            alt, alt_provider = _failover_adapter(provider)
-            if alt is None:
-                raise _provider_error_http(exc)
-            try:
-                resp = await alt.complete(system=system, messages=messages, tools=[])
-                return resp, alt_provider, getattr(alt, "model", None)
-            except Exception:  # noqa: BLE001 — surface the ORIGINAL rate limit
-                raise _provider_error_http(exc)
+            for alt, alt_provider in _failover_candidates(provider):
+                try:
+                    resp = await _complete_with_retry(
+                        alt, system=system, messages=messages, tools=[]
+                    )
+                    return resp, alt_provider, getattr(alt, "model", None)
+                except Exception:  # noqa: BLE001 — try the next candidate
+                    continue
+            # Every connected provider is rate-limited: surface the ORIGINAL error.
+            raise _provider_error_http(exc)
 
     # --- Workflows (§24, §25) ---------------------------------------------
 

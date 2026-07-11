@@ -18,7 +18,41 @@ platform wire these into a live ``auto_route`` callable.
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
+
+
+class LatencyTracker:
+    """EWMA of successful-completion latency per ``(provider, model)``.
+
+    Used as a SECONDARY signal: when Auto has multiple equally-cheap candidates
+    for a tier, the faster-observed one wins. Pure in-memory, process-local, and
+    self-contained — no persistence, no I/O. ``alpha`` weights the newest sample
+    (0.3 => a moderately sticky average that still tracks a provider slowing
+    down). Unknown pairs return ``None`` so callers can treat "no data" as
+    neutral rather than infinitely slow.
+    """
+
+    def __init__(self, alpha: float = 0.3) -> None:
+        self._alpha = alpha
+        self._ewma: dict[tuple[str, str], float] = {}
+
+    def record(self, provider: str, model: str, seconds: float) -> None:
+        if seconds < 0:
+            return
+        key = (str(provider), str(model or ""))
+        prev = self._ewma.get(key)
+        self._ewma[key] = seconds if prev is None else (
+            self._alpha * seconds + (1 - self._alpha) * prev
+        )
+
+    def ewma(self, provider: str, model: str) -> float | None:
+        return self._ewma.get((str(provider), str(model or "")))
+
+
+#: Process-global latency tracker. The router records into it on every
+#: successful ``complete()``; :func:`derive_tiers` reads it (via an injected
+#: accessor) to break ties among equally-cheap tier candidates.
+LATENCY = LatencyTracker()
 
 #: The three difficulty tiers, cheapest → most capable.
 TIERS = ("light", "standard", "heavy")
@@ -130,14 +164,33 @@ def cheapest(connected: Iterable[Any]) -> "tuple[str, str] | None":
     return min(reals, key=key)
 
 
-def derive_tiers(connected: Iterable[Any]) -> dict[str, tuple[str, str]]:
+def derive_tiers(
+    connected: Iterable[Any],
+    latency: Callable[[str, str], "float | None"] | None = None,
+) -> dict[str, tuple[str, str]]:
     """A light/standard/heavy mapping over the connected models: light = cheapest,
     heavy = most capable, standard = something in between (falling back to the
-    neighbours when only one or two distinct models are connected)."""
+    neighbours when only one or two distinct models are connected).
+
+    LATENCY-AWARE (opt-in): when ``latency`` is supplied it is a SECONDARY sort
+    key after cost rank, so among several equally-cheap models the faster-
+    observed one is chosen for its tier. With ``latency=None`` (the default) the
+    ordering is byte-for-byte as before — existing callers/tests are unaffected.
+    """
     reals = _real(connected)
     if not reals:
         return {}
-    ranked = sorted(reals, key=lambda pm: model_rank(*pm))
+
+    def sort_key(pm: tuple[str, str]) -> tuple[float, float]:
+        rank = float(model_rank(*pm))
+        if latency is None:
+            return (rank, 0.0)
+        # No data => neutral (0.0), so an unmeasured model is neither favoured
+        # nor penalised versus another of the same rank until a sample lands.
+        lat = latency(*pm)
+        return (rank, lat if lat is not None else 0.0)
+
+    ranked = sorted(reals, key=sort_key)
     light = ranked[0]
     heavy = ranked[-1]
     # Prefer a genuine mid model; else the one just above light; else light.

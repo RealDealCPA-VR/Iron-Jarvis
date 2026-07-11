@@ -33,11 +33,24 @@ import json
 from typing import Any, Callable
 
 from ..cli_detect import GROK_PROXY_BASE, grok_session, grok_session_expired
-from .base import LLMAdapter, LLMMessage, LLMResponse, ToolCall
+from .base import (
+    LLMAdapter,
+    LLMMessage,
+    LLMResponse,
+    ToolCall,
+    provider_error_from_response,
+)
 
 
 class GrokCliAdapter(LLMAdapter):
     provider = "grok-cli"
+
+    def capabilities(self) -> dict[str, Any]:
+        # The Grok CLI proxy speaks the Responses API with function tools, so it
+        # CAN drive the agent tool loop — but it carries no inline image path,
+        # so vision is off (the router prefers an API adapter when images are
+        # present).
+        return {"provider": self.provider, "model": self.model, "tool_use": True, "vision": False}
 
     def __init__(
         self,
@@ -234,7 +247,9 @@ class GrokCliAdapter(LLMAdapter):
                     f"{detail} (Iron Jarvis sent x-grok-client-version="
                     f"{version}; run `grok update` if the proxy rejects it)"
                 )
-            raise RuntimeError(f"grok-cli API error {status}: {detail}")
+            # Typed error so the router classifies transient (429/5xx) vs
+            # permanent (401/426) by status and honours any Retry-After.
+            raise provider_error_from_response("grok-cli", resp, detail)
         return self._parse_sse(getattr(resp, "text", "") or "")
 
 

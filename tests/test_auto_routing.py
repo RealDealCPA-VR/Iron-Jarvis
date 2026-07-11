@@ -259,7 +259,8 @@ def test_auto_on_no_real_downgrades_to_mock():
 
 def test_auto_off_never_consults_auto_route():
     # 11. With Auto off the auto branch is byte-for-byte skipped: auto_route is
-    #     never invoked and no provider.routed fires.
+    #     never invoked. A structured provider.routed still fires for the (real)
+    #     resolved route, tagged reason="default" — never via the auto path.
     called: list = []
 
     async def boom(*a, **k):
@@ -271,7 +272,11 @@ def test_auto_off_never_consults_auto_route():
     res = asyncio.run(r.complete(system="s", messages=[], tools=[], task_class=None))
     assert res.provider == "anthropic"
     assert called == []
-    assert EventType.PROVIDER_ROUTED not in _types(events)
+    routed = [e for e in events if e.type == EventType.PROVIDER_ROUTED]
+    assert routed and routed[0].payload["reason"] == "default"
+    assert routed[0].payload["resolved_provider"] == "anthropic"
+    # No tier/classifier keys — those are only on the auto path.
+    assert "tier" not in routed[0].payload
 
 
 # --------------------------------------------------------------------------- #

@@ -11,7 +11,50 @@ import asyncio
 import os
 from typing import Any
 
-from .base import LLMAdapter, LLMMessage, LLMResponse, ToolCall
+from .base import (
+    LLMAdapter,
+    LLMMessage,
+    LLMResponse,
+    ProviderError,
+    ToolCall,
+    parse_retry_after,
+)
+
+
+def _anthropic_provider_error(exc: Exception) -> ProviderError:
+    """Convert an Anthropic SDK exception into a typed :class:`ProviderError`.
+
+    The SDK raises ``APIStatusError`` (carrying ``.status_code`` + ``.response``)
+    for HTTP errors and ``APITimeoutError`` / ``APIConnectionError`` for
+    transport failures. We read the status + ``Retry-After`` where present and
+    mark timeouts/connection drops transient by TYPE — so the router fails over
+    on a 429/overload/timeout and raises honestly on a 400/401. Kept attribute-
+    driven (no hard SDK import) since this path only runs with a real key.
+    """
+    if isinstance(exc, ProviderError):
+        return exc
+    status = getattr(exc, "status_code", None)
+    retry_after = None
+    resp = getattr(exc, "response", None)
+    headers = getattr(resp, "headers", None)
+    if headers is not None:
+        try:
+            retry_after = parse_retry_after(headers.get("retry-after"))
+        except Exception:  # noqa: BLE001
+            retry_after = None
+    transient: bool | None = None
+    if status is None:
+        # No HTTP status → a transport-layer failure. Anthropic names these
+        # APITimeoutError / APIConnectionError; both are transient.
+        name = type(exc).__name__
+        if "Timeout" in name or "Connection" in name:
+            transient = True
+    return ProviderError(
+        str(exc) or f"anthropic error: {type(exc).__name__}",
+        status_code=status,
+        retry_after=retry_after,
+        transient=transient,
+    )
 
 
 class AnthropicAdapter(LLMAdapter):
@@ -164,13 +207,16 @@ class AnthropicAdapter(LLMAdapter):
                 ]
             elif isinstance(content, list) and content:
                 content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
-        resp = await client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            system=system_param,
-            messages=anthropic_messages,
-            tools=tool_defs,
-        )
+        try:
+            resp = await client.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                system=system_param,
+                messages=anthropic_messages,
+                tools=tool_defs,
+            )
+        except Exception as exc:  # noqa: BLE001 — typed for the router's classifier
+            raise _anthropic_provider_error(exc) from exc
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
         for block in resp.content:

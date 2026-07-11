@@ -11,7 +11,13 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable
 
-from .base import LLMAdapter, LLMMessage, LLMResponse, ToolCall
+from .base import (
+    LLMAdapter,
+    LLMMessage,
+    LLMResponse,
+    ToolCall,
+    provider_error_from_response,
+)
 
 _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
@@ -184,5 +190,7 @@ class GoogleAdapter(LLMAdapter):
                 detail = str((err or {}).get("message") if isinstance(err, dict) else err)[:300]
             except Exception:
                 detail = (getattr(resp, "text", "") or "")[:300]
-            raise RuntimeError(f"google API error {status}: {detail}")
+            # Typed error (status + Retry-After) so the router classifies
+            # transient (429/5xx) vs permanent (4xx) by status, not by string.
+            raise provider_error_from_response("google", resp, detail)
         return self._parse(resp.json())

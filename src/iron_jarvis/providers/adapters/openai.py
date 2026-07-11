@@ -23,7 +23,14 @@ import base64
 import json
 from typing import Any, Callable
 
-from .base import LLMAdapter, LLMMessage, LLMResponse, ToolCall
+from .base import (
+    LLMAdapter,
+    LLMMessage,
+    LLMResponse,
+    ProviderError,
+    ToolCall,
+    provider_error_from_response,
+)
 
 _ENDPOINT = "https://api.openai.com/v1/chat/completions"
 
@@ -442,9 +449,14 @@ class OpenAIAdapter(LLMAdapter):
                 continue
             break  # success, or a non-model error worth surfacing as-is
         if status >= 400:
-            raise RuntimeError(
-                f"openai (ChatGPT backend) API error {status}: "
-                f"{_error_detail(resp) if resp is not None else last_err}"
+            # Typed error so the router classifies transient (429/5xx) vs
+            # permanent (400/401) by STATUS, and honours any Retry-After.
+            detail = _error_detail(resp) if resp is not None else last_err
+            if resp is not None:
+                raise provider_error_from_response("openai (ChatGPT backend)", resp, detail)
+            raise ProviderError(
+                f"openai (ChatGPT backend) API error {status}: {detail}",
+                status_code=status,
             )
         if model not in _CHATGPT_KNOWN_GOOD:
             _CHATGPT_KNOWN_GOOD.insert(0, model)  # remember what works
@@ -500,6 +512,9 @@ class OpenAIAdapter(LLMAdapter):
         # router emits provider.failed + falls back (never a silent empty reply).
         status = getattr(resp, "status_code", 200)
         if status >= 400:
-            detail = _error_detail(resp)
-            raise RuntimeError(f"{self.provider} API error {status}: {detail}")
+            # Typed error (status + Retry-After) so the router fails over on a
+            # transient 429/5xx and raises honestly on a permanent 4xx — never a
+            # blank successful reply. Transport/timeout errors propagate as their
+            # native httpx types, which the router also classifies as transient.
+            raise provider_error_from_response(self.provider, resp, _error_detail(resp))
         return self._parse(resp.json())

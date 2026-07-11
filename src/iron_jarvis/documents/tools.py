@@ -106,7 +106,22 @@ class ReadDocumentTool(Tool):
     )
     input_schema = {
         "type": "object",
-        "properties": {"path": {"type": "string"}},
+        "properties": {
+            "path": {"type": "string"},
+            "page_range": {
+                "type": "string",
+                "description": (
+                    "Optional 1-based page (PDF) / slide (PPTX) slice, e.g. "
+                    "'2', '1-3', '2-', '1,4-6'. Ignored by other formats."
+                ),
+            },
+            "sheet": {
+                "description": (
+                    "Optional worksheet to read from an .xlsx — a sheet NAME or "
+                    "0-based index. Ignored by other formats."
+                ),
+            },
+        },
         "required": ["path"],
     }
 
@@ -116,7 +131,12 @@ class ReadDocumentTool(Tool):
         if not allowed:
             return ToolResult(ok=False, error=reason)
         try:
-            text = await asyncio.to_thread(extract_text, path)  # CPU-bound parse off the loop
+            text = await asyncio.to_thread(  # CPU-bound parse off the loop
+                extract_text,
+                path,
+                page_range=args.get("page_range"),
+                sheet=args.get("sheet"),
+            )
         except Exception as exc:  # reading real files must never crash the runtime
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
         out, truncated = _truncate(text)
@@ -180,7 +200,16 @@ class ExtractPdfTool(Tool):
     description = "Extract the text of a PDF file (absolute or workspace-relative path)."
     input_schema = {
         "type": "object",
-        "properties": {"path": {"type": "string"}},
+        "properties": {
+            "path": {"type": "string"},
+            "page_range": {
+                "type": "string",
+                "description": (
+                    "Optional 1-based page slice, e.g. '2', '1-3', '2-', "
+                    "'1,4-6' — read only part of a large PDF."
+                ),
+            },
+        },
         "required": ["path"],
     }
 
@@ -192,7 +221,9 @@ class ExtractPdfTool(Tool):
         if not allowed:
             return ToolResult(ok=False, error=reason)
         try:
-            text = await asyncio.to_thread(extract_text, path)  # CPU-bound parse off the loop
+            text = await asyncio.to_thread(  # CPU-bound parse off the loop
+                extract_text, path, page_range=args.get("page_range")
+            )
         except Exception as exc:
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
         out, truncated = _truncate(text)

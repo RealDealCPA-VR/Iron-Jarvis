@@ -300,9 +300,12 @@ def build_platform(
         connected = _routing.connected_real_models(providers, config)
         if not connected:
             return None
+        # LATENCY-AWARE tie-break: among equally-cheap models for a tier, the
+        # faster-observed one (router-maintained EWMA) wins. A manual
+        # routing_tiers_json override still takes precedence over the derived map.
         tiers = _routing.parse_tiers_json(
             getattr(config, "routing_tiers_json", "") or ""
-        ) or _routing.derive_tiers(connected)
+        ) or _routing.derive_tiers(connected, latency=_routing.LATENCY.ewma)
         if not tiers:
             return None
         classifier = _routing.parse_pm(getattr(config, "routing_model", "") or "")
