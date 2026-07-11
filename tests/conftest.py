@@ -35,6 +35,30 @@ def _isolate_cli_provider_home():
             os.environ["GROK_HOME"] = prev
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_subscription_cli_detection():
+    """Keep Claude/OpenAI subscription INHERITANCE out of bare tests.
+
+    A logged-in ``claude``/``codex`` CLI now makes ``anthropic``/``openai``
+    "available" without an API key (the sanctioned inherited-login path,
+    ``ProviderManager._INHERIT_ALIAS``). On a dev box where those CLIs are
+    installed, a bare test would otherwise see a live provider — flipping
+    availability, onboarding, first-run, and simulated-mode assertions that
+    assume nothing is connected (CI has no CLI, so it would pass there and fail
+    locally). Force binary detection off for the session so every test is
+    hermetic; the real app keeps real detection, and the inheritance behavior is
+    covered explicitly in ``test_inherit_cli_compliance.py`` (which overrides the
+    check on its own manager instance, so this default doesn't interfere)."""
+    from iron_jarvis.providers.manager import ProviderManager
+
+    original = ProviderManager._cli_binary_present
+    ProviderManager._cli_binary_present = staticmethod(lambda binary: False)
+    try:
+        yield
+    finally:
+        ProviderManager._cli_binary_present = original
+
+
 @pytest.fixture
 def project_root(tmp_path):
     return str(tmp_path)

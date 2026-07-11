@@ -67,8 +67,15 @@ class ProviderManager:
         custom_base_url: str | None = None,
         custom_model: str = "",
         grok_cli_available: Callable[[], bool] | None = None,
+        inherit_cli_logins: bool = False,
     ) -> None:
         self.vault = vault
+        # Keyless subscription inheritance (anthropic->claude-cli, openai->
+        # codex-cli). OPT-IN so a bare unit-test ProviderManager stays hermetic:
+        # otherwise `available("anthropic")` would flip on merely because the
+        # `claude` binary is on PATH, making availability env-dependent (present
+        # on a dev box, absent in CI). The platform passes inherit_cli_logins=True.
+        self._inherit_cli = inherit_cli_logins
         self._default_model = default_model
         self._credential_resolver = credential_resolver
         # Local OpenAI-compatible (Ollama) endpoint: when set, the "ollama"
@@ -174,13 +181,22 @@ class ProviderManager:
         # Subscription CLIs (§arbitrage): a logged-in `claude` / `codex` binary
         # is a FLAT-RATE provider — headless print-mode, no API key, the CLI
         # owns auth + model churn. Text-only (no tool calls) by design.
-        self.register("claude-cli", lambda model=None: self._make_subprocess_cli("claude-cli"))
-        self.register("codex-cli", lambda model=None: self._make_subprocess_cli("codex-cli"))
+        self.register("claude-cli", lambda model=None: self._make_subprocess_cli("claude-cli", model))
+        self.register("codex-cli", lambda model=None: self._make_subprocess_cli("codex-cli", model))
 
-    def _make_subprocess_cli(self, which: str) -> LLMAdapter:
+    #: Keyless subscription INHERITANCE. When 'anthropic'/'openai' has no API key
+    #: but the provider's own CLI is logged in, a request resolves to the
+    #: inherited CLI adapter (the sanctioned path — the CLI owns auth) instead of
+    #: the raw API. The API-KEY path is never affected: a stored key always takes
+    #: the raw adapter, byte-for-byte as before.
+    _INHERIT_ALIAS = {"anthropic": "claude-cli", "openai": "codex-cli"}
+
+    def _make_subprocess_cli(self, which: str, model: str | None = None) -> LLMAdapter:
         from .adapters.subprocess_cli import make_claude_cli, make_codex_cli
 
-        return make_claude_cli() if which == "claude-cli" else make_codex_cli()
+        if which == "claude-cli":
+            return make_claude_cli(model=model or "subscription")
+        return make_codex_cli(model=model or "subscription")
 
     @staticmethod
     def _cli_binary_present(binary: str) -> bool:
@@ -282,7 +298,11 @@ class ProviderManager:
 
     def available(self, name: str) -> bool:
         if name in API_PROVIDERS:
-            return self._present(name)
+            if self._present(name):
+                return True
+            # Keyless inheritance: usable if the provider's own CLI is logged in.
+            alias = self._INHERIT_ALIAS.get(name) if self._inherit_cli else None
+            return bool(alias and self.available(alias))
         if name == "ollama":
             # Local provider: available only once a base_url is configured.
             return self._ollama_base_url is not None
@@ -333,6 +353,11 @@ class ProviderManager:
     def get(self, name: str, model: str | None = None) -> LLMAdapter:
         if name == "auto":
             name, model = self._auto_concrete_default()
+        # Keyless inheritance: route a Claude/OpenAI request with NO API key to
+        # the logged-in CLI (sanctioned). A stored API key keeps the raw adapter.
+        alias = self._INHERIT_ALIAS.get(name) if self._inherit_cli else None
+        if alias and not self._present(name) and self.available(alias):
+            name = alias
         if name not in self._factories:
             raise KeyError(f"unknown provider '{name}'")
         key = (name, model)

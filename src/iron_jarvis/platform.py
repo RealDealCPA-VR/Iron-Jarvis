@@ -222,6 +222,14 @@ def build_platform(
         prober=live_probe,
         oauth_app=_oauth_app,
     )
+    # One-time migration: Anthropic/OpenAI are now API-key-only, with the
+    # subscription inherited from the `claude`/`codex` CLI. Purge any account
+    # OAuth token this app minted under the retired in-app login flow so it can
+    # never reach the raw API. Idempotent; safe every boot.
+    try:
+        connections.purge_app_minted_oauth()
+    except Exception:  # noqa: BLE001 — migration must never block boot
+        pass
 
     def _grok_cli_available() -> bool:
         """True when the local Grok CLI is installed AND has a valid on-disk
@@ -252,6 +260,10 @@ def build_platform(
         # hermetic in unit tests; in the real app grok-cli lights up the moment
         # the CLI is installed + logged in, no restart.
         grok_cli_available=_grok_cli_available,
+        # Inherit the logged-in `claude`/`codex` CLI login when Claude/OpenAI is
+        # requested without an API key (the sanctioned subscription path). The
+        # raw API-key path is unaffected.
+        inherit_cli_logins=True,
     )
     # Self-tuning router (§6 phase-1), OFF by default: only when the user opts in
     # (prefer_local_when_capable) AND a local Ollama model is configured AND it has

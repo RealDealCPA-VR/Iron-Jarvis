@@ -47,19 +47,20 @@ class AnthropicAdapter(LLMAdapter):
             )
         from anthropic import AsyncAnthropic  # lazy import
 
-        # An OAuth ACCOUNT token (Claude Pro/Max via the Claude Code login flow)
-        # is an `sk-ant-oat...` Bearer token that calls the Messages API with the
-        # oauth beta header — never as an x-api-key. A normal API key
-        # (`sk-ant-api...`) uses x-api-key as before.
+        # The raw Messages API is API-KEY-ONLY. A Claude Pro/Max subscription is
+        # used the sanctioned way — inherited from the logged-in `claude` CLI
+        # (providers/adapters/subprocess_cli.py), never by sending an account
+        # OAuth token (`sk-ant-oat...`) to this endpoint. Reject one outright so a
+        # stray token can never reach the raw API.
+        if key.startswith("sk-ant-oat"):
+            raise RuntimeError(
+                "Anthropic OAuth account tokens are not used for the raw API. "
+                "Connect an API key (sk-ant-…), or use your logged-in Claude CLI "
+                "(inherited automatically)."
+            )
         # A 60s request timeout (matching the OpenAI/Google adapters) so a slow or
         # half-open connection trips the router's PROVIDER_FAILED fallback promptly
         # instead of hanging a session on the SDK's ~600s default.
-        if key.startswith("sk-ant-oat"):
-            return AsyncAnthropic(
-                auth_token=key,
-                default_headers={"anthropic-beta": "oauth-2025-04-20"},
-                timeout=60.0,
-            )
         return AsyncAnthropic(api_key=key, timeout=60.0)
 
     @staticmethod

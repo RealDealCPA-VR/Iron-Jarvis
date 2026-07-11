@@ -32,8 +32,14 @@ async def test_mock_finalizes_after_tool_result(platform):
 
 
 async def test_falls_back_to_mock_when_provider_unavailable(platform, monkeypatch):
-    # anthropic has no API key in tests -> router selects the offline mock
+    # anthropic has no API key in tests -> router selects the offline mock.
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # Keyless Claude now inherits the local `claude` CLI when present; force it
+    # absent so this exercises the true "nothing real connected -> mock" net
+    # deterministically (independent of whether the CLI is installed on the box).
+    monkeypatch.setattr(
+        platform.providers, "_cli_binary_present", lambda binary: False
+    )
     res = await platform.router.complete(
         provider="anthropic",
         system="",

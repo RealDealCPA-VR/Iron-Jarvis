@@ -24,7 +24,10 @@ async def test_claude_cli_adapter_flattens_and_parses_json():
     assert r.text == "flat-rate answer"
     assert calls["argv"][0] == "/x/claude" and "-p" in calls["argv"]
     assert "--output-format" in calls["argv"]
-    assert "be brief" in calls["argv"][calls["argv"].index("-p") + 1]
+    # The prompt is the last argv element; the system text is folded into it.
+    assert "be brief" in calls["argv"][-1]
+    # Tool-less step disables the CLI's own tools and asks for no schema.
+    assert "--tools" in calls["argv"] and "--json-schema" not in calls["argv"]
 
 
 @pytest.mark.asyncio

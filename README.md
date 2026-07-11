@@ -54,7 +54,7 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 | 🖥️ **Beautiful dashboard** | arc-reactor dark UI, Kanban board, real-time everything |
 | 📄 **Every file type** | read & write **PDF, Word, Excel, PowerPoint, CSV, Markdown, text** — like a colleague would |
 | 🌱 **Self-correcting** | feedback + reflections become lessons — deduped and **distilled by a real model** into short reusable guidance injected into future runs |
-| 🔌 **Connect a model in seconds** | a Connections page — paste an **API key** (Anthropic/OpenAI/Google, the stable path), or **log in with your Anthropic (Claude Pro/Max) or OpenAI (ChatGPT/Codex) account** *(experimental — rides unofficial public clients)* |
+| 🔌 **Connect a model in seconds** | a Connections page — paste an **API key** (Anthropic / OpenAI / Google), or just be logged into the **`claude` / `codex` CLI** and Iron Jarvis **inherits that subscription login automatically** (it never logs in for you) |
 | 🦙 **Or stay fully local** | point it at a local **Ollama** / OpenAI-compatible endpoint — real intelligence, no cloud, no key |
 | 🔎 **Web search + MCP** | a keyless `web_search` tool for agents, plus an **MCP client** to consume external MCP servers as native tools |
 | 🛠️ **Edits itself** | an opt-in **Maintainer** agent can read/edit/test/fix Iron Jarvis's own source on a review-gated worktree |
@@ -94,7 +94,7 @@ Run the installer. Windows SmartScreen will show *"Windows protected your PC"* b
 
 The app boots its own private daemon on loopback `127.0.0.1:8787` (token-protected, per-install — nothing is exposed to your network) and opens the dashboard in a native window. A **first-run guide** walks you through the two steps that matter:
 
-1. **Connect a model** — on the **Connections** page, either paste an **API key** (Anthropic / OpenAI / Google — the stable path), point it at a **local Ollama** (free, fully private), or try the experimental account login. Until you do, a persistent **"Simulated mode"** banner reminds you that replies come from an offline mock.
+1. **Connect a model** — on the **Connections** page, either paste an **API key** (Anthropic / OpenAI / Google), point it at a **local Ollama** (free, fully private), or simply be logged into the **`claude` / `codex` CLI** and Iron Jarvis inherits that subscription automatically. Until a model is available, a persistent **"Simulated mode"** banner reminds you that replies come from an offline mock.
 2. **Run one real task** — type anything ("summarize the files on my desktop") and watch it work.
 
 You can skip the guide and explore in demo mode — the banner keeps you honest.
@@ -152,12 +152,9 @@ Open the dashboard, hit **New Session**, and watch agents work in real time.
 uv run ironjarvis connect anthropic sk-ant-...   # stored encrypted in the vault
 # the provider flips to "available" instantly — sessions route to it, no env vars
 ```
-- **Log in with your account (OAuth) — *experimental*** — since this runs locally, you can **"Log in with your account"** on the Connections page instead of pasting a key. Heads-up: these flows ride the providers' *public CLI clients* (not an official Iron Jarvis integration), and the ChatGPT-account backend in particular retires model ids without notice — an **API key is the recommended, stable path**. What works today:
-  - **Anthropic** — sign in with your **Claude Pro/Max** account (the public Claude Code OAuth/PKCE client, no app registration). The minted token calls the Messages API with the OAuth beta header — fully wired for inference.
-  - **OpenAI** — sign in with your **ChatGPT (Plus/Pro)** account via the public **Codex** OAuth client; the account token is stored and sent as a bearer.
-  - **Google/Gemini** — OAuth too (bring your own Google Cloud client id).
-  - The flow is standard OAuth 2.0 + PKCE to the daemon's loopback callback; the public client ids are embedded but overridable via the `<provider>_oauth_client_id` / `_oauth_redirect_uri` secrets. Tokens auto-refresh and live only in the encrypted vault.
-- **API key** still works for **Anthropic, OpenAI, and Google** — paste it on the same card (a provider can be connected by *either* a key or your account; the account token is preferred when present).
+- **Use your Claude / ChatGPT subscription — by inheriting your CLI login.** Iron Jarvis **never performs an account login itself**. If you're already signed into the **Claude CLI** (`claude`) or **Codex CLI** (`codex`) on this machine, that subscription login is inherited automatically: a Claude/OpenAI request with no API key runs through the logged-in CLI, which owns the credential (Iron Jarvis never sees or stores it). This is the sanctioned way to use a Pro/Max or ChatGPT plan programmatically. Claude-backed agent sessions, workflows, and armed chat work the same on the inherited login as on an API key — just slightly slower (a fresh CLI process per step), and inline image analysis needs an API key.
+- **API key** — paste one for **Anthropic, OpenAI, or Google** on the Connections page (or `ironjarvis connect anthropic sk-ant-...`); it's stored encrypted in the vault and used directly against the provider's API. A stored key always takes the direct-API path, unaffected by the CLI inheritance above.
+- **Memory sources (Google Drive / Dropbox / OneDrive) and Gemini** connect with your **own** registered OAuth app (you bring the client id) — a standard OAuth 2.0 + PKCE flow used only for the accounts and files you point it at. Tokens live only in the encrypted vault.
 - **Fully local?** Run a local **Ollama** (or any OpenAI-compatible server) and set `ollama_base_url` in config — no key, no network. Sessions can pick the `ollama` provider.
 
 ---

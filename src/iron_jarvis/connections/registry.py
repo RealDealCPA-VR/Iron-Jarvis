@@ -519,6 +519,56 @@ class ConnectionRegistry:
                 connected_at=None,
             )
 
+    def purge_app_minted_oauth(
+        self, providers: tuple[str, ...] = ("anthropic", "openai")
+    ) -> list[str]:
+        """Remove any app-minted account-OAuth credential for providers that are
+        now API-KEY-ONLY (the app no longer performs their login; the
+        subscription is inherited from the CLI). Deletes the ``<provider>_oauth``
+        vault secret and, if the connection row was an OAuth login with no API
+        key, marks it disconnected. Idempotent — safe to run every boot.
+        Returns the providers actually cleaned up."""
+        purged: list[str] = []
+        with self._lock:
+            for provider in providers:
+                secret = f"{provider}_oauth"
+                try:
+                    had_token = bool(self.secrets.get_oauth(secret))
+                except Exception:  # noqa: BLE001
+                    had_token = False
+                try:
+                    self.secrets.delete(secret)
+                except Exception:  # noqa: BLE001 — absent secret must not break boot
+                    pass
+                record = self._get_record(provider)
+                spec = self._specs.get(provider)
+                is_oauth_row = record is not None and (
+                    record.method == "oauth" or had_token
+                )
+                if is_oauth_row:
+                    key_present = False
+                    if spec is not None and spec.supports_api_key:
+                        try:
+                            key_present = bool(
+                                self.secrets.get(
+                                    spec.key_secret_name or f"{provider}_api_key"
+                                )
+                            )
+                        except Exception:  # noqa: BLE001
+                            key_present = False
+                    if not key_present:
+                        self._upsert(
+                            provider,
+                            method=(spec.method if spec else "api_key"),
+                            status="disconnected",
+                            account="",
+                            connected_at=None,
+                        )
+                    purged.append(provider)
+                elif had_token:
+                    purged.append(provider)
+        return purged
+
     # --- internals --------------------------------------------------------
 
     #: In-flight OAuth states expire / are capped so an unauthenticated drive-by

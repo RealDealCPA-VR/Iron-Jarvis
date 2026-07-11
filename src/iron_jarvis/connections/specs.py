@@ -98,65 +98,39 @@ def generic_oauth_spec(
 
 #: Built-in, ready-to-connect providers.
 BUILTIN_SPECS: dict[str, ConnectionSpec] = {
+    # Anthropic and OpenAI are API-KEY-ONLY here. The subscription (Claude
+    # Pro/Max, ChatGPT/Codex) is used the SANCTIONED way — by inheriting the
+    # login you already performed in the provider's own CLI (`claude` / `codex`),
+    # never by this app minting its own account token. So there is deliberately
+    # NO embedded-public-client OAuth flow on these two cards: the app never runs
+    # a claude.ai / ChatGPT login on your behalf. See providers/adapters/
+    # subprocess_cli.py (the inherited-CLI adapters) and the router alias that
+    # routes a keyless Claude/OpenAI request to the logged-in CLI.
     "anthropic": ConnectionSpec(
         provider="anthropic",
         display_name="Anthropic (Claude)",
-        method="api_key",  # also supports OAuth account login (see oauth_* below)
+        method="api_key",
         docs_url="https://console.anthropic.com/settings/keys",
-        key_help="Get a key at console.anthropic.com",
+        key_help=(
+            "Paste an Anthropic API key (sk-ant-…) for direct API use. Or skip "
+            "this: if you're logged into the Claude CLI (`claude`) on this "
+            "machine, Iron Jarvis inherits that subscription login automatically "
+            "— no key needed."
+        ),
         key_secret_name="anthropic_api_key",
-        # Log in with a Claude Pro/Max account via the public Claude Code OAuth
-        # client (PKCE, no secret). The minted token (sk-ant-oat...) calls the
-        # Messages API with the oauth beta header (see the Anthropic adapter).
-        auth_url="https://claude.ai/oauth/authorize",
-        token_url="https://console.anthropic.com/v1/oauth/token",
-        scopes=["org:create_api_key", "user:profile", "user:inference"],
-        oauth_client_id="9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-        oauth_help="Log in with your Claude Pro/Max account (no API key needed).",
-        # MANUAL-CODE flow: claude.ai shows the user an authorization code
-        # (code#state) to paste back into the Connections page. The console
-        # callback below is one of the only redirect URIs REGISTERED for the
-        # public Claude Code client — a custom localhost callback is rejected
-        # with "Redirect URI ... is not supported by client". code=true asks the
-        # authorize page to display the code; the token endpoint takes JSON and
-        # requires the state field alongside the code.
-        oauth_redirect_uri="https://console.anthropic.com/oauth/code/callback",
-        oauth_extra_auth_params={"code": "true"},
-        oauth_token_format="json",
-        oauth_manual_code=True,
     ),
     "openai": ConnectionSpec(
         provider="openai",
         display_name="OpenAI",
-        method="api_key",  # also supports OAuth account login (ChatGPT / Codex)
+        method="api_key",
         docs_url="https://platform.openai.com/api-keys",
-        key_help="Get a key at platform.openai.com/api-keys (recommended — works for inference today).",
-        key_secret_name="openai_api_key",
-        # Account login (ChatGPT / Codex) rides the public Codex CLI client:
-        # PKCE against auth.openai.com with ITS registered loopback redirect —
-        # http://localhost:1455/auth/callback; ANY other redirect_uri fails with
-        # authorize_hydra_invalid_request, so the daemon binds a one-shot
-        # listener on that exact port for the duration of the flow (see
-        # connections/loopback.py). A ChatGPT access token is NOT accepted by
-        # api.openai.com, so after the exchange an RFC 8693 token-exchange mints
-        # a REAL API key from the login's id_token (oauth_key_exchange) and THAT
-        # becomes the stored credential.
-        auth_url="https://auth.openai.com/oauth/authorize",
-        token_url="https://auth.openai.com/oauth/token",
-        scopes=["openid", "profile", "email", "offline_access"],
-        oauth_client_id="app_EMoamEEZ73f0CkXaXp7hrann",
-        oauth_redirect_uri="http://localhost:1455/auth/callback",
-        oauth_extra_auth_params={
-            "id_token_add_organizations": "true",
-            "codex_cli_simplified_flow": "true",
-        },
-        oauth_key_exchange=True,
-        oauth_help=(
-            "Log in with your ChatGPT account. With an API organization an API "
-            "key is minted and stored encrypted; without one (subscription-only "
-            "account) inference runs through the ChatGPT backend on your plan "
-            "(codex-capable models)."
+        key_help=(
+            "Paste an OpenAI API key (sk-…) for direct API use. Or skip this: if "
+            "you're logged into the Codex CLI (`codex`) on this machine, Iron "
+            "Jarvis inherits that ChatGPT subscription login automatically — no "
+            "key needed."
         ),
+        key_secret_name="openai_api_key",
     ),
     "xai": ConnectionSpec(
         provider="xai",

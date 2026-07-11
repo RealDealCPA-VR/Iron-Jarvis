@@ -15,7 +15,8 @@ from __future__ import annotations
 
 #: provider -> (url, auth_style). auth_style is one of:
 #:   "bearer"  -> Authorization: Bearer <cred>
-#:   "anthropic" -> x-api-key (or Bearer for sk-ant-oat) + anthropic-version
+#:   "anthropic" -> x-api-key + anthropic-version (API keys only; the
+#:                  subscription is inherited via the Claude CLI, never probed here)
 #:   "google_tokeninfo" -> ?access_token=<cred> (validates an OAuth token)
 _PROBES: dict[str, tuple[str, str]] = {
     "anthropic": ("https://api.anthropic.com/v1/models", "anthropic"),
@@ -56,11 +57,9 @@ def live_probe(provider: str, credential: str) -> tuple[bool, str]:
     headers: dict[str, str] = {}
     params: dict[str, str] = {}
     if style == "anthropic":
-        if credential.startswith("sk-ant-oat"):
-            headers["Authorization"] = f"Bearer {credential}"
-            headers["anthropic-beta"] = "oauth-2025-04-20"
-        else:
-            headers["x-api-key"] = credential
+        # API-key-only: the Anthropic card no longer accepts an account OAuth
+        # token (subscription use is inherited from the `claude` CLI, not probed).
+        headers["x-api-key"] = credential
         headers["anthropic-version"] = "2023-06-01"
     elif style == "bearer":
         headers["Authorization"] = f"Bearer {credential}"
