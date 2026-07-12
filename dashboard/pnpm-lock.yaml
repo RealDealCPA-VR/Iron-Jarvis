@@ -50,6 +50,9 @@ importers:
       remark-gfm:
         specifier: ^4.0.1
         version: 4.0.1
+      simple-icons:
+        specifier: ^16.26.0
+        version: 16.26.0
     devDependencies:
       '@testing-library/dom':
         specifier: ^10.4.1
@@ -1798,6 +1801,10 @@ packages:
 
   siginfo@2.0.0:
     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
+
+  simple-icons@16.26.0:
+    resolution: {integrity: sha512-T9rNJtyOshULM8heLlvrZY346g9zOgZILQ3vxP+FWcX13RhaOLez7YM/hNCEx3b5gJckSCNDoNsjZuDncSMYSQ==}
+    engines: {node: '>=0.12.18'}
 
   smart-buffer@4.2.0:
     resolution: {integrity: sha512-94hK0Hh8rPqQl2xXc3HsaBoOXKV20MToPkcXvwbISWLEs+64sBq5kFgn2kJDHb1Pry9yrP0dxrCI9RRci7RXKg==}
@@ -4015,6 +4022,8 @@ snapshots:
     optional: true
 
   siginfo@2.0.0: {}
+
+  simple-icons@16.26.0: {}
 
   smart-buffer@4.2.0: {}
 

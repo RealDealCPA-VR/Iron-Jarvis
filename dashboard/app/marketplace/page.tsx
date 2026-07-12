@@ -34,6 +34,7 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { BrandGlyph } from "@/components/BrandGlyph";
 
 /* -------------------------------------------------------------------------- */
 /*  Types (local — lib/types.ts is intentionally untouched)                    */
@@ -278,25 +279,7 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
       {/* Header: glyph + name + via tag + status */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <span
-            aria-hidden="true"
-            className="relative grid h-12 w-12 shrink-0 place-items-center"
-          >
-            <span
-              className={`absolute inset-0 rounded-2xl blur-[10px] transition-colors ${
-                c.connected ? "bg-emerald-400/20" : "bg-accent/15"
-              }`}
-            />
-            <span
-              className={`relative grid h-12 w-12 place-items-center rounded-2xl border text-2xl leading-none ${
-                c.connected
-                  ? "border-emerald-400/30 bg-emerald-400/[0.06]"
-                  : "border-white/[0.1] bg-white/[0.03]"
-              }`}
-            >
-              {c.glyph}
-            </span>
-          </span>
+          <BrandGlyph id={c.id} glyph={c.glyph} connected={c.connected} />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h3 className="truncate text-sm font-semibold text-zinc-100">{c.name}</h3>
