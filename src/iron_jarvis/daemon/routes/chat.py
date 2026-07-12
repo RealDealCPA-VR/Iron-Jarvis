@@ -407,6 +407,13 @@ def register(app: FastAPI, d) -> None:
             _tool = d.platform.registry.get(_name)
             if _tool is not None:
                 overrides[_tool.perm_key()] = "allow"
+        # Arming a tool in the chat UI is an EXPLICIT, interactive per-turn grant,
+        # so ALSO pass the armed set as session_allow. The deny-floor refuses to
+        # raise a host-touching tool (e.g. mcp_call, base "ask") via
+        # agent_overrides, but an interactive session grant is the sanctioned path
+        # to lift an "ask" floor tool for one task — so MCP/web tools stay armable
+        # while base-"deny" floor tools (browser_use) remain correctly blocked.
+        armed_grant = set(overrides.keys())
         # Routing: an explicit body choice always wins; otherwise fall back to
         # the resolved project's per-project default model, if it has one.
         provider_choice = (body.provider or "").strip() or (
@@ -443,7 +450,8 @@ def register(app: FastAPI, d) -> None:
                     ran = False
                     try:
                         result = await d.platform.registry.invoke(
-                            tc.name, tc.arguments, ctx, d.platform.permissions, overrides
+                            tc.name, tc.arguments, ctx, d.platform.permissions,
+                            overrides, session_allow=armed_grant,
                         )
                         if result.ok:
                             content = result.output

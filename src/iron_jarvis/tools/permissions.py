@@ -3,6 +3,17 @@
 Every tool invocation passes through here. Modes: allow / ask / deny. Scopes
 merge with precedence agent > project/global. The engine is **fail-closed**: an
 unknown tool defaults to ``ask``, and ``ask`` with no resolver (headless) denies.
+
+**Deny-floor invariant.** Agent-definition ``permission_overrides`` normally
+outrank the base policy, but the host-touching tools in :data:`DENY_FLOOR_TOOLS`
+are exempt: an agent definition may keep or *lower* them (to ask/deny) yet can
+NEVER *raise* them to ``allow``. This closes the path where an unattended,
+headless spawn of a user-authored dynamic agent (``spawn_agent`` auto-approves
+in headless mode) reaches the host shell purely because the agent's own
+definition set ``shell: allow``. The sanctioned way to grant one of these for a
+single task is the interactive per-session grant (``session_allow`` in
+:meth:`PermissionEngine.authorize`), never an agent definition. A base ``deny``
+remains a hard floor that neither an override nor a session grant can lift.
 """
 
 from __future__ import annotations
@@ -21,6 +32,15 @@ AskResolver = Callable[[str, dict], bool]
 # can decompose work without a prompt. Genuinely dangerous tools (e.g. ``shell``)
 # are deliberately excluded and stay fail-closed.
 SAFE_HEADLESS_TOOLS: frozenset[str] = frozenset({"delegate", "spawn_agent"})
+
+# Host-touching capabilities that an agent-definition ``permission_override`` may
+# keep or LOWER (to ask/deny) but must NEVER RAISE to ``allow``. See the module
+# docstring: this is the deny-floor that prevents a user-authored dynamic agent
+# from silently arming the host shell for an unattended headless spawn. Granting
+# one of these for a single task must go through ``session_allow`` instead.
+DENY_FLOOR_TOOLS: frozenset[str] = frozenset(
+    {"shell", "browser_use", "web_action", "mcp_call"}
+)
 
 
 def headless_ask_resolver(
@@ -59,10 +79,28 @@ class PermissionEngine:
     def mode_for(
         self, tool_name: str, agent_overrides: dict[str, str] | None = None
     ) -> PermissionMode:
+        """Resolve the effective mode for *tool_name*.
+
+        Agent-definition ``agent_overrides`` take precedence over the base
+        policy, with ONE exception: a tool in :data:`DENY_FLOOR_TOOLS` can never
+        be *raised* to ``allow`` by an override. An ``allow`` override on a floor
+        tool is dropped and the base policy applies instead (an override to
+        ``ask``/``deny`` — keeping or lowering — still takes effect). Unknown
+        tools fail closed to ``ask``.
+        """
         raw = None
         if agent_overrides and tool_name in agent_overrides:
-            raw = agent_overrides[tool_name]
-        elif tool_name in self._base:
+            candidate = agent_overrides[tool_name]
+            # Deny-floor: an agent-definition override must not RAISE a
+            # host-touching tool to "allow". Drop such an override and fall
+            # through to the base policy; ask/deny overrides still apply.
+            if (
+                tool_name in DENY_FLOOR_TOOLS
+                and str(candidate) == PermissionMode.ALLOW.value
+            ):
+                candidate = None
+            raw = candidate
+        if raw is None and tool_name in self._base:
             raw = self._base[tool_name]
         if raw is None:
             return PermissionMode.ASK  # fail-closed default for unknown tools
@@ -87,6 +125,10 @@ class PermissionEngine:
         # mode is ASK
         # Per-session grant: the user bundle-approved this tool for THIS task
         # before it ran, so we don't re-ask (and headless doesn't fail-close it).
+        # This is ALSO the sanctioned way to grant a DENY_FLOOR_TOOLS capability
+        # for one task — the deny-floor blocks agent definitions from raising it,
+        # but an explicit interactive session grant on an ``ask`` floor tool still
+        # lifts it here (a base ``deny`` above is never lifted).
         if session_allow is not None and tool_name in session_allow:
             return PermissionDecision(True, mode, "granted for this task")
         if self._ask_resolver is None:

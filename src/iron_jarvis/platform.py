@@ -189,6 +189,14 @@ def build_platform(
     # TX-01 undo journal pre-images can hold prior file content (incl. from the
     # user's real folders) — never let an agent file tool read them back out.
     register_protected_root(config.home / "undo")
+    # The app SQLite DB is NOT an fs allowlist root, but an agent file tool could
+    # still name it by absolute path — and it holds INLINE undo pre-images (<8KB)
+    # plus the plaintext tool/event ledger. Protect the DB file and its WAL/SHM
+    # sidecars by exact path (files, not dirs, so nothing else under home is
+    # affected — workspaces + the user's real folders stay readable).
+    register_protected_root(config.db_path)
+    register_protected_root(Path(str(config.db_path) + "-wal"))
+    register_protected_root(Path(str(config.db_path) + "-shm"))
 
     # Secrets vault + LLM Connections (OAuth2/PKCE + API key) — built early so the
     # provider manager resolves live credentials and reports REAL availability.

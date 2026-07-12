@@ -587,13 +587,16 @@ def register(app: FastAPI, d) -> None:
                 raise HTTPException(
                     status_code=413, detail="file too large to publish (200MB max)"
                 )
+            # read_bytes() (up to 200MB) + the POST both go OFF the loop —
+            # evaluating p.read_bytes() as an inline arg would read on the loop.
             url = await asyncio.to_thread(
-                pixio_publish,
-                key,
-                blob=p.read_bytes(),
-                filename=p.name,
-                mime=mime_for(p.name),
-                endpoint=endpoint,
+                lambda: pixio_publish(
+                    key,
+                    blob=p.read_bytes(),
+                    filename=p.name,
+                    mime=mime_for(p.name),
+                    endpoint=endpoint,
+                )
             )
             return {"url": url}
         except RuntimeError as exc:  # honest Pixio-side failure
@@ -927,8 +930,13 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(
                 status_code=415, detail="only image/video/audio files belong in the gallery"
             )
+        import asyncio
+
+        # Decode the whole (up to _MAX_UPLOAD_BYTES) payload OFF the loop.
         try:
-            blob = base64.b64decode(body.content_b64, validate=False)
+            blob = await asyncio.to_thread(
+                base64.b64decode, body.content_b64, validate=False
+            )
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=400, detail=f"invalid base64: {exc}")
         if not blob:
@@ -942,7 +950,9 @@ def register(app: FastAPI, d) -> None:
         import hashlib
 
         digest = hashlib.sha1(blob).hexdigest()[:8]
-        artifact = d.platform.artifacts.save(
+        # save() writes the blob to disk synchronously — keep it off the loop.
+        artifact = await asyncio.to_thread(
+            d.platform.artifacts.save,
             f"upload-{Path(name).stem[:60]}-{digest}",
             blob,
             kind=media_kind(name) or "file",
@@ -955,8 +965,6 @@ def register(app: FastAPI, d) -> None:
             "size": artifact.size,
         }
         if body.publish:
-            import asyncio
-
             from ...tools.pixio import pixio_publish
 
             key = _pixio_key()

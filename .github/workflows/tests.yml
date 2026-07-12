@@ -56,6 +56,37 @@ jobs:
         working-directory: dashboard
         run: pnpm install --frozen-lockfile
 
+      - name: Unit tests (vitest)
+        working-directory: dashboard
+        run: pnpm test
+
+      - name: Typecheck
+        working-directory: dashboard
+        run: npx tsc --noEmit
+
       - name: Production build
         working-directory: dashboard
         run: pnpm build
+
+  # Syntax-check the Electron entry points. A parse error in the supervisor /
+  # tray / updater / IPC (main.js, preload.js, ...) reaches users only at launch
+  # otherwise — no test covers desktop/. Pure `node --check`, no deps needed.
+  desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Syntax-check Electron entry points
+        working-directory: desktop
+        run: |
+          node --check main.js
+          node --check preload.js
+          node --check spotlight-preload.js
+          node --check windowState.js
+          node --check afterPack.js
+          node --check sign.js

@@ -100,6 +100,8 @@ export function TimeTravelFeed({
 
   // Guard against out-of-order responses when filters change mid-flight.
   const reqRef = useRef(0);
+  // Coalesces a burst of live events into a single trailing head refetch.
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const buildQuery = useCallback(
     (before?: string | null) => {
@@ -117,6 +119,13 @@ export function TimeTravelFeed({
   // First page (also re-run on any filter change).
   useEffect(() => {
     const seq = ++reqRef.current;
+    // A filter change supersedes any pending debounced head-refresh — that timer
+    // captured the PREVIOUS buildQuery, so letting it fire would merge stale-filter
+    // rows onto the new list. Cancel it; this fresh first-page load replaces them.
+    if (refreshTimer.current !== null) {
+      clearTimeout(refreshTimer.current);
+      refreshTimer.current = null;
+    }
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -191,7 +200,20 @@ export function TimeTravelFeed({
 
   useEffect(() => {
     if (!latestLive) return;
-    refreshHead();
+    // A busy run emits many tool.executed/llm.completed events per second, and
+    // each refreshHead() is a full GET /audit. Debounce: clear+reset the timer
+    // on every event so a burst collapses into ONE trailing refetch (~600ms).
+    if (refreshTimer.current !== null) clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = null;
+      refreshHead();
+    }, 600);
+    return () => {
+      if (refreshTimer.current !== null) {
+        clearTimeout(refreshTimer.current);
+        refreshTimer.current = null;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latestLive?.id]);
 

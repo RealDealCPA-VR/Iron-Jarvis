@@ -168,14 +168,17 @@ def test_mcp_tool_executes_through_registry(tmp_path):
             engine=platform.engine,
         )
 
-        # Grant mcp_call for this invocation via an agent override, then run it.
+        # Grant mcp_call for this invocation via the sanctioned per-session grant
+        # path, then run it. (mcp_call is a deny-floor tool: an agent-definition
+        # override can no longer raise it to "allow" — see permissions.py F1/F2 —
+        # so a per-task grant must go through session_allow.)
         res = asyncio.run(
             reg.invoke(
                 "mcp__echo__echo",
                 {"text": "hello"},
                 ctx,
                 platform.permissions,
-                {"mcp_call": "allow"},
+                session_allow=["mcp_call"],
             )
         )
         assert res.ok is True, res.error
@@ -188,7 +191,7 @@ def test_mcp_tool_executes_through_registry(tmp_path):
                 {"a": 2, "b": 3},
                 ctx,
                 platform.permissions,
-                {"mcp_call": "allow"},
+                session_allow=["mcp_call"],
             )
         )
         assert res2.ok is True, res2.error

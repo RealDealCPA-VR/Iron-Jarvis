@@ -198,6 +198,9 @@ const LASTDIR_KEY = "ironjarvis.creative.lastdir";
 const PINS_KEY = "ironjarvis.creative.pins";
 /** Hard cap on tiles rendered per folder (a 10k-file folder must not melt the DOM). */
 const LIB_RENDER_CAP = 200;
+/** Same incremental render cap for the Creations grid ("Show more") — a 500-item
+ *  grid must not mount hundreds of tiles at once. */
+const CRE_RENDER_CAP = 200;
 
 interface PinnedFolder {
   path: string;
@@ -974,7 +977,7 @@ function MediaTile({
             fullUrl={src}
             alt={item.filename}
             kind={item.media}
-            videoFallback="video"
+            videoFallback="glyph"
           />
         ) : (
           <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-4">
@@ -3395,6 +3398,12 @@ export default function CreativePage() {
   useEffect(() => {
     setLibCap(LIB_RENDER_CAP);
   }, [libDir]);
+  // Creations grid: same incremental render cap ("Show more"). Resets when the
+  // active filter/search/sort changes so the list starts fresh at the top.
+  const [creCap, setCreCap] = useState(CRE_RENDER_CAP);
+  useEffect(() => {
+    setCreCap(CRE_RENDER_CAP);
+  }, [filter, creQuery, creSort]);
 
   useEffect(() => {
     if (view !== "library" || libDir === null) return;
@@ -3600,6 +3609,8 @@ export default function CreativePage() {
       ),
     [creSearched, filter, creSort],
   );
+  const creShown = visible.slice(0, creCap);
+  const creRemaining = visible.length - creShown.length;
   const libVisible = useMemo(
     () =>
       sortLibrary(
@@ -3817,15 +3828,28 @@ export default function CreativePage() {
                 </Empty>
               </Card>
             ) : (
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4">
-                {visible.map((item) => (
-                  <MediaTile
-                    key={`${item.name}:${item.version}`}
-                    item={item}
-                    onOpen={() => setSelected(item)}
-                    onConverted={reload}
-                  />
-                ))}
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4">
+                  {creShown.map((item) => (
+                    <MediaTile
+                      key={`${item.name}:${item.version}`}
+                      item={item}
+                      onOpen={() => setSelected(item)}
+                      onConverted={reload}
+                    />
+                  ))}
+                </div>
+                {creRemaining > 0 && (
+                  <div className="flex justify-center">
+                    <button
+                      type="button"
+                      onClick={() => setCreCap((c) => c + CRE_RENDER_CAP)}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-4 py-2 text-xs font-medium text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/[0.04] hover:text-zinc-100"
+                    >
+                      Show {Math.min(CRE_RENDER_CAP, creRemaining)} more ({creRemaining} remaining)
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </Reveal>

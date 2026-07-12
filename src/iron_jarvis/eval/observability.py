@@ -686,12 +686,16 @@ class AuditTimeline:
             summary = f"denied {tname}: {(output or '')[:120]}"
         else:
             summary = f"{tname} {'ok' if ok else 'error'}"
+        # A settings change is journaled with session_id=="settings" and no Session
+        # row, so origin is NULL — without this it would mislabel a USER settings
+        # change as an agent action on the trust timeline.
+        actor = origin or ("you" if sid == "settings" else "agent")
         return {
             "id": tid,
             "ts": _iso(created),
             "_sort": (created, tid),
             "kind": kind,
-            "actor": origin or "agent",
+            "actor": actor,
             "session_id": sid,
             "project_id": project_id,
             "tool": tname,

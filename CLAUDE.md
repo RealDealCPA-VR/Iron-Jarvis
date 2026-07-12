@@ -104,7 +104,8 @@ cd dashboard && pnpm dev           # dashboard
   `~/.codex/skills` (`framework.py::external_skill_roots`); registry
   repopulates IN PLACE; skills inject into prompts (provider-agnostic), the
   agent-facing tools are just search/load. `workflows/` — store + engine
-  (note: `POST /workflows/run` blocks until all steps finish). `ltm/`,
+  (note: `POST /workflows/run` spawns the run in the background and returns the
+  record immediately; it does NOT block until steps finish). `ltm/`,
   `memory/`, `comm/`, `computeruse/`, `sandbox/`, `scheduling/`.
 - `documents/` — readers (extract_text: pdf/docx/xlsx/pptx/csv/text/images),
   writers (markdown-AWARE rich creation: headings/lists/tables/code become

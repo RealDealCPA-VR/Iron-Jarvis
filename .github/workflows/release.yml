@@ -95,8 +95,38 @@ jobs:
         if: steps.gate.outputs.publish == 'true'
         run: uv sync --extra dev
 
+      # Freeze the daemon and BOOT it before publishing anything. PyInstaller has
+      # silently dropped bundled binaries before (OpenConsole.exe / winpty; a
+      # native wheel), shipping a daemon that dies at launch — and no unit test
+      # can catch that (it needs the frozen exe). Gate the release on a real
+      # /health from the frozen binary; the installer step then reuses it.
+      - name: Freeze + smoke-test the daemon (must boot + serve /health)
+        if: steps.gate.outputs.publish == 'true'
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File packaging/build_daemon.ps1
+          $exe = "packaging/dist/ironjarvis/ironjarvis.exe"
+          if (-not (Test-Path $exe)) { throw "frozen daemon missing after build: $exe" }
+          $root = Join-Path $env:RUNNER_TEMP "ij-smoke"
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $p = Start-Process -FilePath $exe -ArgumentList @("serve","--port","8799","--root",$root) -PassThru -WindowStyle Hidden
+          try {
+            $ok = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              Start-Sleep -Seconds 2
+              try {
+                $r = Invoke-RestMethod -Uri "http://127.0.0.1:8799/health" -TimeoutSec 3
+                if ($r.status -eq "ok") { Write-Host "frozen daemon healthy: v$($r.version)"; $ok = $true; break }
+              } catch { }
+            }
+            if (-not $ok) { throw "frozen daemon did not serve /health on :8799 within 60s — refusing to publish a dead build" }
+          } finally {
+            if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          }
+
       - name: Build + publish the installer
         if: steps.gate.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: powershell -ExecutionPolicy Bypass -File desktop/build-installer.ps1 -Publish
+        # -SkipDaemon: reuse the frozen daemon that the smoke step just built + verified.
+        run: powershell -ExecutionPolicy Bypass -File desktop/build-installer.ps1 -Publish -SkipDaemon

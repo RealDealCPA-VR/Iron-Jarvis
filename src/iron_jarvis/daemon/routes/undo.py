@@ -145,6 +145,35 @@ def register(app: FastAPI, d) -> None:
                 prior = {}
             updated = restore_config_values(platform.config, prior)
             result_output = f"undo: restored settings {', '.join(updated) or '(none)'}"
+            # LIVE re-apply — mirror PUT /settings so undoing an endpoint/autonomy
+            # setting takes effect immediately instead of silently needing a restart.
+            # Best-effort: a re-point/re-arm error must never fail the undo itself.
+            cfg = platform.config
+            if any(
+                k in ("ollama_base_url", "ollama_model", "custom_base_url", "custom_model")
+                for k in updated
+            ):
+                try:
+                    platform.providers.configure_local(
+                        ollama_base_url=cfg.ollama_base_url,
+                        ollama_model=cfg.ollama_model,
+                        custom_base_url=cfg.custom_base_url,
+                        custom_model=cfg.custom_model,
+                    )
+                except Exception:  # noqa: BLE001 — next boot still picks config up
+                    pass
+            try:
+                rearm = getattr(d, "_live_rearm", None)
+                if rearm:
+                    loop = rearm.get("loop")
+                    if loop is not None:
+                        for group in ("autonomy", "sentinels"):
+                            if any(k.startswith(group) for k in updated):
+                                fn = rearm.get(group)
+                                if fn is not None:
+                                    loop.call_soon_threadsafe(fn)
+            except Exception:  # noqa: BLE001 — re-arm must never fail the undo itself
+                pass
         else:
             # 4) Tool-backed revert: same tool, same PermissionEngine + fs policy.
             tool = platform.registry.get(tool_name)

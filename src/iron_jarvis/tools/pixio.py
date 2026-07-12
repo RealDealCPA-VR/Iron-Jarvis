@@ -635,23 +635,30 @@ class PixioUploadTool(_PixioTool):
             return ToolResult(ok=False, error=f"blocked: {reason}")
         if p.stat().st_size > self._MAX_UPLOAD:
             return ToolResult(ok=False, error="file too large to publish (200MB max)")
-        blob = p.read_bytes()
-        try:
-            public = await asyncio.to_thread(
-                pixio_publish,
-                key,
-                blob=blob,
-                filename=p.name,
-                mime=mime_for(p.name),
-                endpoint=endpoint,
-                http_upload=self._http_upload,
+
+        # read_bytes() (up to 200MB) + the POST both run OFF the loop.
+        def _read_and_publish() -> tuple[str, int]:
+            blob = p.read_bytes()
+            return (
+                pixio_publish(
+                    key,
+                    blob=blob,
+                    filename=p.name,
+                    mime=mime_for(p.name),
+                    endpoint=endpoint,
+                    http_upload=self._http_upload,
+                ),
+                len(blob),
             )
+
+        try:
+            public, size = await asyncio.to_thread(_read_and_publish)
         except RuntimeError as exc:
             return ToolResult(ok=False, error=str(exc))
         return ToolResult(
             ok=True,
             output=(
-                f"uploaded {p.name} ({len(blob)} bytes) → permanent public url:\n"
+                f"uploaded {p.name} ({size} bytes) → permanent public url:\n"
                 f"{public}\nPass it directly in a generation param."
             ),
             data={"url": public, "source": str(p)},
