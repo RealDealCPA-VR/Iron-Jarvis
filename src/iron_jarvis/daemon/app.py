@@ -1340,45 +1340,99 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     #: Curated, known-good MCP servers (npx-based, cross-platform). The
     #: placeholders in `args` are filled by the user in the UI.
+    # Curated, one-click MCP servers. Entries are the servers we can vouch for a
+    # RELIABLE run command for: the maintained official reference servers
+    # (github.com/modelcontextprotocol/servers) + a few company-official
+    # integrations. Anything else is covered by the "add from npm / GitHub" flow
+    # on the Tools page, so we never ship a guessed (broken) command here.
+    # `needs` names the prerequisite runtime for the plain-language UI hint;
+    # `category` groups the cards ("reference" vs "integration"). `<...>` args are
+    # placeholders the UI collects before connecting.
     _MCP_CATALOG = [
+        # --- Official reference servers (maintained) ---
         {
             "id": "filesystem",
-            "name": "Filesystem",
-            "description": "Read/write files in folders you choose (official server).",
+            "name": "Files & folders",
+            "description": "Let agents read and write files inside a folder you choose. Official reference server.",
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-filesystem", "<folder-path>"],
+            "category": "reference",
+            "needs": "Node",
         },
         {
             "id": "fetch",
-            "name": "Web Fetch",
-            "description": "Fetch and clean web pages for the agent (official server).",
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-fetch"],
-        },
-        {
-            "id": "github",
-            "name": "GitHub",
-            "description": "Repos, issues, PRs. Needs a GitHub personal access token.",
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-github"],
-            "env_keys": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
+            "name": "Fetch web pages",
+            "description": "Pull a web page and hand the agent clean, readable text. Official reference server.",
+            "command": "uvx",
+            "args": ["mcp-server-fetch"],
+            "category": "reference",
+            "needs": "Python (uv)",
         },
         {
             "id": "memory",
-            "name": "Knowledge Graph Memory",
-            "description": "A persistent knowledge-graph memory (official server).",
+            "name": "Long-term memory",
+            "description": "A persistent knowledge graph the agent can remember things in across chats. Official reference server.",
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-memory"],
+            "category": "reference",
+            "needs": "Node",
+        },
+        {
+            "id": "sequentialthinking",
+            "name": "Step-by-step reasoning",
+            "description": "A scratchpad that lets the agent work through hard problems in explicit steps. Official reference server.",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-sequentialthinking"],
+            "category": "reference",
+            "needs": "Node",
+        },
+        {
+            "id": "git",
+            "name": "Git repositories",
+            "description": "Read the history, diffs, and branches of a local git repo. Official reference server.",
+            "command": "uvx",
+            "args": ["mcp-server-git", "--repository", "<repo-path>"],
+            "category": "reference",
+            "needs": "Python (uv)",
+        },
+        {
+            "id": "everything",
+            "name": "Demo / connection test",
+            "description": "Exercises every MCP feature — handy to confirm the plumbing works before adding a real one. Official reference server.",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-everything"],
+            "category": "reference",
+            "needs": "Node",
+        },
+        # --- Popular integrations (company-official) ---
+        {
+            "id": "github",
+            "name": "GitHub",
+            "description": "Search repos and read/open issues and pull requests. Needs a GitHub personal access token.",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-github"],
+            "env_keys": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
+            "category": "integration",
+            "needs": "Node",
+        },
+        {
+            "id": "playwright",
+            "name": "Browser control (Playwright)",
+            "description": "Drive a real browser — open pages, click, fill forms, screenshot. Microsoft's official Playwright MCP.",
+            "command": "npx",
+            "args": ["-y", "@playwright/mcp@latest"],
+            "category": "integration",
+            "needs": "Node",
         },
         {
             "id": "box",
-            "name": "Box (client files)",
-            "description": "Search, read, and manage files in Box — Box's own MCP "
-                           "server (Python; needs uv installed). Get a Developer "
-                           "Token from a Box custom app (developer.box.com).",
+            "name": "Box (cloud files)",
+            "description": "Search, read, and manage files in Box. Box's official server — get a Developer Token from a Box custom app (developer.box.com).",
             "command": "uvx",
             "args": ["mcp-server-box"],
             "env_keys": ["BOX_CLIENT_ID", "BOX_CLIENT_SECRET"],
+            "category": "integration",
+            "needs": "Python (uv)",
         },
     ]
 

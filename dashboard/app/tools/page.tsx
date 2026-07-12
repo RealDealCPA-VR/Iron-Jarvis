@@ -113,6 +113,49 @@ interface McpCatalogEntry {
   command: string;
   args: string[];
   env_keys?: string[];
+  /** "reference" (official) | "integration" — groups the cards. */
+  category?: string;
+  /** Prerequisite runtime, plain language: "Node" | "Python (uv)". */
+  needs?: string;
+}
+
+/**
+ * Turn a pasted npm package or GitHub repo into a ready MCP launch command
+ * — DETERMINISTIC, no code runs here. The exact command is shown to the user,
+ * who reviews (and can edit) it before Connect actually starts the server.
+ *   - "@scope/pkg" or "pkg"            -> npx -y <pkg>
+ *   - "github.com/owner/repo" / URL    -> npx -y github:owner/repo
+ *   - "owner/repo"                     -> npx -y github:owner/repo
+ * Returns null when the input does not look like either.
+ */
+function buildFromSource(
+  raw: string,
+): { name: string; command: string; args: string[]; github: boolean } | null {
+  const s = raw.trim().replace(/\s+/g, "");
+  if (!s) return null;
+  // A GitHub URL or bare owner/repo (but NOT an npm scope like @scope/pkg).
+  const gh = s.match(
+    /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/]+)\/([^/#?]+)|^([^@/][^/]*)\/([^/@]+)$/,
+  );
+  if (gh) {
+    const owner = gh[1] ?? gh[3];
+    const repo = (gh[2] ?? gh[4]).replace(/\.git$/, "");
+    if (owner && repo) {
+      return {
+        name: repo,
+        command: "npx",
+        args: ["-y", `github:${owner}/${repo}`],
+        github: true,
+      };
+    }
+  }
+  // An npm package spec: "@scope/name", "@scope/name@1.2.3", or "name".
+  if (/^@?[\w.-]+(?:\/[\w.-]+)?(?:@[\w.-]+)?$/.test(s)) {
+    const bare = s.replace(/^@[^/]+\//, "").replace(/@[\w.-]+$/, "");
+    const name = (bare || s).replace(/[^\w.-]/g, "-");
+    return { name, command: "npx", args: ["-y", s], github: false };
+  }
+  return null;
 }
 
 /** A configured MCP server, as returned by GET /mcp/servers. */
@@ -228,7 +271,10 @@ function ParamChips({ params }: { params: ToolParam[] }) {
 interface SuiteTool {
   name: string;
   description: string;
-  /** Plain-language "what it does for you" line shown in the gallery (UI only —
+  /** Plain-language use-case shown as the card TITLE (e.g. "Fetch a web page").
+   *  The technical `name` is what the daemon registers + agents call it by. */
+  title: string;
+  /** One-line "what it does for you", shown under the title (UI only —
    *  `description` is what actually gets registered with the daemon). */
   blurb: string;
   parameters: ToolParam[];
@@ -250,44 +296,49 @@ function strParam(name: string, description: string): ToolParam {
 const TOOL_SUITE: SuiteTool[] = [
   {
     name: "http_get",
+    title: "Fetch a web page",
     description: "Fetch a URL and print the response.",
     blurb: "Grab the contents of any web page or API link.",
     parameters: [strParam("url", "The URL to fetch.")],
     command: ["curl", "-s", "{url}"],
     timeout_seconds: 30,
-    icon: <Globe size={14} className="text-accent-soft" />,
+    icon: <Globe size={16} className="text-accent-soft" />,
   },
   {
     name: "ping_host",
+    title: "Check if a site is reachable",
     description: "Ping a host 4 times.",
-    blurb: "Check whether a website or machine is up and reachable.",
+    blurb: "See whether a website or machine is up and responding.",
     parameters: [strParam("host", "Hostname or IP address to ping.")],
     command: ["ping", "-n", "4", "{host}"],
     timeout_seconds: 30,
-    icon: <Radio size={14} className="text-accent-soft" />,
+    icon: <Radio size={16} className="text-accent-soft" />,
   },
   {
     name: "dns_lookup",
+    title: "Look up a site's address",
     description: "DNS lookup for a hostname.",
-    blurb: "Find the internet address behind a website name.",
+    blurb: "Find the internet (IP) address behind a website name.",
     parameters: [strParam("host", "Hostname to resolve.")],
     command: ["nslookup", "{host}"],
     timeout_seconds: 20,
-    icon: <Search size={14} className="text-accent-soft" />,
+    icon: <Search size={16} className="text-accent-soft" />,
   },
   {
     name: "list_dir",
+    title: "List what's in a folder",
     description: "List a directory.",
-    blurb: "See what's inside any folder on your computer.",
+    blurb: "See the files and folders inside any folder on your computer.",
     parameters: [strParam("path", "Directory path to list.")],
     command: ["powershell", "-NoProfile", "-Command", "Get-ChildItem -Force '{path}'"],
     timeout_seconds: 20,
-    icon: <FolderOpen size={14} className="text-accent-soft" />,
+    icon: <FolderOpen size={16} className="text-accent-soft" />,
   },
   {
     name: "word_count",
+    title: "Count words in a document",
     description: "Count words in a text file.",
-    blurb: "Count how many words are in a document.",
+    blurb: "Count how many words are in a text document.",
     parameters: [strParam("file", "Path to the text file.")],
     command: [
       "powershell",
@@ -296,12 +347,13 @@ const TOOL_SUITE: SuiteTool[] = [
       "(Get-Content '{file}' -Raw | Measure-Object -Word).Words",
     ],
     timeout_seconds: 30,
-    icon: <FileText size={14} className="text-accent-soft" />,
+    icon: <FileText size={16} className="text-accent-soft" />,
   },
   {
     name: "disk_free",
+    title: "Check free disk space",
     description: "Show free disk space.",
-    blurb: "Check how much storage space you have left.",
+    blurb: "See how much storage space you have left on each drive.",
     parameters: [],
     command: [
       "powershell",
@@ -310,19 +362,21 @@ const TOOL_SUITE: SuiteTool[] = [
       "Get-PSDrive -PSProvider FileSystem | Select-Object Name,Used,Free",
     ],
     timeout_seconds: 20,
-    icon: <HardDrive size={14} className="text-accent-soft" />,
+    icon: <HardDrive size={16} className="text-accent-soft" />,
   },
   {
     name: "git_status",
+    title: "See what changed in a project",
     description: "git status of a repo.",
     blurb: "See what's changed in a code project since the last save point.",
     parameters: [strParam("repo", "Path to the git repository.")],
     command: ["git", "-C", "{repo}", "status", "--short"],
     timeout_seconds: 30,
-    icon: <GitBranch size={14} className="text-accent-soft" />,
+    icon: <GitBranch size={16} className="text-accent-soft" />,
   },
   {
     name: "zip_folder",
+    title: "Zip up a folder",
     description: "Zip a folder.",
     blurb: "Bundle a folder into a single .zip file, ready to share.",
     parameters: [
@@ -336,16 +390,17 @@ const TOOL_SUITE: SuiteTool[] = [
       "Compress-Archive -Path '{source}' -DestinationPath '{dest}' -Force",
     ],
     timeout_seconds: 120,
-    icon: <FileArchive size={14} className="text-accent-soft" />,
+    icon: <FileArchive size={16} className="text-accent-soft" />,
   },
   {
     name: "open_url",
+    title: "Open a link in the browser",
     description: "Open a URL in the default browser.",
-    blurb: "Pop a link open in your browser for you.",
+    blurb: "Pop a link open in your default browser.",
     parameters: [strParam("url", "The URL to open.")],
     command: ["powershell", "-NoProfile", "-Command", "Start-Process '{url}'"],
     timeout_seconds: 15,
-    icon: <ExternalLink size={14} className="text-accent-soft" />,
+    icon: <ExternalLink size={16} className="text-accent-soft" />,
   },
 ];
 
@@ -620,6 +675,177 @@ export default function ToolsPage() {
   const [sugError, setSugError] = useState<string | null>(null);
   const [suggestion, setSuggestion] = useState<McpSuggestion | null>(null);
 
+  // Add-from-source (paste an npm package or GitHub repo) --------------------
+  const [srcInput, setSrcInput] = useState("");
+  const [srcName, setSrcName] = useState("");
+  const [srcEnvText, setSrcEnvText] = useState("");
+  const srcBuilt = buildFromSource(srcInput);
+
+  /** Parse "KEY=value" lines into an env dict (blank/comment lines ignored). */
+  function parseEnv(text: string): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const line of text.split("\n")) {
+      const t = line.trim();
+      if (!t || t.startsWith("#")) continue;
+      const eq = t.indexOf("=");
+      if (eq <= 0) continue;
+      env[t.slice(0, eq).trim()] = t.slice(eq + 1).trim();
+    }
+    return env;
+  }
+
+  async function addFromSource() {
+    if (!srcBuilt) return;
+    const name = (srcName.trim() || srcBuilt.name).replace(/[^\w.-]/g, "-");
+    const okAdd = await addMcpServer(
+      name,
+      srcBuilt.command,
+      srcBuilt.args,
+      parseEnv(srcEnvText),
+      `src:${name}`,
+    );
+    if (okAdd) {
+      setSrcInput("");
+      setSrcName("");
+      setSrcEnvText("");
+    }
+  }
+
+  /** One curated MCP catalog card (extracted so the two category groups share it). */
+  function catalogCard(entry: McpCatalogEntry) {
+    const connected = serverNames.has(entry.id);
+    const phs = placeholdersOf(entry.args);
+    const envKeys = entry.env_keys ?? [];
+    const needsConfig = phs.length > 0 || envKeys.length > 0;
+    const open = cfgId === entry.id;
+    const isBusy = mcpBusy === entry.id;
+    const canConnect =
+      phs.every((ph) => (cfgValues[ph] ?? "").trim().length > 0) &&
+      envKeys.every((k) => (cfgEnv[k] ?? "").trim().length > 0);
+    return (
+      <div
+        key={entry.id}
+        className="flex flex-col rounded-xl border border-white/[0.06] bg-white/[0.015] p-4 transition-colors hover:border-white/10 hover:bg-white/[0.03]"
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <Plug size={14} className="text-accent-soft" />
+            <span className="truncate text-sm font-semibold text-zinc-100">
+              {entry.name}
+            </span>
+          </div>
+          {connected ? (
+            <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-500/[0.1] px-2 py-1 text-[11px] font-medium text-emerald-300">
+              <Check size={12} /> Added
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() =>
+                needsConfig
+                  ? toggleConfig(entry)
+                  : void addMcpServer(entry.id, entry.command, entry.args, {}, entry.id)
+              }
+              disabled={isBusy}
+              title={`Add "${entry.name}"`}
+              className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-accent/30 bg-accent/[0.08] px-2 py-1 text-[11px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
+            >
+              {isBusy ? (
+                <LoaderInline label="Adding…" />
+              ) : open ? (
+                <>
+                  <X size={12} /> Close
+                </>
+              ) : (
+                <>
+                  <Plus size={12} /> Add
+                </>
+              )}
+            </button>
+          )}
+        </div>
+
+        <p className="mt-2 text-[13px] text-zinc-400">{entry.description}</p>
+
+        {entry.needs && (
+          <div className="mt-2">
+            <span className="inline-flex items-center gap-1 rounded-md border border-white/[0.07] bg-white/[0.03] px-1.5 py-0.5 text-[10px] font-medium text-zinc-400">
+              needs {entry.needs}
+            </span>
+          </div>
+        )}
+
+        {/* Raw launch command tucked away — plain description leads. */}
+        <details className="group mt-3">
+          <summary className="flex cursor-pointer select-none items-center gap-1 text-[11px] font-medium text-zinc-500 transition-colors hover:text-zinc-300 [&::-webkit-details-marker]:hidden">
+            <ChevronRight
+              size={12}
+              className="transition-transform duration-200 group-open:rotate-90"
+            />
+            Show command
+          </summary>
+          <div className="mt-2">
+            <ArgvChips argv={[entry.command, ...entry.args]} />
+          </div>
+        </details>
+
+        {/* Placeholder / env config before connecting */}
+        {open && !connected && (
+          <div className="mt-3 space-y-2 rounded-lg border border-white/[0.05] bg-ink-900/40 p-2.5">
+            {phs.map((ph) => (
+              <label key={ph} className="block">
+                <span className="mb-1 block font-mono text-[11px] text-accent-soft/80">
+                  {ph}
+                </span>
+                <input
+                  value={cfgValues[ph] ?? ""}
+                  onChange={(e) => setCfgValues((v) => ({ ...v, [ph]: e.target.value }))}
+                  placeholder="value"
+                  className="field px-2 py-1.5 font-mono text-xs"
+                />
+              </label>
+            ))}
+            {envKeys.map((k) => (
+              <label key={k} className="block">
+                <span className="mb-1 block font-mono text-[11px] text-zinc-400">
+                  {k} <span className="text-zinc-600">(env)</span>
+                </span>
+                <input
+                  value={cfgEnv[k] ?? ""}
+                  onChange={(e) => setCfgEnv((v) => ({ ...v, [k]: e.target.value }))}
+                  placeholder="value"
+                  className="field px-2 py-1.5 font-mono text-xs"
+                />
+              </label>
+            ))}
+            <button
+              type="button"
+              disabled={!canConnect || isBusy}
+              onClick={() =>
+                void addMcpServer(
+                  entry.id,
+                  entry.command,
+                  substituteArgs(entry.args, cfgValues),
+                  Object.fromEntries(envKeys.map((k) => [k, (cfgEnv[k] ?? "").trim()])),
+                  entry.id,
+                )
+              }
+              className="btn-accent w-full"
+            >
+              {isBusy ? (
+                <LoaderInline label="Connecting…" />
+              ) : (
+                <>
+                  <Plug size={14} /> Connect
+                </>
+              )}
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   async function suggest(e: React.FormEvent) {
     e.preventDefault();
     const d = sugDesc.trim();
@@ -876,11 +1102,16 @@ export default function ToolsPage() {
                   className="flex flex-col rounded-xl border border-white/[0.06] bg-white/[0.015] p-4 transition-colors hover:border-white/10 hover:bg-white/[0.03]"
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <div className="flex min-w-0 items-center gap-2">
-                      {t.icon}
-                      <span className="truncate font-mono text-sm font-semibold text-zinc-100">
-                        {t.name}
-                      </span>
+                    <div className="flex min-w-0 items-start gap-2">
+                      <span className="mt-0.5 shrink-0">{t.icon}</span>
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-zinc-100">
+                          {t.title}
+                        </div>
+                        <div className="truncate font-mono text-[11px] text-zinc-500">
+                          {t.name}
+                        </div>
+                      </div>
                     </div>
                     {added ? (
                       <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-500/[0.1] px-2 py-1 text-[11px] font-medium text-emerald-300">
@@ -907,17 +1138,20 @@ export default function ToolsPage() {
 
                   <p className="mt-2 text-[13px] text-zinc-400">{t.blurb}</p>
 
-                  {/* exact command it will run, shown as chips */}
-                  <div className="mt-3">
-                    <ArgvChips argv={t.command} />
-                  </div>
-
-                  {/* parameter chips */}
-                  {t.parameters.length > 0 && (
-                    <div className="mt-2.5">
-                      <ParamChips params={t.parameters} />
+                  {/* Command tucked away — the use-case leads, the jargon hides. */}
+                  <details className="group mt-3">
+                    <summary className="flex cursor-pointer select-none items-center gap-1 text-[11px] font-medium text-zinc-500 transition-colors hover:text-zinc-300 [&::-webkit-details-marker]:hidden">
+                      <ChevronRight
+                        size={12}
+                        className="transition-transform duration-200 group-open:rotate-90"
+                      />
+                      Show command
+                    </summary>
+                    <div className="mt-2 space-y-2">
+                      <ArgvChips argv={t.command} />
+                      {t.parameters.length > 0 && <ParamChips params={t.parameters} />}
                     </div>
-                  )}
+                  </details>
                 </div>
               );
             })}
@@ -979,137 +1213,124 @@ export default function ToolsPage() {
           ) : catalog.length === 0 ? (
             <p className="text-[13px] text-zinc-600">No packs to show.</p>
           ) : (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {catalog.map((entry) => {
-                const connected = serverNames.has(entry.id);
-                const phs = placeholdersOf(entry.args);
-                const envKeys = entry.env_keys ?? [];
-                const needsConfig = phs.length > 0 || envKeys.length > 0;
-                const open = cfgId === entry.id;
-                const isBusy = mcpBusy === entry.id;
-                const canConnect =
-                  phs.every((ph) => (cfgValues[ph] ?? "").trim().length > 0) &&
-                  envKeys.every((k) => (cfgEnv[k] ?? "").trim().length > 0);
-                return (
-                  <div
-                    key={entry.id}
-                    className="flex flex-col rounded-xl border border-white/[0.06] bg-white/[0.015] p-4 transition-colors hover:border-white/10 hover:bg-white/[0.03]"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <Plug size={14} className="text-accent-soft" />
-                        <span className="truncate text-sm font-semibold text-zinc-100">
-                          {entry.name}
-                        </span>
-                      </div>
-                      {connected ? (
-                        <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-500/[0.1] px-2 py-1 text-[11px] font-medium text-emerald-300">
-                          <Check size={12} /> Added
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            needsConfig
-                              ? toggleConfig(entry)
-                              : void addMcpServer(
-                                  entry.id,
-                                  entry.command,
-                                  entry.args,
-                                  {},
-                                  entry.id,
-                                )
-                          }
-                          disabled={isBusy}
-                          title={`Add "${entry.name}"`}
-                          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-accent/30 bg-accent/[0.08] px-2 py-1 text-[11px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
-                        >
-                          {isBusy ? (
-                            <LoaderInline label="Adding…" />
-                          ) : open ? (
-                            <>
-                              <X size={12} /> Close
-                            </>
-                          ) : (
-                            <>
-                              <Plus size={12} /> Add
-                            </>
-                          )}
-                        </button>
-                      )}
-                    </div>
-
-                    <p className="mt-2 text-[13px] text-zinc-400">
-                      {entry.description}
-                    </p>
-
-                    <div className="mt-3">
-                      <ArgvChips argv={[entry.command, ...entry.args]} />
-                    </div>
-
-                    {/* Placeholder / env config before connecting */}
-                    {open && !connected && (
-                      <div className="mt-3 space-y-2 rounded-lg border border-white/[0.05] bg-ink-900/40 p-2.5">
-                        {phs.map((ph) => (
-                          <label key={ph} className="block">
-                            <span className="mb-1 block font-mono text-[11px] text-accent-soft/80">
-                              {ph}
-                            </span>
-                            <input
-                              value={cfgValues[ph] ?? ""}
-                              onChange={(e) =>
-                                setCfgValues((v) => ({ ...v, [ph]: e.target.value }))
-                              }
-                              placeholder="value"
-                              className="field px-2 py-1.5 font-mono text-xs"
-                            />
-                          </label>
-                        ))}
-                        {envKeys.map((k) => (
-                          <label key={k} className="block">
-                            <span className="mb-1 block font-mono text-[11px] text-zinc-400">
-                              {k}{" "}
-                              <span className="text-zinc-600">(env)</span>
-                            </span>
-                            <input
-                              value={cfgEnv[k] ?? ""}
-                              onChange={(e) =>
-                                setCfgEnv((v) => ({ ...v, [k]: e.target.value }))
-                              }
-                              placeholder="value"
-                              className="field px-2 py-1.5 font-mono text-xs"
-                            />
-                          </label>
-                        ))}
-                        <button
-                          type="button"
-                          disabled={!canConnect || isBusy}
-                          onClick={() =>
-                            void addMcpServer(
-                              entry.id,
-                              entry.command,
-                              substituteArgs(entry.args, cfgValues),
-                              Object.fromEntries(
-                                envKeys.map((k) => [k, (cfgEnv[k] ?? "").trim()]),
-                              ),
-                              entry.id,
-                            )
-                          }
-                          className="btn-accent w-full"
-                        >
-                          {isBusy ? (
-                            <LoaderInline label="Connecting…" />
-                          ) : (
-                            <>
-                              <Plug size={14} /> Connect
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    )}
+            <div className="space-y-5">
+              {catalog.some((e) => (e.category ?? "reference") === "reference") && (
+                <div>
+                  <p className="mb-2 text-[12px] text-zinc-500">
+                    Official reference servers — safe, first-party building blocks.
+                  </p>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    {catalog
+                      .filter((e) => (e.category ?? "reference") === "reference")
+                      .map(catalogCard)}
                   </div>
-                );
-              })}
+                </div>
+              )}
+              {catalog.some((e) => e.category === "integration") && (
+                <div>
+                  <p className="mb-2 text-[12px] text-zinc-500">
+                    Popular integrations — connect an app or service.
+                  </p>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    {catalog.filter((e) => e.category === "integration").map(catalogCard)}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Add from npm / GitHub — the deterministic "paste a package" flow */}
+          <div className="mb-2.5 mt-6">
+            <SectionLabel>Add from npm or GitHub</SectionLabel>
+          </div>
+          <p className="mb-2 text-[13px] text-zinc-500">
+            Paste an npm package (e.g.{" "}
+            <code className="rounded bg-black/40 px-1 py-0.5 font-mono text-[11px] text-accent-soft/90">
+              @modelcontextprotocol/server-slack
+            </code>
+            ) or a GitHub repo (e.g.{" "}
+            <code className="rounded bg-black/40 px-1 py-0.5 font-mono text-[11px] text-accent-soft/90">
+              owner/repo
+            </code>
+            ). Iron Jarvis builds the launch command for you — nothing runs until you
+            review it and hit Connect.
+          </p>
+          <input
+            value={srcInput}
+            onChange={(e) => setSrcInput(e.target.value)}
+            placeholder="@scope/package · owner/repo · https://github.com/owner/repo"
+            className="field font-mono"
+          />
+          {srcInput.trim() && !srcBuilt && (
+            <p className="mt-2 text-[12px] text-amber-300/80">
+              That doesn&apos;t look like an npm package or a GitHub repo. Try{" "}
+              <span className="font-mono">@scope/name</span> or{" "}
+              <span className="font-mono">owner/repo</span>.
+            </p>
+          )}
+          {srcBuilt && (
+            <div className="mt-3 rounded-xl border border-accent/20 bg-accent/[0.04] p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Server size={14} className="text-accent-soft" />
+                <span className="font-mono text-sm font-semibold text-zinc-100">
+                  {srcName.trim() || srcBuilt.name}
+                </span>
+                {srcBuilt.github && <Badge value="from GitHub" tone="violet" />}
+              </div>
+              <p className="mt-2 text-[12px] text-zinc-500">
+                This is the command it will run when you Connect:
+              </p>
+              <div className="mt-1">
+                <ArgvChips argv={[srcBuilt.command, ...srcBuilt.args]} />
+              </div>
+              {srcBuilt.github && (
+                <p className="mt-2 text-[11px] text-zinc-600">
+                  GitHub repos launch via npx. If it&apos;s a Python server instead, add
+                  it above by its package name (which uses uvx).
+                </p>
+              )}
+              <label className="mt-3 block">
+                <span className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  Name (optional)
+                </span>
+                <input
+                  value={srcName}
+                  onChange={(e) => setSrcName(e.target.value)}
+                  placeholder={srcBuilt.name}
+                  className="field px-2 py-1.5 font-mono text-xs"
+                />
+              </label>
+              <label className="mt-2 block">
+                <span className="mb-1 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                  Environment variables (optional)
+                </span>
+                <textarea
+                  value={srcEnvText}
+                  onChange={(e) => setSrcEnvText(e.target.value)}
+                  rows={2}
+                  placeholder="KEY=value — one per line, e.g. API_TOKEN=..."
+                  className="field resize-y font-mono text-xs"
+                />
+              </label>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => void addFromSource()}
+                  disabled={!!mcpBusy && mcpBusy.startsWith("src:")}
+                  className="btn-accent"
+                >
+                  {mcpBusy && mcpBusy.startsWith("src:") ? (
+                    <LoaderInline label="Connecting…" />
+                  ) : (
+                    <>
+                      <Plug size={14} /> Connect this pack
+                    </>
+                  )}
+                </button>
+                <span className="text-[11px] text-zinc-600">
+                  Nothing is added until you confirm.
+                </span>
+              </div>
             </div>
           )}
 
