@@ -1,12 +1,14 @@
 "use client";
 
-// Real brand marks for the Marketplace, bundled at build time from Simple Icons
-// (import-only — no logos are hand-drawn here) so nothing phones a logo CDN and
-// the marks work fully offline, in keeping with the local-first ethos. Imported
-// per-icon so only the marks we use ship in the bundle. Any connector without a
-// brand mark (or a brand not in the set, e.g. Slack / OneDrive) falls back to its
-// emoji glyph.
+import type { ReactNode } from "react";
+
+// Real brand marks, bundled at build time from Simple Icons (import-only — no
+// logos are hand-drawn here) so nothing phones a logo CDN and the marks work
+// fully offline, in keeping with the local-first ethos. Imported per-icon so
+// only the marks we use ship in the bundle. Any id without a brand mark falls
+// back to its emoji (Marketplace) or a provided lucide icon (Connections).
 import {
+  // Marketplace connectors
   siGithub,
   siPostgresql,
   siSentry,
@@ -19,6 +21,12 @@ import {
   siBox,
   siBrave,
   siStripe,
+  // Connections / model providers
+  siAnthropic,
+  siClaude,
+  siGooglegemini,
+  siOllama,
+  siOpenrouter,
 } from "simple-icons";
 
 interface BrandIcon {
@@ -27,8 +35,16 @@ interface BrandIcon {
   path: string; // single 24x24 SVG path
 }
 
-/** Connector id (see connectors/catalog.py) → its Simple Icons brand mark. */
+/**
+ * Id → Simple Icons brand mark. Ids are globally unique in the app's vocabulary
+ * (Marketplace connector ids + model-provider ids don't collide). Brands not in
+ * the set fall back:
+ *   - OpenAI: removed from Simple Icons at OpenAI's request → lucide Bot.
+ *   - xAI / Grok: no dedicated mark (the only "X" is Twitter's — misleading) →
+ *     lucide Zap.
+ */
 const BRAND: Record<string, BrandIcon> = {
+  // --- Marketplace connectors ---
   github: siGithub,
   postgres: siPostgresql,
   sentry: siSentry,
@@ -41,16 +57,28 @@ const BRAND: Record<string, BrandIcon> = {
   box: siBox,
   brave_search: siBrave,
   stripe: siStripe,
+  // --- Model providers (Connections) ---
+  anthropic: siAnthropic,
+  "claude-cli": siClaude,
+  google: siGooglegemini, // the Google provider is Gemini
+  openrouter: siOpenrouter,
+  ollama: siOllama,
 };
 
-/** Whether a connector has a real brand mark (vs. the emoji fallback). */
+/** The brand mark for an id, or undefined when there is none. */
+export function brandIcon(id: string): BrandIcon | undefined {
+  return BRAND[id];
+}
+
+/** Whether an id has a real brand mark (vs. a fallback). */
 export function hasBrandMark(id: string): boolean {
   return id in BRAND;
 }
 
 /**
  * A brand color too dark to read on the dark UI (GitHub #181717, Notion #000000,
- * …) is rendered near-white instead; brighter brand colors render as-is.
+ * Anthropic #191919, Ollama #000000, …) is rendered near-white instead; brighter
+ * brand colors render as-is.
  */
 function displayFill(hex: string): string {
   const h = hex.replace("#", "");
@@ -61,11 +89,28 @@ function displayFill(hex: string): string {
   return Number.isNaN(lum) || lum < 0.4 ? "#e8e8ea" : `#${h}`;
 }
 
+/** The raw brand SVG in its (legibility-adjusted) color. */
+function BrandSvg({ brand, size }: { brand: BrandIcon; size: number }) {
+  const fill = displayFill(brand.hex);
+  return (
+    <svg
+      role="img"
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill={fill}
+      aria-label={`${brand.title} logo`}
+    >
+      <path d={brand.path} />
+    </svg>
+  );
+}
+
 /**
- * The connector's real brand mark on a softly glowing tile, in its brand color.
- * Falls back to the emoji `glyph` for connectors with no brand mark (the emoji
- * tile keeps the prior look, incl. the emerald tint when connected). Purely
- * presentational.
+ * The connector's real brand mark on a softly glowing tile, in its brand color
+ * (Marketplace). Falls back to the emoji `glyph` for connectors with no brand
+ * mark (the emoji tile keeps the prior look, incl. the emerald tint when
+ * connected). Purely presentational.
  */
 export function BrandGlyph({
   id,
@@ -76,7 +121,7 @@ export function BrandGlyph({
   glyph: string;
   connected?: boolean;
 }) {
-  const brand = BRAND[id];
+  const brand = brandIcon(id);
 
   if (!brand) {
     return (
@@ -113,16 +158,29 @@ export function BrandGlyph({
         style={{ backgroundColor: fill, opacity: 0.16 }}
       />
       <span className="relative grid h-12 w-12 place-items-center rounded-2xl border border-white/[0.1] bg-white/[0.04]">
-        <svg
-          role="img"
-          viewBox="0 0 24 24"
-          className="h-6 w-6"
-          fill={fill}
-          aria-label={`${brand.title} logo`}
-        >
-          <path d={brand.path} />
-        </svg>
+        <BrandSvg brand={brand} size={24} />
       </span>
     </span>
   );
+}
+
+/**
+ * Just the brand MARK for an id (no tile), in its brand color — for surfaces
+ * that own their own tile (Connections cards, the Add-connection menu, the CLI
+ * provider rows). Renders `fallback` (a lucide icon) when there is no brand
+ * mark, so brand-less providers (OpenAI, xAI, custom, mock) keep their current
+ * look.
+ */
+export function ProviderMark({
+  id,
+  size = 18,
+  fallback,
+}: {
+  id: string;
+  size?: number;
+  fallback: ReactNode;
+}) {
+  const brand = brandIcon(id);
+  if (!brand) return <>{fallback}</>;
+  return <BrandSvg brand={brand} size={size} />;
 }

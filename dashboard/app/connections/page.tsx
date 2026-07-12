@@ -40,6 +40,7 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { ProviderMark } from "@/components/BrandGlyph";
 
 /* -------------------------------------------------------------------------- */
 /*  Per-provider presentation (the /connections payload carries no help text)  */
@@ -443,7 +444,11 @@ function ConnectionCard({
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
           <span className="grid h-10 w-10 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.03]">
-            <Icon size={19} className={meta.tint} />
+            <ProviderMark
+              id={conn.provider}
+              size={19}
+              fallback={<Icon size={19} className={meta.tint} />}
+            />
           </span>
           <div>
             <div className="text-sm font-semibold text-zinc-100">{conn.display_name}</div>
@@ -797,7 +802,11 @@ function CliProviderRow({ info, available }: { info: CliProviderInfo; available:
     <div className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
       <div className="flex min-w-0 items-center gap-3">
         <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.03]">
-          <Icon size={16} className={info.tint} />
+          <ProviderMark
+            id={info.provider}
+            size={16}
+            fallback={<Icon size={16} className={info.tint} />}
+          />
         </span>
         <div className="min-w-0">
           <div className="text-sm font-medium text-zinc-100">{info.name}</div>
@@ -973,7 +982,11 @@ export default function ConnectionsPage() {
                             onClick={() => scrollToCard(c.provider)}
                             className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs text-zinc-200 transition-colors hover:bg-white/[0.06]"
                           >
-                            <MenuIcon size={14} className={m.tint} />
+                            <ProviderMark
+                              id={c.provider}
+                              size={14}
+                              fallback={<MenuIcon size={14} className={m.tint} />}
+                            />
                             <span className="flex-1 truncate">{c.display_name}</span>
                           </button>
                         );
