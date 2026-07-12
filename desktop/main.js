@@ -1064,7 +1064,10 @@ function installSpotlightIpc() {
     try {
       await au.checkForUpdates();
     } catch (err) {
-      _emitUpdateState({ status: "error", error: (err && err.message) || "check failed" });
+      _emitUpdateState({
+        status: "error",
+        error: friendlyUpdateError((err && err.message) || "check failed"),
+      });
     }
     return _updateState;
   });
@@ -1223,6 +1226,23 @@ function applyPendingUpdate() {
   }
 }
 
+// A checkForUpdates 404 on latest.yml is the PUBLISHING WINDOW, not a fault: CI
+// pre-creates the release, then uploads the installer + latest.yml over the next
+// several minutes. Translate that (and any opaque updater failure) into a plain
+// sentence so NEITHER the auto-check NOR the manual "Check for updates" ever
+// surfaces a raw HttpError stack trace.
+function friendlyUpdateError(msg) {
+  const m = (msg || "update failed").toString();
+  if (/latest\.yml/i.test(m) && /404|not.*found|cannot find/i.test(m)) {
+    return (
+      "A new version is being prepared — its files are still uploading (this " +
+      "takes a few minutes after a release goes out). You're on the latest " +
+      "available version until then; check again shortly."
+    );
+  }
+  return m;
+}
+
 function initUpdater() {
   if (_autoUpdater || !IS_PACKAGED) return _autoUpdater;
   try {
@@ -1247,20 +1267,7 @@ function initUpdater() {
   autoUpdater.on("error", (err) => {
     const msg = (err && err.message) || "update failed";
     console.error("[update] error:", msg);
-    // The PUBLISHING WINDOW: CI creates the release first, then uploads the
-    // installer + latest.yml over the next ~10 minutes. Checking during that
-    // window 404s on latest.yml — that's "an update is on its way", not an
-    // error worth a stack trace.
-    if (/latest\.yml/i.test(msg) && /404|not.*found|cannot find/i.test(msg)) {
-      _emitUpdateState({
-        status: "error",
-        error:
-          "A new version is publishing right now — its files are still uploading. " +
-          "Check again in a few minutes.",
-      });
-      return;
-    }
-    _emitUpdateState({ status: "error", error: msg });
+    _emitUpdateState({ status: "error", error: friendlyUpdateError(msg) });
   });
   autoUpdater.on("update-available", (info) => {
     console.log("[update] available:", info && info.version);
