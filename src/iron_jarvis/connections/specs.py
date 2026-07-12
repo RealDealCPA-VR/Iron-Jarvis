@@ -179,6 +179,14 @@ BUILTIN_SPECS: dict[str, ConnectionSpec] = {
         ),
         key_secret_name="openrouter_api_key",
     ),
+    "groq": ConnectionSpec(
+        provider="groq",
+        display_name="Groq",
+        method="api_key",
+        docs_url="https://console.groq.com/keys",
+        key_help="Get a key at console.groq.com. Store as groq_api_key in the vault — never hardcode.",
+        key_secret_name="groq_api_key",
+    ),
     "custom": ConnectionSpec(
         provider="custom",
         display_name="Custom endpoint",

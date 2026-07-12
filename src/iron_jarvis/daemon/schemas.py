@@ -190,6 +190,18 @@ _SETTINGS_KEYS = [
     # runtime re-arms the background polling loop LIVE (mirrors autonomy_*).
     "sentinels_enabled",
     "sentinels_tick_seconds",
+    # Epic Tech AI budgets + commerce (no secret values — names only in config).
+    "max_tokens_per_run",
+    "max_usd_per_day",
+    "max_runs_per_hour",
+    "max_tokens_per_day",
+    "prefer_local_when_capable",
+    "billing_enabled",
+    "billing_require_credits",
+    "billing_min_credits",
+    "billing_currency",
+    "billing_site_url",
+    "marketplace_enabled",
 ]
 
 

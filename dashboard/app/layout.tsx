@@ -14,13 +14,14 @@ import { DaemonProvider } from "@/lib/daemon";
 export const metadata: Metadata = {
   // Base title; NotificationBell mutates document.title at runtime to surface
   // pending review/approval counts.
-  title: "Iron Jarvis",
-  description: "Dashboard for the Iron Jarvis daemon.",
+  title: "Epic Tech AI",
+  description:
+    "Epic Tech AI control center — local-first agents, Telegram, credits. epictechai@gmail.com · @EpicTechAI",
   manifest: "/manifest.webmanifest",
-  applicationName: "Iron Jarvis",
+  applicationName: "Epic Tech AI",
   appleWebApp: {
     capable: true,
-    title: "Iron Jarvis",
+    title: "Epic Tech AI",
     statusBarStyle: "black-translucent",
   },
 };

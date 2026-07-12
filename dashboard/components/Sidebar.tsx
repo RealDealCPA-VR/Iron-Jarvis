@@ -218,7 +218,7 @@ function Brand() {
     <Link href="/" className="flex items-center gap-3 text-accent">
       <ArcMark />
       <div>
-        <div className="text-[15px] font-semibold tracking-tight text-zinc-50">Iron Jarvis</div>
+        <div className="text-[15px] font-semibold tracking-tight text-zinc-50">Epic Tech AI</div>
         <div className="text-[11px] tracking-wide text-zinc-500">control center</div>
       </div>
     </Link>
@@ -464,7 +464,7 @@ export function MobileNav() {
         <Menu size={18} />
       </button>
       <Link href="/" className="flex items-center gap-2 text-accent">
-        <span className="text-[14px] font-semibold tracking-tight text-zinc-50">Iron Jarvis</span>
+        <span className="text-[14px] font-semibold tracking-tight text-zinc-50">Epic Tech AI</span>
       </Link>
 
       <AnimatePresence>

@@ -1,9 +1,12 @@
 [project]
-name = "iron-jarvis"
-version = "1.49.0"
-description = "Iron Jarvis - a local-first AI operating system: a multi-agent orchestrator with tools, memory, workflows, a sandbox, git-native review, and a Next.js control center."
+name = "epic-iron-jarvis"
+version = "1.49.0+epic.1"
+description = "Epic Tech AI — local-first AI OS (Iron Jarvis core): agents, Telegram, credits, multi-provider, workflows."
 readme = "README.md"
 requires-python = ">=3.12"
+authors = [
+    { name = "Epic Tech AI", email = "epictechai@gmail.com" },
+]
 dependencies = [
     "fastapi>=0.115",
     "starlette>=0.40", # imported directly in daemon/auth.py (security middleware)
@@ -32,6 +35,7 @@ dependencies = [
     "pywinpty>=3.0.5 ; sys_platform == 'win32'",
     "paramiko>=3.4", # SSH/SFTP for the remote long-term-memory source (§21)
     "markitdown[pdf]>=0.1.6",
+    "stripe>=11.0",  # billing; keys ONLY from env/vault
 ]
 
 [project.optional-dependencies]
@@ -43,6 +47,7 @@ dev = [
 
 [project.scripts]
 ironjarvis = "iron_jarvis.daemon.cli:app"
+epic = "iron_jarvis.daemon.cli:app"
 
 [build-system]
 requires = ["hatchling"]

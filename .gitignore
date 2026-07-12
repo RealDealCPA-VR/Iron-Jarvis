@@ -24,3 +24,10 @@ dashboard/.turbo/
 # OS
 Thumbs.db
 .DS_Store
+
+# Secrets
+.env
+.env.*
+!.env.example
+.epic-tech/
+

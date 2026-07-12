@@ -8,6 +8,7 @@ from . import (  # noqa: F401
     agents,
     audit,
     autonomy,
+    billing,
     chat,
     comm,
     computeruse,

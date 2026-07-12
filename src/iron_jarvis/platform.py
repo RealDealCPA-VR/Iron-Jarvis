@@ -77,6 +77,7 @@ from .secrets import SecretsManager, secret_tools
 from .secrets import models as _sec_models  # noqa: F401
 from .webhooks import InboundWebhooks, OutboundWebhooks
 from .webhooks import models as _whk_models  # noqa: F401
+from .billing import models as _billing_models_early  # noqa: F401  (register tables pre-init_db)
 
 # Documents (all file types) + self-correcting learning loop.
 from .documents import document_tools
@@ -160,6 +161,8 @@ class Platform:
     #: The Reflex Loop's durable rule store (signal→action bindings). The
     #: executing ReflexRouter is built by the daemon (it needs the orchestrator).
     reflex: "object | None" = None
+    #: Epic Tech AI credits ledger (Stripe keys from env/vault only).
+    billing: "object | None" = None
 
 
 def build_platform(
@@ -751,5 +754,24 @@ def build_platform(
     # orchestrator (cheap, never-raising, runs on every session completion); the
     # model-driven reflect() stays on-demand (POST /improvement/reflect).
     platform.improvement = ImprovementEngine(platform)
+
+    # Epic Tech AI commerce — keys from env/vault only, never hardcoded.
+    # Models registered early via import so init_db create_all includes tables.
+    from .billing import BillingService
+    from .billing import models as _billing_models  # noqa: F401
+
+    platform.billing = BillingService(
+        engine,
+        secret_resolver=secrets.get,
+        currency=getattr(config, "billing_currency", "credits") or "credits",
+        stripe_secret_name=getattr(config, "stripe_secret_name", "stripe_secret_key"),
+        stripe_webhook_secret_name=getattr(
+            config, "stripe_webhook_secret_name", "stripe_webhook_secret"
+        ),
+        site_url=getattr(config, "billing_site_url", None),
+        enabled=bool(getattr(config, "billing_enabled", False)),
+        require_credits=bool(getattr(config, "billing_require_credits", False)),
+        min_credits=float(getattr(config, "billing_min_credits", 1.0) or 1.0),
+    )
 
     return platform

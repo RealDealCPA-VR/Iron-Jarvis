@@ -20,7 +20,7 @@ from ..core.logging import get_logger
 log = get_logger("reflex.commands")
 
 _HELP = (
-    "Iron Jarvis commands:\n"
+    "Epic Tech AI commands:\n"
     "/status — version, model, live work\n"
     "/workflows — list saved workflows\n"
     "/run <name> — start a workflow\n"
@@ -29,8 +29,12 @@ _HELP = (
     "/agents — list remote agents\n"
     "/ask <agent> <task> — ask a remote agent\n"
     "/sessions — recent sessions\n"
+    "/balance — credit balance\n"
+    "/buy [product_id] — credit packs / Stripe checkout\n"
+    "/usage — token usage summary\n"
     "/help — this list\n"
-    "Any other message runs as a normal request."
+    "Any other message runs as a normal request.\n"
+    "Contact: epictechai@gmail.com · x.com/EpicTechAI"
 )
 
 
@@ -70,11 +74,54 @@ class CommandInterpreter:
             runs = list(db.exec(select(WorkflowRunRecord)))
         live = sum(1 for r in runs if r.status in ("running", "cancelling"))
         return (
-            f"Iron Jarvis v{__version__}\n"
+            f"Epic Tech AI v{__version__}\n"
             f"Model: {cfg.default_provider}/{cfg.default_model}\n"
             f"Workflows: {live} running, {len(runs)} total\n"
             f"Sessions: {len(self.orch.list_sessions(limit=200))} recent"
         )
+
+    async def _cmd_balance(self, _rest: str) -> str:
+        billing = getattr(self.p, "billing", None)
+        if billing is None:
+            return "Billing offline. Local mock/Ollama use is free."
+        s = billing.summary()
+        return (
+            f"Balance: {s.get('balance', 0):.2f} {s.get('currency', 'credits')}\n"
+            f"Billing enabled: {s.get('enabled')}\n"
+            f"Stripe configured: {s.get('stripe_configured')} "
+            f"(keys from env/vault only — never hardcode)"
+        )
+
+    async def _cmd_buy(self, rest: str) -> str:
+        billing = getattr(self.p, "billing", None)
+        if billing is None:
+            return "Billing offline."
+        products = billing.list_products()
+        if not rest.strip():
+            lines = ["Credit packs:"]
+            for p in products:
+                lines.append(
+                    f"  {p['id']}: {p['name']} — {p['credits']} credits "
+                    f"(${p['price_cents']/100:.2f})"
+                )
+            lines.append("Buy: /buy <product_id>")
+            return "\n".join(lines)
+        try:
+            checkout = billing.create_checkout(rest.strip())
+            return f"Checkout: {checkout.get('checkout_url')}"
+        except Exception as exc:  # noqa: BLE001
+            return f"Checkout failed: {exc}"
+
+    async def _cmd_usage(self, _rest: str) -> str:
+        try:
+            u = self.p.observability.usage_summary(7)
+        except Exception:  # noqa: BLE001
+            return "Usage stats unavailable."
+        totals = u.get("totals") or u.get("total") or u
+        if isinstance(totals, dict):
+            bits = ", ".join(f"{k}={v}" for k, v in list(totals.items())[:8])
+            return f"Last 7 days: {bits}"
+        return f"Last 7 days: {totals}"
 
     async def _cmd_workflows(self, _rest: str) -> str:
         from ..workflows.store import WorkflowStore

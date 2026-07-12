@@ -260,6 +260,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     from ..comm import InboundPoller
 
+    from ..brand import REPLY_PREFIX as _EPIC_REPLY_PREFIX
+
     inbound_poller = InboundPoller(
         platform.notifier,
         orchestrator,
@@ -267,6 +269,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
         event_bus=platform.event_bus,
         command_interpreter=command_interpreter,
         reflex_router=reflex_router,
+        reply_prefix=_EPIC_REPLY_PREFIX,
     )
 
     # LIVE re-arm bridge: lifespan drops its event loop + the autonomy/sentinel
@@ -1434,6 +1437,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
     _routes.creative.register(app, d)
     _routes.connections.register(app, d)
     _routes.connectors.register(app, d)
+    _routes.billing.register(app, d)
     _routes.routing.register(app, d)
     _routes.comm.register(app, d)
     _routes.agents.register(app, d)

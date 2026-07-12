@@ -26,7 +26,7 @@ PresenceResolver = Callable[[str], bool]
 AdapterFactory = Callable[..., LLMAdapter]
 
 #: API providers whose availability is gated on a real credential.
-API_PROVIDERS = ("anthropic", "openai", "google", "xai", "openrouter")
+API_PROVIDERS = ("anthropic", "openai", "google", "xai", "openrouter", "groq")
 
 #: xAI (Grok) is OpenAI-compatible, so it routes through the OpenAI adapter with
 #: a base_url override (same pattern as a local Ollama server).
@@ -34,6 +34,9 @@ XAI_ENDPOINT = "https://api.x.ai/v1/chat/completions"
 
 #: OpenRouter — one key routes every lab's models (OpenAI-compatible aggregator).
 OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+
+#: Groq — OpenAI-compatible high-speed inference (credential from vault/env only).
+GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 
 
 def _normalize_ollama_url(url: str | None) -> str | None:
@@ -135,6 +138,16 @@ class ProviderManager:
                 provider_name="xai",
             ),
         )
+        # Groq — OpenAI-compatible. Never hardcode keys; vault/env only.
+        self.register(
+            "groq",
+            lambda model=None: OpenAIAdapter(
+                model=model or "llama-3.3-70b-versatile",
+                base_url=GROQ_ENDPOINT,
+                credential=lambda: self._cred("groq"),
+                provider_name="groq",
+            ),
+        )
         # OpenRouter — one key, every lab's models, OpenAI-compatible. Model ids
         # are namespaced ("x-ai/grok-code-fast-1", "openrouter/auto"...).
         self.register(
@@ -227,6 +240,18 @@ class ProviderManager:
         except Exception:  # noqa: BLE001
             return False
 
+    #: Env fallbacks only — never hardcode secret values in source.
+    _ENV_FALLBACKS: dict[str, tuple[str, ...]] = {
+        "anthropic": ("ANTHROPIC_API_KEY",),
+        "openai": ("OPENAI_API_KEY",),
+        "google": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
+        "xai": ("XAI_API_KEY",),
+        "openrouter": ("OPENROUTER_API_KEY",),
+        "groq": ("GROQ_API_KEY",),
+        "custom": ("CUSTOM_API_KEY",),
+        "pixio": ("PIXIO_API_KEY",),
+    }
+
     def _cred(self, name: str) -> str | None:
         """Resolve a live credential for an API provider (vault/connections → env)."""
         if self._credential_resolver is not None:
@@ -236,8 +261,10 @@ class ProviderManager:
                     return cred
             except Exception:
                 pass
-        if name == "anthropic":
-            return os.environ.get("ANTHROPIC_API_KEY")
+        for env_name in self._ENV_FALLBACKS.get(name, ()):
+            val = os.environ.get(env_name, "").strip()
+            if val:
+                return val
         return None
 
     def _present(self, name: str) -> bool:
@@ -246,7 +273,7 @@ class ProviderManager:
         Prefers the injected ``presence_resolver`` (e.g. the Connections layer's
         ``has_credential``, which only checks the vault). With no presence
         resolver wired, falls back to the existing credential check so behavior
-        is unchanged. The ANTHROPIC_API_KEY env var is always honored (no I/O).
+        is unchanged. Env vars are honored without I/O (never hardcode keys).
         """
         if self._presence_resolver is not None:
             try:
@@ -260,8 +287,9 @@ class ProviderManager:
                     return True
             except Exception:
                 pass
-        if name == "anthropic":
-            return bool(os.environ.get("ANTHROPIC_API_KEY"))
+        for env_name in self._ENV_FALLBACKS.get(name, ()):
+            if os.environ.get(env_name, "").strip():
+                return True
         return False
 
     def register(self, name: str, factory: AdapterFactory) -> None:

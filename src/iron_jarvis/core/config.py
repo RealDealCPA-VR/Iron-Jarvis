@@ -224,6 +224,21 @@ class Config(BaseModel):
     sentinels_enabled: bool = False
     sentinels_tick_seconds: int = 300  # filesystem poll cadence (background loop)
 
+    # --- Epic Tech AI: token budgets + commerce (secrets NEVER hardcoded) -----
+    max_tokens_per_run: int = 0  # 0 = off
+    max_usd_per_day: float = 0.0
+    max_runs_per_hour: int = 0
+    max_tokens_per_day: int = 0
+    prefer_local_when_capable: bool = False
+    billing_enabled: bool = False
+    billing_require_credits: bool = False
+    billing_min_credits: float = 1.0
+    billing_currency: str = "credits"
+    stripe_secret_name: str = "stripe_secret_key"
+    stripe_webhook_secret_name: str = "stripe_webhook_secret"
+    billing_site_url: str | None = None
+    marketplace_enabled: bool = False  # skill microtx; connector marketplace is separate
+
     @field_validator("autonomy_level")
     @classmethod
     def _valid_autonomy_level(cls, v: str) -> str:
@@ -378,15 +393,14 @@ def global_config_path() -> Path:
 def resolve_home(project_root: str | Path) -> Path:
     """The state home (DB, secrets, memory, sessions, schedules, workspaces).
 
-    ``IRONJARVIS_HOME`` (when set) DECOUPLES all persistent state from the
-    per-invocation project directory, so ONE Iron Jarvis brain — one vault of
-    provider logins/keys, one memory, one session history — serves EVERY project
-    the owner works in (the "daily driver for all projects" model). Unset (the
-    default) keeps the per-project ``<project_root>/.ironjarvis`` home, so existing
-    behavior is unchanged and each project stays fully isolated."""
-    override = os.environ.get("IRONJARVIS_HOME", "").strip()
-    if override:
-        return Path(override).expanduser().resolve()
+    Prefer ``EPIC_HOME`` (Epic Tech AI). ``IRONJARVIS_HOME`` is still honored.
+    When set, state is DECOUPLED from the per-invocation project directory —
+    one brain (vault, memory, history) across every project. Unset (default)
+    keeps the per-project ``<project_root>/.ironjarvis`` home."""
+    for env_name in ("EPIC_HOME", "IRONJARVIS_HOME"):
+        override = os.environ.get(env_name, "").strip()
+        if override:
+            return Path(override).expanduser().resolve()
     return Path(project_root).resolve() / ".ironjarvis"
 
 
