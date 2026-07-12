@@ -11,6 +11,8 @@ import {
   ChevronUp,
   Copy,
   FileCode2,
+  Pencil,
+  Lightbulb,
 } from "lucide-react";
 import { get, post, del, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
@@ -85,6 +87,19 @@ function normalize(res: unknown): { name: string; ok: boolean | null; detail: st
   });
 }
 
+/** A short, actionable fix for a failed channel test, from the daemon's detail. */
+function tipFor(detail?: string): string {
+  const d = (detail || "").toLowerCase();
+  if (d.includes("delivery method") || d.includes("webhook_url") || d.includes("token_secret"))
+    return "add an Incoming Webhook URL, or a bot token + a channel, then re-test.";
+  if (d.includes("did not resolve") || d.includes("token secret"))
+    return "the saved token is missing — re-enter it via Edit.";
+  if (d.includes("chat_id")) return "add your Chat ID via Edit.";
+  if (d.includes("host") || d.includes("from_addr") || d.includes("to_addr"))
+    return "fill the SMTP host and addresses via Edit.";
+  return "open Edit and re-check the channel's details.";
+}
+
 export default function ChannelsPage() {
   const { data, error, loading, reload } = useApi<{ channels: ChannelInfo[] }>("/comm/channels");
   const { data: typesData } = useApi<{ types: ChannelType[] }>("/comm/channel-types");
@@ -107,6 +122,9 @@ export default function ChannelsPage() {
   const [addBusy, setAddBusy] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
   const [addSuccess, setAddSuccess] = useState<string | null>(null);
+  // Non-null when the add form is reconfiguring an EXISTING channel (Edit). The
+  // add endpoint replaces on the same name, so Edit = re-submit through it.
+  const [editing, setEditing] = useState<string | null>(null);
 
   /* --- One-paste app manifest (slack) --------------------------------------- */
   // Open by default — the one-paste manifest is the EASIEST setup path and was
@@ -193,18 +211,37 @@ export default function ChannelsPage() {
         config[f.key] = addValues[f.key] ?? "";
       });
       await post("/comm/channels", { name, type: addType, config });
-      setAddSuccess(`Channel “${name}” added.`);
+      setAddSuccess(`Channel “${name}” ${editing ? "updated" : "added"}.`);
       setAddName("");
       setAddType("");
       setAddValues({});
       setShowAdd(false);
+      setEditing(null);
       reload();
     } catch (err) {
-      // Keep the form open so the user can fix a bad name/type.
+      // Keep the form open so the user can fix a bad name/type/config — the
+      // daemon's detail carries the actionable tip (e.g. Slack needs a webhook).
       setAddError(err instanceof ApiError ? err.message : String(err));
     } finally {
       setAddBusy(false);
     }
+  }
+
+  /** Open the form to RECONFIGURE an existing channel (name + type locked). */
+  function openEdit(c: ChannelInfo) {
+    setEditing(c.name);
+    setAddType(c.type);
+    setAddName(c.name);
+    setAddValues({});
+    setShowAdd(true);
+    setAddError(null);
+    setAddSuccess(null);
+    setManifestOpen(c.type === "slack");
+    setManifestCopied(false);
+  }
+  function openEditByName(name: string) {
+    const c = channels.find((x) => x.name === name);
+    if (c) openEdit(c);
   }
 
   async function deleteChannel(name: string) {
@@ -227,11 +264,20 @@ export default function ChannelsPage() {
             <button
               type="button"
               onClick={() => {
-                setShowAdd((v) => !v);
+                // Always open a FRESH add (never inherit an in-progress edit).
+                if (editing) {
+                  setEditing(null);
+                  setAddType("");
+                  setAddName("");
+                  setAddValues({});
+                  setShowAdd(true);
+                } else {
+                  setShowAdd((v) => !v);
+                }
                 setAddError(null);
                 setAddSuccess(null);
               }}
-              className={showAdd ? "btn-ghost" : "btn-accent"}
+              className={showAdd && !editing ? "btn-ghost" : "btn-accent"}
             >
               <Plus size={14} /> Add channel
             </button>
@@ -252,8 +298,20 @@ export default function ChannelsPage() {
 
       {showAdd && (
         <Reveal>
-          <Card title="Add a channel" icon={<Plus size={15} />}>
+          <Card
+            title={editing ? `Edit “${editing}”` : "Add a channel"}
+            icon={editing ? <Pencil size={15} /> : <Plus size={15} />}
+          >
             <form onSubmit={addChannel} className="space-y-3.5">
+              {editing && (
+                <div className="rounded-xl border border-accent/20 bg-accent/[0.05] px-3.5 py-2.5 text-[12px] leading-relaxed text-zinc-300">
+                  Re-enter the details to update{" "}
+                  <span className="font-mono text-accent-soft">{editing}</span>. For
+                  your security, saved secrets aren&apos;t shown — re-paste the ones
+                  you&apos;re setting (Slack: a webhook URL, or a bot token + a
+                  channel).
+                </div>
+              )}
               <div>
                 <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   Type
@@ -261,13 +319,14 @@ export default function ChannelsPage() {
                 <select
                   aria-label="Channel type"
                   value={addType}
+                  disabled={!!editing}
                   onChange={(e) => {
                     setAddType(e.target.value);
                     setAddValues({});
                     setManifestOpen(false);
                     setManifestCopied(false);
                   }}
-                  className="field"
+                  className="field disabled:opacity-60"
                 >
                   <option value="">Select a type…</option>
                   {channelTypes.map((t) => (
@@ -289,7 +348,8 @@ export default function ChannelsPage() {
                   placeholder="team-alerts"
                   aria-label="Channel name"
                   autoComplete="off"
-                  className="field font-mono text-sm"
+                  disabled={!!editing}
+                  className="field font-mono text-sm disabled:opacity-60"
                 />
                 <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
                   A short name you&apos;ll use to send to it, e.g. team-alerts.
@@ -371,12 +431,23 @@ export default function ChannelsPage() {
                   disabled={addBusy || !addName.trim() || !addType}
                   className="btn-accent"
                 >
-                  {addBusy ? <LoaderInline label="Adding…" /> : <><Plus size={14} /> Add channel</>}
+                  {addBusy ? (
+                    <LoaderInline label={editing ? "Saving…" : "Adding…"} />
+                  ) : editing ? (
+                    <>
+                      <Pencil size={14} /> Save changes
+                    </>
+                  ) : (
+                    <>
+                      <Plus size={14} /> Add channel
+                    </>
+                  )}
                 </button>
                 <button
                   type="button"
                   onClick={() => {
                     setShowAdd(false);
+                    setEditing(null);
                     setAddError(null);
                   }}
                   className="btn-ghost"
@@ -417,6 +488,14 @@ export default function ChannelsPage() {
                       <div className="flex shrink-0 items-center gap-1.5">
                         <button
                           type="button"
+                          onClick={() => openEdit(c)}
+                          title={`Edit ${c.name}`}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
+                        >
+                          <Pencil size={13} /> Edit
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => testChannel(c.name)}
                           disabled={testBusy !== null}
                           title={`Send a real test message through ${c.name}`}
@@ -441,16 +520,31 @@ export default function ChannelsPage() {
               </ul>
             )}
             {testResult && (
-              <div className="mt-3">
+              <div className="mt-3 space-y-2">
                 {testResult.ok ? (
                   <SuccessNote>
                     Test message delivered — check {testResult.name}.
                   </SuccessNote>
                 ) : (
-                  <ErrorNote>
-                    Test to {testResult.name} failed
-                    {testResult.detail ? ` — ${testResult.detail}` : "."}
-                  </ErrorNote>
+                  <>
+                    <ErrorNote>
+                      Test to {testResult.name} failed
+                      {testResult.detail ? ` — ${testResult.detail}` : "."}
+                    </ErrorNote>
+                    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-accent/15 bg-accent/[0.04] px-3 py-2 text-[12px] text-zinc-300">
+                      <Lightbulb size={13} className="shrink-0 text-accent-soft" />
+                      <span className="min-w-0 flex-1">
+                        Fix it fast: {tipFor(testResult.detail)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => openEditByName(testResult.name)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-accent/30 bg-accent/[0.08] px-2 py-1 text-[11px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.14]"
+                      >
+                        <Pencil size={12} /> Edit {testResult.name}
+                      </button>
+                    </div>
+                  </>
                 )}
               </div>
             )}

@@ -24,6 +24,42 @@ from ..schemas import (
 from ...core.db import session_scope
 
 
+def _channel_config_problem(ctype: str, config: dict) -> str | None:
+    """A human, actionable message when a channel has no working delivery method
+    yet, or ``None`` when it is good to go. Catches a misconfigured channel at
+    ADD time (with a tip) instead of silently saving one that only fails later at
+    test time. ``config`` is the post-processing dict (secret fields already
+    resolved to ``<key>_secret``)."""
+    if ctype == "slack":
+        if config.get("webhook_url") or (config.get("token_secret") and config.get("channel")):
+            return None
+        return (
+            "Slack has no way to deliver messages yet. Add ONE of these: an "
+            "Incoming Webhook URL (simplest — Slack app → Incoming Webhooks → Add "
+            "New Webhook), OR a Bot token plus a channel (e.g. #general). Tip: use "
+            "the one-paste app manifest above to create the app in seconds."
+        )
+    if ctype == "discord":
+        if config.get("webhook_url"):
+            return None
+        return (
+            "Discord needs an Incoming Webhook URL — in Discord: the channel → "
+            "Edit Channel → Integrations → Webhooks → New Webhook, then Copy URL."
+        )
+    if ctype == "telegram":
+        if config.get("token_secret") and config.get("chat_id"):
+            return None
+        return (
+            "Telegram needs a Bot token (from @BotFather) and your Chat ID "
+            "(message @userinfobot to find it)."
+        )
+    if ctype == "email":
+        if config.get("host") and config.get("from_addr") and config.get("to_addr"):
+            return None
+        return "Email needs at least an SMTP host, a From address, and a Send-to address."
+    return None
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/vault")
@@ -185,6 +221,13 @@ def register(app: FastAPI, d) -> None:
                 config[key] = str(value).strip().lower() in ("1", "true", "yes", "on")
             else:
                 config[key] = value
+
+        # Reject a channel with no working delivery method up front, with a tip —
+        # far better than silently saving one that only fails at test time. (Edit
+        # re-submits here, so this also guards a fix that is still incomplete.)
+        problem = _channel_config_problem(ctype, config)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
 
         # Persist to config.comm.channels (survives restart) + atomic write.
         comm = dict(d.platform.config.comm or {})
