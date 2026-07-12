@@ -170,7 +170,7 @@ def register(app: FastAPI, d) -> None:
                     "manifest": d._CHANNEL_MANIFESTS.get(t),
                     "manifest_help": (
                         "Create the Slack app in one paste: api.slack.com/apps → "
-                        "Create New App → From an app manifest → paste this YAML, "
+                        "Create New App → From an app manifest → paste this JSON, "
                         "then install it to your workspace and copy the Bot token "
                         "(plus the Signing Secret from Basic Information for "
                         "two-way events — point Slack's Event Subscriptions "

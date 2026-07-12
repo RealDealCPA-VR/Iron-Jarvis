@@ -48,7 +48,7 @@ interface ChannelField {
 interface ChannelType {
   type: string;
   fields: ChannelField[];
-  /** One-paste app manifest (YAML) for types that support it (slack); null otherwise. */
+  /** One-paste app manifest (JSON) for types that support it (slack); null otherwise. */
   manifest?: string | null;
   /** Human instructions for where to paste the manifest. */
   manifest_help?: string | null;

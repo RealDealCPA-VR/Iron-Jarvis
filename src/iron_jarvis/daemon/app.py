@@ -1302,38 +1302,46 @@ def create_app(project_root: str | None = None) -> FastAPI:
         ],
     }
 
-    # Pre-formatted app manifests (YAML — Slack's canonical format): paste at
-    # api.slack.com/apps → "Create New App" → "From an app manifest" and every
-    # required scope/setting is configured in one step.
+    # Pre-formatted app manifest (JSON — the format Slack's "Create New App →
+    # From an app manifest" editor now expects; it dropped the YAML tab): paste it
+    # at api.slack.com/apps and every required scope/setting lands in one step.
+    # (Socket Mode is on, so Iron Jarvis dials OUT to Slack — two-way DMs with no
+    # public URL; create an App-Level Token with connections:write after install.)
     _CHANNEL_MANIFESTS = {
-        "slack": (
-            "display_information:\n"
-            "  name: Iron Jarvis\n"
-            "  description: Notifications and two-way chat from your local Iron Jarvis\n"
-            "  background_color: \"#0a0c11\"\n"
-            "features:\n"
-            "  bot_user:\n"
-            "    display_name: Iron Jarvis\n"
-            "    always_online: true\n"
-            "oauth_config:\n"
-            "  scopes:\n"
-            "    bot:\n"
-            "      - chat:write\n"
-            "      - chat:write.public\n"
-            "      - channels:history\n"
-            "      - im:history\n"
-            "      - im:write\n"
-            "settings:\n"
-            "  event_subscriptions:\n"
-            "    bot_events:\n"
-            "      - message.im\n"
-            "  org_deploy_enabled: false\n"
-            "  # Socket Mode = Iron Jarvis dials OUT to Slack; two-way with no\n"
-            "  # public URL. Create an App-Level Token (connections:write) after\n"
-            "  # installing and paste it into the channel form.\n"
-            "  socket_mode_enabled: true\n"
-            "  token_rotation_enabled: false\n"
-        ),
+        "slack": """{
+  "display_information": {
+    "name": "Iron Jarvis",
+    "description": "Notifications and two-way chat from your local Iron Jarvis",
+    "background_color": "#0a0c11"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Iron Jarvis",
+      "always_online": true
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "chat:write",
+        "chat:write.public",
+        "channels:history",
+        "im:history",
+        "im:write"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "bot_events": [
+        "message.im"
+      ]
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": true,
+    "token_rotation_enabled": false
+  }
+}""",
     }
 
     # --- External MCP servers (prebuilt catalog + custom) ------------------
