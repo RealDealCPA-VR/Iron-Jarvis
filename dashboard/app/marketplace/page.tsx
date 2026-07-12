@@ -15,12 +15,15 @@ import {
   Sparkles,
   ArrowRight,
   Info,
+  Zap,
+  Layers,
   X,
 } from "lucide-react";
 import { post, del, ApiError } from "@/lib/api";
 import { usePolledApi } from "@/lib/useApi";
 import {
   Badge,
+  Stat,
   OfflineHint,
   Empty,
   Skeleton,
@@ -265,15 +268,34 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
   }
 
   return (
-    <div className="card-surface flex flex-col gap-3.5 p-5 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-card-hover">
+    <div
+      className={`card-surface relative flex flex-col gap-3.5 p-5 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-card-hover hover:ring-1 hover:ring-accent/20 ${
+        c.connected
+          ? "ring-1 ring-emerald-500/25 shadow-[0_0_24px_-10px_rgba(52,211,153,0.35)]"
+          : ""
+      }`}
+    >
       {/* Header: glyph + name + via tag + status */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <span
             aria-hidden="true"
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-2xl leading-none"
+            className="relative grid h-12 w-12 shrink-0 place-items-center"
           >
-            {c.glyph}
+            <span
+              className={`absolute inset-0 rounded-2xl blur-[10px] transition-colors ${
+                c.connected ? "bg-emerald-400/20" : "bg-accent/15"
+              }`}
+            />
+            <span
+              className={`relative grid h-12 w-12 place-items-center rounded-2xl border text-2xl leading-none ${
+                c.connected
+                  ? "border-emerald-400/30 bg-emerald-400/[0.06]"
+                  : "border-white/[0.1] bg-white/[0.03]"
+              }`}
+            >
+              {c.glyph}
+            </span>
           </span>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -542,7 +564,7 @@ function CardSkeleton() {
   return (
     <div className="card-surface flex flex-col gap-3.5 p-5">
       <div className="flex items-center gap-3">
-        <Skeleton className="h-11 w-11 rounded-xl" />
+        <Skeleton className="h-12 w-12 rounded-2xl" />
         <div className="flex-1 space-y-2">
           <Skeleton className="h-3.5 w-2/5" />
           <Skeleton className="h-2.5 w-1/4" />
@@ -575,6 +597,13 @@ export default function MarketplacePage() {
 
   const total = connectors.length;
   const connectedCount = connectors.filter((c) => c.connected).length;
+  const toolsLive = useMemo(
+    () =>
+      connectors
+        .filter((c) => c.connected)
+        .reduce((n, c) => n + (c.tools_loaded || 0), 0),
+    [connectors],
+  );
 
   const q = search.trim().toLowerCase();
   const visible = useMemo(
@@ -614,20 +643,33 @@ export default function MarketplacePage() {
         <PageHeader
           title="Marketplace"
           subtitle="Connect Iron Jarvis to your apps — one tap. Tokens are stored encrypted; nothing is sent anywhere but the service you connect."
-          actions={
-            data ? (
-              <span className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-zinc-300">
-                <Store size={14} className="text-accent-soft" />
-                {connectedCount} connected of {total}
-              </span>
-            ) : null
-          }
         />
       </Reveal>
 
       {offline && (
         <Reveal>
           <OfflineHint />
+        </Reveal>
+      )}
+
+      {/* Stat strip — the page's pulse at a glance */}
+      {data && !offline && (
+        <Reveal>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Stat
+              label="Connected"
+              value={connectedCount}
+              icon={<CheckCircle2 size={15} />}
+              accent={connectedCount > 0}
+            />
+            <Stat label="Available" value={total} icon={<Store size={15} />} />
+            <Stat label="Tools live" value={toolsLive} icon={<Zap size={15} />} />
+            <Stat
+              label="Categories"
+              value={categories.length}
+              icon={<Layers size={15} />}
+            />
+          </div>
         </Reveal>
       )}
 
@@ -659,9 +701,9 @@ export default function MarketplacePage() {
                     type="button"
                     onClick={() => setActiveCat(cat)}
                     aria-pressed={active}
-                    className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                    className={`rounded-full border px-3 py-1 text-xs font-medium transition-all ${
                       active
-                        ? "border-accent/40 bg-accent/[0.12] text-accent-soft"
+                        ? "border-accent/40 bg-accent/[0.12] text-accent-soft shadow-[0_0_14px_-4px_rgba(34,211,238,0.5)]"
                         : "border-white/10 bg-white/[0.02] text-zinc-400 hover:border-white/20 hover:text-zinc-200"
                     }`}
                   >
@@ -694,11 +736,23 @@ export default function MarketplacePage() {
       ) : (
         grouped.map((group) => (
           <Reveal key={group.cat}>
-            <section className="space-y-3">
-              <h2 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-                {group.cat}
-                <span className="ml-2 font-normal text-zinc-600">{group.items.length}</span>
-              </h2>
+            <section className="space-y-3.5">
+              <div className="flex items-center gap-3">
+                <span
+                  aria-hidden="true"
+                  className="h-4 w-1 rounded-full bg-gradient-to-b from-accent to-accent/20 shadow-[0_0_8px_rgba(34,211,238,0.4)]"
+                />
+                <h2 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-zinc-300">
+                  {group.cat}
+                </h2>
+                <span className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-medium text-zinc-500">
+                  {group.items.length}
+                </span>
+                <span
+                  aria-hidden="true"
+                  className="h-px flex-1 bg-gradient-to-r from-white/[0.08] to-transparent"
+                />
+              </div>
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                 {group.items.map((c) => (
                   <ConnectorCard key={c.id} c={c} onChanged={reload} />
