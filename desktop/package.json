@@ -1,17 +1,12 @@
 {
   "name": "iron-jarvis-desktop",
   "productName": "Iron Jarvis",
-  "version": "1.49.0",
+  "version": "1.49.1",
   "private": true,
   "description": "Native desktop wrapper for Iron Jarvis. Boots the local Python daemon (uv run ironjarvis serve) and the Next.js dashboard (pnpm start), then opens them in a native window.",
   "main": "main.js",
   "author": "RealDealCPA",
   "license": "UNLICENSED",
-  "_signing_comments": {
-    "publisherName": "SET THIS to the EXACT subject Common Name (CN) of your code-signing certificate, e.g. 'RealDealCPA LLC' (Azure Trusted Signing) or 'Valentino <Lastname>' (individual OV cert). It is currently a PLACEHOLDER — while it does not match a real signed binary, keep build.win.verifyUpdateCodeSignature = false (see below). See docs/SIGNING.md.",
-    "sign": "build.win.sign points at ./sign.js — a custom electron-builder code-signing hook. It signs each artifact ONLY when signing credentials are present in the environment (Azure Trusted Signing or signtool/eSigner); with no creds it logs and returns so the build proceeds UNSIGNED instead of failing. Secrets are passed through by .github/workflows/release.yml.",
-    "verifyUpdateCodeSignature": "Kept FALSE on purpose: electron-updater would otherwise reject every unsigned self-update because the downloaded installer's signature would not match the placeholder publisherName above. Once you configure REAL signing (creds + a publisherName that matches the cert subject) and ship one signed release, flip this to true to turn the auto-updater into a genuine chain of trust. CAVEAT: the FIRST signed release must still be installed over an unsigned one (that transition update is not signature-verified); every release after that must stay signed with the same publisher or installed apps refuse the update."
-  },
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
@@ -54,10 +49,7 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.png",
-      "publisherName": "RealDealCPA — REPLACE with the exact cert subject CN",
-      "sign": "./sign.js",
-      "verifyUpdateCodeSignature": false
+      "icon": "assets/icon.png"
     },
     "nsis": {
       "oneClick": false,

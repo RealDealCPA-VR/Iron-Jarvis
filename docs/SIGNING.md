@@ -6,23 +6,23 @@ Iron Jarvis ships unsigned today, so every new download trips SmartScreen
 identity to the binaries and letting Microsoft build reputation for them.
 This page is what it actually takes, as of mid-2026.
 
-## TL;DR — what is already wired vs. what YOU must supply
+## TL;DR — what is ready vs. what YOU must supply
 
-The build is **already plumbed for signing** and stays green whether or not you
-configure it:
+The signing hook is **written and ready**, but it is deliberately **NOT wired
+into the build by default** — the default build ships a working *unsigned*
+installer. (An earlier release wired a bare `win.sign` string hook into the
+build; electron-builder 26 rejects that shape at config-validation and the
+release build failed with an empty release. Signing stays out of the default
+build until you have a real certificate, so a daily-driver's auto-update can
+never be held hostage by an unactivated optional feature.)
 
-- `desktop/sign.js` is a custom electron-builder signing hook. It signs each
+What is already in the repo, ready to activate:
+
+- `desktop/sign.js` — a custom electron-builder signing hook. It signs each
   artifact **only when signing credentials are in the environment**; with no
   creds it logs `code-signing skipped (no cert configured) — installer will be
-  unsigned` and returns, so the build still produces a working (unsigned)
-  installer.
-- `desktop/build-installer.ps1` and `.github/workflows/release.yml` both run a
-  `Get-AuthenticodeSignature` verify pass afterward: if creds were present they
-  **fail the build unless the installer is validly signed AND timestamped**; if
-  not, they just report "unsigned" and pass.
-- `release.yml` passes all signing secrets through as env (absent secrets are
-  empty strings, so nothing breaks) and best-effort-installs
-  `trusted-signing-cli` on the runner.
+  unsigned` and returns. It is inert until you reference it from `build.win.sign`
+  (step 3 below).
 
 **What is EXTERNAL and user-supplied — Iron Jarvis cannot do this for you:**
 
@@ -45,18 +45,37 @@ configure it:
    to `signtool.exe` on the runner) and `IJ_SIGN_SHA1` (cert thumbprint).
    Optional: `IJ_TIMESTAMP_URL` (defaults to
    `http://timestamp.acs.microsoft.com`).
-3. **Set `publisherName`** in `desktop/package.json` → `build.win` to the
-   **exact subject CN of your certificate** (it is a placeholder today).
-4. **Flip `verifyUpdateCodeSignature` to `true`** in the same block *after* your
-   first signed release ships. It is `false` today on purpose: with a placeholder
-   `publisherName` and unsigned binaries, electron-updater would otherwise reject
-   every self-update. Caveat: the transition update (unsigned → first signed
-   release) is not signature-verified; every release after that must stay signed
-   with the same publisher or installed apps will refuse to update.
+3. **Wire the hook into `desktop/package.json` → `build.win`.** In
+   **electron-builder 26**, `sign` is an OBJECT and `publisherName` nests INSIDE
+   it (they are NOT direct `win.*` keys — that is what broke the build before):
 
-Until you do steps 1–3, **builds are unsigned** and Windows shows a SmartScreen
+   ```jsonc
+   "win": {
+     "target": "nsis",
+     "icon": "assets/icon.png",
+     "verifyUpdateCodeSignature": false,   // flip to true AFTER the first signed release
+     "sign": {
+       "publisherName": "<exact subject CN of your certificate>",
+       "sign": "./sign.js"                 // the custom hook above
+     }
+   }
+   ```
+
+4. **Pass the secrets to the build + install the signing CLI.** In
+   `.github/workflows/release.yml`, add the `AZURE_*` / `IJ_SIGN_*` secrets as
+   `env:` on the "Build + publish the installer" step, and (for Azure) a
+   best-effort `cargo install trusted-signing-cli` step before it. (These were
+   removed from the default workflow along with the hook; re-add them here.)
+5. **Flip `verifyUpdateCodeSignature` to `true`** *after* your first signed
+   release ships. With a placeholder/absent `publisherName` and unsigned
+   binaries, electron-updater would otherwise reject every self-update. Caveat:
+   the transition update (unsigned → first signed release) is not
+   signature-verified; every release after that must stay signed with the same
+   publisher or installed apps will refuse to update.
+
+Until you do steps 1–4, **builds are unsigned** and Windows shows a SmartScreen
 "unknown publisher" warning on install. That is expected and does not break
-anything.
+anything — including auto-update.
 
 ## The ground rules (why this isn't just "buy a .pfx")
 

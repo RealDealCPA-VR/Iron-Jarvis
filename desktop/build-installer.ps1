@@ -131,37 +131,3 @@ try {
 Write-Host "`n==> DONE. Installer(s) in desktop\release\:" -ForegroundColor Green
 Get-ChildItem (Join-Path $Desktop "release") -Filter *.exe -ErrorAction SilentlyContinue |
     ForEach-Object { Write-Host ("    {0}  ({1:N1} MB)" -f $_.Name, ($_.Length / 1MB)) }
-
-# 5) Verify the Authenticode signature -------------------------------------
-# Mirror of the credential gate in desktop/sign.js. If signing creds were
-# present, sign.js MUST have produced a valid, timestamped signature -- FAIL
-# the build if it didn't (a silently-unsigned "signed" release is worse than an
-# openly-unsigned one). If no creds were present, the installer is expected to
-# be unsigned -- just report it and exit clean so CI stays green.
-Write-Host "==> [5/5] Verifying Authenticode signature..." -ForegroundColor Cyan
-$signExpected =
-    ($env:AZURE_TENANT_ID -and $env:AZURE_CLIENT_ID -and $env:AZURE_CLIENT_SECRET -and
-     $env:IJ_SIGN_ENDPOINT -and $env:IJ_SIGN_ACCOUNT -and $env:IJ_SIGN_PROFILE) -or
-    ($env:IJ_SIGNTOOL_PATH -and $env:IJ_SIGN_SHA1)
-
-$exes = Get-ChildItem (Join-Path $Desktop "release") -Filter *.exe -ErrorAction SilentlyContinue
-if (-not $exes) { throw "no installer .exe found in desktop\release to verify" }
-
-foreach ($exe in $exes) {
-    $sig = Get-AuthenticodeSignature $exe.FullName
-    $hasTimestamp = $null -ne $sig.TimeStamperCertificate
-    if ($signExpected) {
-        if ($sig.Status -ne 'Valid') {
-            throw "signing creds were present but $($exe.Name) is not validly signed (status: $($sig.Status)). Check desktop/sign.js and the signing tool output above."
-        }
-        if (-not $hasTimestamp) {
-            throw "signing creds were present but $($exe.Name) has no timestamp -- the signature will expire with the certificate. Ensure the timestamp URL is reachable."
-        }
-        Write-Host ("    SIGNED + timestamped: {0}  [{1}]" -f $exe.Name, $sig.SignerCertificate.Subject) -ForegroundColor Green
-    } else {
-        Write-Host ("    unsigned (no cert configured): {0}  [status: {1}]" -f $exe.Name, $sig.Status) -ForegroundColor Yellow
-    }
-}
-if (-not $signExpected) {
-    Write-Host "    NOTE: unsigned installers trip SmartScreen 'unknown publisher'. See docs/SIGNING.md to configure signing." -ForegroundColor Yellow
-}
