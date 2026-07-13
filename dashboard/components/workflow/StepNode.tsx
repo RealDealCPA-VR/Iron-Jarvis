@@ -9,7 +9,7 @@ import { agentMeta, type StepNodeData } from "./agents";
 
 const handleClass =
   "!h-3 !w-3 !rounded-full !border-2 !border-ink-950 !bg-accent " +
-  "!shadow-[0_0_10px_2px_rgba(34,211,238,0.6)]";
+  "!shadow-[0_0_10px_2px_rgb(var(--accent-rgb)/0.6)]";
 
 function StepNodeImpl({ data, selected }: NodeProps) {
   const d = data as StepNodeData;

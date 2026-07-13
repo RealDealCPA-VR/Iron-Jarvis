@@ -42,7 +42,7 @@ export const AGENT_META: Record<AgentType, AgentMeta> = {
     icon: Hammer,
     chip: "border-accent/30 bg-accent/10 text-accent-soft",
     tile: "border-accent/30 bg-accent/10 text-accent-soft",
-    glow: "rgba(34,211,238,0.55)",
+    glow: "rgb(var(--accent-rgb)/0.55)",
     hex: "#22d3ee",
   },
   planner: {

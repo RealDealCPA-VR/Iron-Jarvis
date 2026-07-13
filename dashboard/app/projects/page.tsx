@@ -56,9 +56,9 @@ function ActiveBadge() {
   return (
     <span
       title="New chats, sessions, and workflows automatically carry this project's context"
-      className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent/[0.12] px-2.5 py-0.5 text-[11px] font-medium text-accent-soft shadow-[0_0_14px_rgba(34,211,238,0.35)]"
+      className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent/[0.12] px-2.5 py-0.5 text-[11px] font-medium text-accent-soft shadow-[0_0_14px_rgb(var(--accent-rgb)/0.35)]"
     >
-      <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse-glow shadow-[0_0_8px_2px_rgba(34,211,238,0.55)]" />
+      <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse-glow shadow-[0_0_8px_2px_rgb(var(--accent-rgb)/0.55)]" />
       Active
     </span>
   );

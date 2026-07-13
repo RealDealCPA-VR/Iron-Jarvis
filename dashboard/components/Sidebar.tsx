@@ -180,7 +180,7 @@ function ArcMark() {
       <span className="absolute inset-0 rounded-xl bg-accent/15 blur-[6px]" />
       <svg
         viewBox="0 0 24 24"
-        className="relative h-9 w-9 drop-shadow-[0_0_6px_rgba(34,211,238,0.55)]"
+        className="relative h-9 w-9 drop-shadow-[0_0_6px_rgb(var(--accent-rgb)/0.55)]"
         fill="none"
         stroke="currentColor"
       >
@@ -271,7 +271,7 @@ function NavLinks({
                 {active && (
                   <motion.span
                     layoutId={layoutId}
-                    className="absolute inset-0 rounded-xl border border-accent/25 bg-accent/[0.08] shadow-[inset_0_0_0_1px_rgba(34,211,238,0.06)]"
+                    className="absolute inset-0 rounded-xl border border-accent/25 bg-accent/[0.08] shadow-[inset_0_0_0_1px_rgb(var(--accent-rgb)/0.06)]"
                     transition={{ type: "spring", stiffness: 380, damping: 32 }}
                   />
                 )}
@@ -343,7 +343,7 @@ function NavModeToggle({
           <span
             className={`h-2.5 w-2.5 rounded-full transition-colors ${
               advanced
-                ? "bg-accent shadow-[0_0_6px_rgba(34,211,238,0.6)]"
+                ? "bg-accent shadow-[0_0_6px_rgb(var(--accent-rgb)/0.6)]"
                 : "bg-zinc-600"
             }`}
           />

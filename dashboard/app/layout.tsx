@@ -6,6 +6,7 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { NotificationBell } from "@/components/NotificationBell";
 import { MoodOrb } from "@/components/MoodOrb";
 import { ModelSwitcher } from "@/components/ModelSwitcher";
+import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { SimulatedBanner } from "@/components/SimulatedBanner";
 import { FirstRunWizard } from "@/components/FirstRunWizard";
 import { MainContent } from "@/components/MainContent";
@@ -37,7 +38,17 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* Apply the saved arc-reactor theme BEFORE paint (no flash of the
+            default palette). The ThemeSwitcher writes localStorage.ij_theme. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{var t=localStorage.getItem('ij_theme');if(t)document.documentElement.dataset.theme=t}catch(e){}",
+          }}
+        />
+      </head>
       <body>
         {/* Skip past the ~34 sidebar nav links straight to page content (WCAG 2.4.1).
             Visually hidden until focused. */}
@@ -61,6 +72,10 @@ export default function RootLayout({
                 <header className="sticky top-0 z-30 flex items-center gap-3 border-b border-white/[0.06] bg-ink-950/70 px-4 py-2.5 backdrop-blur-xl lg:px-10">
                   <MobileNav />
                   <div className="ml-auto flex items-center gap-2">
+                    {/* Arc-reactor theme switcher (the "Marks"). */}
+                    <div className="hidden sm:block">
+                      <ThemeSwitcher />
+                    </div>
                     {/* One-click switcher for the active provider/model. */}
                     <ModelSwitcher />
                     {/* Live "mood" orb — reflects idle / thinking / alert. */}

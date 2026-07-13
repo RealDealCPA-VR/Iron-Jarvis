@@ -8,7 +8,7 @@ import type { Tone } from "@/components/ui";
 import { SessionCard } from "./SessionCard";
 
 const HEAD: Record<Tone, { dot: string; text: string; bar: string }> = {
-  cyan: { dot: "bg-accent shadow-[0_0_8px_2px_rgba(34,211,238,0.55)]", text: "text-accent-soft", bar: "from-accent/60" },
+  cyan: { dot: "bg-accent shadow-[0_0_8px_2px_rgb(var(--accent-rgb)/0.55)]", text: "text-accent-soft", bar: "from-accent/60" },
   amber: { dot: "bg-amber-400 shadow-[0_0_8px_2px_rgba(251,191,36,0.5)]", text: "text-amber-300", bar: "from-amber-400/60" },
   green: { dot: "bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.5)]", text: "text-emerald-300", bar: "from-emerald-400/60" },
   red: { dot: "bg-rose-400 shadow-[0_0_8px_2px_rgba(251,113,133,0.5)]", text: "text-rose-300", bar: "from-rose-400/60" },

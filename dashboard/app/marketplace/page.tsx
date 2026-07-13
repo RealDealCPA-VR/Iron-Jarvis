@@ -686,7 +686,7 @@ export default function MarketplacePage() {
                     aria-pressed={active}
                     className={`rounded-full border px-3 py-1 text-xs font-medium transition-all ${
                       active
-                        ? "border-accent/40 bg-accent/[0.12] text-accent-soft shadow-[0_0_14px_-4px_rgba(34,211,238,0.5)]"
+                        ? "border-accent/40 bg-accent/[0.12] text-accent-soft shadow-[0_0_14px_-4px_rgb(var(--accent-rgb)/0.5)]"
                         : "border-white/10 bg-white/[0.02] text-zinc-400 hover:border-white/20 hover:text-zinc-200"
                     }`}
                   >
@@ -723,7 +723,7 @@ export default function MarketplacePage() {
               <div className="flex items-center gap-3">
                 <span
                   aria-hidden="true"
-                  className="h-4 w-1 rounded-full bg-gradient-to-b from-accent to-accent/20 shadow-[0_0_8px_rgba(34,211,238,0.4)]"
+                  className="h-4 w-1 rounded-full bg-gradient-to-b from-accent to-accent/20 shadow-[0_0_8px_rgb(var(--accent-rgb)/0.4)]"
                 />
                 <h2 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-zinc-300">
                   {group.cat}

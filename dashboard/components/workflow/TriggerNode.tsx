@@ -32,7 +32,7 @@ function TriggerNodeImpl({ data, selected }: NodeProps) {
       <Handle
         type="source"
         position={Position.Right}
-        className="!h-3 !w-3 !rounded-full !border-2 !border-ink-950 !bg-accent !shadow-[0_0_10px_2px_rgba(34,211,238,0.6)]"
+        className="!h-3 !w-3 !rounded-full !border-2 !border-ink-950 !bg-accent !shadow-[0_0_10px_2px_rgb(var(--accent-rgb)/0.6)]"
       />
     </div>
   );

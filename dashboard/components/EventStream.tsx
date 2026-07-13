@@ -58,8 +58,8 @@ export function EventStream() {
               <motion.li
                 key={e.id}
                 layout
-                initial={{ opacity: 0, x: -10, backgroundColor: "rgba(34,211,238,0.10)" }}
-                animate={{ opacity: 1, x: 0, backgroundColor: "rgba(34,211,238,0)" }}
+                initial={{ opacity: 0, x: -10, backgroundColor: "rgb(var(--accent-rgb)/0.10)" }}
+                animate={{ opacity: 1, x: 0, backgroundColor: "rgb(var(--accent-rgb)/0)" }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
                 className="flex items-baseline gap-3 rounded-lg px-2.5 py-1.5 hover:bg-white/[0.04]"

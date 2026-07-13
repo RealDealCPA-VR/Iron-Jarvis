@@ -65,7 +65,7 @@ function ArcMark() {
       <span className="absolute inset-0 rounded-xl bg-accent/15 blur-[8px]" />
       <svg
         viewBox="0 0 24 24"
-        className="relative h-12 w-12 drop-shadow-[0_0_8px_rgba(34,211,238,0.55)]"
+        className="relative h-12 w-12 drop-shadow-[0_0_8px_rgb(var(--accent-rgb)/0.55)]"
         fill="none"
         stroke="currentColor"
       >

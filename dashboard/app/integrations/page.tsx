@@ -79,7 +79,7 @@ function ConnectTileLink({ tile }: { tile: ConnectTile }) {
       className="group relative flex items-start gap-3 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3.5 transition-all duration-300 hover:-translate-y-0.5 hover:border-accent/30 hover:bg-accent/[0.05] hover:shadow-card-hover"
     >
       <span className="pointer-events-none absolute -right-6 -top-8 h-24 w-24 rounded-full bg-accent/15 opacity-0 blur-2xl transition-opacity duration-300 group-hover:opacity-100" />
-      <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-accent/25 bg-accent/[0.08] text-accent-soft shadow-[0_0_12px_rgba(34,211,238,0.18)]">
+      <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-accent/25 bg-accent/[0.08] text-accent-soft shadow-[0_0_12px_rgb(var(--accent-rgb)/0.18)]">
         {tile.icon}
       </span>
       <span className="min-w-0">

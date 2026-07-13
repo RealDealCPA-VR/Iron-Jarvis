@@ -587,7 +587,7 @@ export default function ComputerUsePage() {
           >
             {screen ? (
               <div className="space-y-2.5">
-                <div className="overflow-hidden rounded-xl border border-accent/30 shadow-[0_0_28px_-6px_rgba(34,211,238,0.35)]">
+                <div className="overflow-hidden rounded-xl border border-accent/30 shadow-[0_0_28px_-6px_rgb(var(--accent-rgb)/0.35)]">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={`data:image/png;base64,${screen.image_b64}`}

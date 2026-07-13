@@ -4,6 +4,73 @@
 
 :root {
   color-scheme: dark;
+
+  /* --- Theme palette: Mark 2 — arc-reactor cyan (the default) ---------------
+     The "Mark" arc-reactor themes swap these variables; everything in the app
+     that uses `accent` / `ink` (and the glow shadows in tailwind.config)
+     re-skins automatically. Channels are space-separated for `rgb(var(--x)/a)`. */
+  --accent-rgb: 34 211 238;
+  --accent-soft-rgb: 103 232 249;
+  --accent-deep-rgb: 8 145 178;
+  --accent-dim-rgb: 14 116 144;
+
+  --ink-950: 7 8 9;
+  --ink-900: 11 13 17;
+  --ink-875: 15 18 23;
+  --ink-850: 19 22 29;
+  --ink-800: 24 28 37;
+  --ink-750: 31 36 48;
+  --ink-700: 39 45 59;
+  --ink-600: 52 60 78;
+}
+
+/* Mark 23 — gold + red (the original hero colors). */
+:root[data-theme="mark23"] {
+  --accent-rgb: 245 183 49;
+  --accent-soft-rgb: 252 211 77;
+  --accent-deep-rgb: 185 28 28;
+  --accent-dim-rgb: 146 64 14;
+}
+
+/* Mark 29 — silver + red. */
+:root[data-theme="mark29"] {
+  --accent-rgb: 191 200 214;
+  --accent-soft-rgb: 226 232 240;
+  --accent-deep-rgb: 220 38 38;
+  --accent-dim-rgb: 127 29 29;
+}
+
+/* Mark 1 — bright graphite (a lighter steel finish; keeps light text). */
+:root[data-theme="mark1"] {
+  --accent-rgb: 125 211 252;
+  --accent-soft-rgb: 186 230 253;
+  --accent-deep-rgb: 56 189 248;
+  --accent-dim-rgb: 14 165 233;
+
+  --ink-950: 36 40 50;
+  --ink-900: 44 49 60;
+  --ink-875: 50 56 68;
+  --ink-850: 56 63 76;
+  --ink-800: 64 72 87;
+  --ink-750: 74 83 100;
+  --ink-700: 86 96 116;
+  --ink-600: 104 117 140;
+}
+
+/* Smooth color morph — ONLY while a theme switch is in flight (the switcher
+   toggles .theme-transition on <html> for ~half a second), so normal hovers
+   and route changes keep their own timing. */
+html.theme-transition,
+html.theme-transition *,
+html.theme-transition *::before,
+html.theme-transition *::after {
+  transition:
+    background-color 450ms ease,
+    border-color 450ms ease,
+    color 450ms ease,
+    box-shadow 450ms ease,
+    fill 450ms ease,
+    stroke 450ms ease !important;
 }
 
 html,
@@ -95,7 +162,12 @@ table {
 
 /* Gradient text used for the wordmark / hero numerals. */
 .text-gradient {
-  background: linear-gradient(180deg, #f4fdff 0%, #a7e9f4 60%, #5fc9dd 100%);
+  background: linear-gradient(
+    180deg,
+    rgb(var(--accent-soft-rgb)) 0%,
+    rgb(var(--accent-rgb)) 60%,
+    rgb(var(--accent-deep-rgb)) 100%
+  );
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;

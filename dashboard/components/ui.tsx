@@ -114,7 +114,7 @@ const TONE_DOT: Record<Tone, string> = {
   green: "bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.5)]",
   amber: "bg-amber-400 shadow-[0_0_8px_2px_rgba(251,191,36,0.5)]",
   red: "bg-rose-400 shadow-[0_0_8px_2px_rgba(251,113,133,0.5)]",
-  cyan: "bg-accent shadow-[0_0_8px_2px_rgba(34,211,238,0.55)]",
+  cyan: "bg-accent shadow-[0_0_8px_2px_rgb(var(--accent-rgb)/0.55)]",
   violet: "bg-violet-400 shadow-[0_0_8px_2px_rgba(167,139,250,0.5)]",
   slate: "bg-zinc-500",
 };

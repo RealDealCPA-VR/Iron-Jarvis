@@ -973,7 +973,7 @@ function Canvas() {
             variant={BackgroundVariant.Dots}
             gap={22}
             size={1}
-            color="rgba(34,211,238,0.16)"
+            color="rgba(148,163,184,0.14)"
           />
           <Controls
             showInteractive={false}

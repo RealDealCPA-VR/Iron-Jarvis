@@ -272,7 +272,7 @@ function ReactorHero({
       <div className="pointer-events-none absolute inset-0">
         <div className="absolute -left-24 -top-28 h-72 w-72 rounded-full bg-accent/10 blur-3xl" />
         <div className="absolute bottom-[-6rem] -right-20 h-72 w-72 rounded-full bg-accent/[0.07] blur-3xl" />
-        <div className="absolute left-[26%] top-1/2 h-[440px] w-[440px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(closest-side,rgba(34,211,238,0.12),transparent)]" />
+        <div className="absolute left-[26%] top-1/2 h-[440px] w-[440px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(closest-side,rgb(var(--accent-rgb)/0.12),transparent)]" />
       </div>
 
       <div className="relative grid gap-8 p-8 lg:grid-cols-[auto_1fr] lg:items-center lg:gap-12 lg:p-12">
@@ -283,15 +283,15 @@ function ReactorHero({
           <div className="absolute inset-[10%] rounded-full border border-accent/10" />
           <div className="absolute inset-[22%] rounded-full border border-dashed border-accent/20" />
           {/* Rotating conic sweep (masked to a thin outer ring band). */}
-          <div className="absolute inset-0 animate-spin rounded-full [animation-duration:13s] [background:conic-gradient(from_0deg,transparent_0deg,rgba(34,211,238,0.55)_55deg,transparent_150deg)] [mask:radial-gradient(farthest-side,transparent_calc(100%_-_7px),#000_calc(100%_-_7px))] [-webkit-mask:radial-gradient(farthest-side,transparent_calc(100%_-_7px),#000_calc(100%_-_7px))]" />
+          <div className="absolute inset-0 animate-spin rounded-full [animation-duration:13s] [background:conic-gradient(from_0deg,transparent_0deg,rgb(var(--accent-rgb)/0.55)_55deg,transparent_150deg)] [mask:radial-gradient(farthest-side,transparent_calc(100%_-_7px),#000_calc(100%_-_7px))] [-webkit-mask:radial-gradient(farthest-side,transparent_calc(100%_-_7px),#000_calc(100%_-_7px))]" />
           {/* Reverse inner sweep. */}
           <div className="absolute inset-[14%] animate-spin rounded-full [animation-direction:reverse] [animation-duration:22s] [background:conic-gradient(from_180deg,transparent,rgba(95,201,221,0.4),transparent_120deg)] [mask:radial-gradient(farthest-side,transparent_calc(100%_-_5px),#000_calc(100%_-_5px))] [-webkit-mask:radial-gradient(farthest-side,transparent_calc(100%_-_5px),#000_calc(100%_-_5px))]" />
           {/* Orbiting glow node. */}
           <div className="absolute inset-0 animate-spin [animation-duration:9s]">
-            <span className="absolute left-1/2 top-0 h-2 w-2 -translate-x-1/2 rounded-full bg-accent shadow-[0_0_12px_3px_rgba(34,211,238,0.75)]" />
+            <span className="absolute left-1/2 top-0 h-2 w-2 -translate-x-1/2 rounded-full bg-accent shadow-[0_0_12px_3px_rgb(var(--accent-rgb)/0.75)]" />
           </div>
           {/* Glowing core with the live MoodOrb. */}
-          <div className="relative grid h-[38%] w-[38%] place-items-center rounded-full border border-accent/25 bg-accent/[0.06] shadow-[0_0_55px_-8px_rgba(34,211,238,0.6)] animate-pulse-glow">
+          <div className="relative grid h-[38%] w-[38%] place-items-center rounded-full border border-accent/25 bg-accent/[0.06] shadow-[0_0_55px_-8px_rgb(var(--accent-rgb)/0.6)] animate-pulse-glow">
             <span className="scale-[2.2]">
               <MoodOrb />
             </span>
@@ -321,7 +321,7 @@ function ReactorHero({
               <Link
                 href={`/projects/${encodeURIComponent(activeProject.id)}`}
                 title="Your active context spine — new chats, sessions & workflows carry it"
-                className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent/[0.12] px-2.5 py-0.5 font-medium text-accent-soft shadow-[0_0_14px_rgba(34,211,238,0.3)] transition-colors hover:bg-accent/[0.18]"
+                className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent/[0.12] px-2.5 py-0.5 font-medium text-accent-soft shadow-[0_0_14px_rgb(var(--accent-rgb)/0.3)] transition-colors hover:bg-accent/[0.18]"
               >
                 <FolderKanban size={11} />
                 {activeProject.name}

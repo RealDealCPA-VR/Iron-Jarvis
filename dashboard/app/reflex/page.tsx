@@ -92,7 +92,7 @@ function Toggle({
       onClick={onChange}
       title={enabled ? "Enabled — click to disable" : "Disabled — click to enable"}
       className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
-        enabled ? "bg-accent/70 shadow-[0_0_8px_1px_rgba(34,211,238,0.35)]" : "bg-zinc-700"
+        enabled ? "bg-accent/70 shadow-[0_0_8px_1px_rgb(var(--accent-rgb)/0.35)]" : "bg-zinc-700"
       }`}
     >
       <span
