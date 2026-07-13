@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -16,6 +16,8 @@ import {
   SquareKanban,
   ListChecks,
   BookOpen,
+  Search,
+  SearchX,
 } from "lucide-react";
 import { del, patch, post, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
@@ -51,11 +53,20 @@ const BTN_PILL =
 const BTN_GHOST =
   "inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-zinc-400 transition-colors hover:border-white/20 hover:text-zinc-200 disabled:opacity-50";
 
-/** The glowing "Active" badge — this project is the context spine right now. */
+/**
+ * Honest copy for the focus-project marker. "Active" is only a lightweight flag
+ * that highlights one project around the app (e.g. the Overview) — it does NOT
+ * auto-carry context into new work. You attach a project per surface yourself
+ * (e.g. picking it in Chat). Keep every mention on this page consistent with this.
+ */
+const FOCUS_HINT =
+  "Marks your current focus project — a marker only, used to highlight it around the app. It does NOT auto-carry context; you attach a project per surface (e.g. pick it in Chat).";
+
+/** The glowing "Active" badge — the current focus marker (not a context spine). */
 function ActiveBadge() {
   return (
     <span
-      title="New chats, sessions, and workflows automatically carry this project's context"
+      title={FOCUS_HINT}
       className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent/[0.12] px-2.5 py-0.5 text-[11px] font-medium text-accent-soft shadow-[0_0_14px_rgb(var(--accent-rgb)/0.35)]"
     >
       <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse-glow shadow-[0_0_8px_2px_rgb(var(--accent-rgb)/0.55)]" />
@@ -79,6 +90,8 @@ function ProjectTile({
 }) {
   const archived = p.status === "archived";
   const sessions = p.session_count ?? 0;
+  const knowledge = p.knowledge_count ?? 0;
+  const knowledgeNoun = knowledge === 1 ? "knowledge item" : "knowledge items";
 
   /** Which action is in flight ("activate" | "status" | "delete" | null). */
   const [busy, setBusy] = useState<string | null>(null);
@@ -195,7 +208,7 @@ function ProjectTile({
               type="button"
               onClick={deactivate}
               disabled={busy !== null}
-              title="Stop feeding this project's context into new sessions"
+              title="Clear the focus marker on this project (a marker only — nothing auto-carries context)."
               className={`${BTN_GHOST} pointer-events-auto`}
             >
               {busy === "activate" ? (
@@ -211,7 +224,7 @@ function ProjectTile({
               type="button"
               onClick={activate}
               disabled={busy !== null}
-              title="New chats, sessions, and workflows will carry this project's context"
+              title={`Set as your focus project. ${FOCUS_HINT}`}
               className={`${BTN_PILL} pointer-events-auto`}
             >
               {busy === "activate" ? (
@@ -255,8 +268,14 @@ function ProjectTile({
             run("delete", () => del(`/projects/${encodeURIComponent(p.id)}`))
           }
           label="Delete"
-          confirmLabel="Delete from app?"
-          title={`Remove "${p.name}" from Iron Jarvis only — your files and folders on this computer are NOT touched`}
+          confirmLabel={
+            knowledge > 0 ? `Delete + ${knowledge} knowledge?` : "Delete from app?"
+          }
+          title={
+            knowledge > 0
+              ? `Permanently delete "${p.name}" and its ${knowledge} ${knowledgeNoun} from Iron Jarvis. Your files and folders on this computer are NOT touched.`
+              : `Remove "${p.name}" from Iron Jarvis only — your files and folders on this computer are NOT touched`
+          }
         />
       </div>
 
@@ -278,14 +297,28 @@ export default function ProjectsPage() {
   );
   const offline = error && error.status === 0;
 
-  // Active first, archived last, newest first within each group.
-  const projects = [...(data?.projects ?? [])].sort((a, b) => {
-    if (!!a.active !== !!b.active) return a.active ? -1 : 1;
-    const aArch = a.status === "archived" ? 1 : 0;
-    const bArch = b.status === "archived" ? 1 : 0;
-    if (aArch !== bArch) return aArch - bArch;
-    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-  });
+  /* --- Filter + sort ------------------------------------------------------- */
+  const [filter, setFilter] = useState("");
+  const [hideArchived, setHideArchived] = useState(false);
+
+  const totalCount = data?.projects?.length ?? 0;
+
+  // Filter by name (case-insensitive) + optional archived toggle, THEN sort:
+  // active first, archived last, newest first within each group. Memoized so it
+  // only recomputes when the data or the filters change — not on every render.
+  const projects = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    return (data?.projects ?? [])
+      .filter((p) => (q ? p.name.toLowerCase().includes(q) : true))
+      .filter((p) => (hideArchived ? p.status !== "archived" : true))
+      .sort((a, b) => {
+        if (!!a.active !== !!b.active) return a.active ? -1 : 1;
+        const aArch = a.status === "archived" ? 1 : 0;
+        const bArch = b.status === "archived" ? 1 : 0;
+        if (aArch !== bArch) return aArch - bArch;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
+  }, [data?.projects, filter, hideArchived]);
 
   /* --- New project form ---------------------------------------------------- */
   const [name, setName] = useState("");
@@ -425,17 +458,64 @@ export default function ProjectsPage() {
               <Card>
                 <ErrorNote>{error.message}</ErrorNote>
               </Card>
-            ) : projects.length === 0 ? (
+            ) : totalCount === 0 ? (
               <Card>
                 <Empty icon={<FolderKanban size={24} />}>
                   No projects yet — create one to get a workspace.
                 </Empty>
               </Card>
             ) : (
-              <div className="grid gap-4 xl:grid-cols-2">
-                {projects.map((p) => (
-                  <ProjectTile key={p.id} project={p} onChanged={reload} />
-                ))}
+              <div className="space-y-4">
+                {/* Filter bar — narrow the grid by name; toggle archived clutter. */}
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <div className="relative min-w-0 flex-1">
+                    <Search
+                      size={14}
+                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
+                    />
+                    <input
+                      value={filter}
+                      onChange={(e) => setFilter(e.target.value)}
+                      placeholder="Filter projects by name…"
+                      aria-label="Filter projects by name"
+                      className="field pl-9"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setHideArchived((v) => !v)}
+                    aria-pressed={hideArchived}
+                    title={
+                      hideArchived
+                        ? "Show archived projects too"
+                        : "Hide archived projects from this list"
+                    }
+                    className={hideArchived ? BTN_PILL : BTN_GHOST}
+                  >
+                    <ArchiveRestore size={13} /> Hide archived
+                  </button>
+                  <span className="shrink-0 text-[11px] tabular-nums text-zinc-500">
+                    {projects.length === totalCount
+                      ? `${totalCount} ${totalCount === 1 ? "project" : "projects"}`
+                      : `${projects.length} of ${totalCount}`}
+                  </span>
+                </div>
+
+                {projects.length === 0 ? (
+                  <Card>
+                    <Empty icon={<SearchX size={24} />}>
+                      {filter.trim()
+                        ? `No projects match “${filter.trim()}”.`
+                        : "No projects match the current filters."}
+                    </Empty>
+                  </Card>
+                ) : (
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    {projects.map((p) => (
+                      <ProjectTile key={p.id} project={p} onChanged={reload} />
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -8,10 +8,11 @@
 //     grounds every chat + task); Board/Activity get the full width.
 // The Board tab is the ONLY thing that polls /sessions, and only while active.
 
-import { use, useEffect, useState, type ReactNode } from "react";
+import { Suspense, use, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
+  AlertTriangle,
   Archive,
   ArchiveRestore,
   ArrowLeft,
@@ -27,6 +28,7 @@ import {
   Music,
   Pencil,
   Play,
+  RotateCw,
   Sparkles,
   SquareKanban,
   Trash2,
@@ -127,7 +129,7 @@ function ProjectMedia({ projectId }: { projectId: string }) {
                   className="aspect-square w-full object-cover"
                 />
               ) : (
-                <div className="flex aspect-square w-full items-center justify-center bg-black/40 text-zinc-300">
+                <div className="flex aspect-square w-full items-center justify-center bg-white/[0.06] text-zinc-400">
                   {m.media === "video" ? <Play size={20} /> : <Music size={18} />}
                 </div>
               )}
@@ -159,11 +161,13 @@ function splitChoice(choice: string): { provider?: string; model?: string } {
   return provider && model ? { provider, model } : {};
 }
 
-/** The glowing "Active" badge — this project is the context spine right now. */
+/** The glowing "Active" badge — the focus marker for the project you're working
+ *  on. It doesn't auto-inject context everywhere; each surface attaches this
+ *  project's context itself (e.g. chats and tasks here run grounded in it). */
 function ActiveBadge() {
   return (
     <span
-      title="New chats, sessions, and workflows automatically carry this project's context"
+      title="Your current focus. Context is attached per surface — e.g. chats and tasks here run grounded in this project."
       className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent/[0.12] px-2.5 py-0.5 text-[11px] font-medium text-accent-soft shadow-[0_0_14px_rgb(var(--accent-rgb)/0.35)]"
     >
       <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse-glow shadow-[0_0_8px_2px_rgb(var(--accent-rgb)/0.55)]" />
@@ -172,10 +176,30 @@ function ActiveBadge() {
   );
 }
 
+/** Track page visibility so a hidden tab stops polling /sessions — cost should
+ *  scale with attention, not wall-clock. SSR-safe: assumes visible until mounted. */
+function useDocumentVisible(): boolean {
+  const [visible, setVisible] = useState(true);
+  useEffect(() => {
+    const sync = () => setVisible(!document.hidden);
+    sync();
+    document.addEventListener("visibilitychange", sync);
+    return () => document.removeEventListener("visibilitychange", sync);
+  }, []);
+  return visible;
+}
+
 /** The per-project Kanban — mounted ONLY while the Board tab is active, so a
  * hidden tab never 4s-polls /sessions. */
 function ProjectBoard({ projectId }: { projectId: string }) {
-  const { data, error, reload } = usePolledApi<{ sessions: SessionView[] }>("/sessions", 4000);
+  // Scoped to this project (cost scales with the project, not all history) and
+  // paused while the tab is hidden. Null path stops the poll but keeps the last
+  // data, so the board renders identically on return.
+  const visible = useDocumentVisible();
+  const { data, error, reload } = usePolledApi<{ sessions: SessionView[] }>(
+    visible ? `/sessions?project_id=${encodeURIComponent(projectId)}` : null,
+    4000,
+  );
   const sessions = data?.sessions;
   const reviewsState = useReviews(sessions);
   const list = sessions ?? [];
@@ -216,7 +240,12 @@ function ProjectBoard({ projectId }: { projectId: string }) {
 /** Live recent activity for the project — polls /sessions (like the Board) so
  *  it never diverges from the Board's freshness or count. */
 function ActivityList({ projectId }: { projectId: string }) {
-  const { data } = usePolledApi<{ sessions: SessionView[] }>("/sessions", 4000);
+  // Same scoped + visibility-paused poll as the Board so the two never diverge.
+  const visible = useDocumentVisible();
+  const { data } = usePolledApi<{ sessions: SessionView[] }>(
+    visible ? `/sessions?project_id=${encodeURIComponent(projectId)}` : null,
+    4000,
+  );
   const sessions = (data?.sessions ?? [])
     .filter((s) => s.project_id === projectId)
     .slice(0, 40);
@@ -251,26 +280,53 @@ function ActivityList({ projectId }: { projectId: string }) {
   );
 }
 
-export default function ProjectWorkspacePage({
+export default function ProjectWorkspacePage(props: {
+  params: Promise<{ id: string }>;
+}) {
+  // The inner view reads useSearchParams (?tab=), which would deopt this whole
+  // route out of static prerendering unless it sits inside a Suspense boundary.
+  return (
+    <Suspense fallback={null}>
+      <ProjectWorkspaceInner {...props} />
+    </Suspense>
+  );
+}
+
+function ProjectWorkspaceInner({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const detail = useApi<ProjectDetail>(`/projects/${encodeURIComponent(id)}`);
   const models = useApi<{ models: ModelOption[] }>("/models");
 
   const project = detail.data?.project;
   const offline = detail.error && detail.error.status === 0;
   const notFound = detail.error && detail.error.status === 404;
+  // Anything else (500, malformed, etc.) — don't leave a blank page. Show the
+  // shared error affordance with a reload, mirroring the Projects list page.
+  const genericError = detail.error && !offline && !notFound;
 
   const availableModels = (models.data?.models ?? []).filter((m) => m.available !== false);
 
-  /* --- Active tab (persisted per project) --------------------------------- */
+  /* --- Active tab: ?tab= is the source of truth (deep-linkable + bookmarkable),
+     falling back to the per-project localStorage, then the default. Reading the
+     param synchronously seeds initial state, so there's no first-paint flash of
+     the default tab when arriving on a deep link. ------------------------------ */
   const TAB_KEY = `ij.project.${id}.tab`;
-  const [tab, setTab] = useState<TabId>("chat");
+  const urlTab = searchParams.get("tab");
+  const paramTab =
+    urlTab && TABS.some((t) => t.id === urlTab) ? (urlTab as TabId) : null;
+  const [tab, setTab] = useState<TabId>(paramTab ?? "chat");
   useEffect(() => {
+    if (paramTab) {
+      setTab(paramTab);
+      return;
+    }
     try {
       const s = window.localStorage.getItem(TAB_KEY);
       if (s && TABS.some((t) => t.id === s)) setTab(s as TabId);
@@ -278,14 +334,17 @@ export default function ProjectWorkspacePage({
       /* ignore */
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, urlTab]);
   function chooseTab(t: TabId) {
     setTab(t);
     try {
-      window.localStorage.setItem(TAB_KEY, t);
+      window.localStorage.setItem(TAB_KEY, t); // fallback when there's no ?tab=
     } catch {
       /* ignore */
     }
+    const next = new URLSearchParams(searchParams.toString());
+    next.set("tab", t);
+    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
   }
 
   /* --- Header / inline edits ---------------------------------------------- */
@@ -430,6 +489,24 @@ export default function ProjectWorkspacePage({
           </Card>
         </Reveal>
       )}
+      {genericError && (
+        <Reveal>
+          <Card>
+            <div className="space-y-3">
+              <ErrorNote>
+                {detail.error?.message || "Couldn't load this project."}
+              </ErrorNote>
+              <button
+                type="button"
+                onClick={() => detail.reload()}
+                className="btn-ghost"
+              >
+                <RotateCw size={13} /> Reload
+              </button>
+            </div>
+          </Card>
+        </Reveal>
+      )}
 
       {detail.loading && !detail.data ? (
         <Reveal>
@@ -561,14 +638,35 @@ export default function ProjectWorkspacePage({
 
                   {/* Folder root — editable (was read-only, which stranded file
                       deliverables). Click to browse + change; set one if none. */}
-                  <div className="mt-2 flex items-center gap-1.5 text-[11px] text-zinc-500">
-                    <Folder size={11} className="shrink-0" />
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-500">
+                    <Folder
+                      size={11}
+                      className={`shrink-0 ${
+                        project.root && project.root_exists === false
+                          ? "text-amber-500"
+                          : ""
+                      }`}
+                    />
                     {project.root ? (
-                      <span className="min-w-0 truncate font-mono" title={project.root}>
+                      <span
+                        className={`min-w-0 truncate font-mono ${
+                          project.root_exists === false ? "text-amber-400" : ""
+                        }`}
+                        title={project.root}
+                      >
                         {project.root}
                       </span>
                     ) : (
                       <span className="italic text-zinc-600">No folder — file tasks need one</span>
+                    )}
+                    {project.root && project.root_exists === false && (
+                      <span
+                        title="This folder no longer exists on disk — file tasks will fail until you update it"
+                        className="inline-flex shrink-0 items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/[0.12] px-1.5 py-0.5 font-medium text-amber-500"
+                      >
+                        <AlertTriangle size={10} className="shrink-0" /> folder missing / moved —
+                        update it
+                      </span>
                     )}
                     <button
                       type="button"
@@ -630,7 +728,7 @@ export default function ProjectWorkspacePage({
                         type="button"
                         onClick={() => void deactivate()}
                         disabled={savingField === "active"}
-                        title="Stop feeding this project's context into new sessions"
+                        title="Clear the focus marker — surfaces stop defaulting to this project"
                         className={BTN_GHOST}
                       >
                         {savingField === "active" ? (
@@ -646,7 +744,7 @@ export default function ProjectWorkspacePage({
                         type="button"
                         onClick={() => void activate()}
                         disabled={savingField === "active"}
-                        title="New chats, sessions, and workflows will carry this project's context"
+                        title="Make this project your focus — surfaces like Chat attach its context per session"
                         className={BTN_PILL}
                       >
                         {savingField === "active" ? (
@@ -809,7 +907,14 @@ export default function ProjectWorkspacePage({
                         hasRoot={!!project.root}
                       />
                     )}
-                    {tab === "tasks" && <ProjectTasks projectId={id} hasRoot={!!project.root} />}
+                    {tab === "tasks" && (
+                      <ProjectTasks
+                        projectId={id}
+                        hasRoot={!!project.root}
+                        sessions={detail.data?.sessions ?? []}
+                        reloadSessions={detail.reload}
+                      />
+                    )}
                   </>
                 )}
                 {tab === "board" && <ProjectBoard projectId={id} />}

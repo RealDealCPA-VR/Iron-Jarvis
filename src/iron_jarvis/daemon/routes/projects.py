@@ -147,6 +147,8 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/projects/{project_id}")
     def get_project(project_id: str) -> dict[str, Any]:
+        from pathlib import Path
+
         from ...core.models import Project
         from ...core.models import Session as SessionModel
 
@@ -165,6 +167,9 @@ def register(app: FastAPI, d) -> None:
         return {
             "project": {
                 **project.model_dump(),
+                # root_exists lets the workspace warn about a moved/deleted folder
+                # BEFORE a task fails on it (mirrors the tiles in list_projects).
+                "root_exists": bool(project.root) and Path(project.root).is_dir(),
                 "active": project.id == getattr(d.platform.config, "active_project_id", None),
             },
             "sessions": [_session_view(s) for s in sessions],
@@ -464,13 +469,21 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="no such project")
         root = Path(project.root) if project.root else None
         if output != "chat" and (root is None or not root.is_dir()):
-            raise HTTPException(
-                status_code=400,
-                detail=(
+            # A root that IS set but points at a missing/moved folder is a
+            # different failure than never setting one — say so, so the user
+            # fixes the right thing instead of hunting for a setting they already
+            # filled in.
+            if project.root:
+                detail = (
+                    f"This project's folder no longer exists: {project.root}. "
+                    "Update it on the project page."
+                )
+            else:
+                detail = (
                     "a file deliverable needs the project to have a folder — "
                     "set one on the Projects page first"
-                ),
-            )
+                )
+            raise HTTPException(status_code=400, detail=detail)
 
         in_folder = root is not None and root.is_dir()
         lines = [f"Task: {text}", ""]

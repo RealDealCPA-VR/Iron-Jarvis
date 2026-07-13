@@ -162,10 +162,31 @@ def register(app: FastAPI, d) -> None:
         return PlainTextResponse("\n".join(lines), media_type="text/markdown")
 
     @app.get("/sessions")
-    def list_sessions(limit: int = 200) -> dict[str, Any]:
+    def list_sessions(limit: int = 200, project_id: str = "") -> dict[str, Any]:
         # Bounded window (default 200 most-recent) so the polled list stays cheap as
         # sessions accumulate over weeks; clients page for more via ?limit=.
         lim = None if limit <= 0 else limit
+        pid = (project_id or "").strip()
+        if pid:
+            # Scope the query to ONE project at the DB level so the global 200-row
+            # recency window can't hide older sessions of a quieter project
+            # (Session.project_id is indexed). Same {"sessions": [...]} shape and
+            # same _session_view rows as the unfiltered list.
+            from sqlmodel import select
+
+            from ...core.db import session_scope
+            from ...core.models import Session as SessionModel
+
+            with session_scope(d.platform.engine) as db:
+                stmt = (
+                    select(SessionModel)
+                    .where(SessionModel.project_id == pid)
+                    .order_by(SessionModel.created_at.desc())  # type: ignore[attr-defined]
+                )
+                if lim is not None:
+                    stmt = stmt.limit(lim)
+                scoped = list(db.exec(stmt))
+            return {"sessions": [_session_view(s) for s in scoped]}
         return {"sessions": [_session_view(s) for s in d.orchestrator.list_sessions(limit=lim)]}
 
     @app.get("/sessions/{session_id}")

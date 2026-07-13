@@ -11,10 +11,11 @@ import {
   ChevronDown,
   Square,
   Trash2,
+  FolderKanban,
 } from "lucide-react";
-import { usePolledApi } from "@/lib/useApi";
+import { useApi, usePolledApi } from "@/lib/useApi";
 import { post, del, ApiError } from "@/lib/api";
-import type { SessionView } from "@/lib/types";
+import type { Project, SessionView } from "@/lib/types";
 import {
   Card,
   Badge,
@@ -35,19 +36,49 @@ import { timeAgo, shortId } from "@/lib/format";
 
 const ACTIVE = new Set(["active", "running", "pending"]);
 
+// Sentinel <select> value for "sessions with no project" — there is no server
+// param for the null case, so it is narrowed client-side.
+const NO_PROJECT = "__none__";
+
 export default function SessionsPage() {
-  const { data, error, loading, reload } = usePolledApi<{
-    sessions: SessionView[];
-  }>("/sessions", 4000);
-
-  const offline = error && error.status === 0;
-  const sessions = useMemo(() => data?.sessions ?? [], [data]);
-
-  // Toolbar state (all client-side over the already-fetched list).
+  // Toolbar state. `query`/`statusFilter`/`agentFilter` filter the fetched list
+  // client-side; `projectFilter` is server-SCOPED — it changes the fetch path.
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [agentFilter, setAgentFilter] = useState("");
+  const [projectFilter, setProjectFilter] = useState("");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  // A real project id scopes the fetch server-side; "All" (empty) and
+  // "No project" both fetch the full list (the null case is narrowed in
+  // `visible`). Polling carries whatever path is current, so the scope sticks.
+  const sessionsPath =
+    projectFilter && projectFilter !== NO_PROJECT
+      ? `/sessions?project_id=${encodeURIComponent(projectFilter)}`
+      : "/sessions";
+
+  const { data, error, loading, reload } = usePolledApi<{
+    sessions: SessionView[];
+  }>(sessionsPath, 4000);
+
+  // One-time projects fetch → id→name map (for badges) + the filter dropdown.
+  const { data: projData } = useApi<{ projects: Project[] }>("/projects");
+  const projects = useMemo(
+    () =>
+      [...(projData?.projects ?? [])].sort((a, b) =>
+        a.name.localeCompare(b.name),
+      ),
+    [projData],
+  );
+  const projectsById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of projects) m.set(p.id, p.name);
+    return m;
+  }, [projects]);
+  const projectsLoaded = projData != null;
+
+  const offline = error && error.status === 0;
+  const sessions = useMemo(() => data?.sessions ?? [], [data]);
 
   // Row + maintenance action state.
   const [stoppingId, setStoppingId] = useState<string | null>(null);
@@ -90,12 +121,22 @@ export default function SessionsPage() {
       );
     if (statusFilter) rows = rows.filter((s) => s.status === statusFilter);
     if (agentFilter) rows = rows.filter((s) => s.agent_type === agentFilter);
+    // Project scope is served server-side, but re-apply it here so the filter
+    // still works if the daemon predates the ?project_id= param, and so the
+    // "No project" case (which has no server param) is honoured.
+    if (projectFilter === NO_PROJECT) rows = rows.filter((s) => !s.project_id);
+    else if (projectFilter)
+      rows = rows.filter((s) => s.project_id === projectFilter);
     return [...rows].sort((a, b) => {
       const da = new Date(a.created_at).getTime();
       const db = new Date(b.created_at).getTime();
       return sortDir === "asc" ? da - db : db - da;
     });
-  }, [sessions, query, statusFilter, agentFilter, sortDir]);
+  }, [sessions, query, statusFilter, agentFilter, projectFilter, sortDir]);
+
+  // Any active filter — used to keep the toolbar reachable and to show the
+  // right empty state when a server-scoped fetch legitimately returns nothing.
+  const anyFilter = Boolean(query || statusFilter || agentFilter || projectFilter);
 
   async function stopSession(id: string) {
     setStoppingId(id);
@@ -202,8 +243,9 @@ export default function SessionsPage() {
                 />
               }
             >
-              {/* Toolbar: search + filters */}
-              {sessions.length > 0 && (
+              {/* Toolbar: search + filters. Stays mounted while any filter is
+                  active so a zero-result scope can still be cleared. */}
+              {(sessions.length > 0 || anyFilter) && (
                 <div className="mb-3 flex flex-wrap items-center gap-2">
                   <div className="relative min-w-[180px] flex-1">
                     <Search
@@ -243,6 +285,20 @@ export default function SessionsPage() {
                       </option>
                     ))}
                   </select>
+                  <select
+                    aria-label="Filter by project"
+                    value={projectFilter}
+                    onChange={(e) => setProjectFilter(e.target.value)}
+                    className="rounded-lg border border-white/[0.08] bg-ink-900/80 px-2.5 py-1.5 text-sm text-zinc-300 outline-none focus:border-accent/60"
+                  >
+                    <option value="">All projects</option>
+                    <option value={NO_PROJECT}>No project</option>
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               )}
 
@@ -260,9 +316,15 @@ export default function SessionsPage() {
               {loading && !data ? (
                 <SkeletonRows rows={6} />
               ) : sessions.length === 0 ? (
-                <Empty icon={<Boxes size={26} />}>
-                  No sessions yet — create one on the left to get started.
-                </Empty>
+                anyFilter ? (
+                  <Empty icon={<Search size={24} />}>
+                    No sessions match your filters.
+                  </Empty>
+                ) : (
+                  <Empty icon={<Boxes size={26} />}>
+                    No sessions yet — create one on the left to get started.
+                  </Empty>
+                )
               ) : visible.length === 0 ? (
                 <Empty icon={<Search size={24} />}>
                   No sessions match your filters.
@@ -298,6 +360,9 @@ export default function SessionsPage() {
                     <tbody>
                       {visible.map((s) => {
                         const active = ACTIVE.has(s.status.toLowerCase());
+                        const projectName = s.project_id
+                          ? projectsById.get(s.project_id)
+                          : undefined;
                         return (
                           <tr
                             key={s.id}
@@ -319,11 +384,37 @@ export default function SessionsPage() {
                                   className="shrink-0 text-zinc-600 opacity-0 transition-opacity group-hover:opacity-100"
                                 />
                               </Link>
-                              <span className="flex items-center gap-2 pl-4">
+                              <span className="flex flex-wrap items-center gap-2 pl-4">
                                 <span className="font-mono text-[11px] text-zinc-600">
                                   {shortId(s.id)}
                                 </span>
                                 {s.provider === "mock" && <MockChip />}
+                                {/* Context spine: which project produced this
+                                    session. Links to the project; unresolved
+                                    (deleted) ids degrade to a neutral, unlinked
+                                    chip instead of a 404. */}
+                                {s.project_id &&
+                                  (projectName ? (
+                                    <Link
+                                      href={`/projects/${s.project_id}`}
+                                      onClick={(e) => e.stopPropagation()}
+                                      title={`Project: ${projectName}`}
+                                      className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent/[0.08] px-2 py-0.5 text-[10px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.14]"
+                                    >
+                                      <FolderKanban size={10} className="shrink-0" />
+                                      <span className="max-w-[10rem] truncate">
+                                        {projectName}
+                                      </span>
+                                    </Link>
+                                  ) : projectsLoaded ? (
+                                    <span
+                                      title="This session's project no longer exists"
+                                      className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[10px] font-medium text-zinc-500"
+                                    >
+                                      <FolderKanban size={10} className="shrink-0" />{" "}
+                                      project
+                                    </span>
+                                  ) : null)}
                               </span>
                             </td>
                             <td className="px-2 py-2.5 text-zinc-400">{s.agent_type}</td>

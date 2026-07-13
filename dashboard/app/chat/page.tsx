@@ -32,8 +32,10 @@
 import {
   createContext,
   isValidElement,
+  memo,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -44,6 +46,7 @@ import {
   AudioLines,
   Bot,
   Check,
+  ChevronDown,
   ChevronRight,
   Copy,
   FolderOpen,
@@ -102,6 +105,9 @@ interface ChatMessage {
   attachmentPaths?: string[];
   /** Registry tools the reply actually ran (assistant messages) — footer line. */
   toolsUsed?: string[];
+  /** This assistant reply was cut off mid-stream (Stop, or a committed failure)
+   *  — shown with a subtle marker so a partial answer never looks complete. */
+  interrupted?: boolean;
 }
 
 /** What POST /chat expects. */
@@ -485,7 +491,7 @@ function MarkdownPre({ children }: { children?: ReactNode }) {
         className="absolute right-2 top-2 z-10 grid h-6 w-6 place-items-center rounded-md border border-white/10 bg-white/[0.06] text-zinc-400 opacity-0 transition-opacity hover:text-zinc-100 focus-visible:opacity-100 group-hover/code:opacity-100"
       />
       <PreContext.Provider value={true}>
-        <pre className="overflow-x-auto rounded bg-black/40 p-3 font-mono text-xs leading-relaxed text-zinc-200">
+        <pre className="overflow-x-auto rounded border border-white/[0.06] bg-ink-900/80 p-3 font-mono text-xs leading-relaxed text-zinc-200">
           {children}
         </pre>
       </PreContext.Provider>
@@ -640,6 +646,15 @@ function Markdown({ content }: { content: string }) {
   );
 }
 
+/** Markdown for a SETTLED assistant message, memoized on its content. During a
+ *  streaming turn the page re-renders on every token; without this, every prior
+ *  assistant bubble would re-run the full remark/rehype parse each token (cost
+ *  O(thread size) per token). A prior message's `content` string is referentially
+ *  stable, so memo skips the re-parse and streaming stays smooth on long threads. */
+const MemoMarkdown = memo(function MemoMarkdown({ content }: { content: string }) {
+  return <Markdown content={content} />;
+});
+
 // ------------------------------------------------------------------- bubbles
 
 function Bubble({ role, children }: { role: ChatMessage["role"]; children: ReactNode }) {
@@ -658,7 +673,7 @@ function Bubble({ role, children }: { role: ChatMessage["role"]; children: React
       <div
         className={`min-w-0 max-w-[80%] rounded-2xl border px-4 py-2.5 text-sm leading-relaxed ${
           isUser
-            ? "whitespace-pre-wrap border-accent/25 bg-accent/[0.1] text-zinc-100"
+            ? "whitespace-pre-wrap break-words [overflow-wrap:anywhere] border-accent/25 bg-accent/[0.1] text-zinc-100"
             : "border-white/[0.06] bg-white/[0.03] text-zinc-200"
         }`}
       >
@@ -728,7 +743,7 @@ function ToolCardList({ cards }: { cards: readonly ToolCard[] }) {
  *  (a `::after` on the final block, so it sits inline with the running text). */
 function StreamingText({ content }: { content: string }) {
   return (
-    <div className="[&>*:last-child]:after:ml-0.5 [&>*:last-child]:after:inline-block [&>*:last-child]:after:h-[0.95em] [&>*:last-child]:after:w-[2px] [&>*:last-child]:after:translate-y-[1px] [&>*:last-child]:after:animate-pulse [&>*:last-child]:after:rounded-full [&>*:last-child]:after:bg-accent-soft [&>*:last-child]:after:align-baseline [&>*:last-child]:after:content-['']">
+    <div className="[&>*:last-child]:after:ml-0.5 [&>*:last-child]:after:inline-block [&>*:last-child]:after:h-[0.95em] [&>*:last-child]:after:w-[2px] [&>*:last-child]:after:translate-y-[1px] [&>*:last-child]:after:animate-caret [&>*:last-child]:after:rounded-full [&>*:last-child]:after:bg-accent-soft [&>*:last-child]:after:align-baseline [&>*:last-child]:after:content-['']">
       <Markdown content={content} />
     </div>
   );
@@ -799,6 +814,10 @@ export default function ChatPage() {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false); // mobile-only toggle
   const [threadQuery, setThreadQuery] = useState(""); // sidebar title filter
+  const [threadsLoading, setThreadsLoading] = useState(true); // first threads fetch
+  // The reader scrolled up: show a "Jump to latest" pill and STOP auto-scrolling
+  // so streamed tokens don't yank them back down while they re-read.
+  const [showJump, setShowJump] = useState(false);
 
   const { events } = useEvents(150);
   // The main chat is project-agnostic — a project applies only inside the
@@ -833,8 +852,16 @@ export default function ChatPage() {
   const inputFromVoiceRef = useRef(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null); // the message scroll container
+  // True while the reader is pinned to (near) the bottom. Only then do streamed
+  // tokens auto-scroll; scrolling up releases the pin until they return.
+  const pinnedRef = useRef(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Synchronous send guard: `busy` is React state and lags a frame, so two
+  // Enter keydowns in the same tick both saw busy===false and double-sent. This
+  // ref flips instantly and is the real gate; cleared when the turn settles.
+  const sendingRef = useRef(false);
   // "+" popover container — outside-click detection needs the DOM node.
   const toolsPopRef = useRef<HTMLDivElement>(null);
   // One-shot fetch guards for the /tools and /skills catalogs (cached in state;
@@ -932,6 +959,9 @@ export default function ChatPage() {
       })
       .catch(() => {
         /* sidebar stays empty */
+      })
+      .finally(() => {
+        if (!cancelled) setThreadsLoading(false);
       });
     return () => {
       cancelled = true;
@@ -1195,6 +1225,9 @@ export default function ChatPage() {
     setOffline(false);
     sinceRef.current = null;
     finalizingRef.current = false;
+    sendingRef.current = false;
+    pinnedRef.current = true; // a loaded thread scrolls to its latest message
+    setShowJump(false);
     try {
       const t = await get<ThreadDetail>(`/chat/threads/${id}`);
       setMessages(t.messages ?? []);
@@ -1471,11 +1504,40 @@ export default function ChatPage() {
     return out;
   }, [events, awaitingId]);
 
-  // Keep the newest message (or the live working bubble) in view — including as
-  // streamed tokens grow the in-flight chat / agent bubble.
+  // Keep the newest message (or the live working bubble) in view — but ONLY when
+  // the reader is pinned near the bottom, so scrolling up to re-read isn't yanked
+  // back down on the next token. During a live stream scroll INSTANTLY (a smooth
+  // animation queued per token never settles and reads as jitter).
   useEffect(() => {
+    if (!pinnedRef.current) return;
+    bottomRef.current?.scrollIntoView({ behavior: busy ? "auto" : "smooth", block: "end" });
+  }, [messages, awaitingId, chatBusy, progress.length, stream.text, runStream.text, busy]);
+
+  // Track the reader's pin state; releasing the pin surfaces a "Jump to latest"
+  // pill instead of fighting them for the scroll position.
+  function onThreadScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    pinnedRef.current = nearBottom;
+    setShowJump((prev) => (prev === !nearBottom ? prev : !nearBottom));
+  }
+
+  function jumpToLatest() {
+    pinnedRef.current = true;
+    setShowJump(false);
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, awaitingId, chatBusy, progress.length, stream.text, runStream.text]);
+  }
+
+  // Auto-grow the composer to fit multi-line input (up to ~1/4 viewport), and
+  // shrink back when it's cleared on send. Runs on every `input` change (incl.
+  // the programmatic reset), so a Shift+Enter draft is never trapped in one row.
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [input]);
 
   // Fetch the finished session and turn it into the assistant's reply. Only acts
   // once the session has actually reached a terminal status (the `agent.completed`
@@ -1517,6 +1579,7 @@ export default function ChatPage() {
       queueSave(full); // agent turns are conversations worth keeping too
       awaitingIdRef.current = null;
       setAwaitingId(null);
+      inputRef.current?.focus(); // type-ready for the next turn
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) {
         // Transient network blip — keep the turn alive and let the 1.5s poll
@@ -1687,6 +1750,8 @@ export default function ChatPage() {
   async function completeChat(history: ChatMessage[], atts: UploadedFile[]) {
     const gen = chatGenRef.current;
     setMessages(history);
+    pinnedRef.current = true; // a fresh turn always scrolls into view
+    setShowJump(false);
     setFailedTurn(null); // a fresh attempt — retire any prior failure
     setChatBusy(true);
     ttsStreamStartedRef.current = false; // new turn — feedTTS will reset the counter
@@ -1728,6 +1793,16 @@ export default function ChatPage() {
         const status = se?.status ?? (e instanceof ApiError ? e.status : 0);
         const endpointMissing = status === 404 || status === 405;
         if (committed || !endpointMissing) {
+          // Preserve what the user already watched stream in — dropping it reads
+          // like a crash. Keep it as an interrupted bubble (Retry re-runs from the
+          // clean `history`, which doesn't include this partial).
+          const partial = (se?.partial ?? "").trim();
+          if (partial) {
+            setMessages([
+              ...history,
+              { role: "assistant", content: partial, interrupted: true },
+            ]);
+          }
           if (se?.offline || (e instanceof ApiError && e.status === 0 && !se))
             setOffline(true);
           else setError(e instanceof ApiError ? e.message : String(e));
@@ -1765,7 +1840,12 @@ export default function ChatPage() {
       else setError(e instanceof ApiError ? e.message : String(e));
       setFailedTurn({ history, atts });
     } finally {
-      if (chatGenRef.current === gen) setChatBusy(false);
+      sendingRef.current = false;
+      if (chatGenRef.current === gen) {
+        setChatBusy(false);
+        // Return focus so the next message is type-ready without a click.
+        inputRef.current?.focus();
+      }
     }
   }
 
@@ -1871,15 +1951,26 @@ export default function ChatPage() {
       awaitingIdRef.current = session.id;
       setAwaitingId(session.id);
     } catch (e) {
-      // Keep the typed thread intact — only surface the failure.
+      // Keep the typed thread intact and RESTORE the optimistically-cleared
+      // attachments so a failed send never silently eats the user's files.
+      if (atts.length) setAttachments(atts);
       if (e instanceof ApiError && e.status === 0) setOffline(true);
       else setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      sendingRef.current = false;
     }
   }
 
   function send(text: string) {
     const message = text.trim();
-    if (!message || busy) return;
+    // `busy` is React state (lags a frame); `sendingRef` flips synchronously so
+    // two Enter keydowns in the same tick can't both start a turn.
+    if (!message || busy || sendingRef.current) return;
+    sendingRef.current = true;
+    // A new turn always follows: re-pin so the user's own message + the reply
+    // scroll into view even if they'd scrolled up to re-read earlier context.
+    pinnedRef.current = true;
+    setShowJump(false);
     setError(null);
     setOffline(false);
     setInput("");
@@ -1899,11 +1990,16 @@ export default function ChatPage() {
       const partial = stream.text.trim();
       const full: ChatMessage[] = [
         ...messagesRef.current,
-        { role: "assistant", content: partial || "Stopped." },
+        {
+          role: "assistant",
+          content: partial || "Stopped.",
+          ...(partial ? { interrupted: true } : {}),
+        },
       ];
       setMessages(full);
       queueSave(full); // the (aborted) turn still completed a visible exchange
       setChatBusy(false);
+      sendingRef.current = false;
       return;
     }
     // AGENT: ask the daemon to cancel the session.
@@ -1913,7 +2009,11 @@ export default function ChatPage() {
     const partial = runStream.text.trim();
     const full: ChatMessage[] = [
       ...messagesRef.current,
-      { role: "assistant", content: partial || "Stopped." },
+      {
+        role: "assistant",
+        content: partial || "Stopped.",
+        ...(partial ? { interrupted: true } : {}),
+      },
     ];
     setMessages(full);
     queueSave(full); // the (aborted) turn still completed a visible exchange
@@ -1944,6 +2044,10 @@ export default function ChatPage() {
     saveTargetRef.current = { id: null }; // next completed turn creates a fresh thread
     sinceRef.current = null;
     finalizingRef.current = false;
+    sendingRef.current = false;
+    pinnedRef.current = true; // fresh pane follows new messages; retire any jump pill
+    setShowJump(false);
+    inputRef.current?.focus();
   }
 
   function prefill(text: string) {
@@ -1951,7 +2055,21 @@ export default function ChatPage() {
     inputRef.current?.focus();
   }
 
+  /** Switch Chat↔Agent. Clears the bound `sessionId` on a real change so a later
+   *  Agent turn opens a FRESH session (recapping the visible thread) instead of
+   *  silently continuing a stale one that never saw the intervening chat turns.
+   *  An in-flight agent turn (tracked by awaitingIdRef) still finalizes. */
+  function switchMode(next: Mode) {
+    if (next === mode) return;
+    setSessionId(null);
+    setMode(next);
+    inputRef.current?.focus();
+  }
+
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // Ignore keystrokes mid-IME-composition (CJK / accented input): Enter is
+    // confirming a candidate, not sending a half-finished message.
+    if (e.nativeEvent.isComposing) return;
     // While the "/" skill dropdown is open it owns the navigation keys.
     if (slashActive) {
       if (e.key === "ArrowDown") {
@@ -1976,6 +2094,12 @@ export default function ChatPage() {
         pickSkill(skillMatches[Math.min(skillIndex, skillMatches.length - 1)].name);
         return;
       }
+    }
+    // Escape cancels an in-flight turn (keyboard "Stop") without leaving the composer.
+    if (e.key === "Escape" && busy) {
+      e.preventDefault();
+      stop();
+      return;
     }
     // Enter sends; Shift+Enter inserts a newline.
     if (e.key === "Enter" && !e.shiftKey) {
@@ -2049,7 +2173,7 @@ export default function ChatPage() {
               >
                 <button
                   type="button"
-                  onClick={() => setMode("chat")}
+                  onClick={() => switchMode("chat")}
                   aria-pressed={mode === "chat"}
                   title="Direct replies in seconds"
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[13px] font-medium transition-colors ${
@@ -2062,7 +2186,7 @@ export default function ChatPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setMode("agent")}
+                  onClick={() => switchMode("agent")}
                   aria-pressed={mode === "agent"}
                   title="Does real work with tools — files, web, terminals; slower"
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[13px] font-medium transition-colors ${
@@ -2372,7 +2496,13 @@ export default function ChatPage() {
                 )}
               </div>
               <div className="max-h-[70vh] overflow-y-auto p-1.5">
-                {threads.length === 0 ? (
+                {threadsLoading && threads.length === 0 ? (
+                  <div className="space-y-1 p-1">
+                    {[0, 1, 2, 3].map((i) => (
+                      <div key={i} className="skeleton h-9 w-full" />
+                    ))}
+                  </div>
+                ) : threads.length === 0 ? (
                   <p className="px-2.5 py-3 text-xs leading-relaxed text-zinc-500">
                     No saved chats yet — conversations appear here after the first
                     reply.
@@ -2442,7 +2572,11 @@ export default function ChatPage() {
               }`}
             >
               {/* Message thread */}
-              <div className="flex max-h-[60vh] min-h-[24rem] flex-col gap-4 overflow-y-auto p-4 sm:p-5">
+              <div
+                ref={scrollRef}
+                onScroll={onThreadScroll}
+                className="flex max-h-[60vh] min-h-[24rem] flex-col gap-4 overflow-y-auto p-4 sm:p-5"
+              >
                 {messages.length === 0 && !busy ? (
                   <div className="flex flex-1 flex-col items-center justify-center gap-4">
                     <Empty icon={<MessageSquare size={28} />}>
@@ -2485,8 +2619,13 @@ export default function ChatPage() {
                       return (
                         <div key={i} className="group/msg">
                           <Bubble role="assistant">
-                            <Markdown content={m.content} />
+                            <MemoMarkdown content={m.content} />
                           </Bubble>
+                          {m.interrupted && (
+                            <div className="ml-11 mt-1 text-[11px] italic text-amber-400/80">
+                              interrupted — the reply was cut off
+                            </div>
+                          )}
                           {/* Tools the reply's tool loop actually ran */}
                           {m.toolsUsed && m.toolsUsed.length > 0 && (
                             <div className="ml-11 mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-zinc-500">
@@ -2517,7 +2656,7 @@ export default function ChatPage() {
                         a blinking caret once the first token lands (a Thinking
                         shimmer until then), with any live tool calls below. */}
                     {chatBusy && (
-                      <div>
+                      <div aria-live="polite" aria-busy="true">
                         <Bubble role="assistant">
                           {stream.text ? (
                             <StreamingText content={stream.text} />
@@ -2541,7 +2680,7 @@ export default function ChatPage() {
                         arrive, and keeps the step feed underneath. */}
                     {awaiting && (
                       <Bubble role="assistant">
-                        <div className="flex flex-col gap-1.5">
+                        <div className="flex flex-col gap-1.5" aria-live="polite" aria-busy="true">
                           <span className="inline-flex items-center gap-2 text-zinc-300">
                             <Loader2 size={14} className="animate-spin text-accent-soft" />
                             {progress[0] ?? "Thinking…"}
@@ -2564,6 +2703,16 @@ export default function ChatPage() {
                       </Bubble>
                     )}
                   </>
+                )}
+                {showJump && (
+                  <button
+                    type="button"
+                    onClick={jumpToLatest}
+                    className="sticky bottom-1 z-10 mx-auto flex items-center gap-1.5 rounded-full border border-accent/40 bg-ink-850/90 px-3 py-1 text-[12px] font-medium text-accent-soft shadow-glow-sm backdrop-blur transition-colors hover:bg-ink-800"
+                    title="Scroll to the latest message"
+                  >
+                    <ChevronDown size={13} /> Jump to latest
+                  </button>
                 )}
                 <div ref={bottomRef} />
               </div>
@@ -2966,11 +3115,11 @@ export default function ChatPage() {
                     setSlashDismissed(false); // editing reopens the "/" dropdown
                   }}
                   onKeyDown={onKeyDown}
-                  disabled={busy}
+                  autoFocus
                   rows={1}
                   aria-label="Message"
                   placeholder="Message Iron Jarvis…  (Enter to send · Shift+Enter for a new line)"
-                  className="field max-h-40 min-h-[2.75rem] flex-1 resize-none disabled:opacity-60"
+                  className="field max-h-40 min-h-[2.75rem] flex-1 resize-none"
                 />
                 {(awaiting || (chatBusy && stream.streaming)) && (
                   <button

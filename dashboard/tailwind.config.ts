@@ -96,12 +96,18 @@ const config: Config = {
           "0%, 100%": { transform: "translateY(0)" },
           "50%": { transform: "translateY(-3px)" },
         },
+        // A hard-edged cursor blink (not an opacity fade) for the streaming caret.
+        caret: {
+          "0%, 50%": { opacity: "1" },
+          "50.01%, 100%": { opacity: "0" },
+        },
       },
       animation: {
         shimmer: "shimmer 1.6s infinite",
         "pulse-glow": "pulse-glow 2s ease-in-out infinite",
         "spin-slow": "spin-slow 1s linear infinite",
         float: "float 4s ease-in-out infinite",
+        caret: "caret 1.05s steps(1) infinite",
       },
     },
   },

@@ -281,11 +281,21 @@ export function upsertTool(
 export class StreamError extends ApiError {
   readonly committed: boolean;
   readonly offline: boolean;
-  constructor(message: string, status: number, committed: boolean, offline: boolean) {
+  /** Text streamed before the failure (empty if none) — so the caller can keep
+   *  what the user already watched appear rather than dropping it on error. */
+  readonly partial: string;
+  constructor(
+    message: string,
+    status: number,
+    committed: boolean,
+    offline: boolean,
+    partial = "",
+  ) {
     super(message, status);
     this.name = "StreamError";
     this.committed = committed;
     this.offline = offline;
+    this.partial = partial;
   }
 }
 
@@ -377,6 +387,7 @@ export function useChatStream(): UseChatStream {
                 ev.status ?? 0,
                 committed,
                 ev.offline ?? false,
+                acc,
               );
             default:
               break; // round / unknown — nothing to accumulate

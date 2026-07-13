@@ -20,7 +20,6 @@ import {
   X,
 } from "lucide-react";
 import { get, post, ApiError, API_BASE, ijToken } from "@/lib/api";
-import { useApi } from "@/lib/useApi";
 import type { SessionDetail, SessionView } from "@/lib/types";
 import { Card, Badge, ErrorNote, LoaderInline } from "@/components/ui";
 
@@ -83,9 +82,16 @@ function mediaSrc(url: string): string {
 export function ProjectTasks({
   projectId,
   hasRoot,
+  sessions,
+  reloadSessions,
 }: {
   projectId: string;
   hasRoot: boolean;
+  /** This project's recent sessions, fetched ONCE by the parent workspace
+   *  (avoids a second identical GET /projects/{id} just to read `sessions`). */
+  sessions: SessionView[];
+  /** Ask the parent to re-fetch its sessions (e.g. once a run finishes). */
+  reloadSessions?: () => void;
 }) {
   const [taskText, setTaskText] = useState("");
   const [taskOutput, setTaskOutput] = useState<TaskOutput>("chat");
@@ -118,11 +124,9 @@ export function ProjectTasks({
   // Where the active run id is stashed so it survives a tab-switch/reload.
   const runKey = `ij:projtask:${projectId}`;
 
-  // Task history: this project's recent runs (GET /projects/{id} → sessions).
-  const { data: histData, reload: reloadHistory } = useApi<{ sessions: SessionView[] }>(
-    base,
-  );
-  const history = histData?.sessions ?? [];
+  // Task history: this project's recent runs — passed down from the parent
+  // workspace's already-live /projects/{id} fetch (no duplicate poller here).
+  const history = sessions ?? [];
 
   // Rehydrate the active run on mount (per project) so a running task keeps its
   // live strip across a reload; clearing taskSession forces a fresh poll.
@@ -147,9 +151,10 @@ export function ProjectTasks({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  // Refresh the history once a run reaches a terminal state (it's now in it).
+  // Refresh the history once a run reaches a terminal state (it's now in it) —
+  // ask the parent to re-fetch its sessions rather than polling our own.
   useEffect(() => {
-    if (taskDone) reloadHistory();
+    if (taskDone) reloadSessions?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskDone]);
 
