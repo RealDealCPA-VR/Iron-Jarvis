@@ -22,6 +22,21 @@
   --ink-750: 31 36 48;
   --ink-700: 39 45 59;
   --ink-600: 52 60 78;
+
+  /* Neutrals — Tailwind's default zinc + white, so the LIGHT Mark can invert
+     text/hairlines to dark-on-light. Dark Marks leave these untouched. */
+  --white: 255 255 255;
+  --zinc-50: 250 250 250;
+  --zinc-100: 244 244 245;
+  --zinc-200: 228 228 231;
+  --zinc-300: 212 212 216;
+  --zinc-400: 161 161 170;
+  --zinc-500: 113 113 122;
+  --zinc-600: 82 82 91;
+  --zinc-700: 63 63 70;
+  --zinc-800: 39 39 42;
+  --zinc-900: 24 24 27;
+  --zinc-950: 9 9 11;
 }
 
 /* Mark 23 — gold + red (the original hero colors). */
@@ -40,21 +55,43 @@
   --accent-dim-rgb: 127 29 29;
 }
 
-/* Mark 1 — bright graphite (a lighter steel finish; keeps light text). */
+/* Mark 1 — Daylight: a true LIGHT theme (dark text + features on a bright
+   canvas). `zinc`/`white` invert so text + hairlines flip without touching a
+   single component; the accent deepens so it reads on white and still carries
+   the light button text. */
 :root[data-theme="mark1"] {
-  --accent-rgb: 125 211 252;
-  --accent-soft-rgb: 186 230 253;
-  --accent-deep-rgb: 56 189 248;
-  --accent-dim-rgb: 14 165 233;
+  color-scheme: light;
 
-  --ink-950: 36 40 50;
-  --ink-900: 44 49 60;
-  --ink-875: 50 56 68;
-  --ink-850: 56 63 76;
-  --ink-800: 64 72 87;
-  --ink-750: 74 83 100;
-  --ink-700: 86 96 116;
-  --ink-600: 104 117 140;
+  --accent-rgb: 14 116 144;
+  --accent-soft-rgb: 8 145 178;
+  --accent-deep-rgb: 21 94 117;
+  --accent-dim-rgb: 22 78 99;
+
+  /* Surfaces: light page, near-white elevated cards. */
+  --ink-950: 237 240 245; /* page background */
+  --ink-900: 244 246 250; /* inputs / recessed panels */
+  --ink-875: 240 243 248;
+  --ink-850: 252 253 255; /* card surface (elevated) */
+  --ink-800: 255 255 255;
+  --ink-750: 230 233 239;
+  --ink-700: 222 226 233;
+  --ink-600: 208 213 221;
+
+  /* Hairlines + subtle overlays (border-white/… , bg-white/…) flip to dark. */
+  --white: 22 26 33;
+
+  /* Text: dark-on-light — strongest headings (zinc-50) darkest, hints lighter. */
+  --zinc-50: 24 27 33;
+  --zinc-100: 31 35 43;
+  --zinc-200: 45 51 62;
+  --zinc-300: 51 58 71;
+  --zinc-400: 82 90 104;
+  --zinc-500: 100 108 124;
+  --zinc-600: 122 130 146;
+  --zinc-700: 176 182 194;
+  --zinc-800: 205 210 219;
+  --zinc-900: 224 228 235;
+  --zinc-950: 240 242 246;
 }
 
 /* Smooth color morph — ONLY while a theme switch is in flight (the switcher

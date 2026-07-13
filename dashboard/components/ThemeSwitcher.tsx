@@ -7,8 +7,8 @@ import { AnimatePresence, motion } from "framer-motion";
  * Arc-reactor theme switcher. Four "Mark" reactors in the top bar re-skin the
  * whole app by flipping `data-theme` on <html> (the palette lives in CSS
  * variables — see globals.css + tailwind.config). Engaging one pops a brief
- * "suit up" modal and morphs the colors. The choice persists to localStorage;
- * a tiny inline script in the layout applies it before paint (no flash).
+ * arc-reactor "suit up" HUD and morphs the colors. The choice persists to
+ * localStorage; a tiny inline script in the layout applies it before paint.
  */
 
 interface Mark {
@@ -23,9 +23,9 @@ const THEMES: Mark[] = [
   {
     id: "mark1",
     mark: "Mark 1",
-    name: "Bright Graphite",
-    flavor: "Raw steel — a brighter, cleaner finish.",
-    accent: "#7dd3fc",
+    name: "Daylight",
+    flavor: "Dark work on a bright canvas — full light mode.",
+    accent: "#0891b2",
   },
   {
     id: "mark2",
@@ -53,8 +53,16 @@ const THEMES: Mark[] = [
 const STORAGE_KEY = "ij_theme";
 const DEFAULT = "mark2";
 
-/** A stylized arc reactor drawn in `currentColor`. */
-function Reactor({ size = 22, glow = false }: { size?: number; glow?: boolean }) {
+function hexA(hex: string, a: number): string {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+/** A compact static arc reactor (switcher buttons), drawn in `currentColor`. */
+function Reactor({ size = 18, glow = false }: { size?: number; glow?: boolean }) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -88,13 +96,94 @@ function Reactor({ size = 22, glow = false }: { size?: number; glow?: boolean })
   );
 }
 
+/** The big animated reactor for the "suit up" HUD — counter-rotating rings, a
+ *  pulsing core and a blooming glow, all in the chosen Mark's color. */
+function BigReactor({ color, size = 128 }: { color: string; size?: number }) {
+  const layer = "absolute inset-0 h-full w-full";
+  const spokes = Array.from({ length: 8 }).map((_, i) => {
+    const a = (i * Math.PI) / 4;
+    return (
+      <line
+        key={i}
+        x1={50 + Math.cos(a) * 24}
+        y1={50 + Math.sin(a) * 24}
+        x2={50 + Math.cos(a) * 33}
+        y2={50 + Math.sin(a) * 33}
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        opacity="0.7"
+      />
+    );
+  });
+  return (
+    <div className="relative" style={{ width: size, height: size, color }}>
+      {/* glow bloom */}
+      <motion.div
+        className={layer}
+        style={{
+          borderRadius: "50%",
+          background: `radial-gradient(circle, ${hexA(color, 0.32)}, transparent 62%)`,
+        }}
+        animate={{ opacity: [0.55, 1, 0.55], scale: [0.9, 1.05, 0.9] }}
+        transition={{ repeat: Infinity, duration: 2.8, ease: "easeInOut" }}
+      />
+      {/* outer dashed ring — slow spin */}
+      <motion.svg
+        className={layer}
+        viewBox="0 0 100 100"
+        fill="none"
+        stroke="currentColor"
+        animate={{ rotate: 360 }}
+        transition={{ repeat: Infinity, ease: "linear", duration: 16 }}
+      >
+        <circle cx="50" cy="50" r="48" strokeWidth="0.8" strokeDasharray="2 5" opacity="0.45" />
+      </motion.svg>
+      {/* mid segmented ring — reverse spin */}
+      <motion.svg
+        className={layer}
+        viewBox="0 0 100 100"
+        fill="none"
+        stroke="currentColor"
+        animate={{ rotate: -360 }}
+        transition={{ repeat: Infinity, ease: "linear", duration: 10 }}
+      >
+        <circle cx="50" cy="50" r="42" strokeWidth="1.6" strokeDasharray="18 10" opacity="0.8" />
+        <circle cx="50" cy="50" r="37" strokeWidth="0.6" opacity="0.3" />
+      </motion.svg>
+      {/* static spokes + inner ring */}
+      <svg className={layer} viewBox="0 0 100 100" fill="none" stroke="currentColor">
+        {spokes}
+        <circle cx="50" cy="50" r="23" strokeWidth="1.2" opacity="0.6" />
+      </svg>
+      {/* pulsing core */}
+      <motion.svg
+        className={layer}
+        viewBox="0 0 100 100"
+        animate={{ scale: [1, 1.08, 1], opacity: [0.85, 1, 0.85] }}
+        transition={{ repeat: Infinity, duration: 1.7, ease: "easeInOut" }}
+        style={{ color }}
+      >
+        <circle
+          cx="50"
+          cy="50"
+          r="13"
+          fill="currentColor"
+          fillOpacity="0.18"
+          stroke="currentColor"
+          strokeWidth="1.4"
+        />
+        <circle cx="50" cy="50" r="5.5" fill="currentColor" />
+      </motion.svg>
+    </div>
+  );
+}
+
 export function ThemeSwitcher() {
   const [active, setActive] = useState<string>(DEFAULT);
   const [reveal, setReveal] = useState<Mark | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Reflect whatever the no-flash script already applied.
   useEffect(() => {
     setActive(document.documentElement.dataset.theme || DEFAULT);
   }, []);
@@ -119,13 +208,11 @@ export function ThemeSwitcher() {
     setActive(m.id);
     if (clsTimer.current) clearTimeout(clsTimer.current);
     clsTimer.current = setTimeout(() => html.classList.remove("theme-transition"), 520);
-    // "Suit up" reveal, auto-dismissed.
     setReveal(m);
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setReveal(null), 1900);
+    timer.current = setTimeout(() => setReveal(null), 2100);
   }
 
-  // Esc closes the reveal.
   useEffect(() => {
     if (!reveal) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setReveal(null);
@@ -170,43 +257,67 @@ export function ThemeSwitcher() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.2 }}
+            transition={{ duration: 0.22 }}
             onClick={() => setReveal(null)}
             role="dialog"
             aria-modal="true"
             aria-label={`Theme changed to ${reveal.mark}, ${reveal.name}`}
-            className="fixed inset-0 z-[100] grid place-items-center bg-black/70 backdrop-blur-sm"
+            className="fixed inset-0 z-[100] grid place-items-center bg-black/75 backdrop-blur-sm"
           >
             <motion.div
-              initial={{ scale: 0.9, y: 8, opacity: 0 }}
+              initial={{ scale: 0.92, y: 10, opacity: 0 }}
               animate={{ scale: 1, y: 0, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              transition={{ type: "spring", stiffness: 320, damping: 26 }}
+              exit={{ scale: 0.96, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 300, damping: 24 }}
               onClick={(e) => e.stopPropagation()}
-              className="card-surface flex w-[min(88vw,340px)] flex-col items-center gap-3 px-8 py-8 text-center"
+              className="card-surface relative flex w-[min(88vw,320px)] flex-col items-center gap-3.5 px-10 py-9 text-center"
             >
-              <motion.div
+              {/* HUD corner brackets */}
+              {[
+                "left-2 top-2 border-l-2 border-t-2",
+                "right-2 top-2 border-r-2 border-t-2",
+                "left-2 bottom-2 border-l-2 border-b-2",
+                "right-2 bottom-2 border-r-2 border-b-2",
+              ].map((c) => (
+                <span
+                  key={c}
+                  aria-hidden="true"
+                  className={`pointer-events-none absolute h-4 w-4 rounded-[3px] ${c}`}
+                  style={{ borderColor: hexA(reveal.accent, 0.55) }}
+                />
+              ))}
+
+              <BigReactor color={reveal.accent} />
+
+              <div>
+                <div className="font-mono text-[10px] font-medium uppercase tracking-[0.34em] text-zinc-500">
+                  {reveal.mark}
+                </div>
+                <div className="mt-1 text-xl font-semibold tracking-tight text-zinc-50">
+                  {reveal.name}
+                </div>
+              </div>
+
+              <div
+                className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.22em]"
                 style={{ color: reveal.accent }}
-                initial={{ rotate: -90, scale: 0.6 }}
-                animate={{ rotate: 0, scale: 1 }}
-                transition={{ type: "spring", stiffness: 200, damping: 18 }}
               >
-                <Reactor size={72} glow />
-              </motion.div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-zinc-400">
-                {reveal.mark}
+                <span
+                  className="h-1.5 w-1.5 rounded-full"
+                  style={{ background: reveal.accent, boxShadow: `0 0 8px ${reveal.accent}` }}
+                />
+                reactor online
               </div>
-              <div className="text-xl font-semibold tracking-tight text-zinc-50">
-                {reveal.name}
-              </div>
+
               <p className="max-w-[15rem] text-[13px] leading-relaxed text-zinc-400">
                 {reveal.flavor}
               </p>
+
               <button
                 type="button"
                 autoFocus
                 onClick={() => setReveal(null)}
-                className="btn-accent mt-1 px-4 py-1.5 text-xs"
+                className="btn-accent mt-0.5 px-5 py-1.5 text-xs"
               >
                 Suit up
               </button>

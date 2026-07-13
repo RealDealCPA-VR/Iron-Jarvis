@@ -37,6 +37,15 @@ type AIResult = {
 
 type ConnState = "connecting" | "open" | "reconnecting" | "closed";
 
+// Terminal REPORT/answerback replies xterm auto-generates for control QUERIES
+// (Primary/Secondary Device Attributes "\x1b[?1;2c", cursor-position reports
+// "\x1b[..R", device-status "\x1b[..n", window reports "\x1b[..t"). On (re)connect
+// the daemon replays saved scrollback that can contain such a query; xterm
+// answers it and the answer would be injected into the shell as fake input
+// (visible as "[?1;2c" at a fresh prompt). We drop these ONLY during the brief
+// post-connect replay window — a real user keystroke never matches this shape.
+const TERM_REPORT_RE = /^\x1b\[[?>=0-9;]*[cnRt]/;
+
 /** xterm theme tuned to the arc-reactor cyan / near-black aesthetic. */
 const XTERM_THEME = {
   background: "#0a0c11",
@@ -227,6 +236,9 @@ export function TerminalPane({
     let ro: ResizeObserver | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let attempts = 0;
+    // Drop xterm's auto-answers to queries embedded in replayed scrollback until
+    // this timestamp (set on every (re)connect). See TERM_REPORT_RE.
+    let replayGuardUntil = 0;
     let focusedOnce = false; // steal focus on FIRST connect only — a reconnect
     // mid-interaction would close an open dropdown/popup out from under the user
 
@@ -312,6 +324,9 @@ export function TerminalPane({
       ws.binaryType = "arraybuffer";
       ws.onopen = () => {
         attempts = 0;
+        // Guard the scrollback-replay window so echoed query answers ("[?1;2c")
+        // don't get injected into the shell as fake input.
+        replayGuardUntil = Date.now() + 800;
         setState("open");
         doFit();
         sendResize();
@@ -376,8 +391,10 @@ export function TerminalPane({
       termRef.current = term; // expose for launch-command refocus
       doFit();
 
-      // Client -> server: raw keystrokes as text.
+      // Client -> server: raw keystrokes as text. Suppress xterm's auto-answers
+      // to queries in replayed scrollback during the brief post-connect window.
       term.onData((d: string) => {
+        if (Date.now() < replayGuardUntil && TERM_REPORT_RE.test(d)) return;
         if (ws && ws.readyState === WebSocket.OPEN) ws.send(d);
       });
 
