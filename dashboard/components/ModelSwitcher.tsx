@@ -135,6 +135,11 @@ export function ModelSwitcher() {
   const health = usePolledApi<Health>("/health", 5000);
   const modelsData = useApi<{ models: ModelOption[] }>("/models");
   const [open, setOpen] = useState(false);
+  // The Auto — smart-routing detail is a collapsible disclosure (expands on
+  // hover / click) so it never sits fully-expanded and static above the model
+  // list — once configured, it collapses to a one-line summary so you can pick
+  // from the rest of the list. Reset to collapsed each time the panel opens.
+  const [autoOpen, setAutoOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
@@ -201,6 +206,11 @@ export function ModelSwitcher() {
     window.addEventListener("ij:open-switcher", onOpen);
     return () => window.removeEventListener("ij:open-switcher", onOpen);
   }, []);
+
+  // Start with the Auto detail collapsed every time the panel (re)opens.
+  useEffect(() => {
+    if (!open) setAutoOpen(false);
+  }, [open]);
 
   // Close on outside click / Escape.
   useEffect(() => {
@@ -294,139 +304,183 @@ export function ModelSwitcher() {
 
       {open && (
         <div className="absolute right-0 z-50 mt-1.5 w-80 rounded-xl border border-white/10 bg-ink-950/95 p-1.5 shadow-card-hover backdrop-blur-xl">
-          {/* Auto — smart routing (top, accent-tinted) */}
-          <div className="mb-1.5 rounded-lg border border-accent/30 bg-accent/[0.08] p-2">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5">
-                <Sparkles size={13} className="text-accent-soft" />
+          {/* Auto — smart routing: a COLLAPSIBLE disclosure. Compact by default so
+              it never sits fully-expanded over the model list; expands on hover
+              (or click, for touch/keyboard) to configure, and collapses to a
+              one-line summary once you move on to the list below. */}
+          <div
+            className="mb-1.5 rounded-lg border border-accent/30 bg-accent/[0.08]"
+            onMouseEnter={() => setAutoOpen(true)}
+            onMouseLeave={() => setAutoOpen(false)}
+          >
+            <button
+              type="button"
+              onClick={() => setAutoOpen((v) => !v)}
+              aria-expanded={autoOpen}
+              className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-2 text-left"
+            >
+              <span className="flex min-w-0 items-center gap-1.5">
+                <Sparkles size={13} className="shrink-0 text-accent-soft" />
                 <span className="text-[12px] font-medium text-zinc-100">
                   Auto — smart routing
                 </span>
-              </div>
-              {autoOn && (
-                <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-300">
-                  On
-                </span>
-              )}
-            </div>
-            <p className="mt-1 text-[10px] leading-snug text-zinc-400">
-              Routes each request to the best model — cheap for simple, strong for
-              complex.
-            </p>
-
-            {/* /routing fetch states */}
-            {routing.loading && !rv && (
-              <div className="mt-2 text-[11px] text-zinc-500">Loading routing options…</div>
-            )}
-            {routing.error && !rv && (
-              <div className="mt-2 text-[11px] text-rose-300">{routing.error.message}</div>
-            )}
-
-            {/* OFF → chooser + "Turn on Auto" */}
-            {rv && !autoOn && (
-              <div className="mt-2">
-                <div className="mb-1 text-[10px] uppercase tracking-wider text-zinc-400">
-                  Routing model
-                </div>
-                {rv.connected.length === 0 ? (
-                  <div className="text-[11px] text-zinc-500">
-                    Connect a model to enable Auto.
-                  </div>
+              </span>
+              <span className="flex shrink-0 items-center gap-1.5">
+                {autoOn ? (
+                  <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-300">
+                    On
+                  </span>
                 ) : (
-                  <div className="space-y-0.5">
-                    {rv.suggested && (
-                      <RoutingChoice
-                        pm={rv.suggested}
-                        recommended
-                        selected={selectedRM === fmtPM(rv.suggested)}
-                        onClick={() => setPick(fmtPM(rv.suggested!))}
-                      />
-                    )}
-                    {rv.connected
-                      .filter(
-                        (c) => !rv.suggested || fmtPM(c) !== fmtPM(rv.suggested),
-                      )
-                      .map((c) => (
-                        <RoutingChoice
-                          key={fmtPM(c)}
-                          pm={c}
-                          selected={selectedRM === fmtPM(c)}
-                          onClick={() => setPick(fmtPM(c))}
-                        />
-                      ))}
+                  <span className="text-[9px] font-medium uppercase tracking-wide text-zinc-500">
+                    Off
+                  </span>
+                )}
+                <ChevronDown
+                  size={13}
+                  className={`text-zinc-500 transition-transform duration-200 ${
+                    autoOpen ? "rotate-180" : ""
+                  }`}
+                />
+              </span>
+            </button>
+
+            {/* Collapsed + ON → a compact one-liner of where requests route. */}
+            {!autoOpen && autoOn && (
+              <div className="px-2 pb-2 -mt-0.5 text-[10px] text-zinc-400">
+                Routing via{" "}
+                <span className="font-mono text-accent-soft">
+                  {rmShort || rv?.routing_model || "cheapest"}
+                </span>
+              </div>
+            )}
+
+            {/* Expanded → full configuration. */}
+            {autoOpen && (
+              <div className="px-2 pb-2">
+                <p className="text-[10px] leading-snug text-zinc-400">
+                  Routes each request to the best model — cheap for simple, strong for
+                  complex.
+                </p>
+
+                {/* /routing fetch states */}
+                {routing.loading && !rv && (
+                  <div className="mt-2 text-[11px] text-zinc-500">
+                    Loading routing options…
                   </div>
                 )}
-                <button
-                  onClick={() => enableAuto(selectedRM, true)}
-                  disabled={routingBusy || !selectedRM}
-                  className="mt-2 w-full rounded-lg bg-accent/90 px-2 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {routingBusy ? "Turning on…" : "Turn on Auto"}
-                </button>
-              </div>
-            )}
+                {routing.error && !rv && (
+                  <div className="mt-2 text-[11px] text-rose-300">
+                    {routing.error.message}
+                  </div>
+                )}
 
-            {/* ON → active state: routing model, tiers, change routing model */}
-            {rv && autoOn && (
-              <div className="mt-2">
-                <div className="text-[11px] text-zinc-300">
-                  Routing via{" "}
-                  <span className="font-mono text-accent-soft">
-                    {rmShort || rv.routing_model || "cheapest"}
-                  </span>
-                </div>
-                <div className="mt-2 space-y-0.5 rounded-lg border border-white/[0.06] bg-white/[0.02] p-1.5">
-                  {ROUTE_TIERS.map((t) => {
-                    const pm = rv.tiers[t];
-                    return (
-                      <div
-                        key={t}
-                        className="flex items-center justify-between gap-2 text-[10px]"
-                      >
-                        <span className="text-zinc-400">{ROUTE_TIER_LABELS[t]}</span>
-                        <span className="ml-2 min-w-0 truncate font-mono text-zinc-300">
-                          {pm ? pm.model : "—"}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-                {rv.connected.length > 1 && (
+                {/* OFF → chooser + "Turn on Auto" */}
+                {rv && !autoOn && (
                   <div className="mt-2">
                     <div className="mb-1 text-[10px] uppercase tracking-wider text-zinc-400">
-                      Change routing model
+                      Routing model
                     </div>
-                    <div className="space-y-0.5">
-                      {rv.connected.map((c) => {
-                        const isCur = rv.routing_model === fmtPM(c);
+                    {rv.connected.length === 0 ? (
+                      <div className="text-[11px] text-zinc-500">
+                        Connect a model to enable Auto.
+                      </div>
+                    ) : (
+                      <div className="space-y-0.5">
+                        {rv.suggested && (
+                          <RoutingChoice
+                            pm={rv.suggested}
+                            recommended
+                            selected={selectedRM === fmtPM(rv.suggested)}
+                            onClick={() => setPick(fmtPM(rv.suggested!))}
+                          />
+                        )}
+                        {rv.connected
+                          .filter(
+                            (c) => !rv.suggested || fmtPM(c) !== fmtPM(rv.suggested),
+                          )
+                          .map((c) => (
+                            <RoutingChoice
+                              key={fmtPM(c)}
+                              pm={c}
+                              selected={selectedRM === fmtPM(c)}
+                              onClick={() => setPick(fmtPM(c))}
+                            />
+                          ))}
+                      </div>
+                    )}
+                    <button
+                      onClick={() => enableAuto(selectedRM, true)}
+                      disabled={routingBusy || !selectedRM}
+                      className="mt-2 w-full rounded-lg bg-accent/90 px-2 py-1.5 text-[11px] font-semibold text-white transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {routingBusy ? "Turning on…" : "Turn on Auto"}
+                    </button>
+                  </div>
+                )}
+
+                {/* ON → active state: routing model, tiers, change routing model */}
+                {rv && autoOn && (
+                  <div className="mt-2">
+                    <div className="text-[11px] text-zinc-300">
+                      Routing via{" "}
+                      <span className="font-mono text-accent-soft">
+                        {rmShort || rv.routing_model || "cheapest"}
+                      </span>
+                    </div>
+                    <div className="mt-2 space-y-0.5 rounded-lg border border-white/[0.06] bg-white/[0.02] p-1.5">
+                      {ROUTE_TIERS.map((t) => {
+                        const pm = rv.tiers[t];
                         return (
-                          <button
-                            key={fmtPM(c)}
-                            onClick={() => !isCur && enableAuto(fmtPM(c), false)}
-                            disabled={routingBusy || isCur}
-                            className={`flex w-full items-center justify-between gap-2 rounded-md px-1.5 py-1 text-left text-[11px] transition-colors ${
-                              isCur
-                                ? "bg-accent/[0.12] text-accent-soft"
-                                : "text-zinc-300 hover:bg-white/[0.06]"
-                            }`}
+                          <div
+                            key={t}
+                            className="flex items-center justify-between gap-2 text-[10px]"
                           >
-                            <span className="min-w-0 truncate font-mono text-[10px]">
-                              {c.model}
+                            <span className="text-zinc-400">{ROUTE_TIER_LABELS[t]}</span>
+                            <span className="ml-2 min-w-0 truncate font-mono text-zinc-300">
+                              {pm ? pm.model : "—"}
                             </span>
-                            {isCur && (
-                              <Check size={12} className="shrink-0 text-accent-soft" />
-                            )}
-                          </button>
+                          </div>
                         );
                       })}
                     </div>
+                    {rv.connected.length > 1 && (
+                      <div className="mt-2">
+                        <div className="mb-1 text-[10px] uppercase tracking-wider text-zinc-400">
+                          Change routing model
+                        </div>
+                        <div className="space-y-0.5">
+                          {rv.connected.map((c) => {
+                            const isCur = rv.routing_model === fmtPM(c);
+                            return (
+                              <button
+                                key={fmtPM(c)}
+                                onClick={() => !isCur && enableAuto(fmtPM(c), false)}
+                                disabled={routingBusy || isCur}
+                                className={`flex w-full items-center justify-between gap-2 rounded-md px-1.5 py-1 text-left text-[11px] transition-colors ${
+                                  isCur
+                                    ? "bg-accent/[0.12] text-accent-soft"
+                                    : "text-zinc-300 hover:bg-white/[0.06]"
+                                }`}
+                              >
+                                <span className="min-w-0 truncate font-mono text-[10px]">
+                                  {c.model}
+                                </span>
+                                {isCur && (
+                                  <Check size={12} className="shrink-0 text-accent-soft" />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
-            )}
 
-            {routingErr && (
-              <div className="mt-2 text-[11px] text-rose-300">{routingErr}</div>
+                {routingErr && (
+                  <div className="mt-2 text-[11px] text-rose-300">{routingErr}</div>
+                )}
+              </div>
             )}
           </div>
 
