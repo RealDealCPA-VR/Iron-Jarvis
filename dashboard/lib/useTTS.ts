@@ -109,6 +109,19 @@ export interface UseTTS {
    * call on every render with the latest assistant output.
    */
   speak: (text: string) => void;
+  /**
+   * Zero the per-turn "already consumed" counter used by {@link speakMore}.
+   * Call once at the start of a streaming turn before feeding deltas.
+   */
+  resetStream: () => void;
+  /**
+   * Incremental sibling of {@link speak} for token streaming: given the FULL
+   * text so far, enqueue only the newly-complete sentences (via
+   * `takeCompleteSentences`) WITHOUT cancelling in-flight speech and WITHOUT the
+   * whole-reply dedupe. Pass `flush = true` on stream end to speak a trailing
+   * fragment. No-op while voice is off.
+   */
+  speakMore: (fullText: string, flush?: boolean) => void;
   /** Stop and clear the queue immediately. */
   cancel: () => void;
 }
@@ -127,6 +140,10 @@ export function useTTS(): UseTTS {
   const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const lastSpokenRef = useRef<string>(""); // dedupe identical re-speak calls
   const enabledRef = useRef(false);
+  // Chars of the current streaming turn already enqueued by speakMore(). Zeroed
+  // by resetStream() at the start of each turn so incremental speech never
+  // repeats a sentence.
+  const streamConsumedRef = useRef(0);
 
   // Detect support + restore the saved preference (guarded for SSR).
   useEffect(() => {
@@ -172,6 +189,7 @@ export function useTTS(): UseTTS {
     }
     setSpeaking(false);
     lastSpokenRef.current = "";
+    streamConsumedRef.current = 0;
   }, []);
 
   const persist = useCallback((on: boolean) => {
@@ -201,40 +219,80 @@ export function useTTS(): UseTTS {
     else enable();
   }, [enable, disable]);
 
-  const speak = useCallback((text: string) => {
+  // The per-utterance body shared by speak() (whole reply) and speakMore()
+  // (streaming). `speaking` tracks the queue: true on any utterance start, false
+  // once the queue drains (`pending` is false when this is the last one).
+  const enqueueUtterance = useCallback((sentence: string) => {
     const s = synth();
-    if (!s || !enabledRef.current) return;
-    const clean = (text || "").trim();
-    if (!clean || clean === lastSpokenRef.current) return;
-    lastSpokenRef.current = clean;
-
+    if (!s) return;
+    const u = new SpeechSynthesisUtterance(sentence);
+    if (voiceRef.current) u.voice = voiceRef.current;
+    u.rate = VOICE_PERSONA.rate;
+    u.pitch = VOICE_PERSONA.pitch;
+    u.volume = VOICE_PERSONA.volume;
+    u.onstart = () => setSpeaking(true);
+    u.onend = () => setSpeaking(s.pending);
+    u.onerror = () => setSpeaking(s.pending);
     try {
-      s.cancel(); // replace any in-flight speech with the newest output
+      s.speak(u);
     } catch {
-      /* ignore */
+      /* a single utterance failing must not break the queue */
     }
-
-    const sentences = splitSentences(clean);
-    if (!sentences.length) return;
-
-    sentences.forEach((sentence, i) => {
-      const u = new SpeechSynthesisUtterance(sentence);
-      if (voiceRef.current) u.voice = voiceRef.current;
-      u.rate = VOICE_PERSONA.rate;
-      u.pitch = VOICE_PERSONA.pitch;
-      u.volume = VOICE_PERSONA.volume;
-      if (i === 0) u.onstart = () => setSpeaking(true);
-      if (i === sentences.length - 1) {
-        u.onend = () => setSpeaking(false);
-        u.onerror = () => setSpeaking(false);
-      }
-      try {
-        s.speak(u);
-      } catch {
-        /* a single utterance failing must not break the queue */
-      }
-    });
   }, []);
 
-  return { supported, enabled, speaking, enable, disable, toggle, speak, cancel };
+  const speak = useCallback(
+    (text: string) => {
+      const s = synth();
+      if (!s || !enabledRef.current) return;
+      const clean = (text || "").trim();
+      if (!clean || clean === lastSpokenRef.current) return;
+      lastSpokenRef.current = clean;
+
+      try {
+        s.cancel(); // replace any in-flight speech with the newest output
+      } catch {
+        /* ignore */
+      }
+
+      const sentences = splitSentences(clean);
+      if (!sentences.length) return;
+      sentences.forEach((sentence) => enqueueUtterance(sentence));
+    },
+    [enqueueUtterance],
+  );
+
+  const resetStream = useCallback(() => {
+    streamConsumedRef.current = 0;
+  }, []);
+
+  const speakMore = useCallback(
+    (fullText: string, flush = false) => {
+      const s = synth();
+      if (!s || !enabledRef.current) return;
+      const { sentences, consumed } = takeCompleteSentences(
+        fullText || "",
+        streamConsumedRef.current,
+        flush,
+      );
+      streamConsumedRef.current = consumed;
+      if (!sentences.length) return;
+      // No s.cancel() (never interrupt in-flight speech) and no whole-reply
+      // dedupe — the consumed counter alone guards against re-speaking.
+      sentences.forEach((sentence) => enqueueUtterance(sentence));
+    },
+    [enqueueUtterance],
+  );
+
+  return {
+    supported,
+    enabled,
+    speaking,
+    enable,
+    disable,
+    toggle,
+    speak,
+    resetStream,
+    speakMore,
+    cancel,
+  };
 }

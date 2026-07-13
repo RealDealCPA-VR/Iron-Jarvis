@@ -49,6 +49,17 @@ export function wsUrl(path: string): string {
   return `${url}${sep}token=${encodeURIComponent(t)}`;
 }
 
+/** Absolute URL for an SSE endpoint consumed via EventSource. Like wsUrl, the
+ * bearer token rides as a `?token=` query param because EventSource (unlike
+ * fetch) cannot set an Authorization header. */
+export function sseUrl(path: string): string {
+  const url = `${API_BASE}${path}`;
+  const t = ijToken();
+  if (!t) return url;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${url}${sep}token=${encodeURIComponent(t)}`;
+}
+
 export const put = <T>(path: string, body?: unknown) =>
   api<T>(path, { method: "PUT", body: body ? JSON.stringify(body) : undefined });
 

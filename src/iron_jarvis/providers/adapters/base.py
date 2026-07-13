@@ -7,6 +7,7 @@ The Model Router and Agent Runtime speak only this vocabulary; concrete vendors
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -146,6 +147,30 @@ class LLMAdapter(ABC):
         tools: list[dict[str, Any]],
     ) -> LLMResponse:
         ...
+
+    async def stream(
+        self,
+        *,
+        system: str,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Token-stream a completion (FX-01). Yields frames:
+
+            {"type": "text", "text": <delta>}          — an incremental text chunk
+            {"type": "final", "response": LLMResponse}  — the complete aggregate
+
+        The DEFAULT runs the non-streaming :meth:`complete` and emits the whole
+        answer as ONE ``text`` chunk followed by ``final`` — so EVERY adapter
+        streams (degrading gracefully to a single chunk) and only real streamers
+        override this. The ``final`` ``response`` MUST be identical to what
+        :meth:`complete` returns, so callers that consume the aggregate (token
+        accounting, tool loop, persisted result) stay byte-compatible.
+        """
+        resp = await self.complete(system=system, messages=messages, tools=tools)
+        if resp.text:
+            yield {"type": "text", "text": resp.text}
+        yield {"type": "final", "response": resp}
 
     def capabilities(self) -> dict[str, Any]:
         # Default = a full API-class model: it can call tools AND accept inline

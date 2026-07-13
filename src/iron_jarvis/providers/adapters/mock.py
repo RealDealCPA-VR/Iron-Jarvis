@@ -12,6 +12,8 @@ Two modes:
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from typing import Any
 
 from .base import LLMAdapter, LLMMessage, LLMResponse, ToolCall
@@ -34,6 +36,24 @@ class MockLLMAdapter(LLMAdapter):
         if self._script:
             return self._script.pop(0)
         return self._default_behavior(messages, tools)
+
+    async def stream(
+        self,
+        *,
+        system: str,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Actually stream the offline reply word-by-word so the streaming path
+        demos + smoke-tests end-to-end with zero network. A tool-use turn (empty
+        text) just yields ``final``. The ``response`` is identical to complete()."""
+        resp = await self.complete(system=system, messages=messages, tools=tools)
+        if resp.text:
+            words = resp.text.split(" ")
+            for i, w in enumerate(words):
+                yield {"type": "text", "text": (w if i == 0 else " " + w)}
+                await asyncio.sleep(0)  # yield to the loop so the client sees deltas
+        yield {"type": "final", "response": resp}
 
     @staticmethod
     def _default_behavior(

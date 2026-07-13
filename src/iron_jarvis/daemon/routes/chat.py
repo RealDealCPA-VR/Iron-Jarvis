@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import json
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pathlib import Path
 from sqlmodel import select
 from typing import Any
@@ -17,6 +18,39 @@ from ..schemas import ChatBody, PersonaCreateBody, PersonaSaveBody
 from ...core.db import session_scope
 from ...core.fs_policy import fs_read_ok
 from ...core.models import AgentType
+
+
+def _sse(event: str, data: dict[str, Any]) -> str:
+    """Serialize one Server-Sent Event frame (FX-01 wire format)."""
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+async def _router_frames(router, **kwargs):
+    """Yield streaming frames for one completion (FX-01).
+
+    Prefers the router's native token stream (``ModelRouter.stream`` — added by
+    the coordinator, same kwargs as ``complete``: provider/model/system/messages/
+    tools/task_class), and degrades HONESTLY to a single-chunk stream over
+    ``complete()`` when a router without ``stream`` is wired. Either path yields
+    ``{"type":"text","text":<delta>}`` deltas then exactly one
+    ``{"type":"final","response":LLMResponse,"provider":..,"model":..}`` carrying
+    the aggregate — never fabricated output (a real-provider failure raises here,
+    exactly as ``complete`` does, and the caller turns it into an ``error`` frame).
+    """
+    stream = getattr(router, "stream", None)
+    if stream is not None:
+        async for frame in stream(**kwargs):
+            yield frame
+        return
+    route = await router.complete(**kwargs)
+    if route.response.text:
+        yield {"type": "text", "text": route.response.text}
+    yield {
+        "type": "final",
+        "response": route.response,
+        "provider": route.provider,
+        "model": route.model,
+    }
 
 
 def register(app: FastAPI, d) -> None:
@@ -537,3 +571,374 @@ def register(app: FastAPI, d) -> None:
             "skill": (body.skill or "").strip() or None,
             "tools_used": tools_used,
         }
+
+    @app.post("/chat/stream")
+    async def chat_stream(body: ChatBody, request: Request):
+        """Streaming twin of :func:`chat_complete` (FX-01).
+
+        IDENTICAL prep (persona/project/learning/memory fabric/attachments/skill/
+        armed tools/overrides/routing choice), but the turn is emitted as Server-
+        Sent Events — token deltas as they generate, live tool-call frames, then a
+        terminal ``done``. PURELY ADDITIVE: POST /chat is unchanged, and this
+        shares the same router + tool-loop semantics so a streamed turn is byte-
+        compatible with the non-streaming one (same usage ledger, same reply).
+        """
+        from ...providers.adapters.base import LLMMessage
+
+        if not body.messages:
+            raise HTTPException(status_code=400, detail="messages is required")
+
+        # ------------------------------------------------------------------ #
+        # PREP — verbatim from chat_complete (kept in lock-step deliberately).
+        # ------------------------------------------------------------------ #
+        # Persona: a user override/creation wins, then a built-in, then the value
+        # is treated as free-text instructions (used verbatim).
+        from ...personas import resolve_prompt
+
+        want = (body.persona or "").strip()
+        persona = resolve_prompt(_persona_store(), d._PERSONAS, want)
+        system = persona + (
+            "\n\n# Environment\n"
+            f"- You run locally on the user's machine; their home directory is {Path.home()}.\n"
+            "- You are the CHAT surface: answer directly. For multi-step jobs "
+            "with tools, the user can switch this conversation to Agent mode."
+        )
+        pid = (body.project_id or "").strip() or None
+        resolved_proj = None
+        if pid:
+            try:
+                from ...core.models import Project
+
+                with session_scope(d.platform.engine) as db:
+                    resolved_proj = db.get(Project, pid)
+            except Exception:  # noqa: BLE001 — never block a chat turn
+                resolved_proj = None
+        if resolved_proj is not None:
+            block = f"\n\n# Project: {resolved_proj.name}"
+            instructions = (resolved_proj.instructions or "").strip()
+            if instructions:
+                block += f"\n\nInstructions (follow these):\n{instructions[:2000]}"
+            if resolved_proj.brief:
+                block += f"\n\nAbout this project: {resolved_proj.brief[:1500]}"
+            query = next(
+                (m.content or "" for m in reversed(body.messages) if m.role == "user"),
+                "",
+            )
+            try:
+                from ...projects.knowledge import ground
+
+                knowledge = ground(d.platform, pid, query)
+                if knowledge:
+                    block += f"\n\nProject knowledge (reference):\n{knowledge}"
+            except Exception:  # noqa: BLE001 — retrieval must never break a turn
+                pass
+            system += block
+
+        learning = getattr(d.platform, "learning", None)
+        if learning is not None:
+            try:
+                system = learning.apply_to_prompt(system)
+            except Exception:  # noqa: BLE001 — never block a chat turn
+                pass
+
+        fabric = getattr(d.platform, "fabric", None)
+        if fabric is not None:
+            last_user = next(
+                (m.content or "" for m in reversed(body.messages) if m.role == "user"),
+                "",
+            )
+            if last_user.strip():
+                try:
+                    grounding = fabric.ground(
+                        last_user,
+                        project_id=pid,
+                        sources=["files", "notes", "memory", "lessons", "sessions"],
+                    )
+                    if grounding:
+                        system += grounding
+                except Exception:  # noqa: BLE001 — retrieval must never break a turn
+                    pass
+
+        # Attachments: text formats extracted inline; images go to VISION.
+        images: list[dict[str, str]] = []
+        attach_block = ""
+        _IMG = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".webp": "image/webp", ".gif": "image/gif"}
+        for raw in (body.attachments or [])[:4]:
+            p = Path(raw)
+            if not p.is_absolute():
+                p = d.platform.config.home / "uploads" / p.name
+            ok, _reason = fs_read_ok(str(p))
+            if not ok or not p.is_file():
+                continue
+            suffix = p.suffix.lower()
+            if suffix in _IMG:
+                import base64 as _b64
+
+                if p.stat().st_size <= 8 * 1024 * 1024:
+                    images.append(
+                        {"data_b64": _b64.b64encode(p.read_bytes()).decode("ascii"),
+                         "media_type": _IMG[suffix]}
+                    )
+                else:
+                    _mb = p.stat().st_size / (1024 * 1024)
+                    attach_block += (
+                        f"\n\n## Attached image: {p.name}\n(NOT analyzed — {_mb:.0f} MB "
+                        "exceeds the 8 MB inline-image limit; ask the user to resize "
+                        "it or describe what they want from it.)"
+                    )
+            else:
+                try:
+                    from ...documents.readers import extract_text
+
+                    text = extract_text(p)[:6000]
+                    attach_block += f"\n\n## Attached file: {p.name}\n{text}"
+                except Exception as exc:  # noqa: BLE001
+                    attach_block += f"\n\n## Attached file: {p.name}\n(could not read: {exc})"
+        if attach_block:
+            system += "\n\n# Attachments (provided by the user this turn)" + attach_block
+
+        if (body.skill or "").strip():
+            sk = d.platform.skills.get(body.skill.strip())
+            if sk is None:
+                raise HTTPException(status_code=404, detail=f"no such skill: {body.skill}")
+            system += (
+                f"\n\n# Skill invoked by the user: {sk.name}\n"
+                "FOLLOW this playbook for this request.\n" + sk.instructions[:8000]
+            )
+
+        msgs: list[LLMMessage] = []
+        for m in body.messages[-30:]:
+            role = m.role if m.role in ("user", "assistant") else "user"
+            msgs.append(LLMMessage(role=role, content=(m.content or "")[:12000]))
+        if images and msgs:
+            for m in reversed(msgs):
+                if m.role == "user":
+                    m.images = images
+                    break
+
+        armed = [t for t in (body.tools or [])[:6] if d.platform.registry.get(t)]
+        tool_specs = d.platform.registry.specs(armed) if armed else []
+        ctx = None
+        if armed:
+            from ...tools.base import ToolContext
+
+            tool_ws = d.platform.config.home / "uploads"
+            in_project_folder = False
+            ws = (body.workspace_dir or "").strip()
+            if ws:
+                from ...core.fs_policy import fs_path_allowed, is_protected_path
+
+                wp = Path(ws)
+                if (
+                    wp.is_absolute()
+                    and wp.is_dir()
+                    and fs_path_allowed(str(wp))
+                    and not is_protected_path(str(wp))
+                ):
+                    tool_ws, in_project_folder = wp, True
+            elif resolved_proj is not None and (resolved_proj.root or "").strip():
+                proot = Path(resolved_proj.root)
+                if proot.is_dir():
+                    tool_ws, in_project_folder = proot, True
+            tool_ws.mkdir(parents=True, exist_ok=True)
+            ctx = ToolContext(
+                workspace=tool_ws, session_id="chat", agent_run_id="chat",
+                config=d.platform.config, event_bus=d.platform.event_bus,
+                engine=d.platform.engine,
+            )
+            system += (
+                "\n\n# Tools\nThe user armed these tools for this chat: "
+                + ", ".join(armed)
+                + ". Use them when they help; answer directly when they don't."
+                + (
+                    f"\nYour file tools operate INSIDE the folder {tool_ws}; "
+                    "read, edit, and create files there directly, and use the absolute paths "
+                    "that file_search returns."
+                    if in_project_folder
+                    else ""
+                )
+            )
+        overrides: dict[str, str] = {}
+        for _name in armed:
+            overrides[_name] = "allow"
+            _tool = d.platform.registry.get(_name)
+            if _tool is not None:
+                overrides[_tool.perm_key()] = "allow"
+        armed_grant = set(overrides.keys())
+        provider_choice = (body.provider or "").strip() or (
+            (resolved_proj.default_provider or "").strip() if resolved_proj else ""
+        )
+        model_choice = (body.model or "").strip() or (
+            (resolved_proj.default_model or "").strip() if resolved_proj else ""
+        )
+
+        # ------------------------------------------------------------------ #
+        # STREAM — the round + tool loop, emitting SSE frames as it goes.
+        # ------------------------------------------------------------------ #
+        async def gen():
+            usage_in = usage_out = completions = 0
+            tools_used: list[str] = []          # ONLY tools that actually executed
+            denied_tools: list[str] = []        # armed tools refused this turn
+            last_tool_output = ""               # last SUCCESSFUL output (synthesis)
+            reply_text = ""
+            route_provider = provider_choice or ""
+            route_model = model_choice or ""
+            try:
+                for _round in range(4):
+                    if await request.is_disconnected():
+                        return
+                    yield _sse("round", {"round": _round})
+                    final_resp = None
+                    async for frame in _router_frames(
+                        d.platform.router,
+                        provider=provider_choice or None,
+                        model=model_choice or None,
+                        system=system,
+                        messages=msgs,
+                        tools=tool_specs,
+                        task_class="chat",
+                    ):
+                        ftype = frame.get("type")
+                        if ftype == "text":
+                            txt = frame.get("text") or ""
+                            if txt:
+                                yield _sse("token", {"text": txt})
+                        elif ftype == "meta":
+                            route_provider = frame.get("provider") or route_provider
+                            route_model = frame.get("model") or route_model
+                            yield _sse(
+                                "meta",
+                                {"provider": route_provider, "model": route_model},
+                            )
+                        elif ftype == "reset":
+                            # A pre-first-token failover swapped providers — tell the
+                            # client to discard any partial text streamed so far.
+                            yield _sse("reset", {"reason": frame.get("reason", "")})
+                        elif ftype == "final":
+                            final_resp = frame.get("response")
+                            route_provider = frame.get("provider") or route_provider
+                            route_model = frame.get("model") or route_model
+                    if final_resp is None:
+                        # The stream ended without an aggregate — honest error, not
+                        # a fabricated reply.
+                        yield _sse(
+                            "error",
+                            {"detail": "stream ended without a final response"},
+                        )
+                        return
+                    reply_text = final_resp.text or ""
+                    _u = final_resp.usage or {}
+                    usage_in += int(_u.get("input_tokens", 0) or 0)
+                    usage_out += int(_u.get("output_tokens", 0) or 0)
+                    completions += 1
+                    calls = final_resp.tool_calls or []
+                    if not calls or not armed:
+                        break
+                    msgs.append(LLMMessage(role="assistant",
+                                           content=final_resp.text,
+                                           tool_calls=calls))
+                    for tc in calls:
+                        ran = False
+                        _t = d.platform.registry.get(tc.name)
+                        # REDACT args before they cross the wire — a planted secret
+                        # (secrets/computeruse tools redact) never streams to the
+                        # browser; same guard the DB-persist path uses.
+                        safe_args = (
+                            _t.redact_args(tc.arguments) if _t is not None else tc.arguments
+                        )
+                        yield _sse("tool_call", {
+                            "id": tc.id, "name": tc.name,
+                            "status": "started", "args": safe_args,
+                        })
+                        try:
+                            result = await d.platform.registry.invoke(
+                                tc.name, tc.arguments, ctx, d.platform.permissions,
+                                overrides, session_allow=armed_grant,
+                            )
+                            if result.ok:
+                                content = result.output
+                                ran = True
+                                last_tool_output = str(result.output or "")
+                            else:
+                                content = result.error or "error"
+                                if "permission denied" in (result.error or ""):
+                                    denied_tools.append(tc.name)
+                        except Exception as exc:  # noqa: BLE001
+                            content = f"{type(exc).__name__}: {exc}"
+                        if ran:
+                            tools_used.append(tc.name)
+                            # FENCE externally-sourced output before the model (and
+                            # the client) sees it — the same guard chat_complete +
+                            # the agent runtime apply to returns_untrusted_content.
+                            if getattr(_t, "returns_untrusted_content", False):
+                                from ...computeruse.safety import (
+                                    detect_injection,
+                                    wrap_untrusted,
+                                )
+
+                                _inj = detect_injection(str(content))
+                                content = wrap_untrusted(
+                                    f"[content withheld — suspected {_inj['category']}: "
+                                    f"{_inj['reason']}]"
+                                    if _inj["flagged"]
+                                    else str(content)
+                                )
+                        yield _sse("tool_call", {
+                            "id": tc.id, "name": tc.name, "status": "finished",
+                            "ok": ran, "output": str(content)[:2000],
+                        })
+                        msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
+                                               name=tc.name, content=str(content)[:12000]))
+            except Exception as exc:  # noqa: BLE001 — honest error, never fabricate
+                yield _sse("error", {"detail": str(exc)})
+                return
+
+            # USAGE LEDGER — persist the run row exactly as chat_complete does so a
+            # streamed turn counts the same on the Usage page.
+            try:
+                from ...core.ids import utcnow as _now
+                from ...core.models import AgentRun, AgentState
+
+                with session_scope(d.platform.engine) as db:
+                    db.add(AgentRun(
+                        session_id="chat",
+                        agent_type=AgentType.BUILDER,
+                        provider=route_provider,
+                        model=route_model,
+                        state=AgentState.COMPLETED,
+                        steps=max(1, completions),
+                        input_tokens=usage_in,
+                        output_tokens=usage_out,
+                        finished_at=_now(),
+                    ))
+                    db.commit()
+            except Exception:  # noqa: BLE001 — accounting must never break a reply
+                pass
+
+            # Reply honesty (mirrors chat_complete): synthesize from the last tool
+            # output when the model returned no final text; note denied tools.
+            reply = reply_text or ""
+            if not reply.strip() and last_tool_output:
+                snippet = last_tool_output.strip()[:600]
+                ran_names = ", ".join(dict.fromkeys(tools_used)) or "the armed tools"
+                reply = f"Ran {ran_names}. Result:\n{snippet}"
+            elif not reply.strip():
+                reply = "(no reply)"
+            if denied_tools:
+                names = ", ".join(dict.fromkeys(denied_tools))
+                reply += f"\n\n_Note: {names} could not run (permission denied)._"
+            yield _sse("done", {
+                "reply": reply,
+                "provider": route_provider,
+                "model": route_model,
+                "tools_used": tools_used,
+                "denied_tools": denied_tools,
+                "usage": {"input_tokens": usage_in, "output_tokens": usage_out},
+            })
+
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )

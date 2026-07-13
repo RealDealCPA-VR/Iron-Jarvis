@@ -19,6 +19,7 @@ from sqlalchemy import Engine
 from .core.config import Config, load_config
 from .core.db import open_db, persist_event
 from .core.events import EventBus
+from .core.streams import StreamHub
 from .core.fs_policy import register_protected_root
 from .core.logging import get_logger
 from .providers.manager import ProviderManager
@@ -160,6 +161,9 @@ class Platform:
     #: The Reflex Loop's durable rule store (signal→action bindings). The
     #: executing ReflexRouter is built by the daemon (it needs the orchestrator).
     reflex: "object | None" = None
+    #: FX-01 ephemeral per-session token/tool stream hub (NOT the event bus — see
+    #: core/streams.py). Optional so bare-platform unit tests still construct.
+    streams: "StreamHub | None" = None
 
 
 def build_platform(
@@ -169,6 +173,7 @@ def build_platform(
     config.ensure_dirs()
 
     event_bus = EventBus()
+    streams = StreamHub()  # FX-01: ephemeral token/tool stream side-channel
     # open_db self-heals a corrupt DB (quarantine + fresh) so the daemon always
     # boots instead of wedging on a malformed file.
     engine = open_db(config.db_path)
@@ -626,6 +631,7 @@ def build_platform(
     platform = Platform(
         config=config,
         event_bus=event_bus,
+        streams=streams,
         engine=engine,
         vault=vault,
         providers=providers,

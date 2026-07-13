@@ -9,6 +9,8 @@ callable, and the async HTTP client is injectable so tests stay offline.
 from __future__ import annotations
 
 import asyncio
+import json
+from collections.abc import AsyncIterator
 from typing import Any, Callable
 
 from .base import (
@@ -194,3 +196,140 @@ class GoogleAdapter(LLMAdapter):
             # transient (429/5xx) vs permanent (4xx) by status, not by string.
             raise provider_error_from_response("google", resp, detail)
         return self._parse(resp.json())
+
+    # -- streaming (FX-01) --------------------------------------------------
+    def _stream_url(self) -> str:
+        # SSE variant of generateContent: incremental GenerateContentResponse
+        # chunks, one per ``data:`` line, terminated by the stream closing.
+        return f"{_BASE}/{self.model}:streamGenerateContent?alt=sse"
+
+    async def stream(
+        self,
+        *,
+        system: str,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Real token stream via ``:streamGenerateContent?alt=sse`` (FX-01).
+
+        Yields ``{"type":"text","text": <delta>}`` for each incremental
+        ``candidates[].content.parts[].text`` as it arrives; ``functionCall``
+        parts (which Gemini emits whole) are held, and the trailing
+        ``usageMetadata`` becomes the final usage. The closing
+        ``{"type":"final","response": LLMResponse}`` is assembled to equal what
+        :meth:`complete` returns.
+
+        On ANY failure BEFORE the first frame — including the injected offline
+        transport having no streaming surface — we degrade to the base
+        (non-streaming) stream, so a hiccup honestly falls back to a single-shot
+        completion instead of fabricating output. A failure MID-stream re-raises
+        honestly rather than re-running and double-emitting the answer.
+        """
+        started = False
+        try:
+            async for frame in self._stream_sse(
+                system=system, messages=messages, tools=tools
+            ):
+                started = True
+                yield frame
+            return
+        except Exception:  # noqa: BLE001 — degrade to the honest non-streaming path
+            if started:
+                raise
+        async for frame in super().stream(
+            system=system, messages=messages, tools=tools
+        ):
+            yield frame
+
+    async def _stream_sse(
+        self,
+        *,
+        system: str,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[dict[str, Any]]:
+        key = await asyncio.to_thread(self._resolve_key)
+        body: dict[str, Any] = {"contents": self._to_contents(messages)}
+        if system:
+            body["system_instruction"] = {"parts": [{"text": system}]}
+        if tools:
+            body["tools"] = self._to_tools(tools)
+        if self._oauth:
+            headers = {
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            }
+        else:
+            headers = {
+                "x-goog-api-key": key,
+                "Content-Type": "application/json",
+            }
+
+        text_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
+        usage_dict = {"input_tokens": 0, "output_tokens": 0}
+
+        async with self._client().stream(
+            "POST", self._stream_url(), headers=headers, json=body
+        ) as resp:
+            status = getattr(resp, "status_code", 200)
+            if status >= 400:
+                # Drain the streamed body so .json()/.text is populated, then
+                # raise a typed error (caught above -> non-streaming fallback).
+                try:
+                    await resp.aread()
+                except Exception:  # noqa: BLE001
+                    pass
+                detail = ""
+                try:
+                    err = resp.json().get("error")
+                    detail = str(
+                        (err or {}).get("message") if isinstance(err, dict) else err
+                    )[:300]
+                except Exception:  # noqa: BLE001
+                    detail = (getattr(resp, "text", "") or "")[:300]
+                raise provider_error_from_response("google", resp, detail)
+
+            async for line in resp.aiter_lines():
+                line = line.strip()
+                if not line.startswith("data:"):
+                    continue
+                payload = line[len("data:") :].strip()
+                if not payload or payload == "[DONE]":
+                    continue
+                try:
+                    chunk = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                candidate = (chunk.get("candidates") or [{}])[0]
+                for part in ((candidate.get("content") or {}).get("parts")) or []:
+                    text = part.get("text")
+                    if text:
+                        text_parts.append(text)
+                        yield {"type": "text", "text": text}
+                    fc = part.get("functionCall")
+                    if fc:
+                        name = fc.get("name", "")
+                        tool_calls.append(
+                            ToolCall(
+                                id=name,
+                                name=name,
+                                arguments=dict(fc.get("args") or {}),
+                            )
+                        )
+                meta = chunk.get("usageMetadata")
+                if meta:  # cumulative — the last chunk carries the final totals
+                    usage_dict = {
+                        "input_tokens": int(meta.get("promptTokenCount", 0) or 0),
+                        "output_tokens": int(meta.get("candidatesTokenCount", 0) or 0),
+                    }
+
+        yield {
+            "type": "final",
+            "response": LLMResponse(
+                text="".join(text_parts),
+                tool_calls=tool_calls,
+                finish_reason="tool_use" if tool_calls else "stop",
+                usage=usage_dict,
+            ),
+        }

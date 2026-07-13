@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from collections.abc import AsyncIterator
 from typing import Any, Callable
 
 from .base import (
@@ -518,3 +519,280 @@ class OpenAIAdapter(LLMAdapter):
             # native httpx types, which the router also classifies as transient.
             raise provider_error_from_response(self.provider, resp, _error_detail(resp))
         return self._parse(resp.json())
+
+    # -- token streaming (FX-01) --------------------------------------------
+    async def stream(
+        self,
+        *,
+        system: str,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Real token streaming for every backend this adapter serves.
+
+        Chat Completions (hosted OpenAI, Ollama, xAI, OpenRouter, any
+        OpenAI-compatible ``base_url``) streams via ``client.stream`` with
+        ``stream: true`` + ``stream_options.include_usage``; a ChatGPT-account
+        OAuth token routes to the Codex Responses backend (:meth:`_stream_chatgpt`,
+        keeping the model ladder). Yields ``{"type":"text", ...}`` deltas then one
+        ``{"type":"final","response": LLMResponse}`` byte-identical to what
+        :meth:`complete` returns for the same call. A real failure raises a typed
+        error (as complete() does) — a stream NEVER fabricates output.
+        """
+        # Resolve off the loop — an OAuth provider may block on a token refresh.
+        key = await asyncio.to_thread(self._resolve_key)
+        # A ChatGPT-account OAuth token can't call api.openai.com — route it to
+        # the Codex backend, exactly as complete() does (real OpenAI provider on
+        # the hosted endpoint only, never an Ollama/xAI base_url).
+        if (
+            key
+            and self.provider == "openai"
+            and self._endpoint == _ENDPOINT
+            and _is_chatgpt_token(key)
+        ):
+            async for frame in self._stream_chatgpt(
+                token=key, system=system, messages=messages, tools=tools
+            ):
+                yield frame
+            return
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        elif self._endpoint == _ENDPOINT:
+            raise RuntimeError(
+                "OpenAIAdapter: no API key (set api_key= or wire a credential())"
+            )
+        body: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": self.max_tokens,
+            "messages": self._to_openai_messages(system, messages),
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if tools:
+            body["tools"] = self._to_openai_tools(tools)
+        async with self._client().stream(
+            "POST", self._endpoint, headers=headers, json=body
+        ) as resp:
+            status = getattr(resp, "status_code", 200)
+            if status >= 400:
+                # A streamed response body isn't auto-read: load it, then raise a
+                # typed error so the router fails over on a transient 429/5xx and
+                # raises honestly on a permanent 4xx — never a blank reply.
+                await resp.aread()
+                raise provider_error_from_response(
+                    self.provider, resp, _error_detail(resp)
+                )
+            async for frame in self._consume_chat_stream(resp):
+                yield frame
+
+    async def _consume_chat_stream(
+        self, resp: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Yield text deltas from a chat/completions SSE response, then the final.
+
+        Accumulates ``choices[0].delta.content`` (text) and
+        ``choices[0].delta.tool_calls[]`` (by index) plus the trailing
+        ``include_usage`` chunk, then rebuilds the non-streaming message shape and
+        reuses :meth:`_parse` so the final ``LLMResponse`` is byte-identical to the
+        non-streaming path.
+        """
+        text_parts: list[str] = []
+        tool_accum: dict[int, dict[str, str]] = {}
+        finish_reason: str | None = None
+        usage: dict[str, Any] = {}
+        async for line in resp.aiter_lines():
+            s = line.strip()
+            if not s.startswith("data:"):
+                continue
+            payload = s[len("data:") :].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                chunk = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            u = chunk.get("usage")
+            if u:
+                usage = u  # the include_usage chunk (choices == [])
+            choices = chunk.get("choices") or []
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
+            content = delta.get("content")
+            if content:
+                text_parts.append(content)
+                yield {"type": "text", "text": content}
+            for tc in delta.get("tool_calls") or []:
+                idx = tc.get("index", 0)
+                slot = tool_accum.setdefault(idx, {"id": "", "name": "", "args": ""})
+                if tc.get("id"):
+                    slot["id"] = tc["id"]
+                fn = tc.get("function") or {}
+                if fn.get("name"):
+                    slot["name"] = fn["name"]
+                if fn.get("arguments"):
+                    slot["args"] += fn["arguments"]
+            if choices[0].get("finish_reason"):
+                finish_reason = choices[0]["finish_reason"]
+        # Reconstruct the aggregate message and route it through _parse so text,
+        # tool calls, usage, and the finish-reason mapping match complete().
+        message: dict[str, Any] = {"content": "".join(text_parts)}
+        if tool_accum:
+            message["tool_calls"] = [
+                {
+                    "id": slot["id"],
+                    "type": "function",
+                    "function": {"name": slot["name"], "arguments": slot["args"]},
+                }
+                for _, slot in sorted(tool_accum.items())
+            ]
+        if finish_reason is None:
+            finish_reason = "tool_calls" if tool_accum else "stop"
+        data = {
+            "choices": [{"message": message, "finish_reason": finish_reason}],
+            "usage": usage,
+        }
+        yield {"type": "final", "response": self._parse(data)}
+
+    async def _stream_chatgpt(
+        self,
+        *,
+        token: str,
+        system: str,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Token-stream the Codex (ChatGPT-subscription) backend.
+
+        Uses the SAME model ladder + instructions self-heal as
+        :meth:`_complete_chatgpt`, but streaming begins only AFTER a ladder rung
+        returns 200. Text deltas come from ``response.output_text.delta`` events;
+        the final ``LLMResponse`` is rebuilt from the trailing
+        ``response.completed`` via :meth:`_parse_sse`, so it is identical to
+        the non-streaming path.
+        """
+        account_id = _chatgpt_account_id(token)
+        if not account_id:
+            raise RuntimeError(
+                "openai (ChatGPT backend): the OAuth token carries no "
+                "chatgpt_account_id claim — reconnect on the Connections page, "
+                "or use an API key."
+            )
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+            "chatgpt-account-id": account_id,
+            "OpenAI-Beta": "responses=experimental",
+            "Accept": "text/event-stream",
+        }
+        ladder: list[str] = []
+        if self.model.startswith(_CHATGPT_MODEL_PREFIXES):
+            ladder.append(self.model)
+        ladder.extend(_CHATGPT_KNOWN_GOOD)
+        ladder.extend(_CHATGPT_FALLBACK_MODELS)
+        seen: set[str] = set()
+        candidates = [
+            m for m in ladder
+            if not (m in seen or seen.add(m)) and m not in _CHATGPT_REJECTED
+        ] or [_CHATGPT_DEFAULT_MODEL]
+
+        base_input = self._to_responses_input(messages)
+        tools_shaped = self._to_responses_tools(tools)
+        last_err = ""
+        for model in candidates:
+            instructions: str = system or ""
+            input_items: list[dict[str, Any]] = base_input
+            healed = False
+            while True:
+                body: dict[str, Any] = {
+                    "model": model,
+                    "instructions": instructions,
+                    "input": input_items,
+                    "tools": tools_shaped,
+                    "tool_choice": "auto",
+                    "parallel_tool_calls": False,
+                    "store": False,  # the backend keeps no server-side state
+                    "stream": True,  # the endpoint is SSE-only
+                    "include": ["reasoning.encrypted_content"],
+                }
+                async with self._client().stream(
+                    "POST", _CHATGPT_ENDPOINT, headers=headers, json=body
+                ) as resp:
+                    status = getattr(resp, "status_code", 200)
+                    if status >= 400:
+                        await resp.aread()  # streamed error body isn't auto-read
+                        detail = _error_detail(resp)
+                        detail_l = detail.lower()
+                        if (
+                            status == 400
+                            and "instruction" in detail_l
+                            and not healed
+                        ):
+                            # The backend rejected the custom instructions field —
+                            # retry this SAME rung once with the system prompt
+                            # demoted to a developer message (mirrors complete()).
+                            healed = True
+                            instructions = ""
+                            input_items = [
+                                {
+                                    "type": "message",
+                                    "role": "developer",
+                                    "content": [
+                                        {"type": "input_text", "text": system}
+                                    ],
+                                },
+                                *base_input,
+                            ]
+                            continue
+                        if status == 400 and "model is not supported" in detail_l:
+                            _CHATGPT_REJECTED.add(model)
+                            last_err = detail
+                            break  # advance to the next ladder rung
+                        # Any other error surfaces honestly (typed for the router).
+                        raise provider_error_from_response(
+                            "openai (ChatGPT backend)", resp, detail
+                        )
+                    # 200 — this rung works; remember it, then stream it.
+                    if model not in _CHATGPT_KNOWN_GOOD:
+                        _CHATGPT_KNOWN_GOOD.insert(0, model)
+                    async for frame in self._consume_responses_stream(resp):
+                        yield frame
+                    return
+        # Every candidate was retired — raise a permanent (400) error honestly.
+        raise ProviderError(
+            "openai (ChatGPT backend) API error 400: "
+            + (last_err or "all candidate models were rejected"),
+            status_code=400,
+        )
+
+    async def _consume_responses_stream(
+        self, resp: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Yield text deltas from a Codex Responses SSE stream, then the final.
+
+        ``response.output_text.delta`` events stream incremental text; the whole
+        raw stream is then re-parsed by :meth:`_parse_sse` (exactly what
+        complete() does with the full body) so the final ``LLMResponse`` — text,
+        tool calls, usage — is identical, and a stream that ends without a
+        ``response.completed`` event raises honestly rather than fabricating.
+        """
+        raw_lines: list[str] = []
+        async for line in resp.aiter_lines():
+            raw_lines.append(line)
+            s = line.strip()
+            if not s.startswith("data:"):
+                continue
+            payload = s[len("data:") :].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                event = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "response.output_text.delta":
+                delta = event.get("delta")
+                if delta:
+                    yield {"type": "text", "text": delta}
+        final = self._parse_sse("\n".join(raw_lines))
+        yield {"type": "final", "response": final}

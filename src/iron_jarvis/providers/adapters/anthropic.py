@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import AsyncIterator
 from typing import Any
 
 from .base import (
@@ -238,3 +239,101 @@ class AnthropicAdapter(LLMAdapter):
             finish_reason=finish,
             usage=usage_dict,
         )
+
+    async def stream(
+        self,
+        *,
+        system: str,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Real token streaming (FX-01). Builds the SAME request as :meth:`complete`
+        — verbatim tool/system/message construction + prompt-cache breakpoints — but
+        calls ``client.messages.stream(...)``, yielding incremental ``{"type":"text",
+        ...}`` deltas then a single ``{"type":"final","response": LLMResponse}`` whose
+        ``response`` is byte-identical to what :meth:`complete` returns for the same
+        call. Errors are wrapped in the same :func:`_anthropic_provider_error` so the
+        router classifies transient/permanent exactly as on the non-streaming path.
+        """
+        # Build the client off the loop — credential resolution may trigger a
+        # blocking OAuth token refresh that must not stall the event loop.
+        client = await asyncio.to_thread(self._client)
+        tool_defs: list[dict[str, Any]] = [
+            {
+                "name": t["name"],
+                "description": t["description"],
+                "input_schema": t["input_schema"],
+            }
+            for t in tools
+        ]
+        # Prompt caching: mark the STABLE prefix (tool schemas + system prompt) with a
+        # cache breakpoint so Anthropic bills it at the ~10% cache-read rate on every
+        # step after the first, instead of re-billing the full ~5k-token prefix each
+        # turn of a multi-step agent loop. Cache_control on a too-small prefix is a
+        # silent no-op, so this is always safe.
+        system_param: Any = system or ""
+        if system:
+            system_param = [
+                {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+            ]
+        if tool_defs:
+            tool_defs[-1] = {**tool_defs[-1], "cache_control": {"type": "ephemeral"}}
+        anthropic_messages = self._to_anthropic_messages(messages)
+        # Message-level cache breakpoint: mark the LAST content block so the whole
+        # growing conversation prefix (system + tools + all prior turns) bills at the
+        # ~10% cache-read rate on the next step instead of re-billing in full. The
+        # system/tools breakpoints above only cover the FIXED prefix; this is what
+        # stops a multi-step loop re-paying for the entire history every step. Only
+        # for a real conversation (2+ messages) — a lone first message has no prior
+        # prefix to reuse, and adding it there would just alter the request shape.
+        # Fresh dicts each call, so this never accumulates across requests.
+        if len(anthropic_messages) > 1:
+            last = anthropic_messages[-1]
+            content = last.get("content")
+            if isinstance(content, str):
+                last["content"] = [
+                    {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+                ]
+            elif isinstance(content, list) and content:
+                content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
+        try:
+            # The SDK's streaming helper accumulates state for us: `text_stream`
+            # yields incremental text deltas, `get_final_message()` returns the SAME
+            # Message object messages.create() would have — so the aggregate below is
+            # identical to complete().
+            async with client.messages.stream(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                system=system_param,
+                messages=anthropic_messages,
+                tools=tool_defs,
+            ) as s:
+                async for delta in s.text_stream:
+                    yield {"type": "text", "text": delta}
+                final = await s.get_final_message()
+        except Exception as exc:  # noqa: BLE001 — typed for the router's classifier
+            raise _anthropic_provider_error(exc) from exc
+        text_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
+        for block in final.content:
+            if block.type == "text":
+                text_parts.append(block.text)
+            elif block.type == "tool_use":
+                tool_calls.append(
+                    ToolCall(id=block.id, name=block.name, arguments=dict(block.input))
+                )
+        finish = "tool_use" if final.stop_reason == "tool_use" else "stop"
+        usage = getattr(final, "usage", None)
+        usage_dict = {
+            "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+            "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
+        }
+        yield {
+            "type": "final",
+            "response": LLMResponse(
+                text="".join(text_parts),
+                tool_calls=tool_calls,
+                finish_reason=finish,
+                usage=usage_dict,
+            ),
+        }

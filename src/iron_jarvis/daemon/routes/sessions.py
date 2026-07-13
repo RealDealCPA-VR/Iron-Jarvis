@@ -6,14 +6,21 @@ reached through ``d`` (see the deps object built in create_app).
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from dataclasses import asdict
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from typing import Any
 
 from ..app import _agent_type, _session_view
 from ..schemas import ContinueBody, FeedbackBody, SessionCreate, SessionsClearBody
+
+
+def _sse(event: str, data: dict[str, Any]) -> str:
+    """Serialize one Server-Sent Event frame (FX-01 wire format)."""
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
 def register(app: FastAPI, d) -> None:
@@ -170,6 +177,43 @@ def register(app: FastAPI, d) -> None:
             "session": _session_view(session),
             "transcript": d.orchestrator.transcript(session_id),
         }
+
+    @app.get("/sessions/{session_id}/stream")
+    async def stream_session(session_id: str, request: Request):
+        """Live SSE feed for a running session (FX-01).
+
+        Subscribes to the platform stream hub and forwards the run's EPHEMERAL
+        frames (token deltas, tool-call starts/finishes, rounds) to one browser as
+        the perceive->act loop produces them — never persisted, keyed by
+        session_id (see core/streams.py). Emits a ``: keepalive`` comment every
+        ~15s of idle so a proxy doesn't drop the connection, and closes once the
+        run's terminal ``done`` frame is forwarded. EventSource can't set headers,
+        so this GET authenticates via the ``?token=`` query param (already handled
+        by the daemon's auth middleware — no middleware change)."""
+        hub = getattr(d.platform, "streams", None)
+        if hub is None:  # bare-platform / misconfigured — nothing to stream
+            raise HTTPException(status_code=503, detail="streaming not available")
+        q = hub.subscribe(session_id)
+
+        async def gen():
+            try:
+                while not await request.is_disconnected():
+                    try:
+                        frame = await asyncio.wait_for(q.get(), timeout=15)
+                    except asyncio.TimeoutError:
+                        yield ": keepalive\n\n"
+                        continue
+                    yield _sse(frame["event"], frame["data"])
+                    if frame["event"] == "done":
+                        break
+            finally:
+                hub.unsubscribe(session_id, q)
+
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/sessions/{session_id}/traces")
     def traces(session_id: str) -> dict[str, Any]:

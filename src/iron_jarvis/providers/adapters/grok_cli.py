@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from typing import Any, Callable
 
 from ..cli_detect import GROK_PROXY_BASE, grok_session, grok_session_expired
@@ -251,6 +252,130 @@ class GrokCliAdapter(LLMAdapter):
             # permanent (401/426) by status and honours any Retry-After.
             raise provider_error_from_response("grok-cli", resp, detail)
         return self._parse_sse(getattr(resp, "text", "") or "")
+
+    # -- streaming (FX-01) --------------------------------------------------
+    async def stream(
+        self,
+        *,
+        system: str,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Real token stream over the Responses SSE endpoint (FX-01).
+
+        Emits ``{"type":"text","text": <delta>}`` for each
+        ``response.output_text.delta`` event as it arrives.
+        ``response.function_call_arguments.delta`` events are tool-argument
+        fragments — they are re-aggregated by the terminal ``response.completed``
+        event, so they ride inside the final response rather than as text frames.
+        The closing ``{"type":"final","response": LLMResponse}`` is built by the
+        SAME :meth:`_parse_sse` that :meth:`complete` uses, so it is identical.
+
+        On ANY failure BEFORE the first frame — including the injected offline
+        transport lacking a streaming surface — we degrade to the base
+        (non-streaming) stream instead of fabricating output. A failure
+        MID-stream re-raises honestly rather than re-running and double-emitting.
+        """
+        started = False
+        try:
+            async for frame in self._stream_sse(
+                system=system, messages=messages, tools=tools
+            ):
+                started = True
+                yield frame
+            return
+        except Exception:  # noqa: BLE001 — degrade to the honest non-streaming path
+            if started:
+                raise
+        async for frame in super().stream(
+            system=system, messages=messages, tools=tools
+        ):
+            yield frame
+
+    async def _stream_sse(
+        self,
+        *,
+        system: str,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+    ) -> AsyncIterator[dict[str, Any]]:
+        session = await asyncio.to_thread(self._session_provider)
+        if not session or not session.get("token"):
+            raise RuntimeError(
+                "grok-cli: no Grok session found — run `grok login` "
+                "(this provider uses the CLI's on-disk session, not an API key)."
+            )
+        if grok_session_expired(session):
+            raise RuntimeError(
+                "grok-cli: the Grok session has expired — re-run `grok login`."
+            )
+        token = session["token"]
+        version = session.get("version") or "0.2.82"
+        base_url = (session.get("base_url") or self._base_url).rstrip("/")
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+            "x-grok-client-version": str(version),
+            "x-grok-client-identifier": "grok-shell",
+            "x-grok-model-override": self.model,
+            "User-Agent": f"grok-shell/{version} (windows; x86_64)",
+            "Accept": "text/event-stream",
+        }
+        body: dict[str, Any] = {
+            "model": self.model,
+            "input": self._to_input(system, messages),
+            "max_output_tokens": self.max_tokens,
+            "store": False,
+            "stream": True,
+        }
+        if tools:
+            body["tools"] = self._to_tools(tools)
+            body["tool_choice"] = "auto"
+
+        raw_lines: list[str] = []
+        async with self._client().stream(
+            "POST", f"{base_url}/responses", headers=headers, json=body
+        ) as resp:
+            status = getattr(resp, "status_code", 200)
+            if status >= 400:
+                # Drain the streamed body so .json()/.text is populated, then
+                # raise a typed error (caught above -> non-streaming fallback).
+                try:
+                    await resp.aread()
+                except Exception:  # noqa: BLE001
+                    pass
+                detail = _error_detail(resp)
+                if status == 426:
+                    detail = (
+                        f"{detail} (Iron Jarvis sent x-grok-client-version="
+                        f"{version}; run `grok update` if the proxy rejects it)"
+                    )
+                raise provider_error_from_response("grok-cli", resp, detail)
+
+            async for line in resp.aiter_lines():
+                raw_lines.append(line)
+                stripped = line.strip()
+                if not stripped.startswith("data:"):
+                    continue
+                payload = stripped[len("data:") :].strip()
+                if not payload or payload == "[DONE]":
+                    continue
+                try:
+                    event = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "response.output_text.delta":
+                    delta = event.get("delta") or ""
+                    if delta:
+                        yield {"type": "text", "text": delta}
+                # response.function_call_arguments.delta carries tool-arg
+                # fragments; they are re-aggregated by response.completed below.
+
+        # Build the final aggregate with the SAME parser complete() uses, so the
+        # response is byte-identical (raises if the stream lacked completed).
+        final = self._parse_sse("\n".join(raw_lines))
+        yield {"type": "final", "response": final}
 
 
 def _error_detail(resp: Any) -> str:

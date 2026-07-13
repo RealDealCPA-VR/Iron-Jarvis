@@ -81,6 +81,8 @@ import { timeAgo } from "@/lib/format";
 import { useEvents } from "@/lib/useEvents";
 import { useDictation } from "@/lib/useDictation";
 import { useTTS } from "@/lib/useTTS";
+import { useChatStream, StreamError, type ToolCard } from "@/lib/useChatStream";
+import { useRunStream } from "@/lib/useRunStream";
 import { appendDictation } from "@/components/VoiceInput";
 import { Card, Empty, ErrorNote, LoaderInline, OfflineHint } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
@@ -107,7 +109,9 @@ interface ChatRequestMessage {
   role: "user" | "assistant";
   content: string;
 }
-interface ChatRequestBody {
+// A type alias (not an interface) so it carries an implicit string index
+// signature and stays assignable to the streaming hook's generic `run(body)`.
+type ChatRequestBody = {
   messages: ChatRequestMessage[];
   provider?: string;
   model?: string;
@@ -116,7 +120,7 @@ interface ChatRequestBody {
   skill?: string; // playbook for the reply (omitted / "" = none)
   tools?: string[]; // armed registry tools (max 6) — the chat runs a tool loop
   workspace_dir?: string; // absolute folder armed file tools operate in
-}
+};
 interface ChatResponse {
   reply: string;
   provider?: string;
@@ -679,6 +683,57 @@ function AttachmentFooter({ names }: { names: string[] }) {
   );
 }
 
+// --------------------------------------------------------------- streaming UI
+
+/** A compact list of live tool calls (the streaming hooks' `ToolCard`s, already
+ *  redacted server-side): spinner while running, check/✗ when done, each with
+ *  the tool name and a short output preview. */
+function ToolCardList({ cards }: { cards: readonly ToolCard[] }) {
+  if (!cards.length) return null;
+  return (
+    <div className="mt-1.5 flex flex-col gap-1">
+      {cards.map((c) => {
+        const running = c.status !== "done";
+        const ok = c.ok !== false;
+        return (
+          <div
+            key={c.id}
+            className="flex items-start gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5"
+          >
+            <span className="mt-0.5 shrink-0">
+              {running ? (
+                <Loader2 size={12} className="animate-spin text-accent-soft" />
+              ) : ok ? (
+                <Check size={12} className="text-emerald-400" />
+              ) : (
+                <X size={12} className="text-rose-400" />
+              )}
+            </span>
+            <div className="min-w-0 flex-1">
+              <span className="font-mono text-[12px] text-zinc-200">{c.name}</span>
+              {c.output && (
+                <div className="mt-0.5 line-clamp-2 whitespace-pre-wrap break-words text-[11px] text-zinc-500">
+                  {c.output}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Streamed assistant markdown with a blinking caret pinned after the last line
+ *  (a `::after` on the final block, so it sits inline with the running text). */
+function StreamingText({ content }: { content: string }) {
+  return (
+    <div className="[&>*:last-child]:after:ml-0.5 [&>*:last-child]:after:inline-block [&>*:last-child]:after:h-[0.95em] [&>*:last-child]:after:w-[2px] [&>*:last-child]:after:translate-y-[1px] [&>*:last-child]:after:animate-pulse [&>*:last-child]:after:rounded-full [&>*:last-child]:after:bg-accent-soft [&>*:last-child]:after:align-baseline [&>*:last-child]:after:content-['']">
+      <Markdown content={content} />
+    </div>
+  );
+}
+
 export default function ChatPage() {
   const [mode, setMode] = useState<Mode>("chat");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -762,6 +817,14 @@ export default function ChatPage() {
   // (mic held while speaking, so it never hears itself) → listen again.
   const dictation = useDictation();
   const tts = useTTS();
+  // Token streaming: `stream` drives the live CHAT bubble (deltas + tool cards);
+  // `runStream` drives the AGENT working bubble. Both are additive — the
+  // non-streaming /chat POST and the session finalize path remain the fallback.
+  const stream = useChatStream();
+  const runStream = useRunStream();
+  // Whether the current streaming turn has fed TTS yet (drives the once-per-turn
+  // resetStream in feedTTS).
+  const ttsStreamStartedRef = useRef(false);
   const [voiceMode, setVoiceMode] = useState(false);
   // Chars of dictation.transcript already flushed into the composer.
   const dictEmittedRef = useRef(0);
@@ -1115,6 +1178,8 @@ export default function ChatPage() {
     }
     // Orphan anything in flight from the previous conversation.
     chatGenRef.current += 1;
+    stream.abort(); // tear down a live streaming turn (its throw won't fall back)
+    tts.cancel(); // stop reading the previous thread's reply
     awaitingIdRef.current = null;
     setAwaitingId(null);
     setChatBusy(false);
@@ -1406,10 +1471,11 @@ export default function ChatPage() {
     return out;
   }, [events, awaitingId]);
 
-  // Keep the newest message (or the live working bubble) in view.
+  // Keep the newest message (or the live working bubble) in view — including as
+  // streamed tokens grow the in-flight chat / agent bubble.
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, awaitingId, chatBusy, progress.length]);
+  }, [messages, awaitingId, chatBusy, progress.length, stream.text, runStream.text]);
 
   // Fetch the finished session and turn it into the assistant's reply. Only acts
   // once the session has actually reached a terminal status (the `agent.completed`
@@ -1488,6 +1554,16 @@ export default function ChatPage() {
     if (!awaitingId) return;
     const timer = setInterval(() => void finalize(awaitingId), 1500);
     return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [awaitingId]);
+
+  // AGENT MODE streaming: subscribe to this session's live run frames so the
+  // working bubble narrates tokens + tool calls. Purely a live view — the reply
+  // is still finalized from the session on `agent.completed` above.
+  useEffect(() => {
+    if (!awaitingId) return;
+    runStream.start(awaitingId);
+    return () => runStream.stop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [awaitingId]);
 
@@ -1570,32 +1646,98 @@ export default function ChatPage() {
 
   // ------------------------------------------------------------------- sending
 
+  /** Build the /chat request body for `history` (shared by the streaming attempt
+   *  and the non-streaming POST fallback so the two can never drift). */
+  function buildChatBody(history: ChatMessage[], atts: UploadedFile[]): ChatRequestBody {
+    const { provider, model } = splitChoice(choice);
+    const personaValue = personaForSend();
+    return {
+      // Full conversation every turn — the backend is stateless here.
+      messages: history.map(({ role, content }) => ({ role, content })),
+      ...(provider ? { provider } : {}),
+      ...(model ? { model } : {}),
+      ...(personaValue ? { persona: personaValue } : {}),
+      ...(atts.length ? { attachments: atts.map((a) => a.path) } : {}),
+      // The reply's playbook + armed tool loop (both sticky across turns).
+      ...(activeSkill ? { skill: activeSkill } : {}),
+      ...(selectedTools.length ? { tools: selectedTools.slice(0, MAX_TOOLS) } : {}),
+      // The workspace folder armed file tools operate in (when chosen).
+      ...(workspaceDir ? { workspace_dir: workspaceDir } : {}),
+    };
+  }
+
+  /** Feed streamed text into incremental TTS: reset the per-turn counter on the
+   *  first call, then speak only the newly-complete sentences. No-op if muted. */
+  function feedTTS(full: string, flush: boolean) {
+    if (!tts.enabled) return;
+    if (!ttsStreamStartedRef.current) {
+      tts.resetStream();
+      ttsStreamStartedRef.current = true;
+    }
+    tts.speakMore(full, flush);
+  }
+
   /**
-   * CHAT MODE core: one direct /chat completion over `history` (which must end
-   * with a user message). Shared by sendChat and regenerate. On success the
-   * reply is appended and the turn autosaved (the ONLY chat-mode save site).
+   * CHAT MODE core: one /chat completion over `history` (which must end with a
+   * user message). Shared by sendChat and regenerate. Tries token streaming
+   * first (live bubble + incremental voice); on ANY streaming failure it falls
+   * back to the direct /chat POST verbatim. On success the reply is appended and
+   * the turn autosaved (the ONLY chat-mode save site).
    */
   async function completeChat(history: ChatMessage[], atts: UploadedFile[]) {
     const gen = chatGenRef.current;
     setMessages(history);
     setFailedTurn(null); // a fresh attempt — retire any prior failure
     setChatBusy(true);
+    ttsStreamStartedRef.current = false; // new turn — feedTTS will reset the counter
+    const body = buildChatBody(history, atts);
     try {
-      const { provider, model } = splitChoice(choice);
-      const personaValue = personaForSend();
-      const body: ChatRequestBody = {
-        // Full conversation every turn — the backend is stateless here.
-        messages: history.map(({ role, content }) => ({ role, content })),
-        ...(provider ? { provider } : {}),
-        ...(model ? { model } : {}),
-        ...(personaValue ? { persona: personaValue } : {}),
-        ...(atts.length ? { attachments: atts.map((a) => a.path) } : {}),
-        // The reply's playbook + armed tool loop (both sticky across turns).
-        ...(activeSkill ? { skill: activeSkill } : {}),
-        ...(selectedTools.length ? { tools: selectedTools.slice(0, MAX_TOOLS) } : {}),
-        // The workspace folder armed file tools operate in (when chosen).
-        ...(workspaceDir ? { workspace_dir: workspaceDir } : {}),
-      };
+      // --- Attempt token streaming (live deltas + tool cards + voice) ---
+      try {
+        const { reply, tools_used } = await stream.run(body, (_delta, full) =>
+          feedTTS(full, false),
+        );
+        if (chatGenRef.current !== gen) return; // torn down mid-stream
+        feedTTS(reply, true); // flush any trailing fragment
+        const toolsUsed = (tools_used ?? []).filter((t) => Boolean(t));
+        const finalReply = (reply ?? "").trim() || "(no response)";
+        const full: ChatMessage[] = [
+          ...history,
+          {
+            role: "assistant",
+            content: finalReply,
+            ...(toolsUsed.length ? { toolsUsed } : {}),
+          },
+        ];
+        setMessages(full);
+        queueSave(full); // the turn is complete — persist it
+        return; // streamed successfully
+      } catch (e) {
+        if (chatGenRef.current !== gen) return; // torn down — no fallback
+
+        // A non-streaming re-POST re-runs the WHOLE turn from round 0. When the
+        // stream already committed server-side work (streamed a token or ran a
+        // tool), that would DOUBLE-execute the turn's tools (double credit spend,
+        // duplicate writes/sends). So only fall back when the streaming endpoint
+        // is genuinely ABSENT (an old daemon → 404/405) AND nothing was committed
+        // — i.e. the server did zero work. Every other failure (committed work,
+        // or an honest in-band provider error) is surfaced, never silently rerun;
+        // the user-initiated Retry button remains the explicit way to re-send.
+        const se = e instanceof StreamError ? e : null;
+        const committed = se?.committed ?? false;
+        const status = se?.status ?? (e instanceof ApiError ? e.status : 0);
+        const endpointMissing = status === 404 || status === 405;
+        if (committed || !endpointMissing) {
+          if (se?.offline || (e instanceof ApiError && e.status === 0 && !se))
+            setOffline(true);
+          else setError(e instanceof ApiError ? e.message : String(e));
+          setFailedTurn({ history, atts });
+          return;
+        }
+        // else: /chat/stream is absent on a reachable daemon → safe to fall back.
+      }
+
+      // --- Fallback: the direct /chat POST (only when /chat/stream is absent) ---
       const res = await post<ChatResponse>("/chat", body);
       if (chatGenRef.current !== gen) return; // "New chat" happened mid-flight
       const toolsUsed = (res.tools_used ?? []).filter((t) => Boolean(t));
@@ -1609,7 +1751,9 @@ export default function ChatPage() {
         },
       ];
       setMessages(full);
-      tts.speak(reply); // no-op unless voice replies are on
+      // Nothing streamed on this path (endpoint absent), so this is the first and
+      // only speak — no risk of re-voicing sentences speakMore already spoke.
+      if (!ttsStreamStartedRef.current) tts.speak(reply);
       queueSave(full); // the turn is complete — persist it
     } catch (e) {
       if (chatGenRef.current !== gen) return;
@@ -1743,15 +1887,33 @@ export default function ChatPage() {
     else void sendAgent(message);
   }
 
-  // Ask the daemon to cancel the in-flight agent turn, then release the composer.
-  // Cancel is best-effort — even if it fails server-side we stop waiting locally.
+  // Stop the in-flight turn and keep whatever streamed so far as the answer.
+  // Best-effort — even if the server-side cancel fails we stop waiting locally.
   function stop() {
+    // CHAT: abort the stream. Bump the generation FIRST so the aborted
+    // stream.run()'s throw lands in a torn-down completeChat (no POST fallback).
+    if (chatBusy && stream.streaming) {
+      chatGenRef.current += 1;
+      stream.abort();
+      tts.cancel(); // stop reading a reply the user just cut off
+      const partial = stream.text.trim();
+      const full: ChatMessage[] = [
+        ...messagesRef.current,
+        { role: "assistant", content: partial || "Stopped." },
+      ];
+      setMessages(full);
+      queueSave(full); // the (aborted) turn still completed a visible exchange
+      setChatBusy(false);
+      return;
+    }
+    // AGENT: ask the daemon to cancel the session.
     if (!awaitingId) return;
-    tts.cancel(); // stop reading a reply the user just cut off
+    tts.cancel();
     post(`/sessions/${awaitingId}/cancel`).catch(() => {});
+    const partial = runStream.text.trim();
     const full: ChatMessage[] = [
       ...messagesRef.current,
-      { role: "assistant", content: "Stopped." },
+      { role: "assistant", content: partial || "Stopped." },
     ];
     setMessages(full);
     queueSave(full); // the (aborted) turn still completed a visible exchange
@@ -1761,6 +1923,8 @@ export default function ChatPage() {
 
   function newChat() {
     chatGenRef.current += 1; // orphan any in-flight /chat reply
+    stream.abort(); // tear down a live streaming turn (its throw won't fall back)
+    tts.cancel(); // stop reading the old thread's reply
     setMessages([]);
     setSessionId(null);
     awaitingIdRef.current = null;
@@ -2349,16 +2513,32 @@ export default function ChatPage() {
                         </div>
                       );
                     })}
-                    {/* CHAT MODE: a subtle thinking shimmer — no step feed needed. */}
+                    {/* CHAT MODE: the live streaming bubble. Streamed markdown +
+                        a blinking caret once the first token lands (a Thinking
+                        shimmer until then), with any live tool calls below. */}
                     {chatBusy && (
-                      <Bubble role="assistant">
-                        <span className="inline-flex items-center gap-2 text-zinc-400">
-                          <Loader2 size={14} className="animate-spin text-accent-soft" />
-                          <span className="animate-pulse">Thinking…</span>
-                        </span>
-                      </Bubble>
+                      <div>
+                        <Bubble role="assistant">
+                          {stream.text ? (
+                            <StreamingText content={stream.text} />
+                          ) : (
+                            <span className="inline-flex items-center gap-2 text-zinc-400">
+                              <Loader2
+                                size={14}
+                                className="animate-spin text-accent-soft"
+                              />
+                              <span className="animate-pulse">Thinking…</span>
+                            </span>
+                          )}
+                          {stream.tools.length > 0 && (
+                            <ToolCardList cards={stream.tools} />
+                          )}
+                        </Bubble>
+                      </div>
                     )}
-                    {/* AGENT MODE: the live working bubble narrating agent steps. */}
+                    {/* AGENT MODE: the live working bubble. Narrates the current
+                        step, streams the agent's tokens + tool calls as they
+                        arrive, and keeps the step feed underneath. */}
                     {awaiting && (
                       <Bubble role="assistant">
                         <div className="flex flex-col gap-1.5">
@@ -2366,6 +2546,10 @@ export default function ChatPage() {
                             <Loader2 size={14} className="animate-spin text-accent-soft" />
                             {progress[0] ?? "Thinking…"}
                           </span>
+                          {runStream.text && <StreamingText content={runStream.text} />}
+                          {runStream.tools.length > 0 && (
+                            <ToolCardList cards={runStream.tools} />
+                          )}
                           {progress.length > 1 && (
                             <ul className="ml-[22px] space-y-0.5 text-xs text-zinc-500">
                               {progress.slice(1, 4).map((s, i) => (
@@ -2788,7 +2972,7 @@ export default function ChatPage() {
                   placeholder="Message Iron Jarvis…  (Enter to send · Shift+Enter for a new line)"
                   className="field max-h-40 min-h-[2.75rem] flex-1 resize-none disabled:opacity-60"
                 />
-                {awaiting && (
+                {(awaiting || (chatBusy && stream.streaming)) && (
                   <button
                     onClick={stop}
                     className="btn-ghost h-[2.75rem] px-3 py-0 text-[13px]"

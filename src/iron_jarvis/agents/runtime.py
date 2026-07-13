@@ -108,6 +108,32 @@ class AgentRuntime:
             session_id=session_id,
         )
 
+    async def _route_stream(self, **kwargs):
+        """FX-01 token-stream passthrough for the perceive->act loop.
+
+        Yields the router's streaming frames -- ``{"type": "text", "text": <delta>}``
+        deltas followed by a terminal ``{"type": "final", "response": LLMResponse,
+        "provider": str, "model": str}``. When the router has no ``stream`` method
+        yet (it is added by the FX-01 central wiring), degrade GRACEFULLY to a single
+        text chunk over ``complete()`` so the non-streaming path is exactly preserved
+        and the offline suite stays green regardless of merge order. Same kwargs as
+        ``router.complete``.
+        """
+        streamer = getattr(self.p.router, "stream", None)
+        if streamer is not None:
+            async for ev in streamer(**kwargs):
+                yield ev
+            return
+        route = await self.p.router.complete(**kwargs)
+        if route.response.text:
+            yield {"type": "text", "text": route.response.text}
+        yield {
+            "type": "final",
+            "response": route.response,
+            "provider": route.provider,
+            "model": route.model,
+        }
+
     async def run(
         self,
         session: Session,
@@ -123,6 +149,11 @@ class AgentRuntime:
             state=AgentState.CREATED,
         )
         self._save(run)
+        # FX-01 side-channel: resolve the ephemeral per-run stream sink (token
+        # deltas + live tool frames -> SSE). A no-op when no browser is subscribed,
+        # and absent entirely when the platform exposes no stream hub.
+        hub = getattr(self.p, "streams", None)
+        sink = hub.sink(session.id, run.id) if hub is not None else None
 
         await self._set_state(run, AgentState.INITIALIZING, session.id)
         await self.p.event_bus.publish(
@@ -200,7 +231,13 @@ class AgentRuntime:
                 pass
 
         for step in range(self.p.config.max_agent_steps):
-            route = await self.p.router.complete(
+            # FX-01: consume the router as a TOKEN STREAM. Text deltas are pushed to
+            # the SSE sink the moment they arrive; the terminal ``final`` frame
+            # carries the SAME aggregate LLMResponse (+ resolved provider/model) that
+            # complete() would have returned, so everything downstream (usage
+            # accounting, the tool loop, the persisted result) stays byte-identical.
+            route_resp = None
+            async for ev in self._route_stream(
                 provider=session.provider,
                 model=session.model,
                 system=system_prompt,
@@ -209,10 +246,17 @@ class AgentRuntime:
                 session_id=session.id,
                 # Task class for the (opt-in) self-tuning router: the agent type.
                 task_class=agent_def.type.value,
-            )
-            resp = route.response
+            ):
+                if ev.get("type") == "text":
+                    if sink:
+                        sink.token_delta(ev["text"])
+                elif ev.get("type") == "final":
+                    route_resp = ev
+            resp = route_resp["response"]
             run.steps = step + 1
-            run.provider, run.model = route.provider, route.model
+            run.provider, run.model = route_resp["provider"], route_resp["model"]
+            if sink and step == 0:
+                sink.meta(run.provider, run.model)
             usage = getattr(resp, "usage", None) or {}
             step_in = int(usage.get("input_tokens", 0) or 0)
             step_out = int(usage.get("output_tokens", 0) or 0)
@@ -229,11 +273,11 @@ class AgentRuntime:
                     {
                         "run_id": run.id,
                         "step": step + 1,
-                        "provider": route.provider,
-                        "model": route.model,
+                        "provider": run.provider,
+                        "model": run.model,
                         "input_tokens": step_in,
                         "output_tokens": step_out,
-                        "cost_usd": cost_for(route.provider, route.model, step_in, step_out),
+                        "cost_usd": cost_for(run.provider, run.model, step_in, step_out),
                         "task_class": agent_def.type.value,
                     },
                     session_id=session.id,
@@ -277,6 +321,15 @@ class AgentRuntime:
                     session_allow=session_allow,
                 )
 
+            # FX-01: announce each tool call BEFORE the fan-out, with args redacted
+            # (tool.redact_args) so no secret ever reaches the wire. Emitted HERE —
+            # not inside the gathered coroutines — so frame order is deterministic.
+            if sink:
+                for tc in resp.tool_calls:
+                    tool = self.p.registry.get(tc.name)
+                    safe = tool.redact_args(tc.arguments) if tool else tc.arguments
+                    sink.tool_started(tc.id, tc.name, safe)
+
             results = await asyncio.gather(
                 *(_invoke(tc) for tc in resp.tool_calls),
                 return_exceptions=True,
@@ -313,6 +366,13 @@ class AgentRuntime:
                         content[:_MAX_TOOL_CONTEXT_CHARS]
                         + f"\n[... truncated {dropped} chars — full output in the transcript]"
                     )
+                if sink:
+                    sink.tool_finished(
+                        tc.id,
+                        tc.name,
+                        ok=(result.ok if not isinstance(result, BaseException) else False),
+                        preview=str(content)[:500],
+                    )
                 messages.append(
                     LLMMessage(
                         role="tool",
@@ -322,6 +382,8 @@ class AgentRuntime:
                     )
                 )
             self._save(run)
+            if sink:
+                sink.step_end(step + 1)
         else:
             run.result = "stopped: reached max steps before completion"
             await self._set_state(run, AgentState.FAILED, session.id)
@@ -330,6 +392,8 @@ class AgentRuntime:
                 {"run_id": run.id, "ok": False, "result": run.result},
                 session_id=session.id,
             )
+            if sink:
+                sink.done(ok=False, result=run.result)
             return run
 
         run.result = final_text or "(no final message)"
@@ -339,4 +403,6 @@ class AgentRuntime:
             {"run_id": run.id, "ok": True, "result": run.result},
             session_id=session.id,
         )
+        if sink:
+            sink.done(ok=True, result=run.result)
         return run

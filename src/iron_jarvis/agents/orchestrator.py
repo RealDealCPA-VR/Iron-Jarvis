@@ -313,6 +313,15 @@ class Orchestrator:
             )
         except Exception:  # noqa: BLE001 - never block teardown on the event bus
             log.exception("failed to publish failure event for %s", session.id)
+        # FX-01: release any live SSE reader with a terminal frame -- a crash can
+        # abort the run before its sink emits ``done``, otherwise leaving the
+        # browser stream hanging. Sync + non-blocking; a no-op with no subscriber.
+        hub = getattr(self.p, "streams", None)
+        if hub is not None:
+            hub.publish(
+                session.id,
+                {"event": "done", "data": {"ok": False, "reply": session.summary or ""}},
+            )
         gs = self._git_sessions.pop(session.id, None)
         if gs is not None:
             try:
@@ -346,6 +355,13 @@ class Orchestrator:
             )
         except Exception:  # noqa: BLE001 - never block teardown on the event bus
             log.exception("failed to publish cancel event for %s", session.id)
+        # FX-01: terminal frame so a cancel doesn't leave SSE readers hanging.
+        hub = getattr(self.p, "streams", None)
+        if hub is not None:
+            hub.publish(
+                session.id,
+                {"event": "done", "data": {"ok": False, "reply": session.summary or ""}},
+            )
         gs = self._git_sessions.pop(session.id, None)
         if gs is not None:
             try:

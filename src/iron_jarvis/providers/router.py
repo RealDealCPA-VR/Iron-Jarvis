@@ -27,6 +27,7 @@ import random
 import re
 import subprocess
 import time
+from collections.abc import AsyncIterator
 from typing import Any, Callable, Optional
 
 from ..core.events import EventBus, EventType
@@ -667,7 +668,301 @@ class ModelRouter:
             )
             return RouteResult(response, fallback.provider, fallback.model)
 
-    # TODO(followup): token-streaming passthrough (cross-cutting to runtime/chat/
-    # frontend), a daily budget/cost ledger, response caching, and hard
+    # -- streaming execution helpers (FX-01) -------------------------------
+    async def _stream_one(
+        self,
+        adapter: LLMAdapter,
+        *,
+        system,
+        messages,
+        tools,
+        deadline: float,
+        retry: bool,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Stream a SINGLE candidate adapter, yielding its raw frames.
+
+        With ``retry=True`` (the primary attempt, the streaming twin of
+        :meth:`_attempt_with_retry`) a TRANSIENT failure that lands BEFORE any
+        frame is yielded is retried on the same adapter up to twice, with
+        ``max(exponential, Retry-After)`` ±50%-jittered backoff bounded by the
+        router deadline. The moment a frame is yielded the attempt is committed:
+        a subsequent error — or a permanent one, or retry exhaustion —
+        propagates, so the caller never retries or fails over a live stream. With
+        ``retry=False`` (the failover candidates, the twin of
+        :meth:`_timed_complete`) it is a single straight pass-through."""
+        if not retry:
+            async for frame in adapter.stream(
+                system=system, messages=messages, tools=tools
+            ):
+                yield frame
+            return
+        delay = 1.5
+        attempt = 0
+        while True:
+            yielded = False
+            try:
+                async for frame in adapter.stream(
+                    system=system, messages=messages, tools=tools
+                ):
+                    yielded = True
+                    yield frame
+                return
+            except Exception as exc:  # noqa: BLE001 — classified below
+                # Committed (a frame already went out), permanent, or budget spent
+                # → propagate; a live stream is never retried.
+                if yielded or not is_transient_error(exc) or attempt >= 2:
+                    raise
+                retry_after = getattr(exc, "retry_after", None) if isinstance(
+                    exc, ProviderError
+                ) else None
+                wait = max(delay, retry_after or 0.0) * random.uniform(0.5, 1.5)
+                if self._clock() + wait >= deadline:
+                    raise  # retrying would exceed the budget → fail over now
+                attempt += 1
+                await asyncio.sleep(wait)
+                delay *= 2.5
+
+    def _record_stream_latency(self, adapter: LLMAdapter, t0: float) -> None:
+        """Feed the end-to-end stream duration into the per-(provider,model) EWMA
+        (the same telemetry :meth:`_timed_complete` records on a completion),
+        guarded so telemetry never breaks a request."""
+        try:
+            _routing.LATENCY.record(adapter.provider, adapter.model, self._clock() - t0)
+        except Exception:  # noqa: BLE001 — telemetry must never break a request
+            pass
+
+    @staticmethod
+    def _enrich_final(frame: dict[str, Any], adapter: LLMAdapter) -> dict[str, Any]:
+        """Tag the terminal ``final`` frame with the provider+model that ACTUALLY
+        served it (which may differ from the primary after a failover) so a
+        streaming consumer gets the same routing truth ``RouteResult`` carries.
+        Every other frame passes through untouched."""
+        if isinstance(frame, dict) and frame.get("type") == "final":
+            return {**frame, "provider": adapter.provider, "model": adapter.model}
+        return frame
+
+    async def stream(
+        self,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        system: str,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+        session_id: str | None = None,
+        task_class: str | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Token-streaming twin of :meth:`complete` (FX-01).
+
+        Resolves + capability-enforces + emits ``provider.routed`` /
+        ``provider.downgraded`` EXACTLY as :meth:`complete`, then delegates to
+        ``adapter.stream(...)`` and passes its frames straight through, ENRICHING
+        the terminal ``final`` frame with the serving ``provider``+``model``.
+
+        Failover invariant: a candidate may only be swapped BEFORE the first frame
+        reaches the caller. If the chosen adapter raises before yielding anything,
+        the SAME candidate chain :meth:`complete` uses — default-provider fallback
+        (transient AND permanent), then TRANSIENT-only sideways failover across
+        ``_FAILOVER_ORDER``, filtered by availability + circuit breaker +
+        capability + resolved-adapter identity, honouring Retry-After — is tried on
+        a fresh adapter. Once ANY frame has been yielded the route is committed: a
+        later error PROPAGATES; the router never silently swaps providers
+        mid-stream. Never fabricates: if every real candidate fails before the
+        first frame it raises the same honest error :meth:`complete` does (only the
+        offline/mock-default path may fall through to mock's scripted stream)."""
+        # ---- resolve (identical to complete's preflight) --------------------
+        routed_payload: dict | None = None
+        if (provider or self.default_provider) == "auto":
+            adapter, wanted, downgraded, routed_payload = await self._resolve_auto(
+                system, messages, tools, task_class
+            )
+            reason = "auto-tier"
+        else:
+            adapter, wanted, downgraded = self._resolve(provider, model, task_class)
+            reason = self._resolve_reason
+
+        need_tools = bool(tools)
+        need_vision = _wants_images(messages)
+        avail = self._snapshot()
+
+        # Capability-aware routing: never stream a tool request to a text-only
+        # adapter (it returns tool_calls=[] and stalls the agent loop).
+        if not downgraded and adapter.provider != "mock":
+            repl = self._enforce_capabilities(adapter, need_tools, need_vision, avail)
+            if repl is not None:
+                adapter = repl
+                reason = "failover"
+
+        if downgraded:
+            await self.event_bus.publish(
+                EventType.PROVIDER_DOWNGRADED,
+                {
+                    "requested": wanted,
+                    "used": "mock",
+                    "reason": "not connected — connect a model on the Connections page",
+                },
+                session_id=session_id,
+            )
+        elif (
+            adapter.provider == "mock"
+            and provider != "mock"
+            and self.manager.has_available_api_provider()
+        ):
+            await self.event_bus.publish(
+                EventType.PROVIDER_DOWNGRADED,
+                {
+                    "requested": "mock (default)",
+                    "used": "mock",
+                    "reason": (
+                        "your default provider is 'mock' but a real provider is "
+                        "connected — set it as your default on the Connections page"
+                    ),
+                },
+                session_id=session_id,
+            )
+
+        if adapter.provider != "mock":
+            await self._emit_routed(provider, adapter, reason, routed_payload, session_id)
+
+        # ---- streaming execution: failover ONLY before the first frame ------
+        deadline = self._clock() + self._deadline_s
+        tried_ids: set[int] = set()
+        tried_providers: set[str] = set()
+        committed = False  # True once any frame reached the caller → no swap
+
+        # (Primary) — same-adapter retry on a transient blip before first frame.
+        t0 = self._clock()
+        try:
+            async for frame in self._stream_one(
+                adapter, system=system, messages=messages, tools=tools,
+                deadline=deadline, retry=True,
+            ):
+                committed = True
+                yield self._enrich_final(frame, adapter)
+            self._record_stream_latency(adapter, t0)
+            self.health.record_success(adapter.provider)
+            return
+        except Exception as exc:  # noqa: BLE001 — classified below
+            if committed:
+                raise  # already streaming this provider — never swap mid-stream
+            primary_exc = exc
+            transient = is_transient_error(exc)
+            self.health.record_failure(adapter.provider)
+            tried_ids.add(id(adapter))
+            tried_providers.add(adapter.provider)
+            await self.event_bus.publish(
+                EventType.PROVIDER_FAILED,
+                {"provider": adapter.provider, "error": f"{type(exc).__name__}: {exc}"},
+                session_id=session_id,
+            )
+
+        # (A) DEFAULT-PROVIDER FALLBACK — runs for transient AND permanent primary
+        # failures (a down local/explicit pick must reach the healthy default),
+        # deduped by resolved-adapter identity so an inherited alias isn't retried.
+        dp = self.default_provider
+        if (
+            dp != "mock"
+            and dp not in tried_providers
+            and self._safe_available(dp)
+            and self.health.allow(dp)
+        ):
+            alt = None
+            try:
+                alt = self.manager.get(dp)
+            except Exception:  # noqa: BLE001
+                alt = None
+            if (
+                alt is not None
+                and id(alt) not in tried_ids
+                and alt.provider not in tried_providers
+                and (not need_tools or _supports_tools(alt))
+            ):
+                t0 = self._clock()
+                try:
+                    async for frame in self._stream_one(
+                        alt, system=system, messages=messages, tools=tools,
+                        deadline=deadline, retry=False,
+                    ):
+                        committed = True
+                        yield self._enrich_final(frame, alt)
+                    self._record_stream_latency(alt, t0)
+                    self.health.record_success(alt.provider)
+                    await self.event_bus.publish(
+                        EventType.PROVIDER_FAILOVER,
+                        {"from": adapter.provider, "to": alt.provider, "reason": "provider down"},
+                        session_id=session_id,
+                    )
+                    return
+                except Exception as dexc:  # noqa: BLE001 — the default failed too
+                    if committed:
+                        raise
+                    self.health.record_failure(alt.provider)
+                    tried_ids.add(id(alt))
+                    tried_providers.add(alt.provider)
+                    await self.event_bus.publish(
+                        EventType.PROVIDER_FAILED,
+                        {"provider": alt.provider, "error": f"{type(dexc).__name__}: {dexc}"},
+                        session_id=session_id,
+                    )
+
+        # (B) SIDEWAYS FAILOVER — TRANSIENT only (rate-limit arbitrage across the
+        # OTHER connected providers), same filters complete() applies.
+        if transient:
+            for p in _FAILOVER_ORDER:
+                if p in tried_providers or p == "mock" or p not in avail:
+                    continue
+                if not self.health.allow(p):
+                    continue
+                try:
+                    alt = self.manager.get(p)
+                except Exception:  # noqa: BLE001
+                    continue
+                if id(alt) in tried_ids or alt.provider in tried_providers:
+                    continue
+                if need_tools and not _supports_tools(alt):
+                    continue
+                t0 = self._clock()
+                try:
+                    async for frame in self._stream_one(
+                        alt, system=system, messages=messages, tools=tools,
+                        deadline=deadline, retry=False,
+                    ):
+                        committed = True
+                        yield self._enrich_final(frame, alt)
+                    self._record_stream_latency(alt, t0)
+                    self.health.record_success(alt.provider)
+                    await self.event_bus.publish(
+                        EventType.PROVIDER_FAILOVER,
+                        {"from": adapter.provider, "to": alt.provider, "reason": "rate limited"},
+                        session_id=session_id,
+                    )
+                    return
+                except Exception:  # noqa: BLE001 — try the next candidate
+                    if committed:
+                        raise
+                    self.health.record_failure(alt.provider)
+                    tried_ids.add(id(alt))
+                    tried_providers.add(alt.provider)
+                    continue
+
+        # NEVER fabricate: a real wanted provider that failed before the first
+        # frame surfaces its honest error (identical wording to complete()); only
+        # the offline/mock-default path may fall through to mock's scripted stream.
+        if wanted != "mock":
+            if transient:
+                raise RuntimeError(
+                    "every connected model is rate-limited or unavailable "
+                    f"right now — wait a minute and try again ({adapter.provider}: {primary_exc})"
+                ) from primary_exc
+            raise primary_exc
+        fallback = self.manager.get("mock")
+        if fallback is adapter:
+            raise primary_exc
+        async for frame in fallback.stream(
+            system=system, messages=messages, tools=tools
+        ):
+            yield self._enrich_final(frame, fallback)
+
+    # TODO(followup): a daily budget/cost ledger, response caching, and hard
     # context-window-fit filtering are deferred — none belongs solely in the
     # router and each needs its own surface.
