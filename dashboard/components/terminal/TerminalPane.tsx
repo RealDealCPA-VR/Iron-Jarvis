@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import { ApiError, get, post, wsUrl } from "@/lib/api";
+import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 import type { AiCli, ModelOption, Skill, TerminalInfo } from "@/lib/types";
 
 type AIResult = {
@@ -641,6 +642,13 @@ export function TerminalPane({
               placeholder="Ask about this terminal — e.g. “why did that fail?” or “command to list the 5 biggest files”"
               aria-label="Ask AI about this terminal"
               className="field flex-1 py-1 text-[12px]"
+            />
+            {/* Dictate the request (offline Vosk in the desktop app, Web Speech in
+                a browser). Speaking a plain-English ask beats typing shell syntax;
+                the AI turns it into a command you still review + Run. */}
+            <VoiceInput
+              size="sm"
+              onTranscript={(chunk) => setAiPrompt((p) => appendDictation(p, chunk))}
             />
             {/* Skill for this ask: Auto searches the whole discovered library
                 (Claude + Codex + yours) — works with ANY provider. */}

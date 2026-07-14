@@ -60,6 +60,7 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 
 /* ---- API shapes (mirror the daemon's /creative routes) -------------------- */
 
@@ -2800,6 +2801,14 @@ function StudioView({
                   aria-label="Brief"
                   className="min-w-0 flex-1 rounded-xl border border-white/10 bg-ink-950 px-3.5 py-2.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:border-accent/40 focus:outline-none disabled:opacity-50"
                 />
+                {/* Speak the brief instead of typing it (offline in the desktop
+                    app). STUDIO's whole point is describing what to create — voice
+                    fits it perfectly. */}
+                {!inputDisabled && (
+                  <VoiceInput
+                    onTranscript={(chunk) => setDraft((p) => appendDictation(p, chunk))}
+                  />
+                )}
                 <button
                   type="button"
                   onClick={() => void send()}
