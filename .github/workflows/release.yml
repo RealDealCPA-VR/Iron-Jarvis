@@ -91,9 +91,11 @@ jobs:
         with:
           version: 10
 
-      - name: Sync Python deps (creates .venv with pyinstaller)
+      - name: Sync Python deps (creates .venv with pyinstaller + vosk)
         if: steps.gate.outputs.publish == 'true'
-        run: uv sync --extra dev
+        # --extra voice pulls Vosk so the frozen daemon bundles offline speech-to-
+        # text (packaging/ironjarvis.spec _collect("vosk")).
+        run: uv sync --extra dev --extra voice
 
       # Freeze the daemon and BOOT it before publishing anything. PyInstaller has
       # silently dropped bundled binaries before (OpenConsole.exe / winpty; a

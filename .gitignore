@@ -24,3 +24,7 @@ dashboard/.turbo/
 # OS
 Thumbs.db
 .DS_Store
+
+# Bundled offline voice model (downloaded at build time, ~40MB)
+desktop/resources/vosk-model/
+desktop/resources/vosk-model.zip

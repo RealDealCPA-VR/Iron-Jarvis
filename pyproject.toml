@@ -1,6 +1,6 @@
 [project]
 name = "iron-jarvis"
-version = "1.55.0"
+version = "1.56.0"
 description = "Iron Jarvis - a local-first AI operating system: a multi-agent orchestrator with tools, memory, workflows, a sandbox, git-native review, and a Next.js control center."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -39,6 +39,13 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "pyinstaller>=6.21",
+]
+# Bundled OFFLINE speech-to-text. Kept OPTIONAL (not a base dep) so a plain
+# install stays lean; the packaged desktop build installs it (uv sync --extra
+# voice) and the frozen daemon bundles its native lib (packaging/ironjarvis.spec
+# _collect("vosk")). The daemon degrades gracefully when vosk isn't present.
+voice = [
+    "vosk>=0.3.45",
 ]
 
 [project.scripts]

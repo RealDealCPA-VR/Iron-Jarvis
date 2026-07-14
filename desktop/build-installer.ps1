@@ -101,6 +101,30 @@ Copy-Item -Recurse -Force $StaticSrc $StaticDst
 $PublicSrc = Join-Path $Dashboard "public"
 if (Test-Path $PublicSrc) { Copy-Item -Recurse -Force $PublicSrc (Join-Path $Standalone "public") }
 
+# 3b) Fetch the OFFLINE voice model (Vosk) so extraResources can bundle it. It's
+# ~40MB (too large for git), downloaded once and cached under desktop/resources.
+$VoskDir = Join-Path $Desktop "resources\vosk-model"
+if (Test-Path (Join-Path $VoskDir "am")) {
+    Write-Host "==> [3b] Offline voice model already present ($VoskDir)" -ForegroundColor Green
+} else {
+    Write-Host "==> [3b] Downloading the offline voice model (Vosk, ~40MB)..." -ForegroundColor Cyan
+    $VoskUrl = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
+    $ResDir = Join-Path $Desktop "resources"
+    New-Item -ItemType Directory -Force -Path $ResDir | Out-Null
+    $Zip = Join-Path $ResDir "vosk-model.zip"
+    Invoke-WebRequest -Uri $VoskUrl -OutFile $Zip
+    $Tmp = Join-Path $ResDir "_vosk_unzip"
+    if (Test-Path $Tmp) { Remove-Item -Recurse -Force $Tmp }
+    Expand-Archive -Path $Zip -DestinationPath $Tmp -Force
+    $Extracted = Get-ChildItem -Directory $Tmp | Select-Object -First 1
+    if (Test-Path $VoskDir) { Remove-Item -Recurse -Force $VoskDir }
+    Move-Item $Extracted.FullName $VoskDir
+    Remove-Item -Recurse -Force $Tmp
+    Remove-Item -Force $Zip
+    if (-not (Test-Path (Join-Path $VoskDir "am"))) { throw "vosk model download failed: $VoskDir" }
+    Write-Host "    voice model ready at $VoskDir" -ForegroundColor Green
+}
+
 # 4) Package the installer -------------------------------------------------
 Write-Host "==> [4/4] Packaging the installer (electron-builder)..." -ForegroundColor Cyan
 Push-Location $Desktop

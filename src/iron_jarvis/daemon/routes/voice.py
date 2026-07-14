@@ -6,9 +6,13 @@ reached through ``d`` (see the deps object built in create_app).
 
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
+import asyncio
+import json
+
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from typing import Any
 
+from ..app import _ws_token_ok
 from ..schemas import TranscribeBody
 
 
@@ -22,6 +26,22 @@ def register(app: FastAPI, d) -> None:
         cfg = d.platform.config
         model = (getattr(cfg, "voice_transcribe_model", "") or "").strip()
         label = backend[0] if backend else None
+        # Bundled OFFLINE Vosk streaming is the zero-config, no-key, no-internet
+        # default that makes voice "just work" in the desktop app (the browser's
+        # speech engine isn't available there). It wins over NOTHING and over a
+        # `custom` chat endpoint that may not transcribe (e.g. Ollama) — but an
+        # EXPLICIT higher-accuracy STT the user configured (a dedicated endpoint
+        # or an OpenAI key) still takes precedence. `mode` tells the client the
+        # transport: "stream" (WebSocket /voice/stream, live partials) vs "clip"
+        # (POST /voice/transcribe).
+        if label in (None, "custom") and d._vosk_model_path() is not None:
+            return {
+                "available": True,
+                "backend": "local",
+                "mode": "stream",
+                "model": "vosk",
+                "hint": "",
+            }
         if backend is None:
             hint = (
                 "Connect an OpenAI API key (Connections page), or set a dedicated "
@@ -42,6 +62,7 @@ def register(app: FastAPI, d) -> None:
         return {
             "available": backend is not None,
             "backend": label,
+            "mode": "clip",
             "model": model or None,
             "hint": hint,
         }
@@ -167,3 +188,63 @@ def register(app: FastAPI, d) -> None:
             status_code=424,
             detail=f"{label} transcription failed: {last_err}{guidance}",
         )
+
+    @app.websocket("/voice/stream")
+    async def voice_stream(ws: WebSocket) -> None:
+        """Real-time OFFLINE dictation (bundled Vosk). The client streams 16 kHz
+        mono PCM16 binary frames; we feed a KaldiRecognizer and send back live
+        ``{"partial": …}`` as words form and ``{"text": …, "final": true}`` at
+        each pause — the browser-like feel, with NO key, NO server, NO internet.
+        A ``{"eof": true}`` text control flushes the final hypothesis."""
+        # BaseHTTPMiddleware can't see WS scope, so guard the ?token= here (same
+        # as the /events + terminal sockets).
+        if not _ws_token_ok(ws):
+            await ws.close(code=1008)
+            return
+        model = d._vosk_model()
+        if model is None:
+            await ws.accept()
+            await ws.send_json({"error": "offline speech model not available"})
+            await ws.close()
+            return
+        import vosk
+
+        rec = vosk.KaldiRecognizer(model, 16000)
+        await ws.accept()
+        try:
+            while True:
+                msg = await ws.receive()
+                if msg["type"] == "websocket.disconnect":
+                    break
+                pcm = msg.get("bytes")
+                if pcm:
+                    # Kaldi decode is CPU-bound — off the event loop so a burst of
+                    # frames never stalls the daemon.
+                    done = await asyncio.to_thread(rec.AcceptWaveform, pcm)
+                    if done:
+                        text = json.loads(rec.Result()).get("text", "")
+                        if text:
+                            await ws.send_json({"text": text, "final": True})
+                    else:
+                        partial = json.loads(rec.PartialResult()).get("partial", "")
+                        await ws.send_json({"partial": partial})
+                    continue
+                text_msg = msg.get("text")
+                if text_msg:
+                    try:
+                        obj = json.loads(text_msg)
+                    except (ValueError, TypeError):
+                        obj = None
+                    if isinstance(obj, dict) and obj.get("eof"):
+                        final = json.loads(rec.FinalResult()).get("text", "")
+                        await ws.send_json({"text": final, "final": True})
+                        rec = vosk.KaldiRecognizer(model, 16000)  # ready for next
+        except WebSocketDisconnect:
+            pass
+        except Exception:  # noqa: BLE001 — a bad frame must never crash the daemon
+            pass
+        finally:
+            try:
+                await ws.close()
+            except Exception:  # noqa: BLE001
+                pass

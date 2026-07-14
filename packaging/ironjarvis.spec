@@ -100,6 +100,15 @@ hiddenimports += [
 hiddenimports += collect_submodules("websockets")
 hiddenimports += ["httptools"]  # optional fast HTTP parser (uvicorn standard)
 
+# --- Vosk: bundled OFFLINE speech-to-text (real-time voice dictation) --------
+# vosk ships a native libvosk shared library + its own data; collect_all pulls
+# the Python package AND the native lib so `import vosk` works in the FROZEN
+# daemon. The speech MODEL is NOT bundled here — it's large and ships as an
+# Electron extraResource (desktop/resources/vosk-model), pointed at by the
+# IRONJARVIS_VOSK_MODEL env. Voice is a no-op if either is missing, so a build
+# without vosk installed degrades gracefully (the daemon still boots).
+_collect("vosk")
+
 # --- SSH/SFTP (lazily imported by the remote LTM source) --------------------
 # paramiko pulls native crypto helpers (bcrypt, pynacl -> _sodium, cffi); collect
 # all three so `import paramiko` works in the FROZEN daemon (it's imported lazily

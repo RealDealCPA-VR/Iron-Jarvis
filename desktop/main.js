@@ -1398,6 +1398,15 @@ async function startup() {
     // No Python/uv/Node/pnpm required on the user's machine. Both children run
     // under the crash supervisor (auto-restart with backoff).
     const stateDir = userDataDir; // the daemon's .ironjarvis lives here
+    // Bundled OFFLINE voice model (Vosk). extraResources ships it next to the
+    // daemon; point the daemon at it so speech-to-text works with no key/server/
+    // internet. Only set when the model is actually present (dev has none), so
+    // resolution falls through cleanly otherwise.
+    const voskModelDir = path.join(RES_DIR, "vosk-model");
+    const voskEnv =
+      fs.existsSync(path.join(voskModelDir, "am"))
+        ? { IRONJARVIS_VOSK_MODEL: voskModelDir }
+        : {};
     // 1) Frozen daemon. Must serve on 8787 to match the build-time-baked client URL.
     startService("daemon", () =>
       spawnChild(
@@ -1408,7 +1417,7 @@ async function startup() {
         // Blank out any ambient IRONJARVIS_HOME (e.g. left over from source/dev use)
         // so the packaged app's per-install userData home always wins — an empty
         // value makes resolve_home() fall back to --root (userData/.ironjarvis).
-        { IRONJARVIS_TOKEN: authToken, IRONJARVIS_HOME: "" },
+        { IRONJARVIS_TOKEN: authToken, IRONJARVIS_HOME: "", ...voskEnv },
         false
       )
     );

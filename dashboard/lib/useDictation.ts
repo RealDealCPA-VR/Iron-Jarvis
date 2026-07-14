@@ -1,8 +1,28 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { get, post, ApiError } from "@/lib/api";
+import { get, post, wsUrl, ApiError } from "@/lib/api";
 import { useSpeechRecognition } from "@/lib/useSpeechRecognition";
+
+/** Resample Float32 mic audio → 16 kHz mono PCM16 (little-endian) for Vosk. A
+ *  naive nearest-sample decimation is plenty for speech (Vosk is robust to it);
+ *  when the AudioContext already runs at 16 kHz it's a straight conversion. */
+function floatTo16kPCM(input: Float32Array, inRate: number): ArrayBuffer {
+  let data = input;
+  if (inRate !== 16000 && inRate > 0) {
+    const ratio = inRate / 16000;
+    const outLen = Math.floor(input.length / ratio);
+    const out = new Float32Array(outLen);
+    for (let i = 0; i < outLen; i++) out[i] = input[Math.floor(i * ratio)] || 0;
+    data = out;
+  }
+  const pcm = new Int16Array(data.length);
+  for (let i = 0; i < data.length; i++) {
+    const s = Math.max(-1, Math.min(1, data[i]));
+    pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return pcm.buffer;
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Unified dictation — Web Speech where it works, daemon transcription where  */
@@ -21,6 +41,9 @@ export type DictationEngine = "webspeech" | "server";
 interface VoiceStatus {
   available: boolean;
   backend: string | null;
+  /** "stream" = bundled offline Vosk over the /voice/stream WebSocket (live
+   *  partials); "clip" = record + POST /voice/transcribe. */
+  mode?: string;
   hint: string;
 }
 
@@ -117,6 +140,7 @@ export function useDictation(lang = "en-US"): UseDictation {
   const [listening, setListening] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [transcript, setTranscript] = useState("");
+  const [interim, setInterim] = useState(""); // live partial words (stream mode)
   const [error, setError] = useState<string | null>(null);
 
   const wantRef = useRef(false);
@@ -124,6 +148,11 @@ export function useDictation(lang = "en-US"): UseDictation {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const vadTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Streaming (Vosk) mode: the WS + the audio graph nodes to tear down.
+  const modeRef = useRef<"clip" | "stream">("clip");
+  const wsRef = useRef<WebSocket | null>(null);
+  const procRef = useRef<ScriptProcessorNode | null>(null);
+  const srcRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const langRef = useRef(lang);
   langRef.current = lang;
 
@@ -139,6 +168,7 @@ export function useDictation(lang = "en-US"): UseDictation {
       .then((s) => {
         if (cancelled) return;
         setServerReady(s.available);
+        modeRef.current = s.mode === "stream" ? "stream" : "clip";
         if (!s.available) setReason(s.hint || "No speech-to-text backend connected.");
       })
       .catch(() => {
@@ -164,10 +194,36 @@ export function useDictation(lang = "en-US"): UseDictation {
     } catch {
       /* ignore */
     }
+    // Streaming (Vosk) mode teardown: signal EOF, close the socket + audio graph.
+    const ws = wsRef.current;
+    wsRef.current = null;
+    try {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send('{"eof":true}');
+    } catch {
+      /* ignore */
+    }
+    try {
+      ws?.close();
+    } catch {
+      /* ignore */
+    }
+    try {
+      procRef.current?.disconnect();
+    } catch {
+      /* ignore */
+    }
+    procRef.current = null;
+    try {
+      srcRef.current?.disconnect();
+    } catch {
+      /* ignore */
+    }
+    srcRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     audioCtxRef.current?.close().catch(() => undefined);
     audioCtxRef.current = null;
+    setInterim("");
     setListening(false);
   }, []);
 
@@ -303,6 +359,119 @@ export function useDictation(lang = "en-US"): UseDictation {
     }
   }, [teardown, transcribeClip]);
 
+  /**
+   * STREAM mode (bundled offline Vosk): open /voice/stream, capture the mic as
+   * 16 kHz mono PCM16 via a ScriptProcessor, and push frames over the socket.
+   * Live `{partial}` fills `interim`; `{text, final}` at each pause commits into
+   * `transcript` — the same real-time feel as the browser engine, fully offline.
+   */
+  const startStream = useCallback(async () => {
+    if (wantRef.current) return;
+    setError(null);
+    wantRef.current = true;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      });
+      if (!wantRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      streamRef.current = stream;
+      type AC = typeof AudioContext;
+      const Ctor: AC | undefined =
+        (window as unknown as { AudioContext?: AC; webkitAudioContext?: AC }).AudioContext ??
+        (window as unknown as { webkitAudioContext?: AC }).webkitAudioContext;
+      if (!Ctor) throw new Error("no AudioContext");
+      // Ask for 16 kHz so the mic is resampled for us; fall back to the default
+      // rate (floatTo16kPCM then downsamples).
+      let ctx: AudioContext;
+      try {
+        ctx = new Ctor({ sampleRate: 16000 });
+      } catch {
+        ctx = new Ctor();
+      }
+      audioCtxRef.current = ctx;
+
+      const ws = new WebSocket(wsUrl("/voice/stream"));
+      ws.binaryType = "arraybuffer";
+      wsRef.current = ws;
+      ws.onmessage = (ev) => {
+        let msg: { partial?: string; text?: string; error?: string };
+        try {
+          msg = JSON.parse(String(ev.data));
+        } catch {
+          return;
+        }
+        if (msg.error) {
+          setError(msg.error);
+          wantRef.current = false;
+          teardown();
+          return;
+        }
+        if (typeof msg.partial === "string") {
+          setInterim(msg.partial);
+          return;
+        }
+        if (msg.text) {
+          const t = String(msg.text).trim();
+          if (t) setTranscript((prev) => (prev ? `${prev.replace(/\s+$/, "")} ${t}` : t));
+          setInterim("");
+        }
+      };
+      ws.onerror = () => setError("Voice stream error — is the daemon running?");
+
+      // Wait for the socket to open (with a timeout) before wiring audio.
+      await new Promise<void>((resolve, reject) => {
+        const to = setTimeout(() => reject(new Error("voice stream timeout")), 5000);
+        ws.addEventListener("open", () => {
+          clearTimeout(to);
+          resolve();
+        }, { once: true });
+        ws.addEventListener("error", () => {
+          clearTimeout(to);
+          reject(new Error("voice stream failed"));
+        }, { once: true });
+      });
+      if (!wantRef.current) {
+        ws.close();
+        return;
+      }
+
+      const src = ctx.createMediaStreamSource(stream);
+      srcRef.current = src;
+      const proc = ctx.createScriptProcessor(4096, 1, 1);
+      procRef.current = proc;
+      proc.onaudioprocess = (e) => {
+        if (!wantRef.current || ws.readyState !== WebSocket.OPEN) return;
+        const pcm = floatTo16kPCM(e.inputBuffer.getChannelData(0), ctx.sampleRate);
+        if (pcm.byteLength) {
+          try {
+            ws.send(pcm);
+          } catch {
+            /* socket closing */
+          }
+        }
+      };
+      src.connect(proc);
+      // ScriptProcessor needs a destination to fire; its output buffer is left
+      // silent (we never copy input→output), so nothing is heard — no echo.
+      proc.connect(ctx.destination);
+      setListening(true);
+    } catch (e) {
+      wantRef.current = false;
+      const name = (e as { name?: string })?.name;
+      setError(
+        name === "NotAllowedError"
+          ? "Microphone permission denied. Allow mic access and try again."
+          : name === "NotFoundError"
+            ? "No microphone found. Check Windows Settings → Privacy → Microphone."
+            : "Couldn't start offline voice.",
+      );
+      teardown();
+    }
+  }, [teardown]);
+
   const startServer = useCallback(async () => {
     if (wantRef.current) return;
     setError(null);
@@ -340,9 +509,10 @@ export function useDictation(lang = "en-US"): UseDictation {
 
   const start = useCallback(() => {
     if (engine === "webspeech") web.start();
-    else if (engine === "server" && serverReady) void startServer();
+    else if (engine === "server" && serverReady)
+      void (modeRef.current === "stream" ? startStream() : startServer());
     else if (engine === "server") setError(reason || "Voice backend not connected.");
-  }, [engine, serverReady, reason, startServer, web]);
+  }, [engine, serverReady, reason, startServer, startStream, web]);
 
   const stop = useCallback(() => {
     if (engine === "webspeech") web.stop();
@@ -352,6 +522,7 @@ export function useDictation(lang = "en-US"): UseDictation {
   const reset = useCallback(() => {
     if (engine === "webspeech") web.reset();
     setTranscript("");
+    setInterim("");
     setError(null);
   }, [engine, web]);
 
@@ -382,7 +553,7 @@ export function useDictation(lang = "en-US"): UseDictation {
     listening,
     processing,
     transcript,
-    interim: "",
+    interim, // populated in stream (Vosk) mode; "" in clip mode
     error,
     start,
     stop,

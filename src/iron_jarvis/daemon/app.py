@@ -951,6 +951,57 @@ def create_app(project_root: str | None = None) -> FastAPI:
             return ("custom", _v1(base) + "/audio/transcriptions", ckey)
         return None
 
+    # --- Bundled OFFLINE speech-to-text (Vosk streaming) --------------------
+    # A fully local, real-time dictation backend that ships WITH the desktop app:
+    # no API key, no server, no internet. The renderer streams 16 kHz mono PCM
+    # over /voice/stream and gets live partial + final text back — the same feel
+    # as the browser's speech engine, which the packaged Electron app can't use.
+    # OFF unless a model is present (vosk installed + a model dir), so the default
+    # source install + the offline test suite are untouched.
+    _vosk_state: dict[str, Any] = {}
+
+    def _vosk_model_path() -> str | None:
+        """Directory of the bundled/configured Vosk model, or None.
+
+        Resolution order: ``IRONJARVIS_VOSK_MODEL`` env (the desktop app points
+        this at the bundled model) > ``config.voice_vosk_model_path`` >
+        ``<home>/vosk-model``. A directory qualifies only if it looks like a real
+        model (has an ``am`` subdir)."""
+        from pathlib import Path as _Path
+
+        home = getattr(platform.config, "home", None)
+        for cand in (
+            os.environ.get("IRONJARVIS_VOSK_MODEL"),
+            (getattr(platform.config, "voice_vosk_model_path", "") or "").strip() or None,
+            (str(_Path(home) / "vosk-model") if home else None),
+        ):
+            if not cand:
+                continue
+            p = _Path(cand)
+            if p.is_dir() and (p / "am").is_dir():
+                return str(p)
+        return None
+
+    def _vosk_model() -> Any:
+        """Lazily load + cache the Vosk model (~1s, ~40 MB RAM). None when
+        unavailable (vosk not installed / no model) — the streaming path then
+        reports unavailable and nothing else in the daemon is affected."""
+        path = _vosk_model_path()
+        if not path:
+            return None
+        if _vosk_state.get("model") is not None and _vosk_state.get("path") == path:
+            return _vosk_state["model"]
+        try:
+            import vosk
+
+            vosk.SetLogLevel(-1)
+            model = vosk.Model(path)
+        except Exception:  # noqa: BLE001 — missing native lib / bad model dir
+            log.exception("vosk model load failed for %r", path)
+            return None
+        _vosk_state.update(model=model, path=path)
+        return model
+
     # --- Living documents (§reports that stay fresh) -----------------------
 
     async def _regenerate_livedoc(doc_id: str) -> dict[str, Any]:
@@ -1533,6 +1584,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
         _PERSONAS=_PERSONAS,
         _VOICE_MAX_BYTES=_VOICE_MAX_BYTES,
         _voice_backend=_voice_backend,
+        _vosk_model=_vosk_model,
+        _vosk_model_path=_vosk_model_path,
         _regenerate_livedoc=_regenerate_livedoc,
         _rescan_skills=_rescan_skills,
         _PROMOTE_DEFAULT_MODEL=_PROMOTE_DEFAULT_MODEL,

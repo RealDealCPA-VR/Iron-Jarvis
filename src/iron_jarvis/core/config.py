@@ -192,6 +192,13 @@ class Config(BaseModel):
     # `voice_transcribe_key`.
     voice_transcribe_base_url: str = ""  # OpenAI-compatible /v1 base for STT
     voice_transcribe_model: str = ""  # exact model id the STT server serves
+    # BUNDLED OFFLINE speech-to-text (Vosk) — a fully local, real-time dictation
+    # model that ships with the desktop app (no key, no server, no internet). The
+    # desktop app points IRONJARVIS_VOSK_MODEL at its bundled copy; this override
+    # lets a dev/user name a model dir explicitly. Empty => also look at
+    # <home>/vosk-model. When a model is found, /voice/status prefers it and the
+    # client streams over the /voice/stream WebSocket.
+    voice_vosk_model_path: str = ""
     # User-added REST integrations (id/name/description); re-registered at boot so
     # they survive a restart. Their per-instance config (base_url, auth secret
     # NAME) lives in the IntegrationRecord table; the token lives in the vault.

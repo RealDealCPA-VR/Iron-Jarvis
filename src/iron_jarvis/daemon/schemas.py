@@ -180,6 +180,7 @@ _SETTINGS_KEYS = [
     # chat endpoint. Its key lives in the vault as voice_transcribe_key.
     "voice_transcribe_base_url",
     "voice_transcribe_model",
+    "voice_vosk_model_path",  # bundled offline (Vosk) model dir override
     "event_retention_days",
     # Motivation Layer (the pulse) — all OFF / conservative by default. Toggling
     # autonomy_* at runtime re-arms the background loop LIVE (put_settings →
