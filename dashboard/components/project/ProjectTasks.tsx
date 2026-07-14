@@ -22,6 +22,7 @@ import {
 import { get, post, ApiError, API_BASE, ijToken } from "@/lib/api";
 import type { SessionDetail, SessionView } from "@/lib/types";
 import { Card, Badge, ErrorNote, LoaderInline } from "@/components/ui";
+import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 
 /** Deliverable choices for POST /projects/{id}/task (mirrors the backend). */
 const TASK_OUTPUTS = [
@@ -327,6 +328,11 @@ export function ProjectTasks({
           className="field resize-y text-sm"
         />
         <div className="flex flex-wrap items-center gap-2">
+          {/* Dictate the task (offline in the desktop app), same as chat + Build. */}
+          <VoiceInput
+            size="sm"
+            onTranscript={(chunk) => setTaskText((p) => appendDictation(p, chunk))}
+          />
           <select
             aria-label="Deliverable"
             value={taskOutput}

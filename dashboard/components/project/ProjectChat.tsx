@@ -36,6 +36,7 @@ import remarkGfm from "remark-gfm";
 import { get, post, put, del, ApiError, API_BASE, ijToken } from "@/lib/api";
 import { timeAgo } from "@/lib/format";
 import { Empty, ErrorNote, OfflineHint } from "@/components/ui";
+import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -706,6 +707,9 @@ export function ProjectChat({
               placeholder="Message this project…"
               className="field min-w-0 flex-1 resize-none text-sm"
             />
+            {/* Dictate the message (offline in the desktop app), same as the main
+                chat + Build surfaces. */}
+            <VoiceInput onTranscript={(chunk) => setInput((p) => appendDictation(p, chunk))} />
             {busy ? (
               <button
                 type="button"
