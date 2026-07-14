@@ -904,29 +904,51 @@ def create_app(project_root: str | None = None) -> FastAPI:
     def _voice_backend() -> tuple[str, str, str | None] | None:
         """First available speech-to-text backend as (label, url, api_key).
 
-        An OpenAI API KEY wins (a ChatGPT OAuth token is deliberately NOT used —
-        the audio API rejects account tokens); else a configured custom
-        OpenAI-compatible endpoint (LocalAI / faster-whisper-server / Speaches
-        all serve /v1/audio/transcriptions). None = no backend, be honest.
+        Preference order: (1) a DEDICATED transcription endpoint
+        (``voice_transcribe_base_url`` — a real whisper server, separate from the
+        chat endpoint); (2) an OpenAI API KEY (a ChatGPT OAuth token is
+        deliberately NOT used — the audio API rejects account tokens); (3) the
+        ``custom`` chat endpoint (works ONLY if it actually serves
+        /v1/audio/transcriptions with a whisper model — an Ollama LLM endpoint
+        does not). None = no backend, be honest.
         """
+        def _v1(raw: str) -> str:
+            u = raw.strip().rstrip("/")
+            if u.endswith("/chat/completions"):
+                u = u[: -len("/chat/completions")]
+            if not u.endswith("/v1"):
+                u += "/v1"
+            return u
+
+        # (1) dedicated STT endpoint wins — the self-hosted-whisper path.
+        stt = (getattr(platform.config, "voice_transcribe_base_url", None) or "").strip()
+        if stt:
+            try:
+                skey = platform.secrets.get("voice_transcribe_key")
+            except Exception:  # noqa: BLE001
+                skey = None
+            # Fall back to the custom endpoint's key if the STT endpoint shares it.
+            if not skey:
+                try:
+                    skey = platform.secrets.get("custom_api_key")
+                except Exception:  # noqa: BLE001
+                    skey = None
+            return ("stt", _v1(stt) + "/audio/transcriptions", skey)
+        # (2) OpenAI key.
         try:
             key = platform.secrets.get("openai_api_key")
         except Exception:  # noqa: BLE001 - vault miss = not available
             key = None
         if key:
             return ("openai", "https://api.openai.com/v1/audio/transcriptions", key)
+        # (3) the custom chat endpoint (may or may not serve transcription).
         base = (getattr(platform.config, "custom_base_url", None) or "").strip()
         if base:
-            u = base.rstrip("/")
-            if u.endswith("/chat/completions"):
-                u = u[: -len("/chat/completions")]
-            if not u.endswith("/v1"):
-                u += "/v1"
             try:
                 ckey = platform.secrets.get("custom_api_key")
             except Exception:  # noqa: BLE001
                 ckey = None
-            return ("custom", u + "/audio/transcriptions", ckey)
+            return ("custom", _v1(base) + "/audio/transcriptions", ckey)
         return None
 
     # --- Living documents (§reports that stay fresh) -----------------------

@@ -19,16 +19,31 @@ def register(app: FastAPI, d) -> None:
         """Whether server-side dictation works right now (and via what), so the
         dashboard can offer or grey the mic honestly instead of failing late."""
         backend = d._voice_backend()
+        cfg = d.platform.config
+        model = (getattr(cfg, "voice_transcribe_model", "") or "").strip()
+        label = backend[0] if backend else None
+        if backend is None:
+            hint = (
+                "Connect an OpenAI API key (Connections page), or set a dedicated "
+                "speech-to-text endpoint (voice_transcribe_base_url) pointing at a "
+                "whisper server, to enable voice dictation in the desktop app."
+            )
+        elif label == "custom":
+            # Reusing the chat endpoint — which only transcribes if it's actually a
+            # whisper server. Be honest so a failure isn't a surprise.
+            hint = (
+                "Using your custom chat endpoint for speech-to-text. If it isn't a "
+                "whisper server (e.g. it's an Ollama LLM endpoint), set "
+                "voice_transcribe_base_url to a dedicated STT server, or "
+                "voice_transcribe_model to the model it serves."
+            )
+        else:
+            hint = ""
         return {
             "available": backend is not None,
-            "backend": backend[0] if backend else None,
-            "hint": (
-                ""
-                if backend
-                else "Connect an OpenAI API key (Connections page) — or a custom "
-                "OpenAI-compatible endpoint that serves /v1/audio/transcriptions — "
-                "to enable voice dictation inside the desktop app."
-            ),
+            "backend": label,
+            "model": model or None,
+            "hint": hint,
         }
 
     @app.post("/voice/transcribe")
@@ -71,14 +86,41 @@ def register(app: FastAPI, d) -> None:
             "audio/x-wav": "wav",
         }.get(mime, mime.split("/")[-1] or "webm")
         headers = {"Authorization": f"Bearer {key}"} if key else {}
-        # OpenAI: current transcribe model with the classic whisper-1 as the
-        # ladder rung (same retired-model-id lesson as chat). Custom servers
-        # conventionally accept whisper-1.
-        models = (
-            ["gpt-4o-mini-transcribe", "whisper-1"] if label == "openai" else ["whisper-1"]
-        )
+        # Which transcription model(s) to try:
+        #  * an explicit `voice_transcribe_model` config wins (no guessing);
+        #  * OpenAI has a known ladder (current model + classic whisper-1);
+        #  * a custom / dedicated-STT endpoint is DISCOVERED (GET /v1/models,
+        #    pick ids that look like whisper/transcribe) then falls back to a
+        #    ladder of the common self-hosted-server names — so "whisper-1" is no
+        #    longer the only thing tried (that was the bug: an Ollama endpoint,
+        #    or any server that names its model differently, only ever 404'd).
+        override = (getattr(d.platform.config, "voice_transcribe_model", "") or "").strip()
         last_err = "transcription failed"
         async with httpx.AsyncClient(timeout=60.0) as client:
+            if override:
+                models = [override]
+            elif label == "openai":
+                models = ["gpt-4o-mini-transcribe", "whisper-1"]
+            else:
+                discovered: list[str] = []
+                try:
+                    models_url = url.rsplit("/audio/transcriptions", 1)[0] + "/models"
+                    mr = await client.get(models_url, headers=headers, timeout=8.0)
+                    if mr.status_code == 200:
+                        for m in mr.json().get("data") or []:
+                            mid = str(m.get("id") or "")
+                            low = mid.lower()
+                            if mid and ("whisper" in low or "transcrib" in low):
+                                discovered.append(mid)
+                except Exception:  # noqa: BLE001 — discovery is best-effort
+                    pass
+                ladder = [
+                    "whisper-1", "whisper", "whisper-large-v3",
+                    "whisper-large-v3-turbo", "Systran/faster-whisper-large-v3",
+                    "distil-whisper-large-v3-en", "gpt-4o-mini-transcribe",
+                ]
+                seen: set[str] = set()
+                models = [m for m in discovered + ladder if not (m in seen or seen.add(m))]
             for model in models:
                 form: dict[str, Any] = {"model": model}
                 if body.language.strip():
@@ -110,6 +152,18 @@ def register(app: FastAPI, d) -> None:
                 last_err = resp.text[:300]
                 if resp.status_code not in (400, 404):
                     break  # auth/rate/server trouble — a different model won't help
+        guidance = (
+            ""
+            if label == "openai"
+            else (
+                " — this endpoint didn't accept any known transcription model. "
+                "Set `voice_transcribe_model` to the exact model your server "
+                "serves, or point `voice_transcribe_base_url` at a dedicated "
+                "speech-to-text server (a plain LLM endpoint like Ollama can't "
+                "transcribe)."
+            )
+        )
         raise HTTPException(
-            status_code=424, detail=f"{label} transcription failed: {last_err}"
+            status_code=424,
+            detail=f"{label} transcription failed: {last_err}{guidance}",
         )

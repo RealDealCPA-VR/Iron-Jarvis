@@ -175,6 +175,11 @@ _SETTINGS_KEYS = [
     # private gateways) — pairs with the optional custom_api_key vault entry.
     "custom_base_url",
     "custom_model",
+    # Voice speech-to-text — an optional DEDICATED whisper endpoint + model, so a
+    # self-hosted STT server works independently of the (possibly non-transcribing)
+    # chat endpoint. Its key lives in the vault as voice_transcribe_key.
+    "voice_transcribe_base_url",
+    "voice_transcribe_model",
     "event_retention_days",
     # Motivation Layer (the pulse) — all OFF / conservative by default. Toggling
     # autonomy_* at runtime re-arms the background loop LIVE (put_settings →

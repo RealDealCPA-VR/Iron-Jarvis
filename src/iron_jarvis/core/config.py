@@ -180,6 +180,18 @@ class Config(BaseModel):
     # work too.
     custom_base_url: str | None = None
     custom_model: str = ""  # default model id for the "custom" provider
+    # SPEECH-TO-TEXT (voice dictation) — an OPTIONAL dedicated transcription
+    # backend, so a self-hosted whisper server (faster-whisper-server / Speaches /
+    # LocalAI / a Groq endpoint) can be used INDEPENDENTLY of the chat endpoint.
+    # This matters because an Ollama LLM server can't transcribe at all, yet it's
+    # the `custom` fallback — pointing STT at it only ever 404s. When
+    # `voice_transcribe_base_url` is set it wins; when `voice_transcribe_model` is
+    # set that exact model is requested (no name guessing). Both empty => fall back
+    # to an OpenAI key, then the custom endpoint (with model auto-discovery). The
+    # optional key for a dedicated endpoint lives in the vault as
+    # `voice_transcribe_key`.
+    voice_transcribe_base_url: str = ""  # OpenAI-compatible /v1 base for STT
+    voice_transcribe_model: str = ""  # exact model id the STT server serves
     # User-added REST integrations (id/name/description); re-registered at boot so
     # they survive a restart. Their per-instance config (base_url, auth secret
     # NAME) lives in the IntegrationRecord table; the token lives in the vault.

@@ -142,6 +142,22 @@ const FIELDS: FieldDef[] = [
     placeholder: "qwen3-coder",
     hint: "Default model id for that custom endpoint.",
   },
+  {
+    key: "voice_transcribe_base_url",
+    label: "Voice: speech-to-text endpoint",
+    type: "text",
+    section: "local",
+    placeholder: "http://localhost:8000/v1",
+    hint: "Optional dedicated whisper server for voice dictation (faster-whisper-server, Speaches, LocalAI, Groq…). Leave blank to use your OpenAI key or custom endpoint — but a plain LLM endpoint like Ollama can't transcribe. Its API key goes under Connections (voice_transcribe_key).",
+  },
+  {
+    key: "voice_transcribe_model",
+    label: "Voice: speech-to-text model",
+    type: "text",
+    section: "local",
+    placeholder: "whisper-1 / Systran/faster-whisper-large-v3",
+    hint: "Exact transcription model your server serves. Leave blank to auto-discover (the daemon queries the endpoint's model list and tries the common whisper names).",
+  },
 
   // --- Automation & autonomy ----------------------------------------------
   {
