@@ -98,12 +98,16 @@ class ReflexStore:
             if r.enabled and r.match == slug
         ]
 
-    def matching_comm(self, text: str) -> list[ReflexRule]:
-        """Enabled comm rules whose keyword appears as a whole word in ``text``
-        (an empty keyword matches every message). Case-insensitive."""
+    def matching(self, source: str, text: str) -> list[ReflexRule]:
+        """Enabled rules of ``source`` whose keyword appears as a whole word in
+        ``text`` (an empty keyword matches every signal). Case-insensitive.
+
+        The generic keyword matcher for every text-carrying source
+        (comm/email/calendar/slack). Webhooks use exact-slug matching instead
+        (:meth:`matching_webhook`)."""
         low = (text or "").lower()
         out: list[ReflexRule] = []
-        for r in self.list(source="comm"):
+        for r in self.list(source=source):
             if not r.enabled:
                 continue
             kw = r.match.strip().lower()
@@ -112,3 +116,8 @@ class ReflexStore:
             elif re.search(rf"\b{re.escape(kw)}\b", low):
                 out.append(r)
         return out
+
+    def matching_comm(self, text: str) -> list[ReflexRule]:
+        """Enabled comm rules matching ``text`` (thin alias over :meth:`matching`,
+        kept for the existing callers)."""
+        return self.matching("comm", text)

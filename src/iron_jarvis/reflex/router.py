@@ -28,10 +28,18 @@ log = get_logger("reflex")
 SpawnBg = Callable[[str, Any], Any]
 
 
+#: Placeholders a rule's task_template can reference; filled from the triggering
+#: signal's context. The generic set (body/text/slug) plus source-specific keys
+#: (email {sender}/{subject}/{from}, calendar {title}/{start}, slack {channel}).
+_TEMPLATE_KEYS = (
+    "body", "text", "slug", "sender", "from", "subject", "title", "start", "channel",
+)
+
+
 def _render(template: str, context: dict[str, str]) -> str:
-    """Fill {body}/{text}/{slug} placeholders — plain replace, never raises."""
+    """Fill the supported placeholders — plain replace, never raises."""
     out = template or ""
-    for key in ("body", "text", "slug"):
+    for key in _TEMPLATE_KEYS:
         out = out.replace("{" + key + "}", context.get(key, ""))
     return out.strip()
 
@@ -58,11 +66,70 @@ class ReflexRouter:
         }
         return [await self.execute(r, context) for r in rules]
 
+    async def on_signal(
+        self, source: str, context: dict[str, str]
+    ) -> list[dict[str, Any]]:
+        """Fire every enabled rule of ``source`` whose keyword matches the signal's
+        ``text``. The generic entry point for every text-carrying source
+        (comm/email/calendar/slack) — the source-specific wrappers below just build
+        a ``context`` and delegate here. Webhooks keep their own exact-slug path."""
+        rules = self.store.matching(source, context.get("text", ""))
+        return [await self.execute(r, context) for r in rules]
+
     async def on_comm(self, text: str) -> list[dict[str, Any]]:
         """Fire every enabled comm rule whose keyword matches this message."""
-        rules = self.store.matching_comm(text)
-        context = {"text": text[:2000], "body": text[:2000], "slug": ""}
-        return [await self.execute(r, context) for r in rules]
+        return await self.on_signal(
+            "comm", {"text": text[:2000], "body": text[:2000], "slug": ""}
+        )
+
+    async def on_email(
+        self, *, sender: str, subject: str, body: str
+    ) -> list[dict[str, Any]]:
+        """Fire every enabled ``email`` rule matching an inbound message. Matching
+        runs over subject+body; the template can reference {sender}/{subject}."""
+        subject = subject or ""
+        body = body or ""
+        text = f"{subject}\n{body}".strip()
+        context = {
+            "text": text[:2000],
+            "body": body[:2000],
+            "subject": subject[:500],
+            "sender": (sender or "")[:200],
+            "from": (sender or "")[:200],
+            "slug": "",
+        }
+        return await self.on_signal("email", context)
+
+    async def on_calendar(
+        self, *, title: str, start: str = "", description: str = ""
+    ) -> list[dict[str, Any]]:
+        """Fire every enabled ``calendar`` rule matching an event. Matching runs
+        over title+description; the template can reference {title}/{start}."""
+        title = title or ""
+        description = description or ""
+        text = f"{title}\n{description}".strip()
+        context = {
+            "text": text[:2000],
+            "body": description[:2000],
+            "title": title[:500],
+            "start": (start or "")[:100],
+            "slug": "",
+        }
+        return await self.on_signal("calendar", context)
+
+    async def on_slack(
+        self, *, text: str, channel: str = "", sender: str = ""
+    ) -> list[dict[str, Any]]:
+        """Fire every enabled ``slack`` rule matching a message (DM or channel)."""
+        text = text or ""
+        context = {
+            "text": text[:2000],
+            "body": text[:2000],
+            "channel": (channel or "")[:100],
+            "sender": (sender or "")[:100],
+            "slug": "",
+        }
+        return await self.on_signal("slack", context)
 
     async def start(self, action: str, *, target: str = "", task: str = "") -> dict[str, Any]:
         """Fire an action MANUALLY (e.g. a ``/run`` command) without a stored

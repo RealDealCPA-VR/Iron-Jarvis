@@ -54,9 +54,20 @@ def _channel_config_problem(ctype: str, config: dict) -> str | None:
             "(message @userinfobot to find it)."
         )
     if ctype == "email":
-        if config.get("host") and config.get("from_addr") and config.get("to_addr"):
-            return None
-        return "Email needs at least an SMTP host, a From address, and a Send-to address."
+        if not (config.get("host") and config.get("from_addr") and config.get("to_addr")):
+            return "Email needs at least an SMTP host, a From address, and a Send-to address."
+        # Two-way (inbound) email READS a mailbox over IMAP, which SMTP settings
+        # alone can't do — require an IMAP host + a mailbox password, fail-closed
+        # like the other per-type checks. Outbound-only email is unaffected.
+        if config.get("inbound_enabled") and not (
+            config.get("imap_host") and config.get("password_secret")
+        ):
+            return (
+                "Email two-way (inbound) needs an IMAP host and a mailbox "
+                "password. Add an IMAP host (e.g. imap.gmail.com) and a password "
+                "so Iron Jarvis can read the inbox, or turn two-way off."
+            )
+        return None
     return None
 
 
@@ -266,6 +277,26 @@ def register(app: FastAPI, d) -> None:
                         pass
         return {"name": name, "removed": removed or cfg is not None}
 
+    # Slack redelivers an event on any non-2xx reply or network blip. This bounded
+    # per-process ring dedups by Slack's `event_id` so a redelivery can NOT
+    # double-fire an autonomous action. (Calendar/email use durable at-most-once
+    # cursors; Slack's retry window is short, so an in-memory ring is sufficient.)
+    from collections import deque as _deque
+
+    _slack_seen_order: _deque = _deque()
+    _slack_seen: set[str] = set()
+
+    def _slack_event_is_new(event_id: str) -> bool:
+        if not event_id:
+            return True  # can't dedup without an id — process (rare)
+        if event_id in _slack_seen:
+            return False
+        _slack_seen.add(event_id)
+        _slack_seen_order.append(event_id)
+        while len(_slack_seen_order) > 2048:
+            _slack_seen.discard(_slack_seen_order.popleft())
+        return True
+
     @app.post("/comm/slack/events/{name}")
     async def slack_events(name: str, request: Request) -> dict[str, Any]:
         """Slack Events API receiver for channel ``name``.
@@ -308,6 +339,8 @@ def register(app: FastAPI, d) -> None:
         if body.get("type") == "url_verification":
             return {"challenge": body.get("challenge", "")}
         event = body.get("event") or {}
+        # Observability: keep emitting the raw event for anything watching the
+        # bus (dashboard feed / debugging). The real trigger wiring is below.
         await d.platform.event_bus.publish(
             "slack.event",
             {
@@ -318,6 +351,72 @@ def register(app: FastAPI, d) -> None:
                 "slack_channel": str(event.get("channel") or ""),
             },
         )
+
+        # CX-05 — turn a real inbound Slack event into agent work. A plain user
+        # message (``message`` with no subtype) or an ``@mention`` becomes a
+        # trigger; edits/joins/bot chatter are a no-op ack. Ignore bot messages
+        # (loop protection: never react to our own posts). We ACK Slack FAST
+        # ({"ok": True}) and never raise a 500 here — a 500 makes Slack retry-storm.
+        from ...comm import InboundMessage
+        from ...core.events import EventType
+        from ...core.logging import get_logger
+
+        _log = get_logger("comm.slack")
+        etype = str(event.get("type") or "")
+        user = str(event.get("user") or "")
+        if (
+            body.get("type") == "event_callback"
+            and etype in ("message", "app_mention")
+            and not event.get("subtype")
+            and user
+            and not event.get("bot_id")
+            # Idempotency: a Slack redelivery of an already-processed event_id must
+            # not fire the action twice (duplicate autonomous work breaks trust).
+            and _slack_event_is_new(str(body.get("event_id") or ""))
+        ):
+            channel_type = str(event.get("channel_type") or "")
+            slack_channel = str(event.get("channel") or "")
+            msg = InboundMessage(
+                sender_id=user,
+                text=str(event.get("text") or ""),
+                update_id=None,
+                reply_to=(user if channel_type == "im" else slack_channel),
+                is_bot=bool(event.get("bot_id")),
+            )
+            ch = d.platform.notifier.get(name)
+            if ch is not None and channel_type == "im":
+                # DM: reuse the FULL inbound pipeline (fail-closed allowlist +
+                # command / reflex / session + reply). It may run a whole agent
+                # session, so run it in the BACKGROUND and ack Slack immediately
+                # (3s deadline) rather than block this request.
+                async def _run_dm() -> None:
+                    try:
+                        await d.inbound_poller._handle(name, ch, msg)
+                    except Exception:  # noqa: BLE001 — never surface as a 500 to Slack
+                        _log.exception("slack DM handling failed on %r", name)
+
+                d._spawn_bg(f"slack-events-{name}", _run_dm())
+            elif ch is not None and ch.is_authorized(user):
+                # Channel message / @mention from an AUTHORIZED sender: fire the
+                # "slack" reflex rules only — NO auto-reply into a shared channel
+                # (that would broadcast agent output to non-allowlisted members).
+                # on_slack is bounded (it creates records + backgrounds the run),
+                # so awaiting it keeps well within Slack's ack window.
+                await d.platform.event_bus.publish(
+                    EventType.COMM_RECEIVED,
+                    {
+                        "channel": name,
+                        "sender": user,
+                        "slack_channel": slack_channel,
+                        "text": msg.text[:2000],
+                    },
+                )
+                try:
+                    await app.state.reflex_router.on_slack(
+                        text=msg.text, channel=slack_channel, sender=user
+                    )
+                except Exception:  # noqa: BLE001 — a bad rule never 500s Slack
+                    _log.exception("slack channel reflex failed on %r", name)
         return {"ok": True}
 
     @app.post("/comm/channels/{name}/test")

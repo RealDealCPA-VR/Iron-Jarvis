@@ -154,6 +154,13 @@ class Channel(ABC):
     #: so they are never polled.
     supports_inbound: bool = False
 
+    #: which Reflex ``source`` an inbound message on this channel fires (CX-05).
+    #: The generic chat channels stay ``"comm"``; channels that map to a distinct
+    #: trigger source override it (EmailChannel -> ``"email"``, SlackChannel ->
+    #: ``"slack"``) so a rule can scope to "an email arrived" vs "any comm
+    #: message". Falls back to ``"comm"`` for any channel that doesn't set it.
+    reflex_source: str = "comm"
+
     def __init__(
         self,
         config: dict[str, Any] | None = None,

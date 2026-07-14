@@ -74,6 +74,22 @@ def channel_integrations() -> list[IntegrationSpec]:
             secret_fields=["token_secret"],
         ),
         IntegrationSpec(
+            "email",
+            "communication",
+            "Send AND receive email (SMTP out, IMAP in). Inbound trigger (CX-05): "
+            "set inbound_enabled + allowed_senders (From-addresses) so an "
+            "allowlisted sender can email Iron Jarvis a task.",
+            config_fields=[
+                "imap_host",
+                "imap_port",
+                "username",
+                "mailbox",
+                "inbound_enabled",
+                "allowed_senders",
+            ],
+            secret_fields=["password_secret"],
+        ),
+        IntegrationSpec(
             "mock",
             "communication",
             "Offline test channel that records messages in-memory.",

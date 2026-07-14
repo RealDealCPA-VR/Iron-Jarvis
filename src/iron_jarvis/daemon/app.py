@@ -269,6 +269,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
         reflex_router=reflex_router,
     )
 
+    # CX-05 "inbound everything": the calendar trigger poller. Cheap to build (no
+    # network); OFF unless calendar_trigger_enabled AND a secret ICS URL is stored
+    # (its .enabled() gates loop creation, exactly like inbound_poller). Fires
+    # `calendar` reflex rules for events coming due through the same gated path.
+    from ..triggers import CalendarPoller
+
+    calendar_poller = CalendarPoller(platform, reflex_router, platform.engine)
+
     # LIVE re-arm bridge: lifespan drops its event loop + the autonomy/sentinel
     # arm functions in here so put_settings (which runs in a threadpool) can
     # re-arm the background loops the moment a toggle changes — no restart.
@@ -594,10 +602,49 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         _arm_sentinels()
 
+        # CX-05 calendar trigger poll loop. GUARDED by calendar_poller.enabled()
+        # (calendar_trigger_enabled + a stored ICS URL secret), OFF by default, so
+        # the default install + tests create nothing. Mirrors the loops above:
+        # rehydration is implicit (the fired-event cursor lives in the DB and is
+        # read each pass), sleeps before the first poll (never blocks boot),
+        # cancelled on shutdown via bg_tasks, and re-arms live on a settings
+        # change. Disable explicitly via IRONJARVIS_CALENDAR=off.
+        async def _calendar_loop() -> None:
+            try:
+                interval = max(30, int(platform.config.calendar_tick_seconds))
+            except (TypeError, ValueError):
+                interval = 300
+            await asyncio.sleep(25)  # let boot settle before the first poll
+            while True:
+                try:
+                    await calendar_poller.poll_once()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 - a poll must never kill the daemon
+                    log.exception("calendar trigger poll failed")
+                await asyncio.sleep(interval)
+
+        def _arm_calendar() -> None:
+            task = bg_tasks.pop("calendar", None)
+            if task is not None:
+                task.cancel()
+            if (
+                calendar_poller.enabled()
+                and os.environ.get("IRONJARVIS_CALENDAR", "on").strip().lower()
+                not in {"0", "false", "no", "off"}
+            ):
+                bg_tasks["calendar"] = asyncio.create_task(_calendar_loop())
+                log.info("calendar trigger loop (re)armed")
+            elif task is not None:
+                log.info("calendar trigger loop disarmed")
+
+        _arm_calendar()
+
         # Expose the arm functions + this loop to put_settings (threadpool).
         _live_rearm["loop"] = asyncio.get_running_loop()
         _live_rearm["autonomy"] = _arm_autonomy
         _live_rearm["sentinels"] = _arm_sentinels
+        _live_rearm["calendar"] = _arm_calendar
 
         # Two-way comm inbound poller — the receive leg. GUARDED by
         # poller.enabled() (True only when a channel has inbound_enabled +
@@ -1500,6 +1547,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
     _routes.comm.register(app, d)
     _routes.agents.register(app, d)
     _routes.reflex.register(app, d)
+    _routes.triggers.register(app, d)
     _routes.audit.register(app, d)
     _routes.undo.register(app, d)
     _routes.system.register(app, d)

@@ -207,12 +207,24 @@ class InboundPoller:
                     "sent": bool(send_res.get("ok")),
                 }
 
-        # REFLEX (comm): a non-command message that matches a keyword rule fires
-        # that rule (run a workflow / remote agent / session) instead of a
-        # free-form chat — the ambient-operator path for "mention X → do Y".
+        # REFLEX: a non-command message that matches a keyword rule fires that
+        # rule (run a workflow / remote agent / session) instead of a free-form
+        # chat — the ambient-operator path for "mention X → do Y". The channel's
+        # `reflex_source` scopes matching (email channel → "email" rules, Slack →
+        # "slack", generic chat → "comm"), so CX-05's per-source rules just work.
         if self.reflex_router is not None:
+            source = getattr(ch, "reflex_source", "comm")
             try:
-                fired = await self.reflex_router.on_comm(text)
+                fired = await self.reflex_router.on_signal(
+                    source,
+                    {
+                        "text": text[:2000],
+                        "body": text[:2000],
+                        "sender": str(msg.sender_id)[:200],
+                        "from": str(msg.sender_id)[:200],
+                        "slug": "",
+                    },
+                )
             except Exception:  # noqa: BLE001 — a reflex must never break comm
                 fired = []
             fired = [f for f in fired if f.get("ok")]

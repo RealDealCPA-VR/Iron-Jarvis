@@ -7,9 +7,10 @@ ACK each envelope. No inbound port, no tunnel, no exposure — the same
 outbound-only posture as Telegram polling, but real-time.
 
 Safety mirrors the inbound poller exactly (it REUSES ``InboundPoller._handle``):
-bot-loop protection, FAIL-CLOSED sender allowlist, private (DM) chats only,
-supervised sessions, bounded replies. Transports are injectable so the test
-suite runs fully offline.
+bot-loop protection, FAIL-CLOSED sender allowlist, DMs run the full supervised
+pipeline while channel messages / ``@mentions`` fire the channel's ``slack``
+reflex rules only (no reply into a shared channel), bounded replies. Transports
+are injectable so the test suite runs fully offline.
 """
 
 from __future__ import annotations
@@ -86,32 +87,50 @@ class SlackSocketMode:
     async def process_envelope(self, name: str, envelope: dict) -> dict[str, Any] | None:
         """Handle ONE Socket Mode envelope; returns the handler result or None.
 
-        Only private DMs (``channel_type == "im"``), plain messages (no
-        subtype), and non-bot senders reach the poller pipeline — which then
-        applies its own fail-closed allowlist + supervision.
+        A DM (``channel_type == "im"``) runs the FULL inbound pipeline
+        (``_handle`` — fail-closed allowlist + command/reflex/session + reply). A
+        channel message or ``@mention`` from an AUTHORIZED sender fires the
+        channel's ``slack`` reflex rules only (no reply into a shared channel).
+        Plain messages/mentions with no subtype and non-bot senders only.
         """
         if envelope.get("type") != "events_api":
             return None
         event = ((envelope.get("payload") or {}).get("event")) or {}
-        if event.get("type") != "message" or event.get("subtype"):
+        if event.get("type") not in ("message", "app_mention") or event.get("subtype"):
             return None
-        if event.get("channel_type") != "im":
-            return None  # private-only, like the Telegram leg
         ch = self.notifier.get(name)
         if ch is None:
             return None
         user = str(event.get("user") or "")
-        msg = InboundMessage(
-            sender_id=user,
+        if event.get("channel_type") == "im":
+            # DM: the FULL supervised pipeline. ``_handle`` carries ``is_bot`` and
+            # applies its OWN loop protection + fail-closed allowlist, so a bot's
+            # own message is passed through and dropped there (unchanged).
+            msg = InboundMessage(
+                sender_id=user,
+                text=str(event.get("text") or ""),
+                update_id=None,
+                is_bot=bool(event.get("bot_id")),
+                # Reply to the USER id — chat.postMessage(channel=U…) opens the DM,
+                # and it satisfies the poller's private-chat guard (reply_to ==
+                # sender_id), mirroring Telegram's private-chat semantics.
+                reply_to=user,
+            )
+            return await self.poller._handle(name, ch, msg)  # noqa: SLF001 — by design
+        # Channel message / @mention: fire the "slack" reflex rules for an
+        # AUTHORIZED sender only — no reply into a shared channel. ``on_slack``
+        # has no bot guard, so apply loop protection here (drop bot messages).
+        if event.get("bot_id") or not user:
+            return None
+        router = getattr(self.poller, "reflex_router", None)
+        if router is None or not ch.is_authorized(user):
+            return None
+        await router.on_slack(
             text=str(event.get("text") or ""),
-            update_id=None,
-            is_bot=bool(event.get("bot_id")),
-            # Reply to the USER id — chat.postMessage(channel=U…) opens the DM,
-            # and it satisfies the poller's private-chat guard (reply_to ==
-            # sender_id), mirroring Telegram's private-chat semantics.
-            reply_to=user,
+            channel=str(event.get("channel") or ""),
+            sender=user,
         )
-        return await self.poller._handle(name, ch, msg)  # noqa: SLF001 — by design
+        return {"channel": name, "status": "reflex", "sender": user}
 
     # -- the pump --------------------------------------------------------------
     async def run_channel(self, name: str, app_token: str, *, stop: asyncio.Event) -> None:

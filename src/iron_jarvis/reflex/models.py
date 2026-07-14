@@ -16,8 +16,12 @@ from sqlmodel import Field, SQLModel
 
 from ..core.ids import new_id, utcnow
 
-#: Where the signal comes from.
-REFLEX_SOURCES = ("webhook", "comm")
+#: Where the signal comes from. CX-05 ("inbound everything") extends the loop
+#: beyond webhooks/comm so the WORLD can start work: an inbound email, a calendar
+#: event coming due, or a Slack message can each fire a rule. Every source still
+#: runs the SAME gated action path — a remote signal gets no more power than a
+#: local one.
+REFLEX_SOURCES = ("webhook", "comm", "email", "calendar", "slack")
 #: What firing does.
 REFLEX_ACTIONS = ("workflow", "remote_agent", "session")
 
@@ -29,8 +33,11 @@ class ReflexRule(SQLModel, table=True):
     name: str = ""
     #: "webhook" | "comm".
     source: str = Field(default="webhook", index=True)
-    #: For webhook: the exact inbound webhook slug. For comm: a keyword matched
-    #: case-insensitively as a whole word in the message (empty = every message).
+    #: What the signal must contain to fire. For webhook: the exact inbound
+    #: webhook slug. For every text-carrying source (comm/email/calendar/slack):
+    #: a keyword matched case-insensitively as a whole word in the signal text
+    #: (email = subject+body, calendar = title+description, slack = message text);
+    #: an EMPTY keyword matches every signal of that source.
     match: str = ""
     #: "workflow" | "remote_agent" | "session".
     action: str = "workflow"

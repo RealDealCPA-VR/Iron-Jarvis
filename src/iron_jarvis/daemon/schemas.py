@@ -190,6 +190,12 @@ _SETTINGS_KEYS = [
     # runtime re-arms the background polling loop LIVE (mirrors autonomy_*).
     "sentinels_enabled",
     "sentinels_tick_seconds",
+    # CX-05 calendar trigger (inbound everything) — OFF by default. Toggling
+    # calendar_* at runtime re-arms the background polling loop LIVE (mirrors
+    # autonomy_*/sentinels_*). The ICS URL itself is a vault secret, not a setting.
+    "calendar_trigger_enabled",
+    "calendar_tick_seconds",
+    "calendar_lead_minutes",
 ]
 
 

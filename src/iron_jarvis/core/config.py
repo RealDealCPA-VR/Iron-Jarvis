@@ -223,6 +223,15 @@ class Config(BaseModel):
     # never executes (the autonomy dial + budget + approval still gate any action).
     sentinels_enabled: bool = False
     sentinels_tick_seconds: int = 300  # filesystem poll cadence (background loop)
+    # CX-05 "inbound everything" — calendar trigger. OFF by default, exactly like
+    # autonomy/sentinels. When enabled AND a secret ICS URL is stored (vault key
+    # "calendar_ics_url"), a background loop polls the calendar and fires matching
+    # `calendar` reflex rules for events coming due within `lead_minutes`. Email
+    # triggers ride the existing per-channel comm inbound toggle (no global flag),
+    # and Slack triggers ride the existing Slack channel/socket path.
+    calendar_trigger_enabled: bool = False
+    calendar_tick_seconds: int = 300  # calendar poll cadence (background loop)
+    calendar_lead_minutes: int = 15  # fire when an event starts within this window
 
     @field_validator("autonomy_level")
     @classmethod

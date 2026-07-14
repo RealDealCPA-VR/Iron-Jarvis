@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Zap,
@@ -9,10 +9,15 @@ import {
   Play,
   Webhook as WebhookIcon,
   MessageSquare,
+  Mail,
+  CalendarClock,
+  Hash,
+  Antenna,
   ArrowRight,
   Workflow as WorkflowIcon,
   Bot,
   TerminalSquare,
+  type LucideIcon,
 } from "lucide-react";
 import { post, patch, del, ApiError } from "@/lib/api";
 import { usePolledApi, useApi } from "@/lib/useApi";
@@ -28,6 +33,7 @@ import {
   LoaderInline,
   ConfirmButton,
   SectionLabel,
+  type Tone,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -36,7 +42,7 @@ import { PageShell, Reveal } from "@/components/motion";
 /*  Types (mirror src/iron_jarvis/reflex/models.py::ReflexRule)                */
 /* -------------------------------------------------------------------------- */
 
-type ReflexSource = "webhook" | "comm";
+type ReflexSource = "webhook" | "comm" | "email" | "calendar" | "slack";
 type ReflexAction = "workflow" | "remote_agent" | "session";
 
 interface ReflexRule {
@@ -69,6 +75,90 @@ const ACTION_LABEL: Record<ReflexAction, string> = {
   remote_agent: "remote agent",
   session: "session",
 };
+
+/* -------------------------------------------------------------------------- */
+/*  Signal-source metadata — one place drives the selector, hints, list        */
+/*  grouping, and per-rule badge. Mirrors reflex/models.py::REFLEX_SOURCES.     */
+/* -------------------------------------------------------------------------- */
+
+const SOURCE_ORDER: ReflexSource[] = ["webhook", "comm", "email", "calendar", "slack"];
+
+interface SourceMeta {
+  option: string; // dropdown label
+  section: string; // list section heading
+  badge: string; // per-rule badge label
+  tone: Tone;
+  icon: LucideIcon;
+  iconClass: string; // accent colour for the section icon
+  matchLabel: string; // label above the match input
+  matchHint: string; // helper line (keyword sources)
+  matchPlaceholder: string;
+}
+
+const SOURCE_META: Record<ReflexSource, SourceMeta> = {
+  webhook: {
+    option: "Webhook fires",
+    section: "Webhook reflexes",
+    badge: "webhook",
+    tone: "cyan",
+    icon: WebhookIcon,
+    iconClass: "text-accent-soft",
+    matchLabel: "Webhook slug",
+    matchHint: "",
+    matchPlaceholder: "github-push",
+  },
+  comm: {
+    option: "Message arrives",
+    section: "Message reflexes",
+    badge: "message",
+    tone: "violet",
+    icon: MessageSquare,
+    iconClass: "text-violet-300",
+    matchLabel: "Keyword",
+    matchHint: "Matched as a whole word, case-insensitive. Blank = every message.",
+    matchPlaceholder: "deploy",
+  },
+  email: {
+    option: "Email arrives",
+    section: "Email reflexes",
+    badge: "email",
+    tone: "green",
+    icon: Mail,
+    iconClass: "text-emerald-300",
+    matchLabel: "Keyword",
+    matchHint: "Keyword in the subject or body (whole word). Blank = every allowed email.",
+    matchPlaceholder: "invoice",
+  },
+  calendar: {
+    option: "Calendar event",
+    section: "Calendar reflexes",
+    badge: "calendar",
+    tone: "amber",
+    icon: CalendarClock,
+    iconClass: "text-amber-300",
+    matchLabel: "Keyword",
+    matchHint: "Keyword in the event title (whole word). Empty = every event.",
+    matchPlaceholder: "standup",
+  },
+  slack: {
+    option: "Slack message",
+    section: "Slack reflexes",
+    badge: "slack",
+    tone: "violet",
+    icon: Hash,
+    iconClass: "text-violet-300",
+    matchLabel: "Keyword",
+    matchHint: "Keyword in the message (whole word). Blank = every message.",
+    matchPlaceholder: "deploy",
+  },
+};
+
+/** GET /triggers — world-trigger status. Tolerate missing fields. */
+interface TriggersStatus {
+  email?: { active?: boolean };
+  calendar?: { enabled?: boolean; has_url?: boolean; lead_minutes?: number };
+  slack?: { active?: boolean };
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Small inline toggle switch (arc-reactor cyan when on)                      */
@@ -117,14 +207,23 @@ function chip(t: string) {
 }
 
 function RuleSentence({ r }: { r: ReflexRule }) {
-  const trigger =
-    r.source === "webhook" ? (
-      <>When webhook {chip(r.match || "?")} fires</>
-    ) : r.match.trim() ? (
-      <>When a message contains {chip(r.match.trim())}</>
+  const kw = r.match.trim();
+  let trigger: React.ReactNode;
+  if (r.source === "webhook") {
+    trigger = <>When webhook {chip(r.match || "?")} fires</>;
+  } else if (r.source === "email") {
+    trigger = kw ? <>When an email mentions {chip(kw)}</> : <>When any email arrives</>;
+  } else if (r.source === "calendar") {
+    trigger = kw ? <>When an event titled {chip(kw)} nears</> : <>When any event nears</>;
+  } else if (r.source === "slack") {
+    trigger = kw ? (
+      <>When a Slack message mentions {chip(kw)}</>
     ) : (
-      <>When any message arrives</>
+      <>When any Slack message arrives</>
     );
+  } else {
+    trigger = kw ? <>When a message contains {chip(kw)}</> : <>When any message arrives</>;
+  }
   const action =
     r.action === "workflow" ? (
       <>run workflow {chip(r.target || "?")}</>
@@ -151,8 +250,6 @@ export default function ReflexPage() {
   );
   const offline = error && error.status === 0;
   const rules = data?.rules ?? [];
-  const webhookRules = rules.filter((r) => r.source === "webhook");
-  const commRules = rules.filter((r) => r.source === "comm");
 
   // Picker sources for the add form.
   const workflows = useApi<{ workflows: { name: string; description?: string }[] }>("/workflows");
@@ -304,10 +401,7 @@ export default function ReflexPage() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <Badge
-                value={r.source === "webhook" ? "webhook" : "message"}
-                tone={r.source === "webhook" ? "cyan" : "violet"}
-              />
+              <Badge value={SOURCE_META[r.source].badge} tone={SOURCE_META[r.source].tone} />
               {r.name ? (
                 <span className="truncate font-medium text-zinc-100">{r.name}</span>
               ) : (
@@ -411,13 +505,16 @@ export default function ReflexPage() {
                     onChange={(e) => pickSource(e.target.value as ReflexSource)}
                     className="field"
                   >
-                    <option value="webhook">Webhook fires</option>
-                    <option value="comm">Message arrives</option>
+                    {SOURCE_ORDER.map((s) => (
+                      <option key={s} value={s}>
+                        {SOURCE_META[s].option}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <div>
                   <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                    {source === "webhook" ? "Webhook slug" : "Keyword"}
+                    {SOURCE_META[source].matchLabel}
                   </label>
                   {source === "webhook" ? (
                     inboundSlugs.length > 0 ? (
@@ -459,11 +556,11 @@ export default function ReflexPage() {
                       <input
                         value={match}
                         onChange={(e) => setMatch(e.target.value)}
-                        placeholder="deploy"
+                        placeholder={SOURCE_META[source].matchPlaceholder}
                         className="field font-mono"
                       />
                       <div className="mt-1 text-[11px] text-zinc-600">
-                        Matched as a whole word, case-insensitive. Blank = every message.
+                        {SOURCE_META[source].matchHint}
                       </div>
                     </>
                   )}
@@ -635,27 +732,30 @@ export default function ReflexPage() {
             </Empty>
           ) : (
             <div className="space-y-6">
-              {webhookRules.length > 0 && (
-                <div className="space-y-2.5">
-                  <div className="flex items-center gap-2">
-                    <WebhookIcon size={13} className="text-accent-soft" />
-                    <SectionLabel>Webhook reflexes · {webhookRules.length}</SectionLabel>
+              {SOURCE_ORDER.map((s) => {
+                const group = rules.filter((r) => r.source === s);
+                if (group.length === 0) return null;
+                const meta = SOURCE_META[s];
+                const Icon = meta.icon;
+                return (
+                  <div key={s} className="space-y-2.5">
+                    <div className="flex items-center gap-2">
+                      <Icon size={13} className={meta.iconClass} />
+                      <SectionLabel>
+                        {meta.section} · {group.length}
+                      </SectionLabel>
+                    </div>
+                    {group.map(renderRule)}
                   </div>
-                  {webhookRules.map(renderRule)}
-                </div>
-              )}
-              {commRules.length > 0 && (
-                <div className="space-y-2.5">
-                  <div className="flex items-center gap-2">
-                    <MessageSquare size={13} className="text-violet-300" />
-                    <SectionLabel>Message reflexes · {commRules.length}</SectionLabel>
-                  </div>
-                  {commRules.map(renderRule)}
-                </div>
-              )}
+                );
+              })}
             </div>
           )}
         </Card>
+      </Reveal>
+
+      <Reveal>
+        <TriggersCard />
       </Reveal>
 
       {/* Legend of what the three actions do (quiet reference). */}
@@ -686,4 +786,186 @@ export default function ReflexPage() {
 /** Whether a rule's action carries a task template (mirrors `templateShown`). */
 function templateShownFor(r: ReflexRule): boolean {
   return r.action === "session" || r.action === "remote_agent";
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Triggers card — makes the "the world starts work" story legible.           */
+/*  Calendar polling is configured here; email + Slack point at Channels.      */
+/* -------------------------------------------------------------------------- */
+
+function TriggersCard() {
+  const { data, reload } = useApi<TriggersStatus>("/triggers");
+  const cal = data?.calendar;
+  const emailActive = !!data?.email?.active;
+  const slackActive = !!data?.slack?.active;
+
+  // Calendar form (POST is one Save; ICS URL is write-only — never shown back).
+  const [enabled, setEnabled] = useState(false);
+  const [icsUrl, setIcsUrl] = useState("");
+  const [lead, setLead] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+  const seeded = useRef(false);
+
+  // Seed the form from the server ONCE — later polls/reloads must not clobber edits.
+  useEffect(() => {
+    if (data && !seeded.current) {
+      seeded.current = true;
+      setEnabled(!!data.calendar?.enabled);
+      if (data.calendar?.lead_minutes != null) setLead(String(data.calendar.lead_minutes));
+    }
+  }, [data]);
+
+  async function saveCalendar() {
+    setBusy(true);
+    setErr(null);
+    setOk(null);
+    try {
+      const body: { enabled: boolean; ics_url?: string; lead_minutes?: number } = { enabled };
+      if (icsUrl.trim()) body.ics_url = icsUrl.trim();
+      const n = parseInt(lead, 10);
+      if (!Number.isNaN(n)) body.lead_minutes = n;
+      await post("/triggers/calendar", body);
+      setIcsUrl(""); // clear — the URL is a secret, never re-displayed
+      setOk(
+        enabled
+          ? "Calendar polling on — upcoming events will fire matching reflexes."
+          : "Calendar polling off.",
+      );
+      reload();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card title="Triggers" icon={<Antenna size={15} />}>
+      <p className="mb-4 text-[12px] text-zinc-500">
+        Let the world start the work. These sources fire the same reflexes above — each still runs
+        through the normal permission engine, and each is off until you turn it on.
+      </p>
+      <div className="space-y-3">
+        {/* Calendar — the one trigger configured entirely here. */}
+        <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <CalendarClock size={15} className="text-amber-300" />
+              <span className="text-sm font-medium text-zinc-100">Calendar</span>
+              <Badge value={cal?.enabled ? "on" : "off"} tone={cal?.enabled ? "green" : "slate"} />
+              {cal?.has_url && <span className="text-[11px] text-zinc-500">URL saved</span>}
+            </div>
+            <Toggle enabled={enabled} busy={busy} onChange={() => setEnabled((v) => !v)} />
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto]">
+            <div>
+              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                iCal URL
+              </label>
+              <input
+                type="url"
+                value={icsUrl}
+                onChange={(e) => setIcsUrl(e.target.value)}
+                placeholder={
+                  cal?.has_url
+                    ? "•••••• saved — paste a new URL to replace"
+                    : "https://calendar.google.com/…/basic.ics"
+                }
+                className="field font-mono"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                Lead (min)
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={lead}
+                onChange={(e) => setLead(e.target.value)}
+                placeholder="15"
+                className="field w-24 font-mono"
+              />
+            </div>
+          </div>
+          <div className="mt-1.5 text-[11px] text-zinc-600">
+            Paste your calendar&apos;s secret iCal address (Google/Outlook/iCloud all provide one).
+            Fires this many minutes before each event.
+          </div>
+          <div className="mt-3">
+            <button type="button" onClick={saveCalendar} disabled={busy} className="btn-accent">
+              {busy ? <LoaderInline label="Saving…" /> : "Save calendar trigger"}
+            </button>
+          </div>
+          {ok && (
+            <div className="mt-2">
+              <SuccessNote>{ok}</SuccessNote>
+            </div>
+          )}
+          {err && (
+            <div className="mt-2">
+              <ErrorNote>{err}</ErrorNote>
+            </div>
+          )}
+        </div>
+
+        {/* Email — configured as an inbound channel elsewhere. */}
+        <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Mail size={15} className="text-emerald-300" />
+              <span className="text-sm font-medium text-zinc-100">Email</span>
+              <Badge
+                value={emailActive ? "active" : "not set up"}
+                tone={emailActive ? "green" : "slate"}
+              />
+            </div>
+            <Link
+              href="/channels"
+              className="inline-flex items-center gap-1 text-[12px] text-accent-soft underline-offset-2 hover:underline"
+            >
+              Channels <ArrowRight size={12} />
+            </Link>
+          </div>
+          <div className="mt-2 text-[11px] text-zinc-600">
+            Email triggers fire when a message lands in an inbound Email channel. Add one on the{" "}
+            <Link href="/channels" className="text-accent-soft underline-offset-2 hover:underline">
+              Channels
+            </Link>{" "}
+            page, then add an <span className="text-zinc-400">Email arrives</span> reflex above.
+          </div>
+        </div>
+
+        {/* Slack — inbound Slack channel elsewhere. */}
+        <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Hash size={15} className="text-violet-300" />
+              <span className="text-sm font-medium text-zinc-100">Slack</span>
+              <Badge
+                value={slackActive ? "active" : "not set up"}
+                tone={slackActive ? "green" : "slate"}
+              />
+            </div>
+            <Link
+              href="/channels"
+              className="inline-flex items-center gap-1 text-[12px] text-accent-soft underline-offset-2 hover:underline"
+            >
+              Channels <ArrowRight size={12} />
+            </Link>
+          </div>
+          <div className="mt-2 text-[11px] text-zinc-600">
+            Slack triggers fire on inbound Slack messages. Set up a Slack channel with inbound
+            enabled on the{" "}
+            <Link href="/channels" className="text-accent-soft underline-offset-2 hover:underline">
+              Channels
+            </Link>{" "}
+            page, then add a <span className="text-zinc-400">Slack message</span> reflex above.
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
 }
