@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/session-start.sh",
+            "timeout": 20,
+            "statusMessage": "Checking Iron Jarvis version + repo state"
+          }
+        ]
+      }
+    ]
+  }
+}

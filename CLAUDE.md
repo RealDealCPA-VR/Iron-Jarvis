@@ -23,7 +23,7 @@ bearer token: `%APPDATA%/Iron Jarvis/token.txt` — every daemon request needs
 ## Commands
 
 ```bash
-# Backend tests (~1038, offline, ~2min). ALWAYS run before shipping.
+# Backend tests (~1280, offline, ~4min). ALWAYS run before shipping.
 uv run pytest -q --no-header
 # Dashboard build (must show "Generating static pages (40/40)")
 cd dashboard && pnpm build
@@ -47,6 +47,10 @@ cd dashboard && pnpm dev           # dashboard
 3. The desktop app auto-downloads (checks at boot + every 30 min) and installs
    only when the user clicks Restart-to-update (tray item / notification /
    Updates page). `latest.yml` missing assets = release still uploading.
+4. **State the current (or new target) app version in EVERY response** so the
+   user always knows which version to expect when they pull an update. The
+   SessionStart hook (`.claude/session-start.sh`) injects the live version +
+   repo state at session start — trust it over stale docs.
 
 ## Hard rules (each one was learned the expensive way)
 
@@ -90,7 +94,7 @@ cd dashboard && pnpm dev           # dashboard
 
 - `src/iron_jarvis/daemon/` — `app.py` is factory + glue only (platform build,
   lifespan boot-rehydration + background loops, middleware, the shared `d` deps
-  object); the ~170 endpoint handlers live in `routes/<domain>.py` (17 modules;
+  object); the ~240 endpoint handlers live in `routes/<domain>.py` (24 modules;
   search by route string ACROSS routes/), request models in `schemas.py`.
   Handlers reach shared state via `d.*`; tests monkeypatch `_MAX_UPLOAD_BYTES`
   and `_graceful_stop` on the app module, so routes access those via
