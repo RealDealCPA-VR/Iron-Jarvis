@@ -29,6 +29,26 @@ _ANSI_RE = re.compile(
 )
 
 
+def _safe_replay_start(buf: bytes | bytearray, scan: int = 4096) -> int:
+    """Byte offset where a TRUNCATED output stream can safely re-enter a
+    terminal renderer.
+
+    A rolling byte cap slices arbitrarily — mid UTF-8 code point, mid escape
+    sequence — and replaying from the raw cut renders mojibake / a garbage
+    head line (live-hit 2026-07-16: a re-attached Grok TUI pane came back
+    "blocky"). Skip any leading UTF-8 continuation bytes, then re-enter at
+    the earlier of the next ESC (a sequence starts there) or just past the
+    next newline, looking at most ``scan`` bytes ahead."""
+    i = 0
+    while i < len(buf) and 0x80 <= buf[i] <= 0xBF:
+        i += 1
+    window = bytes(buf[i : i + scan])
+    esc = window.find(b"\x1b")
+    nl = window.find(b"\n")
+    anchors = [a for a in (esc, nl + 1 if nl >= 0 else -1) if a >= 0]
+    return i + min(anchors) if anchors else i
+
+
 class TerminalSession:
     """One real shell the user can type into, streamed over a WebSocket.
 
@@ -63,6 +83,10 @@ class TerminalSession:
         self._write_lock = threading.Lock()
         # Bounded tail of recent output — context for the per-terminal AI assist.
         self._tail = bytearray()
+        # True once the tail has been head-trimmed (or restored from a sliced
+        # snapshot): its first bytes may sit mid-sequence, so replay serves
+        # from a safe boundary instead (see _safe_replay_start).
+        self._tail_truncated = False
         # True when we fell back to a pipe-based shell (no real TTY) because the
         # PTY backend spawned a shell that died immediately (e.g. a frozen build
         # missing the ConPTY host exe). Commands still run; fancy TTY apps don't.
@@ -103,6 +127,7 @@ class TerminalSession:
             self._tail += data
             if len(self._tail) > TAIL_MAX_BYTES:
                 del self._tail[: len(self._tail) - TAIL_MAX_BYTES]
+                self._tail_truncated = True
             self.last_output_at = time.monotonic()
         return data
 
@@ -167,7 +192,11 @@ class TerminalSession:
 
     def scrollback_bytes(self) -> bytes:
         """The raw recent output (with ANSI intact) to REPLAY into a re-attaching
-        pane so it renders its history instead of a blank screen."""
+        pane so it renders its history instead of a blank screen. A truncated
+        tail is served from a safe boundary — its raw head can sit mid escape
+        sequence / mid code point and would render as garbage."""
+        if self._tail_truncated:
+            return bytes(self._tail[_safe_replay_start(self._tail):])
         return bytes(self._tail)
 
     def resize(self, cols: int, rows: int) -> None:

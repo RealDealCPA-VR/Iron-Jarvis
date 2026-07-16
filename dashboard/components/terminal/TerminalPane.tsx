@@ -325,6 +325,11 @@ export function TerminalPane({
       ws.binaryType = "arraybuffer";
       ws.onopen = () => {
         attempts = 0;
+        // Every (re)attach replays the session's full scrollback — reset so it
+        // lands on a clean screen instead of appending to a buffer that already
+        // holds the same history (doubled output after a silent reconnect), and
+        // so a full-screen app's stale modes don't corrupt the replay.
+        term?.reset();
         // Guard the scrollback-replay window so echoed query answers ("[?1;2c")
         // don't get injected into the shell as fake input.
         replayGuardUntil = Date.now() + 800;

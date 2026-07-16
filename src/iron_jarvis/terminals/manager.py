@@ -273,6 +273,9 @@ class TerminalManager:
         if sb:
             try:
                 session._tail = bytearray(base64.b64decode(sb))
+                # A snapshot that FILLED its cap was sliced at a raw byte
+                # offset — serve its replay from a safe boundary, not the cut.
+                session._tail_truncated = len(session._tail) >= _SNAPSHOT_SCROLLBACK
             except Exception:  # pragma: no cover - bad data, keep the fresh shell
                 pass
         with self._lock:

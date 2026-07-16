@@ -115,6 +115,9 @@ def register(app: FastAPI, d) -> None:
                     await asyncio.sleep(0.01)
 
         out = asyncio.create_task(pump_output())
+        # One repaint nudge per attach (armed until the pane's first resize,
+        # which it always sends right after opening — see TerminalPane.onopen).
+        repaint_pending = True
         try:
             while True:
                 msg = await ws.receive()
@@ -128,7 +131,19 @@ def register(app: FastAPI, d) -> None:
                         except (ValueError, TypeError):
                             obj = None
                         if isinstance(obj, dict) and obj.get("type") == "resize":
-                            session.resize(int(obj["cols"]), int(obj["rows"]))
+                            cols, rows = int(obj["cols"]), int(obj["rows"])
+                            # Scrollback replay can't reconstruct a FULL-SCREEN
+                            # app's frame: a TUI (grok/claude/codex) paints only
+                            # CHANGED cells, and its screen-setup sequences have
+                            # long rolled out of the tail — a re-attached pane
+                            # showed a blocky patchwork (live-hit 2026-07-16).
+                            # A resize wiggle (one row down, then back) makes
+                            # the app itself repaint every cell at the right
+                            # size; a line-mode shell just ignores it.
+                            if repaint_pending and rows > 1:
+                                session.resize(cols, rows - 1)
+                            repaint_pending = False
+                            session.resize(cols, rows)
                         else:
                             session.write(text)
                     elif msg.get("bytes") is not None:
