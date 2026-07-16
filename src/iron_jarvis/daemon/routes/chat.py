@@ -14,7 +14,7 @@ from pathlib import Path
 from sqlmodel import select
 from typing import Any
 
-from ..schemas import ChatBody, PersonaCreateBody, PersonaSaveBody
+from ..schemas import ChatBody, ChatShareBody, PersonaCreateBody, PersonaSaveBody
 from ...core.db import session_scope
 from ...core.fs_policy import fs_read_ok
 from ...core.models import AgentType
@@ -51,6 +51,46 @@ async def _router_frames(router, **kwargs):
         "provider": route.provider,
         "model": route.model,
     }
+
+
+def _share_transcript(title: str, persona: str, updated_at, msgs: list) -> str:
+    """The VERBATIM thread as shareable markdown. Deterministic — no model in
+    the loop — so what the user shares is exactly what was said. Message
+    extras (attachments, tools used, interruption) ride along as footnotes;
+    dropping them would misrepresent how a reply was produced."""
+    meta = ["Shared from Iron Jarvis"]
+    if persona:
+        meta.append(f"persona: {persona}")
+    if updated_at is not None:
+        try:
+            meta.append(updated_at.strftime("%Y-%m-%d %H:%M UTC"))
+        except Exception:  # noqa: BLE001 — a str timestamp still shares fine
+            meta.append(str(updated_at))
+    lines = [f"# {title}", "", "_" + " · ".join(meta) + "_", "", "---"]
+    for m in msgs:
+        if not isinstance(m, dict):
+            continue
+        who = "You" if m.get("role") == "user" else "Iron Jarvis"
+        lines += ["", f"### {who}", ""]
+        lines.append(str(m.get("content") or "").strip() or "_(empty message)_")
+        extras = []
+        names = m.get("attachmentNames") or []
+        if names:
+            extras.append("Attached: " + ", ".join(str(n) for n in names))
+        tools = m.get("toolsUsed") or []
+        if tools:
+            extras.append("Tools used: " + ", ".join(str(t) for t in tools))
+        if m.get("interrupted"):
+            extras.append("reply was interrupted mid-stream")
+        if extras:
+            lines += ["", "_" + " · ".join(extras) + "_"]
+    return "\n".join(lines) + "\n"
+
+
+#: Compact-mode input budget (chars). Beyond it the transcript is clipped
+#: head+tail with an EXPLICIT omission marker — the model must never receive
+#: a silently truncated conversation and present its digest as complete.
+_SHARE_COMPACT_INPUT = 24_000
 
 
 def register(app: FastAPI, d) -> None:
@@ -149,6 +189,106 @@ def register(app: FastAPI, d) -> None:
             db.delete(r)
             db.commit()
         return {"deleted": thread_id}
+
+    @app.post("/chat/threads/{thread_id}/share")
+    async def share_chat_thread(thread_id: str, body: ChatShareBody) -> dict[str, Any]:
+        """Render a saved thread for sharing: ``mode`` full (verbatim
+        transcript) or compact (a faithful digest via the one-shot LLM path),
+        as markdown or a self-contained HTML page. Returns the text — the
+        dashboard copies/downloads it; the daemon never publishes anything."""
+        from ...core.models import ChatThreadRecord
+
+        mode = (body.mode or "full").strip().lower()
+        fmt = (body.format or "markdown").strip().lower()
+        if mode not in ("full", "compact"):
+            raise HTTPException(status_code=400, detail="mode must be 'full' or 'compact'")
+        if fmt not in ("markdown", "html"):
+            raise HTTPException(status_code=400, detail="format must be 'markdown' or 'html'")
+        with session_scope(d.platform.engine) as db:
+            r = db.get(ChatThreadRecord, thread_id)
+        if r is None:
+            raise HTTPException(status_code=404, detail="no such thread")
+        try:
+            msgs = json.loads(r.messages_json or "[]")
+        except Exception:  # noqa: BLE001
+            msgs = []
+        if not msgs:
+            raise HTTPException(status_code=400, detail="this thread has no messages to share")
+        title = (r.title or "Chat").strip() or "Chat"
+        transcript = _share_transcript(title, r.persona or "", r.updated_at, msgs)
+
+        used_provider = None
+        if mode == "compact":
+            from ...providers.adapters.base import LLMMessage
+            from ...providers.adapters.mock import MockLLMAdapter
+
+            provider = body.provider or d.platform.config.default_provider
+            model = body.model or d.platform.config.default_model
+            try:
+                adapter = d.platform.providers.get(provider, model)
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+            # A mock adapter would FABRICATE a digest of a real conversation —
+            # never acceptable here (unlike the workflow builder's offline
+            # demo). Route to the strongest REAL provider instead; with none
+            # connected, refuse honestly. Checking the resolved adapter — not
+            # the provider name — keeps a working adapter injected by tests on
+            # the normal path.
+            if isinstance(adapter, MockLLMAdapter):
+                adapter, provider = d._failover_adapter("mock")
+                if adapter is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="connect a model on the Connections page to compact chats"
+                        " — the full transcript works offline",
+                    )
+            clipped = transcript
+            if len(clipped) > _SHARE_COMPACT_INPUT:
+                head, tail = _SHARE_COMPACT_INPUT // 3, _SHARE_COMPACT_INPUT * 2 // 3
+                clipped = (
+                    clipped[:head]
+                    + "\n\n[… middle of the conversation omitted for length —"
+                    " say so in the digest …]\n\n"
+                    + clipped[-tail:]
+                )
+            system = (
+                "You compact chat transcripts for sharing. Produce a faithful,"
+                " self-contained digest in markdown: one opening paragraph of what"
+                " the conversation was about, a '## Key points' bullet list"
+                " (decisions, answers, figures, links — keep exact numbers, names"
+                " and code identifiers as written), and '## Where it landed' with"
+                " the outcome / next steps. NEVER invent content that is not in"
+                " the transcript; if the transcript notes an omitted middle, say"
+                " the digest covers the shared parts. No preamble, no sign-off."
+            )
+            resp, used_provider, _m = await d._one_shot_complete(
+                provider, adapter, system=system,
+                messages=[LLMMessage(role="user", content=clipped)],
+            )
+            digest = (resp.text or "").strip()
+            if not digest:
+                raise HTTPException(
+                    status_code=422, detail="the model returned an empty digest — try again"
+                )
+            content = (
+                f"# {title} — compacted\n\n"
+                f"_A digest of {len(msgs)} messages · shared from Iron Jarvis_\n\n"
+                f"{digest}\n"
+            )
+        else:
+            content = transcript
+
+        if fmt == "html":
+            from ...documents.writers import html_page
+
+            content = html_page(content, title=title)
+        out: dict[str, Any] = {
+            "content": content, "mode": mode, "format": fmt,
+            "title": title, "messages": len(msgs),
+        }
+        if used_provider:
+            out["provider"] = used_provider
+        return out
 
     def _persona_store():
         from ...personas import PersonaStore

@@ -893,6 +893,19 @@ hr { border: none; border-top: 1px solid #ccc; margin: 1.5em 0; }
 _HTML_FOOT = "\n</body>\n</html>\n"
 
 
+def html_page(markdown_text: str, title: str = "") -> str:
+    """A full standalone HTML page rendered from markdown TEXT (nothing is
+    written to disk) — the same rendering ``write_document`` uses for ``.html``
+    files, so shared/exported pages look identical to created ones."""
+    body = _html_render(parse_markdown(markdown_text))
+    head = _HTML_HEAD
+    if title:
+        head = head.replace(
+            "<style>", f"<title>{_html_mod.escape(title)}</title>\n<style>", 1
+        )
+    return head + body + _HTML_FOOT
+
+
 def _write_html(p: Path, content: Any) -> None:
     if isinstance(content, str):
         sniff = content.lstrip().lower()

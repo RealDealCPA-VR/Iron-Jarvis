@@ -26,6 +26,7 @@ import {
   Paperclip,
   Plus,
   Send,
+  Share2,
   Square,
   Trash2,
   User,
@@ -37,6 +38,7 @@ import { get, post, put, del, ApiError, API_BASE, ijToken } from "@/lib/api";
 import { timeAgo } from "@/lib/format";
 import { Empty, ErrorNote, OfflineHint } from "@/components/ui";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
+import { ShareChatDialog } from "@/components/chat/ShareChatDialog";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -324,6 +326,8 @@ export function ProjectChat({
 }) {
   const [threads, setThreads] = useState<ThreadRow[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
+  // Share dialog target (full transcript / compacted digest of one thread).
+  const [shareFor, setShareFor] = useState<ThreadRow | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -611,6 +615,14 @@ export function ProjectChat({
                   <div className="truncate text-zinc-200">{t.title || "Untitled chat"}</div>
                   <div className="text-[10px] text-zinc-600">{timeAgo(t.updated_at)}</div>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setShareFor(t)}
+                  className="shrink-0 rounded p-1 text-zinc-500 transition-colors hover:text-accent-soft"
+                  title="Share this conversation"
+                >
+                  <Share2 size={12} />
+                </button>
                 {pendingDelete === t.id ? (
                   <button
                     type="button"
@@ -734,6 +746,14 @@ export function ProjectChat({
           </div>
         </div>
       </div>
+
+      {shareFor && (
+        <ShareChatDialog
+          threadId={shareFor.id}
+          title={shareFor.title?.trim() || "Chat"}
+          onClose={() => setShareFor(null)}
+        />
+      )}
     </div>
   );
 }

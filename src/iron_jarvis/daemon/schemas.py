@@ -99,6 +99,17 @@ class ChatBody(BaseModel):
     workspace_dir: str = ""
 
 
+class ChatShareBody(BaseModel):
+    """Render a saved chat thread for sharing. ``mode`` full = the verbatim
+    transcript; compact = a faithful one-shot LLM digest. Read-only — the
+    daemon returns text; nothing leaves the machine unless the user does it."""
+
+    mode: str = "full"  # full | compact
+    format: str = "markdown"  # markdown | html (self-contained page)
+    provider: str = ""  # compact-mode LLM override ("" = default)
+    model: str = ""
+
+
 class ProjectCreate(BaseModel):
     """A context-spine project: brief + activity shared across all surfaces."""
 

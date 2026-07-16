@@ -67,6 +67,7 @@ import {
   Save,
   Search,
   Send,
+  Share2,
   Sparkles,
   Square,
   Trash2,
@@ -92,6 +93,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
+import { ShareChatDialog } from "@/components/chat/ShareChatDialog";
 
 type Mode = "chat" | "agent";
 
@@ -812,6 +814,8 @@ export default function ChatPage() {
   // Threads sidebar: the saved-conversation list + which one is loaded.
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
+  // Share dialog for the OPEN thread (full transcript / compacted digest).
+  const [shareOpen, setShareOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false); // mobile-only toggle
   const [threadQuery, setThreadQuery] = useState(""); // sidebar title filter
   const [threadsLoading, setThreadsLoading] = useState(true); // first threads fetch
@@ -2109,6 +2113,8 @@ export default function ChatPage() {
   }
 
   const started = messages.length > 0 || sessionId !== null || threadId !== null;
+  const shareTitle =
+    threads.find((t) => t.id === threadId)?.title?.trim() || "Chat";
   const personaNames = personas.map((p) => p.name);
   const curPersona = personas.find((p) => p.name === persona);
   const selectedPersonaDesc = curPersona?.description ?? "";
@@ -2127,6 +2133,20 @@ export default function ChatPage() {
           subtitle="Talk to Iron Jarvis. Chat mode answers directly in seconds; Agent mode does real work with tools."
           actions={
             <div className="flex flex-wrap items-center gap-2">
+              {/* Share the open thread — full transcript or compacted digest. */}
+              <button
+                type="button"
+                onClick={() => setShareOpen(true)}
+                disabled={!threadId}
+                title={
+                  threadId
+                    ? "Share this chat — full transcript or a compacted digest"
+                    : "A chat can be shared after its first reply (it saves automatically)"
+                }
+                className="btn-ghost px-2.5 py-1.5 text-[13px] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Share2 size={14} /> Share
+              </button>
               {/* Voice: hands-free Voice Chat + spoken-replies toggle. */}
               <button
                 type="button"
@@ -3222,6 +3242,14 @@ export default function ChatPage() {
           )}
         </div>
       </Reveal>
+
+      {shareOpen && threadId && (
+        <ShareChatDialog
+          threadId={threadId}
+          title={shareTitle}
+          onClose={() => setShareOpen(false)}
+        />
+      )}
     </PageShell>
   );
 }
