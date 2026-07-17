@@ -22,6 +22,26 @@ from .types import AgentDefinition
 
 _TERMINAL = {AgentState.COMPLETED, AgentState.FAILED, AgentState.CANCELLED}
 
+
+def is_direct_workspace(config, workspace_path: str | Path | None) -> bool:
+    """True when a session runs DIRECTLY in a user-chosen folder (a project's
+    in-folder task, created with ``workspace_root=...``), not in a disposable
+    dir under ``workspaces_dir``.
+
+    The honest signal: ``create_session`` only ever places a session OUTSIDE the
+    managed ``workspaces_dir`` when the caller passed ``workspace_root``, so the
+    stored ``Session.workspace_path`` alone answers it — no guessed flag. Shared
+    by the runtime (environment prompt) and the orchestrator (rerun) so both
+    always agree on which kind of workspace a session has."""
+    if not workspace_path:
+        return False
+    try:
+        ws = Path(workspace_path).resolve()
+        managed = Path(config.workspaces_dir).resolve()
+    except (OSError, ValueError):  # unresolvable path -> the safe default
+        return False
+    return ws != managed and managed not in ws.parents
+
 #: Cap on tool output fed into the MODEL CONTEXT (the full output still lands in the
 #: DB transcript). Without it, a large read/shell/grep result is re-sent on every
 #: subsequent step of the loop — O(n^2) token growth at full input price.
@@ -205,16 +225,33 @@ class AgentRuntime:
         # ENVIRONMENT: agents kept mistaking the scratch workspace for the
         # user's real files ("list my Downloads" -> listing an empty sandbox,
         # burning tokens). Spell out the split + the real home directory.
+        # An in-folder project session is the OPPOSITE case — its file tools
+        # operate directly in the user's own folder, and the scratch line here
+        # contradicted the task text ("you are working directly inside the
+        # project folder") — so state whichever is actually true.
         try:
-            system_prompt += (
-                "\n\n# Environment\n"
-                f"- The user's real home directory: {Path.home()}\n"
-                "- Your file tools (read_file/write_file/list_files) operate in a "
-                "SCRATCH workspace — it is NOT where the user's files live.\n"
-                "- For the user's REAL folders/files (Downloads, Documents, ...) "
-                "use list_folder / read_document / convert_document with "
-                "ABSOLUTE paths (reads are policy-gated).\n"
-            )
+            if is_direct_workspace(self.p.config, session.workspace_path):
+                system_prompt += (
+                    "\n\n# Environment\n"
+                    f"- The user's real home directory: {Path.home()}\n"
+                    "- Your file tools (read_file/write_file/list_files) operate "
+                    f"directly in the project folder at {workspace} — these ARE "
+                    "the user's real files; treat them as real data, not a "
+                    "scratch sandbox.\n"
+                    "- For the user's OTHER folders/files (Downloads, Documents, "
+                    "...) use list_folder / read_document / convert_document "
+                    "with ABSOLUTE paths (reads are policy-gated).\n"
+                )
+            else:
+                system_prompt += (
+                    "\n\n# Environment\n"
+                    f"- The user's real home directory: {Path.home()}\n"
+                    "- Your file tools (read_file/write_file/list_files) operate in a "
+                    "SCRATCH workspace — it is NOT where the user's files live.\n"
+                    "- For the user's REAL folders/files (Downloads, Documents, ...) "
+                    "use list_folder / read_document / convert_document with "
+                    "ABSOLUTE paths (reads are policy-gated).\n"
+                )
         except Exception:  # noqa: BLE001
             pass
         # MEMORY FABRIC: fold in the most relevant snippets from every store

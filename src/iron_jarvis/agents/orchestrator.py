@@ -22,6 +22,7 @@ from ..core.models import (
     AgentState,
     AgentType,
     PendingReviewRecord,
+    Project,
     Session,
     SessionStatus,
     ToolInvocation,
@@ -33,7 +34,7 @@ from ..git.review import (
     build_review,
     reject as _reject_review,
 )
-from .runtime import AgentRuntime
+from .runtime import AgentRuntime, is_direct_workspace
 from .supervisor import run_supervised
 from .types import get_agent_definition
 
@@ -393,13 +394,25 @@ class Orchestrator:
         return self.get_session(session_id) or session
 
     async def rerun_session(self, session_id: str) -> Session:
-        """Clone a session's inputs (task/agent/provider/model) into a fresh run.
+        """Clone a session's inputs (task/agent/provider/model/grants/folder)
+        into a fresh run.
 
         A MAINTAINER (self-dev) session is re-run as self-dev so it still lands on
-        an Iron Jarvis worktree (and fails closed if self-dev is now disabled)."""
+        an Iron Jarvis worktree (and fails closed if self-dev is now disabled).
+        A session that ran DIRECTLY in a user folder (a project's in-folder task)
+        re-runs THERE — cloning only task/model used to dump the rerun's
+        deliverable into a throwaway scratch workspace — and its bundle-approved
+        tool grant carries over so the pre-approved tools don't fail closed."""
+        import json as _json
+
         prev = self.get_session(session_id)
         if prev is None:
             raise KeyError(f"unknown session '{session_id}'")
+        try:  # the up-front tool grant the user approved for THIS task
+            raw = _json.loads(prev.allow_tools_json or "[]")
+            allow_tools = [str(t) for t in raw if t] if isinstance(raw, list) else []
+        except (ValueError, TypeError):
+            allow_tools = []
         return await self.create_session(
             prev.task,
             prev.agent_type,
@@ -407,7 +420,28 @@ class Orchestrator:
             model=prev.model,
             self_dev=prev.agent_type is AgentType.MAINTAINER,
             project_id=prev.project_id,  # a rerun stays in its project (spine)
+            allow_tools=allow_tools or None,
+            workspace_root=self._rerun_direct_root(prev),
         )
+
+    def _rerun_direct_root(self, prev: Session) -> str | None:
+        """The folder a rerun should run DIRECTLY in, or None for a fresh
+        scratch workspace.
+
+        Honest signal (see ``is_direct_workspace``): a ``workspace_path``
+        outside the managed ``workspaces_dir`` can ONLY mean the session was
+        created with ``workspace_root=...``. When the session's project has
+        since moved its folder, the project's CURRENT root wins so the rerun
+        lands where the project lives now, not in the stale location."""
+        if not is_direct_workspace(self.p.config, prev.workspace_path):
+            return None
+        if prev.project_id:
+            with session_scope(self.p.engine) as db:
+                project = db.get(Project, prev.project_id)
+            current = (project.root or "").strip() if project is not None else ""
+            if current:
+                return current
+        return prev.workspace_path
 
     async def continue_session(self, session_id: str, message: str) -> Session:
         """Start a follow-up run that reuses the finished session's workspace and

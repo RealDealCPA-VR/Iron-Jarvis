@@ -1,11 +1,13 @@
 "use client";
 
 // A lightweight, self-contained project-grounded chat. Unlike the full /chat
-// page this has NO agent mode, voice, skill picker, or tool loop — just a direct
+// page this has NO agent mode, skill picker, or free tool arming — just a direct
 // POST /chat completion grounded in THIS project (project_id is always sent, so
-// the reply carries the project's instructions + knowledge). Conversations live
-// in a narrow left sub-rail; every completed turn autosaves to
-// PUT /chat/threads/{id} with project_id so the thread stays in this project.
+// the reply carries the project's instructions + knowledge). File tools arm
+// automatically when the project folder exists on disk; a per-project Web chip
+// arms web research. Conversations live in a narrow left sub-rail; every
+// completed turn autosaves to PUT /chat/threads/{id} with project_id so the
+// thread stays in this project.
 
 import {
   createContext,
@@ -21,6 +23,7 @@ import {
   Bot,
   Check,
   Copy,
+  Globe,
   Loader2,
   MessageSquare,
   Paperclip,
@@ -29,6 +32,7 @@ import {
   Share2,
   Square,
   Trash2,
+  TriangleAlert,
   User,
   X,
 } from "lucide-react";
@@ -78,6 +82,38 @@ interface UploadedFile {
 
 const MAX_ATTACHMENTS = 4;
 const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB
+
+// A project with an existing folder gets file tools, so the model can find,
+// read, EXTRACT (read_document handles PDF/Word/Excel/PowerPoint), and GENERATE
+// files directly in the folder (run there server-side). Exactly 6 — the chat
+// tool loop TRUNCATES body.tools at six, so every set below is a deliberate ≤6
+// list (nothing may ever be silently dropped off the end).
+const FILE_TOOLS = [
+  "file_search",
+  "read_document",
+  "read_file",
+  "list_files",
+  "write_document",
+  "write_file",
+];
+// The Web chip arms web research (search + page fetch). The chat route drops
+// names missing from the registry, so an unregistered web_fetch is inert.
+const WEB_TOOLS = ["web_search", "web_fetch"];
+// Web + the full file set would exceed the 6-tool cap and the server would
+// silently drop the tail, so with Web on the file set shrinks to its four
+// essentials — file_search still finds files and read_document also reads
+// plain text, making read_file/list_files the two safe drops.
+const FILE_TOOLS_WITH_WEB = [
+  "file_search",
+  "read_document",
+  "write_document",
+  "write_file",
+];
+
+/** localStorage key for the per-project Web-chip state ("1" = armed). */
+function webChipKey(projectId: string): string {
+  return `ij_project_web_${projectId}`;
+}
 
 /** Read a File as raw base64 (FileReader gives a data: URL — strip the prefix). */
 function readAsBase64(file: File): Promise<string> {
@@ -320,8 +356,10 @@ export function ProjectChat({
   projectId: string;
   defaultProvider?: string;
   defaultModel?: string;
-  /** True when the project has a folder — the chat then arms file tools so the
-   *  model can read, edit, and create files directly in that folder. */
+  /** True when the project has a folder SET — the chat then arms file tools so
+   *  the model can read, edit, and create files directly in that folder. Whether
+   *  the folder still EXISTS on disk is checked separately (root_exists below);
+   *  a confirmed-missing folder keeps file tools off. */
   hasRoot?: boolean;
 }) {
   const [threads, setThreads] = useState<ThreadRow[]>([]);
@@ -336,6 +374,15 @@ export function ProjectChat({
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  // Web-research chip — off by default, persisted per project in localStorage.
+  const [webArmed, setWebArmed] = useState(false);
+  // Whether the project folder still EXISTS on disk (null = unknown). The
+  // parent only knows a root is SET; writes against a moved/deleted root land
+  // in a fallback dir, so file tools disarm on a confirmed-missing folder.
+  const [rootExists, setRootExists] = useState<boolean | null>(null);
+  // Daemon unreachable while loading the thread rail — shown as an honest
+  // offline hint instead of a false "No conversations yet" empty state.
+  const [threadsOffline, setThreadsOffline] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -360,6 +407,7 @@ export function ProjectChat({
     try {
       const d = await get<{ threads: ThreadRow[] }>(url);
       setThreads(d.threads ?? []);
+      setThreadsOffline(false); // reachable again — the rail is live
     } catch {
       /* quiet — the list just goes stale */
     }
@@ -369,16 +417,50 @@ export function ProjectChat({
     let cancelled = false;
     get<{ threads: ThreadRow[] }>(url)
       .then((d) => {
-        if (!cancelled) setThreads(d.threads ?? []);
+        if (cancelled) return;
+        setThreads(d.threads ?? []);
+        setThreadsOffline(false);
       })
-      .catch(() => {
-        /* sidebar stays empty */
+      .catch((e) => {
+        // An unreachable daemon must NOT masquerade as an empty project — the
+        // rail shows the offline hint instead. Other errors: sidebar stays empty.
+        if (!cancelled && e instanceof ApiError && e.status === 0) setThreadsOffline(true);
       });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
+
+  // Hydrate the Web chip from localStorage AFTER mount so the server-rendered
+  // markup (chip off) always matches the first client render.
+  useEffect(() => {
+    try {
+      setWebArmed(localStorage.getItem(webChipKey(projectId)) === "1");
+    } catch {
+      /* storage unavailable — the chip just starts off */
+    }
+  }, [projectId]);
+
+  // Verify the project folder actually exists before trusting hasRoot with
+  // write tools. Only an EXPLICIT root_exists === false disarms (matching the
+  // workspace's own flagging convention); a failed check leaves it unknown —
+  // if the daemon is down the chat request fails honestly anyway.
+  useEffect(() => {
+    if (!hasRoot) return;
+    let cancelled = false;
+    setRootExists(null);
+    get<{ project?: { root_exists?: boolean } }>(`/projects/${encodeURIComponent(projectId)}`)
+      .then((d) => {
+        if (!cancelled) setRootExists(d.project?.root_exists !== false);
+      })
+      .catch(() => {
+        /* unknown — keep null */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, hasRoot]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -466,28 +548,22 @@ export function ProjectChat({
     const controller = new AbortController();
     abortRef.current = controller;
     try {
+      // File tools arm only when the folder is not confirmed missing; the Web
+      // chip adds web research. Both together must fit the server's 6-tool cap,
+      // so the combined set swaps in FILE_TOOLS_WITH_WEB (see the constants).
+      const fileToolsOn = hasRoot && rootExists !== false;
+      const tools = webArmed
+        ? [...WEB_TOOLS, ...(fileToolsOn ? FILE_TOOLS_WITH_WEB : [])]
+        : fileToolsOn
+          ? FILE_TOOLS
+          : [];
       const body: Record<string, unknown> = {
         messages: history.map(({ role, content }) => ({ role, content })),
         project_id: projectId,
         ...(defaultProvider ? { provider: defaultProvider } : {}),
         ...(defaultModel ? { model: defaultModel } : {}),
         ...(atts.length ? { attachments: atts.map((a) => a.path) } : {}),
-        // A project with a folder gets file tools, so the model can find, read,
-        // EXTRACT (read_document handles PDF/Word/Excel/PowerPoint), and GENERATE
-        // files directly in the folder (run there server-side). Capped at 6 —
-        // the tool loop enforces it — covering search + text/doc read + write.
-        ...(hasRoot
-          ? {
-              tools: [
-                "file_search",
-                "read_document",
-                "read_file",
-                "list_files",
-                "write_document",
-                "write_file",
-              ],
-            }
-          : {}),
+        ...(tools.length ? { tools } : {}),
       };
       const res = await post<ChatResponse>("/chat", body, { signal: controller.signal });
       if (chatGenRef.current !== gen) return; // switched away mid-flight
@@ -511,6 +587,17 @@ export function ProjectChat({
   /** Stop the in-flight reply — aborts the request and hands control back. */
   function stop() {
     abortRef.current?.abort();
+  }
+
+  /** Toggle the Web chip; the choice persists per project (best-effort). */
+  function toggleWeb() {
+    const next = !webArmed;
+    setWebArmed(next);
+    try {
+      localStorage.setItem(webChipKey(projectId), next ? "1" : "0");
+    } catch {
+      /* persistence is best-effort */
+    }
   }
 
   function send() {
@@ -595,7 +682,11 @@ export function ProjectChat({
           <Plus size={14} /> New chat
         </button>
         <div className="max-h-[60vh] space-y-1 overflow-y-auto">
-          {threads.length === 0 ? (
+          {threadsOffline ? (
+            // Daemon unreachable — an honest offline hint, never a false
+            // "No conversations yet" (the threads may well exist).
+            <OfflineHint />
+          ) : threads.length === 0 ? (
             <p className="px-1 py-2 text-[11px] text-zinc-600">No conversations yet.</p>
           ) : (
             threads.map((t) => (
@@ -699,6 +790,16 @@ export function ProjectChat({
               ))}
             </div>
           )}
+          {hasRoot && rootExists === false && (
+            // The folder is CONFIRMED gone — say so instead of quietly writing
+            // into a fallback dir (the header has the control to update it).
+            <div
+              title="This project's folder no longer exists on disk — file tools stay off so nothing lands in a fallback location. Update the folder in the project header."
+              className="mb-2 inline-flex items-center gap-1.5 rounded-md border border-amber-400/30 bg-amber-400/[0.12] px-2 py-1 text-[11px] font-medium text-amber-400"
+            >
+              <TriangleAlert size={11} className="shrink-0" /> folder missing — file tools off
+            </div>
+          )}
           <div className="flex items-end gap-2">
             <button
               type="button"
@@ -708,6 +809,23 @@ export function ProjectChat({
               className="btn-ghost shrink-0 !px-2.5"
             >
               {uploading ? <Loader2 size={14} className="animate-spin" /> : <Paperclip size={14} />}
+            </button>
+            <button
+              type="button"
+              onClick={toggleWeb}
+              aria-pressed={webArmed}
+              title={
+                webArmed
+                  ? "Web research on — the model can search the web in this chat"
+                  : "Arm web research for this chat"
+              }
+              className={
+                webArmed
+                  ? "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl border border-accent/40 bg-accent/[0.12] px-2.5 py-2 text-sm font-medium text-accent-soft transition-colors hover:bg-accent/[0.18]"
+                  : "btn-ghost shrink-0 !gap-1.5 !px-2.5"
+              }
+            >
+              <Globe size={14} /> Web
             </button>
             <input ref={fileRef} type="file" multiple className="hidden" onChange={onPickFiles} />
             <textarea

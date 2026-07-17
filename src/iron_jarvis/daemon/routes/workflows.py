@@ -28,7 +28,16 @@ def register(app: FastAPI, d) -> None:
         if body.toml:
             wf = load_workflow_toml(body.toml)
         elif body.name and body.steps is not None:
-            wf = load_workflow({"name": body.name, "steps": body.steps})
+            # Project pin: an explicit body.project_id wins ("" = force
+            # unpinned); otherwise a run of a SAVED def inherits its pin.
+            pid = body.project_id
+            if pid is None:
+                from ...workflows.store import WorkflowStore
+
+                pid = WorkflowStore(d.platform.engine).get_project_id(body.name)
+            wf = load_workflow(
+                {"name": body.name, "steps": body.steps, "project_id": pid}
+            )
         else:
             raise HTTPException(status_code=400, detail="provide `toml` or `name`+`steps`")
         # Create the record synchronously (validating steps), then run it in the
@@ -106,19 +115,28 @@ def register(app: FastAPI, d) -> None:
     def save_workflow(body: WorkflowSaveBody) -> dict[str, Any]:
         from ...workflows.store import WorkflowStore
 
-        rec = WorkflowStore(d.platform.engine).save(
-            body.name, body.steps, description=body.description
+        store = WorkflowStore(d.platform.engine)
+        # None PRESERVES an existing pin (dashboards that don't know about
+        # pins re-save the whole def); "" explicitly unpins.
+        pid = body.project_id if body.project_id is not None else store.get_project_id(body.name)
+        rec = store.save(
+            body.name, body.steps, description=body.description, project_id=pid
         )
-        return rec.model_dump()
+        out = rec.model_dump()
+        out["project_id"] = store.get_project_id(body.name)
+        return out
 
     @app.get("/workflows/{name}")
     def get_workflow(name: str) -> dict[str, Any]:
         from ...workflows.store import WorkflowStore
 
-        rec = WorkflowStore(d.platform.engine).get(name)
+        store = WorkflowStore(d.platform.engine)
+        rec = store.get(name)
         if rec is None:
             raise HTTPException(status_code=404, detail="no such workflow")
-        return rec.model_dump()
+        out = rec.model_dump()
+        out["project_id"] = store.get_project_id(name)
+        return out
 
     @app.delete("/workflows/{name}")
     def delete_workflow(name: str) -> dict[str, Any]:

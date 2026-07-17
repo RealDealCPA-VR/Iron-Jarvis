@@ -82,8 +82,9 @@ from .webhooks import models as _whk_models  # noqa: F401
 # Documents (all file types) + self-correcting learning loop.
 from .documents import document_tools
 
-# Web search (keyless) + MCP client (consume external MCP servers).
+# Web search (keyless) + page fetch + MCP client (consume external MCP servers).
 from .tools.websearch import web_search_tools
+from .tools.webfetch import web_fetch_tools
 from .mcp import mcp_tools
 from .learning import LearningEngine, learning_tools
 from .learning import models as _learn_models  # noqa: F401
@@ -562,6 +563,10 @@ def build_platform(
     for tool in web_search_tools(secret_resolver=secrets.get):
         registry.register(tool)
 
+    # Web fetch: read one result page so answers ground in content, not snippets.
+    for tool in web_fetch_tools():
+        registry.register(tool)
+
     # Pixio: generative media (image/video/audio) — the creative arm. Key from
     # the vault secret 'pixio' (or env PIXIO_API_KEY); the pixio-skill in the
     # skill library teaches agents the workflow. Tools are safe no-ops without
@@ -680,10 +685,17 @@ def build_platform(
             ref = payload.get("workflow") or payload.get("name")
             steps = payload.get("steps")
             if ref and not steps:
-                rec = WorkflowStore(platform.engine).get(ref)
+                store = WorkflowStore(platform.engine)
+                rec = store.get(ref)
                 if rec is None:
                     raise ValueError(f"scheduled workflow {ref!r} not found")
-                payload = {"name": rec.name, "steps": json.loads(rec.steps_json or "[]")}
+                payload = {
+                    "name": rec.name,
+                    "steps": json.loads(rec.steps_json or "[]"),
+                    # A scheduled SAVED workflow keeps its project pin — the
+                    # whole point of pinning is recurring in-project work.
+                    "project_id": store.get_project_id(rec.name),
+                }
             # Never silently "complete" a zero-step workflow — that masked every
             # mis-configured schedule as a success.
             if not payload.get("steps"):

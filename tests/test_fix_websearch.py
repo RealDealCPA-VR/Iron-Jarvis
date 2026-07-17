@@ -3,7 +3,8 @@
 The HTTP fetch is dependency-injected, so these never touch the network: a fake
 ``http_get`` returns canned DuckDuckGo HTML (or Brave JSON). We assert the parser
 pulls out title/url/snippet, that the UNTRUSTED fence wraps the output, that an
-injection-laced snippet is flagged + stopped, and the ToolResult shape.
+injection-laced snippet is withheld (with an honest note), and the ToolResult
+shape.
 """
 
 from __future__ import annotations
@@ -169,15 +170,18 @@ async def test_limit_is_respected(ctx):
 # --- safety ----------------------------------------------------------------
 
 
-async def test_injected_snippet_is_flagged_and_stopped(ctx):
+async def test_injected_snippet_is_withheld(ctx):
+    # Flagged results are dropped per-result with an honest note — one poisoned
+    # snippet no longer aborts the whole search (see test_websearch_robust.py).
     tool = WebSearchTool(http_get=_make_http_get(_DDG_HTML_INJECTED))
     res = await tool.execute({"query": "anything"}, ctx)
 
     assert isinstance(res, ToolResult)
-    assert res.ok is False
-    assert "stopped" in (res.error or "")
-    assert res.data["injection"]["flagged"] is True
-    assert res.data["injection"]["category"] == "instruction_override"
+    assert res.ok
+    assert res.data["count"] == 0
+    assert res.data["withheld"] == 1
+    assert "withheld by the injection scan" in res.output
+    assert "Ignore all previous instructions" not in res.output
 
 
 async def test_empty_query_rejected(ctx):
@@ -245,10 +249,14 @@ async def test_web_search_tool_via_registry(ctx):
 
 async def test_web_search_permission_denied(ctx):
     registry = ToolRegistry()
-    for tool in web_search_tools():
-        registry.register(tool)
-    # Default for web_search is "ask"; with no resolver, ASK fails closed -> deny.
-    perms = PermissionEngine({})
+
+    def _no_network(url, params):
+        raise AssertionError("denied search must never reach the network")
+
+    registry.register(WebSearchTool(http_get=_no_network))
+    # web_search is read-only and now allow-by-default headless (see
+    # test_web_headless_policy.py) — but an EXPLICIT user deny always wins.
+    perms = PermissionEngine({"web_search": "deny"})
     res = await registry.invoke("web_search", {"query": "python"}, ctx, perms)
     assert not res.ok
     assert "permission denied" in (res.error or "")

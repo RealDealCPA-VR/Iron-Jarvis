@@ -416,12 +416,18 @@ class WorkflowRunBody(BaseModel):
     toml: str | None = None
     name: str | None = None
     steps: list[dict] | None = None
+    #: Explicit project pin for THIS run. None inherits the saved def's pin
+    #: (matched by name); "" forces an unpinned run.
+    project_id: str | None = None
 
 
 class WorkflowSaveBody(BaseModel):
     name: str
     steps: list[dict] = []
     description: str = ""
+    #: Explicit project pin. None PRESERVES an existing pin (a UI that doesn't
+    #: know about pins must not silently unpin on re-save); "" unpins.
+    project_id: str | None = None
 
 
 class WorkflowGenerateBody(BaseModel):

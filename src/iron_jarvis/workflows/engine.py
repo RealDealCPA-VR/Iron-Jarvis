@@ -28,7 +28,7 @@ from typing import Any
 from ..core.db import dumps, session_scope
 from ..core.events import EventType
 from ..core.ids import utcnow
-from ..core.models import AgentType, SessionStatus
+from ..core.models import AgentType, Project, SessionStatus
 from .models import WorkflowRunRecord
 
 #: Context-chaining bounds: each earlier-step summary is clipped, and the whole
@@ -54,6 +54,11 @@ class WorkflowDef:
     name: str
     steps: list[Step] = field(default_factory=list)
     description: str = ""
+    #: Optional EXPLICIT project pin (context spine): when set, every run is
+    #: stamped with it and each step session is grounded in the project's
+    #: brief/instructions/knowledge. None = project-agnostic — the globally
+    #: active project never leaks into a workflow run.
+    project_id: str | None = None
 
 
 def _agent_type(name: str) -> AgentType:
@@ -80,6 +85,8 @@ def load_workflow(data: dict) -> WorkflowDef:
         name=str(data.get("name", "")),
         steps=steps,
         description=str(data.get("description", "")),
+        # Optional explicit project pin — absent/empty both mean unpinned.
+        project_id=(str(data.get("project_id") or "").strip() or None),
     )
 
 
@@ -146,9 +153,9 @@ class WorkflowEngine:
             workflow_name=workflow.name,
             status="running",
             # Workflows are their own module — a run is NOT tagged to whatever
-            # project is globally active (the project_id column stays for a
-            # future explicit per-workflow pin).
-            project_id=None,
+            # project is globally active; it carries a project ONLY when the def
+            # itself is explicitly pinned to one (None otherwise).
+            project_id=workflow.project_id,
             steps_json=dumps(steps_meta),
             session_ids_json="[]",
             outputs_json="{}",
@@ -181,6 +188,9 @@ class WorkflowEngine:
 
         orch = self.orchestrator or Orchestrator(self.platform)
         run_id = record.id
+        # Resolve the pinned project's folder ONCE for the whole run (None when
+        # unpinned, or when the folder is missing on disk — see the helper).
+        workspace_root = self._project_workspace_root(workflow.project_id)
         steps = list(workflow.steps)
         session_ids: list[str] = []
         outputs: dict[str, Any] = {}
@@ -198,8 +208,16 @@ class WorkflowEngine:
                 break
 
             task_text = step.task + self._context_block(completed)
+            # The def's explicit pin (None for unpinned workflows) grounds each
+            # step in the project — its instructions/knowledge inject at run
+            # time — and, when the project has a valid folder, runs the step
+            # directly IN that folder so deliverables land where the user expects.
             session = await orch.create_session(
-                task_text, _agent_type(step.agent), provider=None
+                task_text,
+                _agent_type(step.agent),
+                provider=None,
+                project_id=workflow.project_id,
+                workspace_root=workspace_root,
             )
             session_ids.append(session.id)
             # Record the live session id BEFORE running, so a cancel arriving
@@ -287,6 +305,23 @@ class WorkflowEngine:
             return ""
         parts.reverse()  # present oldest -> newest
         return "\n\n# Context from earlier steps" + "".join(parts)
+
+    def _project_workspace_root(self, project_id: str | None) -> str | None:
+        """Return the pinned project's folder for step sessions, or None.
+
+        Mirrors the project-task route's validation: the root must be set AND be
+        an existing directory. A moved/deleted folder returns None so the step
+        degrades to a normal per-session workspace instead of failing the run —
+        the pin's project context still applies; only the folder is skipped.
+        """
+        if not project_id:
+            return None
+        with session_scope(self.platform.engine) as db:
+            project = db.get(Project, project_id)
+        if project is None or not (project.root or "").strip():
+            return None
+        root = Path(project.root)
+        return str(root) if root.is_dir() else None
 
     def _get_record(self, run_id: str) -> WorkflowRunRecord | None:
         with session_scope(self.platform.engine) as db:

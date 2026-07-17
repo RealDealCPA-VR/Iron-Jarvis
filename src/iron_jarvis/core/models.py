@@ -238,6 +238,11 @@ class ChatThreadRecord(SQLModel, table=True):
     title: str = ""
     persona: str = ""
     messages_json: str = "[]"  # [{role, content, attachmentNames?}]
+    #: The thread's working SETUP — {tools, skill, workspace_dir, provider,
+    #: model} as compact JSON — so reopening a thread restores HOW the user
+    #: works in it, not just what was said (repetitive work stops being
+    #: re-setup work). "" = none. Additive column (auto-reconciled).
+    setup_json: str = ""
     project_id: str | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)

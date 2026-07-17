@@ -17,7 +17,7 @@ from typing import Any
 from ..schemas import ChatBody, ChatShareBody, PersonaCreateBody, PersonaSaveBody
 from ...core.db import session_scope
 from ...core.fs_policy import fs_read_ok
-from ...core.models import AgentType
+from ...core.models import AgentState, AgentType
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -92,6 +92,85 @@ def _share_transcript(title: str, persona: str, updated_at, msgs: list) -> str:
 #: a silently truncated conversation and present its digest as complete.
 _SHARE_COMPACT_INPUT = 24_000
 
+#: Armed-tools cap for one chat turn (the "+" menu). A saved thread setup
+#: honors the same cap, so a stored setup can never arm more than a live turn.
+_MAX_ARMED_TOOLS = 6
+
+#: Tool-loop budget per chat turn. The LAST round is completion-only — tools
+#: the model requests there would run without any round left to read their
+#: results, so they are skipped with an honest note instead of silently burned.
+_MAX_TOOL_ROUNDS = 4
+
+#: Per-attachment extract budget (chars); clips carry an explicit marker.
+_ATTACH_EXTRACT_CHARS = 6000
+
+
+def _clean_setup(raw: Any) -> str:
+    """Validate + compact a thread ``setup`` payload into its stored JSON.
+
+    Keeps ONLY the known keys ({tools, skill, workspace_dir, provider, model}),
+    correctly typed (tools: a list of strings, capped at the armed-tools MAX;
+    the rest: strings); unknown keys and mistyped values are dropped rather
+    than erroring. Returns "" when nothing valid remains, so ``has_setup``
+    stays an honest flag.
+    """
+    if not isinstance(raw, dict):
+        return ""
+    out: dict[str, Any] = {}
+    tools = raw.get("tools")
+    if isinstance(tools, list):
+        names = [t.strip() for t in tools if isinstance(t, str) and t.strip()]
+        if names:
+            out["tools"] = names[:_MAX_ARMED_TOOLS]
+    for key in ("skill", "workspace_dir", "provider", "model"):
+        val = raw.get(key)
+        if isinstance(val, str) and val.strip():
+            out[key] = val.strip()
+    return json.dumps(out, separators=(",", ":")) if out else ""
+
+
+def _clip_attachment(text: str) -> str:
+    """Clip an attachment extract to the budget, with an EXPLICIT marker when
+    content was dropped — an unmarked clip reads as the whole file, so the
+    model (and the user) would be silently misled about what was seen."""
+    if len(text) <= _ATTACH_EXTRACT_CHARS:
+        return text
+    return (
+        text[:_ATTACH_EXTRACT_CHARS]
+        + f"\n[attachment truncated: showing {_ATTACH_EXTRACT_CHARS} of {len(text)} chars]"
+    )
+
+
+def _persist_chat_usage(
+    d, *, provider: str, model: str, state: AgentState,
+    completions: int, usage_in: int, usage_out: int,
+) -> None:
+    """USAGE LEDGER: direct chat turns must count like agent runs, or the Usage
+    page under-reports the user's main surface. Persist a run row (session_id
+    "chat") with the adapters' reported token usage — including turns that
+    FAILED partway, because the rounds that did complete were still billed.
+    Accounting must never break (or alter) a reply or an error, so persistence
+    failures are swallowed."""
+    try:
+        from ...core.ids import utcnow as _now
+        from ...core.models import AgentRun
+
+        with session_scope(d.platform.engine) as db:
+            db.add(AgentRun(
+                session_id="chat",
+                agent_type=AgentType.BUILDER,
+                provider=provider,
+                model=model,
+                state=state,
+                steps=max(1, completions),
+                input_tokens=usage_in,
+                output_tokens=usage_out,
+                finished_at=_now(),
+            ))
+            db.commit()
+    except Exception:  # noqa: BLE001 — accounting must never break a reply
+        pass
+
 
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
@@ -119,6 +198,7 @@ def register(app: FastAPI, d) -> None:
                 {"id": r.id, "title": r.title or "(untitled)",
                  "persona": r.persona, "messages": count,
                  "project_id": r.project_id,
+                 "has_setup": bool(r.setup_json),
                  "updated_at": r.updated_at.isoformat()}
             )
         return {"threads": out}
@@ -135,23 +215,34 @@ def register(app: FastAPI, d) -> None:
             msgs = json.loads(r.messages_json or "[]")
         except Exception:  # noqa: BLE001
             msgs = []
+        setup: dict[str, Any] = {}
+        if r.setup_json:
+            try:
+                setup = json.loads(r.setup_json)
+            except Exception:  # noqa: BLE001
+                setup = {}
         return {
             "id": r.id, "title": r.title, "persona": r.persona,
-            "project_id": r.project_id, "messages": msgs,
+            "project_id": r.project_id, "messages": msgs, "setup": setup,
         }
 
     @app.put("/chat/threads/{thread_id}")
     def save_chat_thread(thread_id: str, body: dict) -> dict[str, Any]:
         """Upsert a thread (the chat autosaves after every turn). Send
-        {messages, title?, persona?, project_id?}; 'new' as the id creates a
-        thread — stamped with the ACTIVE project (the context spine) unless the
-        body names one explicitly."""
+        {messages, title?, persona?, project_id?, setup?}; 'new' as the id
+        creates a thread — stamped with the ACTIVE project (the context spine)
+        unless the body names one explicitly. ``setup`` ({tools, skill,
+        workspace_dir, provider, model}) persists the thread's working
+        configuration so reopening it restores how the user works there."""
         from ...core.ids import utcnow as _now
         from ...core.models import ChatThreadRecord
 
         msgs = body.get("messages")
         if not isinstance(msgs, list):
             raise HTTPException(status_code=400, detail="messages list required")
+        raw_setup = body.get("setup")
+        if "setup" in body and raw_setup is not None and not isinstance(raw_setup, dict):
+            raise HTTPException(status_code=400, detail="setup must be an object")
         with session_scope(d.platform.engine) as db:
             r = None if thread_id == "new" else db.get(ChatThreadRecord, thread_id)
             created = r is None
@@ -171,6 +262,11 @@ def register(app: FastAPI, d) -> None:
             # chat stay project-agnostic — no leaking the globally-active one.
             if "project_id" in body:  # explicit tag (or explicit null to clear)
                 r.project_id = body.get("project_id") or None
+            # Setup persists ONLY when the body carries the key — a plain
+            # autosave (messages-only PUT) never clobbers a stored setup; an
+            # explicit null clears it (same contract as project_id above).
+            if "setup" in body:
+                r.setup_json = _clean_setup(raw_setup)
             r.messages_json = json.dumps(msgs[-200:])
             r.updated_at = _now()
             db.add(r)
@@ -485,7 +581,7 @@ def register(app: FastAPI, d) -> None:
                 try:
                     from ...documents.readers import extract_text
 
-                    text = extract_text(p)[:6000]
+                    text = _clip_attachment(extract_text(p))
                     attach_block += f"\n\n## Attached file: {p.name}\n{text}"
                 except Exception as exc:  # noqa: BLE001
                     attach_block += f"\n\n## Attached file: {p.name}\n(could not read: {exc})"
@@ -517,7 +613,7 @@ def register(app: FastAPI, d) -> None:
         # "+" armed tools: a SMALL tool loop (max 4 rounds) with exactly the
         # tools the user selected — auto-allowed because arming them WAS the
         # user's explicit consent for this conversation.
-        armed = [t for t in (body.tools or [])[:6] if d.platform.registry.get(t)]
+        armed = [t for t in (body.tools or [])[:_MAX_ARMED_TOOLS] if d.platform.registry.get(t)]
         tool_specs = d.platform.registry.specs(armed) if armed else []
         tools_used: list[str] = []          # ONLY tools that actually executed
         last_tool_output = ""               # last SUCCESSFUL output (no-reply synthesis)
@@ -600,8 +696,9 @@ def register(app: FastAPI, d) -> None:
         # rounds so the Usage ledger reflects the WHOLE turn — a multi-round
         # armed-tool turn is several separately-billed completions, not one.
         usage_in = usage_out = completions = 0
+        stopped_note = ""  # honest note when the round budget cuts off tool calls
         try:
-            for _round in range(4):
+            for _round in range(_MAX_TOOL_ROUNDS):
                 route = await d.platform.router.complete(
                     provider=provider_choice or None,
                     model=model_choice or None,
@@ -616,6 +713,15 @@ def register(app: FastAPI, d) -> None:
                 completions += 1
                 calls = route.response.tool_calls or []
                 if not calls or not armed:
+                    break
+                if _round == _MAX_TOOL_ROUNDS - 1:
+                    # LAST allowed round: no round is left to show the model
+                    # these results, so executing them would burn tool side
+                    # effects invisibly. Skip them and say so.
+                    stopped_note = (
+                        f"stopped after {_round} tool rounds; "
+                        f"{len(calls)} tool call(s) not executed"
+                    )
                     break
                 msgs.append(LLMMessage(role="assistant",
                                        content=route.response.text,
@@ -665,29 +771,24 @@ def register(app: FastAPI, d) -> None:
                     msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
                                            name=tc.name, content=str(content)[:12000]))
         except Exception as exc:  # noqa: BLE001 — honest, human error
+            # The rounds that DID complete were still billed — persist their
+            # usage before surfacing the failure, or a round-2 error silently
+            # drops round 1 from the ledger. The client's error is unchanged.
+            if completions:
+                _persist_chat_usage(
+                    d, provider=route.provider, model=route.model,
+                    state=AgentState.FAILED, completions=completions,
+                    usage_in=usage_in, usage_out=usage_out,
+                )
             raise HTTPException(status_code=502, detail=str(exc))
         # USAGE LEDGER: direct chat turns must count like agent runs, or the
         # Usage page under-reports the user's main surface. Persist a run row
         # (session_id "chat") with the adapters' reported token usage.
-        try:
-            from ...core.ids import utcnow as _now
-            from ...core.models import AgentRun, AgentState
-
-            with session_scope(d.platform.engine) as db:
-                db.add(AgentRun(
-                    session_id="chat",
-                    agent_type=AgentType.BUILDER,
-                    provider=route.provider,
-                    model=route.model,
-                    state=AgentState.COMPLETED,
-                    steps=max(1, completions),
-                    input_tokens=usage_in,
-                    output_tokens=usage_out,
-                    finished_at=_now(),
-                ))
-                db.commit()
-        except Exception:  # noqa: BLE001 — accounting must never break a reply
-            pass
+        _persist_chat_usage(
+            d, provider=route.provider, model=route.model,
+            state=AgentState.COMPLETED, completions=completions,
+            usage_in=usage_in, usage_out=usage_out,
+        )
         # Reply honesty: if the model returned no final text but tools DID run
         # with output, synthesize a short summary from the last result rather
         # than the bare "(no reply)" placeholder (which reads like the turn did
@@ -702,6 +803,8 @@ def register(app: FastAPI, d) -> None:
         if denied_tools:
             names = ", ".join(dict.fromkeys(denied_tools))
             reply += f"\n\n_Note: {names} could not run (permission denied)._"
+        if stopped_note:
+            reply += f"\n\n_Note: {stopped_note}._"
         return {
             "reply": reply,
             "provider": route.provider,
@@ -831,7 +934,7 @@ def register(app: FastAPI, d) -> None:
                 try:
                     from ...documents.readers import extract_text
 
-                    text = extract_text(p)[:6000]
+                    text = _clip_attachment(extract_text(p))
                     attach_block += f"\n\n## Attached file: {p.name}\n{text}"
                 except Exception as exc:  # noqa: BLE001
                     attach_block += f"\n\n## Attached file: {p.name}\n(could not read: {exc})"
@@ -857,7 +960,7 @@ def register(app: FastAPI, d) -> None:
                     m.images = images
                     break
 
-        armed = [t for t in (body.tools or [])[:6] if d.platform.registry.get(t)]
+        armed = [t for t in (body.tools or [])[:_MAX_ARMED_TOOLS] if d.platform.registry.get(t)]
         tool_specs = d.platform.registry.specs(armed) if armed else []
         ctx = None
         if armed:
@@ -921,12 +1024,21 @@ def register(app: FastAPI, d) -> None:
             tools_used: list[str] = []          # ONLY tools that actually executed
             denied_tools: list[str] = []        # armed tools refused this turn
             last_tool_output = ""               # last SUCCESSFUL output (synthesis)
+            stopped_note = ""                   # round budget cut off tool calls
             reply_text = ""
             route_provider = provider_choice or ""
             route_model = model_choice or ""
             try:
-                for _round in range(4):
+                for _round in range(_MAX_TOOL_ROUNDS):
                     if await request.is_disconnected():
+                        # The completed rounds were billed even though the
+                        # client walked away — keep the ledger honest.
+                        if completions:
+                            _persist_chat_usage(
+                                d, provider=route_provider, model=route_model,
+                                state=AgentState.CANCELLED, completions=completions,
+                                usage_in=usage_in, usage_out=usage_out,
+                            )
                         return
                     yield _sse("round", {"round": _round})
                     final_resp = None
@@ -961,7 +1073,13 @@ def register(app: FastAPI, d) -> None:
                             route_model = frame.get("model") or route_model
                     if final_resp is None:
                         # The stream ended without an aggregate — honest error, not
-                        # a fabricated reply.
+                        # a fabricated reply. Completed rounds still get counted.
+                        if completions:
+                            _persist_chat_usage(
+                                d, provider=route_provider, model=route_model,
+                                state=AgentState.FAILED, completions=completions,
+                                usage_in=usage_in, usage_out=usage_out,
+                            )
                         yield _sse(
                             "error",
                             {"detail": "stream ended without a final response"},
@@ -974,6 +1092,14 @@ def register(app: FastAPI, d) -> None:
                     completions += 1
                     calls = final_resp.tool_calls or []
                     if not calls or not armed:
+                        break
+                    if _round == _MAX_TOOL_ROUNDS - 1:
+                        # LAST allowed round (mirrors chat_complete): no round is
+                        # left to show the model these results — skip, say so.
+                        stopped_note = (
+                            f"stopped after {_round} tool rounds; "
+                            f"{len(calls)} tool call(s) not executed"
+                        )
                         break
                     msgs.append(LLMMessage(role="assistant",
                                            content=final_resp.text,
@@ -1031,30 +1157,25 @@ def register(app: FastAPI, d) -> None:
                         msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
                                                name=tc.name, content=str(content)[:12000]))
             except Exception as exc:  # noqa: BLE001 — honest error, never fabricate
+                # Completed rounds were still billed — persist BEFORE the error
+                # frame (mirrors chat_complete's failure path); the client sees
+                # the same error either way.
+                if completions:
+                    _persist_chat_usage(
+                        d, provider=route_provider, model=route_model,
+                        state=AgentState.FAILED, completions=completions,
+                        usage_in=usage_in, usage_out=usage_out,
+                    )
                 yield _sse("error", {"detail": str(exc)})
                 return
 
             # USAGE LEDGER — persist the run row exactly as chat_complete does so a
             # streamed turn counts the same on the Usage page.
-            try:
-                from ...core.ids import utcnow as _now
-                from ...core.models import AgentRun, AgentState
-
-                with session_scope(d.platform.engine) as db:
-                    db.add(AgentRun(
-                        session_id="chat",
-                        agent_type=AgentType.BUILDER,
-                        provider=route_provider,
-                        model=route_model,
-                        state=AgentState.COMPLETED,
-                        steps=max(1, completions),
-                        input_tokens=usage_in,
-                        output_tokens=usage_out,
-                        finished_at=_now(),
-                    ))
-                    db.commit()
-            except Exception:  # noqa: BLE001 — accounting must never break a reply
-                pass
+            _persist_chat_usage(
+                d, provider=route_provider, model=route_model,
+                state=AgentState.COMPLETED, completions=completions,
+                usage_in=usage_in, usage_out=usage_out,
+            )
 
             # Reply honesty (mirrors chat_complete): synthesize from the last tool
             # output when the model returned no final text; note denied tools.
@@ -1068,6 +1189,8 @@ def register(app: FastAPI, d) -> None:
             if denied_tools:
                 names = ", ".join(dict.fromkeys(denied_tools))
                 reply += f"\n\n_Note: {names} could not run (permission denied)._"
+            if stopped_note:
+                reply += f"\n\n_Note: {stopped_note}._"
             yield _sse("done", {
                 "reply": reply,
                 "provider": route_provider,

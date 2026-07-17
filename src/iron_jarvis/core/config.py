@@ -46,7 +46,11 @@ def default_permissions() -> dict[str, str]:
         "skill_search": "allow",
         "skill_load": "allow",
         "delegate": "ask",
-        "web_search": "ask",
+        # Read-only web retrieval — allow-by-default so headless agent runs and
+        # scheduled workflows can research (the engine enforces the same tier;
+        # an explicit user "deny" always wins).
+        "web_search": "allow",
+        "web_fetch": "allow",
         "browser_use": "deny",  # computer-control capability — never default-allow
         "mcp_call": "ask",
         "create_document": "deny",  # superseded by write_document — fail-closed

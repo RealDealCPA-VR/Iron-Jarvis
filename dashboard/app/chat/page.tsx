@@ -23,7 +23,12 @@
 // sidebar lists saved conversations; clicking one loads it back into chat mode.
 // Saves are queued through a single promise chain so turns can never race two
 // PUTs (the first turn's "new" must resolve to a real id before the second
-// save starts, or we'd mint duplicate threads).
+// save starts, or we'd mint duplicate threads). Threads also carry a `setup`
+// snapshot (armed tools/skill/workspace/model) that restores on open — sent
+// only once restored or user-changed, so a plain reply never clobbers a stored
+// setup with empties. FAILED turns save too (the typed message + any streamed
+// partial, marked interrupted) so nothing is lost to navigation, and the
+// message returns to the composer for an edit/resend.
 //
 // Assistant bubbles render MARKDOWN (react-markdown + GFM) with styled code
 // blocks (per-block copy button), tables, lists, and links; user bubbles stay
@@ -51,6 +56,7 @@ import {
   Copy,
   FolderOpen,
   FolderPen,
+  Globe,
   History,
   Loader2,
   MessageSquare,
@@ -94,6 +100,12 @@ import { PageShell, Reveal } from "@/components/motion";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
 import { ShareChatDialog } from "@/components/chat/ShareChatDialog";
+import {
+  SourcesRow,
+  WEB_TOOLS,
+  extractWebSources,
+  type ChatSource,
+} from "@/components/chat/SourcesRow";
 
 type Mode = "chat" | "agent";
 
@@ -107,6 +119,9 @@ interface ChatMessage {
   attachmentPaths?: string[];
   /** Registry tools the reply actually ran (assistant messages) — footer line. */
   toolsUsed?: string[];
+  /** Web sources the reply's web tool calls actually surfaced (assistant
+   *  messages) — rendered as a compact domain-chip row under the bubble. */
+  sources?: ChatSource[];
   /** This assistant reply was cut off mid-stream (Stop, or a committed failure)
    *  — shown with a subtle marker so a partial answer never looks complete. */
   interrupted?: boolean;
@@ -190,6 +205,18 @@ interface ThreadSummary {
   updated_at: string;
 }
 
+/** Per-thread setup the daemon stores alongside the transcript: what was armed
+ *  when the conversation last saved. Returned as `setup` by GET
+ *  /chat/threads/{id}; accepted on PUT (all five keys sent, empties meaning
+ *  deliberately cleared). */
+interface ThreadSetup {
+  tools?: string[];
+  skill?: string;
+  workspace_dir?: string;
+  provider?: string;
+  model?: string;
+}
+
 /** GET /chat/threads/{id}. */
 interface ThreadDetail {
   id: string;
@@ -198,6 +225,8 @@ interface ThreadDetail {
   /** Context spine: the project this thread was tagged into (or null). */
   project_id?: string | null;
   messages: ChatMessage[];
+  /** The armed tools/skill/workspace/model to restore (older daemons omit it). */
+  setup?: ThreadSetup | null;
 }
 
 /** PUT /chat/threads/{id} body + response. */
@@ -205,6 +234,7 @@ interface ThreadSaveBody {
   messages: ChatMessage[];
   title?: string;
   persona?: string;
+  setup?: ThreadSetup;
 }
 interface ThreadSaveResult {
   id: string;
@@ -796,6 +826,10 @@ export default function ChatPage() {
   // "+" TOOLS MENU (chat mode): armed registry tool names — sent as `tools` on
   // every /chat turn and kept across turns until "New chat" / a thread switch.
   const [selectedTools, setSelectedTools] = useState<string[]>([]);
+  // Bumped on every USER edit to the thread setup (tools/skill/workspace/model)
+  // — drives the persist-on-change effect below. Restores never bump it, so
+  // merely opening a thread can't churn its updated_at with an echo save.
+  const [setupVersion, setSetupVersion] = useState(0);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [toolQuery, setToolQuery] = useState("");
   // "+" menu: category groups the user has collapsed (selection is unaffected).
@@ -883,6 +917,16 @@ export default function ChatPage() {
   // and event watchers, where `messages` from the closure could be stale).
   const messagesRef = useRef<ChatMessage[]>(messages);
   messagesRef.current = messages;
+  // Latest stream tool cards, readable after `stream.run` settles (the closure's
+  // `stream.tools` is frozen at send time; this ref tracks re-renders) — source
+  // extraction reads it once per turn.
+  const streamToolsRef = useRef<readonly ToolCard[]>(stream.tools);
+  streamToolsRef.current = stream.tools;
+  // THREAD SETUP persistence guard: saves include a `setup` snapshot only once
+  // it was restored from the open thread or the user actually armed/changed
+  // something — a plain reply on a thread whose setup wasn't restored (older
+  // daemon, or nothing armed) must never PUT empties over a stored setup.
+  const sendSetupRef = useRef(false);
   // Event-id boundary captured at the start of each agent turn: we only treat
   // events NEWER than this as belonging to the current turn. This stops a stale
   // `agent.completed` from the previous turn (same session id, still in the
@@ -1000,6 +1044,16 @@ export default function ChatPage() {
     }
   }
 
+  /** Select a persona for THIS conversation without touching the stored
+   *  default. Threads round-trip their persona verbatim — including free-text
+   *  unsaved-draft prompts — so applying a loaded thread's persona through
+   *  choosePersona would silently hijack the global default. Only an explicit
+   *  pick or a saved persona goes through choosePersona. */
+  function selectPersonaLocal(value: string) {
+    setPersona(value);
+    prevPersonaRef.current = value;
+  }
+
   // ------------------------------------------------------------------ personas
 
   /** Refetch the persona catalog (after any save/revert/delete). */
@@ -1073,7 +1127,9 @@ export default function ChatPage() {
     setPersonaError(null);
     setPersonaSaved(false);
     if (persona === NEW_PERSONA) {
-      choosePersona(prevPersonaRef.current || personas[0]?.name || "assistant");
+      // Local restore only: the previous value may be a thread's free-text
+      // persona, which must not be (re)written as the stored default.
+      selectPersonaLocal(prevPersonaRef.current || personas[0]?.name || "assistant");
     }
     setIsNewPersona(false);
   }
@@ -1148,6 +1204,7 @@ export default function ChatPage() {
   function chooseWorkspace(path: string) {
     setWorkspaceDir(path);
     setPickingFolder(false);
+    markSetupChanged();
     try {
       window.localStorage.setItem(WORKSPACE_KEY, path);
     } catch {
@@ -1176,6 +1233,39 @@ export default function ChatPage() {
     }
   }
 
+  /** The thread-setup snapshot for saves: exactly what's armed right now. All
+   *  five keys always ride along so a cleared skill/model reads as deliberately
+   *  cleared, not merely omitted. */
+  function currentSetup(): ThreadSetup {
+    const { provider, model } = splitChoice(choice);
+    return {
+      tools: selectedTools.slice(0, MAX_TOOLS),
+      skill: activeSkill,
+      workspace_dir: workspaceDir ?? "",
+      provider: provider ?? "",
+      model: model ?? "",
+    };
+  }
+
+  /** Mark the thread setup as USER-changed: saves start carrying it, and the
+   *  effect below persists the change to an already-saved thread right away
+   *  (arming a tool then navigating off must not lose it). */
+  function markSetupChanged() {
+    sendSetupRef.current = true;
+    setSetupVersion((v) => v + 1);
+  }
+
+  // Persist USER setup edits to the open thread even without a new turn. Runs
+  // only on real edits (setupVersion never bumps on a thread-open restore) and
+  // only once the conversation is already saved — an unsaved chat's first turn
+  // carries the setup itself.
+  useEffect(() => {
+    if (setupVersion === 0) return;
+    if (!saveTargetRef.current.id || messagesRef.current.length === 0) return;
+    queueSave(messagesRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setupVersion]);
+
   /**
    * Queue ONE autosave for a completed turn. Called exactly once per turn
    * (chat success, regenerate success, agent finalize, Stop) with the full
@@ -1185,11 +1275,16 @@ export default function ChatPage() {
     if (msgs.length === 0) return;
     const target = saveTargetRef.current; // the conversation this save belongs to
     const personaValue = personaForSend();
+    // Setup rides along only once it was restored from this thread or the user
+    // actually changed something (see sendSetupRef) — never clobber a stored
+    // setup with empties just because nothing was re-armed this visit.
+    const setup = sendSetupRef.current ? currentSetup() : null;
     saveChainRef.current = saveChainRef.current.then(async () => {
       try {
         const body: ThreadSaveBody = {
           messages: msgs,
           ...(personaValue ? { persona: personaValue } : {}),
+          ...(setup ? { setup } : {}),
         };
         const res = await put<ThreadSaveResult>(
           `/chat/threads/${target.id ?? "new"}`,
@@ -1221,6 +1316,7 @@ export default function ChatPage() {
     setSessionId(null);
     setAttachments([]);
     setSelectedTools([]); // armed tools are per-conversation
+    sendSetupRef.current = false; // until this thread's setup (if any) restores
     setToolsOpen(false);
     setToolQuery("");
     setActiveSkill(""); // so is the active skill
@@ -1241,8 +1337,28 @@ export default function ChatPage() {
       setPersonaEditorOpen(false); // never carry a stale draft into another thread
       // A known name selects normally; an unlisted name / free-text instructions
       // are tolerated by the select (and sent verbatim, which the server treats
-      // as free text).
-      if (t.persona) choosePersona(t.persona);
+      // as free text). LOCAL selection only — a round-tripped persona (possibly
+      // an unsaved free-text draft) must never overwrite the stored default.
+      if (t.persona) selectPersonaLocal(t.persona);
+      // Restore the thread's saved setup so reopening a conversation comes back
+      // armed the way it was left. sendSetupRef stays false when the thread has
+      // none — a plain reply then never PUTs empties over a stored setup.
+      const setup = t.setup;
+      if (setup && typeof setup === "object") {
+        setSelectedTools(
+          Array.isArray(setup.tools)
+            ? setup.tools.filter((x) => typeof x === "string").slice(0, MAX_TOOLS)
+            : [],
+        );
+        setActiveSkill(typeof setup.skill === "string" ? setup.skill : "");
+        // Thread-local restore: the panel points at this conversation's folder
+        // without touching the localStorage default (New chat returns to it).
+        setWorkspaceDir(setup.workspace_dir ? setup.workspace_dir : null);
+        setChoice(
+          setup.provider && setup.model ? `${setup.provider}::${setup.model}` : "",
+        );
+        sendSetupRef.current = true;
+      }
       setSidebarOpen(false);
       inputRef.current?.focus();
     } catch (e) {
@@ -1474,10 +1590,30 @@ export default function ChatPage() {
           ? prev // at the cap — the row is disabled anyway
           : [...prev, name],
     );
+    markSetupChanged();
   }
 
   function disarmTool(name: string) {
     setSelectedTools((prev) => prev.filter((n) => n !== name));
+    markSetupChanged();
+  }
+
+  // WEB QUICK-TOGGLE: one click arms/disarms the web_search + web_fetch pair
+  // (they ride the same `tools` mechanism as the "+" menu). Pressed only when
+  // BOTH are armed; arming needs room for the pair inside the MAX_TOOLS cap.
+  const webArmed = WEB_TOOLS.every((n) => selectedTools.includes(n));
+  const webRoom =
+    selectedTools.filter((n) => !WEB_TOOLS.includes(n)).length + WEB_TOOLS.length <=
+    MAX_TOOLS;
+
+  function toggleWeb() {
+    setSelectedTools((prev) => {
+      const others = prev.filter((n) => !WEB_TOOLS.includes(n));
+      if (WEB_TOOLS.every((n) => prev.includes(n))) return others; // disarm both
+      if (others.length + WEB_TOOLS.length > MAX_TOOLS) return prev; // no room
+      return [...others, ...WEB_TOOLS];
+    });
+    markSetupChanged();
   }
 
   /** Select a skill from the "/" dropdown: chip on, "/query" text consumed. */
@@ -1485,6 +1621,7 @@ export default function ChatPage() {
     setActiveSkill(name);
     setInput("");
     setSlashDismissed(false);
+    markSetupChanged();
     inputRef.current?.focus();
   }
 
@@ -1593,6 +1730,7 @@ export default function ChatPage() {
       }
       // Hard failure: surface it and stop waiting so the turn doesn't hang forever.
       setError(e instanceof ApiError ? e.message : String(e));
+      queueSave(messagesRef.current); // the typed message still survives navigation
       awaitingIdRef.current = null;
       setAwaitingId(null);
     } finally {
@@ -1744,6 +1882,17 @@ export default function ChatPage() {
     tts.speakMore(full, flush);
   }
 
+  /** Put a failed turn's typed message back in the composer — but only when
+   *  it's empty (never clobber text typed while the turn was in flight). The
+   *  restore is programmatic, so it must never count as voice input: Voice
+   *  Chat's auto-send would otherwise re-fire the failed turn in a loop. */
+  function restoreComposerDraft(history: ChatMessage[]) {
+    const lastUser = [...history].reverse().find((m) => m.role === "user");
+    if (!lastUser) return;
+    inputFromVoiceRef.current = false;
+    setInput((cur) => (cur.trim() ? cur : lastUser.content));
+  }
+
   /**
    * CHAT MODE core: one /chat completion over `history` (which must end with a
    * user message). Shared by sendChat and regenerate. Tries token streaming
@@ -1767,8 +1916,15 @@ export default function ChatPage() {
           feedTTS(full, false),
         );
         if (chatGenRef.current !== gen) return; // torn down mid-stream
+        // One tick so the final tool_call frame's state flush lands before the
+        // cards are read for source extraction (this resolve microtask can
+        // outrun React's batched setTools render).
+        await new Promise<void>((r) => window.setTimeout(r, 0));
+        if (chatGenRef.current !== gen) return;
         feedTTS(reply, true); // flush any trailing fragment
         const toolsUsed = (tools_used ?? []).filter((t) => Boolean(t));
+        // Sources the turn's web tools ACTUALLY returned (never prose links).
+        const sources = extractWebSources(streamToolsRef.current);
         const finalReply = (reply ?? "").trim() || "(no response)";
         const full: ChatMessage[] = [
           ...history,
@@ -1776,6 +1932,7 @@ export default function ChatPage() {
             role: "assistant",
             content: finalReply,
             ...(toolsUsed.length ? { toolsUsed } : {}),
+            ...(sources.length ? { sources } : {}),
           },
         ];
         setMessages(full);
@@ -1800,17 +1957,31 @@ export default function ChatPage() {
           // Preserve what the user already watched stream in — dropping it reads
           // like a crash. Keep it as an interrupted bubble (Retry re-runs from the
           // clean `history`, which doesn't include this partial).
+          await new Promise<void>((r) => window.setTimeout(r, 0)); // tool flush
+          if (chatGenRef.current !== gen) return;
           const partial = (se?.partial ?? "").trim();
-          if (partial) {
-            setMessages([
-              ...history,
-              { role: "assistant", content: partial, interrupted: true },
-            ]);
-          }
+          const sources = extractWebSources(streamToolsRef.current);
+          const withPartial: ChatMessage[] = partial
+            ? [
+                ...history,
+                {
+                  role: "assistant",
+                  content: partial,
+                  interrupted: true,
+                  ...(sources.length ? { sources } : {}),
+                },
+              ]
+            : history;
+          if (partial) setMessages(withPartial);
           if (se?.offline || (e instanceof ApiError && e.status === 0 && !se))
             setOffline(true);
           else setError(e instanceof ApiError ? e.message : String(e));
           setFailedTurn({ history, atts });
+          // The failed turn must survive navigation: persist the typed message
+          // (+ the interrupted partial) through the same autosave path a
+          // completed turn uses, and put the message back in the composer.
+          queueSave(withPartial);
+          restoreComposerDraft(history);
           return;
         }
         // else: /chat/stream is absent on a reachable daemon → safe to fall back.
@@ -1843,6 +2014,10 @@ export default function ChatPage() {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
       else setError(e instanceof ApiError ? e.message : String(e));
       setFailedTurn({ history, atts });
+      // Persist the typed message so navigating away doesn't lose it, and
+      // restore it to the composer for an immediate edit/resend.
+      queueSave(history);
+      restoreComposerDraft(history);
     } finally {
       sendingRef.current = false;
       if (chatGenRef.current === gen) {
@@ -1902,6 +2077,11 @@ export default function ChatPage() {
     const { history, atts } = failedTurn;
     setError(null);
     setOffline(false);
+    // Retire the auto-restored composer draft (it duplicates the message Retry
+    // is about to re-send); anything the user typed themselves is kept.
+    const lastUser = [...history].reverse().find((m) => m.role === "user");
+    if (lastUser)
+      setInput((cur) => (cur.trim() === lastUser.content.trim() ? "" : cur));
     void completeChat(history, atts);
   }
 
@@ -1960,6 +2140,11 @@ export default function ChatPage() {
       if (atts.length) setAttachments(atts);
       if (e instanceof ApiError && e.status === 0) setOffline(true);
       else setError(e instanceof ApiError ? e.message : String(e));
+      // Match the chat-mode failure path: the typed message survives navigation
+      // (messagesRef already holds the appended user bubble by now) and returns
+      // to the composer for an immediate edit/resend.
+      queueSave(messagesRef.current);
+      restoreComposerDraft(messagesRef.current);
     } finally {
       sendingRef.current = false;
     }
@@ -1992,12 +2177,14 @@ export default function ChatPage() {
       stream.abort();
       tts.cancel(); // stop reading a reply the user just cut off
       const partial = stream.text.trim();
+      const sources = extractWebSources(stream.tools);
       const full: ChatMessage[] = [
         ...messagesRef.current,
         {
           role: "assistant",
           content: partial || "Stopped.",
           ...(partial ? { interrupted: true } : {}),
+          ...(partial && sources.length ? { sources } : {}),
         },
       ];
       setMessages(full);
@@ -2037,6 +2224,7 @@ export default function ChatPage() {
     setFailedTurn(null);
     setAttachments([]);
     setSelectedTools([]);
+    sendSetupRef.current = false; // fresh conversation — nothing armed to persist
     setToolsOpen(false);
     setToolQuery("");
     setActiveSkill("");
@@ -2045,6 +2233,15 @@ export default function ChatPage() {
     setError(null);
     setOffline(false);
     setThreadId(null);
+    // Back to the user's OWN defaults — an opened thread's restore may have
+    // pointed the workspace panel/persona at that conversation's choices.
+    try {
+      setWorkspaceDir(window.localStorage.getItem(WORKSPACE_KEY) || null);
+      const savedPersona = window.localStorage.getItem(PERSONA_KEY);
+      if (savedPersona) selectPersonaLocal(savedPersona);
+    } catch {
+      /* keep the current values */
+    }
     saveTargetRef.current = { id: null }; // next completed turn creates a fresh thread
     sinceRef.current = null;
     finalizingRef.current = false;
@@ -2269,7 +2466,10 @@ export default function ChatPage() {
               <select
                 aria-label="Model"
                 value={choice}
-                onChange={(e) => setChoice(e.target.value)}
+                onChange={(e) => {
+                  setChoice(e.target.value);
+                  markSetupChanged();
+                }}
                 disabled={mode === "agent" ? awaiting || sessionId !== null : busy}
                 title={
                   mode === "agent" && sessionId !== null
@@ -2279,6 +2479,11 @@ export default function ChatPage() {
                 className="field w-auto py-1.5 text-[13px]"
               >
                 <option value="">default model</option>
+                {/* Tolerate a thread-restored model the catalog no longer lists. */}
+                {choice !== "" &&
+                  !models.some((m) => `${m.provider}::${m.model}` === choice) && (
+                    <option value={choice}>{choice.replace("::", " · ")}</option>
+                  )}
                 {models.map((m) => {
                   const v = `${m.provider}::${m.model}`;
                   return (
@@ -2655,6 +2860,10 @@ export default function ChatPage() {
                               </span>
                             </div>
                           )}
+                          {/* URLs the turn's web tools actually returned */}
+                          {m.sources && m.sources.length > 0 && (
+                            <SourcesRow sources={m.sources} />
+                          )}
                           <div className="ml-11 mt-1 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100">
                             <CopyIconButton text={m.content} title="Copy message" />
                             {canRegen && (
@@ -2771,7 +2980,10 @@ export default function ChatPage() {
                       </span>
                       <button
                         type="button"
-                        onClick={() => setActiveSkill("")}
+                        onClick={() => {
+                          setActiveSkill("");
+                          markSetupChanged();
+                        }}
                         aria-label={`Clear skill ${activeSkill}`}
                         title="Clear skill"
                         className="text-zinc-500 transition-colors hover:text-rose-300"
@@ -3099,6 +3311,28 @@ export default function ChatPage() {
                       </div>
                     )}
                   </div>
+                )}
+                {/* Web quick-toggle — one click arms web_search + web_fetch
+                    (the same registry-tools mechanism as the "+" menu). */}
+                {mode === "chat" && (
+                  <button
+                    type="button"
+                    onClick={toggleWeb}
+                    disabled={!webArmed && !webRoom}
+                    aria-pressed={webArmed}
+                    title={
+                      webArmed
+                        ? "Web research armed (web_search + web_fetch) — click to disarm"
+                        : webRoom
+                          ? "Arm web research — search the web and read pages in this chat"
+                          : `All ${MAX_TOOLS} tool slots are armed — disarm one to add Web`
+                    }
+                    className={`btn-ghost h-[2.75rem] px-3 py-0 text-[13px] ${
+                      webArmed ? "text-accent-soft" : ""
+                    } disabled:cursor-not-allowed disabled:opacity-50`}
+                  >
+                    <Globe size={15} /> Web
+                  </button>
                 )}
                 {/* Mic — dictate into the composer (daemon-transcribed in the
                     desktop app, Web Speech in a browser). */}

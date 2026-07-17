@@ -4,6 +4,15 @@ Every tool invocation passes through here. Modes: allow / ask / deny. Scopes
 merge with precedence agent > project/global. The engine is **fail-closed**: an
 unknown tool defaults to ``ask``, and ``ask`` with no resolver (headless) denies.
 
+**Read-only web retrieval tier.** The tools in :data:`READ_ONLY_WEB_TOOLS`
+(``web_search``/``web_fetch``) are classified allow-by-default, the same tier as
+the other read-only tools (read_file/grep/ltm_search): an ``ask`` resolution for
+them — including the stale ``ask`` persisted into live installs' config.toml by
+older defaults — upgrades to ``allow``. Without this, headless runs (researcher
+agents, scheduled workflow steps) could NEVER research: ``ask`` with no resolver
+fail-closes. An explicit ``deny`` (base policy or agent override) ALWAYS wins —
+the upgrade only ever touches ``ask``.
+
 **Deny-floor invariant.** Agent-definition ``permission_overrides`` normally
 outrank the base policy, but the host-touching tools in :data:`DENY_FLOOR_TOOLS`
 are exempt: an agent definition may keep or *lower* them (to ask/deny) yet can
@@ -41,6 +50,18 @@ SAFE_HEADLESS_TOOLS: frozenset[str] = frozenset({"delegate", "spawn_agent"})
 DENY_FLOOR_TOOLS: frozenset[str] = frozenset(
     {"shell", "browser_use", "web_action", "mcp_call"}
 )
+
+# READ-ONLY web retrieval — classified allow-by-default, same tier as the other
+# read-only tools (read_file/grep/ltm_search). These only READ the public web:
+# no host access, no side effects, and their output is already injection-scanned
+# + fenced as untrusted data at the tool layer. An ``ask`` tier for them is
+# unanswerable headless (no resolver => fail-closed deny), which silently
+# blinded researcher agents and scheduled workflow steps — and first-boot wrote
+# ``web_search = "ask"`` into live installs' config.toml, so the fix must live
+# HERE, not in the config default alone. Resolution: ``ask`` upgrades to
+# ``allow``; an explicit ``deny`` always wins; everything else (shell,
+# web_action, browser_use, mcp_call, writes) keeps its gate exactly.
+READ_ONLY_WEB_TOOLS: frozenset[str] = frozenset({"web_search", "web_fetch"})
 
 
 def headless_ask_resolver(
@@ -86,7 +107,9 @@ class PermissionEngine:
         be *raised* to ``allow`` by an override. An ``allow`` override on a floor
         tool is dropped and the base policy applies instead (an override to
         ``ask``/``deny`` — keeping or lowering — still takes effect). Unknown
-        tools fail closed to ``ask``.
+        tools fail closed to ``ask`` — EXCEPT :data:`READ_ONLY_WEB_TOOLS`, whose
+        ``ask``/unknown resolution upgrades to ``allow`` (an explicit ``deny``
+        on them still wins).
         """
         raw = None
         if agent_overrides and tool_name in agent_overrides:
@@ -103,11 +126,20 @@ class PermissionEngine:
         if raw is None and tool_name in self._base:
             raw = self._base[tool_name]
         if raw is None:
-            return PermissionMode.ASK  # fail-closed default for unknown tools
-        try:
-            return PermissionMode(raw)
-        except ValueError:
-            return PermissionMode.ASK
+            mode = PermissionMode.ASK  # fail-closed default for unknown tools
+        else:
+            try:
+                mode = PermissionMode(raw)
+            except ValueError:
+                mode = PermissionMode.ASK
+        # Read-only web retrieval tier: an ``ask`` here is unanswerable headless
+        # (fail-closed deny), so it upgrades to ``allow`` — this is what lets
+        # researcher agents and scheduled workflows actually search. Only ASK is
+        # touched: an explicit deny (base or override) resolved above passes
+        # through unchanged, so a user denial always wins.
+        if mode is PermissionMode.ASK and tool_name in READ_ONLY_WEB_TOOLS:
+            return PermissionMode.ALLOW
+        return mode
 
     def authorize(
         self,
