@@ -6,7 +6,7 @@
   "description": "Native desktop wrapper for Iron Jarvis. Boots the local Python daemon (uv run ironjarvis serve) and the Next.js dashboard (pnpm start), then opens them in a native window.",
   "main": "main.js",
   "author": "RealDealCPA",
-  "license": "UNLICENSED",
+  "license": "SEE LICENSE IN LICENSE",
   "scripts": {
     "start": "electron .",
     "dev": "electron .",

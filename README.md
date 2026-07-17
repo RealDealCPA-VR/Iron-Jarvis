@@ -335,6 +335,22 @@ Built from `SPEC.MD` (§10–33) + reconstructed `SPEC-SECTIONS-01-09.md`. See [
 
 A mobile companion, distributed agent clusters, a skills/agent marketplace, and team-shared org memory. The foundation is built — everything else stacks on top.
 
+## License
+
+Iron Jarvis is **free to use** — personally or inside your business — under the
+[Apache License 2.0 with the Commons Clause](LICENSE). In plain language:
+
+- ✅ **Use it** — run the app, for anything, including at work.
+- ✅ **Modify it** — fork it, change it, build on it.
+- ✅ **Share it** — redistribute copies and improvements (keep the license notice).
+- ❌ **Don't sell it** — you may not sell the software or any part of it, offer it
+  as a paid/hosted service, or charge for products whose value substantially
+  comes from Iron Jarvis.
+
+Because of the no-selling condition this is *source-available* software, not
+OSI-certified open source. If you want to do something commercial with it, open
+an issue and ask.
+
 ---
 
 <div align="center">
