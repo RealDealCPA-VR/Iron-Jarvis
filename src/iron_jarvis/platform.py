@@ -268,6 +268,13 @@ def build_platform(
 
     fleet_registry = FleetRegistry(config)
 
+    def _opencode_allowed() -> list[str]:
+        """LOCAL OpenCode models only — never its hosted tier, never a paid
+        passthrough alias sitting behind a local-looking proxy."""
+        from .providers.opencode import allowed_models
+
+        return allowed_models(config)
+
     providers = ProviderManager(
         vault=vault,
         default_model=config.default_model,
@@ -294,6 +301,9 @@ def build_platform(
         # comes from the sampler's CACHED last-known reachability (never a live
         # probe — this is called per provider per request).
         dynamic_available=lambda name: fleet_registry.reachable(name),
+        # OpenCode is offered LOCAL-ONLY: it can also reach hosted/paid models,
+        # and the user asked for their own hardware only. See providers/opencode.
+        opencode_allowed=lambda: _opencode_allowed(),
     )
     # LOCAL FLEET — the user's own inference machines. The registry derives nodes
     # from the two config endpoint slots (so it works with zero setup) plus any

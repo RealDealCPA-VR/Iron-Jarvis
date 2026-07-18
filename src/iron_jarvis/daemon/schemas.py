@@ -222,6 +222,9 @@ _SETTINGS_KEYS = [
     "fleet_code_route_enabled",
     "fleet_code_target",
     "fleet_code_task_classes",
+    # OpenCode CLI provider — CSV of "provider/model" it may serve.
+    # "" = auto-detect the models that genuinely run on your own hardware.
+    "opencode_local_models",
 ]
 
 

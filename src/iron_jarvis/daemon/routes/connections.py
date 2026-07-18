@@ -185,6 +185,15 @@ def register(app: FastAPI, d) -> None:
             models.append(
                 {"provider": "custom", "model": cfg.custom_model or "default"}
             )
+        # OpenCode CLI: ONLY the models that genuinely run on the user's own
+        # hardware. Its hosted tier and any paid passthrough alias are excluded
+        # upstream, so a picker can never offer a model this provider refuses.
+        try:
+            if d.platform.providers.available("opencode-cli"):
+                for entry in d.platform.providers._opencode_allowed():  # noqa: SLF001
+                    models.append({"provider": "opencode-cli", "model": entry})
+        except Exception:  # noqa: BLE001 — a picker never breaks on detection
+            pass
         # LIVE DISCOVERY: ask each CONNECTED provider what it actually serves
         # (cached ~10 min). Discovered ids are ADDED; curated ids drop only when
         # the live list is non-empty (a failed probe — e.g. an OAuth token that

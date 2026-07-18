@@ -129,6 +129,13 @@ def register(app: FastAPI, d) -> None:
                 )
             except Exception:  # noqa: BLE001 — next boot still picks config up
                 pass
+        # Editing the OpenCode allowlist must take effect NOW: the manager
+        # caches the resolved local models (available() is on the hot path).
+        if "opencode_local_models" in updated:
+            try:
+                d.platform.providers.refresh_opencode()
+            except Exception:  # noqa: BLE001 — a cache drop never breaks a save
+                pass
         return {
             "settings": {k: getattr(cfg, k, None) for k in _SETTINGS_KEYS},
             "updated": updated,

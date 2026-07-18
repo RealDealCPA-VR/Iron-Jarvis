@@ -787,6 +787,14 @@ const CLI_PROVIDERS: CliProviderInfo[] = [
     tint: "text-violet-300",
   },
   {
+    provider: "opencode-cli",
+    name: "OpenCode CLI",
+    description: "Your local models only",
+    hint: "point an OpenCode provider at a server on your own network",
+    icon: Terminal,
+    tint: "text-sky-300",
+  },
+  {
     provider: "ollama",
     name: "Local Ollama",
     description: "Free models running on this machine",

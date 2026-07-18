@@ -223,6 +223,11 @@ class Config(BaseModel):
     fleet_code_route_enabled: bool = False
     fleet_code_target: str = ""  # "provider:model" (providers/routing.parse_pm)
     fleet_code_task_classes: str = ""  # CSV override; "" = the built-in set
+    #: OpenCode CLI provider: the models it may serve, as CSV "provider/model".
+    #: "" = auto-detect the ones that genuinely run on your own hardware. The
+    #: provider is LOCAL-ONLY by design — OpenCode's hosted tier and any paid
+    #: passthrough alias are excluded, so it can never bill you by surprise.
+    opencode_local_models: str = ""
     # Self-tuning router (§6 phase-1) — OFF by default. When enabled AND the local
     # Ollama model is configured AND eval/observability shows it has met the
     # quality bar for a task class, the router prefers it for that class. With the

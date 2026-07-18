@@ -69,7 +69,12 @@ class ProviderManager:
         grok_cli_available: Callable[[], bool] | None = None,
         inherit_cli_logins: bool = False,
         dynamic_available: Callable[[str], bool | None] | None = None,
+        opencode_allowed: Callable[[], list[str]] | None = None,
     ) -> None:
+        #: Resolver for the LOCAL models OpenCode may serve. Injected (and
+        #: defaulting to "none") so a bare ProviderManager() never shells out.
+        self._opencode_resolver: Callable[[], list[str]] = opencode_allowed or (lambda: [])
+        self._opencode_cache: list[str] | None = None
         #: Availability oracle for providers registered at RUNTIME (the local
         #: fleet). Returns None for names it doesn't own, so every built-in
         #: provider keeps its existing logic. Injected rather than name-branched
@@ -190,6 +195,15 @@ class ProviderManager:
         # owns auth + model churn. Text-only (no tool calls) by design.
         self.register("claude-cli", lambda model=None: self._make_subprocess_cli("claude-cli", model))
         self.register("codex-cli", lambda model=None: self._make_subprocess_cli("codex-cli", model))
+        # OpenCode CLI — LOCAL MODELS ONLY. Unlike the two above (whose whole
+        # point is a paid subscription), OpenCode can reach hosted/paid models
+        # too, so the adapter refuses anything not proven to run on the user's
+        # own hardware. `opencode_allowed` is injected so the manager stays
+        # hermetic and tests can pin the list.
+        self.register(
+            "opencode-cli",
+            lambda model=None: self._make_opencode_cli(model),
+        )
 
     #: Keyless subscription INHERITANCE. When 'anthropic'/'openai' has no API key
     #: but the provider's own CLI is logged in, a request resolves to the
@@ -204,6 +218,31 @@ class ProviderManager:
         if which == "claude-cli":
             return make_claude_cli(model=model or "subscription")
         return make_codex_cli(model=model or "subscription")
+
+    def _opencode_allowed(self) -> list[str]:
+        """The LOCAL models OpenCode may serve here (cached per manager).
+
+        Cached because ``available()`` is on the routing hot path and the
+        underlying detection shells out to ``opencode models`` and may probe a
+        proxy. Call ``refresh_opencode()`` after the user changes the allowlist.
+        """
+        if self._opencode_cache is None:
+            try:
+                self._opencode_cache = list(self._opencode_resolver())
+            except Exception:  # noqa: BLE001 — detection never breaks routing
+                self._opencode_cache = []
+        return self._opencode_cache
+
+    def refresh_opencode(self) -> None:
+        """Drop the cached local-model list (settings changed / re-scan)."""
+        self._opencode_cache = None
+        for key in [k for k in self._cache if k[0] == "opencode-cli"]:
+            self._cache.pop(key, None)
+
+    def _make_opencode_cli(self, model: str | None = None) -> LLMAdapter:
+        from .adapters.opencode_cli import OpencodeCliAdapter
+
+        return OpencodeCliAdapter(model=model or "", allowed=self._opencode_allowed)
 
     @staticmethod
     def _cli_binary_present(binary: str) -> bool:
@@ -324,6 +363,12 @@ class ProviderManager:
             return self._cli_binary_present("claude")
         if name == "codex-cli":
             return self._cli_binary_present("codex")
+        if name == "opencode-cli":
+            # Installed AND at least one model that actually runs locally —
+            # an OpenCode with only hosted models is not available HERE, and
+            # saying otherwise would offer the user a provider that refuses
+            # every request.
+            return self._cli_binary_present("opencode") and bool(self._opencode_allowed())
         if self._dynamic_available is not None:
             try:
                 verdict = self._dynamic_available(name)
@@ -392,7 +437,8 @@ class ProviderManager:
                     "api"
                     if name in API_PROVIDERS
                     else "local"
-                    if name in ("ollama", "custom", "grok-cli")
+                    if name in ("ollama", "custom", "grok-cli", "opencode-cli")
+                    or name.startswith("fleet-")
                     else "mock"
                 ),
             }
