@@ -115,7 +115,12 @@ def discover_models(
     """Live model ids for one provider (cached). Empty list = nothing learned
     (caller keeps the curated entries)."""
     now = time.monotonic()
-    hit = _cache.get(provider)
+    # Key by provider AND endpoint URL: a re-pointed local/custom endpoint is a
+    # DIFFERENT server, so its cache entry must miss — with a provider-only key
+    # the old endpoint's model list kept serving for the full TTL (live-hit
+    # 2026-07-18: a freshly saved endpoint showed the previous endpoint's models).
+    cache_key = f"{provider}|{base_url}"
+    hit = _cache.get(cache_key)
     if hit and now - hit[0] < _CACHE_TTL:
         return [m["model"] for m in hit[1]]
     ids: list[str] = []
@@ -137,7 +142,7 @@ def discover_models(
     except Exception as exc:  # noqa: BLE001 — degrade to curated, never break
         log.debug("model discovery failed for %s: %s", provider, exc)
         ids = []
-    _cache[provider] = (now, [{"model": i} for i in ids])
+    _cache[cache_key] = (now, [{"model": i} for i in ids])
     return ids
 
 

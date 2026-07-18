@@ -212,6 +212,15 @@ export function ModelSwitcher() {
     if (!open) setAutoOpen(false);
   }, [open]);
 
+  // Refetch the catalog each time the panel opens: the topbar survives every
+  // in-app navigation, so a once-at-mount /models went stale the moment an
+  // endpoint/connection was saved elsewhere — a freshly added endpoint showed
+  // in the per-page pickers (they remount and refetch) but never here.
+  const reloadModels = modelsData.reload;
+  useEffect(() => {
+    if (open) reloadModels?.();
+  }, [open, reloadModels]);
+
   // Close on outside click / Escape.
   useEffect(() => {
     if (!open) return;
