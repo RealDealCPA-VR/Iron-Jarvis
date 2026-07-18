@@ -108,7 +108,7 @@ def register(app: FastAPI, d) -> None:
         # daemon loop). Previously the toggle waited for the next restart.
         loop = d._live_rearm.get("loop")
         if loop is not None:
-            for group in ("autonomy", "sentinels", "calendar"):
+            for group in ("autonomy", "sentinels", "calendar", "fleet"):
                 if any(k.startswith(group) for k in updated):
                     fn = d._live_rearm.get(group)
                     if fn is not None:

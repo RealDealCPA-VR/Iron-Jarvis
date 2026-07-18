@@ -1,0 +1,324 @@
+# HELP python_gc_objects_collected_total Objects collected during gc
+# TYPE python_gc_objects_collected_total counter
+# HELP python_gc_objects_uncollectable_total Uncollectable objects found during GC
+# TYPE python_gc_objects_uncollectable_total counter
+# HELP python_gc_collections_total Number of times this generation was collected
+# TYPE python_gc_collections_total counter
+# HELP python_info Python platform information
+# TYPE python_info gauge
+# HELP process_virtual_memory_bytes Virtual memory size in bytes.
+# TYPE process_virtual_memory_bytes gauge
+# HELP process_resident_memory_bytes Resident memory size in bytes.
+# TYPE process_resident_memory_bytes gauge
+# HELP process_start_time_seconds Start time of the process since unix epoch in seconds.
+# TYPE process_start_time_seconds gauge
+# HELP process_cpu_seconds_total Total user and system CPU time spent in seconds.
+# TYPE process_cpu_seconds_total counter
+# HELP process_open_fds Number of open file descriptors.
+# TYPE process_open_fds gauge
+# HELP process_max_fds Maximum number of open file descriptors.
+# TYPE process_max_fds gauge
+# HELP vllm:spec_decode_num_drafts_total Number of spec decoding drafts.
+# TYPE vllm:spec_decode_num_drafts_total counter
+vllm:spec_decode_num_drafts_total{engine="0",model_name="deepseek-v4-flash-dspark"} 589.0
+# HELP vllm:spec_decode_num_drafts_created Number of spec decoding drafts.
+# TYPE vllm:spec_decode_num_drafts_created gauge
+vllm:spec_decode_num_drafts_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774590698967e+09
+# HELP vllm:spec_decode_num_draft_tokens_total Number of draft tokens.
+# TYPE vllm:spec_decode_num_draft_tokens_total counter
+vllm:spec_decode_num_draft_tokens_total{engine="0",model_name="deepseek-v4-flash-dspark"} 1767.0
+# HELP vllm:spec_decode_num_draft_tokens_created Number of draft tokens.
+# TYPE vllm:spec_decode_num_draft_tokens_created gauge
+vllm:spec_decode_num_draft_tokens_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774590719087e+09
+# HELP vllm:spec_decode_num_accepted_tokens_total Number of accepted tokens.
+# TYPE vllm:spec_decode_num_accepted_tokens_total counter
+vllm:spec_decode_num_accepted_tokens_total{engine="0",model_name="deepseek-v4-flash-dspark"} 1164.0
+# HELP vllm:spec_decode_num_accepted_tokens_created Number of accepted tokens.
+# TYPE vllm:spec_decode_num_accepted_tokens_created gauge
+vllm:spec_decode_num_accepted_tokens_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774590719254e+09
+# HELP vllm:spec_decode_num_accepted_tokens_per_pos_total Accepted tokens per draft position.
+# TYPE vllm:spec_decode_num_accepted_tokens_per_pos_total counter
+vllm:spec_decode_num_accepted_tokens_per_pos_total{engine="0",model_name="deepseek-v4-flash-dspark",position="0"} 508.0
+vllm:spec_decode_num_accepted_tokens_per_pos_total{engine="0",model_name="deepseek-v4-flash-dspark",position="1"} 369.0
+vllm:spec_decode_num_accepted_tokens_per_pos_total{engine="0",model_name="deepseek-v4-flash-dspark",position="2"} 287.0
+# HELP vllm:spec_decode_num_accepted_tokens_per_pos_created Accepted tokens per draft position.
+# TYPE vllm:spec_decode_num_accepted_tokens_per_pos_created gauge
+vllm:spec_decode_num_accepted_tokens_per_pos_created{engine="0",model_name="deepseek-v4-flash-dspark",position="0"} 1.7843774590737045e+09
+vllm:spec_decode_num_accepted_tokens_per_pos_created{engine="0",model_name="deepseek-v4-flash-dspark",position="1"} 1.784377459073711e+09
+vllm:spec_decode_num_accepted_tokens_per_pos_created{engine="0",model_name="deepseek-v4-flash-dspark",position="2"} 1.7843774590737157e+09
+# HELP vllm:estimated_flops_per_gpu_total Estimated number of floating point operations per GPU (for Model Flops Utilization calculations).
+# TYPE vllm:estimated_flops_per_gpu_total counter
+vllm:estimated_flops_per_gpu_total{engine="0",model_name="deepseek-v4-flash-dspark"} 0.0
+# HELP vllm:estimated_flops_per_gpu_created Estimated number of floating point operations per GPU (for Model Flops Utilization calculations).
+# TYPE vllm:estimated_flops_per_gpu_created gauge
+vllm:estimated_flops_per_gpu_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774590783029e+09
+# HELP vllm:estimated_read_bytes_per_gpu_total Estimated number of bytes read from memory per GPU (for Model Flops Utilization calculations).
+# TYPE vllm:estimated_read_bytes_per_gpu_total counter
+vllm:estimated_read_bytes_per_gpu_total{engine="0",model_name="deepseek-v4-flash-dspark"} 0.0
+# HELP vllm:estimated_read_bytes_per_gpu_created Estimated number of bytes read from memory per GPU (for Model Flops Utilization calculations).
+# TYPE vllm:estimated_read_bytes_per_gpu_created gauge
+vllm:estimated_read_bytes_per_gpu_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774590794964e+09
+# HELP vllm:estimated_write_bytes_per_gpu_total Estimated number of bytes written to memory per GPU (for Model Flops Utilization calculations).
+# TYPE vllm:estimated_write_bytes_per_gpu_total counter
+vllm:estimated_write_bytes_per_gpu_total{engine="0",model_name="deepseek-v4-flash-dspark"} 0.0
+# HELP vllm:estimated_write_bytes_per_gpu_created Estimated number of bytes written to memory per GPU (for Model Flops Utilization calculations).
+# TYPE vllm:estimated_write_bytes_per_gpu_created gauge
+vllm:estimated_write_bytes_per_gpu_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774590796978e+09
+# HELP vllm:num_requests_running Number of requests in model execution batches.
+# TYPE vllm:num_requests_running gauge
+vllm:num_requests_running{engine="0",model_name="deepseek-v4-flash-dspark"} 0.0
+# HELP vllm:num_requests_waiting Number of requests waiting to be processed.
+# TYPE vllm:num_requests_waiting gauge
+vllm:num_requests_waiting{engine="0",model_name="deepseek-v4-flash-dspark"} 0.0
+# HELP vllm:num_requests_waiting_by_reason Number of waiting requests by reason. Reason labels: 'capacity' = waiting for scheduling capacity; 'deferred' = deferred by transient constraints (LoRA budget, KV transfer, blocked status). Sum of all reasons equals vllm:num_requests_waiting.
+# TYPE vllm:num_requests_waiting_by_reason gauge
+vllm:num_requests_waiting_by_reason{engine="0",model_name="deepseek-v4-flash-dspark",reason="capacity"} 0.0
+vllm:num_requests_waiting_by_reason{engine="0",model_name="deepseek-v4-flash-dspark",reason="deferred"} 0.0
+# HELP vllm:engine_sleep_state Engine sleep state; awake = 0 means engine is sleeping; awake = 1 means engine is awake; weights_offloaded = 1 means sleep level 1; discard_all = 1 means sleep level 2.
+# TYPE vllm:engine_sleep_state gauge
+vllm:engine_sleep_state{engine="0",model_name="deepseek-v4-flash-dspark",sleep_state="awake"} 1.0
+vllm:engine_sleep_state{engine="0",model_name="deepseek-v4-flash-dspark",sleep_state="weights_offloaded"} 0.0
+vllm:engine_sleep_state{engine="0",model_name="deepseek-v4-flash-dspark",sleep_state="discard_all"} 0.0
+# HELP vllm:kv_cache_usage_perc KV-cache usage. 1 means 100 percent usage.
+# TYPE vllm:kv_cache_usage_perc gauge
+vllm:kv_cache_usage_perc{engine="0",model_name="deepseek-v4-flash-dspark"} 0.0
+# HELP vllm:prefix_cache_queries_total Prefix cache queries, in terms of number of queried tokens.
+# TYPE vllm:prefix_cache_queries_total counter
+vllm:prefix_cache_queries_total{engine="0",model_name="deepseek-v4-flash-dspark"} 1.227019e+06
+# HELP vllm:prefix_cache_queries_created Prefix cache queries, in terms of number of queried tokens.
+# TYPE vllm:prefix_cache_queries_created gauge
+vllm:prefix_cache_queries_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774590913236e+09
+# HELP vllm:prefix_cache_hits_total Prefix cache hits, in terms of number of cached tokens.
+# TYPE vllm:prefix_cache_hits_total counter
+vllm:prefix_cache_hits_total{engine="0",model_name="deepseek-v4-flash-dspark"} 91392.0
+# HELP vllm:prefix_cache_hits_created Prefix cache hits, in terms of number of cached tokens.
+# TYPE vllm:prefix_cache_hits_created gauge
+vllm:prefix_cache_hits_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.78437745912321e+09
+# HELP vllm:external_prefix_cache_queries_total External prefix cache queries from KV connector cross-instance cache sharing, in terms of number of queried tokens.
+# TYPE vllm:external_prefix_cache_queries_total counter
+vllm:external_prefix_cache_queries_total{engine="0",model_name="deepseek-v4-flash-dspark"} 0.0
+# HELP vllm:external_prefix_cache_queries_created External prefix cache queries from KV connector cross-instance cache sharing, in terms of number of queried tokens.
+# TYPE vllm:external_prefix_cache_queries_created gauge
+vllm:external_prefix_cache_queries_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591262012e+09
+# HELP vllm:external_prefix_cache_hits_total External prefix cache hits from KV connector cross-instance cache sharing, in terms of number of cached tokens.
+# TYPE vllm:external_prefix_cache_hits_total counter
+vllm:external_prefix_cache_hits_total{engine="0",model_name="deepseek-v4-flash-dspark"} 0.0
+# HELP vllm:external_prefix_cache_hits_created External prefix cache hits from KV connector cross-instance cache sharing, in terms of number of cached tokens.
+# TYPE vllm:external_prefix_cache_hits_created gauge
+vllm:external_prefix_cache_hits_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.784377459126277e+09
+# HELP vllm:mm_cache_queries_total Multi-modal cache queries, in terms of number of queried items.
+# TYPE vllm:mm_cache_queries_total counter
+vllm:mm_cache_queries_total{engine="0",model_name="deepseek-v4-flash-dspark"} 0.0
+# HELP vllm:mm_cache_queries_created Multi-modal cache queries, in terms of number of queried items.
+# TYPE vllm:mm_cache_queries_created gauge
+vllm:mm_cache_queries_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591265137e+09
+# HELP vllm:mm_cache_hits_total Multi-modal cache hits, in terms of number of cached items.
+# TYPE vllm:mm_cache_hits_total counter
+vllm:mm_cache_hits_total{engine="0",model_name="deepseek-v4-flash-dspark"} 0.0
+# HELP vllm:mm_cache_hits_created Multi-modal cache hits, in terms of number of cached items.
+# TYPE vllm:mm_cache_hits_created gauge
+vllm:mm_cache_hits_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591265283e+09
+# HELP vllm:num_preemptions_total Cumulative number of preemption from the engine.
+# TYPE vllm:num_preemptions_total counter
+vllm:num_preemptions_total{engine="0",model_name="deepseek-v4-flash-dspark"} 0.0
+# HELP vllm:num_preemptions_created Cumulative number of preemption from the engine.
+# TYPE vllm:num_preemptions_created gauge
+vllm:num_preemptions_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591276944e+09
+# HELP vllm:prompt_tokens_total Number of prefill tokens processed.
+# TYPE vllm:prompt_tokens_total counter
+vllm:prompt_tokens_total{engine="0",model_name="deepseek-v4-flash-dspark"} 1.227019e+06
+# HELP vllm:prompt_tokens_created Number of prefill tokens processed.
+# TYPE vllm:prompt_tokens_created gauge
+vllm:prompt_tokens_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591279101e+09
+# HELP vllm:prompt_tokens_by_source_total Number of prompt tokens by source.
+# TYPE vllm:prompt_tokens_by_source_total counter
+vllm:prompt_tokens_by_source_total{engine="0",model_name="deepseek-v4-flash-dspark",source="local_compute"} 1.135627e+06
+vllm:prompt_tokens_by_source_total{engine="0",model_name="deepseek-v4-flash-dspark",source="local_cache_hit"} 91392.0
+vllm:prompt_tokens_by_source_total{engine="0",model_name="deepseek-v4-flash-dspark",source="external_kv_transfer"} 0.0
+# HELP vllm:prompt_tokens_by_source_created Number of prompt tokens by source.
+# TYPE vllm:prompt_tokens_by_source_created gauge
+vllm:prompt_tokens_by_source_created{engine="0",model_name="deepseek-v4-flash-dspark",source="local_compute"} 1.7843774591285043e+09
+vllm:prompt_tokens_by_source_created{engine="0",model_name="deepseek-v4-flash-dspark",source="local_cache_hit"} 1.7843774591285112e+09
+vllm:prompt_tokens_by_source_created{engine="0",model_name="deepseek-v4-flash-dspark",source="external_kv_transfer"} 1.784377459128517e+09
+# HELP vllm:prompt_tokens_cached_total Number of cached prompt tokens (local + external).
+# TYPE vllm:prompt_tokens_cached_total counter
+vllm:prompt_tokens_cached_total{engine="0",model_name="deepseek-v4-flash-dspark"} 91392.0
+# HELP vllm:prompt_tokens_cached_created Number of cached prompt tokens (local + external).
+# TYPE vllm:prompt_tokens_cached_created gauge
+vllm:prompt_tokens_cached_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591294947e+09
+# HELP vllm:generation_tokens_total Number of generation tokens processed.
+# TYPE vllm:generation_tokens_total counter
+vllm:generation_tokens_total{engine="0",model_name="deepseek-v4-flash-dspark"} 1763.0
+# HELP vllm:generation_tokens_created Number of generation tokens processed.
+# TYPE vllm:generation_tokens_created gauge
+vllm:generation_tokens_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591295114e+09
+# HELP vllm:request_success_total Count of successfully processed requests.
+# TYPE vllm:request_success_total counter
+vllm:request_success_total{engine="0",finished_reason="stop",model_name="deepseek-v4-flash-dspark"} 17.0
+vllm:request_success_total{engine="0",finished_reason="length",model_name="deepseek-v4-flash-dspark"} 5.0
+vllm:request_success_total{engine="0",finished_reason="abort",model_name="deepseek-v4-flash-dspark"} 0.0
+vllm:request_success_total{engine="0",finished_reason="error",model_name="deepseek-v4-flash-dspark"} 0.0
+vllm:request_success_total{engine="0",finished_reason="repetition",model_name="deepseek-v4-flash-dspark"} 0.0
+# HELP vllm:request_success_created Count of successfully processed requests.
+# TYPE vllm:request_success_created gauge
+vllm:request_success_created{engine="0",finished_reason="stop",model_name="deepseek-v4-flash-dspark"} 1.784377459131703e+09
+vllm:request_success_created{engine="0",finished_reason="length",model_name="deepseek-v4-flash-dspark"} 1.7843774591319034e+09
+vllm:request_success_created{engine="0",finished_reason="abort",model_name="deepseek-v4-flash-dspark"} 1.784377459132101e+09
+vllm:request_success_created{engine="0",finished_reason="error",model_name="deepseek-v4-flash-dspark"} 1.7843774591322992e+09
+vllm:request_success_created{engine="0",finished_reason="repetition",model_name="deepseek-v4-flash-dspark"} 1.7843774591334944e+09
+# HELP vllm:request_prompt_tokens Number of prefill tokens processed.
+# TYPE vllm:request_prompt_tokens histogram
+vllm:request_prompt_tokens_count{engine="0",model_name="deepseek-v4-flash-dspark"} 22.0
+vllm:request_prompt_tokens_sum{engine="0",model_name="deepseek-v4-flash-dspark"} 1.227019e+06
+# HELP vllm:request_prompt_tokens_created Number of prefill tokens processed.
+# TYPE vllm:request_prompt_tokens_created gauge
+vllm:request_prompt_tokens_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591364944e+09
+# HELP vllm:request_generation_tokens Number of generation tokens processed.
+# TYPE vllm:request_generation_tokens histogram
+vllm:request_generation_tokens_count{engine="0",model_name="deepseek-v4-flash-dspark"} 22.0
+vllm:request_generation_tokens_sum{engine="0",model_name="deepseek-v4-flash-dspark"} 1763.0
+# HELP vllm:request_generation_tokens_created Number of generation tokens processed.
+# TYPE vllm:request_generation_tokens_created gauge
+vllm:request_generation_tokens_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591460962e+09
+# HELP vllm:iteration_tokens_total Histogram of number of tokens per engine_step.
+# TYPE vllm:iteration_tokens_total histogram
+vllm:iteration_tokens_total_count{engine="0",model_name="deepseek-v4-flash-dspark"} 549.0
+vllm:iteration_tokens_total_sum{engine="0",model_name="deepseek-v4-flash-dspark"} 1.13739e+06
+# HELP vllm:iteration_tokens_total_created Histogram of number of tokens per engine_step.
+# TYPE vllm:iteration_tokens_total_created gauge
+vllm:iteration_tokens_total_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591505156e+09
+# HELP vllm:request_max_num_generation_tokens Histogram of maximum number of requested generation tokens.
+# TYPE vllm:request_max_num_generation_tokens histogram
+vllm:request_max_num_generation_tokens_count{engine="0",model_name="deepseek-v4-flash-dspark"} 22.0
+vllm:request_max_num_generation_tokens_sum{engine="0",model_name="deepseek-v4-flash-dspark"} 1763.0
+# HELP vllm:request_max_num_generation_tokens_created Histogram of maximum number of requested generation tokens.
+# TYPE vllm:request_max_num_generation_tokens_created gauge
+vllm:request_max_num_generation_tokens_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591539116e+09
+# HELP vllm:request_params_n Histogram of the n request parameter.
+# TYPE vllm:request_params_n histogram
+vllm:request_params_n_count{engine="0",model_name="deepseek-v4-flash-dspark"} 22.0
+vllm:request_params_n_sum{engine="0",model_name="deepseek-v4-flash-dspark"} 22.0
+# HELP vllm:request_params_n_created Histogram of the n request parameter.
+# TYPE vllm:request_params_n_created gauge
+vllm:request_params_n_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591587093e+09
+# HELP vllm:request_params_max_tokens Histogram of the max_tokens request parameter.
+# TYPE vllm:request_params_max_tokens histogram
+vllm:request_params_max_tokens_count{engine="0",model_name="deepseek-v4-flash-dspark"} 22.0
+vllm:request_params_max_tokens_sum{engine="0",model_name="deepseek-v4-flash-dspark"} 6918.0
+# HELP vllm:request_params_max_tokens_created Histogram of the max_tokens request parameter.
+# TYPE vllm:request_params_max_tokens_created gauge
+vllm:request_params_max_tokens_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591603136e+09
+# HELP vllm:time_to_first_token_seconds Histogram of time to first token in seconds.
+# TYPE vllm:time_to_first_token_seconds histogram
+vllm:time_to_first_token_seconds_count{engine="0",model_name="deepseek-v4-flash-dspark"} 22.0
+vllm:time_to_first_token_seconds_sum{engine="0",model_name="deepseek-v4-flash-dspark"} 779.7533657550812
+# HELP vllm:time_to_first_token_seconds_created Histogram of time to first token in seconds.
+# TYPE vllm:time_to_first_token_seconds_created gauge
+vllm:time_to_first_token_seconds_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591649096e+09
+# HELP vllm:inter_token_latency_seconds Histogram of inter-token latency in seconds.
+# TYPE vllm:inter_token_latency_seconds histogram
+vllm:inter_token_latency_seconds_count{engine="0",model_name="deepseek-v4-flash-dspark"} 589.0
+vllm:inter_token_latency_seconds_sum{engine="0",model_name="deepseek-v4-flash-dspark"} 39.14989776998118
+# HELP vllm:inter_token_latency_seconds_created Histogram of inter-token latency in seconds.
+# TYPE vllm:inter_token_latency_seconds_created gauge
+vllm:inter_token_latency_seconds_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591699078e+09
+# HELP vllm:request_time_per_output_token_seconds Histogram of time_per_output_token_seconds per request.
+# TYPE vllm:request_time_per_output_token_seconds histogram
+vllm:request_time_per_output_token_seconds_count{engine="0",model_name="deepseek-v4-flash-dspark"} 22.0
+vllm:request_time_per_output_token_seconds_sum{engine="0",model_name="deepseek-v4-flash-dspark"} 0.9710873149246836
+# HELP vllm:request_time_per_output_token_seconds_created Histogram of time_per_output_token_seconds per request.
+# TYPE vllm:request_time_per_output_token_seconds_created gauge
+vllm:request_time_per_output_token_seconds_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591745138e+09
+# HELP vllm:e2e_request_latency_seconds Histogram of e2e request latency in seconds.
+# TYPE vllm:e2e_request_latency_seconds histogram
+vllm:e2e_request_latency_seconds_count{engine="0",model_name="deepseek-v4-flash-dspark"} 22.0
+vllm:e2e_request_latency_seconds_sum{engine="0",model_name="deepseek-v4-flash-dspark"} 819.066356420517
+# HELP vllm:e2e_request_latency_seconds_created Histogram of e2e request latency in seconds.
+# TYPE vllm:e2e_request_latency_seconds_created gauge
+vllm:e2e_request_latency_seconds_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.784377459179109e+09
+# HELP vllm:request_queue_time_seconds Histogram of time spent in WAITING phase for request.
+# TYPE vllm:request_queue_time_seconds histogram
+vllm:request_queue_time_seconds_count{engine="0",model_name="deepseek-v4-flash-dspark"} 22.0
+vllm:request_queue_time_seconds_sum{engine="0",model_name="deepseek-v4-flash-dspark"} 0.00024254402524093166
+# HELP vllm:request_queue_time_seconds_created Histogram of time spent in WAITING phase for request.
+# TYPE vllm:request_queue_time_seconds_created gauge
+vllm:request_queue_time_seconds_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591843154e+09
+# HELP vllm:request_inference_time_seconds Histogram of time spent in RUNNING phase for request.
+# TYPE vllm:request_inference_time_seconds histogram
+vllm:request_inference_time_seconds_count{engine="0",model_name="deepseek-v4-flash-dspark"} 22.0
+vllm:request_inference_time_seconds_sum{engine="0",model_name="deepseek-v4-flash-dspark"} 815.1512508849846
+# HELP vllm:request_inference_time_seconds_created Histogram of time spent in RUNNING phase for request.
+# TYPE vllm:request_inference_time_seconds_created gauge
+vllm:request_inference_time_seconds_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591891575e+09
+# HELP vllm:request_prefill_time_seconds Histogram of time spent in PREFILL phase for request.
+# TYPE vllm:request_prefill_time_seconds histogram
+vllm:request_prefill_time_seconds_count{engine="0",model_name="deepseek-v4-flash-dspark"} 22.0
+vllm:request_prefill_time_seconds_sum{engine="0",model_name="deepseek-v4-flash-dspark"} 776.0013531150034
+# HELP vllm:request_prefill_time_seconds_created Histogram of time spent in PREFILL phase for request.
+# TYPE vllm:request_prefill_time_seconds_created gauge
+vllm:request_prefill_time_seconds_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774591930115e+09
+# HELP vllm:request_decode_time_seconds Histogram of time spent in DECODE phase for request.
+# TYPE vllm:request_decode_time_seconds histogram
+vllm:request_decode_time_seconds_count{engine="0",model_name="deepseek-v4-flash-dspark"} 22.0
+vllm:request_decode_time_seconds_sum{engine="0",model_name="deepseek-v4-flash-dspark"} 39.14989776998118
+# HELP vllm:request_decode_time_seconds_created Histogram of time spent in DECODE phase for request.
+# TYPE vllm:request_decode_time_seconds_created gauge
+vllm:request_decode_time_seconds_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.78437745919781e+09
+# HELP vllm:request_prefill_kv_computed_tokens Histogram of new KV tokens computed during prefill (excluding cached tokens).
+# TYPE vllm:request_prefill_kv_computed_tokens histogram
+vllm:request_prefill_kv_computed_tokens_count{engine="0",model_name="deepseek-v4-flash-dspark"} 22.0
+vllm:request_prefill_kv_computed_tokens_sum{engine="0",model_name="deepseek-v4-flash-dspark"} 1.135627e+06
+# HELP vllm:request_prefill_kv_computed_tokens_created Histogram of new KV tokens computed during prefill (excluding cached tokens).
+# TYPE vllm:request_prefill_kv_computed_tokens_created gauge
+vllm:request_prefill_kv_computed_tokens_created{engine="0",model_name="deepseek-v4-flash-dspark"} 1.7843774592026107e+09
+# HELP vllm:cache_config_info Information of the LLMEngine CacheConfig
+# TYPE vllm:cache_config_info gauge
+vllm:cache_config_info{_block_size_resolved="True",block_size="4",cache_dtype="nvfp4_ds_mla",calculate_kv_scales="False",enable_prefix_caching="True",engine="0",gpu_memory_utilization="0.845",hash_block_size="None",is_attention_free="False",kv_cache_dtype_skip_layers="[]",kv_cache_max_concurrency="1.4780720429191858",kv_cache_memory_bytes="None",kv_cache_size_tokens="1549870",kv_offloading_backend="native",kv_offloading_size="None",kv_sharing_fast_prefill="False",mamba_block_size="None",mamba_cache_dtype="auto",mamba_cache_mode="none",mamba_page_size_padded="None",mamba_ssm_cache_dtype="auto",num_cpu_blocks="None",num_gpu_blocks="17357",num_gpu_blocks_override="None",prefix_caching_hash_algo="sha256",skip_page_size_padded="None",sliding_window="128",user_specified_block_size="True",user_specified_mamba_block_size="False"} 1.0
+# HELP http_requests_total Total number of requests by method, status and handler.
+# TYPE http_requests_total counter
+# HELP http_requests_created Total number of requests by method, status and handler.
+# TYPE http_requests_created gauge
+# HELP http_request_size_bytes Content length of incoming requests by handler. Only value of header is respected. Otherwise ignored. No percentile calculated. 
+# TYPE http_request_size_bytes summary
+# HELP http_request_size_bytes_created Content length of incoming requests by handler. Only value of header is respected. Otherwise ignored. No percentile calculated. 
+# TYPE http_request_size_bytes_created gauge
+# HELP http_response_size_bytes Content length of outgoing responses by handler. Only value of header is respected. Otherwise ignored. No percentile calculated. 
+# TYPE http_response_size_bytes summary
+# HELP http_response_size_bytes_created Content length of outgoing responses by handler. Only value of header is respected. Otherwise ignored. No percentile calculated. 
+# TYPE http_response_size_bytes_created gauge
+# HELP http_request_duration_highr_seconds Latency with many buckets but no API specific labels. Made for more accurate percentile calculations. 
+# TYPE http_request_duration_highr_seconds histogram
+# HELP http_request_duration_highr_seconds_created Latency with many buckets but no API specific labels. Made for more accurate percentile calculations. 
+# TYPE http_request_duration_highr_seconds_created gauge
+# HELP http_request_duration_seconds Latency with only few buckets by handler. Made to be only used if aggregation by handler is important. 
+# TYPE http_request_duration_seconds histogram
+# HELP http_request_duration_seconds_created Latency with only few buckets by handler. Made to be only used if aggregation by handler is important. 
+# TYPE http_request_duration_seconds_created gauge
+# HELP vllm:tool_call_parser_invocations_total Total number of ToolParser invocations. Non-streaming increments once per choice; streaming increments once per delta.
+# TYPE vllm:tool_call_parser_invocations_total counter
+vllm:tool_call_parser_invocations_total{mode="streaming",model_name="deepseek-v4-flash-dspark",outcome="tool_call",request_type="chat_completions"} 0.0
+vllm:tool_call_parser_invocations_total{mode="streaming",model_name="deepseek-v4-flash-dspark",outcome="tool_call",request_type="responses"} 0.0
+vllm:tool_call_parser_invocations_total{mode="streaming",model_name="deepseek-v4-flash-dspark",outcome="tool_call",request_type="other"} 0.0
+vllm:tool_call_parser_invocations_total{mode="streaming",model_name="deepseek-v4-flash-dspark",outcome="no_tool_call",request_type="chat_completions"} 9.0
+vllm:tool_call_parser_invocations_total{mode="streaming",model_name="deepseek-v4-flash-dspark",outcome="no_tool_call",request_type="responses"} 0.0
+vllm:tool_call_parser_invocations_total{mode="streaming",model_name="deepseek-v4-flash-dspark",outcome="no_tool_call",request_type="other"} 0.0
+vllm:tool_call_parser_invocations_total{mode="non_streaming",model_name="deepseek-v4-flash-dspark",outcome="tool_call",request_type="chat_completions"} 0.0
+vllm:tool_call_parser_invocations_total{mode="non_streaming",model_name="deepseek-v4-flash-dspark",outcome="tool_call",request_type="responses"} 0.0
+vllm:tool_call_parser_invocations_total{mode="non_streaming",model_name="deepseek-v4-flash-dspark",outcome="tool_call",request_type="other"} 0.0
+vllm:tool_call_parser_invocations_total{mode="non_streaming",model_name="deepseek-v4-flash-dspark",outcome="no_tool_call",request_type="chat_completions"} 21.0
+vllm:tool_call_parser_invocations_total{mode="non_streaming",model_name="deepseek-v4-flash-dspark",outcome="no_tool_call",request_type="responses"} 0.0
+vllm:tool_call_parser_invocations_total{mode="non_streaming",model_name="deepseek-v4-flash-dspark",outcome="no_tool_call",request_type="other"} 0.0
+# HELP vllm:tool_call_parser_invocations_created Total number of ToolParser invocations. Non-streaming increments once per choice; streaming increments once per delta.
+# TYPE vllm:tool_call_parser_invocations_created gauge
+vllm:tool_call_parser_invocations_created{mode="streaming",model_name="deepseek-v4-flash-dspark",outcome="tool_call",request_type="chat_completions"} 1.7843774626773002e+09
+vllm:tool_call_parser_invocations_created{mode="streaming",model_name="deepseek-v4-flash-dspark",outcome="tool_call",request_type="responses"} 1.784377462677678e+09
+vllm:tool_call_parser_invocations_created{mode="streaming",model_name="deepseek-v4-flash-dspark",outcome="tool_call",request_type="other"} 1.784377462677691e+09
+vllm:tool_call_parser_invocations_created{mode="streaming",model_name="deepseek-v4-flash-dspark",outcome="no_tool_call",request_type="chat_completions"} 1.7843774626777008e+09
+vllm:tool_call_parser_invocations_created{mode="streaming",model_name="deepseek-v4-flash-dspark",outcome="no_tool_call",request_type="responses"} 1.7843774626777081e+09
+vllm:tool_call_parser_invocations_created{mode="streaming",model_name="deepseek-v4-flash-dspark",outcome="no_tool_call",request_type="other"} 1.784377462677878e+09
+vllm:tool_call_parser_invocations_created{mode="non_streaming",model_name="deepseek-v4-flash-dspark",outcome="tool_call",request_type="chat_completions"} 1.7843774626780844e+09
+vllm:tool_call_parser_invocations_created{mode="non_streaming",model_name="deepseek-v4-flash-dspark",outcome="tool_call",request_type="responses"} 1.7843774626780922e+09
+vllm:tool_call_parser_invocations_created{mode="non_streaming",model_name="deepseek-v4-flash-dspark",outcome="tool_call",request_type="other"} 1.7843774626781008e+09
+vllm:tool_call_parser_invocations_created{mode="non_streaming",model_name="deepseek-v4-flash-dspark",outcome="no_tool_call",request_type="chat_completions"} 1.784377462678108e+09
+vllm:tool_call_parser_invocations_created{mode="non_streaming",model_name="deepseek-v4-flash-dspark",outcome="no_tool_call",request_type="responses"} 1.7843774626781144e+09
+vllm:tool_call_parser_invocations_created{mode="non_streaming",model_name="deepseek-v4-flash-dspark",outcome="no_tool_call",request_type="other"} 1.784377462678123e+09

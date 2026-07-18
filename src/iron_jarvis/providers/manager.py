@@ -68,7 +68,14 @@ class ProviderManager:
         custom_model: str = "",
         grok_cli_available: Callable[[], bool] | None = None,
         inherit_cli_logins: bool = False,
+        dynamic_available: Callable[[str], bool | None] | None = None,
     ) -> None:
+        #: Availability oracle for providers registered at RUNTIME (the local
+        #: fleet). Returns None for names it doesn't own, so every built-in
+        #: provider keeps its existing logic. Injected rather than name-branched
+        #: so a bare ProviderManager() stays hermetic — and it MUST be a cached
+        #: read: available() runs per provider per request in the router.
+        self._dynamic_available = dynamic_available
         self.vault = vault
         # Keyless subscription inheritance (anthropic->claude-cli, openai->
         # codex-cli). OPT-IN so a bare unit-test ProviderManager stays hermetic:
@@ -317,6 +324,13 @@ class ProviderManager:
             return self._cli_binary_present("claude")
         if name == "codex-cli":
             return self._cli_binary_present("codex")
+        if self._dynamic_available is not None:
+            try:
+                verdict = self._dynamic_available(name)
+            except Exception:  # noqa: BLE001 — a bad oracle never breaks routing
+                verdict = None
+            if verdict is not None:
+                return bool(verdict)
         return name in self._factories
 
     def has_available_api_provider(self) -> bool:

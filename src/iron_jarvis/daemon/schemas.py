@@ -213,6 +213,15 @@ _SETTINGS_KEYS = [
     "calendar_trigger_enabled",
     "calendar_tick_seconds",
     "calendar_lead_minutes",
+    # Local fleet — SCALARS only. `fleet_nodes` is deliberately absent (same rule
+    # as mcp_servers/custom_integrations): a list is managed by /fleet/nodes, and
+    # a settings-page round-trip of the whole blob is how nodes get lost.
+    "fleet_sampling_enabled",
+    "fleet_sampling_seconds",
+    "fleet_savings_baseline",
+    "fleet_code_route_enabled",
+    "fleet_code_target",
+    "fleet_code_task_classes",
 ]
 
 

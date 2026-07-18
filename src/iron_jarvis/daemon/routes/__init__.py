@@ -15,6 +15,7 @@ from . import (  # noqa: F401
     connectors,
     creative,
     documents,
+    fleet,
     fsbrowse,
     knowledge,
     learning,

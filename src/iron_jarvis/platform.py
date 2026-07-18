@@ -165,6 +165,9 @@ class Platform:
     #: FX-01 ephemeral per-session token/tool stream hub (NOT the event bus — see
     #: core/streams.py). Optional so bare-platform unit tests still construct.
     streams: "StreamHub | None" = None
+    #: LOCAL FLEET registry (the user's own inference machines). Seeded from the
+    #: two config endpoint slots, so it is populated with zero setup.
+    fleet: "object | None" = None
 
 
 def build_platform(
@@ -259,6 +262,12 @@ def build_platform(
         except Exception:  # noqa: BLE001
             return False
 
+    # Built BEFORE the manager: the manager's availability oracle closes over it,
+    # and register_providers() runs the moment the manager exists.
+    from .fleet.registry import FleetRegistry
+
+    fleet_registry = FleetRegistry(config)
+
     providers = ProviderManager(
         vault=vault,
         default_model=config.default_model,
@@ -281,7 +290,18 @@ def build_platform(
         # requested without an API key (the sanctioned subscription path). The
         # raw API-key path is unaffected.
         inherit_cli_logins=True,
+        # Local fleet: availability for the runtime-registered fleet-* providers
+        # comes from the sampler's CACHED last-known reachability (never a live
+        # probe — this is called per provider per request).
+        dynamic_available=lambda name: fleet_registry.reachable(name),
     )
+    # LOCAL FLEET — the user's own inference machines. The registry derives nodes
+    # from the two config endpoint slots (so it works with zero setup) plus any
+    # the user added, and registers one provider per ROUTABLE node. Topology
+    # children discovered behind a proxy are observability-only: they are already
+    # reachable through the proxy's alias, and registering them again would show
+    # the same GPU twice in every picker.
+    fleet_registry.register_providers(providers)
     # Self-tuning router (§6 phase-1), OFF by default: only when the user opts in
     # (prefer_local_when_capable) AND a local Ollama model is configured AND it has
     # demonstrably met the quality bar for a task class do we prefer it for that
@@ -659,6 +679,7 @@ def build_platform(
         connections=connections,
         computeruse=computeruse,
         terminals=terminals,
+        fleet=fleet_registry,
         embedder=embedder,
         fabric=fabric,
     )

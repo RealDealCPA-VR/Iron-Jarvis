@@ -276,6 +276,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from ..triggers import CalendarPoller
 
     calendar_poller = CalendarPoller(platform, reflex_router, platform.engine)
+    # LOCAL FLEET telemetry sampler. Hybrid cadence: a slow background pass so
+    # history exists the moment the page opens, speeding up while someone is
+    # actually watching (GET /fleet touches the lease). Constructed here but NOT
+    # started until lifespan — a bare create_app() in tests must never poll.
+    from ..fleet.sampler import FleetSampler
+
+    fleet_sampler = FleetSampler(
+        platform.fleet,
+        interval_idle=float(max(5, getattr(platform.config, "fleet_sampling_seconds", 30))),
+    )
 
     # LIVE re-arm bridge: lifespan drops its event loop + the autonomy/sentinel
     # arm functions in here so put_settings (which runs in a threadpool) can
@@ -640,11 +650,32 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         _arm_calendar()
 
+        # LOCAL FLEET sampler: start it only when telemetry is enabled AND at
+        # least one node exists, so a fresh install with no local endpoints
+        # never opens a socket. Re-armed live when the fleet settings change.
+        def _arm_fleet() -> None:
+            try:
+                enabled = bool(getattr(platform.config, "fleet_sampling_enabled", True))
+                has_nodes = bool(platform.fleet and platform.fleet.nodes())
+                if enabled and has_nodes:
+                    fleet_sampler.interval_idle = float(
+                        max(5, getattr(platform.config, "fleet_sampling_seconds", 30))
+                    )
+                    bg_tasks["fleet"] = asyncio.create_task(fleet_sampler.start())
+                    log.info("fleet sampler (re)armed")
+                else:
+                    bg_tasks["fleet"] = asyncio.create_task(fleet_sampler.stop())
+            except Exception:  # noqa: BLE001 — telemetry never breaks boot
+                log.debug("fleet sampler arm failed", exc_info=True)
+
+        _arm_fleet()
+
         # Expose the arm functions + this loop to put_settings (threadpool).
         _live_rearm["loop"] = asyncio.get_running_loop()
         _live_rearm["autonomy"] = _arm_autonomy
         _live_rearm["sentinels"] = _arm_sentinels
         _live_rearm["calendar"] = _arm_calendar
+        _live_rearm["fleet"] = _arm_fleet
 
         # Two-way comm inbound poller — the receive leg. GUARDED by
         # poller.enabled() (True only when a channel has inbound_enabled +
@@ -716,6 +747,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
             yield
         finally:
             _live_rearm.clear()  # daemon going down — no more live re-arms
+            try:
+                await fleet_sampler.stop()  # cancel cleanly, no pending-task warnings
+            except Exception:  # noqa: BLE001 — shutdown never raises
+                pass
             if slack_socket_stop is not None:
                 slack_socket_stop.set()
             if slack_socket_task is not None:
@@ -1601,6 +1636,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
         _CHANNEL_TYPE_FIELDS=_CHANNEL_TYPE_FIELDS,
         _CHANNEL_MANIFESTS=_CHANNEL_MANIFESTS,
         _MCP_CATALOG=_MCP_CATALOG,
+        # Local fleet: the registry lives on the platform (providers close over
+        # it); the sampler is daemon-owned because it needs the event loop.
+        fleet=platform.fleet,
+        fleet_sampler=fleet_sampler,
     )
     _routes.chat.register(app, d)
     _routes.projects.register(app, d)
@@ -1625,5 +1664,6 @@ def create_app(project_root: str | None = None) -> FastAPI:
     _routes.triggers.register(app, d)
     _routes.audit.register(app, d)
     _routes.undo.register(app, d)
+    _routes.fleet.register(app, d)
     _routes.system.register(app, d)
     return app

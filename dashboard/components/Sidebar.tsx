@@ -33,6 +33,7 @@ import {
   MoveUpRight,
   GitBranch,
   Gauge,
+  Server,
   DownloadCloud,
   Settings,
   LifeBuoy,
@@ -106,6 +107,8 @@ const NAV: NavSection[] = [
     items: [
       { href: "/marketplace", label: "Marketplace", icon: Store },
       { href: "/connections", label: "Connections", icon: PlugZap },
+      // Advanced-only by construction: NOT in ESSENTIAL_HREFS below.
+      { href: "/fleet", label: "Local fleet", icon: Server },
       { href: "/secrets", label: "Secrets", icon: KeyRound },
       { href: "/integrations", label: "Integrations", icon: Plug },
       { href: "/channels", label: "Channels", icon: Megaphone },

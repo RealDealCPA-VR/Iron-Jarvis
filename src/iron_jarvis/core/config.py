@@ -207,6 +207,22 @@ class Config(BaseModel):
     # they survive a restart. Their per-instance config (base_url, auth secret
     # NAME) lives in the IntegrationRecord table; the token lives in the vault.
     custom_integrations: list[dict[str, Any]] = Field(default_factory=list)
+    # LOCAL FLEET — extra inference nodes ON TOP of the two endpoint slots above
+    # (ollama_base_url / custom_base_url), which are auto-seeded into the fleet, so
+    # this stays empty by default and the feature works with zero setup. Same
+    # list-of-dict shape as mcp_servers/custom_integrations; managed by /fleet/nodes
+    # (NOT via PUT /settings — a UI round-trip of a complex list loses nodes).
+    fleet_nodes: list[dict[str, Any]] = Field(default_factory=list)
+    fleet_sampling_enabled: bool = True  # background telemetry loop (30s idle)
+    fleet_sampling_seconds: int = 30  # idle cadence; a watched page samples at 2s
+    #: "provider:model" the local-vs-cloud savings estimate is priced against —
+    #: an estimate is only honest when its BASIS is named. "" = the built-in default.
+    fleet_savings_baseline: str = ""
+    # Code routing (Wave 2) — send coding work to a chosen local model. OFF by
+    # default; with it off, routing is byte-for-byte unchanged.
+    fleet_code_route_enabled: bool = False
+    fleet_code_target: str = ""  # "provider:model" (providers/routing.parse_pm)
+    fleet_code_task_classes: str = ""  # CSV override; "" = the built-in set
     # Self-tuning router (§6 phase-1) — OFF by default. When enabled AND the local
     # Ollama model is configured AND eval/observability shows it has met the
     # quality bar for a task class, the router prefers it for that class. With the
