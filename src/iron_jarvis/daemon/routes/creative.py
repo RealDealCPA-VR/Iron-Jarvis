@@ -39,7 +39,12 @@ from ...creative.service import list_media, media_kind, mime_for
 #: screen is auto-answered by _engage_claude_automode. It's opt-in (the autopilot
 #: toggle) and scoped to the studio's chosen folder.
 _AUTOPILOT_FLAGS = {
-    "codex": "--full-auto",
+    # Codex ≥0.4x removed --full-auto (launching with it was an instant
+    # unknown-argument exit — the studio's "codex failed" report, live-hit
+    # 2026-07-18). This is codex's exact equivalent of Claude's flag below;
+    # same opt-in autopilot posture, and codex's sandbox is unreliable on
+    # native Windows anyway.
+    "codex": "--dangerously-bypass-approvals-and-sandbox",
     "claude": "--dangerously-skip-permissions",
 }
 
@@ -279,6 +284,44 @@ _AUTO_SKILL_HINT = (
     "(pixio-story for narrative video, seedance-storyboard for cinematic "
     "clips, pixio-song for music, pixio-skill for single images/audio/video)."
 )
+
+#: The known media skills, for the portable Auto menu (name → one-line role).
+_MEDIA_SKILLS = {
+    "pixio-story": "narrative multi-shot video",
+    "seedance-storyboard": "cinematic clips",
+    "pixio-song": "music",
+    "pixio-skill": "single images/audio/video",
+}
+
+
+def _portable_skill_line(registry, skill: str) -> str:
+    """The brief's skill instruction for a CLI that CANNOT discover skills.
+
+    Only Claude Code auto-loads ~/.claude/skills; "Use your 'X' skill" is
+    gibberish to codex/grok (live-hit 2026-07-18 — a codex studio run had no
+    idea what the named skill was). Every CLI can READ FILES though, so point
+    it at the skill's SKILL.md on disk. Unknown/undiscovered skills degrade to
+    the generic hint rather than a dead file path.
+    """
+    if skill:
+        s = registry.get(skill)
+        if s is not None:
+            return (
+                f"Read the file '{s.dir / 'SKILL.md'}' now and follow its "
+                "instructions as your playbook for this task."
+            )
+        return f"Use your '{skill}' skill."  # unknown here; the CLI may know it
+    lines = []
+    for name, role in _MEDIA_SKILLS.items():
+        s = registry.get(name)
+        if s is not None:
+            lines.append(f"'{name}' for {role}: read {s.dir / 'SKILL.md'}")
+    if not lines:
+        return _AUTO_SKILL_HINT
+    return (
+        "Pick the best media-generation playbook for what I describe, then READ "
+        "its file and follow it: " + "; ".join(lines) + "."
+    )
 
 _MISSING_KEY = (
     "Pixio isn't connected — add your key on the Connections page (or a secret "
@@ -659,6 +702,9 @@ def register(app: FastAPI, d) -> None:
         # full-screen TUI stalls once its output buffer fills (= the "chat
         # initialises then nothing generates" failure this fixes).
         session.start_autodrain()
+        # studio_say composes the first brief PER ENGINE (skill discovery is a
+        # Claude-only capability — other CLIs get file paths to read).
+        setattr(session, "_studio_cli", body.cli)
         if key:
             # studio_say adds a "your PIXIO_API_KEY is set" line to the first
             # brief so the CLI's skills use it instead of asking for a key.
@@ -735,9 +781,14 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=400, detail="text is required")
         if body.first:
             skill = (body.skill or "").strip()
-            skill_line = (
-                f"Use your '{skill}' skill." if skill else _AUTO_SKILL_HINT
-            )
+            # Claude discovers ~/.claude/skills natively; every other engine
+            # gets the skill as a FILE PATH to read (universal across CLIs).
+            if getattr(session, "_studio_cli", "claude") == "claude":
+                skill_line = (
+                    f"Use your '{skill}' skill." if skill else _AUTO_SKILL_HINT
+                )
+            else:
+                skill_line = _portable_skill_line(d.platform.skills, skill)
             # The skills' own docs say "ask the user for a key" — preempt that:
             # the studio injected the vault key into this terminal's env.
             pixio_note = (

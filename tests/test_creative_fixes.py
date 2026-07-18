@@ -25,8 +25,10 @@ from iron_jarvis.daemon.app import create_app
 
 def test_autopilot_flags_and_bypass_regexes():
     """Claude launches genuinely hands-off via --dangerously-skip-permissions
-    (Codex via --full-auto), and the one-time acceptance screen is recognised by
-    BOTH a warning regex and an accept regex before any key is sent."""
+    (Codex via --dangerously-bypass-approvals-and-sandbox — its --full-auto was
+    REMOVED in codex ≥0.4x and launching with it exited instantly), and the
+    one-time acceptance screen is recognised by BOTH a warning regex and an
+    accept regex before any key is sent."""
     from iron_jarvis.daemon.routes.creative import (
         _AUTOPILOT_FLAGS,
         _BYPASS_ACCEPT_RE,
@@ -34,7 +36,7 @@ def test_autopilot_flags_and_bypass_regexes():
     )
 
     assert _AUTOPILOT_FLAGS["claude"] == "--dangerously-skip-permissions"
-    assert _AUTOPILOT_FLAGS["codex"] == "--full-auto"
+    assert _AUTOPILOT_FLAGS["codex"] == "--dangerously-bypass-approvals-and-sandbox"
 
     # The warning regex fires on the phrasings Claude Code paints.
     assert _BYPASS_WARNING_RE.search("Bypass Permissions mode")
