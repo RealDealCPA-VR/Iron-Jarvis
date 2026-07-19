@@ -202,6 +202,15 @@ function ProjectTile({
 
       {/* Lifecycle actions — re-enable pointer events so they don't navigate. */}
       <div className="pointer-events-none relative z-20 mt-2 flex flex-wrap items-center gap-1.5">
+        {!archived && (
+          <Link
+            href={`/chat?project=${encodeURIComponent(p.id)}`}
+            title={`Chat inside "${p.name}" — the main chat scoped to this project`}
+            className={`${BTN_GHOST} pointer-events-auto`}
+          >
+            <MessageSquare size={13} /> Chat
+          </Link>
+        )}
         {!archived &&
           (p.active ? (
             <button

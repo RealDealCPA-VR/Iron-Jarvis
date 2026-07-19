@@ -47,6 +47,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import Link from "next/link";
 import {
   AudioLines,
   Bot,
@@ -54,6 +55,8 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  ExternalLink,
+  FolderKanban,
   FolderOpen,
   FolderPen,
   Globe,
@@ -143,6 +146,7 @@ type ChatRequestBody = {
   skill?: string; // playbook for the reply (omitted / "" = none)
   tools?: string[]; // armed registry tools (max 6) — the chat runs a tool loop
   workspace_dir?: string; // absolute folder armed file tools operate in
+  project_id?: string; // context spine: grounds the reply in the project
 };
 interface ChatResponse {
   reply: string;
@@ -193,6 +197,18 @@ interface ToolOption {
   description: string;
 }
 
+/** One row from GET /projects — the fields the chat's project panel needs. */
+interface ProjectOption {
+  id: string;
+  name: string;
+  root?: string | null;
+  /** False = the folder is confirmed missing (file tools stay off). */
+  root_exists?: boolean;
+  status?: string;
+  default_provider?: string | null;
+  default_model?: string | null;
+}
+
 /** One row from GET /chat/threads (newest first). `messages` is a count, but
  * tolerate a daemon that inlines the array. */
 interface ThreadSummary {
@@ -235,6 +251,8 @@ interface ThreadSaveBody {
   title?: string;
   persona?: string;
   setup?: ThreadSetup;
+  /** The project tag (context spine). Explicit null deliberately clears it. */
+  project_id?: string | null;
 }
 interface ThreadSaveResult {
   id: string;
@@ -339,6 +357,18 @@ const NEW_PERSONA = "__new__";
 // Workspace panel persistence (chat mode). The chosen folder + expanded state.
 const WORKSPACE_KEY = "ij_chat_workspace";
 const WORKSPACE_OPEN_KEY = "ij_chat_workspace_open";
+// The right-panel project selection persists across visits (like the folder).
+const PROJECT_KEY = "ij_chat_project";
+// Selecting a project with a live folder auto-arms the file essentials (find,
+// extract, create) — 4 of the 6 tool slots, so the Web chip still fits beside
+// them (the server truncates body.tools at six; nothing may be silently
+// dropped off the end).
+const PROJECT_FILE_TOOLS = [
+  "file_search",
+  "read_document",
+  "write_document",
+  "write_file",
+];
 
 // Fallback until GET /chat/personas answers (or if it never does).
 const DEFAULT_PERSONAS: PersonaOption[] = [
@@ -856,16 +886,34 @@ export default function ChatPage() {
   // The reader scrolled up: show a "Jump to latest" pill and STOP auto-scrolling
   // so streamed tokens don't yank them back down while they re-read.
   const [showJump, setShowJump] = useState(false);
+  // PROJECT PANEL: the chat's context spine. Selecting a project scopes the
+  // thread list, tags every turn/save/session with project_id (the daemon
+  // grounds replies in the project's instructions + knowledge), points the
+  // workspace at the project folder, and arms the file essentials. Selection
+  // is only ever explicit (picker, ?project= deep link, or the last-used
+  // choice) — the daemon's "active project" never auto-applies here.
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [promoting, setPromoting] = useState(false); // folder → project POST in flight
+  // Mirrors projectId for saves/sends that fire from timers + event watchers.
+  const projectIdRef = useRef<string | null>(null);
+  // True while the armed tools are exactly what THIS panel auto-armed —
+  // deselecting the project then clears only that set, never a user's own.
+  const autoArmedRef = useRef(false);
 
   const { events } = useEvents(150);
-  // The main chat is project-agnostic — a project applies only inside the
-  // Projects module. All saved conversations show here, narrowed by the
-  // sidebar's title filter (client-side).
+  // Threads are scoped to the selected project (the daemon filters by
+  // project_id); with no project every saved conversation shows. The sidebar's
+  // title filter narrows client-side on top.
   const visibleThreads = useMemo(() => {
     const q = threadQuery.trim().toLowerCase();
     if (!q) return threads;
     return threads.filter((t) => (t.title || "").toLowerCase().includes(q));
   }, [threads, threadQuery]);
+  const activeProject = useMemo(
+    () => (projectId ? (projects.find((p) => p.id === projectId) ?? null) : null),
+    [projects, projectId],
+  );
 
   // ---- Voice. ONE dictation engine for both the composer mic and hands-free
   // Voice Chat (two instances would fight over the mic / recognition service).
@@ -998,10 +1046,12 @@ export default function ChatPage() {
     };
   }, []);
 
-  // Load the saved-thread list once (best-effort — the sidebar just stays empty).
+  // Load the saved-thread list, re-scoped whenever the project selection
+  // changes (best-effort — the sidebar just stays empty).
   useEffect(() => {
     let cancelled = false;
-    get<{ threads: ThreadSummary[] }>("/chat/threads")
+    const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
+    get<{ threads: ThreadSummary[] }>(`/chat/threads${q}`)
       .then((d) => {
         if (!cancelled) setThreads(d.threads ?? []);
       })
@@ -1014,7 +1064,7 @@ export default function ChatPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [projectId]);
 
   // Restore the saved persona choice + workspace (after mount, so SSR markup
   // matches the first client render).
@@ -1032,6 +1082,35 @@ export default function ChatPage() {
     } catch {
       /* ignore */
     }
+  }, []);
+
+  // Load the project list, then restore the selection: a /chat?project= deep
+  // link (the Projects hub links here) wins over the last-used choice. Read
+  // via window.location — /chat is a static route, so no useSearchParams.
+  useEffect(() => {
+    let cancelled = false;
+    get<{ projects: ProjectOption[] }>("/projects")
+      .then((d) => {
+        if (cancelled) return;
+        const list = d.projects ?? [];
+        setProjects(list);
+        let wanted: string | null = null;
+        try {
+          wanted = new URLSearchParams(window.location.search).get("project");
+          if (!wanted) wanted = window.localStorage.getItem(PROJECT_KEY);
+        } catch {
+          /* ignore */
+        }
+        const found = wanted ? list.find((p) => p.id === wanted) : undefined;
+        if (found) applyProject(found, { armDefaults: true });
+      })
+      .catch(() => {
+        /* the panel just shows "No project" */
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function choosePersona(value: string) {
@@ -1221,12 +1300,115 @@ export default function ChatPage() {
     }
   }
 
+  // ------------------------------------------------------------------ project
+
+  /** Keep ?project= in the URL in sync so the scoped view stays linkable
+   *  (plain history API — /chat is a static route; no useSearchParams). */
+  function syncProjectUrl(id: string | null) {
+    try {
+      const url = new URL(window.location.href);
+      if (id) url.searchParams.set("project", id);
+      else url.searchParams.delete("project");
+      window.history.replaceState(null, "", url.toString());
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Point the chat at *p*: scope threads, tag turns, and (with `armDefaults`)
+   *  aim the workspace at the project folder, arm the file essentials over an
+   *  empty tool set, and adopt the project's default model when none is
+   *  chosen. `armDefaults` stays off when a thread restore drives the switch —
+   *  the thread's own saved setup wins. */
+  function applyProject(p: ProjectOption, opts: { armDefaults: boolean }) {
+    setProjectId(p.id);
+    projectIdRef.current = p.id;
+    try {
+      window.localStorage.setItem(PROJECT_KEY, p.id);
+    } catch {
+      /* ignore */
+    }
+    syncProjectUrl(p.id);
+    if (opts.armDefaults) {
+      const folderLive = Boolean(p.root) && p.root_exists !== false;
+      if (folderLive) setWorkspaceDir(p.root as string);
+      if (folderLive && selectedTools.length === 0) {
+        setSelectedTools(PROJECT_FILE_TOOLS);
+        autoArmedRef.current = true;
+      }
+      if (choice === "" && p.default_provider && p.default_model) {
+        setChoice(`${p.default_provider}::${p.default_model}`);
+      }
+    }
+  }
+
+  /** Back to plain chat: unscope the list, stop tagging, release anything the
+   *  panel auto-armed, and return the workspace to the user's own default. */
+  function clearProject() {
+    setProjectId(null);
+    projectIdRef.current = null;
+    try {
+      window.localStorage.removeItem(PROJECT_KEY);
+    } catch {
+      /* ignore */
+    }
+    syncProjectUrl(null);
+    if (autoArmedRef.current) {
+      autoArmedRef.current = false;
+      setSelectedTools((prev) =>
+        prev.every((t) => PROJECT_FILE_TOOLS.includes(t)) ? [] : prev,
+      );
+    }
+    try {
+      setWorkspaceDir(window.localStorage.getItem(WORKSPACE_KEY) || null);
+    } catch {
+      setWorkspaceDir(null);
+    }
+  }
+
+  /** Promote the ad-hoc workspace folder into a real project (named after the
+   *  folder) and select it — the one-click "this folder IS my project" path. */
+  async function promoteFolderToProject() {
+    const dir = workspaceDir;
+    if (!dir || projectIdRef.current || promoting) return;
+    setPromoting(true);
+    try {
+      const name = dir.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || dir;
+      const p = await post<ProjectOption>("/projects", { name, root: dir });
+      setProjects((prev) => [p, ...prev]);
+      applyProject(p, { armDefaults: true });
+      markSetupChanged();
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 0) setOffline(true);
+      else setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setPromoting(false);
+    }
+  }
+
+  /** The rail select's onChange — an explicit pick also persists to the open
+   *  thread's setup (arming/workspace changes count as setup edits). */
+  function chooseProject(id: string) {
+    if (id) {
+      const p = projects.find((x) => x.id === id);
+      if (!p) return;
+      applyProject(p, { armDefaults: true });
+    } else {
+      clearProject();
+    }
+    markSetupChanged();
+  }
+
   // ------------------------------------------------------------------ threads
 
-  /** Silent sidebar refresh — autosaves and deletes call this; failures are moot. */
+  /** Silent sidebar refresh — autosaves and deletes call this; failures are
+   *  moot. Scoped to the selected project (read via ref: refreshes fire from
+   *  the autosave chain, where closures go stale). */
   async function refreshThreads() {
     try {
-      const d = await get<{ threads: ThreadSummary[] }>("/chat/threads");
+      const pid = projectIdRef.current;
+      const q = pid ? `?project_id=${encodeURIComponent(pid)}` : "";
+      const d = await get<{ threads: ThreadSummary[] }>(`/chat/threads${q}`);
       setThreads(d.threads ?? []);
     } catch {
       /* quiet — the list just goes stale until the next refresh */
@@ -1283,6 +1465,9 @@ export default function ChatPage() {
       try {
         const body: ThreadSaveBody = {
           messages: msgs,
+          // The project tag follows the CURRENT selection — the spine survives
+          // thread switches, and an explicit null untags deliberately.
+          project_id: projectIdRef.current,
           ...(personaValue ? { persona: personaValue } : {}),
           ...(setup ? { setup } : {}),
         };
@@ -1333,6 +1518,27 @@ export default function ChatPage() {
       setMessages(t.messages ?? []);
       setThreadId(t.id);
       saveTargetRef.current = { id: t.id };
+      // Context follows the conversation: a project-tagged thread scopes the
+      // chat to its project; an untagged one unscopes it. armDefaults stays
+      // off — the thread's own saved setup (restored below) wins; without a
+      // setup, the project folder still becomes the workspace.
+      const tpid = t.project_id ?? null;
+      if (tpid !== projectIdRef.current) {
+        const proj = tpid ? projects.find((x) => x.id === tpid) : undefined;
+        if (tpid && proj) {
+          applyProject(proj, { armDefaults: false });
+        } else if (tpid) {
+          // Unknown project (list still loading / deleted) — keep the tag.
+          setProjectId(tpid);
+          projectIdRef.current = tpid;
+          syncProjectUrl(tpid);
+        } else {
+          clearProject();
+        }
+        if (proj?.root && proj.root_exists !== false && !t.setup?.workspace_dir) {
+          setWorkspaceDir(proj.root);
+        }
+      }
       setMode("chat"); // saved threads continue as direct chat
       setPersonaEditorOpen(false); // never carry a stale draft into another thread
       // A known name selects normally; an unlisted name / free-text instructions
@@ -1868,6 +2074,9 @@ export default function ChatPage() {
       ...(selectedTools.length ? { tools: selectedTools.slice(0, MAX_TOOLS) } : {}),
       // The workspace folder armed file tools operate in (when chosen).
       ...(workspaceDir ? { workspace_dir: workspaceDir } : {}),
+      // Context spine: the daemon grounds the reply in this project's
+      // instructions + brief + knowledge (ref — sends can fire from timers).
+      ...(projectIdRef.current ? { project_id: projectIdRef.current } : {}),
     };
   }
 
@@ -2125,6 +2334,9 @@ export default function ChatPage() {
           wait: false,
           ...(provider ? { provider } : {}),
           ...(model ? { model } : {}),
+          // Context spine: the run lands in the selected project (continues
+          // inherit it server-side, so only the opener needs the tag).
+          ...(projectIdRef.current ? { project_id: projectIdRef.current } : {}),
         });
       }
       // ALWAYS chain forward to the returned session id: `continue` spawns a NEW
@@ -2223,7 +2435,18 @@ export default function ChatPage() {
     setChatBusy(false);
     setFailedTurn(null);
     setAttachments([]);
-    setSelectedTools([]);
+    // A selected project keeps its file essentials armed on a fresh
+    // conversation (its folder stays live); otherwise nothing is armed.
+    const proj = projectIdRef.current
+      ? projects.find((p) => p.id === projectIdRef.current)
+      : undefined;
+    const projFolderLive = Boolean(proj?.root) && proj?.root_exists !== false;
+    if (projFolderLive) {
+      setSelectedTools(PROJECT_FILE_TOOLS);
+      autoArmedRef.current = true;
+    } else {
+      setSelectedTools([]);
+    }
     sendSetupRef.current = false; // fresh conversation — nothing armed to persist
     setToolsOpen(false);
     setToolQuery("");
@@ -2233,10 +2456,14 @@ export default function ChatPage() {
     setError(null);
     setOffline(false);
     setThreadId(null);
-    // Back to the user's OWN defaults — an opened thread's restore may have
-    // pointed the workspace panel/persona at that conversation's choices.
+    // Back to the defaults — the project folder while a project is selected,
+    // else the user's own saved workspace/persona choices.
     try {
-      setWorkspaceDir(window.localStorage.getItem(WORKSPACE_KEY) || null);
+      setWorkspaceDir(
+        projFolderLive
+          ? (proj?.root as string)
+          : window.localStorage.getItem(WORKSPACE_KEY) || null,
+      );
       const savedPersona = window.localStorage.getItem(PERSONA_KEY);
       if (savedPersona) selectPersonaLocal(savedPersona);
     } catch {
@@ -2498,15 +2725,20 @@ export default function ChatPage() {
                 onClick={() => setWorkspaceOpenPersisted(!workspaceOpen)}
                 aria-pressed={workspaceOpen}
                 title={
-                  workspaceOpen
-                    ? "Hide the workspace panel"
-                    : "Show a folder + live files panel — armed file tools run here"
+                  activeProject
+                    ? `Project: ${activeProject.name} — replies ground in its knowledge; the panel holds its folder + files`
+                    : workspaceOpen
+                      ? "Hide the project panel"
+                      : "Pick a project (or just a folder) — armed file tools run there"
                 }
                 className={`btn-ghost py-1.5 text-[13px] ${
-                  workspaceOpen || workspaceDir ? "text-accent-soft" : ""
+                  workspaceOpen || workspaceDir || activeProject ? "text-accent-soft" : ""
                 }`}
               >
-                <PanelRight size={14} /> Workspace
+                {activeProject ? <FolderKanban size={14} /> : <PanelRight size={14} />}{" "}
+                <span className="max-w-[9rem] truncate">
+                  {activeProject ? activeProject.name : "Project"}
+                </span>
               </button>
               <button
                 onClick={newChat}
@@ -2764,6 +2996,17 @@ export default function ChatPage() {
                               <span className="min-w-0 truncate">
                                 {t.title || "Untitled chat"}
                               </span>
+                              {/* In the unscoped view, project threads carry a
+                                  small origin chip (scoped lists don't need it). */}
+                              {!projectId && t.project_id && (
+                                <span
+                                  className="ml-auto max-w-[5.5rem] shrink-0 truncate rounded-full border border-white/10 bg-white/[0.04] px-1.5 text-[9px] uppercase tracking-wide text-zinc-500"
+                                  title="Project thread"
+                                >
+                                  {projects.find((p) => p.id === t.project_id)?.name ??
+                                    "project"}
+                                </span>
+                              )}
                             </span>
                             <span className="block text-[11px] text-zinc-500">
                               {timeAgo(t.updated_at)} · {count} msg
@@ -3401,12 +3644,61 @@ export default function ChatPage() {
             </Card>
           </div>
 
-          {/* Workspace panel (right): a Build-like folder chooser + live Files
-              view. The chosen folder rides along as workspace_dir so the chat's
+          {/* Project panel (right): the context spine. Pick a project to scope
+              threads, ground replies in its knowledge, and aim the workspace at
+              its folder — or just browse to any folder for an ad-hoc workspace.
+              The chosen folder rides along as workspace_dir so the chat's
               armed file tools write here and their output surfaces live below. */}
           {workspaceOpen ? (
             <aside className="w-full shrink-0 md:w-80">
-              <div className="flex h-[26rem] flex-col md:h-[60vh]">
+              <div className="flex h-[26rem] flex-col gap-2 md:h-[60vh]">
+                <div className="shrink-0 rounded-xl border border-white/[0.06] bg-ink-850/60 px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <FolderKanban size={13} className="shrink-0 text-accent-soft/80" />
+                    <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                      Project
+                    </span>
+                    {activeProject && (
+                      <Link
+                        href={`/projects/${encodeURIComponent(activeProject.id)}`}
+                        title="Open the project hub — tasks, board, media, knowledge"
+                        className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
+                      >
+                        Hub <ExternalLink size={11} />
+                      </Link>
+                    )}
+                  </div>
+                  <select
+                    aria-label="Project"
+                    value={projectId ?? ""}
+                    onChange={(e) => chooseProject(e.target.value)}
+                    className="field mt-2 w-full py-1.5 text-[12px]"
+                  >
+                    <option value="">No project — plain chat</option>
+                    {/* Tolerate an open thread's project the list doesn't know. */}
+                    {projectId && !projects.some((p) => p.id === projectId) && (
+                      <option value={projectId}>(unknown project)</option>
+                    )}
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                  {activeProject &&
+                    (activeProject.root_exists === false ? (
+                      <p className="mt-1.5 text-[10px] leading-relaxed text-amber-300/90">
+                        The project folder is missing — file tools stay off until
+                        it&apos;s back (fix it in the hub).
+                      </p>
+                    ) : (
+                      <p className="mt-1.5 text-[10px] leading-relaxed text-zinc-600">
+                        Replies ground in this project&apos;s instructions +
+                        knowledge; chats and runs stay tagged to it.
+                      </p>
+                    ))}
+                </div>
+                <div className="min-h-0 flex-1">
                 {workspaceDir && !pickingFolder ? (
                   <div className="flex h-full flex-col gap-2">
                     <div className="flex shrink-0 items-center gap-2 rounded-xl border border-white/[0.06] bg-ink-850/60 px-3 py-2">
@@ -3415,6 +3707,23 @@ export default function ChatPage() {
                         Workspace
                       </span>
                       <div className="ml-auto flex shrink-0 items-center gap-1">
+                        {!projectId && (
+                          <button
+                            type="button"
+                            onClick={() => void promoteFolderToProject()}
+                            disabled={promoting}
+                            title="Turn this folder into a project — chats here get tagged, grounded, and gathered in one place"
+                            aria-label="Make this folder a project"
+                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft disabled:opacity-50"
+                          >
+                            {promoting ? (
+                              <Loader2 size={13} className="animate-spin" />
+                            ) : (
+                              <FolderKanban size={13} />
+                            )}{" "}
+                            Make project
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => setPickingFolder(true)}
@@ -3450,26 +3759,35 @@ export default function ChatPage() {
                     onCollapse={() => {
                       // While changing an existing folder, the tree's collapse
                       // acts as "cancel → back to files"; otherwise it hides the
-                      // whole workspace panel.
+                      // whole project panel.
                       if (pickingFolder && workspaceDir) setPickingFolder(false);
                       else setWorkspaceOpenPersisted(false);
                     }}
                   />
                 )}
+                </div>
               </div>
             </aside>
           ) : (
             <button
               type="button"
               onClick={() => setWorkspaceOpenPersisted(true)}
-              title="Show workspace"
-              aria-label="Show workspace"
+              title={
+                activeProject
+                  ? `Show the project panel (${activeProject.name})`
+                  : "Show the project panel"
+              }
+              aria-label="Show project panel"
               className="hidden shrink-0 self-stretch md:flex"
             >
-              <span className="flex h-full flex-col items-center gap-2 rounded-2xl border border-white/[0.06] bg-ink-850/60 px-2 py-3 text-zinc-500 transition-colors hover:text-accent-soft">
+              <span
+                className={`flex h-full flex-col items-center gap-2 rounded-2xl border border-white/[0.06] bg-ink-850/60 px-2 py-3 transition-colors hover:text-accent-soft ${
+                  activeProject ? "text-accent-soft/80" : "text-zinc-500"
+                }`}
+              >
                 <PanelRightOpen size={16} />
                 <span className="text-[10px] uppercase tracking-wide [writing-mode:vertical-rl]">
-                  Workspace
+                  {activeProject ? activeProject.name.slice(0, 18) : "Project"}
                 </span>
               </span>
             </button>

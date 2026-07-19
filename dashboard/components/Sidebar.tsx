@@ -58,9 +58,10 @@ interface NavSection {
   items: NavItem[];
 }
 
-// FOUR HERO SURFACES lead the nav: Chat (talk), Build (terminals — make
-// things), Projects (the context spine), Sessions (review the work). Every
-// other page is support cast, grouped behind them and mostly Advanced-only.
+// THREE HERO SURFACES lead the nav: Chat (talk — with the project panel),
+// Build (terminals — make things), Projects (the context spine hub). Every
+// other page is support cast, grouped behind them and mostly Advanced-only;
+// Sessions/Activity are review surfaces shown only in Advanced mode.
 const NAV: NavSection[] = [
   {
     label: "Work",
@@ -136,8 +137,10 @@ const ESSENTIAL_HREFS = new Set<string>([
   "/chat", // Chat (hero)
   "/terminals", // Build (hero)
   "/projects", // Projects (hero — the context spine)
-  "/sessions", // Sessions (hero)
-  "/activity", // Activity — the trust surface (audit + time-travel)
+  // Sessions + Activity are Advanced-only: Overview's "Recent sessions" /
+  // "While you were away" cards cover the everyday need and deep-link into
+  // session detail (which carries session-scoped time-travel + undo). The
+  // global Activity surface stays reachable via ⌘K.
   "/creative", // Creative — see what Iron Jarvis makes
   "/memory", // Memory (the one unified surface)
   "/connections", // Connections

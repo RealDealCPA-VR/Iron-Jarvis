@@ -40,7 +40,6 @@ import { useApi, usePolledApi } from "@/lib/useApi";
 import { patch, post, del, ApiError, API_BASE, ijToken } from "@/lib/api";
 import { useReviews } from "@/lib/useReviews";
 import { KanbanBoard } from "@/components/kanban/KanbanBoard";
-import { ProjectChat } from "@/components/project/ProjectChat";
 import { ProjectTasks } from "@/components/project/ProjectTasks";
 import { KnowledgePanel } from "@/components/project/KnowledgePanel";
 import { FilePickerModal } from "@/components/FilePickerModal";
@@ -69,9 +68,12 @@ interface ProjectDetail {
   sessions: SessionView[];
 }
 
-type TabId = "chat" | "tasks" | "board" | "media" | "activity";
+// Chat is no longer a tab: project conversations live in the main /chat
+// surface (full streaming, tool cards, voice) with this project selected in
+// its panel — the header's "Open in Chat" button (and a ?tab=chat redirect
+// for old links) leads there. The hub keeps the management surfaces.
+type TabId = "tasks" | "board" | "media" | "activity";
 const TABS: { id: TabId; label: string; icon: ReactNode }[] = [
-  { id: "chat", label: "Chat", icon: <MessageSquare size={14} /> },
   { id: "tasks", label: "Tasks", icon: <Bot size={14} /> },
   { id: "board", label: "Board", icon: <SquareKanban size={14} /> },
   { id: "media", label: "Media", icon: <Images size={14} /> },
@@ -321,7 +323,15 @@ function ProjectWorkspaceInner({
   const urlTab = searchParams.get("tab");
   const paramTab =
     urlTab && TABS.some((t) => t.id === urlTab) ? (urlTab as TabId) : null;
-  const [tab, setTab] = useState<TabId>(paramTab ?? "chat");
+  const [tab, setTab] = useState<TabId>(paramTab ?? "tasks");
+  // Old ?tab=chat deep links (the chat used to be a tab here) land in the main
+  // chat scoped to this project — same conversation, full-featured surface.
+  useEffect(() => {
+    if (urlTab === "chat") {
+      router.replace(`/chat?project=${encodeURIComponent(id)}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlTab, id]);
   useEffect(() => {
     if (paramTab) {
       setTab(paramTab);
@@ -464,7 +474,7 @@ function ProjectWorkspaceInner({
       ? `${project.default_provider}::${project.default_model}`
       : "";
   const archived = project?.status === "archived";
-  const showRail = tab === "chat" || tab === "tasks";
+  const showRail = tab === "tasks";
 
   return (
     <PageShell>
@@ -695,6 +705,15 @@ function ProjectWorkspaceInner({
 
                 {/* Controls */}
                 <div className="flex flex-wrap items-center gap-2">
+                  {/* The doorway to conversations: the main chat scoped to this
+                      project (streaming, tool cards, voice — the real chat). */}
+                  <Link
+                    href={`/chat?project=${encodeURIComponent(id)}`}
+                    className={BTN_PILL}
+                    title={`Chat inside "${project.name}" — replies ground in its instructions + knowledge`}
+                  >
+                    <MessageSquare size={13} /> Open in Chat
+                  </Link>
                   <select
                     value={modelValue}
                     onChange={(e) => chooseModel(e.target.value)}
@@ -870,15 +889,15 @@ function ProjectWorkspaceInner({
             <div className={showRail ? "grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]" : ""}>
               <div className="min-w-0">
                 {/* An archived project is closed out — don't quietly spawn NEW
-                    chats/tasks into it. Its past work (Board/Activity) stays
+                    tasks into it. Its past work (Board/Activity) stays
                     readable; running work needs an explicit unarchive. */}
-                {archived && (tab === "chat" || tab === "tasks") ? (
+                {archived && tab === "tasks" ? (
                   <Card>
                     <Empty icon={<Archive size={22} />}>
                       <div className="space-y-3 text-center">
                         <p>
-                          This project is archived — unarchive it to start new{" "}
-                          {tab === "chat" ? "chats" : "tasks"} here.
+                          This project is archived — unarchive it to start new
+                          tasks here.
                         </p>
                         <button
                           type="button"
@@ -898,24 +917,14 @@ function ProjectWorkspaceInner({
                     </Empty>
                   </Card>
                 ) : (
-                  <>
-                    {tab === "chat" && (
-                      <ProjectChat
-                        projectId={id}
-                        defaultProvider={project.default_provider}
-                        defaultModel={project.default_model}
-                        hasRoot={!!project.root}
-                      />
-                    )}
-                    {tab === "tasks" && (
-                      <ProjectTasks
-                        projectId={id}
-                        hasRoot={!!project.root}
-                        sessions={detail.data?.sessions ?? []}
-                        reloadSessions={detail.reload}
-                      />
-                    )}
-                  </>
+                  tab === "tasks" && (
+                    <ProjectTasks
+                      projectId={id}
+                      hasRoot={!!project.root}
+                      sessions={detail.data?.sessions ?? []}
+                      reloadSessions={detail.reload}
+                    />
+                  )
                 )}
                 {tab === "board" && <ProjectBoard projectId={id} />}
                 {tab === "media" && <ProjectMedia projectId={id} />}

@@ -43,7 +43,7 @@ import {
 } from "./identity";
 
 /* ------------------------------------------------------------- markdown --- */
-/* Same pattern as ProjectChat's Markdown (kept local — pages don't import
+/* Same pattern as the chat page's Markdown (kept local — pages don't import
  * across each other): GFM, styled blocks, copyable code fences. */
 
 function nodeText(node: ReactNode): string {
