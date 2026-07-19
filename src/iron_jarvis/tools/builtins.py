@@ -26,36 +26,57 @@ def _text_sha(content: str) -> str:
     return sha256_bytes(content.encode("utf-8"))
 
 
-#: Formats that are NOT plain text but that ``read_document`` handles fully.
-#: Pointing at the right tool matters more than it looks: a raw
-#: ``UnicodeDecodeError`` tells a model nothing it can act on, and a model with
-#: no actionable error INVENTS one — a live report had the assistant announce
-#: that .docx files were "blocked by the filter" (there is no such filter; the
-#: documents read perfectly). An error that names the next step ends that.
+#: Office formats that are not plain text. ``read_file`` DELEGATES these to the
+#: document extractor rather than failing: the user's expectation is simply
+#: "the app reads my documents", and making that depend on the model picking
+#: the right tool is a trap it already fell into — a live report had the
+#: assistant announce that .docx files were "blocked by the filter" (no such
+#: filter exists; the documents extract perfectly) after read_file handed it a
+#: bare UnicodeDecodeError. Doing the right thing beats explaining the wrong one.
 _DOC_EXTENSIONS = {
     ".docx": "Word", ".doc": "Word", ".pdf": "PDF", ".xlsx": "Excel",
-    ".xls": "Excel", ".pptx": "PowerPoint", ".ppt": "PowerPoint", ".odt": "OpenDocument",
-    ".rtf": "Rich Text",
+    ".xls": "Excel", ".pptx": "PowerPoint", ".ppt": "PowerPoint",
+    ".odt": "OpenDocument", ".rtf": "Rich Text",
 }
 
 
-def _use_read_document(path: Path, why: str) -> ToolResult:
-    kind = _DOC_EXTENSIONS.get(path.suffix.lower(), "binary")
+def _extract_document(path: Path, kind: str) -> ToolResult:
+    """Serve a document through the extractor, LABELLED as extracted text.
+
+    The label is not decoration. This is a lossy, read-only view of the file —
+    round-tripping it through ``write_file`` would replace a real .docx with
+    plain text and destroy the document, so the reply says so explicitly.
+    """
+    from ..documents import extract_text
+
+    try:
+        text = extract_text(str(path))
+    except ValueError as exc:  # legacy/protected/oversized — a real, nameable no
+        return ToolResult(
+            ok=False, error=f"cannot read {path.name}: {exc}"
+        )
+    except Exception as exc:  # noqa: BLE001 — surface the cause, never a guess
+        return ToolResult(
+            ok=False, error=f"cannot read {path.name}: {type(exc).__name__}: {exc}"
+        )
+    note = (
+        f"[extracted text from a {kind} document — read-only view; to change it "
+        f"use write_document, never write_file]\n\n"
+    )
     return ToolResult(
-        ok=False,
-        error=(
-            f"{path.name} is a {kind} file, not UTF-8 text ({why}). "
-            f"Use the read_document tool for it — it extracts text from Word, "
-            f"PDF, Excel, PowerPoint and CSV. Do not retry read_file on this path."
-        ),
+        ok=True,
+        output=note + text,
+        data={"bytes": len(text), "extracted": True, "format": kind},
     )
 
 
 class ReadFileTool(Tool):
     name = "read_file"
     description = (
-        "Read a UTF-8 TEXT file (code, .md, .txt, .json) from the session "
-        "workspace. For Word/PDF/Excel/PowerPoint use read_document instead."
+        "Read a file from the session workspace: UTF-8 text (code, .md, .txt, "
+        ".json) directly, and Word/PDF/Excel/PowerPoint/RTF by extracting their "
+        "text automatically. read_document does the same with page/sheet "
+        "selection for large documents."
     )
     reversibility = Reversibility.READONLY  # a read has no side effect to undo
     input_schema = {
@@ -68,15 +89,18 @@ class ReadFileTool(Tool):
         path = safe_path(ctx.workspace, args["path"])
         if not path.is_file():
             return ToolResult(ok=False, error=f"no such file: {args['path']}")
-        # Refuse a known document format BEFORE reading it: the extension is
-        # certain knowledge, and the redirect is more useful than 13KB of
-        # mojibake or a decode traceback.
-        if path.suffix.lower() in _DOC_EXTENSIONS:
-            return _use_read_document(path, "read_file only handles plain text")
+        # A known office format goes straight to the extractor — the extension
+        # is certain knowledge, so there is nothing to try and fail at first.
+        kind = _DOC_EXTENSIONS.get(path.suffix.lower())
+        if kind:
+            return _extract_document(path, kind)
         try:
             text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError as exc:
-            return _use_read_document(path, f"not valid UTF-8 at byte {exc.start}")
+        except UnicodeDecodeError:
+            # Not text and not a known document extension: let the extractor
+            # sniff it (it handles unknown-suffix files and images) rather than
+            # returning a decode traceback nothing can act on.
+            return _extract_document(path, "binary")
         except OSError as exc:  # permissions, a vanished file, a locked handle
             return ToolResult(ok=False, error=f"could not read {path.name}: {exc}")
         return ToolResult(ok=True, output=text, data={"bytes": len(text)})
