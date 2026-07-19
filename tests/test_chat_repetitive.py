@@ -12,6 +12,7 @@ from sqlmodel import select
 from iron_jarvis.core.db import session_scope
 from iron_jarvis.core.models import AgentRun
 from iron_jarvis.daemon.app import create_app
+from iron_jarvis.daemon.routes.chat import _MAX_TOOL_ROUNDS
 from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
 from iron_jarvis.providers.router import RouteResult
 from iron_jarvis.tools.base import ToolResult
@@ -161,14 +162,18 @@ def test_final_round_tool_calls_not_executed(tmp_path, monkeypatch):
     })
     assert r.status_code == 200
     body = r.json()
-    assert completions["n"] == 4     # the round budget was fully used…
-    assert invoked["n"] == 3         # …but the 4th round's call did NOT execute
-    assert "stopped after 3 tool rounds" in body["reply"]
+    # Pinned to the CONSTANT, not a literal: the budget is tunable, but the
+    # invariant is that the LAST round never executes the tools it asks for.
+    assert completions["n"] == _MAX_TOOL_ROUNDS   # the budget was fully used…
+    assert invoked["n"] == _MAX_TOOL_ROUNDS - 1   # …minus the final round
+    assert f"stopped after {_MAX_TOOL_ROUNDS - 1} tool rounds" in body["reply"]
     assert "1 tool call(s) not executed" in body["reply"]
     # The whole turn's usage (all 4 billed completions) reached the ledger.
     runs = _chat_runs(platform)
-    assert len(runs) == 1 and runs[0].steps == 4
-    assert runs[0].input_tokens == 40 and runs[0].output_tokens == 20
+    assert len(runs) == 1 and runs[0].steps == _MAX_TOOL_ROUNDS
+    # 10 in / 5 out per billed completion, across the whole budget.
+    assert runs[0].input_tokens == 10 * _MAX_TOOL_ROUNDS
+    assert runs[0].output_tokens == 5 * _MAX_TOOL_ROUNDS
 
 
 def test_stream_final_round_tool_calls_not_executed(tmp_path, monkeypatch):
@@ -199,8 +204,9 @@ def test_stream_final_round_tool_calls_not_executed(tmp_path, monkeypatch):
     assert r.status_code == 200
     frames = _parse_sse(r.text)
     done = next(d for e, d in frames if e == "done")
-    assert completions["n"] == 4 and invoked["n"] == 3
-    assert "stopped after 3 tool rounds" in done["reply"]
+    assert completions["n"] == _MAX_TOOL_ROUNDS
+    assert invoked["n"] == _MAX_TOOL_ROUNDS - 1
+    assert f"stopped after {_MAX_TOOL_ROUNDS - 1} tool rounds" in done["reply"]
     assert "1 tool call(s) not executed" in done["reply"]
 
 

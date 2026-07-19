@@ -99,7 +99,11 @@ _MAX_ARMED_TOOLS = 6
 #: Tool-loop budget per chat turn. The LAST round is completion-only — tools
 #: the model requests there would run without any round left to read their
 #: results, so they are skipped with an honest note instead of silently burned.
-_MAX_TOOL_ROUNDS = 4
+#: Raised 4 -> 6 (i.e. 3 -> 5 executing rounds) after a live report: reading
+#: several documents in a project folder used a round to list, one to recover
+#: from a wrong tool choice, and then ran out mid-task. Real office work is
+#: explore -> correct -> read -> answer, and three rounds does not fit it.
+_MAX_TOOL_ROUNDS = 6
 
 #: Per-attachment extract budget (chars); clips carry an explicit marker.
 _ATTACH_EXTRACT_CHARS = 6000

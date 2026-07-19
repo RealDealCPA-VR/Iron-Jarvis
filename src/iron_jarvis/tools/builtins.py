@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from .base import Reversibility, Tool, ToolContext, ToolResult, safe_path
@@ -25,9 +26,37 @@ def _text_sha(content: str) -> str:
     return sha256_bytes(content.encode("utf-8"))
 
 
+#: Formats that are NOT plain text but that ``read_document`` handles fully.
+#: Pointing at the right tool matters more than it looks: a raw
+#: ``UnicodeDecodeError`` tells a model nothing it can act on, and a model with
+#: no actionable error INVENTS one — a live report had the assistant announce
+#: that .docx files were "blocked by the filter" (there is no such filter; the
+#: documents read perfectly). An error that names the next step ends that.
+_DOC_EXTENSIONS = {
+    ".docx": "Word", ".doc": "Word", ".pdf": "PDF", ".xlsx": "Excel",
+    ".xls": "Excel", ".pptx": "PowerPoint", ".ppt": "PowerPoint", ".odt": "OpenDocument",
+    ".rtf": "Rich Text",
+}
+
+
+def _use_read_document(path: Path, why: str) -> ToolResult:
+    kind = _DOC_EXTENSIONS.get(path.suffix.lower(), "binary")
+    return ToolResult(
+        ok=False,
+        error=(
+            f"{path.name} is a {kind} file, not UTF-8 text ({why}). "
+            f"Use the read_document tool for it — it extracts text from Word, "
+            f"PDF, Excel, PowerPoint and CSV. Do not retry read_file on this path."
+        ),
+    )
+
+
 class ReadFileTool(Tool):
     name = "read_file"
-    description = "Read a UTF-8 text file from the session workspace."
+    description = (
+        "Read a UTF-8 TEXT file (code, .md, .txt, .json) from the session "
+        "workspace. For Word/PDF/Excel/PowerPoint use read_document instead."
+    )
     reversibility = Reversibility.READONLY  # a read has no side effect to undo
     input_schema = {
         "type": "object",
@@ -39,7 +68,17 @@ class ReadFileTool(Tool):
         path = safe_path(ctx.workspace, args["path"])
         if not path.is_file():
             return ToolResult(ok=False, error=f"no such file: {args['path']}")
-        text = path.read_text(encoding="utf-8")
+        # Refuse a known document format BEFORE reading it: the extension is
+        # certain knowledge, and the redirect is more useful than 13KB of
+        # mojibake or a decode traceback.
+        if path.suffix.lower() in _DOC_EXTENSIONS:
+            return _use_read_document(path, "read_file only handles plain text")
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            return _use_read_document(path, f"not valid UTF-8 at byte {exc.start}")
+        except OSError as exc:  # permissions, a vanished file, a locked handle
+            return ToolResult(ok=False, error=f"could not read {path.name}: {exc}")
         return ToolResult(ok=True, output=text, data={"bytes": len(text)})
 
 
