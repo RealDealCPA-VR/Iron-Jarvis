@@ -285,6 +285,89 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="unknown agent")
         return {"removed": name}
 
+    # --- Agent threads: cross-source panels with roles (the Agents page) -----
+    # IMPORTANT: registered BEFORE the {name} catch-alls above would matter,
+    # but "/agents/threads/..." never collides because those routes were
+    # declared first in this file; keep new thread routes below explicit paths.
+
+    def _threads():
+        from ...agents.threads import AgentThreads
+
+        return AgentThreads(d.platform.engine)
+
+    def _thread_view(rec) -> dict[str, Any]:
+        import json as _json
+
+        msgs = _json.loads(rec.messages_json or "[]")
+        return {
+            "id": rec.id,
+            "title": rec.title,
+            "participants": _json.loads(rec.participants_json or "[]"),
+            "messages": msgs,
+            "message_count": len(msgs),
+            "updated_at": rec.updated_at.isoformat(),
+        }
+
+    @app.get("/agents/threads")
+    def list_agent_threads() -> dict[str, Any]:
+        out = []
+        for rec in _threads().list():
+            view = _thread_view(rec)
+            view.pop("messages")  # list rows stay light; GET one for the transcript
+            out.append(view)
+        return {"threads": out}
+
+    @app.post("/agents/threads")
+    def create_agent_thread(body: dict) -> dict[str, Any]:
+        from ...agents.threads import clean_participants
+
+        try:
+            participants = clean_participants(body.get("participants"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        rec = _threads().create(str(body.get("title") or ""), participants)
+        return _thread_view(rec)
+
+    @app.get("/agents/threads/{thread_id}")
+    def get_agent_thread(thread_id: str) -> dict[str, Any]:
+        rec = _threads().get(thread_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="no such thread")
+        return _thread_view(rec)
+
+    @app.put("/agents/threads/{thread_id}/participants")
+    def set_agent_thread_participants(thread_id: str, body: dict) -> dict[str, Any]:
+        from ...agents.threads import clean_participants
+
+        try:
+            participants = clean_participants(body.get("participants"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        rec = _threads().update_participants(thread_id, participants)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="no such thread")
+        return _thread_view(rec)
+
+    @app.delete("/agents/threads/{thread_id}")
+    def delete_agent_thread(thread_id: str) -> dict[str, Any]:
+        if not _threads().delete(thread_id):
+            raise HTTPException(status_code=404, detail="no such thread")
+        return {"deleted": thread_id}
+
+    @app.post("/agents/threads/{thread_id}/say")
+    async def agent_thread_say(thread_id: str, body: dict) -> dict[str, Any]:
+        """One speaking round: the user's message (optional — empty continues
+        the panel), then every participant answers in order, each seeing the
+        replies before it. Failures are honest per-participant entries."""
+        try:
+            return await _threads().run_round(
+                thread_id, str(body.get("message") or ""), d
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail="no such thread")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
     # Custom (agent/user-authored) reusable tools.
     @app.get("/tools/custom")
     def list_custom_tools() -> dict[str, Any]:
