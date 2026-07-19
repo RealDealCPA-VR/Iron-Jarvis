@@ -136,7 +136,10 @@ type DynamicAgentFull = DynamicAgent & {
   tools?: string[];
 };
 
-type RemoteKind = "http-task" | "openai-chat";
+type RemoteKind = "http-task" | "openai-chat" | "openai-responses";
+/** The two OpenAI dialects both carry a model id and parse an LLM reply;
+ *  they differ only in the request field (`messages` vs `input`). */
+const OPENAI_KINDS: RemoteKind[] = ["openai-chat", "openai-responses"];
 
 /** A registered remote agent (GET /agents/remote). The token is NEVER returned. */
 interface RemoteAgent {
@@ -481,14 +484,14 @@ function RemoteAgentRow({ agent, onChanged }: { agent: RemoteAgent; onChanged: (
   return (
     <li className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3.5 py-3">
       <div className="flex flex-wrap items-center gap-2">
-        {agent.kind === "openai-chat" ? (
+        {OPENAI_KINDS.includes(agent.kind as RemoteKind) ? (
           <Globe size={14} className="text-emerald-300" />
         ) : (
           <Server size={14} className="text-sky-300" />
         )}
         <span className="text-sm font-semibold text-zinc-100">{agent.name}</span>
         <Badge value={agent.kind} tone="cyan" />
-        {agent.kind === "openai-chat" && agent.model && (
+        {OPENAI_KINDS.includes(agent.kind as RemoteKind) && agent.model && (
           <span className="inline-flex items-center gap-1 rounded-md border border-accent/30 bg-accent/[0.08] px-1.5 py-0.5 font-mono text-[10px] text-accent-soft">
             <Cpu size={10} /> {agent.model}
           </span>
@@ -714,7 +717,7 @@ export default function AgentsPage() {
         name: rName.trim(),
         base_url: rBaseUrl.trim(),
         kind: rKind,
-        model: rKind === "openai-chat" ? rModel.trim() : "",
+        model: OPENAI_KINDS.includes(rKind) ? rModel.trim() : "",
         token: rToken.trim(), // stored encrypted, never returned
         timeout_s: Number(rTimeout) || 60,
         enabled: true,
@@ -823,7 +826,8 @@ export default function AgentsPage() {
                     className="field"
                   >
                     <option value="http-task">http-task (Hermes / task API)</option>
-                    <option value="openai-chat">openai-chat (OpenAI-compatible)</option>
+                    <option value="openai-chat">openai-chat (OpenAI chat/completions)</option>
+                    <option value="openai-responses">openai-responses (OpenAI Responses API)</option>
                   </select>
                 </div>
               </div>
@@ -839,7 +843,7 @@ export default function AgentsPage() {
                   className="field font-mono text-xs"
                 />
               </div>
-              {rKind === "openai-chat" && (
+              {OPENAI_KINDS.includes(rKind) && (
                 <div>
                   <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     <Cpu size={12} /> Model
