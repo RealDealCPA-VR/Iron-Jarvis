@@ -147,6 +147,7 @@ type ChatRequestBody = {
   tools?: string[]; // armed registry tools (max 6) — the chat runs a tool loop
   workspace_dir?: string; // absolute folder armed file tools operate in
   project_id?: string; // context spine: grounds the reply in the project
+  auto_tools?: boolean; // let the daemon arm safe tools from the request
 };
 interface ChatResponse {
   reply: string;
@@ -359,6 +360,8 @@ const WORKSPACE_KEY = "ij_chat_workspace";
 const WORKSPACE_OPEN_KEY = "ij_chat_workspace_open";
 // The right-panel project selection persists across visits (like the folder).
 const PROJECT_KEY = "ij_chat_project";
+// Auto tools: "0" = the user turned the seamless arming off (default on).
+const AUTO_TOOLS_KEY = "ij_chat_auto_tools";
 // Selecting a project with a live folder auto-arms the file essentials (find,
 // extract, create) — 4 of the 6 tool slots, so the Web chip still fits beside
 // them (the server truncates body.tools at six; nothing may be silently
@@ -895,6 +898,11 @@ export default function ChatPage() {
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [promoting, setPromoting] = useState(false); // folder → project POST in flight
+  // AUTO TOOLS (chat mode): the daemon reads each request and arms matching
+  // safe tools (files/documents/web/vision) in the free "+" slots — explicit
+  // picks always ride first, and replies still list exactly what RAN. Default
+  // ON (the seamless path); the composer chip toggles it, persisted.
+  const [autoTools, setAutoTools] = useState(true);
   // Mirrors projectId for saves/sends that fire from timers + event watchers.
   const projectIdRef = useRef<string | null>(null);
   // True while the armed tools are exactly what THIS panel auto-armed —
@@ -1079,6 +1087,7 @@ export default function ChatPage() {
       if (wd) setWorkspaceDir(wd);
       const wo = window.localStorage.getItem(WORKSPACE_OPEN_KEY);
       if (wo === "1") setWorkspaceOpen(true);
+      if (window.localStorage.getItem(AUTO_TOOLS_KEY) === "0") setAutoTools(false);
     } catch {
       /* ignore */
     }
@@ -1822,6 +1831,19 @@ export default function ChatPage() {
     markSetupChanged();
   }
 
+  /** AUTO TOOLS toggle — a persisted preference, not thread setup. */
+  function toggleAutoTools() {
+    setAutoTools((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(AUTO_TOOLS_KEY, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }
+
   /** Select a skill from the "/" dropdown: chip on, "/query" text consumed. */
   function pickSkill(name: string) {
     setActiveSkill(name);
@@ -2077,6 +2099,9 @@ export default function ChatPage() {
       // Context spine: the daemon grounds the reply in this project's
       // instructions + brief + knowledge (ref — sends can fire from timers).
       ...(projectIdRef.current ? { project_id: projectIdRef.current } : {}),
+      // Seamless arming: the daemon reads the request and fills the free tool
+      // slots from its curated safe set (explicit picks above always first).
+      ...(autoTools ? { auto_tools: true } : {}),
     };
   }
 
@@ -2761,7 +2786,7 @@ export default function ChatPage() {
         <p className="flex items-center gap-2 text-xs text-zinc-500">
           <Sparkles size={13} className="shrink-0 text-accent-soft/70" />
           {mode === "chat"
-            ? "Fast, direct answers — attach files or drop them anywhere on the page. Switch to Agent mode when you need real work done with tools."
+            ? "Fast, direct answers — tools arm themselves from your request (Auto), or pin your own with +. Attach files or drop them anywhere on the page."
             : "Replies come from a real agent that can read files, search, and use tools — you'll see its steps live as it works."}
         </p>
       </Reveal>
@@ -3575,6 +3600,26 @@ export default function ChatPage() {
                     } disabled:cursor-not-allowed disabled:opacity-50`}
                   >
                     <Globe size={15} /> Web
+                  </button>
+                )}
+                {/* Auto tools — each request arms what it needs (files,
+                    documents, web, images) in the free slots; explicit "+"
+                    picks always ride first, and replies list what RAN. */}
+                {mode === "chat" && (
+                  <button
+                    type="button"
+                    onClick={toggleAutoTools}
+                    aria-pressed={autoTools}
+                    title={
+                      autoTools
+                        ? "Auto tools ON — each request arms the safe tools it needs (files, documents, web, images). Click to arm only what you pick."
+                        : "Auto tools OFF — only tools you arm yourself run. Click to let each request arm what it needs."
+                    }
+                    className={`btn-ghost h-[2.75rem] px-3 py-0 text-[13px] ${
+                      autoTools ? "text-accent-soft" : ""
+                    }`}
+                  >
+                    <Sparkles size={15} /> Auto
                   </button>
                 )}
                 {/* Mic — dictate into the composer (daemon-transcribed in the

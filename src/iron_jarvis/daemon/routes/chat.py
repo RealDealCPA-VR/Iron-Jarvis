@@ -109,6 +109,38 @@ _MAX_TOOL_ROUNDS = 6
 _ATTACH_EXTRACT_CHARS = 6000
 
 
+def _resolve_armed_tools(d, body) -> tuple[list[str], list[str]]:
+    """The turn's tool set: explicit "+"-armed tools first, then — when the
+    client sent ``auto_tools`` — auto-selected tools fill the free slots under
+    the same cap. Selection is deterministic (see tools/autoselect.py) and
+    draws only from a curated safe set: file/document tools (fs-policy
+    confined), read-only web retrieval, local image tools — never shell,
+    computeruse, MCP, or paid generative media, which stay behind explicit
+    arming. Returns ``(armed, auto_armed)`` with ``auto_armed ⊆ armed``."""
+    explicit = [
+        t for t in (body.tools or [])[:_MAX_ARMED_TOOLS] if d.platform.registry.get(t)
+    ]
+    auto: list[str] = []
+    if getattr(body, "auto_tools", False) and len(explicit) < _MAX_ARMED_TOOLS:
+        from ...tools.autoselect import select_auto_tools
+
+        last_user = next(
+            (m.content or "" for m in reversed(body.messages) if m.role == "user"),
+            "",
+        )
+        auto = [
+            t
+            for t in select_auto_tools(
+                last_user,
+                attachments=[Path(a).name for a in (body.attachments or [])],
+                exclude=set(explicit),
+                cap=_MAX_ARMED_TOOLS - len(explicit),
+            )
+            if d.platform.registry.get(t)
+        ]
+    return explicit + auto, auto
+
+
 def _clean_setup(raw: Any) -> str:
     """Validate + compact a thread ``setup`` payload into its stored JSON.
 
@@ -614,10 +646,10 @@ def register(app: FastAPI, d) -> None:
                     m.images = images
                     break
 
-        # "+" armed tools: a SMALL tool loop (max 4 rounds) with exactly the
-        # tools the user selected — auto-allowed because arming them WAS the
-        # user's explicit consent for this conversation.
-        armed = [t for t in (body.tools or [])[:_MAX_ARMED_TOOLS] if d.platform.registry.get(t)]
+        # The turn's tool loop: "+"-armed tools (explicit consent) plus, with
+        # body.auto_tools, safe auto-selected tools filling the free slots —
+        # seamless by default, explicit picks always first.
+        armed, auto_armed = _resolve_armed_tools(d, body)
         tool_specs = d.platform.registry.specs(armed) if armed else []
         tools_used: list[str] = []          # ONLY tools that actually executed
         last_tool_output = ""               # last SUCCESSFUL output (no-reply synthesis)
@@ -658,10 +690,22 @@ def register(app: FastAPI, d) -> None:
                 config=d.platform.config, event_bus=d.platform.event_bus,
                 engine=d.platform.engine,
             )
+            explicit_armed = [t for t in armed if t not in auto_armed]
             system += (
-                "\n\n# Tools\nThe user armed these tools for this chat: "
-                + ", ".join(armed)
-                + ". Use them when they help; answer directly when they don't."
+                "\n\n# Tools\n"
+                + (
+                    "The user armed these tools for this chat: "
+                    + ", ".join(explicit_armed)
+                    + ". "
+                    if explicit_armed
+                    else ""
+                )
+                + (
+                    "Auto-selected from this request: " + ", ".join(auto_armed) + ". "
+                    if auto_armed
+                    else ""
+                )
+                + "Use them when they help; answer directly when they don't."
                 + (
                     f"\nYour file tools operate INSIDE the folder {tool_ws}; "
                     "read, edit, and create files there directly, and use the absolute paths "
@@ -687,6 +731,11 @@ def register(app: FastAPI, d) -> None:
         # agent_overrides, but an interactive session grant is the sanctioned path
         # to lift an "ask" floor tool for one task — so MCP/web tools stay armable
         # while base-"deny" floor tools (browser_use) remain correctly blocked.
+        # AUTO-armed tools share this grant deliberately: the selector's curated
+        # set (tools/autoselect.py AUTO_SAFE_TOOLS) contains only fs-policy-
+        # confined file/document tools, allow-tier web retrieval, and local image
+        # tools — never a deny-floor, MCP, shell, or paid tool — and the Auto
+        # toggle in the UI is the user's standing consent for exactly that set.
         armed_grant = set(overrides.keys())
         # Routing: an explicit body choice always wins; otherwise fall back to
         # the resolved project's per-project default model, if it has one.
@@ -817,6 +866,9 @@ def register(app: FastAPI, d) -> None:
             "images": len(images),
             "skill": (body.skill or "").strip() or None,
             "tools_used": tools_used,
+            # What the seamless path armed on its own (honesty surface — the
+            # client can show "auto-armed" distinctly from user picks).
+            "auto_armed": auto_armed,
         }
 
     @app.post("/chat/stream")
@@ -964,7 +1016,7 @@ def register(app: FastAPI, d) -> None:
                     m.images = images
                     break
 
-        armed = [t for t in (body.tools or [])[:_MAX_ARMED_TOOLS] if d.platform.registry.get(t)]
+        armed, auto_armed = _resolve_armed_tools(d, body)
         tool_specs = d.platform.registry.specs(armed) if armed else []
         ctx = None
         if armed:
@@ -994,10 +1046,22 @@ def register(app: FastAPI, d) -> None:
                 config=d.platform.config, event_bus=d.platform.event_bus,
                 engine=d.platform.engine,
             )
+            explicit_armed = [t for t in armed if t not in auto_armed]
             system += (
-                "\n\n# Tools\nThe user armed these tools for this chat: "
-                + ", ".join(armed)
-                + ". Use them when they help; answer directly when they don't."
+                "\n\n# Tools\n"
+                + (
+                    "The user armed these tools for this chat: "
+                    + ", ".join(explicit_armed)
+                    + ". "
+                    if explicit_armed
+                    else ""
+                )
+                + (
+                    "Auto-selected from this request: " + ", ".join(auto_armed) + ". "
+                    if auto_armed
+                    else ""
+                )
+                + "Use them when they help; answer directly when they don't."
                 + (
                     f"\nYour file tools operate INSIDE the folder {tool_ws}; "
                     "read, edit, and create files there directly, and use the absolute paths "
@@ -1201,6 +1265,7 @@ def register(app: FastAPI, d) -> None:
                 "model": route_model,
                 "tools_used": tools_used,
                 "denied_tools": denied_tools,
+                "auto_armed": auto_armed,
                 "usage": {"input_tokens": usage_in, "output_tokens": usage_out},
             })
 

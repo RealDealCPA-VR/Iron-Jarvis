@@ -97,6 +97,11 @@ class ChatBody(BaseModel):
     #: tools run there so created/edited files land in the folder the user is
     #: browsing (the Build-like workspace). "" = project root / uploads default.
     workspace_dir: str = ""
+    #: Seamless arming: let the daemon read the request and fill the free tool
+    #: slots (under the same 6-tool cap) from a curated safe set — files,
+    #: documents, web retrieval, local image tools. Explicit ``tools`` always
+    #: come first; the reply's tools_used stays the honest record of what RAN.
+    auto_tools: bool = False
 
 
 class ChatShareBody(BaseModel):
