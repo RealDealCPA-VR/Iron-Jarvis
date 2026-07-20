@@ -289,7 +289,7 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
               const avail = isAvailable(m);
               return (
                 <option key={optKey(m)} value={optKey(m)} disabled={!avail}>
-                  {m.provider} · {m.model}
+                  {m.name || m.provider} · {m.model}
                   {avail ? "" : " — not connected"}
                 </option>
               );

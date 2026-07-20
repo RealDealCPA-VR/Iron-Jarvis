@@ -25,10 +25,30 @@ import {
   RefreshCw,
   type LucideIcon,
 } from "lucide-react";
-import { get, post, put, del, ApiError } from "@/lib/api";
+import { get, post, put, patch, del, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { useDaemon } from "@/lib/daemon";
 import type { Connection, ConnectionTestResult, OAuthStart } from "@/lib/types";
+
+/** A user-added custom endpoint (a routable fleet node) as the card shows it. */
+interface EndpointRow {
+  id: string;
+  label: string;
+  base_url: string;
+  default_model: string;
+  api_key_name: string;
+}
+
+/** The node fields we read out of GET /fleet's snapshot rows. */
+interface EndpointNodeDump {
+  id: string;
+  label?: string;
+  base_url?: string;
+  source?: string;
+  routable?: boolean;
+  default_model?: string;
+  api_key_name?: string;
+}
 import {
   Card,
   OfflineHint,
@@ -223,26 +243,98 @@ function ConnectionCard({
   const canOAuth = (conn.supports_oauth ?? conn.method === "oauth") && !isMock;
   const canKey = (conn.supports_api_key ?? conn.method === "api_key") && !isMock;
 
-  // Prefill the custom endpoint fields from the daemon's saved settings.
+  // SAVED ENDPOINTS (custom card): the legacy single settings slot plus every
+  // user-added routable fleet node — each one its own provider ("fleet-<id>")
+  // in every model picker. Loaded for DISPLAY ONLY: the add form always starts
+  // EMPTY. (It used to prefill from the saved slot, so "add another endpoint"
+  // silently round-tripped and overwrote the first one — the bug this fixes.)
+  const [endpoints, setEndpoints] = useState<EndpointRow[]>([]);
+  const [legacy, setLegacy] = useState<{ url: string; model: string } | null>(null);
+  const [epName, setEpName] = useState("");
+  const [epBusy, setEpBusy] = useState<string | null>(null);
+  const [epError, setEpError] = useState<string | null>(null);
+
+  async function reloadEndpoints() {
+    try {
+      const [s, f] = await Promise.all([
+        get<{ settings?: Record<string, unknown> }>("/settings"),
+        get<{ nodes?: { node?: EndpointNodeDump }[] }>("/fleet"),
+      ]);
+      const savedUrl = s.settings?.custom_base_url;
+      const savedModel = s.settings?.custom_model;
+      setLegacy(
+        typeof savedUrl === "string" && savedUrl
+          ? {
+              url: savedUrl,
+              model: typeof savedModel === "string" ? savedModel : "",
+            }
+          : null,
+      );
+      setEndpoints(
+        (f.nodes ?? [])
+          .map((row) => row.node)
+          .filter(
+            (n): n is EndpointNodeDump =>
+              Boolean(n && n.id && n.source === "user" && n.routable),
+          )
+          .map((n) => ({
+            id: n.id,
+            label: n.label || n.id,
+            base_url: n.base_url || "",
+            default_model: n.default_model || "",
+            api_key_name: n.api_key_name || "",
+          })),
+      );
+    } catch {
+      /* the list is best-effort — an unreachable daemon just shows nothing */
+    }
+  }
   useEffect(() => {
-    if (!isCustom) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const d = await get<{ settings?: Record<string, unknown> }>("/settings");
-        if (cancelled) return;
-        const savedUrl = d.settings?.custom_base_url;
-        const savedModel = d.settings?.custom_model;
-        if (typeof savedUrl === "string" && savedUrl) setBaseUrl((v) => v || savedUrl);
-        if (typeof savedModel === "string" && savedModel) setModel((v) => v || savedModel);
-      } catch {
-        /* prefill is best-effort — the fields just start empty */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    if (isCustom) void reloadEndpoints();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isCustom]);
+
+  /** Delete a user-added endpoint (its provider unregisters live); the vault
+   *  key created with it is cleaned up best-effort. */
+  async function removeEndpoint(ep: EndpointRow) {
+    setEpBusy(ep.id);
+    setEpError(null);
+    try {
+      await del(`/fleet/nodes/${encodeURIComponent(ep.id)}`);
+      if (ep.api_key_name) {
+        try {
+          await del(`/secrets/${encodeURIComponent(ep.api_key_name)}`);
+        } catch {
+          /* the key may already be gone */
+        }
+      }
+      void reloadEndpoints();
+    } catch (err) {
+      setEpError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setEpBusy(null);
+    }
+  }
+
+  /** Clear the legacy single-slot endpoint (settings-managed "custom"). */
+  async function removeLegacy() {
+    setEpBusy("legacy");
+    setEpError(null);
+    try {
+      await put("/settings", { values: { custom_base_url: "", custom_model: "" } });
+      try {
+        await del("/connections/custom");
+      } catch {
+        /* no stored key — fine */
+      }
+      void reloadEndpoints();
+      onChanged();
+    } catch (err) {
+      setEpError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setEpBusy(null);
+    }
+  }
 
   // Probe the endpoint for ITS OWN model list as the user types (debounced) —
   // /v1/models (or Ollama's /api/tags) knows the ids, the user shouldn't have
@@ -301,17 +393,41 @@ function ConnectionCard({
     setTest(null);
     try {
       if (isCustom) {
-        // Save the endpoint config FIRST so a key-less save still sticks.
-        await put("/settings", {
-          values: { custom_base_url: baseUrl.trim(), custom_model: model.trim() },
-        });
-        if (key.trim()) {
-          await post(`/connections/${conn.provider}/key`, { key: key.trim() });
+        // Every save creates a NEW endpoint (its own provider) — nothing is
+        // ever overwritten; delete rows in the Saved-endpoints list instead.
+        const created = await post<{ node?: { id?: string; label?: string } }>(
+          "/fleet/nodes",
+          {
+            base_url: baseUrl.trim(),
+            label: epName.trim(),
+            routable: true,
+            default_model: model.trim(),
+          },
+        );
+        const nodeId = created.node?.id ?? "";
+        if (key.trim() && nodeId) {
+          // The optional key: vaulted under a per-endpoint name, then wired to
+          // the node so its adapter sends Authorization on every request.
+          const secretName = `endpoint_${nodeId}_key`;
+          await post("/secrets", {
+            name: secretName,
+            value: key.trim(),
+            kind: "api_key",
+            description: `API key for endpoint ${epName.trim() || baseUrl.trim()}`,
+          });
+          await patch(`/fleet/nodes/${encodeURIComponent(nodeId)}`, {
+            api_key_name: secretName,
+          });
         }
+        const shown = epName.trim() || created.node?.label || nodeId || "it";
         setTest({
           ok: true,
-          detail: "Custom endpoint saved — pick 'custom' in any model picker.",
+          detail: `Endpoint saved — pick "${shown}" in any model picker.`,
         });
+        setEpName("");
+        setBaseUrl("");
+        setModel("");
+        void reloadEndpoints();
       } else {
         await post(`/connections/${conn.provider}/key`, { key: key.trim() });
         const result = await post<ConnectionTestResult>(`/connections/${conn.provider}/test`);
@@ -589,6 +705,76 @@ function ConnectionCard({
             </div>
           )}
 
+          {/* Saved endpoints (custom card): every endpoint added, each its own
+              provider — with delete. The add form below always starts empty. */}
+          {isCustom && (legacy || endpoints.length > 0) && (
+            <div className="space-y-1.5">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                Saved endpoints
+              </span>
+              {legacy && (
+                <div className="flex items-center gap-2 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2">
+                  <span className="shrink-0 text-[11px] font-medium text-zinc-300">
+                    custom
+                  </span>
+                  <span
+                    className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-500"
+                    title={legacy.url}
+                  >
+                    {legacy.url}
+                  </span>
+                  {legacy.model && (
+                    <span className="shrink-0 rounded bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
+                      {legacy.model}
+                    </span>
+                  )}
+                  <ConfirmButton
+                    className="shrink-0"
+                    onConfirm={removeLegacy}
+                    label={epBusy === "legacy" ? "…" : "Delete"}
+                    confirmLabel="Delete?"
+                    title="Remove this endpoint (the 'custom' provider entry disappears from the pickers)"
+                  />
+                </div>
+              )}
+              {endpoints.map((ep) => (
+                <div
+                  key={ep.id}
+                  className="flex items-center gap-2 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2"
+                >
+                  <span
+                    className="max-w-[8rem] shrink-0 truncate text-[11px] font-medium text-zinc-300"
+                    title={ep.label}
+                  >
+                    {ep.label}
+                  </span>
+                  <span
+                    className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-500"
+                    title={ep.base_url}
+                  >
+                    {ep.base_url}
+                  </span>
+                  {ep.default_model && (
+                    <span className="shrink-0 rounded bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
+                      {ep.default_model}
+                    </span>
+                  )}
+                  <ConfirmButton
+                    className="shrink-0"
+                    onConfirm={() => void removeEndpoint(ep)}
+                    label={epBusy === ep.id ? "…" : "Delete"}
+                    confirmLabel="Delete?"
+                    title={`Remove "${ep.label}" — its provider disappears from every picker; the saved key is cleaned up`}
+                  />
+                </div>
+              ))}
+              {epError && <ErrorNote>{epError}</ErrorNote>}
+              <p className="text-[10px] leading-relaxed text-zinc-600">
+                Each endpoint is its own provider in every model picker.
+              </p>
+            </div>
+          )}
+
           {/* API key */}
           {canKey &&
             (!open ? (
@@ -596,12 +782,32 @@ function ConnectionCard({
                 onClick={() => setOpen(true)}
                 className={`${canOAuth ? "btn-ghost" : "btn-accent"} w-full py-1.5 text-xs`}
               >
-                <KeyRound size={14} /> {canOAuth ? "Use an API key instead" : "Connect"}
+                {isCustom ? <Plus size={14} /> : <KeyRound size={14} />}{" "}
+                {canOAuth
+                  ? "Use an API key instead"
+                  : isCustom
+                    ? legacy || endpoints.length > 0
+                      ? "Add another endpoint"
+                      : "Add an endpoint"
+                    : "Connect"}
               </button>
             ) : (
               <form onSubmit={connectKey} className="space-y-2.5">
                 {isCustom && (
                   <>
+                    <label className="block space-y-1">
+                      <span className="text-[11px] font-medium text-zinc-400">
+                        Name <span className="font-normal text-zinc-600">(how it shows in pickers)</span>
+                      </span>
+                      <input
+                        type="text"
+                        value={epName}
+                        onChange={(e) => setEpName(e.target.value)}
+                        placeholder="e.g. vLLM box / Ollama Cloud"
+                        autoComplete="off"
+                        className="field text-xs"
+                      />
+                    </label>
                     <label className="block space-y-1">
                       <span className="text-[11px] font-medium text-zinc-400">
                         Endpoint base URL

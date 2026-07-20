@@ -186,7 +186,10 @@ class FleetRegistry:
         node_id = name[len(_PROVIDER_PREFIX) :]
         node = self.get(node_id)
         if node is None:
-            return None  # not ours to answer for — fall through to the factory check
+            # A fleet-prefixed name IS ours: no node record means the endpoint
+            # was deleted — report unavailable rather than deferring to a
+            # possibly-lingering factory (a ghost provider the router picks).
+            return False
         if not node.enabled:
             return False
         # Only the sampler can turn "reachable" into a fact. UNPROBED defers
@@ -197,18 +200,38 @@ class FleetRegistry:
 
     # -- provider registration -----------------------------------------------
 
-    def register_providers(self, manager: Any) -> int:
+    def register_providers(self, manager: Any, secret_resolver: Any = None) -> int:
         """Register ``fleet-<id>`` for each routable node. Returns the count.
+
+        ``secret_resolver`` (name -> value | None) resolves a node's
+        ``api_key_name`` from the secrets vault at REQUEST time — without it a
+        keyed endpoint is silently sent no Authorization at all. Passed once at
+        boot and remembered, so runtime re-registration (add/edit/delete on the
+        Connections page) keeps working credentials.
 
         Per-node try/except: one malformed node must never be able to crash
         daemon boot.
         """
+        if secret_resolver is not None:
+            self._secret_resolver = secret_resolver
+        resolver = getattr(self, "_secret_resolver", None)
         count = 0
         for node in self.routable_nodes():
             try:
+
+                def _cred(n=node):  # noqa: ANN202 — adapter credential thunk
+                    if not n.api_key_name or resolver is None:
+                        return None
+                    try:
+                        return resolver(n.api_key_name)
+                    except Exception:  # noqa: BLE001 — a vault fault ≠ a crash
+                        return None
+
                 manager.register(
                     provider_name(node.id),
-                    lambda model=None, n=node: FleetAdapter(node=n, model=model),
+                    lambda model=None, n=node, c=_cred: FleetAdapter(
+                        node=n, model=model, credential=c
+                    ),
                 )
                 count += 1
             except Exception:  # noqa: BLE001 — skip the bad node, keep the fleet

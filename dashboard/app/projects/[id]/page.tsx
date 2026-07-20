@@ -736,7 +736,7 @@ function ProjectWorkspaceInner({
                       )}
                     {availableModels.map((m) => (
                       <option key={`${m.provider}::${m.model}`} value={`${m.provider}::${m.model}`}>
-                        {m.provider} / {m.model}
+                        {m.name || m.provider} / {m.model}
                       </option>
                     ))}
                   </select>

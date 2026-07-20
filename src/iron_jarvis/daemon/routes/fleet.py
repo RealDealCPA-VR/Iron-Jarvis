@@ -61,12 +61,16 @@ _PING_TOOL = {
 
 class FleetNodeBody(BaseModel):
     """Add a node. Only ``base_url`` is required; ``id`` is slugged from the
-    host when omitted, ``api_key_name`` names a VAULT entry (never a token)."""
+    host when omitted, ``api_key_name`` names a VAULT entry (never a token).
+    ``routable`` + ``default_model`` let the Connections page add a custom
+    endpoint as a ready-to-route provider in ONE call."""
 
     base_url: str
     label: str = ""
     id: str = ""
     api_key_name: str = ""
+    routable: bool = False
+    default_model: str = ""
 
 
 class FleetNodePatch(BaseModel):
@@ -395,11 +399,20 @@ def register(app: FastAPI, d) -> None:
             kind_detected_at=time.time(),
             source="user",
             api_key_name=(body.api_key_name or "").strip(),
+            routable=bool(body.routable),
+            default_model=(body.default_model or "").strip(),
         )
         try:
             node = d.fleet.add(node) or node
         except ValueError as exc:  # invalid/duplicate id — surface the reason
             raise HTTPException(status_code=400, detail=str(exc))
+        # A routable node becomes a provider NOW, not on the next boot —
+        # register_providers is idempotent over the whole routable set.
+        if node.routable:
+            try:
+                d.fleet.register_providers(d.platform.providers)
+            except Exception:  # noqa: BLE001 — registration can't fail the add
+                pass
 
         snapshot, children = await asyncio.to_thread(probe_node, node)
         if children:
@@ -426,7 +439,18 @@ def register(app: FastAPI, d) -> None:
             node = d.fleet.update(node_id, **fields)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        return {"node": _dump(node or d.fleet.get(node_id))}
+        # Keep the provider registry in step LIVE: a node flipped routable gets
+        # its factory now; one flipped off is unregistered so the router can't
+        # pick it again this session.
+        final = node or d.fleet.get(node_id)
+        try:
+            if final is not None and final.routable:
+                d.fleet.register_providers(d.platform.providers)
+            elif final is not None and "routable" in fields:
+                d.platform.providers.unregister(f"fleet-{node_id}")
+        except Exception:  # noqa: BLE001 — registry sync can't fail the edit
+            pass
+        return {"node": _dump(final)}
 
     @app.delete("/fleet/nodes/{node_id}")
     def fleet_delete_node(node_id: str) -> dict[str, Any]:
@@ -444,6 +468,12 @@ def register(app: FastAPI, d) -> None:
                     "(ollama_base_url / custom_base_url)"
                 ),
             )
+        # No ghost providers: drop the factory too (reachable() also answers
+        # False for deleted fleet ids — belt and suspenders).
+        try:
+            d.platform.providers.unregister(f"fleet-{node_id}")
+        except Exception:  # noqa: BLE001
+            pass
         return {"ok": True}
 
     @app.post("/fleet/nodes/{node_id}/detect")

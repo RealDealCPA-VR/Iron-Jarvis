@@ -347,6 +347,11 @@ export interface ModelOption {
   model: string;
   /** Whether this entry's provider is actually connected/configured now. */
   available?: boolean;
+  /** Friendly display name (custom endpoints, detected CLIs) — pickers show it
+   *  instead of a raw provider id like "fleet-a1b2c3". */
+  name?: string;
+  /** Where the entry came from ("endpoint", "cli", …) — display hints only. */
+  source?: string;
 }
 
 /* ---- Projects (context spine) -------------------------------------------- */

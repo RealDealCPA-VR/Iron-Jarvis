@@ -163,7 +163,11 @@ def test_reachable_defers_for_unknown_providers_and_never_calls_out(tmp_path, mo
 
     reg = FleetRegistry(_config(tmp_path, ollama_base_url="http://tower:8003"))
     assert reg.reachable("anthropic") is None  # not ours — other logic decides
-    assert reg.reachable("fleet-nope") is None  # unknown node defers to the factory test
+    # A fleet-prefixed name with NO node record = a DELETED endpoint: honestly
+    # unavailable, never deferred to a possibly-lingering factory (v1.66.0 —
+    # endpoints are user-deletable now, and a ghost provider the router can
+    # still pick is exactly the bug that contract change closes).
+    assert reg.reachable("fleet-nope") is False
     assert reg.reachable("fleet-ollama") is None  # known but UNPROBED is not a claim
     reg.set_reachable("ollama", True)
     assert reg.reachable("fleet-ollama") is True

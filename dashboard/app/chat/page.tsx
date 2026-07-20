@@ -2740,7 +2740,7 @@ export default function ChatPage() {
                   const v = `${m.provider}::${m.model}`;
                   return (
                     <option key={v} value={v}>
-                      {m.provider} · {m.model}
+                      {m.name || m.provider} · {m.model}
                     </option>
                   );
                 })}

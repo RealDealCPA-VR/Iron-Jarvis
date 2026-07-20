@@ -315,6 +315,14 @@ class ProviderManager:
         for key in [k for k in self._cache if k[0] == name]:
             self._cache.pop(key, None)
 
+    def unregister(self, name: str) -> None:
+        """Remove a RUNTIME-registered provider (a deleted fleet endpoint).
+        Without this, a deleted endpoint's factory lingers and the provider
+        reads as available — a ghost the router may still pick."""
+        self._factories.pop(name, None)
+        for key in [k for k in self._cache if k[0] == name]:
+            self._cache.pop(key, None)
+
     def configure_local(
         self,
         *,

@@ -228,6 +228,41 @@ def register(app: FastAPI, d) -> None:
                         models.append({"provider": prov, "model": mid})
             except Exception:  # noqa: BLE001 — discovery must never break the picker
                 continue
+        # CUSTOM ENDPOINTS (fleet nodes marked routable): each one is its own
+        # provider ("fleet-<id>"), so EVERY endpoint the user added shows in
+        # every picker — not just the single legacy custom slot. `name` carries
+        # the user's label so pickers can render it instead of the raw id.
+        # Per-endpoint live discovery reuses the same URL-keyed cache.
+        try:
+            for node in d.fleet.routable_nodes():
+                prov = f"fleet-{node.id}"
+                label = node.label or node.id
+                ids: list[str] = []
+                try:
+                    ids = discover_models(
+                        prov,
+                        lambda n=node: (
+                            d.platform.secrets.get(n.api_key_name)
+                            if n.api_key_name
+                            else None
+                        ),
+                        base_url=node.base_url,
+                    )
+                except Exception:  # noqa: BLE001 — discovery never breaks the picker
+                    ids = []
+                if not ids:
+                    ids = [node.default_model or "default"]
+                for mid in ids:
+                    models.append(
+                        {
+                            "provider": prov,
+                            "model": mid,
+                            "name": label,
+                            "source": "endpoint",
+                        }
+                    )
+        except Exception:  # noqa: BLE001 — a fleet fault never breaks the picker
+            pass
         # Honesty flag: which entries the user can ACTUALLY run right now
         # (provider connected/configured). Pickers show available ones first
         # and grey/hide the rest — no more dead options that silently fail.

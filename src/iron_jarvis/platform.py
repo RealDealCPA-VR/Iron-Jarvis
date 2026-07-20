@@ -311,7 +311,7 @@ def build_platform(
     # children discovered behind a proxy are observability-only: they are already
     # reachable through the proxy's alias, and registering them again would show
     # the same GPU twice in every picker.
-    fleet_registry.register_providers(providers)
+    fleet_registry.register_providers(providers, secret_resolver=secrets.get)
     # Self-tuning router (§6 phase-1), OFF by default: only when the user opts in
     # (prefer_local_when_capable) AND a local Ollama model is configured AND it has
     # demonstrably met the quality bar for a task class do we prefer it for that
