@@ -125,6 +125,10 @@ interface ChatMessage {
   /** Web sources the reply's web tool calls actually surfaced (assistant
    *  messages) — rendered as a compact domain-chip row under the bubble. */
   sources?: ChatSource[];
+  /** The provider that ACTUALLY answered when it differs from the one the
+   *  user explicitly picked (capability reroute / failover) — an honesty chip
+   *  so a local-model turn silently served by a CLI is never invisible. */
+  viaProvider?: string;
   /** This assistant reply was cut off mid-stream (Stop, or a committed failure)
    *  — shown with a subtle marker so a partial answer never looks complete. */
   interrupted?: boolean;
@@ -2105,6 +2109,17 @@ export default function ChatPage() {
     };
   }
 
+  /** The provider that ACTUALLY answered, when the user explicitly picked a
+   *  DIFFERENT one (capability reroute / failover) — "" when there is nothing
+   *  to disclose (default routing, same provider, or no info). Powers the
+   *  honesty chip: a local-model turn silently served by a subscription CLI
+   *  must never be invisible. */
+  function servedByOther(served?: string): string {
+    const requested = splitChoice(choice).provider ?? "";
+    if (!served || !requested || served === requested) return "";
+    return served;
+  }
+
   /** Feed streamed text into incremental TTS: reset the per-turn counter on the
    *  first call, then speak only the newly-complete sentences. No-op if muted. */
   function feedTTS(full: string, flush: boolean) {
@@ -2146,9 +2161,11 @@ export default function ChatPage() {
     try {
       // --- Attempt token streaming (live deltas + tool cards + voice) ---
       try {
-        const { reply, tools_used } = await stream.run(body, (_delta, full) =>
-          feedTTS(full, false),
-        );
+        const {
+          reply,
+          tools_used,
+          provider: servedBy,
+        } = await stream.run(body, (_delta, full) => feedTTS(full, false));
         if (chatGenRef.current !== gen) return; // torn down mid-stream
         // One tick so the final tool_call frame's state flush lands before the
         // cards are read for source extraction (this resolve microtask can
@@ -2160,6 +2177,7 @@ export default function ChatPage() {
         // Sources the turn's web tools ACTUALLY returned (never prose links).
         const sources = extractWebSources(streamToolsRef.current);
         const finalReply = (reply ?? "").trim() || "(no response)";
+        const via = servedByOther(servedBy);
         const full: ChatMessage[] = [
           ...history,
           {
@@ -2167,6 +2185,7 @@ export default function ChatPage() {
             content: finalReply,
             ...(toolsUsed.length ? { toolsUsed } : {}),
             ...(sources.length ? { sources } : {}),
+            ...(via ? { viaProvider: via } : {}),
           },
         ];
         setMessages(full);
@@ -2226,12 +2245,14 @@ export default function ChatPage() {
       if (chatGenRef.current !== gen) return; // "New chat" happened mid-flight
       const toolsUsed = (res.tools_used ?? []).filter((t) => Boolean(t));
       const reply = (res.reply ?? "").trim() || "(no response)";
+      const viaPost = servedByOther(res.provider);
       const full: ChatMessage[] = [
         ...history,
         {
           role: "assistant",
           content: reply,
           ...(toolsUsed.length ? { toolsUsed } : {}),
+          ...(viaPost ? { viaProvider: viaPost } : {}),
         },
       ];
       setMessages(full);
@@ -3117,6 +3138,18 @@ export default function ChatPage() {
                           {m.interrupted && (
                             <div className="ml-11 mt-1 text-[11px] italic text-amber-400/80">
                               interrupted — the reply was cut off
+                            </div>
+                          )}
+                          {/* Honesty chip: the reply came from a DIFFERENT
+                              provider than the one the user picked (capability
+                              reroute / failover) — never silent. */}
+                          {m.viaProvider && (
+                            <div
+                              className="ml-11 mt-1 inline-flex items-center gap-1.5 rounded-full border border-amber-400/25 bg-amber-400/[0.08] px-2 py-0.5 text-[11px] text-amber-200/90"
+                              title={`Your selected model couldn't take this turn (it may not support tools, or it errored), so the router used ${m.viaProvider} instead. Verify the endpoint's tool support in Connections to keep turns local.`}
+                            >
+                              <Bot size={10} className="shrink-0" />
+                              answered by {m.viaProvider}
                             </div>
                           )}
                           {/* Tools the reply's tool loop actually ran */}

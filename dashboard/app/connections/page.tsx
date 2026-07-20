@@ -37,6 +37,9 @@ interface EndpointRow {
   base_url: string;
   default_model: string;
   api_key_name: string;
+  /** Live-verified tool support: true/false = asked the server; null = never
+   *  verified (tool turns then route elsewhere — the chip says so). */
+  tool_use: boolean | null;
 }
 
 /** The node fields we read out of GET /fleet's snapshot rows. */
@@ -48,6 +51,13 @@ interface EndpointNodeDump {
   routable?: boolean;
   default_model?: string;
   api_key_name?: string;
+  tool_use?: boolean | null;
+}
+
+/** POST /fleet/nodes/{id}/verify response (the tool-capability probe). */
+interface VerifyResult {
+  tool_use: boolean | null;
+  error?: string;
 }
 import {
   Card,
@@ -283,6 +293,7 @@ function ConnectionCard({
             base_url: n.base_url || "",
             default_model: n.default_model || "",
             api_key_name: n.api_key_name || "",
+            tool_use: n.tool_use ?? null,
           })),
       );
     } catch {
@@ -293,6 +304,24 @@ function ConnectionCard({
     if (isCustom) void reloadEndpoints();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isCustom]);
+
+  /** Re-run the live tool-capability probe for one endpoint row. */
+  async function verifyEndpoint(ep: EndpointRow) {
+    setEpBusy(ep.id);
+    setEpError(null);
+    try {
+      const v = await post<VerifyResult>(
+        `/fleet/nodes/${encodeURIComponent(ep.id)}/verify`,
+        { model: ep.default_model },
+      );
+      if (v.tool_use === null && v.error) setEpError(`verify: ${v.error}`);
+      void reloadEndpoints();
+    } catch (err) {
+      setEpError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setEpBusy(null);
+    }
+  }
 
   /** Delete a user-added endpoint (its provider unregisters live); the vault
    *  key created with it is cleaned up best-effort. */
@@ -420,9 +449,29 @@ function ConnectionCard({
           });
         }
         const shown = epName.trim() || created.node?.label || nodeId || "it";
+        // AUTO-VERIFY tool support right away (live ping-tool probe): without
+        // it the router treats the endpoint as tools-incapable and quietly
+        // sends every tool-using turn to another provider.
+        let verifyNote = "";
+        if (nodeId) {
+          try {
+            const v = await post<VerifyResult>(
+              `/fleet/nodes/${encodeURIComponent(nodeId)}/verify`,
+              { model: model.trim() },
+            );
+            verifyNote =
+              v.tool_use === true
+                ? " Tool support verified ✓ — web/file turns can run here."
+                : v.tool_use === false
+                  ? " Heads-up: this server can't run tools — turns that use web/files will route to another provider."
+                  : " Couldn't verify tool support yet (endpoint asleep?) — use Verify on its row later.";
+          } catch {
+            verifyNote = "";
+          }
+        }
         setTest({
           ok: true,
-          detail: `Endpoint saved — pick "${shown}" in any model picker.`,
+          detail: `Endpoint saved — pick "${shown}" in any model picker.${verifyNote}`,
         });
         setEpName("");
         setBaseUrl("");
@@ -758,6 +807,33 @@ function ConnectionCard({
                     <span className="shrink-0 rounded bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
                       {ep.default_model}
                     </span>
+                  )}
+                  {/* Tool-capability chip — decides whether tool turns can
+                      stay on this endpoint or route to another provider. */}
+                  {ep.tool_use === true ? (
+                    <span
+                      className="shrink-0 rounded-full border border-emerald-400/25 bg-emerald-400/[0.08] px-1.5 py-0.5 text-[10px] text-emerald-300/90"
+                      title="Verified: this server runs tools — web/file turns stay here"
+                    >
+                      tools ✓
+                    </span>
+                  ) : ep.tool_use === false ? (
+                    <span
+                      className="shrink-0 rounded-full border border-amber-400/25 bg-amber-400/[0.08] px-1.5 py-0.5 text-[10px] text-amber-200/90"
+                      title="Verified: this server can't run tools — turns that use web/files route to another provider (the reply says so)"
+                    >
+                      no tools
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void verifyEndpoint(ep)}
+                      disabled={epBusy === ep.id}
+                      className="shrink-0 rounded-full border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400 transition-colors hover:border-accent/30 hover:text-accent-soft disabled:opacity-50"
+                      title="Tool support unverified — tool turns route elsewhere until verified. Click to probe this server now."
+                    >
+                      {epBusy === ep.id ? "…" : "Verify tools"}
+                    </button>
                   )}
                   <ConfirmButton
                     className="shrink-0"

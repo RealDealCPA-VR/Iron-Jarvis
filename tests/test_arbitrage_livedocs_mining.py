@@ -37,7 +37,12 @@ async def test_codex_cli_adapter_and_errors():
         which=lambda b: f"/x/{b}",
     )
     r = await a.complete(system="", messages=[LLMMessage(role="user", content="q")], tools=[])
-    assert r.text == "the real answer"
+    # v1.67.0 contract change: the stdout fallback keeps EVERYTHING that isn't
+    # a recognized banner (the old keep-only-the-last-block heuristic returned
+    # a trailing footer instead of the answer — live-hit 2026-07-20; the real
+    # channel is now --output-last-message, see test_codex_cli_reply_channel).
+    assert "the real answer" in r.text
+    assert "OpenAI Codex v9" not in r.text
     # Missing binary + nonzero exit are honest errors.
     b = make_claude_cli(which=lambda _: None)
     with pytest.raises(RuntimeError, match="not installed"):

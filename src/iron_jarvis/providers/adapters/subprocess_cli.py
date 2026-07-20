@@ -23,8 +23,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import subprocess
+import tempfile
+from pathlib import Path
 from typing import Any, Callable
 
 from .base import LLMAdapter, LLMMessage, LLMResponse, ProviderError, ToolCall
@@ -103,6 +106,7 @@ class SubprocessCliAdapter(LLMAdapter):
         model: str = "subscription",
         runner: Callable[..., tuple[int, str, str]] | None = None,
         which: Callable[[str], str | None] = shutil.which,
+        output_last_message_flag: str | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
@@ -111,6 +115,13 @@ class SubprocessCliAdapter(LLMAdapter):
         self._parse = parse
         self._runner = runner or _run
         self._which = which
+        #: When set (e.g. codex's --output-last-message), the CLI writes its
+        #: FINAL message to a temp file we read back — the DETERMINISTIC reply
+        #: channel. Parsing stdout with heuristics is only the fallback: a CLI
+        #: build whose stdout ends with a footer/next-steps block made the old
+        #: last-block parse return THAT instead of the answer (live-hit
+        #: 2026-07-20: a web question came back as a greeting).
+        self._out_flag = output_last_message_flag
 
     async def complete(
         self, *, system: str, messages: list[LLMMessage], tools: list[dict[str, Any]]
@@ -122,18 +133,40 @@ class SubprocessCliAdapter(LLMAdapter):
             )
         prompt = _flatten(system, messages)
         argv = [exe] + self._argv_builder(prompt, self.model)
+        out_path: str | None = None
+        if self._out_flag:
+            fd, out_path = tempfile.mkstemp(prefix="ij-cli-reply-", suffix=".txt")
+            os.close(fd)
+            # Flags must precede the positional prompt (the builder's last arg).
+            argv = argv[:-1] + [self._out_flag, out_path, argv[-1]]
         try:
-            code, out, err = await asyncio.to_thread(self._runner, argv)
-        except subprocess.TimeoutExpired as exc:
-            # A wedged CLI is a TRANSIENT failure (typed) — the router should
-            # fail over to another provider, not surface it as a hard error.
-            raise ProviderError(
-                f"{self.provider}: CLI timed out after {_TIMEOUT_S}s", transient=True
-            ) from exc
-        if code != 0:
-            detail = (err or out).strip()[:400]
-            raise RuntimeError(f"{self.provider}: CLI exited {code}: {detail}")
-        text = self._parse(out).strip()
+            try:
+                code, out, err = await asyncio.to_thread(self._runner, argv)
+            except subprocess.TimeoutExpired as exc:
+                # A wedged CLI is a TRANSIENT failure (typed) — the router should
+                # fail over to another provider, not surface it as a hard error.
+                raise ProviderError(
+                    f"{self.provider}: CLI timed out after {_TIMEOUT_S}s", transient=True
+                ) from exc
+            if code != 0:
+                detail = (err or out).strip()[:400]
+                raise RuntimeError(f"{self.provider}: CLI exited {code}: {detail}")
+            text = ""
+            if out_path is not None:
+                try:
+                    text = Path(out_path).read_text(
+                        encoding="utf-8", errors="replace"
+                    ).strip()
+                except OSError:
+                    text = ""
+            if not text:
+                text = self._parse(out).strip()
+        finally:
+            if out_path is not None:
+                try:
+                    os.unlink(out_path)
+                except OSError:
+                    pass
         if not text:
             raise RuntimeError(f"{self.provider}: CLI returned no output")
         return LLMResponse(text=text, tool_calls=[], usage={})
@@ -145,18 +178,20 @@ def _codex_argv(prompt: str, _model: str) -> list[str]:
 
 
 def _codex_parse(stdout: str) -> str:
-    """codex exec prints banners/progress then the answer; keep the tail after
-    the last blank-line separator, dropping obvious log/banner lines."""
+    """FALLBACK ONLY (--output-last-message is the real channel): strip
+    banner/log lines and keep EVERYTHING that remains. This used to keep only
+    the LAST blank-line block — a codex build whose stdout ends with a
+    footer/next-steps block then returned THAT instead of the answer sitting
+    right above it (live-hit 2026-07-20: 'What would you like help with?')."""
     lines = [
         ln for ln in stdout.splitlines()
         if not ln.startswith(("[", "OpenAI Codex", "--------"))
     ]
-    text = "\n".join(lines).strip()
-    blocks = [b.strip() for b in text.split("\n\n") if b.strip()]
-    return blocks[-1] if blocks else text
+    return "\n".join(lines).strip()
 
 
 def make_codex_cli(**kw: Any) -> SubprocessCliAdapter:
+    kw.setdefault("output_last_message_flag", "--output-last-message")
     return SubprocessCliAdapter(
         "codex-cli", "codex", _codex_argv, _codex_parse, **kw
     )
