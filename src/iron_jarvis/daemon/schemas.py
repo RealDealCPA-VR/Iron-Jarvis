@@ -176,6 +176,8 @@ class RepairBody(BaseModel):
 _SETTINGS_KEYS = [
     "default_provider",
     "default_model",
+    # Never substitute an explicitly-picked provider (see config.strict_model_pin).
+    "strict_model_pin",
     # Auto model routing — the classifier + optional tier overrides. "auto" as
     # the default_provider is the ON switch.
     "routing_model",

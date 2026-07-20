@@ -395,6 +395,9 @@ def build_platform(
         event_bus,
         local_oracle=_local_oracle,
         auto_route=_auto_route,
+        # Live: an explicitly-picked provider must answer (or fail honestly)
+        # while the pin is on — no substitution. Settings toggle, no restart.
+        strict_pin=lambda: bool(getattr(config, "strict_model_pin", False)),
     )
     registry = default_registry()
 

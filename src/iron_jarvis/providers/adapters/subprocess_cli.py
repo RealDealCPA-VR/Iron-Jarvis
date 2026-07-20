@@ -141,7 +141,9 @@ class SubprocessCliAdapter(LLMAdapter):
             argv = argv[:-1] + [self._out_flag, out_path, argv[-1]]
         try:
             try:
-                code, out, err = await asyncio.to_thread(self._runner, argv)
+                # The prompt rides STDIN (never argv): Windows caps a command
+                # line at 32,767 chars, and an extracted-PDF prompt exceeds it.
+                code, out, err = await asyncio.to_thread(self._runner, argv, prompt)
             except subprocess.TimeoutExpired as exc:
                 # A wedged CLI is a TRANSIENT failure (typed) — the router should
                 # fail over to another provider, not surface it as a hard error.
@@ -172,9 +174,12 @@ class SubprocessCliAdapter(LLMAdapter):
         return LLMResponse(text=text, tool_calls=[], usage={})
 
 
-def _codex_argv(prompt: str, _model: str) -> list[str]:
-    # --skip-git-repo-check: we run from no particular directory.
-    return ["exec", "--skip-git-repo-check", prompt]
+def _codex_argv(_prompt: str, _model: str) -> list[str]:
+    # --skip-git-repo-check: we run from no particular directory. "-" = read
+    # the prompt from STDIN — a big office prompt (extracted PDFs, knowledge)
+    # blew Windows' 32,767-char command line as a positional arg (live-hit
+    # 2026-07-20: "The command line is too long"). Stdin has no such limit.
+    return ["exec", "--skip-git-repo-check", "-"]
 
 
 def _codex_parse(stdout: str) -> str:
@@ -295,7 +300,11 @@ class ClaudeCliAdapter(LLMAdapter):
         self._runner = runner or _run
         self._which = which
 
-    def _argv(self, exe: str, prompt: str, tools: list[dict[str, Any]]) -> list[str]:
+    def _argv(self, exe: str, tools: list[dict[str, Any]]) -> list[str]:
+        # NO positional prompt: `claude -p` reads it from STDIN. As a command-
+        # line arg, a big office prompt (extracted PDFs, project knowledge)
+        # blew Windows' 32,767-char CreateProcess limit — live-hit 2026-07-20:
+        # "claude-cli: CLI exited 1: The command line is too long."
         argv = [
             exe, "-p", "--output-format", "json",
             "--no-session-persistence",
@@ -308,7 +317,6 @@ class ClaudeCliAdapter(LLMAdapter):
             argv += ["--model", marg]
         if tools:
             argv += ["--json-schema", json.dumps(_STEP_SCHEMA)]
-        argv.append(prompt)
         return argv
 
     async def complete(
@@ -328,9 +336,9 @@ class ClaudeCliAdapter(LLMAdapter):
                 "connect an Anthropic API key for vision."
             )
         prompt = _flatten_for_claude(system, messages, tools)
-        argv = self._argv(exe, prompt, tools)
+        argv = self._argv(exe, tools)
         try:
-            code, out, err = await asyncio.to_thread(self._runner, argv)
+            code, out, err = await asyncio.to_thread(self._runner, argv, prompt)
         except subprocess.TimeoutExpired as exc:
             # Transient (typed): a wedged CLI should fail over, not hard-error.
             raise ProviderError(

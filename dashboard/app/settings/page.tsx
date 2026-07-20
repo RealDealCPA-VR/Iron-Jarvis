@@ -101,6 +101,17 @@ const FIELDS: FieldDef[] = [
     hint: "Model id used by default for new sessions.",
   },
   {
+    key: "strict_model_pin",
+    label: "Strict model pin",
+    type: "boolean",
+    section: "models",
+    hint:
+      "When ON, a chat or session that explicitly picks a model must be answered by THAT model — " +
+      "never silently substituted (no failover, no capability reroute, no offline mock). If your pick " +
+      "can't take the turn you get an honest error instead of another provider's answer. Applies only " +
+      "to explicit picks; the default/auto route still fails over.",
+  },
+  {
     key: "event_retention_days",
     label: "Keep activity history",
     type: "number",

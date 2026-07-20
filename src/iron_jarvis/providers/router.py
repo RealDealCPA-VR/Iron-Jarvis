@@ -224,6 +224,7 @@ class ModelRouter:
         auto_route: AutoRoute | None = None,
         health: ProviderHealth | None = None,
         deadline_s: float = 180.0,
+        strict_pin: "Callable[[], bool] | None" = None,
     ) -> None:
         self.manager = manager
         # Auto routing (opt-in): consulted only when the resolved provider is
@@ -250,6 +251,11 @@ class ModelRouter:
         #: was chosen on ``provider.routed`` without changing _resolve's public
         #: 3-tuple return (the self-tuning tests unpack exactly three values).
         self._resolve_reason = "default"
+        #: Live flag (config.strict_model_pin): when ON, an EXPLICITLY named
+        #: provider must answer or the request fails honestly — no capability
+        #: swap, no cross-provider failover, no mock. Same-provider retries
+        #: still apply. Default-route requests are unaffected.
+        self._strict_pin: Callable[[], bool] = strict_pin or (lambda: False)
 
     @property
     def default_provider(self) -> str:
@@ -498,12 +504,28 @@ class ModelRouter:
         need_vision = _wants_images(messages)
         avail = self._snapshot()
 
+        # STRICT MODEL PIN: an EXPLICITLY named provider must answer or fail
+        # honestly. Applies only to explicit picks — the default/auto routes
+        # keep the full answer-if-anyone-can behavior.
+        pinned = bool(provider) and provider != "auto" and self._strict_pin()
+        if pinned and downgraded:
+            # _resolve would run mock for an unavailable explicit provider;
+            # under the pin that is a fabricated answer — refuse instead.
+            raise ProviderError(
+                f"{wanted} isn't available right now, and strict model pin is on "
+                "— no substitute was used. Check the endpoint/connection (or turn "
+                "the pin off in Settings) and retry."
+            )
+
         # CAPABILITY-AWARE ROUTING (the critical bug): a tool-using request must
         # never resolve to a text-only adapter (codex-cli, inherited-openai) that
         # silently returns tool_calls=[] and stalls the agent loop. Swap to the
         # first tool-capable connected provider; images prefer a vision-capable
         # one. Only re-route a REAL resolved adapter (never the mock/downgrade).
-        if not downgraded and adapter.provider != "mock":
+        # Under the pin the user's pick keeps the request — tools are offered to
+        # the chosen adapter as-is (an unverified local endpoint often CAN call
+        # tools; the verify chip in Connections is the way to prove it).
+        if not pinned and not downgraded and adapter.provider != "mock":
             repl = self._enforce_capabilities(adapter, need_tools, need_vision, avail)
             if repl is not None:
                 adapter = repl
@@ -566,6 +588,10 @@ class ModelRouter:
                 {"provider": adapter.provider, "error": f"{type(exc).__name__}: {exc}"},
                 session_id=session_id,
             )
+            # STRICT MODEL PIN: the explicit pick failed — surface ITS error
+            # verbatim rather than answering from a different provider.
+            if pinned:
+                raise
             # (A) DEFAULT-PROVIDER FALLBACK — runs even for a NON-transient primary
             # failure: a self-tuned LOCAL pick (or an explicit provider) that's
             # down must fall back to the healthy cloud default. IMPORTANT: use the

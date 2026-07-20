@@ -184,6 +184,12 @@ class Config(BaseModel):
     # work too.
     custom_base_url: str | None = None
     custom_model: str = ""  # default model id for the "custom" provider
+    # STRICT MODEL PIN — when ON, a request that EXPLICITLY names a provider
+    # (the chat/session model picker) must be answered by THAT provider or
+    # fail honestly: no capability swap, no cross-provider failover, no mock.
+    # The "my local models do the work, never a frontier substitute" guarantee.
+    # OFF by default: the router's answer-if-anyone-can behavior is unchanged.
+    strict_model_pin: bool = False
     # SPEECH-TO-TEXT (voice dictation) — an OPTIONAL dedicated transcription
     # backend, so a self-hosted whisper server (faster-whisper-server / Speaches /
     # LocalAI / a Groq endpoint) can be used INDEPENDENTLY of the chat endpoint.

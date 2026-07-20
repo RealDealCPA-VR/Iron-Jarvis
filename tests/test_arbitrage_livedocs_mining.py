@@ -15,8 +15,9 @@ from iron_jarvis.providers.adapters.subprocess_cli import (
 async def test_claude_cli_adapter_flattens_and_parses_json():
     calls = {}
 
-    def runner(argv):
+    def runner(argv, stdin=None):
         calls["argv"] = argv
+        calls["stdin"] = stdin
         return 0, '{"type":"result","result":"flat-rate answer"}', ""
 
     a = make_claude_cli(runner=runner, which=lambda b: f"/x/{b}")
@@ -24,8 +25,10 @@ async def test_claude_cli_adapter_flattens_and_parses_json():
     assert r.text == "flat-rate answer"
     assert calls["argv"][0] == "/x/claude" and "-p" in calls["argv"]
     assert "--output-format" in calls["argv"]
-    # The prompt is the last argv element; the system text is folded into it.
-    assert "be brief" in calls["argv"][-1]
+    # v1.68.0: the prompt rides STDIN, never argv — a big extracted-PDF prompt
+    # blew Windows' 32,767-char command line ("The command line is too long").
+    assert "be brief" in (calls["stdin"] or "")
+    assert all("be brief" not in a_ for a_ in calls["argv"])
     # Tool-less step disables the CLI's own tools and asks for no schema.
     assert "--tools" in calls["argv"] and "--json-schema" not in calls["argv"]
 
@@ -33,7 +36,7 @@ async def test_claude_cli_adapter_flattens_and_parses_json():
 @pytest.mark.asyncio
 async def test_codex_cli_adapter_and_errors():
     a = make_codex_cli(
-        runner=lambda argv: (0, "OpenAI Codex v9\n\nbanner\n\nthe real answer", ""),
+        runner=lambda argv, stdin=None: (0, "OpenAI Codex v9\n\nbanner\n\nthe real answer", ""),
         which=lambda b: f"/x/{b}",
     )
     r = await a.complete(system="", messages=[LLMMessage(role="user", content="q")], tools=[])
@@ -47,7 +50,9 @@ async def test_codex_cli_adapter_and_errors():
     b = make_claude_cli(which=lambda _: None)
     with pytest.raises(RuntimeError, match="not installed"):
         await b.complete(system="", messages=[], tools=[])
-    c = make_claude_cli(runner=lambda a_: (1, "", "login required"), which=lambda b_: "/x/claude")
+    c = make_claude_cli(
+        runner=lambda a_, stdin=None: (1, "", "login required"), which=lambda b_: "/x/claude"
+    )
     with pytest.raises(RuntimeError, match="login required"):
         await c.complete(system="", messages=[], tools=[])
 

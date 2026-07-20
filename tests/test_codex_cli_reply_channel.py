@@ -90,3 +90,28 @@ async def test_nonzero_exit_still_raises(tmp_path):
     adapter = make_codex_cli(runner=run, which=lambda _: "codex")
     with pytest.raises(RuntimeError, match="exited 2"):
         await adapter.complete(system="", messages=[], tools=[])
+
+
+async def test_huge_prompt_rides_stdin_never_argv(tmp_path):
+    """The Windows 32,767-char command-line regression (live-hit 2026-07-20:
+    'The command line is too long' on a session with an extracted PDF): the
+    prompt must reach the CLI via STDIN, with argv staying small."""
+    from iron_jarvis.providers.adapters.base import LLMMessage
+
+    seen: dict[str, object] = {}
+
+    def run(argv, stdin=None):
+        seen["argv_len"] = sum(len(a) for a in argv)
+        seen["stdin"] = stdin
+        out = argv[argv.index("--output-last-message") + 1]
+        Path(out).write_text("ok", encoding="utf-8")
+        return 0, "", ""
+
+    big = "x" * 200_000  # far past the 32,767-char CreateProcess ceiling
+    adapter = make_codex_cli(runner=run, which=lambda _: "codex")
+    resp = await adapter.complete(
+        system="", messages=[LLMMessage(role="user", content=big)], tools=[]
+    )
+    assert resp.text == "ok"
+    assert big in str(seen["stdin"])
+    assert int(seen["argv_len"]) < 2_000  # argv holds flags only, never the prompt
