@@ -59,6 +59,19 @@ _PING_TOOL = {
 }
 
 
+def _vision_probe_image_b64() -> str:
+    """A 96×96 solid-RED JPEG generated in-process — the vision-verify probe
+    image (no bundled asset, no network)."""
+    import base64
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (96, 96), (220, 30, 30)).save(buf, format="JPEG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
 class FleetNodeBody(BaseModel):
     """Add a node. Only ``base_url`` is required; ``id`` is slugged from the
     host when omitted, ``api_key_name`` names a VAULT entry (never a token).
@@ -555,10 +568,53 @@ def register(app: FastAPI, d) -> None:
                 "hint": "",
             }
         tool_use = bool(getattr(resp, "tool_calls", None))
-        updated = d.fleet.update(node_id, tool_use=tool_use, verified_at=time.time())
+        d.fleet.update(node_id, tool_use=tool_use, verified_at=time.time())
+        # The completion above proves the endpoint is REACHABLE right now —
+        # record it, so availability agrees with what verify just observed.
+        # (Previously a green "tools ✓" could still read unavailable until the
+        # sampler's next pass — the two signals were decoupled.)
+        try:
+            d.fleet.set_reachable(node_id, True)
+        except Exception:  # noqa: BLE001 — telemetry sync never fails verify
+            pass
+
+        # VISION probe: a generated solid-red square + "name the dominant
+        # color". Correct answer → vision True; wrong/empty → False (the model
+        # answered but didn't SEE it); an ERROR → unknown, nothing recorded —
+        # many text-only servers reject image content outright, but a
+        # transport fault must not permanently brand a multimodal node blind.
+        vision: bool | None = None
+        vision_error = ""
+        try:
+            vresp = await adapter.complete(
+                system="You are a vision connectivity check.",
+                messages=[
+                    LLMMessage(
+                        role="user",
+                        content=(
+                            "Answer with ONE word: the dominant color of this image."
+                        ),
+                        images=[
+                            {
+                                "data_b64": _vision_probe_image_b64(),
+                                "media_type": "image/jpeg",
+                            }
+                        ],
+                    )
+                ],
+                tools=[],
+            )
+            answer = (getattr(vresp, "text", "") or "").strip().lower()
+            vision = "red" in answer
+        except Exception as exc:  # noqa: BLE001 — unknown capability, not False
+            vision_error = _err(exc)
+        if vision is not None:
+            d.fleet.update(node_id, vision=vision, verified_at=time.time())
         return {
-            "node": _dump(updated or d.fleet.get(node_id)),
+            "node": _dump(d.fleet.get(node_id)),
             "tool_use": tool_use,
+            "vision": vision,
+            "vision_error": vision_error,
             "model": model or getattr(adapter, "model", ""),
             "error": "",
             "hint": "",

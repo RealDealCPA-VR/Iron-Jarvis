@@ -571,20 +571,34 @@ class OpenAIAdapter(LLMAdapter):
         }
         if tools:
             body["tools"] = self._to_openai_tools(tools)
-        async with self._client().stream(
-            "POST", self._endpoint, headers=headers, json=body
-        ) as resp:
-            status = getattr(resp, "status_code", 200)
-            if status >= 400:
-                # A streamed response body isn't auto-read: load it, then raise a
-                # typed error so the router fails over on a transient 429/5xx and
-                # raises honestly on a permanent 4xx — never a blank reply.
-                await resp.aread()
-                raise provider_error_from_response(
-                    self.provider, resp, _error_detail(resp)
-                )
-            async for frame in self._consume_chat_stream(resp):
-                yield frame
+        # Some local OpenAI-compat servers reject `stream_options` outright
+        # (older Ollama builds, some llama.cpp gateways 400 on it). Attempt
+        # WITH it first (usage accounting), and on a 400 from a NON-hosted
+        # endpoint retry once WITHOUT — real streaming beats usage numbers.
+        attempts: list[dict[str, Any]] = [body]
+        if self._endpoint != _ENDPOINT:
+            slim = dict(body)
+            slim.pop("stream_options", None)
+            attempts.append(slim)
+        for i, attempt_body in enumerate(attempts):
+            async with self._client().stream(
+                "POST", self._endpoint, headers=headers, json=attempt_body
+            ) as resp:
+                status = getattr(resp, "status_code", 200)
+                if status >= 400:
+                    # A streamed response body isn't auto-read: load it, then
+                    # raise a typed error so the router fails over on a
+                    # transient 429/5xx and raises honestly on a permanent 4xx
+                    # — never a blank reply.
+                    await resp.aread()
+                    if status == 400 and i + 1 < len(attempts):
+                        continue  # retry without stream_options
+                    raise provider_error_from_response(
+                        self.provider, resp, _error_detail(resp)
+                    )
+                async for frame in self._consume_chat_stream(resp):
+                    yield frame
+                return
 
     async def _consume_chat_stream(
         self, resp: Any
@@ -601,10 +615,17 @@ class OpenAIAdapter(LLMAdapter):
         tool_accum: dict[int, dict[str, str]] = {}
         finish_reason: str | None = None
         usage: dict[str, Any] = {}
+        saw_sse = False
+        raw_tail: list[str] = []  # non-SSE body lines (the fallback below)
         async for line in resp.aiter_lines():
             s = line.strip()
             if not s.startswith("data:"):
+                # A server that IGNORES `stream:true` returns one plain JSON
+                # body with no data: framing — keep it for the fallback parse.
+                if s and not saw_sse and len(raw_tail) < 4000:
+                    raw_tail.append(line)
                 continue
+            saw_sse = True
             payload = s[len("data:") :].strip()
             if not payload or payload == "[DONE]":
                 continue
@@ -635,6 +656,21 @@ class OpenAIAdapter(LLMAdapter):
                     slot["args"] += fn["arguments"]
             if choices[0].get("finish_reason"):
                 finish_reason = choices[0]["finish_reason"]
+        # NON-SSE FALLBACK: the server ignored `stream:true` and answered with
+        # one plain JSON body. Before this, that yielded zero text frames and
+        # an empty final — a silent degrade that read as a dead model. Parse
+        # the body and degrade to single-chunk HONESTLY.
+        if not saw_sse and raw_tail:
+            try:
+                data = json.loads("\n".join(raw_tail))
+            except json.JSONDecodeError:
+                data = None
+            if isinstance(data, dict) and data.get("choices"):
+                final = self._parse(data)
+                if final.text:
+                    yield {"type": "text", "text": final.text}
+                yield {"type": "final", "response": final}
+                return
         # Reconstruct the aggregate message and route it through _parse so text,
         # tool calls, usage, and the finish-reason mapping match complete().
         message: dict[str, Any] = {"content": "".join(text_parts)}

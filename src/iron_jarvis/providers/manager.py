@@ -323,6 +323,14 @@ class ProviderManager:
         for key in [k for k in self._cache if k[0] == name]:
             self._cache.pop(key, None)
 
+    def runtime_provider_names(self) -> list[str]:
+        """The RUNTIME-registered local endpoint providers ("fleet-<id>"),
+        sorted for stable ordering. The router folds these into its failover
+        candidate pool — without this, a healthy verified fleet endpoint was
+        invisible to every failover/replacement path unless it happened to be
+        the configured default provider."""
+        return sorted(n for n in self._factories if n.startswith("fleet-"))
+
     def configure_local(
         self,
         *,
@@ -385,6 +393,12 @@ class ProviderManager:
             if verdict is not None:
                 return bool(verdict)
         return name in self._factories
+
+    def has_available_real_endpoint(self) -> bool:
+        """True when at least one RUNTIME fleet endpoint is available — folded
+        into the mock-trap detector so a box whose ONLY real provider is a
+        local endpoint still counts as 'a real provider is connected'."""
+        return any(self.available(n) for n in self.runtime_provider_names())
 
     def has_available_api_provider(self) -> bool:
         """True if at least one REAL (non-mock) provider is connected/available.

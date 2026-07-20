@@ -269,13 +269,33 @@ class ModelRouter:
         except Exception:  # noqa: BLE001 — a probe failure just means "not available"
             return False
 
+    def _fleet_names(self) -> list[str]:
+        """Runtime-registered local endpoints ("fleet-<id>") — folded into the
+        candidate pool so the user's own hardware is a real failover target.
+        getattr-guarded: a bare test manager without the helper just yields []."""
+        fn = getattr(self.manager, "runtime_provider_names", None)
+        if fn is None:
+            return []
+        try:
+            return list(fn())
+        except Exception:  # noqa: BLE001 — candidate discovery never breaks routing
+            return []
+
+    def _candidate_order(self) -> list[str]:
+        """The failover candidate order: the static ladder, then every
+        runtime-registered fleet endpoint. Fleet nodes come AFTER the built-ins
+        (frontier/CLI quality first) but are no longer invisible — before this,
+        a healthy verified endpoint could never absorb failover unless it was
+        the configured default provider."""
+        return list(_FAILOVER_ORDER) + self._fleet_names()
+
     def _snapshot(self) -> set[str]:
         """Snapshot the AVAILABLE real-provider set ONCE per ``complete()``.
 
         ``available()`` for the CLI providers hits PATH/disk; the old failover
         loop re-probed every candidate on the event loop. Taking the set once and
         reusing it keeps the loop off synchronous I/O."""
-        provs = set(_FAILOVER_ORDER)
+        provs = set(self._candidate_order())
         provs.add(self.default_provider)
         return {p for p in provs if p != "mock" and self._safe_available(p)}
 
@@ -315,7 +335,7 @@ class ModelRouter:
         list), used as the Auto fallback so a request never drops to mock while a
         real model is connected. Skips OPEN circuits and, when the request has
         tools, providers whose adapter can't call tools."""
-        for p in _FAILOVER_ORDER:
+        for p in self._candidate_order():
             if p == "mock" or not self._safe_available(p) or not self.health.allow(p):
                 continue
             if need_tools:
@@ -340,7 +360,7 @@ class ModelRouter:
         dp = self.default_provider
         if dp and dp != "mock":
             order.append(dp)
-        order += [p for p in _FAILOVER_ORDER if p != dp]
+        order += [p for p in self._candidate_order() if p != dp]
         vision_fallback: LLMAdapter | None = None
         for p in order:
             if p == "mock" or p not in avail or not self.health.allow(p):
@@ -545,7 +565,12 @@ class ModelRouter:
         elif (
             adapter.provider == "mock"
             and provider != "mock"  # only warn about a mock DEFAULT, not an explicit ask
-            and self.manager.has_available_api_provider()
+            and (
+                self.manager.has_available_api_provider()
+                # A box whose only real provider is a local endpoint still
+                # counts as connected (getattr: bare test managers lack it).
+                or bool(getattr(self.manager, "has_available_real_endpoint", lambda: False)())
+            )
         ):
             # The mock-trap: the default provider is still "mock" while a REAL
             # provider is connected, so output would be fabricated with no signal.
@@ -645,7 +670,7 @@ class ModelRouter:
             # snapshot, the circuit breaker, capability (tools ⇒ skip text-only
             # codex-cli/grok), and resolved-adapter identity dedup.
             if transient:
-                for p in _FAILOVER_ORDER:
+                for p in self._candidate_order():
                     if p in tried_providers or p == "mock" or p not in avail:
                         continue
                     if not self.health.allow(p):
@@ -811,9 +836,23 @@ class ModelRouter:
         need_vision = _wants_images(messages)
         avail = self._snapshot()
 
+        # STRICT MODEL PIN — the STREAM path must honor the same guarantees as
+        # complete(): an explicitly named provider answers or fails honestly.
+        # Before this guard, a pinned-but-unavailable provider STREAMED the
+        # offline mock's scripted output (a fabrication hole complete() never
+        # had), and a pinned pick with tools was silently swapped away.
+        pinned = bool(provider) and provider != "auto" and self._strict_pin()
+        if pinned and downgraded:
+            raise ProviderError(
+                f"{wanted} isn't available right now, and strict model pin is on "
+                "— no substitute was used. Check the endpoint/connection (or turn "
+                "the pin off in Settings) and retry."
+            )
+
         # Capability-aware routing: never stream a tool request to a text-only
-        # adapter (it returns tool_calls=[] and stalls the agent loop).
-        if not downgraded and adapter.provider != "mock":
+        # adapter (it returns tool_calls=[] and stalls the agent loop). Under
+        # the pin the user's pick keeps the request, tools offered as-is.
+        if not pinned and not downgraded and adapter.provider != "mock":
             repl = self._enforce_capabilities(adapter, need_tools, need_vision, avail)
             if repl is not None:
                 adapter = repl
@@ -832,7 +871,12 @@ class ModelRouter:
         elif (
             adapter.provider == "mock"
             and provider != "mock"
-            and self.manager.has_available_api_provider()
+            and (
+                self.manager.has_available_api_provider()
+                # A box whose only real provider is a local endpoint still
+                # counts as connected (getattr: bare test managers lack it).
+                or bool(getattr(self.manager, "has_available_real_endpoint", lambda: False)())
+            )
         ):
             await self.event_bus.publish(
                 EventType.PROVIDER_DOWNGRADED,
@@ -881,6 +925,10 @@ class ModelRouter:
                 {"provider": adapter.provider, "error": f"{type(exc).__name__}: {exc}"},
                 session_id=session_id,
             )
+            # STRICT MODEL PIN: the explicit pick failed — surface ITS error
+            # verbatim rather than streaming from a different provider.
+            if pinned:
+                raise
 
         # (A) DEFAULT-PROVIDER FALLBACK — runs for transient AND permanent primary
         # failures (a down local/explicit pick must reach the healthy default),
@@ -934,7 +982,7 @@ class ModelRouter:
         # (B) SIDEWAYS FAILOVER — TRANSIENT only (rate-limit arbitrage across the
         # OTHER connected providers), same filters complete() applies.
         if transient:
-            for p in _FAILOVER_ORDER:
+            for p in self._candidate_order():
                 if p in tried_providers or p == "mock" or p not in avail:
                     continue
                 if not self.health.allow(p):

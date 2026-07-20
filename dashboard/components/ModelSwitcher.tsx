@@ -563,7 +563,8 @@ export function ModelSwitcher() {
                         {m.model}
                       </span>
                       <span className="text-[10px] text-zinc-500">
-                        {m.provider}
+                        {/* Friendly endpoint label over a raw "fleet-x7f2" id. */}
+                        {m.name || m.provider}
                         {!ok && " · not connected"}
                       </span>
                     </span>

@@ -40,6 +40,8 @@ interface EndpointRow {
   /** Live-verified tool support: true/false = asked the server; null = never
    *  verified (tool turns then route elsewhere — the chip says so). */
   tool_use: boolean | null;
+  /** Live-verified vision support (same probe run): null = unknown. */
+  vision: boolean | null;
 }
 
 /** The node fields we read out of GET /fleet's snapshot rows. */
@@ -52,11 +54,13 @@ interface EndpointNodeDump {
   default_model?: string;
   api_key_name?: string;
   tool_use?: boolean | null;
+  vision?: boolean | null;
 }
 
-/** POST /fleet/nodes/{id}/verify response (the tool-capability probe). */
+/** POST /fleet/nodes/{id}/verify response (tool + vision capability probes). */
 interface VerifyResult {
   tool_use: boolean | null;
+  vision?: boolean | null;
   error?: string;
 }
 import {
@@ -294,6 +298,7 @@ function ConnectionCard({
             default_model: n.default_model || "",
             api_key_name: n.api_key_name || "",
             tool_use: n.tool_use ?? null,
+            vision: n.vision ?? null,
           })),
       );
     } catch {
@@ -810,6 +815,22 @@ function ConnectionCard({
                   )}
                   {/* Tool-capability chip — decides whether tool turns can
                       stay on this endpoint or route to another provider. */}
+                  {ep.vision === true && (
+                    <span
+                      className="shrink-0 rounded-full border border-emerald-400/25 bg-emerald-400/[0.08] px-1.5 py-0.5 text-[10px] text-emerald-300/90"
+                      title="Verified: this model SAW the probe image — image turns and scanned-PDF OCR can run here"
+                    >
+                      vision ✓
+                    </span>
+                  )}
+                  {ep.vision === false && (
+                    <span
+                      className="shrink-0 rounded-full border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-500"
+                      title="Verified: this model answered but did not see the probe image — image turns route to a vision-capable provider"
+                    >
+                      no vision
+                    </span>
+                  )}
                   {ep.tool_use === true ? (
                     <span
                       className="shrink-0 rounded-full border border-emerald-400/25 bg-emerald-400/[0.08] px-1.5 py-0.5 text-[10px] text-emerald-300/90"
