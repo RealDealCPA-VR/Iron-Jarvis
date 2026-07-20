@@ -104,9 +104,16 @@ class ReadDocumentTool(Tool):
     returns_untrusted_content = True  # a read file can carry planted instructions
     description = (
         "Extract text from a document of any type — PDF, Word (.docx), Excel "
-        "(.xlsx), PowerPoint (.pptx), CSV, or plain text/code. May target ANY "
-        "local path (absolute, or relative to the workspace)."
+        "(.xlsx), PowerPoint (.pptx), CSV, or plain text/code. Scanned "
+        "(image-only) PDFs are OCR-transcribed via the vision model when one "
+        "is available. May target ANY local path (absolute, or relative to "
+        "the workspace)."
     )
+
+    def __init__(self, router_resolver: "Any | None" = None) -> None:
+        #: () -> the platform's ModelRouter — powers the scanned-PDF OCR
+        #: fallback. Optional so a bare factory (tests) still constructs.
+        self._router_resolver = router_resolver
     input_schema = {
         "type": "object",
         "properties": {
@@ -142,11 +149,31 @@ class ReadDocumentTool(Tool):
             )
         except Exception as exc:  # reading real files must never crash the runtime
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+        # SCANNED-PDF fallback: image-only pages have no text layer — recover
+        # via vision OCR (never the mock; the note names the method) instead
+        # of handing the model empty silence about a real document.
+        note = ""
+        from .ocr import looks_scanned_pdf, ocr_pdf
+
+        if self._router_resolver is not None and looks_scanned_pdf(path, text):
+            try:
+                ocr_text, note = await ocr_pdf(path, self._router_resolver())
+                if ocr_text:
+                    text = ocr_text
+            except Exception as exc:  # noqa: BLE001 — OCR failure ≠ read failure
+                note = f"scanned PDF — OCR fallback failed ({type(exc).__name__}: {exc})"
         out, truncated = _truncate(text)
+        if note:
+            out = f"[{note}]\n{out}" if out.strip() else f"[{note}]"
         return ToolResult(
             ok=True,
             output=out,
-            data={"path": str(path), "chars": len(text), "truncated": truncated},
+            data={
+                "path": str(path),
+                "chars": len(text),
+                "truncated": truncated,
+                **({"note": note} if note else {}),
+            },
         )
 
 
@@ -561,10 +588,12 @@ class RedactPiiTool(Tool):
         )
 
 
-def document_tools() -> list[Tool]:
-    """Build the document tools (no platform dependency)."""
+def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:
+    """Build the document tools. ``router_resolver`` (() -> ModelRouter) is
+    optional and powers the scanned-PDF OCR fallback in ``read_document``;
+    without it the tools behave exactly as before (no platform dependency)."""
     return [
-        ReadDocumentTool(),
+        ReadDocumentTool(router_resolver),
         WriteDocumentTool(),
         ExtractPdfTool(),
         ConvertDocumentTool(),

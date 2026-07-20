@@ -455,6 +455,9 @@ export interface Onboarding {
 export interface DocumentRead {
   path: string;
   text: string;
+  /** How the text came to be (or why it couldn't) — e.g. "scanned PDF — text
+   *  recovered via OCR (2 of 2 pages transcribed)". "" when a plain extract. */
+  note?: string;
 }
 
 export interface DocumentWriteResult {

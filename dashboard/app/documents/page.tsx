@@ -288,6 +288,8 @@ export default function DocumentsPage() {
   /* ---- Read / extract --------------------------------------------------- */
   const [readPath, setReadPath] = useState("");
   const [readText, setReadText] = useState<string | null>(null);
+  // How the text came to be (or why it couldn't) — e.g. the scanned-PDF OCR note.
+  const [readNote, setReadNote] = useState("");
   const [readDoneType, setReadDoneType] = useState<DocType | null>(null);
   const [readName, setReadName] = useState<string | null>(null);
   const [readBusy, setReadBusy] = useState(false);
@@ -357,12 +359,14 @@ export default function DocumentsPage() {
         `/documents/read?path=${encodeURIComponent(path)}`,
       );
       setReadText(data.text ?? "");
+      setReadNote(data.note ?? "");
       setReadDoneType(docTypeFor(data.path || path));
       setReadName(baseName(data.path || path));
     } catch (err) {
       if (err instanceof ApiError && err.status === 0) setReadOffline(true);
       else setReadError(err instanceof ApiError ? err.message : String(err));
       setReadText(null);
+      setReadNote("");
       setReadDoneType(null);
       setReadName(null);
     } finally {
@@ -657,15 +661,20 @@ export default function DocumentsPage() {
                         />
                       )}
                     </div>
+                    {readNote && (
+                      <div className="mb-2 rounded-xl border border-accent/20 bg-accent/[0.05] px-3 py-2 text-[12px] leading-relaxed text-accent-soft/90">
+                        {readNote}
+                      </div>
+                    )}
                     {readText.trim() ? (
                       <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded-xl border border-white/[0.06] bg-ink-900/80 px-3.5 py-3 font-mono text-xs leading-relaxed text-zinc-300">
                         {readText}
                       </pre>
-                    ) : (
+                    ) : !readNote ? (
                       <div className="rounded-xl border border-white/[0.06] bg-ink-900/80 px-3.5 py-3 text-sm text-zinc-500">
                         The file was read but contained no extractable text.
                       </div>
-                    )}
+                    ) : null}
                   </div>
                   {readText.trim() && readName && (
                     <SaveToMemoryRow

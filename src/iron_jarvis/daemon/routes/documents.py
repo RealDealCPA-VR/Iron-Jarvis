@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
 from sqlmodel import select
+from pathlib import Path
 from typing import Any
 
 from .. import app as _app
@@ -165,17 +166,33 @@ def register(app: FastAPI, d) -> None:
         }
 
     @app.get("/documents/read")
-    def documents_read(path: str) -> dict[str, Any]:
+    async def documents_read(path: str) -> dict[str, Any]:
+        import asyncio as _asyncio
+
         from ...documents import extract_text
+        from ...documents.ocr import looks_scanned_pdf, ocr_pdf
 
         ok, reason = fs_read_ok(path)
         if not ok:
             raise HTTPException(status_code=403, detail=reason)
         try:
-            text = extract_text(path)
+            text = await _asyncio.to_thread(extract_text, path)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=400, detail=f"cannot read: {exc}")
-        return {"path": path, "text": text[:20000]}
+        # SCANNED-PDF fallback: an image-only PDF (death certificate, signed
+        # form) has no text layer — recover it via vision OCR instead of
+        # returning empty silence. The note always says how the text came to
+        # be (or exactly why it couldn't).
+        note = ""
+        p = Path(path)
+        if looks_scanned_pdf(p, text):
+            try:
+                ocr_text, note = await ocr_pdf(p, d.platform.router)
+                if ocr_text:
+                    text = ocr_text
+            except Exception as exc:  # noqa: BLE001 — OCR failure ≠ read failure
+                note = f"scanned PDF — OCR fallback failed ({type(exc).__name__}: {exc})"
+        return {"path": path, "text": text[:20000], "note": note}
 
     @app.post("/documents/write")
     def documents_write(body: DocWriteBody) -> dict[str, Any]:

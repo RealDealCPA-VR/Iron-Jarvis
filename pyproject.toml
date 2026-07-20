@@ -1,6 +1,6 @@
 [project]
 name = "iron-jarvis"
-version = "1.68.0"
+version = "1.69.0"
 description = "Iron Jarvis - a local-first AI operating system: a multi-agent orchestrator with tools, memory, workflows, a sandbox, git-native review, and a Next.js control center."
 readme = "README.md"
 license = { file = "LICENSE" }

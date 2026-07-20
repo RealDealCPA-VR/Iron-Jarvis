@@ -581,7 +581,7 @@ def build_platform(
 
     # Documents: read/write PDF, Word, Excel, PowerPoint, CSV, Markdown, text
     # (+ markdown-aware RICH creation and cross-format conversion).
-    for tool in document_tools():
+    for tool in document_tools(router_resolver=lambda: router):
         registry.register(tool)
 
     # Images: view_image gives any agent EYES (vision via the router — works
