@@ -389,6 +389,178 @@ class ConvertDocumentTool(Tool):
         )
 
 
+class RedactPiiTool(Tool):
+    name = "redact_pii"
+    reversibility = Reversibility.REVERSIBLE  # only the NEW output file to undo
+    description = (
+        "Redact PII from a document and write a NEW file in the SAME format — "
+        "the original is never modified. Detects SSN/ITIN/EIN, emails, phones, "
+        "credit cards, labeled account numbers, dates of birth, street "
+        "addresses, and IPs; pass names or other exact strings you spotted "
+        "while reading via extra_terms. Styles: 'black' (same-length █ blocks), "
+        "'label' ([SSN]-style tags), 'remove' (deleted). Formats: .docx/.xlsx/"
+        ".pptx keep their styling; text formats rewrite in place; .pdf is "
+        "REBUILT from extracted text (content truly removed, layout "
+        "approximate). Never quote the detected PII values back in your reply."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Source document (absolute, or workspace-relative)",
+            },
+            "style": {
+                "type": "string",
+                "enum": ["black", "label", "remove"],
+                "description": "black = █ blocks (default), label = [SSN] tags, remove = delete",
+            },
+            "extra_terms": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Exact strings to also redact (person names, employers, "
+                    "spouse/dependent names…) — case-insensitive"
+                ),
+            },
+            "categories": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Optional subset to redact: ssn, itin, ein, email, phone, "
+                    "credit_card, bank_account, dob, address, ip, custom "
+                    "(default: all)"
+                ),
+            },
+            "output_path": {
+                "type": "string",
+                "description": (
+                    "Workspace-relative output file (default: "
+                    "<name>.redacted.<ext> beside the source when it lives in "
+                    "the workspace, else in the workspace root)"
+                ),
+            },
+        },
+        "required": ["path"],
+    }
+
+    def _output_target(self, source: Path, args: dict[str, Any], ctx: ToolContext) -> Path:
+        raw = str(args.get("output_path") or "").strip()
+        if raw:
+            return safe_path(ctx.workspace, raw)
+        redacted_name = f"{source.stem}.redacted{source.suffix}"
+        ws = Path(ctx.workspace).resolve()
+        try:
+            source.resolve().relative_to(ws)
+            return safe_path(ctx.workspace, str(source.parent / redacted_name))
+        except ValueError:
+            # Source lives outside the workspace — the redacted copy lands in
+            # the workspace root (writes are always workspace-confined).
+            return safe_path(ctx.workspace, redacted_name)
+
+    async def capture_undo(
+        self, args: dict[str, Any], ctx: ToolContext
+    ) -> "dict[str, Any] | None":
+        """The ONLY side effect is the new output file — undo deletes it (or
+        restores prior bytes if the target already existed)."""
+        try:
+            source = _resolve_read_path(str(args.get("path", "")), ctx)
+            target = self._output_target(source, args, ctx)
+            rel = str(target.relative_to(Path(ctx.workspace).resolve())).replace("\\", "/")
+        except Exception:
+            return None
+        if target.is_file():
+            try:
+                prior = target.read_bytes()
+            except OSError:
+                return None
+            return make_file_descriptor(
+                ctx.config.home,
+                kind="file_restore",
+                path=rel,
+                mode="raw",
+                prior_bytes=prior,
+                pre_sha256=sha256_bytes(prior),
+            )
+        return make_file_descriptor(ctx.config.home, kind="file_delete", path=rel, mode="raw")
+
+    async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        return await revert_workspace_file(undo, ctx)
+
+    async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        from .redact import ALL_CATEGORIES, STYLES, redact_file
+
+        source = _resolve_read_path(str(args.get("path", "")), ctx)
+        allowed, reason = fs_read_ok(str(source))
+        if not allowed:
+            return ToolResult(ok=False, error=f"read denied: {reason}")
+        if not source.is_file():
+            return ToolResult(ok=False, error=f"not a file: {args.get('path')}")
+        style = str(args.get("style") or "black").strip().lower()
+        if style not in STYLES:
+            return ToolResult(
+                ok=False, error=f"unknown style {style!r} — use black, label, or remove"
+            )
+        cats_raw = args.get("categories") or []
+        categories = None
+        if cats_raw:
+            categories = {str(c).strip().lower() for c in cats_raw if str(c).strip()}
+            unknown = categories - ALL_CATEGORIES
+            if unknown:
+                return ToolResult(
+                    ok=False,
+                    error=(
+                        f"unknown categories: {', '.join(sorted(unknown))} — "
+                        f"valid: {', '.join(sorted(ALL_CATEGORIES))}"
+                    ),
+                )
+            categories |= {"custom"}  # extra_terms always apply when provided
+        extra_terms = [
+            str(t) for t in (args.get("extra_terms") or []) if str(t).strip()
+        ]
+        try:
+            target = self._output_target(source, args, ctx)
+            if target.resolve() == source.resolve():
+                return ToolResult(
+                    ok=False,
+                    error="output_path must differ from the source — the original is never overwritten",
+                )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            counts, note = await asyncio.to_thread(  # CPU-bound rewrite off the loop
+                redact_file,
+                source,
+                target,
+                style=style,
+                extra_terms=extra_terms,
+                categories=categories,
+            )
+        except Exception as exc:
+            return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+        rel = str(target.relative_to(Path(ctx.workspace).resolve())).replace("\\", "/")
+        total = sum(counts.values())
+        summary = (
+            ", ".join(f"{cat}: {n}" for cat, n in sorted(counts.items()))
+            if counts
+            else "no PII found (output is an identical copy)"
+        )
+        return ToolResult(
+            ok=True,
+            output=(
+                f"redacted {total} PII item(s) [{summary}] -> {rel} (style: {style})"
+                + (f"\nNote: {note}" if note else "")
+                + "\nThe original file was not modified."
+            ),
+            data={
+                "path": rel,
+                "source": str(source),
+                "style": style,
+                "counts": counts,
+                "total": total,
+                "note": note,
+            },
+        )
+
+
 def document_tools() -> list[Tool]:
     """Build the document tools (no platform dependency)."""
     return [
@@ -397,4 +569,5 @@ def document_tools() -> list[Tool]:
         ExtractPdfTool(),
         ConvertDocumentTool(),
         ListFolderTool(),
+        RedactPiiTool(),
     ]

@@ -40,6 +40,8 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         "image_info",
         "image_convert",
         "image_resize",
+        # Writes only a NEW .redacted copy (never modifies the source).
+        "redact_pii",
     }
 )
 
@@ -133,6 +135,15 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             re.IGNORECASE,
         ),
         {"convert_document": 7},
+    ),
+    # --- PII redaction ----------------------------------------------------
+    (
+        re.compile(
+            r"\b(redact|pii|anonymi[sz]e|de.?identif(?:y|ied)|mask|scrub|"
+            r"saniti[sz]e)\b",
+            re.IGNORECASE,
+        ),
+        {"redact_pii": 9, "read_document": 5, "file_search": 4},
     ),
     # --- images -----------------------------------------------------------
     (
