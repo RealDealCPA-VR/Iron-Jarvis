@@ -262,6 +262,13 @@ class HttpTransport:
         self._client_factory = client_factory
         self._client: Any | None = None
         self._id = 0
+        # Streamable-HTTP session state: servers (FastMCP et al.) REQUIRE an
+        # `initialize` handshake and echo an `Mcp-Session-Id` header that every
+        # later request must carry — without it they 400 on tools/list. (The
+        # stdio path always handshook; HTTP lacked it — live-hit 2026-07-21
+        # against a real Obsidian-brain server.)
+        self._session_id: "str | None" = None
+        self._initialized = False
 
     def _ensure_client(self) -> Any:
         if self._client is None:
@@ -301,15 +308,56 @@ class HttpTransport:
             raise MCPError("no JSON-RPC payload in SSE response")
         return response.json()
 
-    def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        client = self._ensure_client()
-        self._id += 1
-        payload = _envelope(self._id, method, params)
+    def _base_headers(self) -> dict[str, str]:
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
             **self.headers,
         }
-        response = client.post(self.url, json=payload, headers=headers)
+        if self._session_id:
+            headers["Mcp-Session-Id"] = self._session_id
+        return headers
+
+    def _handshake(self, client: Any) -> None:
+        """The streamable-HTTP session dance: initialize → capture the session
+        id → notifications/initialized. Best-effort on the notification (some
+        servers 202/204/405 it); the session id is the part that matters."""
+        self._id += 1
+        payload = _envelope(
+            self._id,
+            "initialize",
+            {
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "iron-jarvis", "version": "1.0"},
+            },
+        )
+        response = client.post(self.url, json=payload, headers=self._base_headers())
+        response.raise_for_status()
+        sid = None
+        try:
+            sid = response.headers.get("mcp-session-id")
+        except Exception:  # pragma: no cover — defensive
+            sid = None
+        if sid:
+            self._session_id = sid
+        _extract_result(self._parse_body(response))  # surface protocol errors
+        try:
+            client.post(
+                self.url,
+                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                headers=self._base_headers(),
+            )
+        except Exception:  # noqa: BLE001 — notification delivery is best-effort
+            pass
+        self._initialized = True
+
+    def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        client = self._ensure_client()
+        if not self._initialized and method != "initialize":
+            self._handshake(client)
+        self._id += 1
+        payload = _envelope(self._id, method, params)
+        response = client.post(self.url, json=payload, headers=self._base_headers())
         response.raise_for_status()
         return _extract_result(self._parse_body(response))

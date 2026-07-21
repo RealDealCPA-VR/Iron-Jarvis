@@ -187,6 +187,53 @@ def register(app: FastAPI, d) -> None:
             "chars": len(markdown),
         }
 
+    @app.get("/ltm/browse")
+    def ltm_browse(source: str = "", limit: int = 30) -> dict[str, Any]:
+        """Recent/enumerable items from ONE long-term source: an MCP brain's
+        list tool, or a markdown vault's files. Search-only sources return an
+        honest note instead of pretending to be empty."""
+        ltm = d.platform.ltm
+        name = (source or "").strip() or ltm.default_source()
+        conn = ltm.get(name) if name else None
+        if conn is None:
+            raise HTTPException(status_code=404, detail=f"no such source: {name}")
+        cap = max(1, min(int(limit or 30), 100))
+        lister = getattr(conn, "list_items", None)
+        if callable(lister):
+            try:
+                return {"source": name, "items": lister(limit=cap), "note": ""}
+            except Exception as exc:  # noqa: BLE001 — honest per-source failure
+                return {"source": name, "items": [], "note": str(exc)}
+        files = getattr(conn, "_files", None)
+        read = getattr(conn, "_read", None)
+        if callable(files) and callable(read):
+            items: list[dict[str, Any]] = []
+            try:
+                for p in list(files())[:cap]:
+                    try:
+                        text = read(p) or ""
+                    except Exception:  # noqa: BLE001
+                        continue
+                    items.append(
+                        {
+                            "title": str(getattr(p, "stem", p)),
+                            "snippet": text[:300],
+                            "ref": str(p),
+                            "source": name,
+                        }
+                    )
+            except Exception as exc:  # noqa: BLE001
+                return {"source": name, "items": [], "note": str(exc)}
+            return {"source": name, "items": items, "note": ""}
+        return {
+            "source": name,
+            "items": [],
+            "note": (
+                f"{name} is search-only — it can't list its items. "
+                "Recall search still reaches it."
+            ),
+        }
+
     @app.get("/ltm/sources")
     def ltm_sources() -> dict[str, Any]:
         from ...ltm.sources import CustomSourceStore

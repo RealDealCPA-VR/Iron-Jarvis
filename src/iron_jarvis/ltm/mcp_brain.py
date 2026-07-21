@@ -20,11 +20,29 @@ connect time — never stored on the record.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any, Callable
 
 from .base import LTMConnector
+
+
+def _resolve_maybe_async(value: Any) -> Any:
+    """The LTM contract is SYNC; the real MCPClient's methods are ASYNC (test
+    fakes are sync). Run a coroutine to completion — from a worker thread
+    (FastAPI sync routes, the graph builder) a private loop is safe; if a loop
+    is already running (agent tool path) hop to a helper thread."""
+    if not asyncio.iscoroutine(value):
+        return value
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(value)
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(asyncio.run, value).result()
 
 _SEARCH_RX = re.compile(r"search|query|recall|retrieve|find|lookup", re.IGNORECASE)
 _APPEND_RX = re.compile(
@@ -32,7 +50,7 @@ _APPEND_RX = re.compile(
 )
 _LIST_RX = re.compile(r"\b(list|all|recent|browse|index|enumerate)", re.IGNORECASE)
 _QUERY_KEYS = ("query", "q", "text", "search", "keywords", "prompt", "input")
-_TITLE_KEYS = ("title", "name", "subject", "heading", "filename", "path")
+_TITLE_KEYS = ("title", "name", "subject", "summary", "heading", "filename", "path")
 _CONTENT_KEYS = ("content", "text", "body", "note", "markdown", "data")
 _LIMIT_KEYS = ("k", "limit", "top_k", "max_results", "count")
 _RESULT_LIST_KEYS = ("results", "hits", "items", "notes", "documents", "matches")
@@ -136,7 +154,7 @@ class McpBrainConnector(LTMConnector):
                 raise RuntimeError(f"{self.name}: no MCP url or command configured")
             self._client = MCPClient(transport, name=self.name)
         if self._tools is None:
-            self._tools = self._client.list_tools()
+            self._tools = _resolve_maybe_async(self._client.list_tools())
         return self._client
 
     def _pick(
@@ -183,7 +201,7 @@ class McpBrainConnector(LTMConnector):
             if lk in keys:
                 args[lk] = k
                 break
-        res = client.call_tool(str(tool.get("name")), args)
+        res = _resolve_maybe_async(client.call_tool(str(tool.get("name")), args))
         text = _content_text(res)
         if (res or {}).get("isError"):
             raise RuntimeError(f"{self.name}: {text[:300] or 'search failed'}")
@@ -208,7 +226,7 @@ class McpBrainConnector(LTMConnector):
             if lk in keys:
                 args[lk] = limit
                 break
-        res = client.call_tool(str(tool.get("name")), args)
+        res = _resolve_maybe_async(client.call_tool(str(tool.get("name")), args))
         text = _content_text(res)
         if (res or {}).get("isError"):
             raise RuntimeError(f"{self.name}: {text[:300] or 'list failed'}")
@@ -237,7 +255,7 @@ class McpBrainConnector(LTMConnector):
             # Single-argument tool: fold title + content into one payload.
             only = next(iter(args))
             args[only] = f"{title}\n\n{content}"
-        res = client.call_tool(str(tool.get("name")), args)
+        res = _resolve_maybe_async(client.call_tool(str(tool.get("name")), args))
         text = _content_text(res)
         if (res or {}).get("isError"):
             raise RuntimeError(f"{self.name}: {text[:300] or 'append failed'}")

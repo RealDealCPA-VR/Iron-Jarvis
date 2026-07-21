@@ -6,7 +6,7 @@
 // the markdown kind is presented as "Local folder / Obsidian vault", and the
 // Notion kind takes its integration token inline (stored in the vault).
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Database,
   Search,
@@ -239,6 +239,49 @@ export function LongTerm() {
   // MCP brain: the raw pasted config; parsed live for the preview + submit.
   const [mcpPaste, setMcpPaste] = useState("");
   const mcpParsed = parseMcpPaste(mcpPaste);
+
+  // Browse memories: enumerable items from ONE source (MCP list tool /
+  // markdown vault files); search-only sources return an honest note.
+  const [browseSource, setBrowseSource] = useState("");
+  const [browseItems, setBrowseItems] = useState<
+    { title: string; snippet: string; ref: string }[]
+  >([]);
+  const [browseNote, setBrowseNote] = useState("");
+  const [browseBusy, setBrowseBusy] = useState(false);
+
+  async function loadBrowse(src?: string) {
+    const name = (src ?? browseSource).trim();
+    if (!name) return;
+    setBrowseBusy(true);
+    setBrowseNote("");
+    try {
+      const d = await get<{
+        items: { title: string; snippet: string; ref: string }[];
+        note?: string;
+      }>(`/ltm/browse?source=${encodeURIComponent(name)}&limit=30`);
+      setBrowseItems(d.items ?? []);
+      setBrowseNote(d.note ?? "");
+    } catch (e) {
+      setBrowseItems([]);
+      setBrowseNote(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBrowseBusy(false);
+    }
+  }
+
+  // Seed the browse source once the active list arrives, and load it.
+  useEffect(() => {
+    const active = sourcesData?.active ?? [];
+    if (!browseSource && active.length > 0) {
+      setBrowseSource(active[0]);
+      void loadBrowse(active[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourcesData?.active]);
+  useEffect(() => {
+    if (browseSource) void loadBrowse(browseSource);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [browseSource]);
   const [ragAdvanced, setRagAdvanced] = useState(false);
   const [ragQueryField, setRagQueryField] = useState("query");
   const [ragTopKField, setRagTopKField] = useState("k");
@@ -549,6 +592,62 @@ export function LongTerm() {
             <div className="mt-3">
               <ErrorNote>{error}</ErrorNote>
             </div>
+          )}
+        </Card>
+      </Reveal>
+
+      <Reveal>
+        <Card title="Browse memories" icon={<Database size={15} />}>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              aria-label="Browse source"
+              value={browseSource}
+              onChange={(e) => setBrowseSource(e.target.value)}
+              className="field w-auto py-1.5 text-[13px]"
+            >
+              {(sourcesData?.active ?? []).map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => void loadBrowse()}
+              disabled={browseBusy || !browseSource}
+              className="btn-ghost py-1.5 text-[13px]"
+            >
+              {browseBusy ? <LoaderInline label="Loading…" /> : "Refresh"}
+            </button>
+          </div>
+          {browseNote && (
+            <p className="mt-2 text-[12px] leading-relaxed text-zinc-500">
+              {browseNote}
+            </p>
+          )}
+          {browseItems.length > 0 && (
+            <div className="mt-3 space-y-1.5">
+              {browseItems.map((it, i) => (
+                <div
+                  key={`${it.ref}-${i}`}
+                  className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2"
+                >
+                  <div className="text-[13px] font-medium text-zinc-200">
+                    {it.title}
+                  </div>
+                  {it.snippet && (
+                    <p className="mt-0.5 line-clamp-2 text-[11.5px] leading-relaxed text-zinc-500">
+                      {it.snippet}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {!browseBusy && !browseNote && browseItems.length === 0 && (
+            <p className="mt-2 text-[12px] text-zinc-600">
+              Nothing here yet — memories appear as they&apos;re appended.
+            </p>
           )}
         </Card>
       </Reveal>
