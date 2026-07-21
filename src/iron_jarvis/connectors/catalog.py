@@ -305,7 +305,9 @@ CATALOG: list[Connector] = [
         scopes=["Web search"],
         docs_url="https://brave.com/search/api/",
         command="npx",
-        args=["-y", "@modelcontextprotocol/server-brave-search"],
+        # Brave's OWN server — the upstream @modelcontextprotocol/server-brave-
+        # search was deprecated (archived; connects but advertises no tools).
+        args=["-y", "@brave/brave-search-mcp-server"],
         fields=[Field("BRAVE_API_KEY", "Brave Search API key", help="From the Brave Search API dashboard.")],
     ),
     Connector(

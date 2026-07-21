@@ -113,6 +113,13 @@ def _run_sync(coro: Any) -> Any:
         return pool.submit(asyncio.run, coro).result()
 
 
+#: npm packages superseded upstream — the old name installs but yields a
+#: server that advertises no tools. Healed transparently at transport build.
+_SUPERSEDED_PACKAGES: dict[str, str] = {
+    "@modelcontextprotocol/server-brave-search": "@brave/brave-search-mcp-server",
+}
+
+
 def _build_transport(cfg: dict[str, Any], secret_resolver: SecretResolver | None) -> Any:
     """Construct (or accept an injected) transport from a server config dict."""
     # Direct injection wins (tests / advanced use): a pre-built transport object.
@@ -162,9 +169,16 @@ def _build_transport(cfg: dict[str, Any], secret_resolver: SecretResolver | None
             if value:
                 env[str(env_key)] = value
     merged_env = {**_os.environ, **env} if env else None
+    # Heal superseded package names at LAUNCH: the upstream Brave server was
+    # deprecated/archived — it still connects but advertises no tools, which
+    # read as a broken connector. Mapping here fixes EXISTING config.toml
+    # entries without a manual disconnect/reconnect.
+    args = [
+        _SUPERSEDED_PACKAGES.get(str(a), str(a)) for a in (cfg.get("args") or [])
+    ]
     return StdioTransport(
         cfg["command"],
-        cfg.get("args"),
+        args or None,
         env=merged_env,
         cwd=cfg.get("cwd"),
     )

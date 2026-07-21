@@ -189,3 +189,18 @@ def test_graph_enumerates_listable_remote_brains():
     assert len(nodes) == 1
     assert nodes[0]["id"] == "ltm:hermes-brain:t.md"
     assert nodes[0]["meta"] == {"source": "hermes-brain", "ref": "t.md"}
+
+
+def test_superseded_brave_package_is_healed_at_launch():
+    from iron_jarvis.mcp.tools import _build_transport
+
+    t = _build_transport(
+        {
+            "name": "brave_search",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+        },
+        None,
+    )
+    assert "@brave/brave-search-mcp-server" in list(t.args)
+    assert "@modelcontextprotocol/server-brave-search" not in list(t.args)
