@@ -93,6 +93,31 @@ def _ltm_nodes(platform) -> list[dict[str, Any]]:
     the UI states that honestly rather than pretending they're all here."""
     out: list[dict[str, Any]] = []
     for conn in platform.ltm.connectors():
+        # Remote sources with a LIST capability (an MCP brain whose server
+        # exposes a list/browse tool) enumerate too — their notes join the
+        # graph like local vault files. No list tool → skipped honestly.
+        lister = getattr(conn, "list_items", None)
+        if callable(lister):
+            try:
+                items = lister(limit=MAX_NODES_PER_GROUP - len(out))
+            except Exception:  # noqa: BLE001 — a dead brain must not kill the graph
+                items = []
+            for it in items:
+                if len(out) >= MAX_NODES_PER_GROUP:
+                    return out
+                ref = str(it.get("ref") or it.get("title") or "note")
+                snippet = str(it.get("snippet") or "")
+                out.append(
+                    {
+                        "id": f"ltm:{conn.name}:{ref}",
+                        "label": str(it.get("title") or ref)[:60],
+                        "group": "note",
+                        "snippet": snippet[:_SNIPPET],
+                        "meta": {"source": conn.name, "ref": ref},
+                        "_text": snippet or str(it.get("title") or ""),
+                    }
+                )
+            continue
         files = getattr(conn, "_files", None)
         read = getattr(conn, "_read", None)
         if not callable(files) or not callable(read):

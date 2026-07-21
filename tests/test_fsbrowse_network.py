@@ -51,3 +51,18 @@ def test_drive_kind_never_raises():
             "network",
             "removable",
         )
+
+
+def test_hidden_persistent_mapping_surfaces_as_unc(monkeypatch):
+    r"""A mapped letter INVISIBLE to this session (elevation mismatch) still
+    appears — pointed straight at its UNC target from HKCU\Network."""
+    existing = {d["label"].split(":", 1)[0].upper() for d in browser.drives()}
+    letter = next(c for c in "WVUTSRQPN" if c not in existing)
+    monkeypatch.setattr(
+        browser, "_persistent_mappings", lambda: {letter: "\\\\srv\\clients"}
+    )
+    if os.name != "nt":
+        return  # the merge branch is Windows-only
+    out = browser.drives()
+    hit = next(d for d in out if d["label"] == f"{letter}: (network)")
+    assert hit["path"] == "\\\\srv\\clients" and hit["kind"] == "network"

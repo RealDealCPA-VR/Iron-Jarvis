@@ -70,6 +70,39 @@ def home() -> str:
     return str(Path.home())
 
 
+def _persistent_mappings() -> dict[str, str]:
+    """Windows PERSISTENT drive mappings from ``HKCU\\Network``: letter →
+    UNC RemotePath. This is the fix for the classic invisibility: mapped
+    letters are per-logon-session, so a drive Explorer shows can be absent
+    from this process entirely — but the registry records the mapping for the
+    USER (shared across the user's sessions, elevated or not), including the
+    UNC target we can browse directly."""
+    if os.name != "nt":
+        return {}
+    out: dict[str, str] = {}
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Network") as net:
+            i = 0
+            while True:
+                try:
+                    letter = winreg.EnumKey(net, i)
+                except OSError:
+                    break
+                i += 1
+                try:
+                    with winreg.OpenKey(net, letter) as k:
+                        remote, _ = winreg.QueryValueEx(k, "RemotePath")
+                    if isinstance(remote, str) and remote.startswith("\\\\"):
+                        out[letter.upper()] = remote
+                except OSError:
+                    continue
+    except Exception:  # noqa: BLE001 — enumeration is best-effort
+        return out
+    return out
+
+
 def _drive_kind(root: str) -> str:
     """Windows drive classification via ``GetDriveTypeW``: ``"network"`` for a
     mapped share, ``"removable"`` for USB media, else ``"local"``. Lets the
@@ -138,6 +171,24 @@ def drives() -> list[dict]:
     if os.name == "nt":
         for letter in string.ascii_uppercase[2:]:  # C .. Z
             _add(f"{letter}:\\", f"{letter}:")
+        # Persistent mappings the SESSION hides (elevation mismatch etc.):
+        # surface them anyway, pointing straight at the UNC target — browsing
+        # the share never depends on the letter being visible here.
+        listed = {d["label"].split(":", 1)[0].upper() + ":" for d in out}
+        for letter, remote in sorted(_persistent_mappings().items()):
+            if f"{letter}:" in listed:
+                continue
+            key = str(Path(remote))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(
+                {
+                    "path": remote,
+                    "label": f"{letter}: (network)",
+                    "kind": "network",
+                }
+            )
         _add(home(), "Home")
     else:
         _add("/", "/")

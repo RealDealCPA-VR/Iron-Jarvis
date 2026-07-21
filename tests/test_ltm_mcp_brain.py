@@ -132,3 +132,60 @@ def test_route_adds_mcp_source_lazily_and_vaults_token(tmp_path):
     rec = next(s for s in listed["sources"] if s["name"] == "hermes-brain")
     assert rec["kind"] == "mcp"
     assert "sk-brain-token" not in json.dumps(rec)
+
+_TOOLS_WITH_LIST = _TOOLS + [
+    {
+        "name": "list_notes",
+        "description": "All notes",
+        "inputSchema": {"type": "object", "properties": {"limit": {}}},
+    }
+]
+
+
+def test_list_items_discovers_list_tool_and_normalizes():
+    payload = json.dumps(
+        {"notes": [{"title": "A", "content": "alpha", "path": "a.md"},
+                   {"title": "B", "content": "beta", "path": "b.md"}]}
+    )
+    fake = _FakeClient(_TOOLS_WITH_LIST, results={"list_notes": payload})
+    items = McpBrainConnector("brain", client=fake).list_items(limit=10)
+    name, args = fake.calls[0]
+    assert name == "list_notes" and args == {"limit": 10}
+    assert items[0]["title"] == "A" and items[0]["ref"] == "a.md"
+    assert items[0]["source"] == "brain"
+
+
+def test_list_items_without_list_tool_is_honest():
+    fake = _FakeClient(_TOOLS)  # search + append only
+    try:
+        McpBrainConnector("b", client=fake).list_items()
+        raise AssertionError("expected no-list-tool error")
+    except RuntimeError as exc:
+        assert "list" in str(exc)
+
+
+def test_graph_enumerates_listable_remote_brains():
+    from types import SimpleNamespace
+
+    from iron_jarvis.memory.graph import _ltm_nodes
+
+    class _Brain:
+        name = "hermes-brain"
+
+        def list_items(self, limit=60):
+            return [{"title": "Trust note", "snippet": "acct details", "ref": "t.md",
+                     "source": self.name}]
+
+    class _Dead:
+        name = "dead-brain"
+
+        def list_items(self, limit=60):
+            raise RuntimeError("unreachable")
+
+    platform = SimpleNamespace(
+        ltm=SimpleNamespace(connectors=lambda: [_Brain(), _Dead()])
+    )
+    nodes = _ltm_nodes(platform)
+    assert len(nodes) == 1
+    assert nodes[0]["id"] == "ltm:hermes-brain:t.md"
+    assert nodes[0]["meta"] == {"source": "hermes-brain", "ref": "t.md"}

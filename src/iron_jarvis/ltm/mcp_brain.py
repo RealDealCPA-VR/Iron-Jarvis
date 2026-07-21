@@ -30,6 +30,7 @@ _SEARCH_RX = re.compile(r"search|query|recall|retrieve|find|lookup", re.IGNORECA
 _APPEND_RX = re.compile(
     r"append|add|create|write|save|store|note|ingest|upsert", re.IGNORECASE
 )
+_LIST_RX = re.compile(r"\b(list|all|recent|browse|index|enumerate)", re.IGNORECASE)
 _QUERY_KEYS = ("query", "q", "text", "search", "keywords", "prompt", "input")
 _TITLE_KEYS = ("title", "name", "subject", "heading", "filename", "path")
 _CONTENT_KEYS = ("content", "text", "body", "note", "markdown", "data")
@@ -187,6 +188,31 @@ class McpBrainConnector(LTMConnector):
         if (res or {}).get("isError"):
             raise RuntimeError(f"{self.name}: {text[:300] or 'search failed'}")
         return _hits_from_text(text, self.name, k)
+
+    def list_items(self, limit: int = 60) -> list[dict[str, Any]]:
+        """OPTIONAL enumeration for the Memory list/graph views: when the
+        server exposes a list-ish tool (list_notes / get_recent / browse…),
+        return up to *limit* items in the uniform hit shape. Raises when the
+        server has no such tool — the graph then honestly omits this source
+        (exactly like Notion/RAG endpoints), rather than showing a fake
+        sample. Search/append are unaffected either way."""
+        client = self._connect()
+        tool = self._pick(_LIST_RX, exclude=_SEARCH_RX)
+        if tool is None:
+            raise RuntimeError(
+                f"{self.name}: the MCP server exposes no list/browse-style tool"
+            )
+        keys = self._schema_keys(tool)
+        args: dict[str, Any] = {}
+        for lk in _LIMIT_KEYS:
+            if lk in keys:
+                args[lk] = limit
+                break
+        res = client.call_tool(str(tool.get("name")), args)
+        text = _content_text(res)
+        if (res or {}).get("isError"):
+            raise RuntimeError(f"{self.name}: {text[:300] or 'list failed'}")
+        return _hits_from_text(text, self.name, limit)
 
     def append(self, title: str, content: str) -> str:
         client = self._connect()
