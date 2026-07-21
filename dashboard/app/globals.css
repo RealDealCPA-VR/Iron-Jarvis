@@ -115,10 +115,51 @@ body {
   height: 100%;
 }
 
+/* The page ground lives on <html> so the liquid layer below can sit BETWEEN
+   the ground and the content (body::before at z -1 paints above the html
+   background but under everything in body). */
+html {
+  @apply bg-ink-950;
+}
+
 body {
-  @apply bg-ink-950 text-zinc-300 antialiased;
+  @apply text-zinc-300 antialiased;
   font-feature-settings: "cv11", "ss01";
   letter-spacing: -0.011em;
+}
+
+/* ---- Liquid layer ---------------------------------------------------------
+   Three slow-drifting accent blooms behind the whole app — the depth that the
+   glass surfaces refract. Theme-var driven, so every Mark keeps its color;
+   GPU-composited (transform-only animation) and pointer-transparent. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: -20%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(38% 30% at 18% 12%, rgb(var(--accent-rgb) / 0.11), transparent 65%),
+    radial-gradient(30% 26% at 85% 18%, rgb(var(--accent-deep-rgb) / 0.1), transparent 70%),
+    radial-gradient(44% 36% at 55% 95%, rgb(var(--accent-dim-rgb) / 0.09), transparent 70%);
+  filter: blur(48px) saturate(125%);
+  animation: liquid-drift 80s ease-in-out infinite alternate;
+}
+@keyframes liquid-drift {
+  0% {
+    transform: translate3d(-2%, -1%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(2.5%, 2%, 0) scale(1.07);
+  }
+  100% {
+    transform: translate3d(-1%, 1.5%, 0) scale(1.03);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  body::before {
+    animation: none;
+  }
 }
 
 /* App-wide arc-reactor aura: a faint cyan bloom anchored top-left/right. */
@@ -148,9 +189,26 @@ table {
 
 /* ---- Reusable component primitives --------------------------------------- */
 @layer components {
-  /* Frosted card surface used across the app. */
+  /* Liquid-glass card surface used across the app: a translucent tint over
+     backdrop blur (which refracts the liquid layer + whatever scrolls behind),
+     a literal-white specular edge along the top (invisible on the light Mark's
+     near-white cards, a glass glint on the dark ones), and a soft drop. */
   .card-surface {
-    @apply rounded-2xl border border-white/[0.06] bg-ink-850/80 shadow-card backdrop-blur-sm;
+    @apply relative rounded-2xl border border-white/[0.09];
+    background:
+      linear-gradient(
+        180deg,
+        rgb(var(--white) / 0.05) 0%,
+        rgb(var(--white) / 0.015) 55%,
+        rgb(var(--white) / 0.035) 100%
+      ),
+      rgb(var(--ink-850) / 0.52);
+    backdrop-filter: blur(18px) saturate(150%);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.09),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.025),
+      0 10px 32px rgb(0 0 0 / 0.35);
   }
 
   /* Subtle hairline used to separate card header/body. */
@@ -158,27 +216,43 @@ table {
     @apply border-white/[0.06];
   }
 
-  /* Focus ring for inputs/controls. */
+  /* Focus ring for inputs/controls — recessed glass. */
   .field {
-    @apply w-full rounded-xl border border-white/[0.08] bg-ink-900/80 px-3 py-2 text-sm
+    @apply w-full rounded-xl border border-white/[0.08] px-3 py-2 text-sm
            text-zinc-100 outline-none transition-colors
            placeholder:text-zinc-600
            focus:border-accent/60 focus:ring-2 focus:ring-accent/20;
+    background: rgb(var(--ink-900) / 0.65);
+    backdrop-filter: blur(10px) saturate(130%);
+    -webkit-backdrop-filter: blur(10px) saturate(130%);
+    box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.18);
   }
 
-  /* Primary accent button. */
+  /* Primary accent button — glass sheen over the glow. */
   .btn-accent {
     @apply inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-4 py-2
            text-sm font-semibold text-ink-950 shadow-glow-sm transition-all
            hover:bg-accent-soft hover:shadow-glow active:translate-y-px
            disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none;
+    background-image: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.22) 0%,
+      rgba(255, 255, 255, 0) 45%
+    );
   }
 
   .btn-ghost {
     @apply inline-flex items-center justify-center gap-2 rounded-xl border border-white/10
-           bg-white/[0.02] px-4 py-2 text-sm font-medium text-zinc-300 transition-colors
-           hover:border-white/20 hover:bg-white/[0.05] hover:text-zinc-100
+           px-4 py-2 text-sm font-medium text-zinc-300 transition-colors
+           hover:border-white/20 hover:text-zinc-100
            disabled:cursor-not-allowed disabled:opacity-40;
+    background: rgb(var(--white) / 0.03);
+    backdrop-filter: blur(10px) saturate(130%);
+    -webkit-backdrop-filter: blur(10px) saturate(130%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background: rgb(var(--white) / 0.06);
   }
 
   /* Skeleton shimmer block. */
