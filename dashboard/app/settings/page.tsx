@@ -10,6 +10,7 @@ import {
   RotateCcw,
   Wrench,
   DatabaseBackup,
+  Cpu,
 } from "lucide-react";
 import { get, put, post, ijToken, setIjToken, ApiError } from "@/lib/api";
 import {
@@ -397,6 +398,148 @@ function FieldRow({
   );
 }
 
+/* ---- Local model capabilities (verify-all) -------------------------------- */
+
+interface VerifyAllRow {
+  id: string;
+  label: string;
+  provider: string;
+  base_url: string;
+  routable: boolean;
+  tool_use: boolean | null;
+  vision: boolean | null;
+  error?: string;
+}
+
+/** Plain-language cost of each capability this model DOESN'T have. */
+function blockedList(r: VerifyAllRow): string[] {
+  const out: string[] = [];
+  if (r.tool_use !== true)
+    out.push(
+      "tools (web search & page fetch, file/document work, PII redaction, MCP integrations)" +
+        (r.tool_use === null ? " — unverified" : ""),
+    );
+  if (r.vision !== true)
+    out.push(
+      "vision (image analysis, scanned-PDF OCR)" +
+        (r.vision === null ? " — unverified" : ""),
+    );
+  return out;
+}
+
+function CapChip({ label, state }: { label: string; state: boolean | null }) {
+  const cls =
+    state === true
+      ? "border-emerald-400/25 bg-emerald-400/[0.08] text-emerald-300/90"
+      : state === false
+        ? "border-amber-400/25 bg-amber-400/[0.08] text-amber-200/90"
+        : "border-white/10 text-zinc-500";
+  return (
+    <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] ${cls}`}>
+      {label} {state === true ? "✓" : state === false ? "✗" : "?"}
+    </span>
+  );
+}
+
+/** One button probes EVERY local endpoint (user-added + the Ollama/custom
+ *  slots) for tool + vision capability, and lists what each model CAN'T do —
+ *  so "which of my local models covers which tools" is one click, not a
+ *  per-endpoint hunt. Results are also recorded on the endpoints, so routing
+ *  and the Connections chips pick them up immediately. */
+function LocalCapabilitiesCard() {
+  const [rows, setRows] = useState<VerifyAllRow[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function runAll() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const d = await post<{ results: VerifyAllRow[] }>("/fleet/verify-all");
+      setRows(d.results ?? []);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card title="Local model capabilities" icon={<Cpu size={15} />}>
+      <p className="text-[12px] leading-relaxed text-zinc-500">
+        Probe every local endpoint (your added endpoints plus the Ollama/custom
+        slots) with a live tool call and a vision check, and see exactly what
+        each model can — and can&apos;t — do. Results are saved, so routing and
+        the Connections page reflect them immediately.
+      </p>
+      <button
+        type="button"
+        onClick={() => void runAll()}
+        disabled={busy}
+        className="btn-accent mt-3 w-full justify-center py-1.5 text-xs"
+      >
+        {busy ? (
+          <LoaderInline label="Probing endpoints… (a sleeping box can take a minute)" />
+        ) : (
+          <>
+            <Cpu size={14} /> Verify all local models
+          </>
+        )}
+      </button>
+      {err && (
+        <div className="mt-3">
+          <ErrorNote>{err}</ErrorNote>
+        </div>
+      )}
+      {rows !== null && !busy && (
+        <div className="mt-4 space-y-2">
+          {rows.length === 0 ? (
+            <p className="text-[12px] text-zinc-500">
+              No local endpoints found — add one on the Connections page.
+            </p>
+          ) : (
+            rows.map((r) => (
+              <div
+                key={r.id}
+                className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2"
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  <span
+                    className="min-w-0 truncate text-[12px] font-medium text-zinc-200"
+                    title={r.base_url}
+                  >
+                    {r.label}
+                  </span>
+                  <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                    <CapChip label="tools" state={r.tool_use} />
+                    <CapChip label="vision" state={r.vision} />
+                  </span>
+                </div>
+                {r.error ? (
+                  <p className="mt-1 text-[11px] leading-relaxed text-amber-300/90">
+                    {r.error}
+                  </p>
+                ) : blockedList(r).length > 0 ? (
+                  <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+                    Not available on this model: {blockedList(r).join("; ")}.
+                    Turns needing these run on another provider (or fail
+                    honestly with the strict pin on).
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[11px] leading-relaxed text-emerald-300/80">
+                    Full capability — tools and vision turns can stay on this
+                    model.
+                  </p>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
   const [original, setOriginal] = useState<Record<string, Value> | null>(null);
   const [form, setForm] = useState<Record<string, Value>>({});
@@ -659,6 +802,8 @@ export default function SettingsPage() {
                 </form>
               )}
             </Card>
+
+            <LocalCapabilitiesCard />
           </div>
 
           {/* Sidebar: maintenance + access token */}

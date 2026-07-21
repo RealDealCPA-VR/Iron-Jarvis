@@ -620,6 +620,92 @@ def register(app: FastAPI, d) -> None:
             "hint": "",
         }
 
+    @app.post("/fleet/verify-all")
+    async def fleet_verify_all() -> dict[str, Any]:
+        """Probe EVERY local endpoint (user-added + the config ollama/custom
+        slots) for tool + vision capability in one sweep — the Settings
+        "verify all" button. Per-node results are honest and independent: an
+        asleep box reports its error without hiding the others. Capabilities
+        are recorded on the node records exactly as the single verify does."""
+        from ...providers.adapters.base import LLMMessage
+
+        sem = asyncio.Semaphore(4)
+
+        async def probe(node) -> dict[str, Any]:
+            provider = f"fleet-{node.id}"
+            out: dict[str, Any] = {
+                "id": node.id,
+                "label": node.label or node.id,
+                "provider": provider,
+                "base_url": node.base_url,
+                "routable": bool(node.routable),
+                "tool_use": None,
+                "vision": None,
+                "error": "",
+            }
+            if not node.routable:
+                out["error"] = "not routable — enable Routable to register it as a provider"
+                return out
+            async with sem:
+                try:
+                    adapter = d.platform.providers.get(provider, node.default_model or None)
+                    if getattr(adapter, "provider", "") == "mock":
+                        out["error"] = "resolved to the offline mock — nothing was asked of this node"
+                        return out
+                    # Tool probe (same contract as the single verify).
+                    tresp = await asyncio.wait_for(
+                        adapter.complete(
+                            system="You are a connectivity check. Call the ping tool.",
+                            messages=[LLMMessage(role="user", content="Call the ping tool.")],
+                            tools=[_PING_TOOL],
+                        ),
+                        timeout=90,
+                    )
+                    if hasattr(tresp, "tool_calls"):
+                        out["tool_use"] = bool(tresp.tool_calls)
+                        d.fleet.update(
+                            node.id, tool_use=out["tool_use"], verified_at=time.time()
+                        )
+                    d.fleet.set_reachable(node.id, True)
+                    # Vision probe — same red-square contract as the single verify.
+                    try:
+                        vresp = await asyncio.wait_for(
+                            adapter.complete(
+                                system="You are a vision connectivity check.",
+                                messages=[
+                                    LLMMessage(
+                                        role="user",
+                                        content=(
+                                            "Answer with ONE word: the dominant "
+                                            "color of this image."
+                                        ),
+                                        images=[
+                                            {
+                                                "data_b64": _vision_probe_image_b64(),
+                                                "media_type": "image/jpeg",
+                                            }
+                                        ],
+                                    )
+                                ],
+                                tools=[],
+                            ),
+                            timeout=90,
+                        )
+                        answer = (getattr(vresp, "text", "") or "").strip().lower()
+                        out["vision"] = "red" in answer
+                        d.fleet.update(
+                            node.id, vision=out["vision"], verified_at=time.time()
+                        )
+                    except Exception:  # noqa: BLE001 — vision unknown, tools stand
+                        pass
+                except Exception as exc:  # noqa: BLE001 — this node only
+                    out["error"] = _err(exc)
+            return out
+
+        nodes = d.fleet.nodes()
+        results = await asyncio.gather(*(probe(n) for n in nodes))
+        return {"results": list(results)}
+
     @app.post("/fleet/probe")
     async def fleet_probe(body: FleetProbeBody) -> dict[str, Any]:
         """Detect + probe an UNSAVED base_url for the add-node form.
