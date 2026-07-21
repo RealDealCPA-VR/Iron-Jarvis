@@ -235,7 +235,9 @@ def test_drives_nonempty_and_existing(tree: Path) -> None:
     result = drives()
     assert result, "drives() must return at least one root"
     for d in result:
-        assert set(d.keys()) == {"path", "label"}
+        # v1.73.0: drives carry a `kind` (local/network/removable) so the
+        # pickers can badge mapped file-server letters.
+        assert set(d.keys()) == {"path", "label", "kind"}
         assert Path(d["path"]).exists()
 
 

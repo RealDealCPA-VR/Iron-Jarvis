@@ -193,6 +193,14 @@ export function DirectoryTree({
   const drives = data?.drives ?? [];
   const [root, setRoot] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  // Typed root: a pasted Z:\Clients or \\server\share becomes the tree root —
+  // the network-share path works even when the mapped letter is invisible to
+  // this app's Windows session.
+  const [typedRoot, setTypedRoot] = useState("");
+  function goTypedRoot() {
+    const p = typedRoot.trim().replace(/[“”"]/g, "");
+    if (p) setRoot(p);
+  }
 
   // Default the root to the first drive once they load.
   const activeRoot = root ?? drives[0]?.path ?? null;
@@ -229,12 +237,40 @@ export function DirectoryTree({
               disabled={loading || drives.length === 0}
             >
               {drives.length === 0 && <option value="">{loading ? "loading…" : "—"}</option>}
+              {/* A typed root that isn't an enumerated drive still shows. */}
+              {activeRoot && !drives.some((d) => d.path === activeRoot) && (
+                <option value={activeRoot}>{activeRoot}</option>
+              )}
               {drives.map((d) => (
                 <option key={d.path} value={d.path}>
                   {d.label} — {d.path}
                 </option>
               ))}
             </select>
+            <div className="mt-1.5 flex items-center gap-1.5">
+              <input
+                value={typedRoot}
+                onChange={(e) => setTypedRoot(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    goTypedRoot();
+                  }
+                }}
+                placeholder={"or paste a path… \\\\server\\share\\Clients"}
+                aria-label="Go to root path"
+                spellCheck={false}
+                className="field min-w-0 flex-1 py-1 font-mono text-[11px]"
+              />
+              <button
+                type="button"
+                onClick={goTypedRoot}
+                disabled={!typedRoot.trim()}
+                className="btn-ghost shrink-0 px-2 py-1 text-[11px]"
+              >
+                Go
+              </button>
+            </div>
           </div>
 
           {/* Selected directory + open-terminal-here action */}

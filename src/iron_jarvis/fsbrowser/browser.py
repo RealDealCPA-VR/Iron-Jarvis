@@ -70,12 +70,39 @@ def home() -> str:
     return str(Path.home())
 
 
+def _drive_kind(root: str) -> str:
+    """Windows drive classification via ``GetDriveTypeW``: ``"network"`` for a
+    mapped share, ``"removable"`` for USB media, else ``"local"``. Lets the
+    pickers badge a file-server letter so client-share drives are obvious.
+    Best-effort — any ctypes fault just reads as local."""
+    if os.name != "nt":
+        return "local"
+    try:
+        import ctypes
+
+        kind = ctypes.windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(root))
+        if kind == 4:  # DRIVE_REMOTE
+            return "network"
+        if kind == 2:  # DRIVE_REMOVABLE
+            return "removable"
+    except Exception:  # noqa: BLE001 — classification is cosmetic
+        pass
+    return "local"
+
+
 def drives() -> list[dict]:
-    """Available roots to seed the tree, as ``[{"path", "label"}, ...]``.
+    """Available roots to seed the tree, as ``[{"path", "label", "kind"}, ...]``.
 
     On Windows: every existing drive letter ``C:\\`` .. ``Z:\\`` plus the user
     home. On POSIX: the filesystem root ``/`` plus the user home. Only roots
     that actually exist are included, so the current drive is always present.
+
+    Network mappings get two accommodations: ``os.stat`` is used as the
+    existence probe for letters Windows DEFINES but ``exists()`` denies —
+    touching a lazy "reconnect at sign-in" mapping triggers the OS
+    auto-reconnect, so a share Explorer shows no longer hides from the app —
+    and every root carries a ``kind`` (local/network/removable) so the UI can
+    badge file-server letters.
     """
     out: list[dict] = []
     seen: set[str] = set()
@@ -83,14 +110,30 @@ def drives() -> list[dict]:
     def _add(path: str, label: str) -> None:
         try:
             if not Path(path).exists():
-                return
+                # A DEFINED-but-disconnected network mapping often fails
+                # exists() until something touches it; os.stat forces the
+                # Windows auto-reconnect. Only worth attempting for letters
+                # the session actually defines (GetDriveTypeW != NO_ROOT_DIR).
+                if os.name != "nt" or _drive_kind(path) == "local":
+                    return
+                try:
+                    os.stat(path)
+                except OSError:
+                    return
         except OSError:
             return
         key = str(Path(path))
         if key in seen:
             return
         seen.add(key)
-        out.append({"path": path, "label": label})
+        kind = _drive_kind(path) if os.name == "nt" else "local"
+        out.append(
+            {
+                "path": path,
+                "label": f"{label} (network)" if kind == "network" else label,
+                "kind": kind,
+            }
+        )
 
     if os.name == "nt":
         for letter in string.ascii_uppercase[2:]:  # C .. Z

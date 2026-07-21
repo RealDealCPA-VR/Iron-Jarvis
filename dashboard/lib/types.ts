@@ -251,6 +251,8 @@ export interface FileSearchResult {
 export interface Drive {
   path: string;
   label: string;
+  /** "local" | "network" | "removable" — pickers badge network letters. */
+  kind?: string;
 }
 
 /* ---- Terminals (live shell sessions) ------------------------------------- */
