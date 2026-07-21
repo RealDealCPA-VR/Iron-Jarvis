@@ -48,6 +48,9 @@ if TYPE_CHECKING:  # avoid heavy imports at module load
 #:  * http_rag — any external/offsite RAG service reachable over HTTP (the
 #:    remote does its own ranking; we normalise its hits). The universal
 #:    "point Iron Jarvis at my own RAG" option.
+#:  * mcp — a memory/brain served over the Model Context Protocol (an Obsidian
+#:    brain behind mcp-remote, a notes MCP…): tools are DISCOVERED and mapped
+#:    to search/append (see ltm/mcp_brain.py). HTTP url or stdio command.
 CLOUD_DRIVE_KINDS: tuple[str, ...] = ("google_drive", "onedrive", "dropbox")
 SOURCE_KINDS: tuple[str, ...] = (
     "markdown",
@@ -55,6 +58,7 @@ SOURCE_KINDS: tuple[str, ...] = (
     "ssh",
     *CLOUD_DRIVE_KINDS,
     "http_rag",
+    "mcp",
 )
 
 
@@ -244,6 +248,27 @@ def connector_from_record(
                 (lambda: secret_resolver(token_secret)) if token_secret else None
             ),
             config=HttpRagConfig.from_dict(overrides),
+        )
+    elif rec.kind == "mcp":
+        import json
+
+        from .mcp_brain import McpBrainConnector
+
+        try:
+            cfg = json.loads(rec.config_json) if rec.config_json else {}
+        except (ValueError, TypeError):
+            cfg = {}
+        mcp_secret = rec.token_secret
+        conn = McpBrainConnector(
+            rec.name,
+            url=rec.endpoint_url or str(cfg.get("url") or ""),
+            headers=dict(cfg.get("headers") or {}),
+            token_resolver=(
+                (lambda: secret_resolver(mcp_secret)) if mcp_secret else None
+            ),
+            command=str(cfg.get("command") or ""),
+            args=list(cfg.get("args") or []),
+            env=dict(cfg.get("env") or {}),
         )
     else:  # pragma: no cover — add() validates kind, but stay defensive
         raise ValueError(f"unknown LTM source kind {rec.kind!r}")

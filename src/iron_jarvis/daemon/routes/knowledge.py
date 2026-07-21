@@ -222,6 +222,11 @@ def register(app: FastAPI, d) -> None:
             # secret on the Secrets page and referencing it by name.)
             token_secret = f"ltm_{_slug}_notion"
             d.platform.secrets.set(token_secret, body.token.strip(), kind="token")
+        elif body.kind == "mcp" and body.token.strip():
+            # An MCP brain's bearer token (pasted or parsed out of a Claude-
+            # Desktop-style config) — vaulted, never on the record/config.toml.
+            token_secret = f"ltm_{_slug}_mcp"
+            d.platform.secrets.set(token_secret, body.token.strip(), kind="token")
         try:
             rec = store.add(
                 body.name,

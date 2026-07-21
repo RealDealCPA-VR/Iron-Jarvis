@@ -58,7 +58,120 @@ type Kind =
   | "google_drive"
   | "onedrive"
   | "dropbox"
-  | "http_rag";
+  | "http_rag"
+  | "mcp";
+
+/** What a pasted MCP config resolves to. Accepts a Claude-Desktop-style
+ *  mcpServers block (or a single-server fragment), an mcp-remote command
+ *  (flattened to its direct HTTP url + Authorization token), or a bare URL. */
+interface ParsedMcp {
+  name?: string;
+  url?: string;
+  token?: string;
+  headers?: Record<string, string>;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  error?: string;
+}
+
+/** Extract the first {...} object after `"name": {` via brace matching. */
+function firstServerFragment(raw: string): { name?: string; json?: string } {
+  const m = /"([\w.-]+)"\s*:\s*\{/.exec(raw);
+  if (!m) return {};
+  const start = raw.indexOf("{", m.index + m[0].length - 1);
+  let depth = 0;
+  let inStr = false;
+  for (let i = start; i < raw.length; i++) {
+    const ch = raw[i];
+    if (inStr) {
+      if (ch === "\\") i++;
+      else if (ch === '"') inStr = false;
+    } else if (ch === '"') inStr = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return { name: m[1], json: raw.slice(start, i + 1) };
+    }
+  }
+  return {};
+}
+
+export function parseMcpPaste(raw: string): ParsedMcp {
+  const text = raw.trim();
+  if (!text) return {};
+  // Bare URL — the simplest paste.
+  if (/^https?:\/\/\S+$/i.test(text)) return { url: text };
+  let entry: Record<string, unknown> | null = null;
+  let name: string | undefined;
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    const servers =
+      (parsed.mcpServers as Record<string, unknown> | undefined) ?? parsed;
+    if (typeof servers.command === "string" || typeof servers.url === "string") {
+      entry = servers; // a single server object was pasted
+    } else {
+      const key = Object.keys(servers)[0];
+      if (key && typeof servers[key] === "object") {
+        name = key;
+        entry = servers[key] as Record<string, unknown>;
+      }
+    }
+  } catch {
+    // Tolerate a fragment like `}, "hermes-brain": { ... }` — find the first
+    // named object and brace-match it out.
+    const frag = firstServerFragment(text);
+    if (frag.json) {
+      try {
+        entry = JSON.parse(frag.json) as Record<string, unknown>;
+        name = frag.name;
+      } catch {
+        return { error: "Couldn't parse that config — paste the full { … } block for one server." };
+      }
+    }
+  }
+  if (!entry) return { error: "No MCP server found in the paste." };
+  const out: ParsedMcp = { name };
+  const args = Array.isArray(entry.args) ? entry.args.map(String) : [];
+  const headers: Record<string, string> = {
+    ...((entry.headers as Record<string, string>) ?? {}),
+  };
+  // mcp-remote is a stdio→HTTP bridge: flatten to the DIRECT HTTP connection
+  // (no npx/node needed — the daemon speaks streamable HTTP itself).
+  if (args.some((a) => a.includes("mcp-remote")) || typeof entry.url === "string") {
+    out.url =
+      (typeof entry.url === "string" && entry.url) ||
+      args.find((a) => /^https?:\/\//i.test(a));
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "--header" && args[i + 1]) {
+        const h = args[i + 1];
+        const colon = h.indexOf(":");
+        if (colon > 0) headers[h.slice(0, colon).trim()] = h.slice(colon + 1).trim();
+      }
+    }
+  } else if (typeof entry.command === "string") {
+    out.command = entry.command;
+    out.args = args;
+    if (entry.env && typeof entry.env === "object")
+      out.env = entry.env as Record<string, string>;
+    // A `cmd /c npx …` wrapper is noise the daemon doesn't need on Windows —
+    // keep as-is; StdioTransport runs it verbatim.
+  }
+  // Pull a Bearer token OUT of the headers into the vault-bound field.
+  const auth = headers["Authorization"] ?? headers["authorization"];
+  if (auth) {
+    const mtok = /^Bearer\s+(.+)$/i.exec(auth.trim());
+    if (mtok) {
+      out.token = mtok[1];
+      delete headers["Authorization"];
+      delete headers["authorization"];
+    }
+  }
+  if (Object.keys(headers).length) out.headers = headers;
+  if (!out.url && !out.command)
+    return { error: "That config has neither a URL nor a command." };
+  return out;
+}
 
 // The three OAuth-backed cloud drives resolve their token from the Connections
 // registry, so the add-source form only needs a folder scope for them.
@@ -123,6 +236,9 @@ export function LongTerm() {
   // Offsite RAG (http_rag) fields
   const [srcEndpoint, setSrcEndpoint] = useState("");
   const [srcBearer, setSrcBearer] = useState(""); // write-only bearer token
+  // MCP brain: the raw pasted config; parsed live for the preview + submit.
+  const [mcpPaste, setMcpPaste] = useState("");
+  const mcpParsed = parseMcpPaste(mcpPaste);
   const [ragAdvanced, setRagAdvanced] = useState(false);
   const [ragQueryField, setRagQueryField] = useState("query");
   const [ragTopKField, setRagTopKField] = useState("k");
@@ -218,6 +334,12 @@ export function LongTerm() {
       setSrcError("An offsite RAG source needs an endpoint URL.");
       return;
     }
+    if (srcKind === "mcp" && !mcpParsed.url && !mcpParsed.command) {
+      setSrcError(
+        mcpParsed.error ?? "Paste an MCP config (or a server URL) first.",
+      );
+      return;
+    }
     setSrcBusy(true);
     setSrcError(null);
     setSrcOk(null);
@@ -261,6 +383,21 @@ export function LongTerm() {
         if (ragRefField.trim()) cfg.ref_field = ragRefField.trim();
         if (ragAuthScheme.trim()) cfg.auth_scheme = ragAuthScheme.trim();
         if (ragAuthHeader.trim()) cfg.auth_header = ragAuthHeader.trim();
+        if (Object.keys(cfg).length) body.config = cfg;
+      }
+      if (srcKind === "mcp") {
+        // The token goes to the encrypted vault server-side; everything else
+        // (headers/command/args) rides config on the record.
+        if (mcpParsed.url) body.endpoint_url = mcpParsed.url;
+        if (mcpParsed.token) body.token = mcpParsed.token;
+        const cfg: Record<string, unknown> = {};
+        if (mcpParsed.headers && Object.keys(mcpParsed.headers).length)
+          cfg.headers = mcpParsed.headers;
+        if (mcpParsed.command) {
+          cfg.command = mcpParsed.command;
+          cfg.args = mcpParsed.args ?? [];
+          if (mcpParsed.env) cfg.env = mcpParsed.env;
+        }
         if (Object.keys(cfg).length) body.config = cfg;
       }
       await post("/ltm/sources", body);
@@ -588,6 +725,7 @@ export function LongTerm() {
                       className="field"
                     >
                       <option value="http_rag">Offsite RAG endpoint</option>
+                      <option value="mcp">MCP brain (paste config)</option>
                       <option value="markdown">Local folder / Obsidian vault</option>
                       <option value="ssh">Remote folder (SSH)</option>
                       <option value="notion">Notion database</option>
@@ -597,6 +735,48 @@ export function LongTerm() {
                     </select>
                   </div>
 
+                  {srcKind === "mcp" && (
+                    <div>
+                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        MCP config
+                      </label>
+                      <textarea
+                        value={mcpPaste}
+                        onChange={(e) => {
+                          setMcpPaste(e.target.value);
+                          const p = parseMcpPaste(e.target.value);
+                          if (p.name && !srcName.trim()) setSrcName(p.name);
+                        }}
+                        rows={6}
+                        spellCheck={false}
+                        placeholder={
+                          'Paste the server\'s config block (Claude Desktop style), e.g.\n"my-brain": {\n  "command": "npx",\n  "args": ["-y", "mcp-remote", "http://host:8098/mcp", "--header", "Authorization: Bearer …"]\n}\n— or just the server URL.'
+                        }
+                        className="field resize-y font-mono text-[11px]"
+                      />
+                      {mcpPaste.trim() &&
+                        (mcpParsed.error ? (
+                          <p className="mt-1.5 text-[11px] leading-relaxed text-amber-300/90">
+                            {mcpParsed.error}
+                          </p>
+                        ) : (
+                          <p className="mt-1.5 text-[11px] leading-relaxed text-emerald-300/80">
+                            {mcpParsed.url
+                              ? `→ direct HTTP connection to ${mcpParsed.url}`
+                              : `→ command: ${mcpParsed.command} ${(mcpParsed.args ?? []).slice(0, 3).join(" ")}…`}
+                            {mcpParsed.token &&
+                              " · Bearer token detected — it will be stored in the encrypted vault"}
+                          </p>
+                        ))}
+                      <p className="mt-1 text-[10px] leading-relaxed text-zinc-600">
+                        mcp-remote wrappers are flattened to their direct HTTP
+                        connection — no npx needed. The server&apos;s
+                        search/append tools are discovered automatically, and
+                        this brain answers memory recalls alongside your other
+                        sources.
+                      </p>
+                    </div>
+                  )}
                   {srcKind === "markdown" ? (
                     <div>
                       <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
