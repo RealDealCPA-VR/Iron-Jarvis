@@ -102,6 +102,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
+import { KnowledgePanel } from "@/components/project/KnowledgePanel";
 import { ShareChatDialog } from "@/components/chat/ShareChatDialog";
 import {
   SourcesRow,
@@ -965,6 +966,9 @@ export default function ChatPage() {
   // Composer project quick-toggle popover (the cowork switch).
   const projPopRef = useRef<HTMLDivElement>(null);
   const [projMenuOpen, setProjMenuOpen] = useState(false);
+  // The rail IS the project workspace now (Projects left the nav): Files or
+  // Knowledge inline; the wide surfaces (tasks/board/media) open from here.
+  const [railTab, setRailTab] = useState<"files" | "knowledge">("files");
   // One-shot fetch guards for the /tools and /skills catalogs (cached in state;
   // reset on failure so reopening the affordance retries).
   const toolsFetchedRef = useRef(false);
@@ -3527,11 +3531,14 @@ export default function ChatPage() {
                           <span className="min-w-0 truncate">{p.name}</span>
                         </button>
                       ))}
-                      {projects.length === 0 && (
-                        <p className="px-2.5 py-2 text-[11px] leading-relaxed text-zinc-600">
-                          No projects yet — create one on the Projects page.
-                        </p>
-                      )}
+                      <Link
+                        href="/projects"
+                        onClick={() => setProjMenuOpen(false)}
+                        className="flex w-full items-center gap-2 rounded-lg border-t hairline px-2.5 py-2 text-left text-[12px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
+                      >
+                        <Plus size={13} className="shrink-0" />
+                        New project / manage all ↗
+                      </Link>
                     </div>
                   )}
                 </div>
@@ -3854,7 +3861,42 @@ export default function ChatPage() {
                         knowledge; chats and runs stay tagged to it.
                       </p>
                     ))}
+                  {/* The workspace strip: inline tabs + the wide surfaces.
+                      Projects has no nav entry — this rail IS the module. */}
+                  {activeProject && (
+                    <div className="mt-2 flex flex-wrap items-center gap-1">
+                      {(["files", "knowledge"] as const).map((t) => (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => setRailTab(t)}
+                          className={`rounded-lg border px-2 py-1 text-[10.5px] capitalize transition-colors ${
+                            railTab === t
+                              ? "border-accent/40 bg-accent/[0.1] text-accent-soft"
+                              : "border-white/10 text-zinc-400 hover:text-zinc-200"
+                          }`}
+                        >
+                          {t}
+                        </button>
+                      ))}
+                      {(["tasks", "board", "media"] as const).map((t) => (
+                        <Link
+                          key={t}
+                          href={`/projects/${encodeURIComponent(activeProject.id)}?tab=${t}`}
+                          className="rounded-lg border border-white/10 px-2 py-1 text-[10.5px] capitalize text-zinc-400 transition-colors hover:border-accent/30 hover:text-accent-soft"
+                          title={`Open the ${t} surface (full width)`}
+                        >
+                          {t} ↗
+                        </Link>
+                      ))}
+                    </div>
+                  )}
                 </div>
+                {activeProject && railTab === "knowledge" ? (
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    <KnowledgePanel projectId={activeProject.id} />
+                  </div>
+                ) : (
                 <div className="min-h-0 flex-1">
                 {workspaceDir && !pickingFolder ? (
                   <div className="flex h-full flex-col gap-2">
@@ -3923,6 +3965,7 @@ export default function ChatPage() {
                   />
                 )}
                 </div>
+                )}
               </div>
             </aside>
           ) : (

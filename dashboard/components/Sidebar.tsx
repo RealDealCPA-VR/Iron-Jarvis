@@ -67,9 +67,11 @@ const NAV: NavSection[] = [
     label: "Work",
     items: [
       { href: "/", label: "Overview", icon: LayoutDashboard },
+      // Projects is NOT a nav destination anymore: the module lives inside
+      // Chat (composer toggle + right-rail workspace); the wide surfaces
+      // (board/media/tasks) open from there. The routes stay alive.
       { href: "/chat", label: "Chat", icon: MessageSquare },
       { href: "/terminals", label: "Build", icon: SquareTerminal },
-      { href: "/projects", label: "Projects", icon: FolderKanban },
       { href: "/sessions", label: "Sessions", icon: Boxes },
       { href: "/activity", label: "Activity", icon: History },
       { href: "/creative", label: "Creative", icon: Images },
@@ -134,9 +136,8 @@ const NAV: NavSection[] = [
  */
 const ESSENTIAL_HREFS = new Set<string>([
   "/", // Overview
-  "/chat", // Chat (hero)
+  "/chat", // Chat (hero — carries the whole Projects module)
   "/terminals", // Build (hero)
-  "/projects", // Projects (hero — the context spine)
   // Sessions + Activity are Advanced-only: Overview's "Recent sessions" /
   // "While you were away" cards cover the everyday need and deep-link into
   // session detail (which carries session-scoped time-travel + undo). The
