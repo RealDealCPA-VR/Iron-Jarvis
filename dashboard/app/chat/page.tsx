@@ -962,6 +962,9 @@ export default function ChatPage() {
   const sendingRef = useRef(false);
   // "+" popover container — outside-click detection needs the DOM node.
   const toolsPopRef = useRef<HTMLDivElement>(null);
+  // Composer project quick-toggle popover (the cowork switch).
+  const projPopRef = useRef<HTMLDivElement>(null);
+  const [projMenuOpen, setProjMenuOpen] = useState(false);
   // One-shot fetch guards for the /tools and /skills catalogs (cached in state;
   // reset on failure so reopening the affordance retries).
   const toolsFetchedRef = useRef(false);
@@ -1795,6 +1798,16 @@ export default function ChatPage() {
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [toolsOpen]);
+
+  // Close the composer project quick-toggle on any outside click.
+  useEffect(() => {
+    if (!projMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!projPopRef.current?.contains(e.target as Node)) setProjMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [projMenuOpen]);
 
   // Agent mode hides both affordances — never leave the popover floating open.
   useEffect(() => {
@@ -3456,6 +3469,72 @@ export default function ChatPage() {
                 >
                   {uploading ? <LoaderInline /> : <Paperclip size={15} />}
                 </button>
+                {/* Project quick-toggle — flip between plain chat and a
+                    project right from the composer (the cowork feel), without
+                    opening the side panel. Selection logic is the panel's own
+                    chooseProject/clearProject; this is just a nearer handle. */}
+                <div ref={projPopRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setProjMenuOpen((v) => !v)}
+                    aria-expanded={projMenuOpen}
+                    aria-haspopup="true"
+                    aria-label="Switch project"
+                    title={
+                      activeProject
+                        ? `Working in "${activeProject.name}" — click to switch projects or go plain chat`
+                        : "Work inside a project — replies ground in its files + knowledge"
+                    }
+                    className={`btn-ghost h-[2.75rem] gap-1.5 px-3 py-0 ${
+                      activeProject ? "text-accent-soft" : ""
+                    }`}
+                  >
+                    <FolderKanban size={15} />
+                    {activeProject && (
+                      <span className="max-w-[7rem] truncate text-[12px]">
+                        {activeProject.name}
+                      </span>
+                    )}
+                  </button>
+                  {projMenuOpen && (
+                    <div className="absolute bottom-full left-0 z-20 mb-2 max-h-64 w-60 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          chooseProject("");
+                          setProjMenuOpen(false);
+                        }}
+                        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] transition-colors hover:bg-white/[0.06] ${
+                          !projectId ? "text-accent-soft" : "text-zinc-300"
+                        }`}
+                      >
+                        <MessageSquare size={13} className="shrink-0" />
+                        Plain chat — no project
+                      </button>
+                      {projects.map((p) => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => {
+                            chooseProject(p.id);
+                            setProjMenuOpen(false);
+                          }}
+                          className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] transition-colors hover:bg-white/[0.06] ${
+                            projectId === p.id ? "text-accent-soft" : "text-zinc-300"
+                          }`}
+                        >
+                          <FolderKanban size={13} className="shrink-0" />
+                          <span className="min-w-0 truncate">{p.name}</span>
+                        </button>
+                      ))}
+                      {projects.length === 0 && (
+                        <p className="px-2.5 py-2 text-[11px] leading-relaxed text-zinc-600">
+                          No projects yet — create one on the Projects page.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
                 {/* "+" tools menu — arm registry tools for the /chat tool loop */}
                 {mode === "chat" && (
                   <div ref={toolsPopRef} className="relative">
