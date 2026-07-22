@@ -71,6 +71,7 @@ import {
   Paperclip,
   Pencil,
   Plus,
+  PlugZap,
   RefreshCw,
   RotateCcw,
   Save,
@@ -79,6 +80,7 @@ import {
   Share2,
   Sparkles,
   Square,
+  Store,
   Trash2,
   User,
   Volume2,
@@ -978,6 +980,8 @@ export default function ChatPage() {
   const [projectView, setProjectView] = useState<"chat" | ProjectSurfaceView>(
     "chat",
   );
+  // Which "+" submenu flyout is open (skills / connectors).
+  const [plusSub, setPlusSub] = useState<"skills" | "connectors" | null>(null);
   // One-shot fetch guards for the /tools and /skills catalogs (cached in state;
   // reset on failure so reopening the affordance retries).
   const toolsFetchedRef = useRef(false);
@@ -1772,6 +1776,24 @@ export default function ChatPage() {
       return next;
     });
   }
+
+  /** Lazily fetch the skill catalog (the "+" Skills flyout + the "/" picker). */
+  function ensureSkills() {
+    if (skillsFetchedRef.current) return;
+    skillsFetchedRef.current = true;
+    get<{ skills: SkillOption[] }>("/skills")
+      .then((d) => setSkills(d.skills ?? []))
+      .catch(() => {
+        skillsFetchedRef.current = false; // a later open retries
+        setSkills([]);
+      });
+  }
+
+  /** Connected integrations (MCP tools) for the "+" Connectors flyout. */
+  const connectorTools = useMemo(
+    () => (toolCatalog ?? []).filter((t) => categorizeTool(t) === "integrations"),
+    [toolCatalog],
+  );
 
   // Lazily fetch + cache the skill catalog the first time "/" opens the picker.
   useEffect(() => {
@@ -3501,16 +3523,244 @@ export default function ChatPage() {
                   className="hidden"
                   onChange={onPickFiles}
                 />
-                <button
-                  type="button"
-                  onClick={() => fileRef.current?.click()}
-                  disabled={uploading || attachments.length >= MAX_ATTACHMENTS}
-                  aria-label="Attach files"
-                  title={`Attach files (up to ${MAX_ATTACHMENTS}, 20 MB each) — or drop them anywhere`}
-                  className="btn-ghost h-[2.75rem] px-3 py-0"
-                >
-                  {uploading ? <LoaderInline /> : <Paperclip size={15} />}
-                </button>
+                {/* The "+" menu — the composer stays minimal (+ · project ·
+                    mic); attach, skills, connectors and the web/auto toggles
+                    all live in here. */}
+                <div ref={toolsPopRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setToolsOpen((v) => !v);
+                      setPlusSub(null);
+                    }}
+                    aria-expanded={toolsOpen}
+                    aria-haspopup="true"
+                    aria-label="Open the chat menu"
+                    title="Attach · skills · connectors · web & auto"
+                    className={`btn-ghost h-[2.75rem] px-3 py-0 ${
+                      toolsOpen || selectedTools.length > 0 || activeSkill
+                        ? "text-accent-soft"
+                        : ""
+                    }`}
+                  >
+                    {uploading ? <LoaderInline /> : <Plus size={16} />}
+                  </button>
+                  {toolsOpen && (
+                    <div className="absolute bottom-full left-0 z-20 mb-2 w-64 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setToolsOpen(false);
+                          fileRef.current?.click();
+                        }}
+                        disabled={uploading || attachments.length >= MAX_ATTACHMENTS}
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-40"
+                      >
+                        <Paperclip size={14} className="shrink-0 text-zinc-400" />
+                        Attach files or photos
+                      </button>
+                      {mode === "chat" && (
+                        <>
+                          <div className="relative">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPlusSub(plusSub === "skills" ? null : "skills");
+                                ensureSkills();
+                              }}
+                              aria-expanded={plusSub === "skills"}
+                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
+                            >
+                              <Sparkles size={14} className="shrink-0 text-zinc-400" />
+                              Skills
+                              {activeSkill && (
+                                <span className="max-w-[6rem] truncate rounded-full bg-accent/[0.12] px-1.5 text-[10px] text-accent-soft">
+                                  {activeSkill}
+                                </span>
+                              )}
+                              <ChevronRight size={13} className="ml-auto shrink-0 text-zinc-500" />
+                            </button>
+                            {plusSub === "skills" && (
+                              <div className="absolute left-full top-0 z-30 ml-1 max-h-64 w-60 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
+                                {activeSkill && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveSkill("");
+                                      markSetupChanged();
+                                    }}
+                                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-rose-300/90 transition-colors hover:bg-white/[0.06]"
+                                  >
+                                    <X size={12} /> Clear “{activeSkill}”
+                                  </button>
+                                )}
+                                {skills === null ? (
+                                  <div className="px-2.5 py-2">
+                                    <LoaderInline />
+                                  </div>
+                                ) : skills.length === 0 ? (
+                                  <p className="px-2.5 py-2 text-[11px] text-zinc-500">
+                                    No skills installed.
+                                  </p>
+                                ) : (
+                                  skills.map((s) => (
+                                    <button
+                                      key={s.name}
+                                      type="button"
+                                      onClick={() => {
+                                        pickSkill(s.name);
+                                        setToolsOpen(false);
+                                        setPlusSub(null);
+                                      }}
+                                      title={s.description}
+                                      className={`flex w-full flex-col rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-white/[0.06] ${
+                                        activeSkill === s.name ? "text-accent-soft" : "text-zinc-200"
+                                      }`}
+                                    >
+                                      <span className="truncate text-[12.5px]">{s.name}</span>
+                                      <span className="truncate text-[10.5px] text-zinc-500">
+                                        {s.description}
+                                      </span>
+                                    </button>
+                                  ))
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          <div className="relative">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPlusSub(plusSub === "connectors" ? null : "connectors")
+                              }
+                              aria-expanded={plusSub === "connectors"}
+                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
+                            >
+                              <PlugZap size={14} className="shrink-0 text-zinc-400" />
+                              Connectors
+                              <ChevronRight size={13} className="ml-auto shrink-0 text-zinc-500" />
+                            </button>
+                            {plusSub === "connectors" && (
+                              <div className="absolute left-full top-0 z-30 ml-1 max-h-64 w-64 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
+                                {toolCatalog === null ? (
+                                  <div className="px-2.5 py-2">
+                                    <LoaderInline />
+                                  </div>
+                                ) : connectorTools.length === 0 ? (
+                                  <p className="px-2.5 py-2 text-[11px] leading-relaxed text-zinc-500">
+                                    Nothing connected yet — add integrations in
+                                    the Marketplace below.
+                                  </p>
+                                ) : (
+                                  connectorTools.map((t) => {
+                                    const checked = selectedTools.includes(t.name);
+                                    const atCap =
+                                      !checked && selectedTools.length >= MAX_TOOLS;
+                                    return (
+                                      <button
+                                        key={t.name}
+                                        type="button"
+                                        role="checkbox"
+                                        aria-checked={checked}
+                                        disabled={atCap}
+                                        onClick={() => toggleTool(t.name)}
+                                        title={t.description}
+                                        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors ${
+                                          atCap ? "opacity-40" : "hover:bg-white/[0.06]"
+                                        }`}
+                                      >
+                                        <span
+                                          className={`grid h-3.5 w-3.5 shrink-0 place-items-center rounded border ${
+                                            checked
+                                              ? "border-accent/60 bg-accent/20 text-accent-soft"
+                                              : "border-white/20"
+                                          }`}
+                                        >
+                                          {checked && <Check size={10} />}
+                                        </span>
+                                        <span
+                                          className={`truncate font-mono text-[11.5px] ${
+                                            checked ? "text-accent-soft" : "text-zinc-200"
+                                          }`}
+                                        >
+                                          {t.name.replace(/^mcp__/, "")}
+                                        </span>
+                                      </button>
+                                    );
+                                  })
+                                )}
+                                <Link
+                                  href="/marketplace"
+                                  onClick={() => setToolsOpen(false)}
+                                  className="mt-0.5 flex w-full items-center gap-2 rounded-lg border-t hairline px-2.5 py-2 text-left text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
+                                >
+                                  <Store size={13} className="shrink-0" />
+                                  Marketplace ↗
+                                </Link>
+                              </div>
+                            )}
+                          </div>
+                          <div className="my-1 border-t hairline" />
+                          <button
+                            type="button"
+                            onClick={toggleWeb}
+                            disabled={!webArmed && !webRoom}
+                            role="switch"
+                            aria-checked={webArmed}
+                            title={
+                              webArmed
+                                ? "Web research armed — click to disarm"
+                                : webRoom
+                                  ? "Arm web research for this chat"
+                                  : `All ${MAX_TOOLS} tool slots armed — disarm one first`
+                            }
+                            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-40"
+                          >
+                            <Globe size={14} className="shrink-0 text-zinc-400" />
+                            Web &amp; research
+                            <span
+                              className={`ml-auto flex h-4 w-7 items-center rounded-full border px-0.5 ${
+                                webArmed
+                                  ? "justify-end border-accent/40 bg-accent/20"
+                                  : "justify-start border-white/10 bg-white/[0.03]"
+                              }`}
+                            >
+                              <span
+                                className={`h-2.5 w-2.5 rounded-full ${
+                                  webArmed ? "bg-accent" : "bg-zinc-600"
+                                }`}
+                              />
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={toggleAutoTools}
+                            role="switch"
+                            aria-checked={autoTools}
+                            title="Each request arms the safe tools it needs (files, documents, web, images)"
+                            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
+                          >
+                            <Sparkles size={14} className="shrink-0 text-zinc-400" />
+                            Auto tools
+                            <span
+                              className={`ml-auto flex h-4 w-7 items-center rounded-full border px-0.5 ${
+                                autoTools
+                                  ? "justify-end border-accent/40 bg-accent/20"
+                                  : "justify-start border-white/10 bg-white/[0.03]"
+                              }`}
+                            >
+                              <span
+                                className={`h-2.5 w-2.5 rounded-full ${
+                                  autoTools ? "bg-accent" : "bg-zinc-600"
+                                }`}
+                              />
+                            </span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
                 {/* Project quick-toggle — flip between plain chat and a
                     project right from the composer (the cowork feel), without
                     opening the side panel. Selection logic is the panel's own
@@ -3580,205 +3830,6 @@ export default function ChatPage() {
                     </div>
                   )}
                 </div>
-                {/* "+" tools menu — arm registry tools for the /chat tool loop */}
-                {mode === "chat" && (
-                  <div ref={toolsPopRef} className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setToolsOpen((v) => !v)}
-                      aria-expanded={toolsOpen}
-                      aria-haspopup="true"
-                      aria-label="Arm tools"
-                      title={`Arm tools for this chat (up to ${MAX_TOOLS})`}
-                      className={`btn-ghost h-[2.75rem] px-3 py-0 ${
-                        toolsOpen || selectedTools.length > 0
-                          ? "text-accent-soft"
-                          : ""
-                      }`}
-                    >
-                      <Plus size={16} />
-                    </button>
-                    {toolsOpen && (
-                      <div className="absolute bottom-full left-0 z-20 mb-2 flex max-h-72 w-[min(22rem,calc(100vw-6rem))] flex-col overflow-hidden rounded-xl border border-white/10 bg-zinc-900 shadow-lg shadow-black/40">
-                        <div className="shrink-0 border-b hairline p-2">
-                          <div className="relative">
-                            <Search
-                              size={12}
-                              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500"
-                            />
-                            <input
-                              autoFocus
-                              value={toolQuery}
-                              onChange={(e) => setToolQuery(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Escape") {
-                                  e.preventDefault();
-                                  setToolsOpen(false);
-                                  inputRef.current?.focus();
-                                }
-                              }}
-                              placeholder="Search tools…"
-                              aria-label="Search tools"
-                              className="field w-full py-1.5 pl-8 text-[12px]"
-                            />
-                          </div>
-                          <p
-                            className={`mt-1.5 px-0.5 text-[10px] ${
-                              selectedTools.length >= MAX_TOOLS
-                                ? "text-accent-soft"
-                                : "text-zinc-500"
-                            }`}
-                          >
-                            {selectedTools.length >= MAX_TOOLS
-                              ? `Maximum ${MAX_TOOLS} tools armed — disarm one to add another`
-                              : `Arm up to ${MAX_TOOLS} tools · ${selectedTools.length} armed`}
-                          </p>
-                        </div>
-                        <div className="min-h-0 flex-1 overflow-y-auto p-1">
-                          {toolsError ? (
-                            <p className="px-2.5 py-2 text-[11px] text-rose-300">
-                              {toolsError}
-                            </p>
-                          ) : toolCatalog === null ? (
-                            <div className="px-2.5 py-2">
-                              <LoaderInline />
-                            </div>
-                          ) : toolMatches.length === 0 ? (
-                            <p className="px-2.5 py-2 text-[11px] text-zinc-500">
-                              No tools match.
-                            </p>
-                          ) : (
-                            <>
-                              {toolGroups.map(({ cat, tools }) => {
-                                const collapsed = collapsedCats.has(cat);
-                                const armedInCat = tools.filter((t) =>
-                                  selectedTools.includes(t.name),
-                                ).length;
-                                return (
-                                  <div key={cat} className="mb-0.5">
-                                    <button
-                                      type="button"
-                                      onClick={() => toggleCat(cat)}
-                                      aria-expanded={!collapsed}
-                                      className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500 transition-colors hover:text-zinc-300"
-                                    >
-                                      <ChevronRight
-                                        size={11}
-                                        className={`shrink-0 transition-transform ${
-                                          collapsed ? "" : "rotate-90"
-                                        }`}
-                                      />
-                                      {TOOL_CATEGORY_LABEL[cat]}
-                                      <span className="font-normal normal-case tracking-normal text-zinc-600">
-                                        {tools.length}
-                                        {armedInCat ? ` · ${armedInCat} armed` : ""}
-                                      </span>
-                                    </button>
-                                    {!collapsed &&
-                                      tools.map((t) => {
-                                        const checked = selectedTools.includes(
-                                          t.name,
-                                        );
-                                        const atCap =
-                                          !checked &&
-                                          selectedTools.length >= MAX_TOOLS;
-                                        return (
-                                          <button
-                                            key={t.name}
-                                            type="button"
-                                            role="checkbox"
-                                            aria-checked={checked}
-                                            disabled={atCap}
-                                            onClick={() => toggleTool(t.name)}
-                                            title={t.description}
-                                            className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
-                                              atCap
-                                                ? "opacity-40"
-                                                : "hover:bg-white/[0.05]"
-                                            }`}
-                                          >
-                                            <span
-                                              className={`grid h-3.5 w-3.5 shrink-0 place-items-center rounded border ${
-                                                checked
-                                                  ? "border-accent/60 bg-accent/20 text-accent-soft"
-                                                  : "border-white/20"
-                                              }`}
-                                            >
-                                              {checked && <Check size={10} />}
-                                            </span>
-                                            <span
-                                              className={`max-w-[45%] shrink-0 truncate font-mono text-[12px] ${
-                                                checked
-                                                  ? "text-accent-soft"
-                                                  : "text-zinc-200"
-                                              }`}
-                                            >
-                                              {t.name}
-                                            </span>
-                                            <span className="truncate text-[11px] text-zinc-500">
-                                              {t.description}
-                                            </span>
-                                          </button>
-                                        );
-                                      })}
-                                  </div>
-                                );
-                              })}
-                              {toolMatches.length > TOOL_LIST_CAP && (
-                                <p className="px-2.5 py-1.5 text-[10px] text-zinc-600">
-                                  {toolMatches.length - TOOL_LIST_CAP} more —
-                                  refine your search
-                                </p>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {/* Web quick-toggle — one click arms web_search + web_fetch
-                    (the same registry-tools mechanism as the "+" menu). */}
-                {mode === "chat" && (
-                  <button
-                    type="button"
-                    onClick={toggleWeb}
-                    disabled={!webArmed && !webRoom}
-                    aria-pressed={webArmed}
-                    title={
-                      webArmed
-                        ? "Web research armed (web_search + web_fetch) — click to disarm"
-                        : webRoom
-                          ? "Arm web research — search the web and read pages in this chat"
-                          : `All ${MAX_TOOLS} tool slots are armed — disarm one to add Web`
-                    }
-                    className={`btn-ghost h-[2.75rem] px-3 py-0 text-[13px] ${
-                      webArmed ? "text-accent-soft" : ""
-                    } disabled:cursor-not-allowed disabled:opacity-50`}
-                  >
-                    <Globe size={15} /> Web
-                  </button>
-                )}
-                {/* Auto tools — each request arms what it needs (files,
-                    documents, web, images) in the free slots; explicit "+"
-                    picks always ride first, and replies list what RAN. */}
-                {mode === "chat" && (
-                  <button
-                    type="button"
-                    onClick={toggleAutoTools}
-                    aria-pressed={autoTools}
-                    title={
-                      autoTools
-                        ? "Auto tools ON — each request arms the safe tools it needs (files, documents, web, images). Click to arm only what you pick."
-                        : "Auto tools OFF — only tools you arm yourself run. Click to let each request arm what it needs."
-                    }
-                    className={`btn-ghost h-[2.75rem] px-3 py-0 text-[13px] ${
-                      autoTools ? "text-accent-soft" : ""
-                    }`}
-                  >
-                    <Sparkles size={15} /> Auto
-                  </button>
-                )}
                 {/* Mic — dictate into the composer (daemon-transcribed in the
                     desktop app, Web Speech in a browser). */}
                 <button

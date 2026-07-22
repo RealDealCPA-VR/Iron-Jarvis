@@ -108,7 +108,8 @@ const NAV: NavSection[] = [
   {
     label: "Connections",
     items: [
-      { href: "/marketplace", label: "Marketplace", icon: Store },
+      // Marketplace left the nav: it's reached from the chat "+" menu's
+      // Connectors flyout (the route stays alive).
       { href: "/connections", label: "Connections", icon: PlugZap },
       // Advanced-only by construction: NOT in ESSENTIAL_HREFS below.
       { href: "/fleet", label: "Local fleet", icon: Server },
