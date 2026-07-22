@@ -38,7 +38,10 @@ jobs:
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             echo "publish=true" >> "$GITHUB_OUTPUT"   # explicit tag always builds
-          elif gh release view "v$ver" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+          elif [[ "$(gh release view "v$ver" --repo "$GITHUB_REPOSITORY" \
+                    --json isDraft -q .isDraft 2>/dev/null)" == "false" ]]; then
+            # Skip only for a PUBLISHED release. A leftover DRAFT (a prior run
+            # that died mid-upload) must not block the retry.
             echo "Release v$ver already exists — bump pyproject.toml to ship an update."
             echo "publish=false" >> "$GITHUB_OUTPUT"
           else
@@ -65,8 +68,12 @@ jobs:
             git tag -f "v$ver"
             git push -f origin "v$ver"
           fi
+          # DRAFT until the installer is fully uploaded: releases/latest ignores
+          # drafts, so the app's updater never sees an assetless "newest"
+          # release (live-hit: rapid releases kept update checks landing inside
+          # the upload window — "files are still uploading" for hours).
           gh release view "v$ver" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || \
-            gh release create "v$ver" --repo "$GITHUB_REPOSITORY" --title "$ver" \
+            gh release create "v$ver" --repo "$GITHUB_REPOSITORY" --draft --title "$ver" \
               --notes "Iron Jarvis $ver — installer built and uploaded by CI."
 
       - name: Set up Python 3.12
@@ -132,3 +139,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # -SkipDaemon: reuse the frozen daemon that the smoke step just built + verified.
         run: powershell -ExecutionPolicy Bypass -File desktop/build-installer.ps1 -Publish -SkipDaemon
+
+      # Only NOW does the release go public — with every asset attached. The
+      # updater's `latest` therefore always resolves to a COMPLETE release.
+      - name: Publish the release (assets are fully uploaded)
+        if: steps.gate.outputs.publish == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ver="${{ steps.gate.outputs.version }}"
+          gh release edit "v$ver" --repo "$GITHUB_REPOSITORY" --draft=false --latest
