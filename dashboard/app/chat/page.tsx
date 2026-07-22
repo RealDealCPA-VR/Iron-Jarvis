@@ -103,6 +103,10 @@ import { PageShell, Reveal } from "@/components/motion";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
 import { KnowledgePanel } from "@/components/project/KnowledgePanel";
+import {
+  ProjectSurface,
+  type ProjectSurfaceView,
+} from "@/components/project/ProjectSurfaces";
 import { ShareChatDialog } from "@/components/chat/ShareChatDialog";
 import {
   SourcesRow,
@@ -969,6 +973,11 @@ export default function ChatPage() {
   // The rail IS the project workspace now (Projects left the nav): Files or
   // Knowledge inline; the wide surfaces (tasks/board/media) open from here.
   const [railTab, setRailTab] = useState<"files" | "knowledge">("files");
+  // The conversation column can flip to a full project surface (tasks/board/
+  // media) IN PLACE — the old project screen, inside the chat module.
+  const [projectView, setProjectView] = useState<"chat" | ProjectSurfaceView>(
+    "chat",
+  );
   // One-shot fetch guards for the /tools and /skills catalogs (cached in state;
   // reset on failure so reopening the affordance retries).
   const toolsFetchedRef = useRef(false);
@@ -1365,6 +1374,7 @@ export default function ChatPage() {
   /** Back to plain chat: unscope the list, stop tagging, release anything the
    *  panel auto-armed, and return the workspace to the user's own default. */
   function clearProject() {
+    setProjectView("chat"); // a plain chat has no project surfaces
     setProjectId(null);
     projectIdRef.current = null;
     try {
@@ -3096,11 +3106,39 @@ export default function ChatPage() {
 
           {/* Conversation pane */}
           <div className="min-w-0 flex-1">
+            {/* Project surface strip — the old project screen's tabs, inside
+                the chat module. Chat stays mounted (hidden) so the thread and
+                composer state survive a Tasks/Board detour untouched. */}
+            {activeProject && (
+              <div className="mb-3 flex flex-wrap items-center gap-1">
+                {(["chat", "tasks", "board", "media"] as const).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setProjectView(v)}
+                    className={`rounded-lg border px-2.5 py-1 text-[12px] capitalize transition-colors ${
+                      projectView === v
+                        ? "border-accent/40 bg-accent/[0.1] text-accent-soft"
+                        : "border-white/10 text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+            )}
+            {activeProject && projectView !== "chat" && (
+              <ProjectSurface
+                projectId={activeProject.id}
+                hasRoot={Boolean(activeProject.root) && activeProject.root_exists !== false}
+                view={projectView}
+              />
+            )}
             <Card
               pad={false}
               className={`overflow-hidden transition-shadow ${
                 dragging ? "ring-2 ring-accent/60" : ""
-              }`}
+              } ${activeProject && projectView !== "chat" ? "hidden" : ""}`}
             >
               {/* Message thread */}
               <div
@@ -3880,14 +3918,15 @@ export default function ChatPage() {
                         </button>
                       ))}
                       {(["tasks", "board", "media"] as const).map((t) => (
-                        <Link
+                        <button
                           key={t}
-                          href={`/projects/${encodeURIComponent(activeProject.id)}?tab=${t}`}
+                          type="button"
+                          onClick={() => setProjectView(t)}
                           className="rounded-lg border border-white/10 px-2 py-1 text-[10.5px] capitalize text-zinc-400 transition-colors hover:border-accent/30 hover:text-accent-soft"
-                          title={`Open the ${t} surface (full width)`}
+                          title={`Open ${t} in the chat column`}
                         >
-                          {t} ↗
-                        </Link>
+                          {t}
+                        </button>
                       ))}
                     </div>
                   )}
