@@ -592,6 +592,8 @@ def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:
     """Build the document tools. ``router_resolver`` (() -> ModelRouter) is
     optional and powers the scanned-PDF OCR fallback in ``read_document``;
     without it the tools behave exactly as before (no platform dependency)."""
+    from .excel_tools import excel_tools
+
     return [
         ReadDocumentTool(router_resolver),
         WriteDocumentTool(),
@@ -599,4 +601,5 @@ def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:
         ConvertDocumentTool(),
         ListFolderTool(),
         RedactPiiTool(),
+        *excel_tools(),
     ]

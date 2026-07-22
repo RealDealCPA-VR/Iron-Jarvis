@@ -42,6 +42,10 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         "image_resize",
         # Writes only a NEW .redacted copy (never modifies the source).
         "redact_pii",
+        # Structured spreadsheet work (read anywhere; edits workspace-confined
+        # + undoable).
+        "excel_read",
+        "excel_edit",
     }
 )
 
@@ -135,6 +139,15 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             re.IGNORECASE,
         ),
         {"convert_document": 7},
+    ),
+    # --- spreadsheets -----------------------------------------------------
+    (
+        re.compile(
+            r"\b(excel|xlsx|spreadsheet|workbook|worksheet|\bsheet\b|"
+            r"\bcells?\b|formulas?|pivot)\b",
+            re.IGNORECASE,
+        ),
+        {"excel_read": 8, "excel_edit": 6, "file_search": 3},
     ),
     # --- PII redaction ----------------------------------------------------
     (
