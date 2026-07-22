@@ -41,6 +41,8 @@ import {
   LayoutTemplate,
   SlidersHorizontal,
   Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -181,14 +183,38 @@ function useNavMode(): [boolean, () => void] {
   return [advanced, toggle];
 }
 
-/** The arc-reactor brand mark. */
-function ArcMark() {
+/** Persisted rail collapse (icons-only). Same SSR-safe pattern as useNavMode. */
+function useCollapsed(): [boolean, () => void] {
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    try {
+      setCollapsed(localStorage.getItem("ij_nav_collapsed") === "1");
+    } catch {
+      /* stay expanded */
+    }
+  }, []);
+  const toggle = () =>
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("ij_nav_collapsed", next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  return [collapsed, toggle];
+}
+
+/** The arc-reactor brand mark. `big` = the dominant collapsed-rail reactor. */
+function ArcMark({ big = false }: { big?: boolean }) {
+  const size = big ? "h-12 w-12" : "h-9 w-9";
   return (
-    <span className="relative grid h-9 w-9 place-items-center">
+    <span className={`relative grid ${size} place-items-center`}>
       <span className="absolute inset-0 rounded-xl bg-accent/15 blur-[6px]" />
       <svg
         viewBox="0 0 24 24"
-        className="relative h-9 w-9 drop-shadow-[0_0_6px_rgb(var(--accent-rgb)/0.55)]"
+        className={`relative ${size} drop-shadow-[0_0_6px_rgb(var(--accent-rgb)/0.55)]`}
         fill="none"
         stroke="currentColor"
       >
@@ -241,10 +267,13 @@ function Brand() {
 function NavLinks({
   layoutId,
   advanced,
+  collapsed = false,
   onNavigate,
 }: {
   layoutId: string;
   advanced: boolean;
+  /** Icons-only rail: labels + section headers hidden, tooltips carry names. */
+  collapsed?: boolean;
   onNavigate?: () => void;
 }) {
   const pathname = usePathname();
@@ -259,9 +288,11 @@ function NavLinks({
         if (items.length === 0) return null;
         return (
         <div key={section.label} className="space-y-1 pb-2">
-          <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600">
-            {section.label}
-          </div>
+          {!collapsed && (
+            <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600">
+              {section.label}
+            </div>
+          )}
           {items.map((item) => {
             const active = isActive(item.href);
             const Icon = item.icon;
@@ -270,7 +301,10 @@ function NavLinks({
                 key={item.href}
                 href={item.href}
                 onClick={onNavigate}
-                className={`group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors ${
+                title={collapsed ? item.label : undefined}
+                className={`group relative flex items-center rounded-xl py-2.5 text-sm transition-colors ${
+                  collapsed ? "justify-center px-0" : "gap-3 px-3"
+                } ${
                   active
                     ? "text-accent-soft"
                     : "text-zinc-400 hover:bg-white/[0.04] hover:text-zinc-100"
@@ -290,7 +324,9 @@ function NavLinks({
                 >
                   <Icon size={17} strokeWidth={2} />
                 </span>
-                <span className="relative z-10 font-medium">{item.label}</span>
+                {!collapsed && (
+                  <span className="relative z-10 font-medium">{item.label}</span>
+                )}
               </Link>
             );
           })}
@@ -413,21 +449,94 @@ function SidebarFooter() {
   );
 }
 
-/** The desktop sidebar rail. Hidden below the `md` breakpoint (see MobileNav). */
+/** The desktop sidebar rail. Hidden below the `md` breakpoint (see MobileNav).
+ *  Collapsible: the collapsed rail is a DOMINANT arc reactor over icons-only
+ *  nav — no words, tooltips carry the names. */
 export function Sidebar() {
   const [advanced, toggleAdvanced] = useNavMode();
+  const [collapsed, toggleCollapsed] = useCollapsed();
   return (
-    <aside className="hidden w-64 shrink-0 flex-col border-r border-white/[0.06] bg-ink-900/70 backdrop-blur-xl md:flex">
-      <div className="px-5 py-5">
-        <Brand />
-      </div>
-      <div className="mx-5 h-px bg-accent-line opacity-60" />
-      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
-        <NavLinks layoutId="nav-active" advanced={advanced} />
+    <aside
+      className={`hidden shrink-0 flex-col border-r border-white/[0.06] bg-ink-900/70 backdrop-blur-xl transition-[width] duration-300 md:flex ${
+        collapsed ? "w-[4.5rem]" : "w-64"
+      }`}
+    >
+      {collapsed ? (
+        <div className="flex flex-col items-center gap-2 px-2 py-5">
+          <Link href="/" title="Iron Jarvis — Overview" className="text-accent">
+            <ArcMark big />
+          </Link>
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            title="Expand the sidebar"
+            aria-label="Expand the sidebar"
+            className="grid h-7 w-7 place-items-center rounded-lg text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+          >
+            <PanelLeftOpen size={15} />
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center px-5 py-5">
+          <Brand />
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            title="Collapse the sidebar"
+            aria-label="Collapse the sidebar"
+            className="ml-auto grid h-7 w-7 place-items-center rounded-lg text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+          >
+            <PanelLeftClose size={15} />
+          </button>
+        </div>
+      )}
+      <div className={`h-px bg-accent-line opacity-60 ${collapsed ? "mx-2" : "mx-5"}`} />
+      <nav
+        className={`flex-1 space-y-1 overflow-y-auto py-4 ${
+          collapsed ? "px-2" : "px-3"
+        }`}
+      >
+        <NavLinks layoutId="nav-active" advanced={advanced} collapsed={collapsed} />
       </nav>
-      <NavModeToggle advanced={advanced} onToggle={toggleAdvanced} />
-      <SidebarFooter />
+      {collapsed ? (
+        <div className="flex flex-col items-center gap-2 border-t border-white/[0.06] px-2 py-3">
+          <button
+            type="button"
+            onClick={toggleAdvanced}
+            aria-pressed={advanced}
+            title={advanced ? "Advanced ON — click for essentials" : "Show every tool"}
+            className={`grid h-8 w-8 place-items-center rounded-lg transition-colors ${
+              advanced ? "text-accent" : "text-zinc-500 hover:text-zinc-200"
+            }`}
+          >
+            <SlidersHorizontal size={16} />
+          </button>
+          <CollapsedStatusDot />
+        </div>
+      ) : (
+        <>
+          <NavModeToggle advanced={advanced} onToggle={toggleAdvanced} />
+          <SidebarFooter />
+        </>
+      )}
     </aside>
+  );
+}
+
+/** The collapsed rail's footer: one dot carrying version + connection state. */
+function CollapsedStatusDot() {
+  const { online: connected, health } = useDaemon();
+  return (
+    <span
+      title={`${connected ? "daemon connected" : "daemon offline"}${
+        health?.version ? ` · v${health.version}` : ""
+      }`}
+      className={`h-2.5 w-2.5 rounded-full ${
+        connected
+          ? "bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.5)] animate-pulse-glow"
+          : "bg-zinc-600"
+      }`}
+    />
   );
 }
 
