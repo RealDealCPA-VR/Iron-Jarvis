@@ -980,8 +980,10 @@ export default function ChatPage() {
   const [projectView, setProjectView] = useState<"chat" | ProjectSurfaceView>(
     "chat",
   );
-  // Which "+" submenu flyout is open (skills / connectors).
-  const [plusSub, setPlusSub] = useState<"skills" | "connectors" | null>(null);
+  // Which "+" submenu flyout is open (skills / connectors / project).
+  const [plusSub, setPlusSub] = useState<
+    "skills" | "connectors" | "project" | null
+  >(null);
   // One-shot fetch guards for the /tools and /skills catalogs (cached in state;
   // reset on failure so reopening the affordance retries).
   const toolsFetchedRef = useRef(false);
@@ -1793,6 +1795,39 @@ export default function ChatPage() {
   const connectorTools = useMemo(
     () => (toolCatalog ?? []).filter((t) => categorizeTool(t) === "integrations"),
     [toolCatalog],
+  );
+
+  // Marketplace teasers for the Connectors flyout: a few NOT-yet-connected
+  // catalog entries (glyph + name) that link to the Marketplace — the flyout
+  // always shows something connectable, never a dead end.
+  const [connCatalog, setConnCatalog] = useState<
+    { id: string; name: string; glyph?: string; connected?: boolean }[] | null
+  >(null);
+  const connCatalogFetchedRef = useRef(false);
+  function ensureConnectorCatalog() {
+    if (connCatalogFetchedRef.current) return;
+    connCatalogFetchedRef.current = true;
+    get<{ connectors: { id: string; name: string; glyph?: string; connected?: boolean; status?: string }[] }>(
+      "/connectors",
+    )
+      .then((d) =>
+        setConnCatalog(
+          (d.connectors ?? []).map((c) => ({
+            id: c.id,
+            name: c.name,
+            glyph: c.glyph,
+            connected: Boolean(c.connected) || c.status === "connected",
+          })),
+        ),
+      )
+      .catch(() => {
+        connCatalogFetchedRef.current = false; // a later open retries
+        setConnCatalog([]);
+      });
+  }
+  const marketplaceTeasers = useMemo(
+    () => (connCatalog ?? []).filter((c) => !c.connected).slice(0, 3),
+    [connCatalog],
   );
 
   // Lazily fetch + cache the skill catalog the first time "/" opens the picker.
@@ -3559,6 +3594,73 @@ export default function ChatPage() {
                         <Paperclip size={14} className="shrink-0 text-zinc-400" />
                         Attach files or photos
                       </button>
+                      {/* Add this chat to a project — files the open thread
+                          into the project (and the context follows), same
+                          machinery as the composer toggle. */}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPlusSub(plusSub === "project" ? null : "project")
+                          }
+                          aria-expanded={plusSub === "project"}
+                          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
+                        >
+                          <FolderKanban size={14} className="shrink-0 text-zinc-400" />
+                          Add to project
+                          {activeProject && (
+                            <span className="max-w-[6rem] truncate rounded-full bg-accent/[0.12] px-1.5 text-[10px] text-accent-soft">
+                              {activeProject.name}
+                            </span>
+                          )}
+                          <ChevronRight size={13} className="ml-auto shrink-0 text-zinc-500" />
+                        </button>
+                        {plusSub === "project" && (
+                          <div className="absolute left-full top-0 z-30 ml-1 max-h-64 w-60 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
+                            {projectId && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  chooseProject("");
+                                  setToolsOpen(false);
+                                  setPlusSub(null);
+                                }}
+                                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-rose-300/90 transition-colors hover:bg-white/[0.06]"
+                              >
+                                <X size={12} /> Remove from project
+                              </button>
+                            )}
+                            {projects.length === 0 ? (
+                              <p className="px-2.5 py-2 text-[11px] text-zinc-500">
+                                No projects yet.
+                              </p>
+                            ) : (
+                              projects.map((p) => (
+                                <button
+                                  key={p.id}
+                                  type="button"
+                                  onClick={() => {
+                                    chooseProject(p.id);
+                                    setToolsOpen(false);
+                                    setPlusSub(null);
+                                  }}
+                                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] transition-colors hover:bg-white/[0.06] ${
+                                    projectId === p.id
+                                      ? "text-accent-soft"
+                                      : "text-zinc-200"
+                                  }`}
+                                >
+                                  <FolderKanban size={13} className="shrink-0" />
+                                  <span className="min-w-0 truncate">{p.name}</span>
+                                  {projectId === p.id && (
+                                    <Check size={12} className="ml-auto shrink-0" />
+                                  )}
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        )}
+                      </div>
                       {mode === "chat" && (
                         <>
                           <div className="relative">
@@ -3630,9 +3732,12 @@ export default function ChatPage() {
                           <div className="relative">
                             <button
                               type="button"
-                              onClick={() =>
-                                setPlusSub(plusSub === "connectors" ? null : "connectors")
-                              }
+                              onClick={() => {
+                                setPlusSub(
+                                  plusSub === "connectors" ? null : "connectors",
+                                );
+                                ensureConnectorCatalog();
+                              }}
                               aria-expanded={plusSub === "connectors"}
                               className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
                             >
@@ -3648,8 +3753,7 @@ export default function ChatPage() {
                                   </div>
                                 ) : connectorTools.length === 0 ? (
                                   <p className="px-2.5 py-2 text-[11px] leading-relaxed text-zinc-500">
-                                    Nothing connected yet — add integrations in
-                                    the Marketplace below.
+                                    Nothing connected yet — pick one below.
                                   </p>
                                 ) : (
                                   connectorTools.map((t) => {
@@ -3688,6 +3792,30 @@ export default function ChatPage() {
                                       </button>
                                     );
                                   })
+                                )}
+                                {marketplaceTeasers.length > 0 && (
+                                  <div className="mt-0.5 border-t hairline pt-1">
+                                    <p className="px-2.5 pb-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-zinc-600">
+                                      From the marketplace
+                                    </p>
+                                    {marketplaceTeasers.map((c) => (
+                                      <Link
+                                        key={c.id}
+                                        href="/marketplace"
+                                        onClick={() => setToolsOpen(false)}
+                                        title={`Connect ${c.name} in the Marketplace`}
+                                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
+                                      >
+                                        <span className="w-4 shrink-0 text-center text-[13px]">
+                                          {c.glyph || "🔌"}
+                                        </span>
+                                        <span className="min-w-0 truncate">{c.name}</span>
+                                        <span className="ml-auto shrink-0 text-[10px] text-zinc-600">
+                                          connect ↗
+                                        </span>
+                                      </Link>
+                                    ))}
+                                  </div>
                                 )}
                                 <Link
                                   href="/marketplace"
