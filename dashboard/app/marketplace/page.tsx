@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  ArrowLeft,
   Store,
   Search,
   Plug,
@@ -626,6 +627,18 @@ export default function MarketplacePage() {
         <PageHeader
           title="Marketplace"
           subtitle="Connect Iron Jarvis to your apps — one tap. Tokens are stored encrypted; nothing is sent anywhere but the service you connect."
+          actions={
+            /* Users arrive from the chat "+" menu (Marketplace has no nav
+               entry) — give them the door back so a collapsed sidebar never
+               strands them here. */
+            <Link
+              href="/chat"
+              className="btn-accent px-3 py-1.5 text-[13px]"
+              title="Back to the conversation — new connectors appear in the + menu"
+            >
+              <ArrowLeft size={14} /> Back to chat
+            </Link>
+          }
         />
       </Reveal>
 
