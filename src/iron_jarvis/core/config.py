@@ -219,6 +219,12 @@ class Config(BaseModel):
     # list-of-dict shape as mcp_servers/custom_integrations; managed by /fleet/nodes
     # (NOT via PUT /settings — a UI round-trip of a complex list loses nodes).
     fleet_nodes: list[dict[str, Any]] = Field(default_factory=list)
+    #: Known context windows (TOKENS) for budget scaling, keyed by
+    #: "provider::model", "model", or "provider" (most-specific wins). Local
+    #: endpoints rarely advertise their window, so this pin lets big-context
+    #: fleet models receive whole documents inline while small ones get
+    #: retrieval instead of overflow. Empty = conservative defaults.
+    model_context_windows: dict[str, int] = Field(default_factory=dict)
     fleet_sampling_enabled: bool = True  # background telemetry loop (30s idle)
     fleet_sampling_seconds: int = 30  # idle cadence; a watched page samples at 2s
     #: "provider:model" the local-vs-cloud savings estimate is priced against —

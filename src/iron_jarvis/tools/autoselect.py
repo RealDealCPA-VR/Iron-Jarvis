@@ -43,9 +43,12 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         # Writes only a NEW .redacted copy (never modifies the source).
         "redact_pii",
         # Structured spreadsheet work (read anywhere; edits workspace-confined
-        # + undoable).
+        # + undoable). profile/query are engine-computed reads — exact figures
+        # instead of model arithmetic (the local-model failure mode).
         "excel_read",
         "excel_edit",
+        "excel_profile",
+        "excel_query",
     }
 )
 
@@ -147,7 +150,17 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             r"\bcells?\b|formulas?|pivot)\b",
             re.IGNORECASE,
         ),
-        {"excel_read": 8, "excel_edit": 6, "file_search": 3},
+        {"excel_query": 9, "excel_profile": 8, "excel_read": 7, "excel_edit": 6,
+         "file_search": 3},
+    ),
+    # --- computed figures over sheets ------------------------------------
+    (
+        re.compile(
+            r"\b(sum|total|average|mean|count|how (?:much|many)|breakdown|"
+            r"by (?:client|month|category|vendor|account))\b",
+            re.IGNORECASE,
+        ),
+        {"excel_query": 5, "excel_profile": 3},
     ),
     # --- PII redaction ----------------------------------------------------
     (

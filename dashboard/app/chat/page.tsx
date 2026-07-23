@@ -105,6 +105,7 @@ import { appendDictation } from "@/components/VoiceInput";
 import { Card, Empty, ErrorNote, LoaderInline, OfflineHint } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { DocPreview } from "@/components/chat/DocPreview";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
 import { KnowledgePanel } from "@/components/project/KnowledgePanel";
@@ -171,6 +172,8 @@ interface ChatResponse {
   images?: string[];
   skill?: string;
   tools_used?: string[];
+  /** ABSOLUTE paths of documents this turn created/edited (preview panel). */
+  documents?: string[];
 }
 
 interface PersonaOption {
@@ -883,6 +886,9 @@ export default function ChatPage() {
   // tools write there (and their output surfaces live in the panel).
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  // DOCUMENT PREVIEW (right rail): set when a turn creates/edits a document —
+  // the chat column shifts over and the file renders beside the conversation.
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [pickingFolder, setPickingFolder] = useState(false); // "change folder"
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -1648,6 +1654,7 @@ export default function ChatPage() {
     setAttachments([]);
     setSelectedTools([]); // armed tools are per-conversation
     setSelectedConnectors([]); // so are connector toggles
+    setPreviewPath(null); // the preview belongs to the previous conversation
     sendSetupRef.current = false; // until this thread's setup (if any) restores
     setToolsOpen(false);
     setToolQuery("");
@@ -2381,6 +2388,16 @@ export default function ChatPage() {
     tts.speakMore(full, flush);
   }
 
+  /** A turn created/edited documents: preview the last one in the right rail
+   *  (opening the rail if it was collapsed) so the file appears beside the
+   *  conversation as part of the flow. */
+  function showDocPreview(paths?: string[]) {
+    const last = (paths ?? []).filter(Boolean).at(-1);
+    if (!last) return;
+    setPreviewPath(last);
+    setWorkspaceOpenPersisted(true);
+  }
+
   /** Put a failed turn's typed message back in the composer — but only when
    *  it's empty (never clobber text typed while the turn was in flight). The
    *  restore is programmatic, so it must never count as voice input: Voice
@@ -2415,6 +2432,7 @@ export default function ChatPage() {
           reply,
           tools_used,
           provider: servedBy,
+          documents: madeDocs,
         } = await stream.run(body, (_delta, full) => feedTTS(full, false));
         if (chatGenRef.current !== gen) return; // torn down mid-stream
         // One tick so the final tool_call frame's state flush lands before the
@@ -2440,6 +2458,7 @@ export default function ChatPage() {
         ];
         setMessages(full);
         queueSave(full); // the turn is complete — persist it
+        showDocPreview(madeDocs); // a generated doc appears beside the chat
         return; // streamed successfully
       } catch (e) {
         if (chatGenRef.current !== gen) return; // torn down — no fallback
@@ -2510,6 +2529,7 @@ export default function ChatPage() {
       // only speak — no risk of re-voicing sentences speakMore already spoke.
       if (!ttsStreamStartedRef.current) tts.speak(reply);
       queueSave(full); // the turn is complete — persist it
+      showDocPreview(res.documents); // a generated doc appears beside the chat
     } catch (e) {
       if (chatGenRef.current !== gen) return;
       // Keep the typed thread intact — only surface the failure (a 502 carries
@@ -2744,6 +2764,7 @@ export default function ChatPage() {
       setSelectedTools([]);
     }
     setSelectedConnectors([]); // connector toggles are per-conversation
+    setPreviewPath(null); // a fresh conversation starts without a preview
     sendSetupRef.current = false; // fresh conversation — nothing armed to persist
     setToolsOpen(false);
     setToolQuery("");
@@ -4470,7 +4491,14 @@ export default function ChatPage() {
                     </div>
                   )}
                 </div>
-                {activeProject && railTab === "knowledge" ? (
+                {previewPath ? (
+                  <div className="min-h-0 flex-1">
+                    <DocPreview
+                      path={previewPath}
+                      onClose={() => setPreviewPath(null)}
+                    />
+                  </div>
+                ) : activeProject && railTab === "knowledge" ? (
                   <div className="min-h-0 flex-1 overflow-y-auto">
                     <KnowledgePanel projectId={activeProject.id} />
                   </div>

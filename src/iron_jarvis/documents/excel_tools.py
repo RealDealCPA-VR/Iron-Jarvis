@@ -222,5 +222,296 @@ class ExcelEditTool(Tool):
         )
 
 
+# --------------------------------------------------------------------------- #
+# Engine-computed analysis (v1.89.0): profile + query. Local models hallucinate
+# most on ARITHMETIC — so numbers must come from the engine, never the model.
+# Both tools return compact text (headers + exact figures), sized for small
+# context windows. Pure openpyxl row iteration — no pandas dependency.
+# --------------------------------------------------------------------------- #
+
+_SCAN_ROW_CAP = 50_000  # rows scanned per query — bounded, with an honest flag
+
+
+def _cell_str(v: Any) -> str:
+    return "" if v is None else str(v)
+
+
+def _load_table(path: Path, sheet: "str | None") -> tuple[str, list[str], list[list[Any]], bool]:
+    """(sheet_title, headers, data_rows, truncated) — headers = first row."""
+    from openpyxl import load_workbook
+
+    wb = load_workbook(str(path), data_only=True, read_only=True)
+    ws = wb[sheet] if sheet else wb.active
+    headers: list[str] = []
+    rows: list[list[Any]] = []
+    truncated = False
+    for i, row in enumerate(ws.iter_rows(values_only=True)):
+        if i == 0:
+            headers = [_cell_str(v).strip() for v in row]
+            continue
+        if len(rows) >= _SCAN_ROW_CAP:
+            truncated = True
+            break
+        rows.append(list(row))
+    title = ws.title
+    wb.close()
+    return title, headers, rows, truncated
+
+
+def _col_index(column: str, headers: list[str]) -> int:
+    """Resolve a column by HEADER NAME (case-insensitive) or Excel letter."""
+    want = (column or "").strip()
+    if not want:
+        raise ValueError("a column is required (header name or letter like 'B')")
+    lowered = [h.lower() for h in headers]
+    if want.lower() in lowered:
+        return lowered.index(want.lower())
+    if want.isalpha() and len(want) <= 3:  # Excel letter(s)
+        from openpyxl.utils import column_index_from_string
+
+        return column_index_from_string(want.upper()) - 1
+    raise ValueError(
+        f"no column {want!r} — headers are: {', '.join(h for h in headers if h) or '(none)'}"
+    )
+
+
+def _as_number(v: Any) -> "float | None":
+    if isinstance(v, bool) or v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return float(str(v).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return None
+
+
+_WHERE_OPS = ("eq", "ne", "contains", "gt", "lt", "ge", "le")
+
+
+def _row_matches(row: list[Any], cond: dict[str, Any], headers: list[str]) -> bool:
+    idx = _col_index(str(cond.get("column", "")), headers)
+    cell = row[idx] if idx < len(row) else None
+    op = str(cond.get("op", "eq")).lower()
+    want = cond.get("value")
+    if op in ("gt", "lt", "ge", "le"):
+        a, b = _as_number(cell), _as_number(want)
+        if a is None or b is None:
+            return False
+        return {"gt": a > b, "lt": a < b, "ge": a >= b, "le": a <= b}[op]
+    a_s, b_s = _cell_str(cell).strip().lower(), _cell_str(want).strip().lower()
+    if op == "eq":
+        return a_s == b_s
+    if op == "ne":
+        return a_s != b_s
+    if op == "contains":
+        return b_s in a_s
+    raise ValueError(f"unknown where op {op!r} — use one of {_WHERE_OPS}")
+
+
+class ExcelProfileTool(Tool):
+    name = "excel_profile"
+    reversibility = Reversibility.READONLY
+    returns_untrusted_content = True  # sheet text can carry planted instructions
+    description = (
+        "Orient in an Excel workbook CHEAPLY: every sheet's name, row/column "
+        "counts, headers, and one sample row — a compact map, not a data dump. "
+        "Call this FIRST, then excel_query for figures. Any policy-allowed "
+        "path (local, network share, or tailnet folder)."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+        "required": ["path"],
+    }
+
+    async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        path = _resolve_read_path(str(args.get("path", "")), ctx)
+        ok, reason = fs_read_ok(str(path))
+        if not ok:
+            return ToolResult(ok=False, error=f"read denied: {reason}")
+        if path.suffix.lower() not in (".xlsx", ".xlsm"):
+            return ToolResult(ok=False, error=f"not an Excel workbook: {path.name}")
+
+        def _profile() -> dict[str, Any]:
+            from openpyxl import load_workbook
+
+            wb = load_workbook(str(path), data_only=True, read_only=True)
+            sheets = []
+            for ws in wb.worksheets:
+                first = next(ws.iter_rows(values_only=True, max_row=1), tuple())
+                second = next(
+                    ws.iter_rows(values_only=True, min_row=2, max_row=2), tuple()
+                )
+                sheets.append({
+                    "sheet": ws.title,
+                    "rows": ws.max_row,
+                    "cols": ws.max_column,
+                    "headers": [_cell_str(v).strip() for v in first[:24]],
+                    "sample": [_cell_str(v)[:40] for v in second[:24]],
+                })
+            wb.close()
+            return {"sheets": sheets}
+
+        try:
+            data = await asyncio.to_thread(_profile)
+        except Exception as exc:  # noqa: BLE001 — real files must not crash the runtime
+            return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+        lines = [f"{path.name} — {len(data['sheets'])} sheet(s)"]
+        for s in data["sheets"]:
+            heads = ", ".join(h for h in s["headers"] if h) or "(no header row)"
+            lines.append(f"- {s['sheet']}: {s['rows']}x{s['cols']} | headers: {heads}")
+        return ToolResult(ok=True, output="\n".join(lines), data=data)
+
+
+class ExcelQueryTool(Tool):
+    name = "excel_query"
+    reversibility = Reversibility.READONLY
+    returns_untrusted_content = True  # spreadsheet text can carry planted instructions
+    description = (
+        "Compute over an Excel sheet with the ENGINE — exact numbers, never "
+        "mental math: op sum/avg/min/max/count on a column, group (group_by + "
+        "agg per group), or filter (matching rows). Columns by header name or "
+        "letter; optional `where` conditions (eq/ne/contains/gt/lt/ge/le) "
+        "combine with AND. ALWAYS use this for figures — report its results "
+        "exactly. Any policy-allowed path."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "sheet": {"type": "string", "description": "Sheet name (default: active)"},
+            "op": {
+                "type": "string",
+                "enum": ["sum", "avg", "min", "max", "count", "group", "filter"],
+            },
+            "column": {"type": "string", "description": "Target column (aggregates)"},
+            "group_by": {"type": "string", "description": "Grouping column (op=group)"},
+            "agg": {
+                "type": "string",
+                "enum": ["sum", "avg", "count"],
+                "description": "Per-group aggregate (op=group, default sum)",
+            },
+            "where": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "column": {"type": "string"},
+                        "op": {"type": "string", "enum": list(_WHERE_OPS)},
+                        "value": {},
+                    },
+                    "required": ["column"],
+                },
+            },
+            "limit": {"type": "integer", "description": "Rows/groups returned (default 20)"},
+        },
+        "required": ["path", "op"],
+    }
+
+    async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        path = _resolve_read_path(str(args.get("path", "")), ctx)
+        ok, reason = fs_read_ok(str(path))
+        if not ok:
+            return ToolResult(ok=False, error=f"read denied: {reason}")
+        if path.suffix.lower() not in (".xlsx", ".xlsm"):
+            return ToolResult(ok=False, error=f"not an Excel workbook: {path.name}")
+        op = str(args.get("op", "")).lower()
+        limit = max(1, min(int(args.get("limit") or 20), 50))
+        try:
+            title, headers, rows, truncated = await asyncio.to_thread(
+                _load_table, path, args.get("sheet")
+            )
+            conds = [c for c in (args.get("where") or []) if isinstance(c, dict)]
+            if conds:
+                rows = [r for r in rows if all(_row_matches(r, c, headers) for c in conds)]
+
+            if op == "filter":
+                shown = rows[:limit]
+                head = " | ".join(h or "·" for h in headers)
+                body = "\n".join(
+                    " | ".join(_cell_str(v)[:40] for v in r) for r in shown
+                )
+                note = f" (showing {len(shown)} of {len(rows)} matching rows)"
+                out = f"{title}: {len(rows)} matching row(s){note}\n{head}\n{body}"
+                return ToolResult(ok=True, output=out, data={
+                    "sheet": title, "matches": len(rows), "headers": headers,
+                    "rows": [[_cell_str(v) for v in r] for r in shown],
+                    "scan_truncated": truncated,
+                })
+
+            if op == "group":
+                gi = _col_index(str(args.get("group_by", "")), headers)
+                agg = str(args.get("agg") or "sum").lower()
+                ci = _col_index(str(args.get("column", "")), headers) if agg != "count" else -1
+                groups: dict[str, list[float]] = {}
+                counts: dict[str, int] = {}
+                for r in rows:
+                    key = _cell_str(r[gi] if gi < len(r) else None).strip() or "(blank)"
+                    counts[key] = counts.get(key, 0) + 1
+                    if ci >= 0:
+                        n = _as_number(r[ci] if ci < len(r) else None)
+                        if n is not None:
+                            groups.setdefault(key, []).append(n)
+                if agg == "count":
+                    ranked = sorted(counts.items(), key=lambda kv: -kv[1])[:limit]
+                    result = [{"group": k, "count": v} for k, v in ranked]
+                    body = "\n".join(f"- {k}: {v}" for k, v in ranked)
+                else:
+                    scored = {
+                        k: (sum(v) if agg == "sum" else sum(v) / len(v))
+                        for k, v in groups.items() if v
+                    }
+                    ranked2 = sorted(scored.items(), key=lambda kv: -kv[1])[:limit]
+                    result = [{"group": k, agg: v, "count": counts.get(k, 0)}
+                              for k, v in ranked2]
+                    body = "\n".join(f"- {k}: {v:,.2f}" for k, v in ranked2)
+                out = f"{title}: {agg} by {args.get('group_by')} ({len(rows)} rows)\n{body}"
+                return ToolResult(ok=True, output=out, data={
+                    "sheet": title, "groups": result, "rows_scanned": len(rows),
+                    "scan_truncated": truncated,
+                })
+
+            # Column aggregates: sum / avg / min / max / count.
+            ci = _col_index(str(args.get("column", "")), headers)
+            nums = [n for r in rows
+                    if (n := _as_number(r[ci] if ci < len(r) else None)) is not None]
+            nonempty = sum(1 for r in rows if _cell_str(r[ci] if ci < len(r) else None).strip())
+            if op == "count":
+                value: float = float(nonempty)
+            elif not nums:
+                return ToolResult(
+                    ok=False,
+                    error=f"column {args.get('column')!r} has no numeric values"
+                          f" in the {len(rows)} row(s) considered",
+                )
+            elif op == "sum":
+                value = sum(nums)
+            elif op == "avg":
+                value = sum(nums) / len(nums)
+            elif op == "min":
+                value = min(nums)
+            elif op == "max":
+                value = max(nums)
+            else:
+                return ToolResult(ok=False, error=f"unknown op {op!r}")
+            skipped = nonempty - len(nums) if op != "count" else 0
+            extra = f", {skipped} non-numeric skipped" if skipped > 0 else ""
+            trunc = " [scan capped — figures cover the first 50k rows]" if truncated else ""
+            out = (
+                f"{title}: {op.upper()} of {args.get('column')} = {value:,.2f} "
+                f"({len(rows)} row(s) considered{extra}){trunc}"
+            )
+            return ToolResult(ok=True, output=out, data={
+                "sheet": title, "op": op, "column": args.get("column"),
+                "value": value, "rows_considered": len(rows),
+                "numeric_values": len(nums), "scan_truncated": truncated,
+            })
+        except ValueError as exc:
+            return ToolResult(ok=False, error=str(exc))
+        except Exception as exc:  # noqa: BLE001 — real files must not crash the runtime
+            return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+
+
 def excel_tools() -> list[Tool]:
-    return [ExcelReadTool(), ExcelEditTool()]
+    return [ExcelReadTool(), ExcelEditTool(), ExcelProfileTool(), ExcelQueryTool()]

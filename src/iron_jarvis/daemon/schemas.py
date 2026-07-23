@@ -122,6 +122,12 @@ class ChatRememberBody(BaseModel):
     model: str = ""
 
 
+class DocumentOpenBody(BaseModel):
+    """Open a document with its OS-associated app (preview panel's button)."""
+
+    path: str
+
+
 class ChatShareBody(BaseModel):
     """Render a saved chat thread for sharing. ``mode`` full = the verbatim
     transcript; compact = a faithful one-shot LLM digest. Read-only — the
@@ -211,6 +217,10 @@ _SETTINGS_KEYS = [
     # private gateways) — pairs with the optional custom_api_key vault entry.
     "custom_base_url",
     "custom_model",
+    # Known context windows (tokens) keyed "provider::model"/"model"/"provider"
+    # — scales attachment budgets for local endpoints that don't advertise
+    # theirs (a 128k fleet model gets whole documents inline; 8k gets RAG).
+    "model_context_windows",
     # Voice speech-to-text — an optional DEDICATED whisper endpoint + model, so a
     # self-hosted STT server works independently of the (possibly non-transcribing)
     # chat endpoint. Its key lives in the vault as voice_transcribe_key.

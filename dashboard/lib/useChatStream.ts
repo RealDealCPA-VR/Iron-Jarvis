@@ -41,6 +41,8 @@ export type SSEEvent =
       model?: string;
       tools_used?: string[];
       denied_tools?: string[];
+      /** ABSOLUTE paths of documents this turn created/edited (preview). */
+      documents?: string[];
       usage?: { input_tokens?: number; output_tokens?: number };
     }
   | { type: "error"; detail: string; status?: number; offline?: boolean };
@@ -63,6 +65,8 @@ export interface ChatStreamResult {
   tools_used?: string[];
   provider?: string;
   model?: string;
+  /** ABSOLUTE paths of documents this turn created/edited (preview panel). */
+  documents?: string[];
 }
 
 // -------------------------------------------------------------- frame decoding
@@ -111,6 +115,7 @@ export function sseEventFrom(
       if (Array.isArray(data.tools_used)) ev.tools_used = data.tools_used as string[];
       if (Array.isArray(data.denied_tools))
         ev.denied_tools = data.denied_tools as string[];
+      if (Array.isArray(data.documents)) ev.documents = data.documents as string[];
       if (data.usage && typeof data.usage === "object")
         ev.usage = data.usage as { input_tokens?: number; output_tokens?: number };
       return ev;
@@ -376,6 +381,7 @@ export function useChatStream(): UseChatStream {
                 tools_used: ev.tools_used,
                 provider: ev.provider ?? provider,
                 model: ev.model ?? model,
+                documents: ev.documents,
               };
               break;
             case "error":

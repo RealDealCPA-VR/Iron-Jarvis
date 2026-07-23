@@ -12,9 +12,39 @@ from pathlib import Path
 from typing import Any
 
 from .. import app as _app
-from ..schemas import DocEnhanceBody, DocWriteBody, LiveDocCreate, UploadBody
+from ..schemas import (
+    DocEnhanceBody,
+    DocumentOpenBody,
+    DocWriteBody,
+    LiveDocCreate,
+    UploadBody,
+)
 from ...core.db import session_scope
 from ...core.fs_policy import fs_read_ok
+
+#: Suffix → the app a native open will land in (user-facing button label).
+_APP_LABEL = {
+    ".docx": "Word", ".doc": "Word",
+    ".xlsx": "Excel", ".xlsm": "Excel", ".csv": "Excel",
+    ".pptx": "PowerPoint",
+    ".pdf": "your PDF viewer",
+    ".html": "your browser",
+}
+
+
+def _open_native(path: str) -> None:
+    """Launch *path* with the OS-associated application (Word/Excel/…).
+    Module-level so tests monkeypatch it instead of really launching apps."""
+    import os
+    import subprocess
+    import sys
+
+    if sys.platform == "win32":
+        os.startfile(path)  # noqa: S606 — explicit, user-initiated open
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
 
 
 def register(app: FastAPI, d) -> None:
@@ -47,6 +77,90 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=400, detail=f"invalid base64: {exc}")
         target.write_bytes(data)
         return {"path": str(target), "name": name, "bytes": len(data)}
+
+    # ------------------------------------------------------------------ #
+    # Preview + native open (v1.89.0) — the chat's embedded document panel.
+    # Any policy-allowed ABSOLUTE path works: local disk, a network share,
+    # or a tailnet folder (the daemon reads it like any other file).
+    # ------------------------------------------------------------------ #
+    def _preview_path(raw: str) -> Path:
+        from ...core.fs_policy import is_protected_path
+
+        p = Path((raw or "").strip())
+        if not raw or not p.is_absolute():
+            raise HTTPException(status_code=400, detail="an absolute path is required")
+        ok, reason = fs_read_ok(str(p))
+        if not ok or is_protected_path(str(p)):
+            raise HTTPException(status_code=403, detail=reason or "path not allowed")
+        if not p.is_file():
+            raise HTTPException(status_code=404, detail=f"no such file: {p}")
+        return p
+
+    @app.get("/documents/preview")
+    def document_preview(path: str, sheet: str = "") -> dict[str, Any]:
+        """Structured preview of ONE document: spreadsheets as sheet tabs +
+        rows (engine-read, capped), PDFs as an embed pointer (the client
+        iframes /documents/file), everything else as extracted text."""
+        p = _preview_path(path)
+        suffix = p.suffix.lower()
+        base: dict[str, Any] = {"name": p.name, "path": str(p), "suffix": suffix}
+        if suffix in (".xlsx", ".xlsm"):
+            from openpyxl import load_workbook
+
+            try:
+                wb = load_workbook(str(p), data_only=True, read_only=True)
+                names = list(wb.sheetnames)
+                ws = wb[sheet] if sheet and sheet in names else wb.active
+                rows: list[list[str]] = []
+                truncated = False
+                for i, row in enumerate(ws.iter_rows(values_only=True)):
+                    if i >= 80:
+                        truncated = True
+                        break
+                    rows.append(["" if v is None else str(v)[:80] for v in row[:30]])
+                title = ws.title
+                wb.close()
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(
+                    status_code=422, detail=f"could not read workbook: {exc}"
+                )
+            return {**base, "kind": "sheet", "sheets": names, "sheet": title,
+                    "rows": rows, "truncated": truncated}
+        if suffix == ".pdf":
+            return {**base, "kind": "pdf"}
+        from ...documents.readers import extract_text
+
+        try:
+            text = extract_text(p)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=422, detail=f"could not read: {exc}")
+        kind = "markdown" if suffix in (".md", ".markdown") else "text"
+        return {**base, "kind": kind, "content": text[:20_000],
+                "truncated": len(text) > 20_000}
+
+    @app.get("/documents/file")
+    def document_file(path: str):
+        """Raw file bytes (auth rides the header or ?token= like other embeds)
+        — powers the preview panel's PDF iframe."""
+        from fastapi.responses import FileResponse
+
+        p = _preview_path(path)
+        media = (
+            "application/pdf" if p.suffix.lower() == ".pdf"
+            else "application/octet-stream"
+        )
+        return FileResponse(str(p), media_type=media, filename=p.name)
+
+    @app.post("/documents/open")
+    def document_open(body: DocumentOpenBody) -> dict[str, Any]:
+        """Open a document with its OS-associated app (Word/Excel/…) — an
+        explicit, user-initiated action from the preview panel's button."""
+        p = _preview_path(body.path)
+        try:
+            _open_native(str(p))
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=422, detail=f"could not open: {exc}")
+        return {"ok": True, "app": _APP_LABEL.get(p.suffix.lower(), "the default app")}
 
     @app.get("/documents/live")
     def list_livedocs() -> dict[str, Any]:

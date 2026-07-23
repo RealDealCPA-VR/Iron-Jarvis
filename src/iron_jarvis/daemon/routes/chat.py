@@ -252,16 +252,48 @@ def _clean_setup(raw: Any) -> str:
     return json.dumps(out, separators=(",", ":")) if out else ""
 
 
-def _clip_attachment(text: str) -> str:
-    """Clip an attachment extract to the budget, with an EXPLICIT marker when
-    content was dropped — an unmarked clip reads as the whole file, so the
-    model (and the user) would be silently misled about what was seen."""
-    if len(text) <= _ATTACH_EXTRACT_CHARS:
-        return text
-    return (
-        text[:_ATTACH_EXTRACT_CHARS]
-        + f"\n[attachment truncated: showing {_ATTACH_EXTRACT_CHARS} of {len(text)} chars]"
-    )
+def _context_window(d, provider: str, model: str) -> "int | None":
+    """The resolved model's context window (tokens), when known. An explicit
+    ``config.model_context_windows`` pin wins ("provider::model" > "model" >
+    "provider" — the reliable source for custom/tailnet endpoints that don't
+    advertise their window), then a fleet probe's ``context_length`` when one
+    was recorded. None = unknown → conservative fixed budgets."""
+    cfg = getattr(d.platform.config, "model_context_windows", None) or {}
+    for key in (f"{provider}::{model}", model, provider):
+        if key and key in cfg:
+            try:
+                n = int(cfg[key])
+            except (TypeError, ValueError):
+                continue
+            if n > 0:
+                return n
+    fleet = getattr(d.platform, "fleet", None)
+    if fleet is not None and model:
+        try:  # best-effort probe read — fleet node models may carry the window
+            for node in fleet.nodes():
+                for m in getattr(node, "models", None) or []:
+                    if getattr(m, "name", None) == model:
+                        n = getattr(m, "context_length", None)
+                        if n:
+                            return int(n)
+        except Exception:  # noqa: BLE001 — budgets fall back to defaults
+            pass
+    return None
+
+
+def _attachment_budgets(d, provider: str, model: str) -> tuple[int, int, int]:
+    """(inline_chars, rag_char_budget, rag_k) for this turn's attachments,
+    scaled to the answering model's context window when it is known — a 128k
+    local model gets whole documents inline; an 8k one gets retrieval instead
+    of overflow. Unknown window = the long-standing conservative defaults."""
+    ctx = _context_window(d, provider, model)
+    if not ctx:
+        return _ATTACH_EXTRACT_CHARS, 2400, 6
+    chars = ctx * 4  # ≈ chars per token
+    inline = max(_ATTACH_EXTRACT_CHARS, min(60_000, int(chars * 0.30)))
+    rag = max(2400, min(20_000, int(chars * 0.15)))
+    k = 10 if ctx >= 32_000 else 6
+    return inline, rag, k
 
 
 def _persist_chat_usage(
@@ -819,6 +851,21 @@ def register(app: FastAPI, d) -> None:
             if cm_block:
                 system += cm_block
 
+        # Routing choice (hoisted above attachments): an explicit body choice
+        # always wins; else the project's default. Needed here so attachment
+        # budgets scale to the model that will actually answer.
+        provider_choice = (body.provider or "").strip() or (
+            (resolved_proj.default_provider or "").strip() if resolved_proj else ""
+        )
+        model_choice = (body.model or "").strip() or (
+            (resolved_proj.default_model or "").strip() if resolved_proj else ""
+        )
+        _inline_budget, _rag_budget, _rag_k = _attachment_budgets(
+            d,
+            provider_choice or d.platform.config.default_provider,
+            model_choice or d.platform.config.default_model,
+        )
+
         # Attachments: text formats extracted inline; images go to VISION.
         images: list[dict[str, str]] = []
         attach_block = ""
@@ -852,10 +899,25 @@ def register(app: FastAPI, d) -> None:
                     )
             else:
                 try:
-                    from ...documents.readers import extract_text
+                    from ...documents.attachment_rag import extract_for_rag, rag_block
 
-                    text = _clip_attachment(extract_text(p))
-                    attach_block += f"\n\n## Attached file: {p.name}\n{text}"
+                    text = extract_for_rag(p)
+                    if len(text) <= _inline_budget:
+                        attach_block += f"\n\n## Attached file: {p.name}\n{text}"
+                    else:
+                        # RETRIEVAL, not a head-clip: ground on the chunks
+                        # relevant to THIS question, with location refs — the
+                        # old fixed clip fed page 1 and dropped the rest.
+                        _q = next(
+                            (m.content or "" for m in reversed(body.messages)
+                             if m.role == "user"),
+                            "",
+                        )
+                        attach_block += rag_block(
+                            p.name, text, _q,
+                            getattr(d.platform, "embedder", None),
+                            k=_rag_k, char_budget=_rag_budget,
+                        )
                 except Exception as exc:  # noqa: BLE001
                     attach_block += f"\n\n## Attached file: {p.name}\n(could not read: {exc})"
         if attach_block:
@@ -954,6 +1016,13 @@ def register(app: FastAPI, d) -> None:
                 )
                 + "Use them when they help; answer directly when they don't."
                 + (
+                    "\nSPREADSHEET FIGURES: never compute numbers yourself —"
+                    " call excel_query (profile the workbook first with"
+                    " excel_profile) and report its computed results exactly."
+                    if any(t.startswith("excel_") for t in armed)
+                    else ""
+                )
+                + (
                     f"\nYour file tools operate INSIDE the folder {tool_ws}; "
                     "read, edit, and create files there directly, and use the absolute paths "
                     "that file_search returns."
@@ -984,19 +1053,14 @@ def register(app: FastAPI, d) -> None:
         # tools — never a deny-floor, MCP, shell, or paid tool — and the Auto
         # toggle in the UI is the user's standing consent for exactly that set.
         armed_grant = set(overrides.keys())
-        # Routing: an explicit body choice always wins; otherwise fall back to
-        # the resolved project's per-project default model, if it has one.
-        provider_choice = (body.provider or "").strip() or (
-            (resolved_proj.default_provider or "").strip() if resolved_proj else ""
-        )
-        model_choice = (body.model or "").strip() or (
-            (resolved_proj.default_model or "").strip() if resolved_proj else ""
-        )
+        # (provider_choice/model_choice were resolved above the attachments —
+        # budgets needed them early; the values are identical.)
         # Accumulate token usage + completion count ACROSS the (up to 4) tool
         # rounds so the Usage ledger reflects the WHOLE turn — a multi-round
         # armed-tool turn is several separately-billed completions, not one.
         usage_in = usage_out = completions = 0
         stopped_note = ""  # honest note when the round budget cuts off tool calls
+        made_docs: list[str] = []  # documents this turn created/edited (preview)
         try:
             for _round in range(_MAX_TOOL_ROUNDS):
                 route = await d.platform.router.complete(
@@ -1050,6 +1114,19 @@ def register(app: FastAPI, d) -> None:
                     # or failed call is not honestly reported as run.
                     if ran:
                         tools_used.append(tc.name)
+                        # Track created/edited documents (workspace-relative in
+                        # the tool result) as ABSOLUTE paths for the preview.
+                        if tc.name in ("write_document", "excel_edit"):
+                            _rel = str(
+                                (getattr(result, "data", None) or {}).get("path") or ""
+                            )
+                            if _rel:
+                                try:
+                                    _abs = str((tool_ws / _rel).resolve())
+                                    if _abs not in made_docs:
+                                        made_docs.append(_abs)
+                                except Exception:  # noqa: BLE001
+                                    pass
                         # FENCE externally-sourced tool output before the model
                         # sees it — a planted file / web page / memory / PDF can't
                         # inject instructions (the same guard the agent runtime
@@ -1113,6 +1190,9 @@ def register(app: FastAPI, d) -> None:
             "images": len(images),
             "skill": (body.skill or "").strip() or None,
             "tools_used": tools_used,
+            # ABSOLUTE paths of documents this turn created/edited — the
+            # dashboard opens its embedded preview from these.
+            "documents": made_docs,
             # What the seamless path armed on its own (honesty surface — the
             # client can show "auto-armed" distinctly from user picks).
             "auto_armed": auto_armed,
@@ -1217,6 +1297,20 @@ def register(app: FastAPI, d) -> None:
             if cm_block:
                 system += cm_block
 
+        # Routing choice (hoisted, mirrors chat_complete) — attachment budgets
+        # scale to the model that will actually answer.
+        provider_choice = (body.provider or "").strip() or (
+            (resolved_proj.default_provider or "").strip() if resolved_proj else ""
+        )
+        model_choice = (body.model or "").strip() or (
+            (resolved_proj.default_model or "").strip() if resolved_proj else ""
+        )
+        _inline_budget, _rag_budget, _rag_k = _attachment_budgets(
+            d,
+            provider_choice or d.platform.config.default_provider,
+            model_choice or d.platform.config.default_model,
+        )
+
         # Attachments: text formats extracted inline; images go to VISION.
         images: list[dict[str, str]] = []
         attach_block = ""
@@ -1247,10 +1341,25 @@ def register(app: FastAPI, d) -> None:
                     )
             else:
                 try:
-                    from ...documents.readers import extract_text
+                    from ...documents.attachment_rag import extract_for_rag, rag_block
 
-                    text = _clip_attachment(extract_text(p))
-                    attach_block += f"\n\n## Attached file: {p.name}\n{text}"
+                    text = extract_for_rag(p)
+                    if len(text) <= _inline_budget:
+                        attach_block += f"\n\n## Attached file: {p.name}\n{text}"
+                    else:
+                        # RETRIEVAL, not a head-clip: ground on the chunks
+                        # relevant to THIS question, with location refs — the
+                        # old fixed clip fed page 1 and dropped the rest.
+                        _q = next(
+                            (m.content or "" for m in reversed(body.messages)
+                             if m.role == "user"),
+                            "",
+                        )
+                        attach_block += rag_block(
+                            p.name, text, _q,
+                            getattr(d.platform, "embedder", None),
+                            k=_rag_k, char_budget=_rag_budget,
+                        )
                 except Exception as exc:  # noqa: BLE001
                     attach_block += f"\n\n## Attached file: {p.name}\n(could not read: {exc})"
         if attach_block:
@@ -1332,6 +1441,13 @@ def register(app: FastAPI, d) -> None:
                 )
                 + "Use them when they help; answer directly when they don't."
                 + (
+                    "\nSPREADSHEET FIGURES: never compute numbers yourself —"
+                    " call excel_query (profile the workbook first with"
+                    " excel_profile) and report its computed results exactly."
+                    if any(t.startswith("excel_") for t in armed)
+                    else ""
+                )
+                + (
                     f"\nYour file tools operate INSIDE the folder {tool_ws}; "
                     "read, edit, and create files there directly, and use the absolute paths "
                     "that file_search returns."
@@ -1346,12 +1462,7 @@ def register(app: FastAPI, d) -> None:
             if _tool is not None:
                 overrides[_tool.perm_key()] = "allow"
         armed_grant = set(overrides.keys())
-        provider_choice = (body.provider or "").strip() or (
-            (resolved_proj.default_provider or "").strip() if resolved_proj else ""
-        )
-        model_choice = (body.model or "").strip() or (
-            (resolved_proj.default_model or "").strip() if resolved_proj else ""
-        )
+        # (provider_choice/model_choice were resolved above the attachments.)
 
         # ------------------------------------------------------------------ #
         # STREAM — the round + tool loop, emitting SSE frames as it goes.
@@ -1362,6 +1473,7 @@ def register(app: FastAPI, d) -> None:
             denied_tools: list[str] = []        # armed tools refused this turn
             last_tool_output = ""               # last SUCCESSFUL output (synthesis)
             stopped_note = ""                   # round budget cut off tool calls
+            made_docs: list[str] = []           # documents created/edited (preview)
             reply_text = ""
             route_provider = provider_choice or ""
             route_model = model_choice or ""
@@ -1471,6 +1583,20 @@ def register(app: FastAPI, d) -> None:
                             content = f"{type(exc).__name__}: {exc}"
                         if ran:
                             tools_used.append(tc.name)
+                            # Track created/edited documents for the preview
+                            # (mirrors chat_complete).
+                            if tc.name in ("write_document", "excel_edit"):
+                                _rel = str(
+                                    (getattr(result, "data", None) or {}).get("path")
+                                    or ""
+                                )
+                                if _rel:
+                                    try:
+                                        _abs = str((tool_ws / _rel).resolve())
+                                        if _abs not in made_docs:
+                                            made_docs.append(_abs)
+                                    except Exception:  # noqa: BLE001
+                                        pass
                             # FENCE externally-sourced output before the model (and
                             # the client) sees it — the same guard chat_complete +
                             # the agent runtime apply to returns_untrusted_content.
@@ -1535,6 +1661,7 @@ def register(app: FastAPI, d) -> None:
                 "tools_used": tools_used,
                 "denied_tools": denied_tools,
                 "auto_armed": auto_armed,
+                "documents": made_docs,
                 "usage": {"input_tokens": usage_in, "output_tokens": usage_out},
             })
 

@@ -210,10 +210,10 @@ def test_stream_final_round_tool_calls_not_executed(tmp_path, monkeypatch):
     assert "1 tool call(s) not executed" in done["reply"]
 
 
-# --- attachment truncation marker ---------------------------------------------
+# --- oversized attachments: honest retrieval (v1.89.0 — was a head-clip) ------
 
 
-def test_attachment_truncation_marker(tmp_path, monkeypatch):
+def test_attachment_oversize_uses_honest_retrieval(tmp_path, monkeypatch):
     client = _client(tmp_path)
     platform = client.app.state.platform
     captured = {}
@@ -239,10 +239,13 @@ def test_attachment_truncation_marker(tmp_path, monkeypatch):
     })
     assert r.status_code == 200
     system = captured["system"]
-    # The clipped extract carries an explicit marker with real numbers…
-    assert "[attachment truncated: showing 6000 of 7000 chars]" in system
-    # …and the small file (fully included) is NOT falsely marked.
-    assert system.count("attachment truncated") == 1
+    # v1.89.0: an oversized attachment is RETRIEVED (question-relevant chunks,
+    # honestly labelled), no longer head-clipped with a truncation marker.
+    assert "big.txt" in system and "7000 chars" in system
+    assert "NOT the whole document" in system
+    # …and the small file is fully inline, NOT marked as retrieved.
+    assert "y" * 100 in system
+    assert system.count("NOT the whole document") == 1
 
 
 # --- usage persisted when a later round fails ---------------------------------
