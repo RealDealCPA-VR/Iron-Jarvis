@@ -103,7 +103,9 @@ def test_list_connectors_http(tmp_path):
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["connectors"], "the gallery is not empty"
-        assert body["categories"] == CATEGORY_ORDER
+        # Curated categories first, then the dynamic groups (the user's own
+        # MCP servers + memory sources) so the gallery can order + filter them.
+        assert body["categories"] == [*CATEGORY_ORDER, "Custom", "Memory"]
         for row in body["connectors"]:
             assert {"connected", "status", "fields", "unlocks"} <= set(row), row["id"]
         assert _row(client, "github")["connected"] is False

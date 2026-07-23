@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
+  Brain,
   Store,
   Search,
   Plug,
@@ -41,7 +42,7 @@ import { BrandGlyph } from "@/components/BrandGlyph";
 /*  Types (local — lib/types.ts is intentionally untouched)                    */
 /* -------------------------------------------------------------------------- */
 
-type ConnectVia = "mcp" | "oauth" | "api_key";
+type ConnectVia = "mcp" | "oauth" | "api_key" | "memory";
 type FieldKind = "secret" | "env" | "arg";
 
 /** One value the user supplies to connect an MCP connector. */
@@ -102,7 +103,13 @@ interface ConnTestResult {
   ok: boolean;
   detail: string;
 }
-type TestResult = McpTestResult | ConnTestResult;
+/** Memory sources (LTM brains) test to a bare ok + optional error. */
+interface MemTestResult {
+  ok: boolean;
+  kind?: string;
+  error?: string | null;
+}
+type TestResult = McpTestResult | ConnTestResult | MemTestResult;
 
 /* -------------------------------------------------------------------------- */
 /*  Per-`connect_via` presentation                                             */
@@ -112,10 +119,12 @@ const VIA: Record<ConnectVia, { label: string; icon: typeof Plug }> = {
   mcp: { label: "MCP", icon: Plug },
   oauth: { label: "OAuth", icon: ShieldCheck },
   api_key: { label: "API key", icon: KeyRound },
+  memory: { label: "Memory", icon: Brain },
 };
 
 function ViaTag({ via }: { via: ConnectVia }) {
-  const { label, icon: Icon } = VIA[via];
+  // Defensive fallback: an unknown via from a newer daemon must not crash.
+  const { label, icon: Icon } = VIA[via] ?? { label: via, icon: Plug };
   return (
     <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-400">
       <Icon size={11} className="text-accent-soft/80" />
@@ -325,9 +334,11 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
           <p className="text-[11px] text-zinc-500">
             {c.connect_via === "mcp"
               ? `${c.tools_loaded} tool${c.tools_loaded === 1 ? "" : "s"} loaded`
-              : c.account
-                ? `Signed in as ${c.account}`
-                : "Ready to use"}
+              : c.connect_via === "memory"
+                ? "Grounds chat & agents — toggle it on in the chat + menu"
+                : c.account
+                  ? `Signed in as ${c.account}`
+                  : "Ready to use"}
           </p>
           {c.connect_via === "mcp" && (c.tool_names?.length ?? 0) > 0 && (
             <div className="flex flex-wrap gap-1">
@@ -383,6 +394,11 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
             className="py-1.5"
           />
         </div>
+      ) : c.connect_via === "memory" ? (
+        // Memory sources are added on the Memory page, not connected here.
+        <Link href="/memory" className="btn-ghost w-full py-1.5 text-center text-xs">
+          <Brain size={14} /> Manage on the Memory page
+        </Link>
       ) : (
         <div className="space-y-2.5">
           {!open ? (
@@ -506,7 +522,7 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
       {success && <SuccessNote>{success}</SuccessNote>}
       {error && <ErrorNote>{error}</ErrorNote>}
 
-      {/* Test result — mcp (tools) vs connection (detail) */}
+      {/* Test result — mcp (tools) vs connection (detail) vs memory (bare ok) */}
       {testResult &&
         ("detail" in testResult ? (
           testResult.ok ? (
@@ -514,25 +530,31 @@ function ConnectorCard({ c, onChanged }: { c: Connector; onChanged: () => void }
           ) : (
             <ErrorNote>{testResult.detail}</ErrorNote>
           )
-        ) : testResult.ok ? (
-          <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] px-3 py-2.5">
-            <div className="flex items-center gap-1.5 text-[12px] font-medium text-emerald-300">
-              <Check size={13} /> Connected — {testResult.count} tool
-              {testResult.count === 1 ? "" : "s"} available now
-            </div>
-            {testResult.tools.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-1">
-                {testResult.tools.map((n) => (
-                  <span
-                    key={n}
-                    className="rounded-md border border-emerald-500/20 bg-emerald-500/[0.08] px-1.5 py-0.5 font-mono text-[11px] text-emerald-200"
-                  >
-                    {n}
-                  </span>
-                ))}
+        ) : "count" in testResult ? (
+          testResult.ok ? (
+            <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] px-3 py-2.5">
+              <div className="flex items-center gap-1.5 text-[12px] font-medium text-emerald-300">
+                <Check size={13} /> Connected — {testResult.count} tool
+                {testResult.count === 1 ? "" : "s"} available now
               </div>
-            )}
-          </div>
+              {testResult.tools.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {testResult.tools.map((n) => (
+                    <span
+                      key={n}
+                      className="rounded-md border border-emerald-500/20 bg-emerald-500/[0.08] px-1.5 py-0.5 font-mono text-[11px] text-emerald-200"
+                    >
+                      {n}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <ErrorNote>{testResult.error ?? "Test failed."}</ErrorNote>
+          )
+        ) : testResult.ok ? (
+          <SuccessNote>Memory source is live and searchable.</SuccessNote>
         ) : (
           <ErrorNote>{testResult.error ?? "Test failed."}</ErrorNote>
         ))}

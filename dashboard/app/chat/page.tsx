@@ -51,6 +51,7 @@ import Link from "next/link";
 import {
   AudioLines,
   Bot,
+  Brain,
   Check,
   ChevronDown,
   ChevronRight,
@@ -161,6 +162,7 @@ type ChatRequestBody = {
   workspace_dir?: string; // absolute folder armed file tools operate in
   project_id?: string; // context spine: grounds the reply in the project
   auto_tools?: boolean; // let the daemon arm safe tools from the request
+  connectors?: string[]; // toggled-on connectors: MCP tool groups + memory
 };
 interface ChatResponse {
   reply: string;
@@ -241,6 +243,8 @@ interface ThreadSummary {
  *  deliberately cleared). */
 interface ThreadSetup {
   tools?: string[];
+  /** Connectors toggled ON for this conversation (MCP servers / memory). */
+  connectors?: string[];
   skill?: string;
   workspace_dir?: string;
   provider?: string;
@@ -273,6 +277,17 @@ interface ThreadSaveResult {
   title: string;
 }
 
+/** One /connectors gallery entry, as the "+" Connectors flyout consumes it. */
+interface ConnectorEntry {
+  id: string;
+  name: string;
+  glyph?: string;
+  connected?: boolean;
+  /** "mcp" | "oauth" | "api_key" | "memory" — memory = an LTM source/brain. */
+  connect_via?: string;
+  tools_loaded?: number;
+}
+
 /** POST /documents/upload response (same contract NewSessionForm uses). */
 interface UploadResult {
   path: string;
@@ -295,6 +310,10 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB
 // so the "+" menu renders at most this many rows (search narrows the rest).
 const MAX_TOOLS = 6;
 const TOOL_LIST_CAP = 100;
+// Connector toggles: /chat accepts at most this many toggled-on connectors
+// (an MCP connector arms its whole tool group server-side, additive to the
+// 6-tool cap above; a memory connector grounds the turn with its top hits).
+const MAX_CONNECTORS = 6;
 
 // Agent-mode handoff: escalating a chat conversation to a NEW agent session
 // otherwise starts the agent blind (a fresh session carries no chat history),
@@ -872,6 +891,10 @@ export default function ChatPage() {
   // "+" TOOLS MENU (chat mode): armed registry tool names — sent as `tools` on
   // every /chat turn and kept across turns until "New chat" / a thread switch.
   const [selectedTools, setSelectedTools] = useState<string[]>([]);
+  // "+" CONNECTOR TOGGLES (chat mode): connector ids toggled ON — sent as
+  // `connectors` on every /chat turn. An MCP connector arms its whole tool
+  // group server-side; a memory connector grounds the turn with its store.
+  const [selectedConnectors, setSelectedConnectors] = useState<string[]>([]);
   // Bumped on every USER edit to the thread setup (tools/skill/workspace/model)
   // — drives the persist-on-change effect below. Restores never bump it, so
   // merely opening a thread can't churn its updated_at with an echo save.
@@ -902,6 +925,9 @@ export default function ChatPage() {
   const [pinnedIds, setPinnedIds] = useState<string[]>([]);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  // Commit-to-memory (per-thread): in-flight id + transient success id.
+  const [rememberingId, setRememberingId] = useState<string | null>(null);
+  const [rememberedId, setRememberedId] = useState<string | null>(null);
   const [threadsLoading, setThreadsLoading] = useState(true); // first threads fetch
   // The reader scrolled up: show a "Jump to latest" pill and STOP auto-scrolling
   // so streamed tokens don't yank them back down while they re-read.
@@ -1541,6 +1567,7 @@ export default function ChatPage() {
     const { provider, model } = splitChoice(choice);
     return {
       tools: selectedTools.slice(0, MAX_TOOLS),
+      connectors: selectedConnectors.slice(0, MAX_CONNECTORS),
       skill: activeSkill,
       workspace_dir: workspaceDir ?? "",
       provider: provider ?? "",
@@ -1620,6 +1647,7 @@ export default function ChatPage() {
     setSessionId(null);
     setAttachments([]);
     setSelectedTools([]); // armed tools are per-conversation
+    setSelectedConnectors([]); // so are connector toggles
     sendSetupRef.current = false; // until this thread's setup (if any) restores
     setToolsOpen(false);
     setToolQuery("");
@@ -1675,6 +1703,13 @@ export default function ChatPage() {
             ? setup.tools.filter((x) => typeof x === "string").slice(0, MAX_TOOLS)
             : [],
         );
+        setSelectedConnectors(
+          Array.isArray(setup.connectors)
+            ? setup.connectors
+                .filter((x) => typeof x === "string")
+                .slice(0, MAX_CONNECTORS)
+            : [],
+        );
         setActiveSkill(typeof setup.skill === "string" ? setup.skill : "");
         // Thread-local restore: the panel points at this conversation's folder
         // without touching the localStorage default (New chat returns to it).
@@ -1701,6 +1736,32 @@ export default function ChatPage() {
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
       else setError(e instanceof ApiError ? e.message : String(e));
+    }
+  }
+
+  /** Commit a thread to LONG-TERM MEMORY (the sidebar Brain action): the
+   *  daemon distills it through a real model (or stores an honest verbatim
+   *  excerpt offline) into the default brain. The button shows a transient
+   *  check on success; the note lands on the Memory page. */
+  async function rememberThread(id: string) {
+    if (rememberingId) return; // one commit at a time
+    setRememberingId(id);
+    setRememberedId(null);
+    try {
+      await post<{ ok: boolean; ref: string; source: string; distilled: boolean }>(
+        `/chat/threads/${id}/remember`,
+        {},
+      );
+      setRememberedId(id);
+      window.setTimeout(
+        () => setRememberedId((cur) => (cur === id ? null : cur)),
+        2500,
+      );
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 0) setOffline(true);
+      else setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setRememberingId(null);
     }
   }
 
@@ -1874,25 +1935,26 @@ export default function ChatPage() {
       });
   }
 
-  /** Connected integrations (MCP tools) for the "+" Connectors flyout. */
-  const connectorTools = useMemo(
-    () => (toolCatalog ?? []).filter((t) => categorizeTool(t) === "integrations"),
-    [toolCatalog],
-  );
-
-  // Marketplace teasers for the Connectors flyout: a few NOT-yet-connected
-  // catalog entries (glyph + name) that link to the Marketplace — the flyout
-  // always shows something connectable, never a dead end.
-  const [connCatalog, setConnCatalog] = useState<
-    { id: string; name: string; glyph?: string; connected?: boolean }[] | null
-  >(null);
+  // The "+" Connectors flyout: every ESTABLISHED connector (catalog + the
+  // user's own MCP servers + memory sources/brains) gets an on/off toggle for
+  // this conversation, plus a few not-yet-connected marketplace teasers so the
+  // flyout always shows something connectable, never a dead end.
+  const [connCatalog, setConnCatalog] = useState<ConnectorEntry[] | null>(null);
   const connCatalogFetchedRef = useRef(false);
   function ensureConnectorCatalog() {
     if (connCatalogFetchedRef.current) return;
     connCatalogFetchedRef.current = true;
-    get<{ connectors: { id: string; name: string; glyph?: string; connected?: boolean; status?: string }[] }>(
-      "/connectors",
-    )
+    get<{
+      connectors: {
+        id: string;
+        name: string;
+        glyph?: string;
+        connected?: boolean;
+        status?: string;
+        connect_via?: string;
+        tools_loaded?: number;
+      }[];
+    }>("/connectors")
       .then((d) =>
         setConnCatalog(
           (d.connectors ?? []).map((c) => ({
@@ -1900,6 +1962,8 @@ export default function ChatPage() {
             name: c.name,
             glyph: c.glyph,
             connected: Boolean(c.connected) || c.status === "connected",
+            connect_via: c.connect_via,
+            tools_loaded: c.tools_loaded,
           })),
         ),
       )
@@ -1908,6 +1972,10 @@ export default function ChatPage() {
         setConnCatalog([]);
       });
   }
+  const connectedConnectors = useMemo(
+    () => (connCatalog ?? []).filter((c) => c.connected),
+    [connCatalog],
+  );
   const marketplaceTeasers = useMemo(
     () => (connCatalog ?? []).filter((c) => !c.connected).slice(0, 3),
     [connCatalog],
@@ -1998,6 +2066,17 @@ export default function ChatPage() {
       if (WEB_TOOLS.every((n) => prev.includes(n))) return others; // disarm both
       if (others.length + WEB_TOOLS.length > MAX_TOOLS) return prev; // no room
       return [...others, ...WEB_TOOLS];
+    });
+    markSetupChanged();
+  }
+
+  /** Toggle a connector for this conversation (the "+" Connectors flyout).
+   *  Counts as a thread-setup edit so the choice persists with the thread. */
+  function toggleConnector(id: string) {
+    setSelectedConnectors((prev) => {
+      if (prev.includes(id)) return prev.filter((c) => c !== id);
+      if (prev.length >= MAX_CONNECTORS) return prev; // at the cap
+      return [...prev, id];
     });
     markSetupChanged();
   }
@@ -2265,6 +2344,10 @@ export default function ChatPage() {
       // The reply's playbook + armed tool loop (both sticky across turns).
       ...(activeSkill ? { skill: activeSkill } : {}),
       ...(selectedTools.length ? { tools: selectedTools.slice(0, MAX_TOOLS) } : {}),
+      // Connector toggles: MCP tool groups armed server-side + memory grounding.
+      ...(selectedConnectors.length
+        ? { connectors: selectedConnectors.slice(0, MAX_CONNECTORS) }
+        : {}),
       // The workspace folder armed file tools operate in (when chosen).
       ...(workspaceDir ? { workspace_dir: workspaceDir } : {}),
       // Context spine: the daemon grounds the reply in this project's
@@ -2660,6 +2743,7 @@ export default function ChatPage() {
     } else {
       setSelectedTools([]);
     }
+    setSelectedConnectors([]); // connector toggles are per-conversation
     sendSetupRef.current = false; // fresh conversation — nothing armed to persist
     setToolsOpen(false);
     setToolQuery("");
@@ -3186,7 +3270,7 @@ export default function ChatPage() {
                           <button
                             type="button"
                             onClick={() => void openThread(t.id)}
-                            className="w-full px-2.5 py-2 pr-[4.5rem] text-left"
+                            className="w-full px-2.5 py-2 pr-[6.25rem] text-left"
                             title={t.title || "Untitled chat"}
                           >
                             <span
@@ -3220,6 +3304,26 @@ export default function ChatPage() {
                           )}
                           {renamingId !== t.id && (
                             <span className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/thread:opacity-100">
+                              <button
+                                type="button"
+                                onClick={() => void rememberThread(t.id)}
+                                disabled={rememberingId !== null}
+                                aria-label={`Commit ${t.title || "chat"} to memory`}
+                                title="Commit to memory — distill this chat into long-term memory"
+                                className={`grid h-6 w-6 place-items-center rounded-md transition-colors hover:bg-white/[0.06] ${
+                                  rememberedId === t.id
+                                    ? "text-emerald-300"
+                                    : "text-zinc-500 hover:text-accent-soft"
+                                }`}
+                              >
+                                {rememberingId === t.id ? (
+                                  <Loader2 size={13} className="animate-spin" />
+                                ) : rememberedId === t.id ? (
+                                  <Check size={13} />
+                                ) : (
+                                  <Brain size={13} />
+                                )}
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => togglePin(t.id)}
@@ -3497,7 +3601,9 @@ export default function ChatPage() {
                   (chat mode) share the row with attachment chips. */}
               {(attachments.length > 0 ||
                 (mode === "chat" &&
-                  (activeSkill !== "" || selectedTools.length > 0))) && (
+                  (activeSkill !== "" ||
+                    selectedTools.length > 0 ||
+                    selectedConnectors.length > 0))) && (
                 <div className="flex flex-wrap items-center gap-2 border-t hairline px-3 py-2.5">
                   {mode === "chat" && activeSkill !== "" && (
                     <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300">
@@ -3534,6 +3640,25 @@ export default function ChatPage() {
                           onClick={() => disarmTool(name)}
                           aria-label={`Disarm ${name}`}
                           title="Disarm tool"
+                          className="text-zinc-500 transition-colors hover:text-rose-300"
+                        >
+                          <X size={11} />
+                        </button>
+                      </span>
+                    ))}
+                  {mode === "chat" &&
+                    selectedConnectors.map((id) => (
+                      <span
+                        key={`conn-${id}`}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300"
+                      >
+                        <PlugZap size={11} className="shrink-0 text-accent-soft" />
+                        <span className="max-w-[14rem] truncate">{id}</span>
+                        <button
+                          type="button"
+                          onClick={() => toggleConnector(id)}
+                          aria-label={`Turn off connector ${id}`}
+                          title="Turn off for this chat"
                           className="text-zinc-500 transition-colors hover:text-rose-300"
                         >
                           <X size={11} />
@@ -3687,7 +3812,10 @@ export default function ChatPage() {
                     aria-label="Open the chat menu"
                     title="Attach · skills · connectors · web & auto"
                     className={`btn-ghost h-[2.75rem] px-3 py-0 ${
-                      toolsOpen || selectedTools.length > 0 || activeSkill
+                      toolsOpen ||
+                      selectedTools.length > 0 ||
+                      selectedConnectors.length > 0 ||
+                      activeSkill
                         ? "text-accent-soft"
                         : ""
                     }`}
@@ -3861,47 +3989,66 @@ export default function ChatPage() {
                             </button>
                             {plusSub === "connectors" && (
                               <div className="absolute left-full top-0 z-30 ml-1 max-h-64 w-64 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
-                                {toolCatalog === null ? (
+                                {connCatalog === null ? (
                                   <div className="px-2.5 py-2">
                                     <LoaderInline />
                                   </div>
-                                ) : connectorTools.length === 0 ? (
+                                ) : connectedConnectors.length === 0 ? (
                                   <p className="px-2.5 py-2 text-[11px] leading-relaxed text-zinc-500">
                                     Nothing connected yet — pick one below.
                                   </p>
                                 ) : (
-                                  connectorTools.map((t) => {
-                                    const checked = selectedTools.includes(t.name);
+                                  connectedConnectors.map((c) => {
+                                    const on = selectedConnectors.includes(c.id);
                                     const atCap =
-                                      !checked && selectedTools.length >= MAX_TOOLS;
+                                      !on &&
+                                      selectedConnectors.length >= MAX_CONNECTORS;
+                                    const isMemory = c.connect_via === "memory";
                                     return (
                                       <button
-                                        key={t.name}
+                                        key={c.id}
                                         type="button"
-                                        role="checkbox"
-                                        aria-checked={checked}
+                                        role="switch"
+                                        aria-checked={on}
                                         disabled={atCap}
-                                        onClick={() => toggleTool(t.name)}
-                                        title={t.description}
+                                        onClick={() => toggleConnector(c.id)}
+                                        title={
+                                          isMemory
+                                            ? `${c.name} — grounds replies with this memory`
+                                            : `${c.name} — arms its tools for this chat`
+                                        }
                                         className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors ${
                                           atCap ? "opacity-40" : "hover:bg-white/[0.06]"
                                         }`}
                                       >
-                                        <span
-                                          className={`grid h-3.5 w-3.5 shrink-0 place-items-center rounded border ${
-                                            checked
-                                              ? "border-accent/60 bg-accent/20 text-accent-soft"
-                                              : "border-white/20"
-                                          }`}
-                                        >
-                                          {checked && <Check size={10} />}
+                                        <span className="w-4 shrink-0 text-center text-[13px]">
+                                          {c.glyph || (isMemory ? "🧠" : "🔌")}
                                         </span>
                                         <span
-                                          className={`truncate font-mono text-[11.5px] ${
-                                            checked ? "text-accent-soft" : "text-zinc-200"
+                                          className={`min-w-0 truncate text-[12px] ${
+                                            on ? "text-accent-soft" : "text-zinc-200"
                                           }`}
                                         >
-                                          {t.name.replace(/^mcp__/, "")}
+                                          {c.name}
+                                        </span>
+                                        <span className="ml-auto shrink-0 text-[9.5px] uppercase tracking-wide text-zinc-600">
+                                          {isMemory
+                                            ? "memory"
+                                            : `${c.tools_loaded ?? 0} tools`}
+                                        </span>
+                                        <span
+                                          aria-hidden
+                                          className={`flex h-3.5 w-6 shrink-0 items-center rounded-full border px-0.5 transition-colors ${
+                                            on
+                                              ? "justify-end border-accent/60 bg-accent/25"
+                                              : "justify-start border-white/20 bg-white/[0.04]"
+                                          }`}
+                                        >
+                                          <span
+                                            className={`h-2 w-2 rounded-full ${
+                                              on ? "bg-accent-soft" : "bg-zinc-500"
+                                            }`}
+                                          />
                                         </span>
                                       </button>
                                     );

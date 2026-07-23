@@ -22,7 +22,9 @@ def register(app: FastAPI, d) -> None:
 
         return {
             "connectors": list_connectors(d.platform),
-            "categories": CATEGORY_ORDER,
+            # Dynamic categories (the user's own MCP servers + memory sources)
+            # ride at the end so the gallery groups + filters them properly.
+            "categories": [*CATEGORY_ORDER, "Custom", "Memory"],
         }
 
     @app.post("/connectors/{connector_id}/connect")
@@ -40,16 +42,20 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/connectors/{connector_id}/test")
     def test_route(connector_id: str) -> dict[str, Any]:
-        from ...connectors import get_connector, test
+        from ...connectors import test
 
-        if get_connector(connector_id) is None:
+        # The service also resolves DYNAMIC entries (user MCP servers, memory
+        # sources) the curated catalog doesn't know — KeyError = truly unknown.
+        try:
+            return test(d.platform, connector_id)
+        except KeyError:
             raise HTTPException(status_code=404, detail="no such connector")
-        return test(d.platform, connector_id)
 
     @app.delete("/connectors/{connector_id}")
     def disconnect_route(connector_id: str) -> dict[str, Any]:
-        from ...connectors import disconnect, get_connector
+        from ...connectors import disconnect
 
-        if get_connector(connector_id) is None:
+        try:
+            return disconnect(d.platform, connector_id)
+        except KeyError:
             raise HTTPException(status_code=404, detail="no such connector")
-        return disconnect(d.platform, connector_id)

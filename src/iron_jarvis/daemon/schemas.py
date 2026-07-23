@@ -102,6 +102,24 @@ class ChatBody(BaseModel):
     #: documents, web retrieval, local image tools. Explicit ``tools`` always
     #: come first; the reply's tools_used stays the honest record of what RAN.
     auto_tools: bool = False
+    #: Connectors the user TOGGLED ON for this conversation (the "+" menu).
+    #: An MCP connector arms its whole tool group (additive to ``tools``,
+    #: separately bounded); a memory connector (an LTM source, e.g. an
+    #: MCP-served brain) grounds the turn with that store's top hits.
+    connectors: list[str] = []
+
+
+class ChatRememberBody(BaseModel):
+    """Commit a saved chat thread to long-term memory. ``mode`` distill = a
+    faithful one-shot LLM distillation of what is worth remembering (falls
+    back to a verbatim excerpt when no real model is connected — never a
+    fabricated summary); full = the verbatim transcript. ``source`` targets a
+    registered LTM store ("" = the default brain)."""
+
+    mode: str = "distill"  # distill | full
+    source: str = ""  # LTM source name ("" = default brain)
+    provider: str = ""  # distill-mode LLM override ("" = default)
+    model: str = ""
 
 
 class ChatShareBody(BaseModel):

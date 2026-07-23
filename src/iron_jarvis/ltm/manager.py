@@ -24,6 +24,11 @@ class LongTermMemory:
         self._connectors[connector.name] = connector
         return connector
 
+    def deregister(self, name: str) -> bool:
+        """Remove a registered connector (a deleted custom source takes effect
+        LIVE, not on the next restart). False when no such source."""
+        return self._connectors.pop(name, None) is not None
+
     def connectors(self) -> list[LTMConnector]:
         return list(self._connectors.values())
 
