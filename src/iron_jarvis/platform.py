@@ -403,6 +403,11 @@ def build_platform(
 
     # Phase 4: route the shell tool through the Sandbox Manager (same "shell" name).
     registry.register(SandboxedShellTool())
+    # v1.90.0: disposable code execution — the agent's escape hatch when no
+    # tool reliably fits (same "ask" trust tier as shell).
+    from .tools.runcode import RunCodeTool
+
+    registry.register(RunCodeTool())
 
     # The SHARED embedder is chosen ONCE here and reused across every semantic
     # surface — layered memory (below), file search, and ltm — so they all rank
@@ -420,11 +425,12 @@ def build_platform(
     # Phase 11: skills framework — builtin + user + external Claude/Codex skills
     # (recursively discovered) + any user-configured extra paths, exposed as the
     # search/load tools (which read the registry live, so more skills = richer
-    # results, not more tools).
+    # results, not more tools) + skill_create (v1.90.0: the agent KEEPS a
+    # proven solution as a durable skill; config gives it the home + rescan).
     skills = SkillRegistry().repopulate(
         config.home, getattr(config, "extra_skill_paths", None)
     )
-    for tool in skill_tools(skills):
+    for tool in skill_tools(skills, config):
         registry.register(tool)
 
     # Phase 8a / 9: artifact store, evaluation + observability.

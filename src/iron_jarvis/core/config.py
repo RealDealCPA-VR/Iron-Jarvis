@@ -90,6 +90,20 @@ def default_permissions() -> dict[str, str]:
         "read_document": "allow",
         "write_document": "allow",
         "extract_pdf": "allow",
+        # Excel intelligence: reads/analysis allowed (fs-policy confined);
+        # writes match write_document (workspace-confined + TX-01 undoable).
+        "excel_read": "allow",
+        "excel_profile": "allow",
+        "excel_query": "allow",
+        "excel_formula_check": "allow",
+        "excel_accounts_diff": "allow",
+        "excel_sheet_spec": "allow",
+        "excel_edit": "allow",
+        "excel_apply_spec": "allow",
+        # Disposable code — same trust tier as shell (arming in chat = consent).
+        "run_code": "ask",
+        # Skills inject into future prompts, so creating one asks first.
+        "skill_create": "ask",
         # Self-correcting learning loop.
         "remember_preference": "allow",
         "recall_lessons": "allow",

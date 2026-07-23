@@ -44,11 +44,15 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         "redact_pii",
         # Structured spreadsheet work (read anywhere; edits workspace-confined
         # + undoable). profile/query are engine-computed reads — exact figures
-        # instead of model arithmetic (the local-model failure mode).
+        # instead of model arithmetic (the local-model failure mode);
+        # formula_check/sheet_spec/accounts_diff are read-only analysis.
         "excel_read",
         "excel_edit",
         "excel_profile",
         "excel_query",
+        "excel_formula_check",
+        "excel_sheet_spec",
+        "excel_accounts_diff",
     }
 )
 
@@ -152,6 +156,17 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
         ),
         {"excel_query": 9, "excel_profile": 8, "excel_read": 7, "excel_edit": 6,
          "file_search": 3},
+    ),
+    # --- formula work / statement structure -------------------------------
+    (
+        re.compile(
+            r"\b(formulas?|=sum|subtotal|validate|verify|reconcile|"
+            r"financial statement|balance sheet|income statement|p&l|"
+            r"trial balance|accounts? (?:added|removed|changed))\b",
+            re.IGNORECASE,
+        ),
+        {"excel_formula_check": 7, "excel_sheet_spec": 5, "excel_accounts_diff": 5,
+         "excel_profile": 4},
     ),
     # --- computed figures over sheets ------------------------------------
     (

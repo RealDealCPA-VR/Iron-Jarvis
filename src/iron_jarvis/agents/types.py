@@ -45,8 +45,15 @@ _SELF_SERVICE_TOOLS = [
     "tool_delete",
     "custom:*",
 ]
-# Real documents: read any file type, write within the workspace.
-_DOCUMENT_TOOLS = ["read_document", "write_document", "extract_pdf"]
+# Real documents: read any file type, write within the workspace. The Excel
+# suite (v1.89–v1.90) gives agent sessions the same engine-computed figures,
+# formula validation, sheet reproduction, and account-diffing chat has.
+_DOCUMENT_TOOLS = [
+    "read_document", "write_document", "extract_pdf",
+    "excel_read", "excel_edit", "excel_profile", "excel_query",
+    "excel_formula_check", "excel_sheet_spec", "excel_apply_spec",
+    "excel_accounts_diff",
+]
 # Self-correction: record preferences learned mid-task; recall past lessons.
 _LEARNING_TOOLS = ["remember_preference", "recall_lessons"]
 # Departments: the shared blackboard lets sibling agents post findings and

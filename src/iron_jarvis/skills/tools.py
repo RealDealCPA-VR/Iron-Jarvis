@@ -76,6 +76,67 @@ class SkillLoadTool(Tool):
         )
 
 
-def skill_tools(registry: SkillRegistry) -> list[Tool]:
-    """Build the skill tools bound to ``registry`` (§23)."""
-    return [SkillSearchTool(registry), SkillLoadTool(registry)]
+class SkillCreateTool(Tool):
+    """Author a durable skill from the loop (v1.90.0) — how the agent keeps a
+    PROVEN solution (a validated formula workflow, a working script) for
+    future reuse instead of re-deriving it every time."""
+
+    name = "skill_create"
+    description = (
+        "SAVE a proven approach as a reusable skill for future conversations: "
+        "name + one-line description + full markdown instructions (include "
+        "the exact formulas/spec/code that worked and how they were "
+        "validated). The skill appears on the Skills page immediately and is "
+        "searchable via skill_search. Use after solving something non-obvious "
+        "— e.g. a validated financial-statement formula workflow, or the "
+        "run_code script that cracked a task."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "description": {"type": "string"},
+            "instructions": {"type": "string", "description": "Full markdown playbook"},
+        },
+        "required": ["name", "description", "instructions"],
+    }
+
+    def __init__(self, registry: SkillRegistry, config: Any) -> None:
+        self._registry = registry
+        self._config = config
+
+    async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        from .loader import save_skill
+
+        try:
+            path = save_skill(
+                self._config.home / "skills",
+                str(args.get("name", "")),
+                str(args.get("description", "")),
+                str(args.get("instructions", "")),
+            )
+        except ValueError as exc:
+            return ToolResult(ok=False, error=str(exc))
+        # Live rescan (same repopulate the daemon's /skills endpoints use) so
+        # the new skill is searchable in THIS session, not after a restart.
+        try:
+            self._registry.repopulate(
+                self._config.home,
+                getattr(self._config, "extra_skill_paths", None),
+            )
+        except Exception:  # noqa: BLE001 — the file is saved; a rescan hiccup
+            pass  # must not fail the creation (next boot picks it up)
+        return ToolResult(
+            ok=True,
+            output=f"skill saved: {path}",
+            data={"path": str(path), "name": str(args.get("name", "")).strip()},
+        )
+
+
+def skill_tools(registry: SkillRegistry, config: Any = None) -> list[Tool]:
+    """Build the skill tools bound to ``registry`` (§23). With ``config`` the
+    set includes ``skill_create`` (needs the home dir + rescan paths)."""
+    tools: list[Tool] = [SkillSearchTool(registry), SkillLoadTool(registry)]
+    if config is not None:
+        tools.append(SkillCreateTool(registry, config))
+    return tools
