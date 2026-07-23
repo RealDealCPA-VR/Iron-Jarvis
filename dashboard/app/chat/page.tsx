@@ -4196,7 +4196,10 @@ export default function ChatPage() {
                             />
                           </button>
                           {modelSub === p.id && (
-                            <div className="absolute right-full top-0 z-30 mr-1 max-h-60 w-56 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
+                            /* Anchored to the BOTTOM so a long catalog
+                               (OpenRouter) grows UPWARD over the chat area
+                               instead of being clipped at the card edge. */
+                            <div className="absolute bottom-0 right-full z-30 mr-1 max-h-[24rem] w-56 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
                               {models
                                 .filter((m) => m.provider === p.id)
                                 .map((m) => {
