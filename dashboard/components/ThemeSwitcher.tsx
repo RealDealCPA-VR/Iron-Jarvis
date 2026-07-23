@@ -35,6 +35,13 @@ const THEMES: Mark[] = [
     accent: "#22d3ee",
   },
   {
+    id: "mark8",
+    mark: "Mark 8",
+    name: "Liquid Glass",
+    flavor: "Frosted glass on silver light — clean, airy, unmistakably modern.",
+    accent: "#0a84ff",
+  },
+  {
     id: "mark23",
     mark: "Mark 23",
     name: "Gold & Red",
