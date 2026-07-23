@@ -158,12 +158,15 @@ function buildFromSource(
   return null;
 }
 
-/** A configured MCP server, as returned by GET /mcp/servers. */
+/** A configured MCP server, as returned by GET /mcp/servers. Daemons ≤1.88.0
+ *  omit `env`/`args` on rows saved by the marketplace connect flow, so both
+ *  stay optional here and every use is guarded — a missing env must never
+ *  crash the page (it did, on real installs). */
 interface McpServer {
   name: string;
   command: string;
-  args: string[];
-  env: Record<string, string>;
+  args?: string[];
+  env?: Record<string, string>;
   /** How many of this server's tools are live in the registry (0 = not loaded). */
   tools_loaded: number;
   /** Short names of the loaded tools, e.g. ["send_email","list_messages"]. */
@@ -189,12 +192,13 @@ interface McpTestResult {
   error: string | null;
 }
 
-/** Response payload of POST /mcp/suggest. */
+/** Response payload of POST /mcp/suggest. `args`/`env` are model-derived and
+ *  may be absent — consumers guard. */
 interface McpSuggestion {
   name: string;
   command: string;
-  args: string[];
-  env: Record<string, string>;
+  args?: string[];
+  env?: Record<string, string>;
   reply: string;
 }
 
@@ -870,8 +874,8 @@ export default function ToolsPage() {
     const okAdd = await addMcpServer(
       suggestion.name,
       suggestion.command,
-      suggestion.args,
-      suggestion.env,
+      suggestion.args ?? [],
+      suggestion.env ?? {},
       `suggest:${suggestion.name}`,
     );
     if (okAdd) setSuggestion(null);
@@ -1374,11 +1378,11 @@ export default function ToolsPage() {
                 </span>
               </div>
               <div className="mt-2.5">
-                <ArgvChips argv={[suggestion.command, ...suggestion.args]} />
+                <ArgvChips argv={[suggestion.command, ...(suggestion.args ?? [])]} />
               </div>
-              {Object.keys(suggestion.env).length > 0 && (
+              {Object.keys(suggestion.env ?? {}).length > 0 && (
                 <div className="mt-3 space-y-2">
-                  {Object.entries(suggestion.env).map(([k, v]) => (
+                  {Object.entries(suggestion.env ?? {}).map(([k, v]) => (
                     <label key={k} className="flex items-center gap-2">
                       <span className="w-44 shrink-0 truncate font-mono text-[11px] text-zinc-400">
                         {k}
@@ -1464,16 +1468,16 @@ export default function ToolsPage() {
                           {s.auto_approve && (
                             <Badge value="auto-approve" tone="amber" />
                           )}
-                          {Object.keys(s.env).length > 0 && (
+                          {Object.keys(s.env ?? {}).length > 0 && (
                             <Badge
-                              value={`${Object.keys(s.env).length} env`}
+                              value={`${Object.keys(s.env ?? {}).length} env`}
                               tone="violet"
                             />
                           )}
                         </div>
                         <div className="mt-1 overflow-x-auto">
                           <code className="whitespace-pre font-mono text-[11px] text-zinc-500">
-                            {[s.command, ...s.args].join(" ")}
+                            {[s.command, ...(s.args ?? [])].join(" ")}
                           </code>
                         </div>
                       </div>

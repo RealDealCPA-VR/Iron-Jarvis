@@ -502,6 +502,11 @@ def register(app: FastAPI, d) -> None:
             servers.append(
                 {
                     **s,
+                    # Rows saved by the marketplace connect flow OMIT env/args
+                    # when empty — normalize so clients can rely on the keys
+                    # (a missing env crashed the Tools page on real installs).
+                    "args": list(s.get("args") or []),
+                    "env": dict(s.get("env") or {}),
                     "tools_loaded": len(loaded),
                     "tool_names": [n.split("__", 2)[-1] for n in loaded],
                 }
