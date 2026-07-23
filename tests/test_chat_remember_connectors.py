@@ -315,12 +315,26 @@ def test_thread_setup_persists_connectors(tmp_path):
         "/chat/threads/new",
         json={
             "messages": [{"role": "user", "content": "hi"}],
-            "setup": {"tools": ["read_file"], "connectors": ["gmail", "facts_brain"]},
+            "setup": {"tools": ["read_file"], "connectors": ["gmail", "facts_brain"],
+                      "documents": [r"C:\proj\letter.docx", r"C:\proj\book.xlsx"]},
         },
     ).json()["id"]
     got = client.get(f"/chat/threads/{tid}").json()
     assert got["setup"]["connectors"] == ["gmail", "facts_brain"]
     assert got["setup"]["tools"] == ["read_file"]
+    # v1.91.0: generated-document paths persist with the thread (the preview
+    # chips survive leaving the page + daemon restarts until dismissed).
+    assert got["setup"]["documents"] == [r"C:\proj\letter.docx", r"C:\proj\book.xlsx"]
+    # The cap keeps the NEWEST documents.
+    client.put(
+        f"/chat/threads/{tid}",
+        json={
+            "messages": [{"role": "user", "content": "hi"}],
+            "setup": {"documents": [f"C:\\d\\{i}.docx" for i in range(12)]},
+        },
+    )
+    docs = client.get(f"/chat/threads/{tid}").json()["setup"]["documents"]
+    assert len(docs) == 8 and docs[-1] == "C:\\d\\11.docx" and docs[0] == "C:\\d\\4.docx"
     # Mistyped payloads are dropped, not stored.
     client.put(
         f"/chat/threads/{tid}",

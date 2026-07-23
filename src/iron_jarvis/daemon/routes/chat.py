@@ -223,14 +223,20 @@ def _resolve_armed_tools(d, body) -> tuple[list[str], list[str]]:
     return explicit + auto, auto
 
 
+#: Generated-document paths remembered per thread (the preview chips).
+_MAX_THREAD_DOCS = 8
+
+
 def _clean_setup(raw: Any) -> str:
     """Validate + compact a thread ``setup`` payload into its stored JSON.
 
-    Keeps ONLY the known keys ({tools, connectors, skill, workspace_dir,
-    provider, model}), correctly typed (tools/connectors: lists of strings,
+    Keeps ONLY the known keys ({tools, connectors, documents, skill,
+    workspace_dir, provider, model}), correctly typed (the lists: strings,
     capped at their live-turn maxima; the rest: strings); unknown keys and
     mistyped values are dropped rather than erroring. Returns "" when nothing
-    valid remains, so ``has_setup`` stays an honest flag.
+    valid remains, so ``has_setup`` stays an honest flag. ``documents`` are
+    the conversation's generated files — persisted so their previews survive
+    leaving the page and daemon restarts until deliberately dismissed.
     """
     if not isinstance(raw, dict):
         return ""
@@ -245,6 +251,11 @@ def _clean_setup(raw: Any) -> str:
         ids = [c.strip() for c in connectors if isinstance(c, str) and c.strip()]
         if ids:
             out["connectors"] = ids[:_MAX_CONNECTORS]
+    documents = raw.get("documents")
+    if isinstance(documents, list):
+        docs = [d.strip() for d in documents if isinstance(d, str) and d.strip()]
+        if docs:
+            out["documents"] = docs[-_MAX_THREAD_DOCS:]  # newest survive the cap
     for key in ("skill", "workspace_dir", "provider", "model"):
         val = raw.get(key)
         if isinstance(val, str) and val.strip():

@@ -57,6 +57,7 @@ import {
   ChevronRight,
   Copy,
   ExternalLink,
+  FileText,
   FolderKanban,
   FolderOpen,
   FolderPen,
@@ -248,6 +249,9 @@ interface ThreadSetup {
   tools?: string[];
   /** Connectors toggled ON for this conversation (MCP servers / memory). */
   connectors?: string[];
+  /** Documents this conversation generated — the preview chips persist with
+   *  the thread (and across restarts) until deliberately dismissed. */
+  documents?: string[];
   skill?: string;
   workspace_dir?: string;
   provider?: string;
@@ -317,6 +321,9 @@ const TOOL_LIST_CAP = 100;
 // (an MCP connector arms its whole tool group server-side, additive to the
 // 6-tool cap above; a memory connector grounds the turn with its top hits).
 const MAX_CONNECTORS = 6;
+// Generated-document paths remembered per thread (the persistent preview
+// chips) — newest survive the cap, matching the daemon's setup validation.
+const MAX_THREAD_DOCS = 8;
 
 // Agent-mode handoff: escalating a chat conversation to a NEW agent session
 // otherwise starts the agent blind (a fresh session carries no chat history),
@@ -889,6 +896,9 @@ export default function ChatPage() {
   // DOCUMENT PREVIEW (right rail): set when a turn creates/edits a document —
   // the chat column shifts over and the file renders beside the conversation.
   const [previewPath, setPreviewPath] = useState<string | null>(null);
+  // The conversation's generated documents — persisted in the thread setup so
+  // the preview chips survive leaving the page and restarts until dismissed.
+  const [threadDocs, setThreadDocs] = useState<string[]>([]);
   const [pickingFolder, setPickingFolder] = useState(false); // "change folder"
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -1574,6 +1584,7 @@ export default function ChatPage() {
     return {
       tools: selectedTools.slice(0, MAX_TOOLS),
       connectors: selectedConnectors.slice(0, MAX_CONNECTORS),
+      documents: threadDocs.slice(-MAX_THREAD_DOCS),
       skill: activeSkill,
       workspace_dir: workspaceDir ?? "",
       provider: provider ?? "",
@@ -1655,6 +1666,7 @@ export default function ChatPage() {
     setSelectedTools([]); // armed tools are per-conversation
     setSelectedConnectors([]); // so are connector toggles
     setPreviewPath(null); // the preview belongs to the previous conversation
+    setThreadDocs([]); // until this thread's setup (if any) restores its own
     sendSetupRef.current = false; // until this thread's setup (if any) restores
     setToolsOpen(false);
     setToolQuery("");
@@ -1715,6 +1727,15 @@ export default function ChatPage() {
             ? setup.connectors
                 .filter((x) => typeof x === "string")
                 .slice(0, MAX_CONNECTORS)
+            : [],
+        );
+        // Generated-document chips come back with the thread — no auto-open;
+        // the chips offer the preview until deliberately dismissed.
+        setThreadDocs(
+          Array.isArray(setup.documents)
+            ? setup.documents
+                .filter((x) => typeof x === "string")
+                .slice(-MAX_THREAD_DOCS)
             : [],
         );
         setActiveSkill(typeof setup.skill === "string" ? setup.skill : "");
@@ -2388,14 +2409,70 @@ export default function ChatPage() {
     tts.speakMore(full, flush);
   }
 
+  /** Persist the thread setup with an EXPLICIT documents list. State updates
+   *  are async, so the doc-chip saves can't rely on currentSetup() seeing the
+   *  new list — and the setupVersion effect skips a not-yet-saved thread,
+   *  which would lose chips generated on a conversation's FIRST turn. Riding
+   *  the serialized save chain means the turn's own save has already resolved
+   *  the thread id (the chain mutates the shared target) by the time this
+   *  PUT runs. */
+  function queueSaveDocs(docs: string[]) {
+    const target = saveTargetRef.current;
+    const personaValue = personaForSend();
+    const setup = { ...currentSetup(), documents: docs.slice(-MAX_THREAD_DOCS) };
+    sendSetupRef.current = true; // future saves keep carrying the setup
+    saveChainRef.current = saveChainRef.current.then(async () => {
+      const msgs = messagesRef.current; // read INSIDE the chain — post-turn state
+      if (msgs.length === 0) return;
+      try {
+        const body: ThreadSaveBody = {
+          messages: msgs,
+          project_id: projectIdRef.current,
+          ...(personaValue ? { persona: personaValue } : {}),
+          setup,
+        };
+        const res = await put<ThreadSaveResult>(
+          `/chat/threads/${target.id ?? "new"}`,
+          body,
+        );
+        target.id = res.id;
+        if (saveTargetRef.current === target) setThreadId(res.id);
+      } catch {
+        /* autosave is best-effort — never disturb the conversation itself */
+      }
+    });
+  }
+
   /** A turn created/edited documents: preview the last one in the right rail
-   *  (opening the rail if it was collapsed) so the file appears beside the
-   *  conversation as part of the flow. */
+   *  (opening the rail if it was collapsed) and REMEMBER them on the thread —
+   *  the chips persist (and survive restarts) until deliberately dismissed. */
   function showDocPreview(paths?: string[]) {
-    const last = (paths ?? []).filter(Boolean).at(-1);
+    const docs = (paths ?? []).filter(Boolean);
+    const last = docs.at(-1);
     if (!last) return;
+    const merged = [
+      ...threadDocs.filter((p) => !docs.includes(p)),
+      ...docs,
+    ].slice(-MAX_THREAD_DOCS);
+    setThreadDocs(merged);
+    queueSaveDocs(merged);
     setPreviewPath(last);
     setWorkspaceOpenPersisted(true);
+  }
+
+  /** Reopen a remembered document's preview (the chip's click). */
+  function openDocPreview(path: string) {
+    setPreviewPath(path);
+    setWorkspaceOpenPersisted(true);
+  }
+
+  /** Deliberately dismiss a remembered document (the chip's ×): forget it on
+   *  the thread and close its panel if it is the one showing. */
+  function dismissThreadDoc(path: string) {
+    const next = threadDocs.filter((p) => p !== path);
+    setThreadDocs(next);
+    setPreviewPath((cur) => (cur === path ? null : cur));
+    queueSaveDocs(next);
   }
 
   /** Put a failed turn's typed message back in the composer — but only when
@@ -2765,6 +2842,7 @@ export default function ChatPage() {
     }
     setSelectedConnectors([]); // connector toggles are per-conversation
     setPreviewPath(null); // a fresh conversation starts without a preview
+    setThreadDocs([]); // document chips belong to their conversation
     sendSetupRef.current = false; // fresh conversation — nothing armed to persist
     setToolsOpen(false);
     setToolQuery("");
@@ -3621,6 +3699,7 @@ export default function ChatPage() {
               {/* Chips queued for the next message — active skill + armed tools
                   (chat mode) share the row with attachment chips. */}
               {(attachments.length > 0 ||
+                threadDocs.length > 0 ||
                 (mode === "chat" &&
                   (activeSkill !== "" ||
                     selectedTools.length > 0 ||
@@ -3686,6 +3765,43 @@ export default function ChatPage() {
                         </button>
                       </span>
                     ))}
+                  {/* Generated documents: persistent preview chips — click
+                      reopens the panel; × deliberately forgets the document. */}
+                  {threadDocs.map((doc) => {
+                    const docName = doc.split(/[\\/]/).pop() || doc;
+                    return (
+                      <span
+                        key={`doc-${doc}`}
+                        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] text-zinc-300 ${
+                          previewPath === doc
+                            ? "border-accent/50 bg-accent/[0.12]"
+                            : "border-accent/25 bg-accent/[0.06]"
+                        }`}
+                      >
+                        <FileText size={11} className="shrink-0 text-accent-soft" />
+                        <button
+                          type="button"
+                          onClick={() => openDocPreview(doc)}
+                          title={`Preview ${docName} beside the chat`}
+                          className="max-w-[14rem] truncate transition-colors hover:text-accent-soft"
+                        >
+                          {docName}
+                        </button>
+                        <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-zinc-600">
+                          preview
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => dismissThreadDoc(doc)}
+                          aria-label={`Dismiss the ${docName} preview`}
+                          title="Dismiss — forget this document's preview chip"
+                          className="text-zinc-500 transition-colors hover:text-rose-300"
+                        >
+                          <X size={11} />
+                        </button>
+                      </span>
+                    );
+                  })}
                   {attachments.map((a, i) => (
                     <span
                       key={`${a.path}-${i}`}
