@@ -8,7 +8,7 @@
 // Excel/…" launches the OS-associated app through POST /documents/open — an
 // explicit, user-initiated click.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ExternalLink,
   FileText,
@@ -16,11 +16,13 @@ import {
   RefreshCw,
   X,
 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { get, post, ApiError, API_BASE, ijToken } from "@/lib/api";
 import { ErrorNote, LoaderInline } from "@/components/ui";
 
 interface PreviewData {
-  kind: "sheet" | "pdf" | "markdown" | "text";
+  kind: "sheet" | "pdf" | "html" | "markdown" | "text";
   name: string;
   path: string;
   suffix: string;
@@ -28,8 +30,47 @@ interface PreviewData {
   sheet?: string;
   rows?: string[][];
   content?: string;
+  /** Word-faithful docx→HTML (rendered on a page inside a SANDBOXED frame). */
+  html?: string;
   truncated?: boolean;
 }
+
+/** Word-like page styling for the docx HTML preview. Rendered inside a fully
+ *  sandboxed iframe (no scripts, no navigation) so untrusted document HTML
+ *  can never execute — it can only look like a document. */
+const PAGE_CSS = `
+  html,body{margin:0;padding:0;background:#50545a;}
+  .page{max-width:816px;margin:24px auto;background:#fff;color:#141414;
+    padding:76px 88px;font-family:'Calibri','Segoe UI',Arial,sans-serif;
+    font-size:11pt;line-height:1.55;box-shadow:0 2px 14px rgba(0,0,0,.5);
+    min-height:900px;box-sizing:border-box;}
+  h1{font-size:19pt;font-weight:600;margin:0 0 12px;}
+  h2{font-size:14.5pt;font-weight:600;margin:16px 0 8px;}
+  h3{font-size:12.5pt;font-weight:600;margin:14px 0 6px;}
+  p{margin:0 0 10px;}
+  table{border-collapse:collapse;margin:10px 0;}
+  td,th{border:1px solid #b9b9b9;padding:4px 9px;font-size:10.5pt;}
+  ul,ol{margin:0 0 10px;padding-left:26px;}
+  li{margin:2px 0;}
+  a{color:#0563c1;}
+  img{max-width:100%;}
+  strong{font-weight:700;} em{font-style:italic;}
+`;
+
+/** Word-page look for client-rendered markdown (the docx fallback + .md). */
+const MD_PAGE_CLASS =
+  "mx-auto my-5 min-h-[40rem] max-w-[816px] bg-white px-14 py-12 " +
+  "font-[Calibri,'Segoe_UI',Arial,sans-serif] text-[11pt] leading-[1.55] " +
+  "text-zinc-900 shadow-xl " +
+  "[&_h1]:mb-3 [&_h1]:text-[19pt] [&_h1]:font-semibold " +
+  "[&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-[14.5pt] [&_h2]:font-semibold " +
+  "[&_h3]:mb-1.5 [&_h3]:mt-3 [&_h3]:text-[12.5pt] [&_h3]:font-semibold " +
+  "[&_p]:mb-2.5 [&_ul]:mb-2.5 [&_ul]:list-disc [&_ul]:pl-6 " +
+  "[&_ol]:mb-2.5 [&_ol]:list-decimal [&_ol]:pl-6 " +
+  "[&_table]:my-2.5 [&_table]:border-collapse " +
+  "[&_td]:border [&_td]:border-zinc-400 [&_td]:px-2 [&_td]:py-1 " +
+  "[&_th]:border [&_th]:border-zinc-400 [&_th]:px-2 [&_th]:py-1 " +
+  "[&_a]:text-blue-700 [&_a]:underline";
 
 /** Suffix → the native app the Open button names (mirrors the daemon map). */
 const APP_LABEL: Record<string, string> = {
@@ -113,6 +154,15 @@ export function DocPreview({
   const fileUrl = `${API_BASE}/documents/file?path=${encodeURIComponent(path)}${
     tok ? `&token=${encodeURIComponent(tok)}` : ""
   }`;
+  // The Word-faithful page: server HTML wrapped in our page chrome, rendered
+  // in a FULLY sandboxed frame (no scripts/forms/navigation can run).
+  const docSrcDoc = useMemo(
+    () =>
+      data?.kind === "html"
+        ? `<!doctype html><html><head><meta charset="utf-8"><style>${PAGE_CSS}</style></head><body><div class="page">${data.html ?? ""}</div></body></html>`
+        : "",
+    [data],
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
@@ -174,6 +224,27 @@ export function DocPreview({
             title={`Preview of ${name}`}
             className="h-full w-full border-0"
           />
+        ) : data.kind === "html" ? (
+          // Word-faithful page — sandbox="" blocks scripts/forms/navigation.
+          <iframe
+            sandbox=""
+            srcDoc={docSrcDoc}
+            title={`Preview of ${name}`}
+            className="h-full w-full border-0"
+          />
+        ) : data.kind === "markdown" ? (
+          <div className="h-full overflow-auto bg-[#50545a] px-3">
+            <div className={MD_PAGE_CLASS}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {data.content ?? ""}
+              </ReactMarkdown>
+            </div>
+            {data.truncated && (
+              <p className="pb-3 text-center text-[10.5px] text-zinc-300">
+                Preview clipped — open the file for everything.
+              </p>
+            )}
+          </div>
         ) : data.kind === "sheet" ? (
           <div className="flex h-full min-h-0 flex-col">
             {(data.sheets?.length ?? 0) > 1 && (

@@ -140,6 +140,8 @@ for pkg in (
     "pypdfium2",
     "markdownify",
     "bs4",             # beautifulsoup4 — markitdown HTML handling
+    "mammoth",         # docx -> HTML for the Word-faithful document preview
+    "cobble",          # mammoth's pure-python data-class dependency
 ):
     _collect(pkg)
 

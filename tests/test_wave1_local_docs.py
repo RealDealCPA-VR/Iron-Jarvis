@@ -250,6 +250,31 @@ def test_preview_sheet_and_text_and_gating(tmp_path):
         ).status_code == 403
 
 
+def test_preview_docx_is_word_faithful_html(tmp_path):
+    """v1.90.1: a .docx previews as semantic HTML (headings/bold/tables) for
+    the Word-like page render — NOT flattened text, which loses exactly the
+    formatting the user reviews before opening the file."""
+    from docx import Document
+
+    doc = Document()
+    doc.add_heading("Engagement Letter", level=1)
+    p = doc.add_paragraph("Dear client, ")
+    p.add_run("this part is bold").bold = True
+    doc.add_paragraph("first bullet", style="List Bullet")
+    table = doc.add_table(rows=1, cols=2)
+    table.rows[0].cells[0].text = "Fee"
+    target = tmp_path / "letter.docx"
+    doc.save(str(target))
+    client = TestClient(create_app(str(tmp_path)))
+    out = client.get("/documents/preview", params={"path": str(target)}).json()
+    assert out["kind"] == "html", out
+    html = out["html"]
+    assert "<h1>" in html and "Engagement Letter" in html
+    assert "<strong>this part is bold</strong>" in html
+    assert "<table>" in html and "Fee" in html
+    assert "<li>" in html
+
+
 def test_document_file_serves_bytes(tmp_path):
     client = TestClient(create_app(str(tmp_path)))
     f = tmp_path / "note.txt"

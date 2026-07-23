@@ -1,6 +1,6 @@
 [project]
 name = "iron-jarvis"
-version = "1.90.0"
+version = "1.90.1"
 description = "Iron Jarvis - a local-first AI operating system: a multi-agent orchestrator with tools, memory, workflows, a sandbox, git-native review, and a Next.js control center."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -33,6 +33,7 @@ dependencies = [
     "pywinpty>=3.0.5 ; sys_platform == 'win32'",
     "paramiko>=3.4", # SSH/SFTP for the remote long-term-memory source (§21)
     "markitdown[pdf]>=0.1.6",
+    "mammoth>=1.12.0",
 ]
 
 [project.optional-dependencies]

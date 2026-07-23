@@ -128,6 +128,30 @@ def register(app: FastAPI, d) -> None:
                     "rows": rows, "truncated": truncated}
         if suffix == ".pdf":
             return {**base, "kind": "pdf"}
+        if suffix == ".docx":
+            # WORD-FAITHFUL preview: semantic docx→HTML (headings, bold/italic,
+            # lists, real tables) rendered by the client on a white page in a
+            # SANDBOXED frame — extracted text loses exactly the formatting the
+            # user is reviewing. Degrades to structured markdown, then text.
+            try:
+                import mammoth
+
+                with p.open("rb") as fh:
+                    html = mammoth.convert_to_html(fh).value or ""
+                if html.strip():
+                    return {**base, "kind": "html", "html": html[:400_000],
+                            "truncated": len(html) > 400_000}
+            except Exception:  # noqa: BLE001 — fall through to markdown/text
+                pass
+            try:
+                from ...documents.pdf_markdown import document_to_markdown
+
+                md = document_to_markdown(p)
+                if md.strip():
+                    return {**base, "kind": "markdown", "content": md[:40_000],
+                            "truncated": len(md) > 40_000}
+            except Exception:  # noqa: BLE001
+                pass
         from ...documents.readers import extract_text
 
         try:
