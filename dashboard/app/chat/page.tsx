@@ -70,6 +70,8 @@ import {
   PanelRightOpen,
   Paperclip,
   Pencil,
+  Pin,
+  PinOff,
   Plus,
   PlugZap,
   RefreshCw,
@@ -896,6 +898,10 @@ export default function ChatPage() {
   const [shareOpen, setShareOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false); // mobile-only toggle
   const [threadQuery, setThreadQuery] = useState(""); // sidebar title filter
+  // Pinned threads (per-device view preference) + inline rename state.
+  const [pinnedIds, setPinnedIds] = useState<string[]>([]);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const [threadsLoading, setThreadsLoading] = useState(true); // first threads fetch
   // The reader scrolled up: show a "Jump to latest" pill and STOP auto-scrolling
   // so streamed tokens don't yank them back down while they re-read.
@@ -926,9 +932,57 @@ export default function ChatPage() {
   // title filter narrows client-side on top.
   const visibleThreads = useMemo(() => {
     const q = threadQuery.trim().toLowerCase();
-    if (!q) return threads;
-    return threads.filter((t) => (t.title || "").toLowerCase().includes(q));
-  }, [threads, threadQuery]);
+    const filtered = q
+      ? threads.filter((t) => (t.title || "").toLowerCase().includes(q))
+      : threads;
+    // Pinned float to the top; the sort is stable so recency holds within
+    // each group.
+    return [...filtered].sort(
+      (a, b) => Number(pinnedIds.includes(b.id)) - Number(pinnedIds.includes(a.id)),
+    );
+  }, [threads, threadQuery, pinnedIds]);
+
+  // Hydrate pins once (per-device preference, like the workspace defaults).
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("ij_chat_pinned");
+      const arr = raw ? (JSON.parse(raw) as unknown) : [];
+      if (Array.isArray(arr)) setPinnedIds(arr.filter((x) => typeof x === "string"));
+    } catch {
+      /* no pins */
+    }
+  }, []);
+
+  function togglePin(id: string) {
+    setPinnedIds((prev) => {
+      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [id, ...prev];
+      try {
+        window.localStorage.setItem("ij_chat_pinned", JSON.stringify(next));
+      } catch {
+        /* pins just don't persist */
+      }
+      return next;
+    });
+  }
+
+  /** Rename any listed thread: fetch its messages, PUT them back with the new
+   *  title (the save route treats omitted fields as untouched). */
+  async function renameThread(id: string, title: string) {
+    const clean = title.trim();
+    setRenamingId(null);
+    if (!clean) return;
+    try {
+      const t = await get<ThreadDetail>(`/chat/threads/${encodeURIComponent(id)}`);
+      await put(`/chat/threads/${encodeURIComponent(id)}`, {
+        messages: t.messages ?? [],
+        title: clean,
+      });
+      void refreshThreads();
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 0) setOffline(true);
+      else setError(e instanceof ApiError ? e.message : String(e));
+    }
+  }
   const activeProject = useMemo(
     () => (projectId ? (projects.find((p) => p.id === projectId) ?? null) : null),
     [projects, projectId],
@@ -984,6 +1038,35 @@ export default function ChatPage() {
   const [plusSub, setPlusSub] = useState<
     "skills" | "connectors" | "project" | null
   >(null);
+  // The minimalist bottom-right model switcher: name + chevron, no box;
+  // opens a provider list whose ▸ flyouts hold that provider's models.
+  const modelPopRef = useRef<HTMLDivElement>(null);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const [modelSub, setModelSub] = useState<string | null>(null);
+  const modelProviders = useMemo(() => {
+    const seen = new Map<string, { id: string; label: string }>();
+    for (const m of models) {
+      if (!seen.has(m.provider))
+        seen.set(m.provider, { id: m.provider, label: m.name || m.provider });
+    }
+    return [...seen.values()];
+  }, [models]);
+  const modelLabel = useMemo(() => {
+    if (!choice) return "default model";
+    const { model } = splitChoice(choice);
+    return model || choice.replace("::", " · ");
+  }, [choice]);
+  useEffect(() => {
+    if (!modelMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!modelPopRef.current?.contains(e.target as Node)) {
+        setModelMenuOpen(false);
+        setModelSub(null);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [modelMenuOpen]);
   // One-shot fetch guards for the /tools and /skills catalogs (cached in state;
   // reset on failure so reopening the affordance retries).
   const toolsFetchedRef = useRef(false);
@@ -2820,36 +2903,6 @@ export default function ChatPage() {
                   </button>
                 </div>
               )}
-              <select
-                aria-label="Model"
-                value={choice}
-                onChange={(e) => {
-                  setChoice(e.target.value);
-                  markSetupChanged();
-                }}
-                disabled={mode === "agent" ? awaiting || sessionId !== null : busy}
-                title={
-                  mode === "agent" && sessionId !== null
-                    ? "Start a new chat to switch models"
-                    : "Model for this chat"
-                }
-                className="field w-auto py-1.5 text-[13px]"
-              >
-                <option value="">default model</option>
-                {/* Tolerate a thread-restored model the catalog no longer lists. */}
-                {choice !== "" &&
-                  !models.some((m) => `${m.provider}::${m.model}` === choice) && (
-                    <option value={choice}>{choice.replace("::", " · ")}</option>
-                  )}
-                {models.map((m) => {
-                  const v = `${m.provider}::${m.model}`;
-                  return (
-                    <option key={v} value={v}>
-                      {m.name || m.provider} · {m.model}
-                    </option>
-                  );
-                })}
-              </select>
               <button
                 type="button"
                 onClick={() => setWorkspaceOpenPersisted(!workspaceOpen)}
@@ -3112,10 +3165,28 @@ export default function ChatPage() {
                               : "border-transparent hover:bg-white/[0.04]"
                           }`}
                         >
+                          {renamingId === t.id ? (
+                            <input
+                              autoFocus
+                              value={renameDraft}
+                              onChange={(e) => setRenameDraft(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  void renameThread(t.id, renameDraft);
+                                } else if (e.key === "Escape") {
+                                  setRenamingId(null);
+                                }
+                              }}
+                              onBlur={() => void renameThread(t.id, renameDraft)}
+                              aria-label="Rename chat"
+                              className="field mx-1.5 my-1.5 w-[calc(100%-0.75rem)] py-1 text-[13px]"
+                            />
+                          ) : (
                           <button
                             type="button"
                             onClick={() => void openThread(t.id)}
-                            className="w-full px-2.5 py-2 pr-7 text-left"
+                            className="w-full px-2.5 py-2 pr-[4.5rem] text-left"
                             title={t.title || "Untitled chat"}
                           >
                             <span
@@ -3123,6 +3194,9 @@ export default function ChatPage() {
                                 active ? "text-accent-soft" : "text-zinc-200"
                               }`}
                             >
+                              {pinnedIds.includes(t.id) && (
+                                <Pin size={11} className="shrink-0 text-accent-soft/80" />
+                              )}
                               <span className="min-w-0 truncate">
                                 {t.title || "Untitled chat"}
                               </span>
@@ -3143,15 +3217,55 @@ export default function ChatPage() {
                               {count === 1 ? "" : "s"}
                             </span>
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => void removeThread(t.id)}
-                            aria-label={`Delete ${t.title || "chat"}`}
-                            title="Delete this chat"
-                            className="absolute right-1.5 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md text-zinc-500 opacity-0 transition-opacity hover:bg-white/[0.06] hover:text-rose-300 focus-visible:opacity-100 group-hover/thread:opacity-100"
-                          >
-                            <Trash2 size={13} />
-                          </button>
+                          )}
+                          {renamingId !== t.id && (
+                            <span className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/thread:opacity-100">
+                              <button
+                                type="button"
+                                onClick={() => togglePin(t.id)}
+                                aria-label={
+                                  pinnedIds.includes(t.id) ? "Unpin chat" : "Pin chat"
+                                }
+                                title={
+                                  pinnedIds.includes(t.id)
+                                    ? "Unpin — drop back into the recency order"
+                                    : "Pin to the top of the list"
+                                }
+                                className={`grid h-6 w-6 place-items-center rounded-md transition-colors hover:bg-white/[0.06] ${
+                                  pinnedIds.includes(t.id)
+                                    ? "text-accent-soft"
+                                    : "text-zinc-500 hover:text-zinc-200"
+                                }`}
+                              >
+                                {pinnedIds.includes(t.id) ? (
+                                  <PinOff size={13} />
+                                ) : (
+                                  <Pin size={13} />
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setRenameDraft(t.title || "");
+                                  setRenamingId(t.id);
+                                }}
+                                aria-label={`Rename ${t.title || "chat"}`}
+                                title="Rename this chat"
+                                className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+                              >
+                                <Pencil size={13} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void removeThread(t.id)}
+                                aria-label={`Delete ${t.title || "chat"}`}
+                                title="Delete this chat"
+                                className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-rose-300"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </span>
+                          )}
                         </div>
                       );
                     })}
@@ -4008,19 +4122,115 @@ export default function ChatPage() {
                     <Square size={14} /> Stop
                   </button>
                 )}
-                <button
-                  onClick={() => send(input)}
-                  disabled={busy || !input.trim()}
-                  className="btn-accent h-[2.75rem] px-4 py-0 text-[13px]"
-                >
-                  {busy ? (
-                    <LoaderInline />
-                  ) : (
-                    <>
-                      <Send size={16} /> Send
-                    </>
+                {/* The send ARROW: invisible until there's something to send
+                    (text or an attachment) — then it materializes. */}
+                {(input.trim() || attachments.length > 0 || busy) && (
+                  <button
+                    onClick={() => send(input)}
+                    disabled={busy || !input.trim()}
+                    aria-label="Send"
+                    title="Send (Enter)"
+                    className="btn-accent h-[2.75rem] w-[2.75rem] shrink-0 rounded-full p-0"
+                  >
+                    {busy ? <LoaderInline /> : <Send size={16} />}
+                  </button>
+                )}
+              </div>
+              {/* Bottom-right: the minimalist model switcher — just the name
+                  and a chevron, no box. Providers list; each ▸ flys out that
+                  provider's models. */}
+              <div className="flex justify-end px-4 pb-2.5">
+                <div ref={modelPopRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModelMenuOpen((v) => !v);
+                      setModelSub(null);
+                    }}
+                    disabled={mode === "agent" && sessionId !== null}
+                    aria-expanded={modelMenuOpen}
+                    aria-haspopup="true"
+                    title={
+                      mode === "agent" && sessionId !== null
+                        ? "Start a new chat to switch models"
+                        : "Switch model"
+                    }
+                    className="inline-flex items-center gap-1 text-[11.5px] text-zinc-500 transition-colors hover:text-zinc-300 disabled:opacity-40"
+                  >
+                    <span className="max-w-[14rem] truncate font-mono">{modelLabel}</span>
+                    <ChevronDown size={11} className="shrink-0" />
+                  </button>
+                  {modelMenuOpen && (
+                    <div className="absolute bottom-full right-0 z-20 mb-1.5 w-52 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setChoice("");
+                          markSetupChanged();
+                          setModelMenuOpen(false);
+                        }}
+                        className={`flex w-full items-center rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] ${
+                          !choice ? "text-accent-soft" : "text-zinc-300"
+                        }`}
+                      >
+                        default model
+                      </button>
+                      {modelProviders.map((p) => (
+                        <div key={p.id} className="relative">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setModelSub(modelSub === p.id ? null : p.id)
+                            }
+                            aria-expanded={modelSub === p.id}
+                            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] ${
+                              splitChoice(choice).provider === p.id
+                                ? "text-accent-soft"
+                                : "text-zinc-300"
+                            }`}
+                          >
+                            <span className="min-w-0 truncate">{p.label}</span>
+                            <ChevronRight
+                              size={12}
+                              className="ml-auto shrink-0 text-zinc-500"
+                            />
+                          </button>
+                          {modelSub === p.id && (
+                            <div className="absolute right-full top-0 z-30 mr-1 max-h-60 w-56 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
+                              {models
+                                .filter((m) => m.provider === p.id)
+                                .map((m) => {
+                                  const v = `${m.provider}::${m.model}`;
+                                  return (
+                                    <button
+                                      key={v}
+                                      type="button"
+                                      onClick={() => {
+                                        setChoice(v);
+                                        markSetupChanged();
+                                        setModelMenuOpen(false);
+                                        setModelSub(null);
+                                      }}
+                                      className={`flex w-full items-center rounded-lg px-2.5 py-1.5 text-left font-mono text-[11.5px] transition-colors hover:bg-white/[0.06] ${
+                                        choice === v
+                                          ? "text-accent-soft"
+                                          : "text-zinc-300"
+                                      }`}
+                                    >
+                                      <span className="min-w-0 truncate">{m.model}</span>
+                                      {choice === v && (
+                                        <Check size={11} className="ml-auto shrink-0" />
+                                      )}
+                                    </button>
+                                  );
+                                })}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   )}
-                </button>
+                </div>
               </div>
             </Card>
           </div>
