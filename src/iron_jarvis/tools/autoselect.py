@@ -117,15 +117,21 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
         {"read_document": 8, "file_search": 5},
     ),
     # --- creating deliverables -------------------------------------------
+    # "excel/workbook/worksheet/table/word doc" belong in the noun group:
+    # "create an excel" once armed only the ANALYZERS (excel_edit refuses
+    # without an existing workbook) and never the one tool that creates
+    # files — a real shipped failure. The creator also OUTRANKS the
+    # spreadsheet analyzers (10 > 9) when creation intent is present.
     (
         re.compile(
             r"\b(write|create|draft|make|generate|prepare|produce|save|"
             r"export|put together)\b.{0,60}\b(file|document|report|memo|"
             r"letter|docx|pdf|spreadsheet|xlsx|csv|deck|presentation|pptx|"
-            r"proposal|invoice|one.pager|summary doc)\b",
+            r"proposal|invoice|one.pager|summary doc|excel|workbook|"
+            r"worksheet|sheet|table|word doc)\b",
             re.IGNORECASE,
         ),
-        {"write_document": 8, "write_file": 3},
+        {"write_document": 10, "write_file": 3},
     ),
     (
         re.compile(

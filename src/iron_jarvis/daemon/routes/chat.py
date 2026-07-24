@@ -245,6 +245,49 @@ _FOLDER_RX = _re.compile(r"(?:[A-Za-z]:\\|\\\\)[^\s\"'`|<>*?]*[\\/]")
 
 _DOC_WRITING_TOOLS = {"write_document", "excel_edit", "excel_apply_spec"}
 
+#: File-creation intent in the user's message ("create an excel of…"), used
+#: for the no-file-was-written honesty note below.
+_CREATE_INTENT_RX = _re.compile(
+    r"\b(?:write|create|draft|make|generate|prepare|produce|save|export)\b"
+    r".{0,60}\b(?:excel|xlsx|spreadsheet|workbook|worksheet|docx|word|pdf|csv"
+    r"|pptx|presentation|document|file)\b",
+    _re.IGNORECASE,
+)
+#: Questions ABOUT creating ("how do I create an excel formula?") are advice,
+#: not a request — no note.
+_ADVICE_RX = _re.compile(
+    r"\s*(?:how|what|why|when|where|can|could|should|would|does|do|is|are)\b",
+    _re.IGNORECASE,
+)
+_FILE_WRITING_TOOLS = frozenset(
+    {"write_document", "write_file", "excel_edit", "excel_apply_spec"}
+)
+
+
+def _creation_honesty_note(body, armed: list[str], tools_used: list[str]) -> str:
+    """'' unless the user asked for a FILE and none was written this turn — a
+    model (local ones especially) narrating a save that never happened must
+    never go unflagged, and the note tells the user exactly how to fix it."""
+    last_user = next(
+        (m.content or "" for m in reversed(body.messages) if m.role == "user"), ""
+    )
+    if not _CREATE_INTENT_RX.search(last_user) or _ADVICE_RX.match(last_user):
+        return ""
+    if set(tools_used) & _FILE_WRITING_TOOLS:
+        return ""
+    if set(armed) & _FILE_WRITING_TOOLS:
+        return (
+            "\n\n_Note: no file was actually written this turn — the model "
+            "answered without using its document tools. Ask again (e.g. "
+            "“use write_document”), or switch to a model that is stronger "
+            "at tool use._"
+        )
+    return (
+        "\n\n_Note: no file was actually created this turn — no document-"
+        "writing tool was armed. Arm write_document via the “+” menu (or "
+        "keep Auto-tools on) and ask again._"
+    )
+
 
 def _derive_thread_documents(msgs: list, setup: dict) -> list[str]:
     """Best-effort document recovery for threads saved BEFORE v1.91.0 (whose
@@ -1279,6 +1322,7 @@ def register(app: FastAPI, d) -> None:
             reply += f"\n\n_Note: {names} could not run (permission denied)._"
         if stopped_note:
             reply += f"\n\n_Note: {stopped_note}._"
+        reply += _creation_honesty_note(body, armed, tools_used)
         return {
             "reply": reply,
             "provider": route.provider,
@@ -1759,6 +1803,7 @@ def register(app: FastAPI, d) -> None:
                 reply += f"\n\n_Note: {names} could not run (permission denied)._"
             if stopped_note:
                 reply += f"\n\n_Note: {stopped_note}._"
+            reply += _creation_honesty_note(body, armed, tools_used)
             yield _sse("done", {
                 "reply": reply,
                 "provider": route_provider,
