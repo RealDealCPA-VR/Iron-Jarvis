@@ -233,3 +233,78 @@ async def test_tool_no_pii_is_honest(tmp_path):
     assert res.ok
     assert res.data["total"] == 0
     assert "no PII found" in res.output
+
+
+# --- v1.93.0: confirmed redaction (scan -> user approves -> targeted apply) ---
+
+
+def test_scan_text_groups_findings_with_counts_and_context():
+    from iron_jarvis.documents.redact import scan_text
+
+    text = (
+        "Client John: SSN 123-45-6789, phone (212) 555-0199.\n"
+        "Spouse SSN 123-45-6789 repeats; email jane@example.com."
+    )
+    findings = scan_text(text)
+    by_value = {f["value"]: f for f in findings}
+    assert by_value["123-45-6789"]["count"] == 2  # deduped, counted
+    assert by_value["123-45-6789"]["label"] == "SSN"
+    assert "Client John" in by_value["123-45-6789"]["context"]
+    assert by_value["jane@example.com"]["category"] == "email"
+    assert [f["id"] for f in findings] == list(range(1, len(findings) + 1))
+
+
+def test_only_terms_redacts_exactly_the_confirmed_values():
+    from iron_jarvis.documents.redact import mask_text
+
+    text = "SSN 123-45-6789, spouse SSN 987-65-4321, email a@b.example.com."
+    # The user confirmed ONLY the first SSN — the second and the email stay.
+    masked, counts = mask_text(text, style="label", only_terms=["123-45-6789"])
+    assert "[SSN]" in masked  # a confirmed term is still CATEGORIZED
+    assert "123-45-6789" not in masked
+    assert "987-65-4321" in masked and "a@b.example.com" in masked
+    assert counts == {"ssn": 1}
+    # A confirmed free-text term (a name) categorizes as custom.
+    masked2, counts2 = mask_text(
+        "Prepared for Bruce Wayne.", style="label", only_terms=["Bruce Wayne"]
+    )
+    assert "[REDACTED]" in masked2 and "Bruce" not in masked2
+    assert counts2 == {"custom": 1}
+
+
+async def test_scan_tool_numbers_findings_for_confirmation(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "return.txt").write_text(SSN_TEXT, encoding="utf-8")
+    scan = next(t for t in document_tools() if t.name == "redact_scan")
+    res = await scan.execute({"path": "return.txt"}, _ctx(ws))
+    assert res.ok, res.error
+    assert "confirm" in res.output  # the tool ASKS, it does not act
+    assert res.output.splitlines()[1].startswith("1. [SSN]")
+    assert res.data["findings"][0]["value"] == "123-45-6789"
+    # Unknown category → actionable error.
+    bad = await scan.execute(
+        {"path": "return.txt", "categories": ["ssn", "ghost"]}, _ctx(ws)
+    )
+    assert not bad.ok and "ghost" in bad.error
+
+
+async def test_redact_tool_terms_mode_end_to_end(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "return.txt").write_text(
+        "SSN 123-45-6789 and phone (212) 555-0199 for Bruce Wayne.",
+        encoding="utf-8",
+    )
+    res = await _tool().execute(
+        {"path": "return.txt", "style": "label",
+         "terms": ["123-45-6789", "Bruce Wayne"]},
+        _ctx(ws),
+    )
+    assert res.ok, res.error
+    out = (ws / "return.redacted.txt").read_text(encoding="utf-8")
+    assert "[SSN]" in out and "[REDACTED]" in out
+    assert "123-45-6789" not in out and "Bruce Wayne" not in out
+    # The UNCONFIRMED phone survives — confirmed mode redacts nothing else.
+    assert "(212) 555-0199" in out
+    assert res.data["counts"] == {"ssn": 1, "custom": 1}

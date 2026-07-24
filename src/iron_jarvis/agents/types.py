@@ -53,6 +53,8 @@ _DOCUMENT_TOOLS = [
     "excel_read", "excel_edit", "excel_profile", "excel_query",
     "excel_formula_check", "excel_sheet_spec", "excel_apply_spec",
     "excel_accounts_diff",
+    # Confirmed redaction: scan → the user approves → targeted removal.
+    "redact_scan", "redact_pii",
 ]
 # Self-correction: record preferences learned mid-task; recall past lessons.
 _LEARNING_TOOLS = ["remember_preference", "recall_lessons"]

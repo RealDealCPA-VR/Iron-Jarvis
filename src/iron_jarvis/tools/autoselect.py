@@ -40,8 +40,10 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         "image_info",
         "image_convert",
         "image_resize",
-        # Writes only a NEW .redacted copy (never modifies the source).
+        # Writes only a NEW .redacted copy (never modifies the source);
+        # redact_scan is the read-only confirm-first step.
         "redact_pii",
+        "redact_scan",
         # Structured spreadsheet work (read anywhere; edits workspace-confined
         # + undoable). profile/query are engine-computed reads — exact figures
         # instead of model arithmetic (the local-model failure mode);
@@ -184,7 +186,7 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             r"saniti[sz]e)\b",
             re.IGNORECASE,
         ),
-        {"redact_pii": 9, "read_document": 5, "file_search": 4},
+        {"redact_scan": 10, "redact_pii": 9, "read_document": 5, "file_search": 4},
     ),
     # --- images -----------------------------------------------------------
     (

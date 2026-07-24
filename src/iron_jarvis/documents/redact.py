@@ -99,35 +99,62 @@ def _luhn_ok(digits: str) -> bool:
     return total % 10 == 0
 
 
+def _categorize_term(term: str) -> str:
+    """The category a CONFIRMED literal term belongs to (first pattern that
+    matches the whole term wins), so 'label'-style redaction still tags it
+    ``[SSN]`` rather than a generic ``[REDACTED]``."""
+    for cat, rx in _PATTERNS.items():
+        m = rx.fullmatch(term) or rx.match(term)
+        if m is not None and m.group(0) == term:
+            if cat == "credit_card" and not _luhn_ok(term):
+                continue
+            return cat
+    return "custom"
+
+
 def find_pii_spans(
     text: str,
     *,
     extra_terms: list[str] | None = None,
     categories: set[str] | frozenset[str] | None = None,
+    only_terms: list[str] | None = None,
 ) -> list[tuple[int, int, str]]:
     """Return non-overlapping ``(start, end, category)`` spans, sorted by start.
     ``extra_terms`` are matched literally (case-insensitive) as ``custom``.
+    ``only_terms`` switches to CONFIRMED mode: pattern detection is skipped
+    entirely and exactly those literal values are redacted (case-insensitive),
+    each categorized for labeling — the human-in-the-loop contract where what
+    gets removed is precisely what was confirmed, nothing else.
     Earlier-starting/longer spans win overlaps."""
-    wanted = set(categories) if categories else set(_PATTERNS) | {"custom"}
     raw: list[tuple[int, int, str]] = []
-    for cat, rx in _PATTERNS.items():
-        if cat not in wanted:
-            continue
-        for m in rx.finditer(text):
-            start, end = (m.span(1) if m.groups() and m.group(1) else m.span())
-            value = text[start:end]
-            if cat == "credit_card" and not _luhn_ok(value):
-                continue
-            if cat == "ip" and any(int(p) > 255 for p in re.findall(r"\d+", value)):
-                continue
-            raw.append((start, end, cat))
-    if "custom" in wanted:
-        for term in extra_terms or []:
+    if only_terms is not None:
+        for term in only_terms:
             t = (term or "").strip()
             if len(t) < 2:
                 continue  # a 1-char term would shred the document
+            cat = _categorize_term(t)
             for m in re.finditer(re.escape(t), text, re.IGNORECASE):
-                raw.append((m.start(), m.end(), "custom"))
+                raw.append((m.start(), m.end(), cat))
+    else:
+        wanted = set(categories) if categories else set(_PATTERNS) | {"custom"}
+        for cat, rx in _PATTERNS.items():
+            if cat not in wanted:
+                continue
+            for m in rx.finditer(text):
+                start, end = (m.span(1) if m.groups() and m.group(1) else m.span())
+                value = text[start:end]
+                if cat == "credit_card" and not _luhn_ok(value):
+                    continue
+                if cat == "ip" and any(int(p) > 255 for p in re.findall(r"\d+", value)):
+                    continue
+                raw.append((start, end, cat))
+        if "custom" in wanted:
+            for term in extra_terms or []:
+                t = (term or "").strip()
+                if len(t) < 2:
+                    continue  # a 1-char term would shred the document
+                for m in re.finditer(re.escape(t), text, re.IGNORECASE):
+                    raw.append((m.start(), m.end(), "custom"))
     # Resolve overlaps: sort by (start, -length); keep spans that don't overlap
     # an already-kept one.
     raw.sort(key=lambda s: (s[0], -(s[1] - s[0])))
@@ -156,9 +183,13 @@ def _make_spans_fn(
     style: str,
     extra_terms: list[str] | None,
     categories: set[str] | frozenset[str] | None,
+    only_terms: list[str] | None = None,
 ) -> Callable[[str], list[_Span]]:
     def spans_for(text: str) -> list[_Span]:
-        found = find_pii_spans(text, extra_terms=extra_terms, categories=categories)
+        found = find_pii_spans(
+            text, extra_terms=extra_terms, categories=categories,
+            only_terms=only_terms,
+        )
         return [(s, e, cat, _replacement(text[s:e], cat, style)) for s, e, cat in found]
 
     return spans_for
@@ -183,10 +214,69 @@ def mask_text(
     style: str = "black",
     extra_terms: list[str] | None = None,
     categories: set[str] | frozenset[str] | None = None,
+    only_terms: list[str] | None = None,
 ) -> tuple[str, dict[str, int]]:
     """Redact *text*; returns ``(redacted, counts_by_category)``."""
-    spans = _make_spans_fn(style, extra_terms, categories)(text)
+    spans = _make_spans_fn(style, extra_terms, categories, only_terms)(text)
     return _apply_spans(text, spans)
+
+
+# ----------------------------------------------------------------- scanning ---
+
+#: Context chars shown either side of a finding in scan results.
+_SCAN_CONTEXT = 40
+#: Findings cap — a pathological document must not flood the review.
+_MAX_FINDINGS = 120
+
+
+def scan_text(
+    text: str,
+    *,
+    extra_terms: list[str] | None = None,
+    categories: set[str] | frozenset[str] | None = None,
+) -> list[dict[str, Any]]:
+    """STEP 1 of confirmed redaction: every distinct PII candidate in *text*,
+    grouped by (category, value) with an occurrence count and one context
+    snippet — the reviewable list a human confirms before anything is
+    removed. Ordered by first appearance; capped with an honest flag."""
+    spans = find_pii_spans(text, extra_terms=extra_terms, categories=categories)
+    findings: dict[tuple[str, str], dict[str, Any]] = {}
+    for start, end, cat in spans:
+        value = text[start:end]
+        key = (cat, value.lower())
+        if key in findings:
+            findings[key]["count"] += 1
+            continue
+        ctx_start = max(0, start - _SCAN_CONTEXT)
+        ctx_end = min(len(text), end + _SCAN_CONTEXT)
+        context = " ".join(text[ctx_start:ctx_end].split())
+        findings[key] = {
+            "category": cat,
+            "label": _LABELS.get(cat, "REDACTED"),
+            "value": value,
+            "count": 1,
+            "context": context,
+        }
+        if len(findings) >= _MAX_FINDINGS:
+            break
+    out = list(findings.values())
+    for i, f in enumerate(out, start=1):
+        f["id"] = i
+    return out
+
+
+def scan_document(
+    path: Path,
+    *,
+    extra_terms: list[str] | None = None,
+    categories: set[str] | frozenset[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Scan a document file for PII candidates (see :func:`scan_text`)."""
+    from .readers import extract_text
+
+    return scan_text(
+        extract_text(path), extra_terms=extra_terms, categories=categories
+    )
 
 
 # -------------------------------------------------------- format redactors ---
@@ -351,12 +441,14 @@ def redact_file(
     style: str = "black",
     extra_terms: list[str] | None = None,
     categories: set[str] | frozenset[str] | None = None,
+    only_terms: list[str] | None = None,
 ) -> tuple[dict[str, int], str]:
     """Redact *src* into *dst* (same format). Returns ``(counts, note)``.
-    The source file is never modified."""
+    ``only_terms`` = CONFIRMED mode: exactly those values are redacted and
+    nothing else (see :func:`find_pii_spans`). The source is never modified."""
     if style not in STYLES:
         raise ValueError(f"unknown style: {style!r} (use black, label, or remove)")
-    spans_for = _make_spans_fn(style, extra_terms, categories)
+    spans_for = _make_spans_fn(style, extra_terms, categories, only_terms)
     suffix = src.suffix.lower()
     note = ""
     if suffix == ".docx":

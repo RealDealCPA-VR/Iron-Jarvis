@@ -1112,6 +1112,14 @@ def register(app: FastAPI, d) -> None:
                     else ""
                 )
                 + (
+                    "\nREDACTION: scan first (redact_scan), present the"
+                    " numbered findings, and get the user's confirmation of"
+                    " exactly which to remove BEFORE calling redact_pii —"
+                    " pass the confirmed values via terms."
+                    if any(t.startswith("redact") for t in armed)
+                    else ""
+                )
+                + (
                     f"\nYour file tools operate INSIDE the folder {tool_ws}; "
                     "read, edit, and create files there directly, and use the absolute paths "
                     "that file_search returns."
@@ -1534,6 +1542,14 @@ def register(app: FastAPI, d) -> None:
                     " call excel_query (profile the workbook first with"
                     " excel_profile) and report its computed results exactly."
                     if any(t.startswith("excel_") for t in armed)
+                    else ""
+                )
+                + (
+                    "\nREDACTION: scan first (redact_scan), present the"
+                    " numbered findings, and get the user's confirmation of"
+                    " exactly which to remove BEFORE calling redact_pii —"
+                    " pass the confirmed values via terms."
+                    if any(t.startswith("redact") for t in armed)
                     else ""
                 )
                 + (

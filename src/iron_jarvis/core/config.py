@@ -90,6 +90,10 @@ def default_permissions() -> dict[str, str]:
         "read_document": "allow",
         "write_document": "allow",
         "extract_pdf": "allow",
+        # Confirmed redaction: the scan is read-only; redact_pii writes only a
+        # NEW .redacted copy (never the source) and is TX-01 undoable.
+        "redact_scan": "allow",
+        "redact_pii": "allow",
         # Excel intelligence: reads/analysis allowed (fs-policy confined);
         # writes match write_document (workspace-confined + TX-01 undoable).
         "excel_read": "allow",

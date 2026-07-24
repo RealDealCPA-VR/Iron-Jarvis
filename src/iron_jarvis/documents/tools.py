@@ -416,19 +416,104 @@ class ConvertDocumentTool(Tool):
         )
 
 
+class RedactScanTool(Tool):
+    name = "redact_scan"
+    reversibility = Reversibility.READONLY  # detection only — nothing written
+    returns_untrusted_content = True  # document text can carry planted instructions
+    description = (
+        "STEP 1 of RELIABLE redaction: scan a document and return every "
+        "distinct PII candidate (SSN/ITIN/EIN, emails, phones, cards, "
+        "accounts, DOBs, addresses, IPs + any extra_terms you spotted) as a "
+        "NUMBERED list with counts and context. Present the list to the user "
+        "and ask exactly which items to remove (and what to add) — then call "
+        "redact_pii with terms=[the confirmed values]. Never redact without "
+        "this confirmation when the user is available."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Source document (absolute, or workspace-relative)",
+            },
+            "extra_terms": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Exact strings to also flag as candidates (person names, "
+                    "employers…) — case-insensitive"
+                ),
+            },
+            "categories": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Optional subset to scan for: ssn, itin, ein, email, phone, "
+                    "credit_card, bank_account, dob, address, ip, custom "
+                    "(default: all)"
+                ),
+            },
+        },
+        "required": ["path"],
+    }
+
+    async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        from .redact import ALL_CATEGORIES, scan_document
+
+        source = _resolve_read_path(str(args.get("path", "")), ctx)
+        allowed, reason = fs_read_ok(str(source))
+        if not allowed:
+            return ToolResult(ok=False, error=f"read denied: {reason}")
+        if not source.is_file():
+            return ToolResult(ok=False, error=f"not a file: {args.get('path')}")
+        raw_cats = [str(c).strip().lower() for c in (args.get("categories") or [])]
+        unknown = [c for c in raw_cats if c and c not in ALL_CATEGORIES]
+        if unknown:
+            return ToolResult(
+                ok=False,
+                error=f"unknown categories: {', '.join(unknown)} — "
+                      f"valid: {', '.join(sorted(ALL_CATEGORIES))}",
+            )
+        try:
+            findings = await asyncio.to_thread(
+                scan_document,
+                source,
+                extra_terms=[str(t) for t in (args.get("extra_terms") or [])],
+                categories=set(raw_cats) or None,
+            )
+        except Exception as exc:  # noqa: BLE001 — real files must not crash the loop
+            return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+        if not findings:
+            return ToolResult(
+                ok=True,
+                output="no PII candidates found — nothing to confirm",
+                data={"findings": []},
+            )
+        lines = [f"{len(findings)} PII candidate(s) in {source.name} — confirm"
+                 " which to redact:"]
+        for f in findings:
+            times = f" ×{f['count']}" if f["count"] > 1 else ""
+            lines.append(f"{f['id']}. [{f['label']}] {f['value']}{times} — …{f['context']}…")
+        return ToolResult(
+            ok=True, output="\n".join(lines), data={"findings": findings}
+        )
+
+
 class RedactPiiTool(Tool):
     name = "redact_pii"
     reversibility = Reversibility.REVERSIBLE  # only the NEW output file to undo
     description = (
         "Redact PII from a document and write a NEW file in the SAME format — "
-        "the original is never modified. Detects SSN/ITIN/EIN, emails, phones, "
-        "credit cards, labeled account numbers, dates of birth, street "
-        "addresses, and IPs; pass names or other exact strings you spotted "
-        "while reading via extra_terms. Styles: 'black' (same-length █ blocks), "
-        "'label' ([SSN]-style tags), 'remove' (deleted). Formats: .docx/.xlsx/"
-        ".pptx keep their styling; text formats rewrite in place; .pdf is "
-        "REBUILT from extracted text (content truly removed, layout "
-        "approximate). Never quote the detected PII values back in your reply."
+        "the original is never modified. RELIABLE workflow: redact_scan first, "
+        "have the user confirm the numbered candidates, then pass the "
+        "confirmed values via `terms` — ONLY those exact strings are redacted, "
+        "nothing else. Without `terms` it auto-detects SSN/ITIN/EIN, emails, "
+        "phones, credit cards, labeled account numbers, dates of birth, street "
+        "addresses, and IPs (+ extra_terms). Styles: 'black' (same-length █ "
+        "blocks), 'label' ([SSN]-style tags), 'remove' (deleted). Formats: "
+        ".docx/.xlsx/.pptx keep their styling; text formats rewrite in place; "
+        ".pdf is REBUILT from extracted text (content truly removed, layout "
+        "approximate). Never quote the redacted PII values back in your reply."
     )
     input_schema = {
         "type": "object",
@@ -442,12 +527,23 @@ class RedactPiiTool(Tool):
                 "enum": ["black", "label", "remove"],
                 "description": "black = █ blocks (default), label = [SSN] tags, remove = delete",
             },
+            "terms": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "CONFIRMED mode: the exact values the user approved (from "
+                    "redact_scan) — ONLY these strings are redacted, "
+                    "case-insensitive, auto-categorized for labeling. "
+                    "Auto-detection is skipped entirely."
+                ),
+            },
             "extra_terms": {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": (
                     "Exact strings to also redact (person names, employers, "
-                    "spouse/dependent names…) — case-insensitive"
+                    "spouse/dependent names…) — case-insensitive. Ignored "
+                    "when `terms` is given."
                 ),
             },
             "categories": {
@@ -545,6 +641,9 @@ class RedactPiiTool(Tool):
         extra_terms = [
             str(t) for t in (args.get("extra_terms") or []) if str(t).strip()
         ]
+        # CONFIRMED mode: the user approved these exact values (redact_scan →
+        # confirmation) — detection is skipped and precisely they are removed.
+        only_terms = [str(t) for t in (args.get("terms") or []) if str(t).strip()]
         try:
             target = self._output_target(source, args, ctx)
             if target.resolve() == source.resolve():
@@ -560,6 +659,7 @@ class RedactPiiTool(Tool):
                 style=style,
                 extra_terms=extra_terms,
                 categories=categories,
+                only_terms=only_terms or None,
             )
         except Exception as exc:
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
@@ -600,6 +700,7 @@ def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:
         ExtractPdfTool(),
         ConvertDocumentTool(),
         ListFolderTool(),
+        RedactScanTool(),
         RedactPiiTool(),
         *excel_tools(),
     ]
