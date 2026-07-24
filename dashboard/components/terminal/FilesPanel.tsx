@@ -286,9 +286,13 @@ function FilePreview({ file, onClose }: { file: FileRow; onClose: () => void }) 
 export function FilesPanel({
   folder,
   onOpenTerminal,
+  onPreview,
 }: {
   folder: string | null;
   onOpenTerminal?: (path: string) => void;
+  /** When set (the chat rail), clicking a file opens the HOST's document
+   *  preview panel instead of the built-in inline preview. */
+  onPreview?: (path: string) => void;
 }) {
   const [root, setRoot] = useState<string | null>(null);
   const [files, setFiles] = useState<FileRow[]>([]);
@@ -422,8 +426,10 @@ export function FilesPanel({
                 <li key={f.path}>
                   <button
                     type="button"
-                    onClick={() => setSelected(f)}
-                    title={f.path}
+                    onClick={() =>
+                      onPreview ? onPreview(f.path) : setSelected(f)
+                    }
+                    title={onPreview ? `Preview ${f.rel}` : f.path}
                     className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
                       fresh
                         ? "bg-accent/[0.06] ring-1 ring-inset ring-accent/20 hover:bg-accent/[0.1]"

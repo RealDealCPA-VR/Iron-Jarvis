@@ -226,6 +226,74 @@ def _resolve_armed_tools(d, body) -> tuple[list[str], list[str]]:
 #: Generated-document paths remembered per thread (the preview chips).
 _MAX_THREAD_DOCS = 8
 
+# -- derived documents (threads from BEFORE v1.91.0 recorded none) ----------- #
+import re as _re
+
+_DOC_SUFFIX = r"(?:docx|xlsx|xlsm|pptx|pdf|csv|md|html|txt)"
+#: Absolute Windows/UNC paths ending in a document suffix (no spaces — the
+#: wrapped patterns below catch spaced paths exactly as written).
+_ABS_DOC_RX = _re.compile(
+    rf"(?:[A-Za-z]:\\|\\\\)[^\s\"'`|<>*?]+?\.{_DOC_SUFFIX}\b", _re.IGNORECASE
+)
+#: Filenames as replies actually format them: `wrapped in backticks`,
+#: **bolded**, or a bare token without spaces.
+_TICK_DOC_RX = _re.compile(rf"`([^`\n]+?\.{_DOC_SUFFIX})`", _re.IGNORECASE)
+_BOLD_DOC_RX = _re.compile(rf"\*\*([^*\n]+?\.{_DOC_SUFFIX})\*\*", _re.IGNORECASE)
+_NAME_DOC_RX = _re.compile(rf"[\w][\w()\-.]{{0,80}}\.{_DOC_SUFFIX}\b", _re.IGNORECASE)
+#: Folder mentions ("at `C:\Users\VR\`") a bare filename can be joined to.
+_FOLDER_RX = _re.compile(r"(?:[A-Za-z]:\\|\\\\)[^\s\"'`|<>*?]*[\\/]")
+
+_DOC_WRITING_TOOLS = {"write_document", "excel_edit", "excel_apply_spec"}
+
+
+def _derive_thread_documents(msgs: list, setup: dict) -> list[str]:
+    """Best-effort document recovery for threads saved BEFORE v1.91.0 (whose
+    setup never recorded generated files): document-writing turns name their
+    files in the reply, so mine the transcript for paths/filenames, join bare
+    names to mentioned folders (+ the thread's workspace), and keep ONLY
+    files that exist and pass fs policy — a derived chip is always real."""
+    from ...core.fs_policy import fs_read_ok, is_protected_path
+
+    out: list[str] = []
+    for m in msgs:
+        if not isinstance(m, dict) or m.get("role") != "assistant":
+            continue
+        if not (_DOC_WRITING_TOOLS & set(m.get("toolsUsed") or [])):
+            continue
+        content = str(m.get("content") or "")
+        folders = _FOLDER_RX.findall(content)
+        ws = str(setup.get("workspace_dir") or "").strip()
+        if ws:
+            folders.append(ws if ws.endswith(("\\", "/")) else ws + "\\")
+        candidates: list[str] = list(_ABS_DOC_RX.findall(content))
+        for name in (
+            _TICK_DOC_RX.findall(content)
+            + _BOLD_DOC_RX.findall(content)
+            + _NAME_DOC_RX.findall(content)
+        ):
+            try:
+                if Path(name).is_absolute():
+                    candidates.append(name)
+                    continue
+            except (OSError, ValueError):
+                continue
+            for folder in folders:
+                candidates.append(folder + name)
+        for cand in candidates:
+            try:
+                p = Path(cand)
+                if not p.is_absolute() or not p.is_file():
+                    continue
+                ok, _reason = fs_read_ok(str(p))
+                if not ok or is_protected_path(str(p)):
+                    continue
+                s = str(p)
+                if s not in out:
+                    out.append(s)
+            except (OSError, ValueError):
+                continue
+    return out[-_MAX_THREAD_DOCS:]
+
 
 def _clean_setup(raw: Any) -> str:
     """Validate + compact a thread ``setup`` payload into its stored JSON.
@@ -387,9 +455,19 @@ def register(app: FastAPI, d) -> None:
                 setup = json.loads(r.setup_json)
             except Exception:  # noqa: BLE001
                 setup = {}
+        # Threads from before v1.91.0 recorded no generated documents — derive
+        # them from the transcript (existence-checked) so their preview chips
+        # appear too. Recorded documents always win; derivation never blocks.
+        derived: list[str] = []
+        if not setup.get("documents"):
+            try:
+                derived = _derive_thread_documents(msgs, setup)
+            except Exception:  # noqa: BLE001 — recovery must never break a thread
+                derived = []
         return {
             "id": r.id, "title": r.title, "persona": r.persona,
             "project_id": r.project_id, "messages": msgs, "setup": setup,
+            "derived_documents": derived,
         }
 
     @app.put("/chat/threads/{thread_id}")

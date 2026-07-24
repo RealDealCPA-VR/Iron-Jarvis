@@ -144,6 +144,38 @@ def test_remember_validation(tmp_path):
     assert client.post(f"/chat/threads/{empty}/remember", json={}).status_code == 400
 
 
+def test_thread_derives_documents_from_pre_v191_transcripts(tmp_path):
+    """v1.92.1: threads saved BEFORE documents were recorded still get preview
+    chips — derived from the transcript, kept only when the file EXISTS.
+    Modeled on a real reply: 'saved as **Name.docx** at `C:\\folder\\`'."""
+    client = _client(tmp_path)
+    real = tmp_path / "Application_Testing_Letter.docx"
+    real.write_bytes(b"PK\x03\x04fake")
+    folder = str(tmp_path) + "\\"
+    msgs = [
+        {"role": "user", "content": "write me a letter in word about testing"},
+        {"role": "assistant",
+         "content": f"Here's your letter — saved as "
+                    f"**Application_Testing_Letter.docx** at `{folder}`.\n"
+                    f"Also mentioned but never written: **Ghost_Report.docx**.",
+         "toolsUsed": ["write_document"]},
+        # A doc-writing turn is REQUIRED — prose alone must not mint chips.
+        {"role": "assistant",
+         "content": f"see `{real}` again", "toolsUsed": ["web_search"]},
+    ]
+    tid = client.put("/chat/threads/new", json={"messages": msgs}).json()["id"]
+    got = client.get(f"/chat/threads/{tid}").json()
+    assert got["derived_documents"] == [str(real)]  # exists → chip; ghost → no
+    # Once a thread RECORDS documents, derivation stands down.
+    client.put(
+        f"/chat/threads/{tid}",
+        json={"messages": msgs, "setup": {"documents": [str(real)]}},
+    )
+    got = client.get(f"/chat/threads/{tid}").json()
+    assert got["setup"]["documents"] == [str(real)]
+    assert got["derived_documents"] == []
+
+
 # --- /connectors: dynamic entries ---------------------------------------------
 
 

@@ -268,6 +268,9 @@ interface ThreadDetail {
   messages: ChatMessage[];
   /** The armed tools/skill/workspace/model to restore (older daemons omit it). */
   setup?: ThreadSetup | null;
+  /** Transcript-derived document paths for threads saved before v1.91.0
+   *  recorded them — existence-checked server-side, so chips are real. */
+  derived_documents?: string[];
 }
 
 /** PUT /chat/threads/{id} body + response. */
@@ -1729,15 +1732,6 @@ export default function ChatPage() {
                 .slice(0, MAX_CONNECTORS)
             : [],
         );
-        // Generated-document chips come back with the thread — no auto-open;
-        // the chips offer the preview until deliberately dismissed.
-        setThreadDocs(
-          Array.isArray(setup.documents)
-            ? setup.documents
-                .filter((x) => typeof x === "string")
-                .slice(-MAX_THREAD_DOCS)
-            : [],
-        );
         setActiveSkill(typeof setup.skill === "string" ? setup.skill : "");
         // Thread-local restore: the panel points at this conversation's folder
         // without touching the localStorage default (New chat returns to it).
@@ -1747,6 +1741,19 @@ export default function ChatPage() {
         );
         sendSetupRef.current = true;
       }
+      // Document chips: recorded ones win; otherwise the server's transcript-
+      // derived recovery fills in for threads saved before v1.91.0 recorded
+      // them. No auto-open — the chips offer the preview until dismissed.
+      const recorded =
+        setup && typeof setup === "object" && Array.isArray(setup.documents)
+          ? setup.documents.filter((x) => typeof x === "string")
+          : [];
+      const derived = Array.isArray(t.derived_documents)
+        ? t.derived_documents.filter((x) => typeof x === "string")
+        : [];
+      setThreadDocs(
+        (recorded.length ? recorded : derived).slice(-MAX_THREAD_DOCS),
+      );
       setSidebarOpen(false);
       inputRef.current?.focus();
     } catch (e) {
@@ -4669,7 +4676,7 @@ export default function ChatPage() {
                       Files the chat&apos;s armed tools create land here.
                     </p>
                     <div className="min-h-0 flex-1">
-                      <FilesPanel folder={workspaceDir} />
+                      <FilesPanel folder={workspaceDir} onPreview={openDocPreview} />
                     </div>
                   </div>
                 ) : (
