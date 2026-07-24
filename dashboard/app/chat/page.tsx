@@ -44,6 +44,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -327,6 +328,17 @@ const MAX_CONNECTORS = 6;
 // Generated-document paths remembered per thread (the persistent preview
 // chips) — newest survive the cap, matching the daemon's setup validation.
 const MAX_THREAD_DOCS = 8;
+// Resizable side rail (preview/workspace column): width bounds + persistence.
+const RAIL_W_KEY = "ij_chat_rail_w";
+const RAIL_MIN_W = 280;
+const RAIL_DEFAULT_W = 320;
+
+/** Clamp a rail width: never below the usable minimum, never past ~70% of the
+ *  viewport (the conversation must stay readable beside it). */
+function clampRailW(w: number): number {
+  const max = Math.min(920, Math.round(window.innerWidth * 0.7));
+  return Math.max(RAIL_MIN_W, Math.min(max, w));
+}
 
 // Agent-mode handoff: escalating a chat conversation to a NEW agent session
 // otherwise starts the agent blind (a fresh session carries no chat history),
@@ -902,6 +914,17 @@ export default function ChatPage() {
   // The conversation's generated documents — persisted in the thread setup so
   // the preview chips survive leaving the page and restarts until dismissed.
   const [threadDocs, setThreadDocs] = useState<string[]>([]);
+  // Side-rail width (px, desktop only): draggable via the rail's left-edge
+  // grip, clamped, persisted per device. Default keeps today's layout.
+  const [railW, setRailW] = useState(RAIL_DEFAULT_W);
+  useEffect(() => {
+    try {
+      const saved = parseInt(window.localStorage.getItem(RAIL_W_KEY) || "", 10);
+      if (Number.isFinite(saved)) setRailW(clampRailW(saved));
+    } catch {
+      /* keep the default */
+    }
+  }, []);
   const [pickingFolder, setPickingFolder] = useState(false); // "change folder"
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -2471,6 +2494,42 @@ export default function ChatPage() {
   function openDocPreview(path: string) {
     setPreviewPath(path);
     setWorkspaceOpenPersisted(true);
+  }
+
+  /** Drag the rail's left edge: wider preview when wanted, default when not.
+   *  Pointer-captured so the drag survives leaving the grip; the chosen width
+   *  persists per device on release. */
+  function startRailDrag(e: React.PointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = railW;
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) =>
+      setRailW(clampRailW(startW + (startX - ev.clientX)));
+    const up = () => {
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      setRailW((w) => {
+        try {
+          window.localStorage.setItem(RAIL_W_KEY, String(w));
+        } catch {
+          /* private mode — the width still applies this session */
+        }
+        return w;
+      });
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+  }
+
+  function resetRailW() {
+    setRailW(RAIL_DEFAULT_W);
+    try {
+      window.localStorage.setItem(RAIL_W_KEY, String(RAIL_DEFAULT_W));
+    } catch {
+      /* ignore */
+    }
   }
 
   /** Deliberately dismiss a remembered document (the chip's ×): forget it on
@@ -4535,7 +4594,23 @@ export default function ChatPage() {
               The chosen folder rides along as workspace_dir so the chat's
               armed file tools write here and their output surfaces live below. */}
           {workspaceOpen ? (
-            <aside className="w-full shrink-0 md:w-80">
+            <aside
+              className="relative w-full shrink-0 md:w-[var(--rail-w)]"
+              style={{ "--rail-w": `${railW}px` } as CSSProperties}
+            >
+              {/* Drag grip (desktop): widen the preview/workspace column or
+                  keep it as is — double-click resets to the default width. */}
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize the side panel"
+                title="Drag to resize — double-click to reset"
+                onPointerDown={startRailDrag}
+                onDoubleClick={resetRailW}
+                className="group/resize absolute -left-2.5 top-0 z-10 hidden h-full w-3 cursor-col-resize touch-none items-center justify-center md:flex"
+              >
+                <span className="h-12 w-1 rounded-full bg-white/10 transition-colors group-hover/resize:bg-accent/60" />
+              </div>
               <div className="flex h-[26rem] flex-col gap-2 md:h-[60vh]">
                 <div className="shrink-0 rounded-xl border border-white/[0.06] bg-ink-850/60 px-3 py-2">
                   <div className="flex items-center gap-2">
