@@ -131,7 +131,9 @@ class RunCodeTool(Tool):
     description = (
         "Write and execute a small DISPOSABLE script when no other tool can "
         "reliably do the job (odd file formats, bulk transforms, gnarly "
-        "parsing). Languages: python (needs an interpreter on the machine), "
+        "parsing). CHECK code_search FIRST — you or another agent may have "
+        "already written and proven a script for this; reusing it beats "
+        "re-deriving it. Languages: python (needs an interpreter on the machine), "
         "powershell (always available on Windows), bash. Runs inside the "
         "workspace with a timeout; the script is deleted after the run unless "
         "keep=true (then it stays under scripts/ for ongoing use). Every run is "

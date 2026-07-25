@@ -106,6 +106,13 @@ def default_permissions() -> dict[str, str]:
         "excel_apply_spec": "allow",
         # Disposable code — same trust tier as shell (arming in chat = consent).
         "run_code": "ask",
+        # Code Lab reuse (v1.97.0): finding and READING a saved script is text
+        # retrieval — allowed, so an agent can check for prior art without a
+        # prompt every time. RUNNING one executes arbitrary saved code, which is
+        # exactly run_code's power, so it keeps run_code's tier.
+        "code_search": "allow",
+        "code_load": "allow",
+        "code_run": "ask",
         # Skills inject into future prompts, so creating one asks first.
         "skill_create": "ask",
         # Self-correcting learning loop.

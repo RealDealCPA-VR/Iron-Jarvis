@@ -44,6 +44,12 @@ _SELF_SERVICE_TOOLS = [
     "tool_list",
     "tool_delete",
     "custom:*",
+    # Code Lab (v1.97.0): check what we already wrote before writing it again.
+    # Search + load are read-only; code_run is armed here but still "ask" at the
+    # permission layer, so reuse is offered while execution stays consented.
+    "code_search",
+    "code_load",
+    "code_run",
 ]
 # Real documents: read any file type, write within the workspace. The Excel
 # suite (v1.89–v1.90) gives agent sessions the same engine-computed figures,

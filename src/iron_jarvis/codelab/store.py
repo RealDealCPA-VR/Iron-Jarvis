@@ -14,6 +14,8 @@ provenance stays honest.
 
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import Engine
 from sqlmodel import select
 
@@ -26,6 +28,11 @@ from .models import CodeArtifactRecord
 MAX_SOURCE = 100_000
 #: Stored output cap — independent of the tool's own 12k display cap.
 MAX_OUTPUT = 20_000
+
+
+def _tokens(text: str) -> list[str]:
+    """Lowercase alphanumeric tokens for relevance ranking (as in skills)."""
+    return re.findall(r"[a-z0-9]+", (text or "").lower())
 
 
 def _clip(text: str, limit: int, what: str) -> str:
@@ -113,6 +120,35 @@ class CodeArtifactStore:
     def get(self, artifact_id: str) -> CodeArtifactRecord | None:
         with session_scope(self.engine) as db:
             return db.get(CodeArtifactRecord, artifact_id)
+
+    def search(self, query: str, k: int = 5) -> list[CodeArtifactRecord]:
+        """Rank saved scripts against ``query`` — "has this already been solved?"
+
+        Token overlap over purpose + name + source, mirroring
+        ``SkillRegistry.search`` (deterministic, offline, no embedder call on a
+        path an agent hits mid-task). The purpose is weighted highest because it
+        is the sentence describing the PROBLEM; source matches still count, so
+        "openpyxl" finds the script that used it even when the purpose doesn't
+        say so.
+
+        A script that last FAILED is not hidden — it may still be the closest
+        prior art — but it sorts below working ones, so the agent reaches for
+        something proven first. Callers must surface ``last_exit_code`` rather
+        than implying every hit is known-good.
+        """
+        terms = set(_tokens(query))
+        if not terms:
+            return []
+        scored: list[tuple[int, int, CodeArtifactRecord]] = []
+        for rec in self.list():
+            purpose_hit = len(terms & set(_tokens(f"{rec.description} {rec.name}")))
+            source_hit = len(terms & set(_tokens(rec.source or "")))
+            score = purpose_hit * 3 + source_hit
+            if score:
+                # Sort key: score desc, then working-before-broken.
+                scored.append((score, 1 if rec.last_exit_code == 0 else 0, rec))
+        scored.sort(key=lambda t: (-t[0], -t[1], t[2].name))
+        return [rec for _, _, rec in scored[: max(1, int(k))]]
 
     def record_run(
         self, artifact_id: str, exit_code: int, output: str

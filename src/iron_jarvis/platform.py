@@ -448,6 +448,14 @@ def build_platform(
 
     registry.register(RunCodeTool(sink=_code_sink))
 
+    # v1.97.0: close the loop — agents can now FIND and REUSE what they already
+    # wrote instead of re-deriving it. search/load are read-only ("allow");
+    # code_run executes saved code and stays gated like run_code/shell.
+    from .codelab.tools import code_tools
+
+    for tool in code_tools(code_artifacts, config.codelab_dir):
+        registry.register(tool)
+
     # The SHARED embedder is chosen ONCE here and reused across every semantic
     # surface — layered memory (below), file search, and ltm — so they all rank
     # against the SAME vectors: a real local model (Ollama) when reachable, else

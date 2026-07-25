@@ -55,6 +55,12 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         "excel_formula_check",
         "excel_sheet_spec",
         "excel_accounts_diff",
+        # Code Lab reuse (v1.97.0): READ-ONLY prior-art lookup — find a script
+        # already written for this problem and read its source. Deliberately
+        # NOT code_run, which executes saved code and belongs with shell behind
+        # explicit "+" arming (see the module docstring's safety rule).
+        "code_search",
+        "code_load",
     }
 )
 
@@ -115,6 +121,19 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             re.IGNORECASE,
         ),
         {"read_document": 8, "file_search": 5},
+    ),
+    # --- reuse a script we already wrote ---------------------------------
+    # Fires on scripting/automation intent AND on "again"-shaped asks ("like
+    # last time", "the usual"), which is exactly when prior art exists. Only
+    # the read-only pair is armed: worst case the model ignores them.
+    (
+        re.compile(
+            r"\b(script|automate|automation|bulk|batch|rename|convert all|"
+            r"every file|python|powershell|macro)\b|"
+            r"\b(again|like last time|same as before|the usual|as usual)\b",
+            re.IGNORECASE,
+        ),
+        {"code_search": 6, "code_load": 3},
     ),
     # --- creating deliverables -------------------------------------------
     # "excel/workbook/worksheet/table/word doc" belong in the noun group:
