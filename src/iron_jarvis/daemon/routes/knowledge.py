@@ -64,21 +64,51 @@ def register(app: FastAPI, d) -> None:
             )
         return {"artifacts": items, "session_id": sid}
 
+    #: Never stringify an artifact bigger than this. The store holds generated
+    #: MEDIA (mp4/png/mp3), and this endpoint used to hand every byte back as
+    #: text: a 65 MB video became a 155 MB JSON body of U+FFFD replacement
+    #: characters, which froze the browser laying it out. Text artifacts are
+    #: kilobytes, so a 1 MB ceiling costs nothing real.
+    _ARTIFACT_TEXT_MAX = 1_000_000
+
     @app.get("/artifacts/{name}")
     def artifact(name: str) -> dict[str, Any]:
+        """One artifact's metadata, plus its content ONLY when it is genuinely
+        text of sane size. ``content`` is null otherwise and ``content_note``
+        says why — binary media is served properly by ``/creative/file/{name}``,
+        and code lives in ``/code-artifacts``."""
         art = d.platform.artifacts.latest(name)
         if art is None:
             raise HTTPException(status_code=404, detail="no such artifact")
-        try:
-            content = d.platform.artifacts.read(name).decode("utf-8", "replace")
-        except Exception:
-            content = None
+        content: str | None = None
+        note = ""
+        if art.size > _ARTIFACT_TEXT_MAX:
+            note = (
+                f"{art.size} bytes — too large to show as text; "
+                f"fetch /creative/file/{name} instead"
+            )
+        else:
+            raw = b""
+            try:
+                raw = d.platform.artifacts.read(name)
+            except Exception:  # noqa: BLE001 — unreadable file, report honestly
+                note = "artifact could not be read"
+            if not note:
+                # STRICT decode: unlike decode(..., "replace") this actually
+                # RAISES on binary, which is the signal we want. "replace"
+                # silently produced megabytes of garbage and made the old
+                # except-branch below dead code.
+                try:
+                    content = raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    note = f"binary artifact ({art.size} bytes) — not text"
         return {
             "name": art.name,
             "version": art.version,
             "size": art.size,
             "versions": d.platform.artifacts.versions(name),
             "content": content,
+            "content_note": note,
         }
 
     @app.get("/filesearch/drives")

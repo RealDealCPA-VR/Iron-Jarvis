@@ -17,7 +17,8 @@ import httpx
 from sqlalchemy import Engine
 
 from .core.config import Config, load_config
-from .core.db import open_db, persist_event
+from .codelab.store import CodeArtifactStore
+from .core.db import open_db, persist_event, session_scope
 from .core.events import EventBus
 from .core.streams import StreamHub
 from .core.fs_policy import register_protected_root
@@ -130,6 +131,9 @@ class Platform:
     memory: MemoryLayers
     skills: SkillRegistry
     artifacts: ArtifactStore
+    #: Saved, re-runnable scripts agents wrote (v1.95.0). Distinct from
+    #: ``artifacts`` (generated MEDIA files): this holds source code.
+    code_artifacts: CodeArtifactStore
     evaluator: Evaluator
     observability: Observability
     secrets: SecretsManager
@@ -405,9 +409,38 @@ def build_platform(
     registry.register(SandboxedShellTool())
     # v1.90.0: disposable code execution — the agent's escape hatch when no
     # tool reliably fits (same "ask" trust tier as shell).
+    # v1.95.0: every run is ALSO recorded in the Code Lab store. Execution is
+    # unchanged (still disposable in the workspace) — this only keeps the
+    # SOURCE, which otherwise died with the session workspace, so the user can
+    # browse and re-run what agents built from the Artifacts page.
     from .tools.runcode import RunCodeTool
 
-    registry.register(RunCodeTool())
+    code_artifacts = CodeArtifactStore(engine)
+
+    def _code_sink(name, language, code, session_id, exit_code, output):  # noqa: ANN001
+        """Persist an executed script. Resolves the producing session's project
+        so a script written during project work is scoped to it (context spine)."""
+        project_id = None
+        if session_id:
+            try:
+                from .core.models import Session as _Session
+
+                with session_scope(engine) as db:
+                    parent = db.get(_Session, session_id)
+                    project_id = parent.project_id if parent is not None else None
+            except Exception:  # noqa: BLE001 — provenance is a nice-to-have
+                project_id = None
+        code_artifacts.save(
+            name,
+            language,
+            code,
+            session_id=session_id,
+            project_id=project_id,
+            exit_code=exit_code,
+            output=output,
+        )
+
+    registry.register(RunCodeTool(sink=_code_sink))
 
     # The SHARED embedder is chosen ONCE here and reused across every semantic
     # surface — layered memory (below), file search, and ltm — so they all rank
@@ -685,6 +718,7 @@ def build_platform(
         memory=memory,
         skills=skills,
         artifacts=artifacts,
+        code_artifacts=code_artifacts,
         evaluator=evaluator,
         observability=observability,
         secrets=secrets,

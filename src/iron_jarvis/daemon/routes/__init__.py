@@ -9,6 +9,7 @@ from . import (  # noqa: F401
     audit,
     autonomy,
     chat,
+    codelab,
     comm,
     computeruse,
     connections,

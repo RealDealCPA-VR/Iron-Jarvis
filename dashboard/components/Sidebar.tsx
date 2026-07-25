@@ -12,6 +12,7 @@ import {
   Images,
   Sparkles,
   BrainCircuit,
+  Code2,
   Package,
   Workflow,
   Bot,
@@ -104,7 +105,7 @@ const NAV: NavSection[] = [
       { href: "/documents", label: "Documents", icon: FileText },
       { href: "/filesearch", label: "File Search", icon: FileSearch },
       { href: "/skills", label: "Skills", icon: Sparkles },
-      { href: "/artifacts", label: "Artifacts", icon: Package },
+      { href: "/artifacts", label: "Artifacts", icon: Code2 },
     ],
   },
   {

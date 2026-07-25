@@ -340,6 +340,13 @@ class Config(BaseModel):
     def artifacts_dir(self) -> Path:
         return self.home / "artifacts"
 
+    @property
+    def codelab_dir(self) -> Path:
+        """Durable working directory for saved code artifacts (v1.95.0). Each
+        artifact re-runs in ``codelab/<id>/`` — a script's output files persist
+        between runs instead of dying with the session workspace it was born in."""
+        return self.home / "codelab"
+
     def ensure_dirs(self) -> None:
         for d in (
             self.home,
@@ -347,6 +354,7 @@ class Config(BaseModel):
             self.browser_dir,
             self.memory_dir,
             self.artifacts_dir,
+            self.codelab_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)
 

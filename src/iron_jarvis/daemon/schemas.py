@@ -448,6 +448,23 @@ class TerminalCreate(BaseModel):
     rows: int = 24
 
 
+class CodeArtifactSave(BaseModel):
+    """Hand-saving a script into the Code Lab (v1.95.0)."""
+
+    name: str = "untitled"
+    language: str = "python"
+    source: str
+    description: str = ""
+    project_id: str | None = None
+
+
+class CodeArtifactRun(BaseModel):
+    """Optional overrides for a re-run. ``timeout_s`` is clamped to the same
+    ceiling run_code enforces (300s) inside execute_script."""
+
+    timeout_s: int | None = None
+
+
 class MemoryWrite(BaseModel):
     """Body of the (single) POST /memory. ``layer`` defaults to "user" — the
     layer that endpoint has always actually written to; this model once

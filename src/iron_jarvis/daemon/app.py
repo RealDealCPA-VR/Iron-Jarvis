@@ -1654,6 +1654,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
     _routes.autonomy.register(app, d)
     _routes.settings.register(app, d)
     _routes.knowledge.register(app, d)
+    _routes.codelab.register(app, d)
     _routes.creative.register(app, d)
     _routes.connections.register(app, d)
     _routes.connectors.register(app, d)

@@ -22,9 +22,13 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .base import Reversibility, Tool, ToolContext, ToolResult
+
+#: ``(name, language, code, session_id, exit_code, output) -> None`` — the
+#: durable sink for executed scripts (wired to the Code Lab store in platform).
+CodeArtifactSink = Callable[[str, str, str, "str | None", int, str], None]
 
 _MAX_OUTPUT = 12_000
 _MAX_TIMEOUT = 300
@@ -45,6 +49,78 @@ _LANGS = {
     "powershell": {"suffix": ".ps1"},
     "bash": {"suffix": ".sh"},
 }
+
+
+class ScriptRunFailed(Exception):
+    """Execution could not be attempted (no interpreter, timeout, missing exe).
+
+    Carries a human-readable reason; the caller decides whether that is a tool
+    error or an HTTP 400/503.
+    """
+
+
+def script_argv(language: str, script: "Path") -> list[str]:
+    """The argv that runs ``script``. Raises :class:`ScriptRunFailed` when the
+    interpreter honestly isn't on this machine (frozen install with no Python)."""
+    if language == "python":
+        interp = _python_interpreter()
+        if not interp:
+            raise ScriptRunFailed(
+                "no Python interpreter on this machine (packaged install) — use "
+                "language 'powershell' instead, or install Python and retry"
+            )
+        return [interp, str(script)]
+    if language == "powershell":
+        exe = "powershell" if sys.platform == "win32" else "pwsh"
+        return [exe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy",
+                "Bypass", "-File", str(script)]
+    return ["bash", str(script)]
+
+
+async def execute_script(
+    language: str, code: str, cwd: "Path", timeout_s: int = 60
+) -> "tuple[int, str]":
+    """Write ``code`` to a temp script under ``cwd`` and run it; return
+    ``(exit_code, combined_output)``.
+
+    The RE-RUN path (Code Lab). It differs from :class:`RunCodeTool` only in
+    file handling — the tool honors ``keep`` and names the script, while a
+    re-run always writes a throwaway file because the source of truth is the
+    stored record. Everything that MUST agree between them is shared code:
+    :func:`script_argv` for interpreter detection, ``_MAX_TIMEOUT`` for the
+    ceiling, ``_MAX_OUTPUT`` for the cap.
+    """
+    if language not in _LANGS:
+        raise ScriptRunFailed(f"language must be one of {', '.join(_LANGS)}")
+    if not (code or "").strip():
+        raise ScriptRunFailed("code is required")
+    timeout = min(max(int(timeout_s or 60), 1), _MAX_TIMEOUT)
+    cwd = Path(cwd)
+    cwd.mkdir(parents=True, exist_ok=True)
+    script = cwd / f".rerun_{int(time.time() * 1000)}{_LANGS[language]['suffix']}"
+    script.write_text(code, encoding="utf-8")
+    try:
+        argv = script_argv(language, script)
+
+        def _run() -> "tuple[int, str, str]":
+            proc = subprocess.run(
+                argv, cwd=str(cwd), capture_output=True, text=True,
+                timeout=timeout, shell=False,
+            )
+            return proc.returncode, proc.stdout or "", proc.stderr or ""
+
+        try:
+            rc, out, err = await asyncio.to_thread(_run)
+        except subprocess.TimeoutExpired:
+            raise ScriptRunFailed(f"script timed out after {timeout}s")
+        except FileNotFoundError:
+            raise ScriptRunFailed(f"{argv[0]} is not available on this machine")
+    finally:
+        script.unlink(missing_ok=True)  # the SOURCE lives in the store, not on disk
+    combined = out + (("\n[stderr]\n" + err) if err.strip() else "")
+    if len(combined) > _MAX_OUTPUT:
+        combined = combined[:_MAX_OUTPUT] + f"\n[output clipped at {_MAX_OUTPUT} chars]"
+    return rc, combined
 
 
 class RunCodeTool(Tool):
@@ -76,6 +152,24 @@ class RunCodeTool(Tool):
         "required": ["language", "code"],
     }
 
+    def __init__(self, sink: "CodeArtifactSink | None" = None) -> None:
+        #: Called after every COMPLETED run with
+        #: ``(name, language, code, session_id, exit_code, output)`` — the
+        #: platform wires this to the Code Lab store so the script outlives the
+        #: session workspace it ran in. A failing sink never breaks a run: the
+        #: agent's task matters more than the bookkeeping.
+        self._sink = sink
+
+    def _record(
+        self, name: str, lang: str, code: str, ctx: ToolContext, rc: int, output: str
+    ) -> None:
+        if self._sink is None:
+            return
+        try:
+            self._sink(name, lang, code, getattr(ctx, "session_id", None), rc, output)
+        except Exception:  # noqa: BLE001 — bookkeeping never breaks the task
+            pass
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         lang = str(args.get("language", "")).strip().lower()
         code = str(args.get("code") or "")
@@ -99,23 +193,14 @@ class RunCodeTool(Tool):
         script = folder / (stem if stem.endswith(suffix) else stem + suffix)
         script.write_text(code, encoding="utf-8")
 
-        if lang == "python":
-            interp = _python_interpreter()
-            if not interp:
-                script.unlink(missing_ok=True)
-                return ToolResult(
-                    ok=False,
-                    error="no Python interpreter on this machine (packaged "
-                    "install) — use language 'powershell' instead, or install "
-                    "Python and retry",
-                )
-            argv = [interp, str(script)]
-        elif lang == "powershell":
-            exe = "powershell" if sys.platform == "win32" else "pwsh"
-            argv = [exe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy",
-                    "Bypass", "-File", str(script)]
-        else:  # bash
-            argv = ["bash", str(script)]
+        # Shared with the Code Lab re-run endpoint, so interpreter detection
+        # (and the honest "no Python on a frozen install" message) can never
+        # drift between the two paths.
+        try:
+            argv = script_argv(lang, script)
+        except ScriptRunFailed as exc:
+            script.unlink(missing_ok=True)
+            return ToolResult(ok=False, error=str(exc))
 
         def _run() -> "tuple[int, str, str]":
             proc = subprocess.run(
@@ -147,6 +232,9 @@ class RunCodeTool(Tool):
         if len(combined) > _MAX_OUTPUT:
             combined = combined[:_MAX_OUTPUT] + f"\n[output clipped at {_MAX_OUTPUT} chars]"
         kept_rel = f"scripts/{script.name}" if keep else None
+        # The script file is gone (or dies with the workspace) — persist the
+        # SOURCE so it stays browsable + re-runnable from the Artifacts page.
+        self._record(script.stem, lang, code, ctx, rc, combined)
         header = f"exit {rc}" + (f" · kept {kept_rel}" if kept_rel else " · script discarded")
         return ToolResult(
             ok=rc == 0,

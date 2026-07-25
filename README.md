@@ -51,6 +51,7 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 | 💬 **Chat that remembers how you work** | armed tools, skill, workspace, and model persist **per thread** — reopen a conversation and it's still set up. One-click **Share**: the verbatim transcript or an AI-compacted digest, as Markdown or a self-contained web page |
 | 🖥️ **Your own GPUs, watched live** | a **Local fleet** page for the machines you own: tokens/sec, concurrency, queue depth, models loaded, VRAM, context windows — and a metric it *can't* read says so instead of showing a fake zero |
 | 🎬 **Creative studio** | generate images, video, music, and speech; browse your own media folders in a Library; and drive an AI coding CLI in a managed terminal that saves straight into the folder you picked |
+| 🧪 **The code agents write, kept** | when an agent solves something by writing a script, that script used to die with its disposable workspace. Now it lands in **Artifacts** — read the source, see its real exit code and output, and **run it again** in its own durable folder, months later |
 | 🎙️ **Voice chat** | hands-free in Chat: speak, it answers out loud — with **offline speech-to-text bundled** (Vosk), so dictation works in the desktop app with no key and no cloud |
 | 🗝️ **Encrypted secrets vault** | API keys / OAuth / tokens, shared by every subsystem, never shown to agents |
 | 📅 **Scheduled tasks** | friendly repeat presets or a specific date/time — no cron syntax required |
