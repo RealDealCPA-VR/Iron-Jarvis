@@ -147,8 +147,37 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/usage")
     def usage(days: int = 30) -> dict[str, Any]:
-        """Token + $ cost over time (totals, by-day, by-model) from agent runs."""
-        return d.platform.observability.usage_summary(days)
+        """Token + $ cost over time (totals, by-day, by-model) from agent runs
+        PLUS the user's OpenCode sessions (read live from OpenCode's own store
+        — local-model work done in OpenCode counts, not just in-app runs)."""
+        out = d.platform.observability.usage_summary(days)
+        try:
+            from ...eval.opencode_usage import opencode_db_path, opencode_usage
+
+            oc = opencode_usage(opencode_db_path(d.platform.config), days)
+        except Exception:  # noqa: BLE001 — usage must never break on the merge
+            oc = {"available": False, "note": "opencode merge failed"}
+        out["opencode"] = oc
+        if oc.get("available"):
+            t, ot = out["totals"], oc["totals"]
+            t["input_tokens"] += ot["input_tokens"]
+            t["output_tokens"] += ot["output_tokens"]
+            t["cost_usd"] += ot["cost_usd"]
+            t["runs"] += ot["runs"]
+            out["by_model"] = list(out["by_model"]) + list(oc["by_model"])
+            merged: dict[str, dict[str, Any]] = {
+                r["day"]: dict(r) for r in out["by_day"]
+            }
+            for r in oc["by_day"]:
+                m = merged.setdefault(r["day"], {
+                    "day": r["day"], "input_tokens": 0,
+                    "output_tokens": 0, "cost_usd": 0.0,
+                })
+                m["input_tokens"] += r["input_tokens"]
+                m["output_tokens"] += r["output_tokens"]
+                m["cost_usd"] += r["cost_usd"]
+            out["by_day"] = sorted(merged.values(), key=lambda r: r["day"])
+        return out
 
     @app.post("/shutdown")
     def shutdown_daemon() -> dict[str, Any]:

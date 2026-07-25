@@ -237,6 +237,10 @@ class Config(BaseModel):
     # list-of-dict shape as mcp_servers/custom_integrations; managed by /fleet/nodes
     # (NOT via PUT /settings — a UI round-trip of a complex list loses nodes).
     fleet_nodes: list[dict[str, Any]] = Field(default_factory=list)
+    #: OpenCode's data dir (or its opencode.db directly) — the Usage page
+    #: merges OpenCode's own session tokens so local work done there counts.
+    #: "" = the standard ~/.local/share/opencode location.
+    opencode_data_dir: str = ""
     #: Known context windows (TOKENS) for budget scaling, keyed by
     #: "provider::model", "model", or "provider" (most-specific wins). Local
     #: endpoints rarely advertise their window, so this pin lets big-context

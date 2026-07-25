@@ -221,6 +221,8 @@ _SETTINGS_KEYS = [
     # — scales attachment budgets for local endpoints that don't advertise
     # theirs (a 128k fleet model gets whole documents inline; 8k gets RAG).
     "model_context_windows",
+    # OpenCode store override for the Usage merge (dir or .db path).
+    "opencode_data_dir",
     # Voice speech-to-text — an optional DEDICATED whisper endpoint + model, so a
     # self-hosted STT server works independently of the (possibly non-transcribing)
     # chat endpoint. Its key lives in the vault as voice_transcribe_key.
