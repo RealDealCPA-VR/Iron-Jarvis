@@ -41,12 +41,6 @@ class LessonCreateBody(BaseModel):
     scope: str = "user"
 
 
-class MemoryWriteBody(BaseModel):
-    layer: str = "user"  # whatever layers MemoryLayers accepts
-    key: str
-    text: str
-
-
 class LiveDocCreate(BaseModel):
     """A living document: prompt + format + optional refresh schedule."""
 
@@ -455,7 +449,12 @@ class TerminalCreate(BaseModel):
 
 
 class MemoryWrite(BaseModel):
-    layer: str = "project"
+    """Body of the (single) POST /memory. ``layer`` defaults to "user" — the
+    layer that endpoint has always actually written to; this model once
+    defaulted to "project" but sat behind a duplicate registration and never
+    served a request, so "project" was never the live behavior."""
+
+    layer: str = "user"  # whatever layers MemoryLayers accepts
     key: str
     text: str
     scope_id: str | None = None

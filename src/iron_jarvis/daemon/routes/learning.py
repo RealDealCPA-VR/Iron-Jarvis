@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException
 from typing import Any
 
-from ..schemas import GraphLinkBody, LessonCreateBody, MemoryWrite, MemoryWriteBody
+from ..schemas import GraphLinkBody, LessonCreateBody, MemoryWrite
 from ...core.db import session_scope
 
 
@@ -79,14 +79,35 @@ def register(app: FastAPI, d) -> None:
             return {"id": rec.id, "text": rec.text}
 
     @app.post("/memory")
-    def memory_write(body: MemoryWriteBody) -> dict[str, Any]:
-        """Write straight into working memory (the layered store agents search)."""
+    def memory_write(body: MemoryWrite) -> dict[str, Any]:
+        """Write straight into working memory (the layered store agents search).
+
+        THE only POST /memory. A second, richer handler used to be registered
+        further down this module; FastAPI dispatches the FIRST match, so that one
+        was dead code while ``/openapi.json`` advertised ITS schema (OpenAPI
+        generation keeps the last) — ``scope_id`` was documented but silently
+        dropped. Merged here: ``scope_id`` is honored, and the layer default
+        stays ``"user"`` (what actually shipped) rather than the dead handler's
+        ``"project"``, so no caller that omits ``layer`` changes destination.
+
+        ``key`` falls back to "note" when blank and ``text`` is capped, both
+        carried over from the handler that was live. The response echoes the
+        RECORD, so a substituted key or layer is visible rather than reflected
+        back as sent. An unknown layer is a client error (400); anything else
+        stays a 500 — a DB failure must not masquerade as bad input.
+        """
         try:
-            rec = d.platform.memory.write(body.layer, body.key.strip() or "note",
-                                        (body.text or "").strip()[:8000])
-        except Exception as exc:  # noqa: BLE001 — bad layer etc.
+            rec = d.platform.memory.write(
+                body.layer,
+                body.key.strip() or "note",
+                (body.text or "").strip()[:8000],
+                scope_id=body.scope_id,
+            )
+        except ValueError as exc:  # unknown layer -> client error, not a 500
             raise HTTPException(status_code=400, detail=str(exc))
-        return {"id": rec.id, "layer": body.layer, "key": body.key}
+        return {
+            "id": rec.id, "layer": rec.layer, "key": rec.key, "scope_id": rec.scope_id,
+        }
 
     @app.delete("/lessons/{lesson_id}")
     def delete_lesson(lesson_id: str) -> dict[str, Any]:
@@ -190,19 +211,14 @@ def register(app: FastAPI, d) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-    @app.post("/memory")
-    def memory_write(body: MemoryWrite) -> dict[str, Any]:
-        try:
-            rec = d.platform.memory.write(
-                body.layer, body.key, body.text, scope_id=body.scope_id
-            )
-        except ValueError as exc:  # unknown layer -> client error, not a 500
-            raise HTTPException(status_code=400, detail=str(exc))
-        return {"id": rec.id, "layer": rec.layer, "key": rec.key}
-
     @app.get("/memory/{layer}/{key}")
-    def memory_read(layer: str, key: str) -> dict[str, Any]:
-        text = d.platform.memory.read(layer, key)
+    def memory_read(layer: str, key: str, scope_id: str | None = None) -> dict[str, Any]:
+        """Read one working-memory entry. ``scope_id`` addresses the same
+        (layer, key, scope) triple POST /memory writes — omitted means the
+        unscoped record, since ``_find`` treats None as ``scope_id IS NULL``
+        rather than "any scope". Without this param a scoped write would not be
+        readable back through the API at all."""
+        text = d.platform.memory.read(layer, key, scope_id=scope_id)
         if text is None:
             raise HTTPException(status_code=404, detail="not found")
-        return {"layer": layer, "key": key, "text": text}
+        return {"layer": layer, "key": key, "text": text, "scope_id": scope_id}
