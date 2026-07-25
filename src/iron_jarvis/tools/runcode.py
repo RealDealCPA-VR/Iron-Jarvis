@@ -26,9 +26,10 @@ from typing import Any, Callable
 
 from .base import Reversibility, Tool, ToolContext, ToolResult
 
-#: ``(name, language, code, session_id, exit_code, output) -> None`` — the
-#: durable sink for executed scripts (wired to the Code Lab store in platform).
-CodeArtifactSink = Callable[[str, str, str, "str | None", int, str], None]
+#: ``(name, language, code, session_id, exit_code, output, purpose) -> None``
+#: — the durable sink for executed scripts (wired to the Code Lab store in
+#: platform). ``purpose`` is the one-line use case shown on the gallery tile.
+CodeArtifactSink = Callable[[str, str, str, "str | None", int, str, str], None]
 
 _MAX_OUTPUT = 12_000
 _MAX_TIMEOUT = 300
@@ -133,15 +134,26 @@ class RunCodeTool(Tool):
         "parsing). Languages: python (needs an interpreter on the machine), "
         "powershell (always available on Windows), bash. Runs inside the "
         "workspace with a timeout; the script is deleted after the run unless "
-        "keep=true (then it stays under scripts/ for ongoing use). If the "
-        "script SOLVED a hard problem, save the approach + code as a skill "
-        "with skill_create so future sessions know how it was done."
+        "keep=true (then it stays under scripts/ for ongoing use). Every run is "
+        "SAVED so the user can find and re-run it later — always pass 'purpose' "
+        "(one plain sentence about what this script is for) and a readable "
+        "'filename', because they become the script's card in the user's "
+        "Artifacts gallery. If the script SOLVED a hard problem, save the "
+        "approach + code as a skill with skill_create too."
     )
     input_schema = {
         "type": "object",
         "properties": {
             "language": {"type": "string", "enum": list(_LANGS)},
             "code": {"type": "string"},
+            "purpose": {
+                "type": "string",
+                "description": (
+                    "One plain sentence: what this script is for and why you ran "
+                    "it (e.g. 'Rename the 400 scanned invoices to INV-<date>.pdf'). "
+                    "Shown to the user as this script's use case."
+                ),
+            },
             "keep": {
                 "type": "boolean",
                 "description": "Keep the script under scripts/ (default: delete after run)",
@@ -153,20 +165,28 @@ class RunCodeTool(Tool):
     }
 
     def __init__(self, sink: "CodeArtifactSink | None" = None) -> None:
-        #: Called after every COMPLETED run with
-        #: ``(name, language, code, session_id, exit_code, output)`` — the
-        #: platform wires this to the Code Lab store so the script outlives the
-        #: session workspace it ran in. A failing sink never breaks a run: the
-        #: agent's task matters more than the bookkeeping.
+        #: Called after every COMPLETED run — see :data:`CodeArtifactSink` for
+        #: the signature. The platform wires this to the Code Lab store so the
+        #: script outlives the session workspace it ran in. A failing sink never
+        #: breaks a run: the agent's task matters more than the bookkeeping.
         self._sink = sink
 
     def _record(
-        self, name: str, lang: str, code: str, ctx: ToolContext, rc: int, output: str
+        self,
+        name: str,
+        lang: str,
+        code: str,
+        ctx: ToolContext,
+        rc: int,
+        output: str,
+        purpose: str = "",
     ) -> None:
         if self._sink is None:
             return
         try:
-            self._sink(name, lang, code, getattr(ctx, "session_id", None), rc, output)
+            self._sink(
+                name, lang, code, getattr(ctx, "session_id", None), rc, output, purpose
+            )
         except Exception:  # noqa: BLE001 — bookkeeping never breaks the task
             pass
 
@@ -234,7 +254,10 @@ class RunCodeTool(Tool):
         kept_rel = f"scripts/{script.name}" if keep else None
         # The script file is gone (or dies with the workspace) — persist the
         # SOURCE so it stays browsable + re-runnable from the Artifacts page.
-        self._record(script.stem, lang, code, ctx, rc, combined)
+        self._record(
+            script.stem, lang, code, ctx, rc, combined,
+            purpose=str(args.get("purpose") or "").strip(),
+        )
         header = f"exit {rc}" + (f" · kept {kept_rel}" if kept_rel else " · script discarded")
         return ToolResult(
             ok=rc == 0,

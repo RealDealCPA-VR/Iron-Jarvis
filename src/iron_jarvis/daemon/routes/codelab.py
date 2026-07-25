@@ -69,11 +69,15 @@ def register(app: FastAPI, d) -> None:
         mini-app, or keeping one an agent produced elsewhere."""
         if not (body.source or "").strip():
             raise HTTPException(status_code=400, detail="source is required")
+        from ...codelab.purpose import purpose_for
+
         rec = d.platform.code_artifacts.save(
             body.name,
             body.language,
             body.source,
-            description=body.description or "",
+            # Same rule as the agent path: stated wins, else read the code's
+            # own header, else leave it blank rather than invent a use case.
+            description=purpose_for(body.source, body.language, body.description or ""),
             origin="manual",
             project_id=(body.project_id or None),
             count_run=False,  # saving is not running — don't claim it ran

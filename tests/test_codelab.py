@@ -174,7 +174,7 @@ def test_run_code_persists_the_script_it_just_ran(tmp_path):
     store = CodeArtifactStore(engine)
     captured: list[tuple] = []
 
-    def sink(name, language, code, session_id, exit_code, output):
+    def sink(name, language, code, session_id, exit_code, output, purpose=""):
         captured.append((name, language, session_id, exit_code))
         store.save(name, language, code, session_id=session_id,
                    exit_code=exit_code, output=output)

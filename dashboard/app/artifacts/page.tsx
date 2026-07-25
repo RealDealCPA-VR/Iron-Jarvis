@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Artifacts — the code and mini-apps agents build (v1.95.0).
+ * Artifacts — the code and mini-apps agents build (v1.95.0; gallery v1.96.0).
  *
  * This page used to list the artifact STORE, which in practice holds only
  * generated media (images/video/audio). It requested each one as text, so
@@ -9,11 +9,13 @@
  * wrapping <pre> and froze the tab on the spinner. Generated media has a real
  * home — the Creative gallery — so this page now shows what had no home at all:
  * the scripts agents write with run_code, which used to die with the session
- * workspace. Browse them, read the source, and run them again.
+ * workspace. Browse them as a GALLERY headlined by each script's use case,
+ * read the source, and run them again.
  */
 
 import { useState } from "react";
 import {
+  ArrowLeft,
   Code2,
   Play,
   Terminal,
@@ -30,7 +32,6 @@ import {
   Spinner,
   OfflineHint,
   Empty,
-  SkeletonRows,
   Badge,
   ConfirmButton,
   ErrorNote,
@@ -114,7 +115,12 @@ export default function ArtifactsPage() {
     setRunError(null);
     try {
       setRun(await post<RunResult>(`/code-artifacts/${encodeURIComponent(id)}/run`, {}));
-      list.reload(); // run_count / last exit changed
+      // BOTH views hold now-stale metadata: the tile's run count/exit status and
+      // THIS card's "last run" line. Reloading only the list left the detail
+      // header showing the previous run's time and exit code next to fresh
+      // output — quietly wrong, and exactly the kind of thing that erodes trust.
+      list.reload();
+      detail.reload();
     } catch (e) {
       setRunError(e instanceof ApiError ? e.message : String(e));
     } finally {
@@ -145,59 +151,91 @@ export default function ArtifactsPage() {
         </Reveal>
       )}
 
-      <Reveal>
-        <div className="grid gap-6 lg:grid-cols-3">
-          <div className="lg:col-span-1 space-y-4">
-            <Card title={`Scripts · ${items.length}`} icon={<Code2 size={15} />}>
-              {list.loading && !list.data ? (
-                <SkeletonRows rows={5} />
-              ) : items.length === 0 ? (
-                <Empty icon={<Code2 size={22} />}>
-                  No saved scripts yet. When an agent uses <code>run_code</code> to solve
-                  something, it lands here automatically.
-                </Empty>
-              ) : (
-                <ul className="space-y-1">
-                  {items.map((a) => (
-                    <li key={a.id}>
-                      <button
-                        onClick={() => select(a.id)}
-                        className={`w-full rounded-xl border px-3 py-2.5 text-left transition-colors ${
-                          selected === a.id
-                            ? "border-accent/30 bg-accent/[0.08]"
-                            : "border-transparent hover:border-white/10 hover:bg-white/[0.04]"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="truncate text-sm text-zinc-200">{a.name}</span>
-                          <span className="shrink-0 font-mono text-[10px] uppercase text-zinc-500">
-                            {a.language}
-                          </span>
-                        </div>
-                        <div className="mt-1 flex items-center gap-3 text-[11px] text-zinc-500">
-                          <RunStatus code={a.last_exit_code} />
-                          <span>
-                            {a.run_count} run{a.run_count === 1 ? "" : "s"}
-                          </span>
-                        </div>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
+      {/* GALLERY — one tile per script, headlined by its USE CASE. The name is
+          often `run_<epoch>`, so leading with purpose is what makes this
+          browsable at a glance. */}
+      {!selected && (
+        <Reveal>
+          {list.loading && !list.data ? (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="h-36 animate-pulse rounded-2xl border border-white/[0.06] bg-white/[0.02]"
+                />
+              ))}
+            </div>
+          ) : items.length === 0 ? (
+            <Card title="Scripts · 0" icon={<Code2 size={15} />}>
+              <Empty icon={<Code2 size={22} />}>
+                No saved scripts yet. When an agent uses <code>run_code</code> to solve
+                something, it lands here automatically — with what it was for.
+              </Empty>
             </Card>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {items.map((a) => (
+                <button
+                  key={a.id}
+                  onClick={() => select(a.id)}
+                  className="group flex h-full flex-col rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4 text-left transition-colors hover:border-accent/30 hover:bg-accent/[0.05]"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 rounded-md bg-white/[0.04] px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-zinc-400">
+                      <Code2 size={11} /> {a.language}
+                    </span>
+                    <RunStatus code={a.last_exit_code} />
+                  </div>
 
-            {/* The media that used to (fail to) render here has a working home. */}
-            <Link
-              href="/creative"
-              className="flex items-center gap-2 rounded-xl border border-white/[0.06] px-3 py-2.5 text-xs text-zinc-400 transition-colors hover:border-white/10 hover:text-zinc-200"
-            >
-              <ImageIcon size={14} />
-              Generated images, video and audio live in the Creative gallery →
-            </Link>
-          </div>
+                  {/* THE USE CASE — the reason this tile exists. */}
+                  <p className="mt-3 line-clamp-3 text-sm leading-relaxed text-zinc-200">
+                    {a.description || (
+                      <span className="italic text-zinc-500">
+                        No stated purpose — open to read the code.
+                      </span>
+                    )}
+                  </p>
 
-          <div className="lg:col-span-2 space-y-4">
+                  <div className="mt-auto pt-3">
+                    <p className="truncate font-mono text-[11px] text-zinc-500">{a.name}</p>
+                    <div className="mt-1.5 flex items-center gap-3 text-[11px] text-zinc-500">
+                      <span className="inline-flex items-center gap-1">
+                        <Play size={11} /> {a.run_count} run{a.run_count === 1 ? "" : "s"}
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <Clock size={11} /> {when(a.last_run_at)}
+                      </span>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* The media that used to (fail to) render here has a working home. */}
+          <Link
+            href="/creative"
+            className="mt-4 flex items-center gap-2 rounded-xl border border-white/[0.06] px-3 py-2.5 text-xs text-zinc-400 transition-colors hover:border-white/10 hover:text-zinc-200"
+          >
+            <ImageIcon size={14} />
+            Generated images, video and audio live in the Creative gallery →
+          </Link>
+        </Reveal>
+      )}
+
+      {selected && (
+        <Reveal>
+          <button
+            onClick={() => {
+              setSelected(null);
+              setRun(null);
+              setRunError(null);
+            }}
+            className="mb-4 inline-flex items-center gap-1.5 text-xs text-zinc-400 transition-colors hover:text-zinc-200"
+          >
+            <ArrowLeft size={14} /> All scripts
+          </button>
+          <div className="space-y-4">
             <Card
               title={detail.data?.name || "Script"}
               icon={<Code2 size={15} />}
@@ -224,17 +262,19 @@ export default function ArtifactsPage() {
                 ) : null
               }
             >
-              {!selected ? (
-                <Empty icon={<Code2 size={22} />}>
-                  Select a script to read its source and run it again.
-                </Empty>
-              ) : detail.loading && !detail.data ? (
+              {detail.loading && !detail.data ? (
                 <Spinner />
               ) : detail.data ? (
                 <div className="space-y-3">
-                  {detail.data.description && (
-                    <p className="text-sm text-zinc-400">{detail.data.description}</p>
-                  )}
+                  {/* The use case again, up top — the tile's headline carries
+                      over so the detail view answers "what is this?" first. */}
+                  <p className="text-sm leading-relaxed text-zinc-300">
+                    {detail.data.description || (
+                      <span className="italic text-zinc-500">
+                        No stated purpose was recorded for this script.
+                      </span>
+                    )}
+                  </p>
                   <div className="flex flex-wrap items-center gap-3 text-[11px] text-zinc-500">
                     <span className="inline-flex items-center gap-1">
                       <Clock size={12} /> last run {when(detail.data.last_run_at)}
@@ -278,8 +318,8 @@ export default function ArtifactsPage() {
               </Card>
             )}
           </div>
-        </div>
-      </Reveal>
+        </Reveal>
+      )}
     </PageShell>
   );
 }

@@ -417,9 +417,14 @@ def build_platform(
 
     code_artifacts = CodeArtifactStore(engine)
 
-    def _code_sink(name, language, code, session_id, exit_code, output):  # noqa: ANN001
+    def _code_sink(name, language, code, session_id, exit_code, output, purpose=""):  # noqa: ANN001
         """Persist an executed script. Resolves the producing session's project
-        so a script written during project work is scoped to it (context spine)."""
+        so a script written during project work is scoped to it (context spine),
+        and settles the one-line USE CASE shown on the gallery tile: what the
+        agent stated, else what the code's own header says, else nothing (never
+        invented)."""
+        from .codelab.purpose import purpose_for
+
         project_id = None
         if session_id:
             try:
@@ -434,6 +439,7 @@ def build_platform(
             name,
             language,
             code,
+            description=purpose_for(code, language, purpose),
             session_id=session_id,
             project_id=project_id,
             exit_code=exit_code,
