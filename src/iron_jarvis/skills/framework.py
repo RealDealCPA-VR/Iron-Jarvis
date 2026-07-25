@@ -8,6 +8,7 @@ against each skill's name + description.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -35,6 +36,71 @@ def external_skill_roots() -> list[tuple[Path, str]]:
         (home / ".codex" / "skills", "codex"),
     ]
     return [(p, tag) for p, tag in candidates if p.is_dir()]
+
+
+def marketplace_catalog_dirs(home: "Path | None" = None) -> list[Path]:
+    """Cloned plugin-MARKETPLACE checkouts, which must NOT be read as installed
+    skills (v1.98.0).
+
+    Adding a marketplace clones its whole catalog into
+    ``~/.claude/plugins/marketplaces/<name>/`` so it can be BROWSED — sample
+    plugins, authoring kits, and every listed plugin's payload. A plain
+    ``**/SKILL.md`` glob can't tell "available in a store" from "installed by
+    the user", so it swallowed the lot: on this machine that was 27 skills
+    (``plugin-dev``, ``mcp-server-dev``, discord/imessage/telegram, and one
+    literally named ``example-plugin``) against 13 real ones — skills the user
+    never installed, searchable by agents and injected into prompts.
+
+    Catalogs are identified from ``known_marketplaces.json`` (the file Claude
+    Code actually maintains) so a marketplace installed anywhere is caught, with
+    the conventional ``plugins/marketplaces/*`` layout as the fallback for a
+    missing or unreadable manifest. Genuinely installed plugins living ELSEWHERE
+    under ``plugins/`` keep loading exactly as before.
+    """
+    root = (home or Path.home()) / ".claude" / "plugins"
+    if not root.is_dir():
+        return []
+    found: list[Path] = []
+    manifest = root / "known_marketplaces.json"
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        for entry in (data or {}).values():
+            loc = str((entry or {}).get("installLocation") or "").strip()
+            if loc:
+                found.append(Path(loc))
+    except Exception:  # noqa: BLE001 — absent/corrupt manifest -> use the layout
+        pass
+    # Fallback + belt-and-braces: the conventional location, whether or not the
+    # manifest listed it. A catalog missed here would silently re-pollute.
+    conventional = root / "marketplaces"
+    if conventional.is_dir():
+        found.extend(p for p in conventional.iterdir() if p.is_dir())
+        found.append(conventional)
+    out: list[Path] = []
+    for p in found:
+        try:
+            rp = p.resolve()
+        except OSError:
+            continue
+        if rp not in out:
+            out.append(rp)
+    return out
+
+
+def _under_any(path: Path, roots: list[Path]) -> bool:
+    """True when ``path`` lives inside any of ``roots`` (resolved, so a symlinked
+    or differently-cased marketplace clone is still recognised)."""
+    try:
+        rp = path.resolve()
+    except OSError:
+        rp = path
+    for root in roots:
+        try:
+            if rp == root or rp.is_relative_to(root):
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
 
 
 def _tokens(text: str) -> list[str]:
@@ -72,7 +138,11 @@ class SkillRegistry:
         return self
 
     def discover_recursive(
-        self, *dirs: Path, source: str = "custom", max_files: int = 2000
+        self,
+        *dirs: Path,
+        source: str = "custom",
+        max_files: int = 2000,
+        exclude: "list[Path] | None" = None,
     ) -> "SkillRegistry":
         """Load EVERY ``<root>/**/SKILL.md`` (any depth) under each root.
 
@@ -80,7 +150,13 @@ class SkillRegistry:
         folders. FIRST-wins on name collision, so already-registered builtin/user
         skills are never clobbered by an external one of the same name. Bounded
         (``max_files`` per root) and fault-tolerant (a bad SKILL.md is skipped).
+
+        ``exclude`` drops any SKILL.md living under one of those directories —
+        used to skip cloned marketplace CATALOGS, which are a store to browse
+        rather than skills the user installed (see
+        :func:`marketplace_catalog_dirs`).
         """
+        skips = [Path(p) for p in (exclude or [])]
         for d in dirs:
             base = Path(d)
             if not base.is_dir():
@@ -89,6 +165,8 @@ class SkillRegistry:
                 files = sorted(base.rglob(SKILL_FILE))
             except OSError:
                 continue
+            if skips:
+                files = [f for f in files if not _under_any(f, skips)]
             for md in files[:max_files]:
                 try:
                     skill = load_skill(md.parent, source=source)
@@ -111,8 +189,12 @@ class SkillRegistry:
         self._skills.clear()
         self.discover(builtin_dir(), source="builtin")
         self.discover(Path(home) / "skills", source="user")
+        # A cloned marketplace is a STORE to browse, not skills the user
+        # installed — excluded so the catalog's sample/authoring plugins never
+        # enter the registry (v1.98.0).
+        catalogs = marketplace_catalog_dirs()
         for root, tag in external_skill_roots():
-            self.discover_recursive(root, source=tag)
+            self.discover_recursive(root, source=tag, exclude=catalogs)
         for extra in extra_paths or []:
             try:
                 self.discover_recursive(Path(extra).expanduser(), source="custom")
