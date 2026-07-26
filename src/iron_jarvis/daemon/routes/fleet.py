@@ -467,27 +467,27 @@ def register(app: FastAPI, d) -> None:
 
     @app.delete("/fleet/nodes/{node_id}")
     def fleet_delete_node(node_id: str) -> dict[str, Any]:
-        """Remove a user-added node. The two auto-seeded endpoint slots are NOT
-        deletable here — they're config, and deleting them would silently
-        reappear on the next boot. We say where they actually live."""
+        """Remove an endpoint, including the two config-seeded slots (v1.100.0).
+
+        Those two used to be refused with "managed in Settings", which pinned a
+        dead endpoint to the page forever after moving off it (Ollama → vLLM).
+        They're DERIVED from ``ollama_base_url`` / ``custom_base_url``, so
+        clearing those keys is the removal — and the response reports exactly
+        which keys were cleared rather than doing it silently, because it also
+        retires the matching top-level provider.
+        """
         _node_or_404(node_id)
-        try:
-            d.fleet.remove(node_id)
-        except ValueError:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    "this endpoint is managed in Settings "
-                    "(ollama_base_url / custom_base_url)"
-                ),
-            )
+        cleared = d.fleet.remove(node_id)
         # No ghost providers: drop the factory too (reachable() also answers
         # False for deleted fleet ids — belt and suspenders).
-        try:
-            d.platform.providers.unregister(f"fleet-{node_id}")
-        except Exception:  # noqa: BLE001
-            pass
-        return {"ok": True}
+        for name in (f"fleet-{node_id}", node_id if cleared else ""):
+            if not name:
+                continue
+            try:
+                d.platform.providers.unregister(name)
+            except Exception:  # noqa: BLE001
+                pass
+        return {"ok": True, "cleared_settings": cleared}
 
     @app.post("/fleet/nodes/{node_id}/detect")
     async def fleet_detect_node(node_id: str) -> dict[str, Any]:

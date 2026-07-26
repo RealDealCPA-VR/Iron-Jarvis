@@ -4060,8 +4060,17 @@ export default function ChatPage() {
                           )}
                           <ChevronRight size={13} className="ml-auto shrink-0 text-zinc-500" />
                         </button>
+                        {/* bottom-0, NOT top-0 (v1.100.0). The thread +
+                            composer live inside a Card with overflow-hidden, so
+                            an absolute child that extends past it is CLIPPED
+                            whatever its z-index. These flyouts hang off a menu
+                            already anchored at the bottom of the chat, so
+                            growing downward ran them straight off the bottom
+                            edge and cut off the list. Growing upward keeps them
+                            inside the Card — the same fix the model flyout got
+                            in v1.87.0. */}
                         {plusSub === "project" && (
-                          <div className="absolute left-full top-0 z-30 ml-1 max-h-64 w-60 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
+                          <div className="absolute bottom-0 left-full z-30 ml-1 max-h-64 w-60 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
                             {projectId && (
                               <button
                                 type="button"
@@ -4128,7 +4137,7 @@ export default function ChatPage() {
                               <ChevronRight size={13} className="ml-auto shrink-0 text-zinc-500" />
                             </button>
                             {plusSub === "skills" && (
-                              <div className="absolute left-full top-0 z-30 ml-1 max-h-64 w-60 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
+                              <div className="absolute bottom-0 left-full z-30 ml-1 max-h-64 w-60 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
                                 {activeSkill && (
                                   <button
                                     type="button"
@@ -4191,7 +4200,7 @@ export default function ChatPage() {
                               <ChevronRight size={13} className="ml-auto shrink-0 text-zinc-500" />
                             </button>
                             {plusSub === "connectors" && (
-                              <div className="absolute left-full top-0 z-30 ml-1 max-h-64 w-64 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
+                              <div className="absolute bottom-0 left-full z-30 ml-1 max-h-64 w-64 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
                                 {connCatalog === null ? (
                                   <div className="px-2.5 py-2">
                                     <LoaderInline />

@@ -150,12 +150,26 @@ class _Registry:
         self._flush()
         return node
 
-    def remove(self, node_id: str) -> None:
+    #: Mirrors FleetRegistry._SEED_KEYS — a config-seeded node is DERIVED from
+    #: these, so clearing them is what actually removes it (v1.100.0).
+    _SEED_KEYS = {
+        "ollama": ("ollama_base_url", "ollama_model"),
+        "custom": ("custom_base_url", "custom_model"),
+    }
+
+    def remove(self, node_id: str) -> list[str]:
+        """Returns the config keys cleared — empty for a plain user node."""
         node = self._nodes.get(node_id)
-        if node is not None and node.source == "config":
-            raise ValueError("config-seeded node")
         self._nodes.pop(node_id, None)
         self._flush()
+        if node is None or node.source != "config":
+            return []
+        cleared = []
+        for key in self._SEED_KEYS.get(node_id, ()):
+            if getattr(self.config, key, None):
+                setattr(self.config, key, "")
+                cleared.append(key)
+        return cleared
 
     def absorb_children(self, parent_id: str, children) -> None:
         for child in children:
@@ -515,7 +529,7 @@ def test_node_crud_round_trip_persists_and_survives_reload(tmp_path, monkeypatch
     assert saved["tower"]["label"] == "Tower A"
     assert saved["tower"]["base_url"] == "http://100.87.42.62:8003"
 
-    assert client.delete("/fleet/nodes/tower").json() == {"ok": True}
+    assert client.delete("/fleet/nodes/tower").json() == {"ok": True, "cleared_settings": []}
     assert _reload(d).fleet_nodes == []
 
 
@@ -541,19 +555,29 @@ def test_add_node_validation(tmp_path, monkeypatch):
     assert "invalid node id" in bad.json()["detail"]  # the registry's own reason
 
 
-def test_config_seeded_node_is_visible_but_not_deletable(tmp_path, monkeypatch):
-    """The two endpoint slots are auto-seeded; deleting one here would just
-    reappear on the next boot, so we point at where it actually lives."""
+def test_config_seeded_node_is_visible_AND_removable(tmp_path, monkeypatch):
+    """A seeded slot is derived from config, so removing it clears the backing
+    keys (v1.100.0). It used to be refused with "managed in Settings", which
+    pinned a dead endpoint to the page forever after moving Ollama -> vLLM.
+
+    The response names the keys it cleared rather than doing it silently: this
+    also retires the matching top-level provider.
+    """
     _stub_probes(monkeypatch)
     seed = _Node(
         id="ollama", label="Ollama", base_url="http://127.0.0.1:11434", source="config"
     )
     client, _d = _wire(tmp_path, sampler=_Sampler(snaps=[_Snapshot(node=seed)]), seed=[seed])
+    # A config-sourced node only exists BECAUSE these keys are set — seeding the
+    # node without them would test a state the app can never be in.
+    _d.fleet.config.ollama_base_url = "http://127.0.0.1:11434"
+    _d.fleet.config.ollama_model = "llama3"
+
     assert client.get("/fleet").json()["nodes"][0]["node"]["source"] == "config"
     r = client.delete("/fleet/nodes/ollama")
-    assert r.status_code == 404
-    assert "managed in Settings" in r.json()["detail"]
-    assert "ollama_base_url" in r.json()["detail"]
+    assert r.status_code == 200
+    assert set(r.json()["cleared_settings"]) == {"ollama_base_url", "ollama_model"}
+    assert _d.fleet.config.ollama_base_url == ""
 
 
 def test_litellm_children_are_absorbed(tmp_path, monkeypatch):

@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import Link from "next/link";
 import {
   Plug,
   FlaskConical,
@@ -10,12 +9,6 @@ import {
   CheckCircle2,
   Plus,
   Save,
-  ArrowRight,
-  Bot,
-  Blocks,
-  MessagesSquare,
-  Cloud,
-  Compass,
 } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
@@ -35,66 +28,6 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 
 /* -------------------------------------------------------------------------- */
-/*  "Where to connect things" — friendly pointers to the real connection hubs  */
-/* -------------------------------------------------------------------------- */
-
-type ConnectTile = {
-  href: string;
-  title: string;
-  desc: string;
-  icon: ReactNode;
-};
-
-const CONNECT_TILES: ConnectTile[] = [
-  {
-    href: "/connections",
-    title: "AI accounts",
-    desc: "Sign in to Anthropic, OpenAI and other model providers.",
-    icon: <Bot size={17} />,
-  },
-  {
-    href: "/tools",
-    title: "Tool packs (MCP)",
-    desc: "Plug in ready-made tool packs that give Jarvis new abilities.",
-    icon: <Blocks size={17} />,
-  },
-  {
-    href: "/channels",
-    title: "Slack / Telegram / Email",
-    desc: "Get updates and reply to Jarvis where you already chat.",
-    icon: <MessagesSquare size={17} />,
-  },
-  {
-    href: "/memory?scope=longterm",
-    title: "Cloud drives for memory",
-    desc: "Box, Drive, Dropbox and more — long-term memory storage.",
-    icon: <Cloud size={17} />,
-  },
-];
-
-function ConnectTileLink({ tile }: { tile: ConnectTile }) {
-  return (
-    <Link
-      href={tile.href}
-      className="group relative flex items-start gap-3 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02] px-4 py-3.5 transition-all duration-300 hover:-translate-y-0.5 hover:border-accent/30 hover:bg-accent/[0.05] hover:shadow-card-hover"
-    >
-      <span className="pointer-events-none absolute -right-6 -top-8 h-24 w-24 rounded-full bg-accent/15 opacity-0 blur-2xl transition-opacity duration-300 group-hover:opacity-100" />
-      <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-accent/25 bg-accent/[0.08] text-accent-soft shadow-[0_0_12px_rgb(var(--accent-rgb)/0.18)]">
-        {tile.icon}
-      </span>
-      <span className="min-w-0">
-        <span className="flex items-center gap-1.5 text-sm font-semibold text-zinc-100">
-          {tile.title}
-          <ArrowRight
-            size={13}
-            className="shrink-0 text-zinc-600 transition-all duration-300 group-hover:translate-x-0.5 group-hover:text-accent-soft"
-          />
-        </span>
-        <span className="mt-0.5 block text-xs leading-relaxed text-zinc-500">{tile.desc}</span>
-      </span>
-    </Link>
-  );
-}
 
 function IntegrationCard({
   integ,
@@ -448,7 +381,7 @@ export default function IntegrationsPage() {
       <Reveal>
         <PageHeader
           title="Integrations"
-          subtitle="Hook Iron Jarvis into other services. Most connections live on their own pages — this page is for direct REST API hookups."
+          subtitle="Connect any service with an HTTP API — a name, a base URL, and a key. Model providers, tool packs, chat channels and cloud drives each have their own page in the sidebar."
           actions={
             <button
               onClick={() => {
@@ -464,19 +397,9 @@ export default function IntegrationsPage() {
       </Reveal>
 
       <Reveal>
-        <Card title="Where to connect things" icon={<Compass size={15} />}>
-          <div className="grid gap-3 sm:grid-cols-2">
-            {CONNECT_TILES.map((tile) => (
-              <ConnectTileLink key={tile.href} tile={tile} />
-            ))}
-          </div>
-        </Card>
-      </Reveal>
-
-      <Reveal>
         <div className="space-y-1">
           <h2 className="text-sm font-semibold text-zinc-200">
-            Direct REST hookups <span className="font-normal text-zinc-500">(advanced)</span>
+            Direct REST hookups
           </h2>
           <p className="flex items-start gap-2 text-xs leading-relaxed text-zinc-600">
             <Plug size={13} className="mt-0.5 shrink-0" />

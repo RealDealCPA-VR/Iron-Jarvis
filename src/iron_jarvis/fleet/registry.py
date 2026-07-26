@@ -155,15 +155,46 @@ class FleetRegistry:
         self._save(rows)
         return merged
 
-    def remove(self, node_id: str) -> None:
+    #: Config keys backing each derived seed. Removing a seeded endpoint has to
+    #: clear these — the node is RENDERED from them on every read, so deleting a
+    #: stored row alone would just let it reappear on the next call.
+    _SEED_KEYS: dict[str, tuple[str, ...]] = {
+        "ollama": ("ollama_base_url", "ollama_model"),
+        "custom": ("custom_base_url", "custom_model"),
+    }
+
+    def remove(self, node_id: str) -> list[str]:
+        """Remove a node. Returns the config keys cleared (empty for a plain
+        user-added node), so the caller can tell the user what else changed.
+
+        A config-seeded endpoint (``ollama`` / ``custom``) used to be refused
+        outright with "managed in Settings", which left a dead endpoint pinned to
+        the page forever — exactly what happens after moving from Ollama to vLLM.
+        Since the seed is derived from the config keys, clearing them IS the
+        removal. Note this also retires the matching top-level provider, which is
+        the honest reading of "remove this endpoint": the user isn't running it
+        any more. Re-entering the URL in Settings brings it straight back.
+        """
         node = self.get(node_id)
         if node is None:
             raise KeyError(node_id)
-        if node.source == "config" and not any(n.id == node_id for n in self._stored()):
-            raise ValueError(
-                "this endpoint is managed in Settings (ollama_base_url / custom_base_url)"
-            )
-        self._save([n for n in self._stored() if n.id != node_id])
+
+        # Drop any stored row first (a promoted seed has one; a user node is one).
+        rows = [n for n in self._stored() if n.id != node_id]
+        if len(rows) != len(self._stored()):
+            self._save(rows)
+
+        if node.source != "config":
+            return []
+
+        cleared: list[str] = []
+        for key in self._SEED_KEYS.get(node_id, ()):
+            if getattr(self.config, key, None):
+                setattr(self.config, key, "")  # keep the live object in agreement
+                cleared.append(key)
+        if cleared:
+            self._persist(self.config.home, {k: "" for k in cleared})
+        return cleared
 
     def absorb_children(self, parent_id: str, children: list[FleetNode]) -> None:
         """Replace a proxy's discovered backends (in memory only)."""

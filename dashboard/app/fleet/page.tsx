@@ -16,12 +16,14 @@ import {
   Timer,
   Activity,
   Clock,
+  Pencil,
 } from "lucide-react";
 import { useApi, usePolledApi } from "@/lib/useApi";
-import { ApiError, get, post } from "@/lib/api";
+import { ApiError, del, get, patch, post } from "@/lib/api";
 import {
   Badge,
   Card,
+  ConfirmButton,
   Dot,
   Empty,
   ErrorNote,
@@ -258,7 +260,125 @@ function ChildRow({ snap }: { snap: NodeSnapshot }) {
  * plus the command that would fix it. Nothing here renders a number we did not
  * measure.
  */
-function NodeCard({ snap, series }: { snap: NodeSnapshot; series: (number | null)[] }) {
+/**
+ * Rename + Remove for one endpoint (v1.100.0).
+ *
+ * The backend has had `PATCH /fleet/nodes/{id}` (label, routable, default_model)
+ * and `DELETE /fleet/nodes/{id}` all along; this page only ever called
+ * `POST /fleet/nodes`, so the fleet was add-only — a box you retired stayed
+ * pinned to the page forever with no way to rename or remove it.
+ */
+function NodeActions({ snap, onChanged }: { snap: NodeSnapshot; onChanged: () => void }) {
+  const node = snap.node;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(node.label || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [cleared, setCleared] = useState<string[] | null>(null);
+
+  async function save() {
+    const label = draft.trim();
+    if (!label || label === node.label) {
+      setEditing(false);
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await patch(`/fleet/nodes/${encodeURIComponent(node.id)}`, { label });
+      setEditing(false);
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    setErr(null);
+    try {
+      const res = await del<{ ok: boolean; cleared_settings?: string[] }>(
+        `/fleet/nodes/${encodeURIComponent(node.id)}`,
+      );
+      // Removing a config-seeded endpoint clears its Settings keys and retires
+      // the matching provider — say so rather than doing it silently.
+      if (res?.cleared_settings?.length) setCleared(res.cleared_settings);
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : String(e));
+    }
+  }
+
+  if (editing) {
+    return (
+      <span className="flex items-center gap-1.5">
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void save();
+            if (e.key === "Escape") setEditing(false);
+          }}
+          disabled={busy}
+          aria-label="Endpoint name"
+          className="w-44 rounded-md border border-white/10 bg-ink-950 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-accent/40"
+        />
+        <button
+          type="button"
+          onClick={() => void save()}
+          disabled={busy}
+          className="rounded-md border border-accent/30 bg-accent/[0.08] px-2 py-1 text-[11px] text-accent-soft disabled:opacity-50"
+        >
+          {busy ? "…" : "Save"}
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <span className="flex items-center gap-1.5">
+      {err && <span className="text-[11px] text-rose-300">{err}</span>}
+      {cleared && (
+        <span className="text-[11px] text-amber-300" title={cleared.join(", ")}>
+          cleared {cleared.length} setting{cleared.length === 1 ? "" : "s"}
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={() => {
+          setDraft(node.label || "");
+          setEditing(true);
+        }}
+        title="Rename this endpoint"
+        aria-label="Rename this endpoint"
+        className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+      >
+        <Pencil size={12} />
+      </button>
+      <ConfirmButton
+        label="Remove"
+        onConfirm={remove}
+        title={
+          node.source === "config"
+            ? "Remove this endpoint (also clears its Settings URL, retiring the provider)"
+            : "Remove this endpoint"
+        }
+      />
+    </span>
+  );
+}
+
+function NodeCard({
+  snap,
+  series,
+  onChanged,
+}: {
+  snap: NodeSnapshot;
+  series: (number | null)[];
+  onChanged: () => void;
+}) {
   const m = snap.metrics ?? null;
   const supported = snap.metrics_supported !== false;
   const reason = snap.metrics_reason ?? null;
@@ -292,6 +412,7 @@ function NodeCard({ snap, series }: { snap: NodeSnapshot; series: (number | null
             </span>
           )}
           <StatusPill snap={snap} />
+          <NodeActions snap={snap} onChanged={onChanged} />
         </span>
       }
     >
@@ -838,7 +959,7 @@ export default function FleetPage() {
       ) : (
         roots.map((snap) => (
           <Reveal key={snap.node.id}>
-            <NodeCard snap={snap} series={history[snap.node.id]?.points ?? []} />
+            <NodeCard snap={snap} series={history[snap.node.id]?.points ?? []} onChanged={reload} />
           </Reveal>
         ))
       )}

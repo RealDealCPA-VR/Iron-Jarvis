@@ -114,10 +114,34 @@ def test_invalid_ids_are_rejected(tmp_path):
         reg.add(FleetNode(id="ok", base_url="   "))
 
 
-def test_removing_a_config_seed_refuses_and_points_at_settings(tmp_path):
-    reg = FleetRegistry(_config(tmp_path, ollama_base_url="http://tower:8003"))
-    with pytest.raises(ValueError, match="Settings"):
-        reg.remove("ollama")
+def test_removing_a_config_seed_clears_its_backing_settings(tmp_path):
+    """A seed is DERIVED from config on every read, so clearing the keys is the
+    only thing that actually removes it (v1.100.0).
+
+    This used to raise "managed in Settings", which meant a dead endpoint could
+    never leave the page — precisely the state after moving Ollama -> vLLM. The
+    returned key list is the contract: callers surface it because clearing the
+    URL also retires the matching top-level provider.
+    """
+    cfg = _config(tmp_path, ollama_base_url="http://tower:8003")
+    reg = FleetRegistry(cfg)
+    assert "ollama" in {n.id for n in reg.nodes()}
+
+    cleared = reg.remove("ollama")
+
+    assert "ollama_base_url" in cleared
+    assert cfg.ollama_base_url == ""
+    assert "ollama" not in {n.id for n in reg.nodes()}, "it re-derived — not removed"
+
+
+def test_removing_a_user_node_clears_no_settings(tmp_path):
+    """Only seeds touch config; a plain node must not have side effects."""
+    cfg = _config(tmp_path)
+    reg = FleetRegistry(cfg)
+    reg.add(FleetNode(id="tower", base_url="http://tower:8003"))
+
+    assert reg.remove("tower") == []
+    assert "tower" not in {n.id for n in reg.nodes()}
 
 
 # --- topology children ---------------------------------------------------------

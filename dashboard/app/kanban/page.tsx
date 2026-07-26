@@ -1,10 +1,11 @@
 "use client";
 
-import { SquareKanban, Info } from "lucide-react";
+import { SquareKanban, Info, ArrowLeft } from "lucide-react";
 import { usePolledApi } from "@/lib/useApi";
 import { useReviews } from "@/lib/useReviews";
 import type { SessionView } from "@/lib/types";
 import { OfflineHint, Empty, Skeleton } from "@/components/ui";
+import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { KanbanBoard } from "@/components/kanban/KanbanBoard";
@@ -33,9 +34,23 @@ export default function KanbanPage() {
           title="Kanban"
           subtitle="Live session lifecycle — drag a card from In Review onto Completed to approve, or onto Failed to reject."
           actions={
-            <span className="hidden items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-zinc-400 sm:flex">
-              <Info size={13} className="text-accent-soft/70" />
-              {list.length} session{list.length === 1 ? "" : "s"}
+            <span className="flex items-center gap-2">
+              <span className="hidden items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-zinc-400 sm:flex">
+                <Info size={13} className="text-accent-soft/70" />
+                {list.length} session{list.length === 1 ? "" : "s"}
+              </span>
+              {/* This board has NO nav entry — it is reached only from the
+                  notification bell or Self-development, so without a door out a
+                  collapsed sidebar strands the user here. Sessions is the
+                  natural parent (this is a view of the same records) and is
+                  always reachable, unlike guessing which entry point was used. */}
+              <Link
+                href="/sessions"
+                className="inline-flex items-center gap-1.5 rounded-md border border-white/10 px-3 py-1.5 text-[13px] text-zinc-400 transition-colors hover:border-white/20 hover:text-zinc-200"
+                title="Back to all sessions"
+              >
+                <ArrowLeft size={14} /> All sessions
+              </Link>
             </span>
           }
         />
