@@ -50,6 +50,17 @@ class MCPRemoteTool(Tool):
     """A native ``Tool`` that proxies to one remote MCP tool via an ``MCPClient``."""
 
     permission_key = "mcp_call"
+    #: EVERYTHING a remote MCP server returns is third-party text (v1.98.1).
+    #: This is the surface that reads mail, issues, tickets and shared docs — the
+    #: most attacker-reachable content in the product: someone emails the user, or
+    #: comments on their GitHub issue, with "ignore previous instructions...", and
+    #: the next agent read hands it to the model. Declaring this makes the runtime
+    #: and both chat loops fence it as DATA and scan it for injection first.
+    #:
+    #: Declared rather than self-fenced on purpose: tools either set this flag OR
+    #: call wrap_untrusted themselves (web_search/browse do the latter). Doing both
+    #: would double-wrap the same text.
+    returns_untrusted_content = True
 
     def __init__(
         self,

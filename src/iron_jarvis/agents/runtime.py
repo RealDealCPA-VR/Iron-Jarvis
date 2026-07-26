@@ -384,11 +384,19 @@ class AgentRuntime:
                 else:
                     content = result.output if result.ok else (result.error or "error")
                     # Fence externally-sourced tool output (documents/PDF/notes/
-                    # memory/file-search) as untrusted DATA and scan it for
+                    # memory/file-search/MCP) as untrusted DATA and scan it for
                     # prompt-injection — consistent with web_search/browse — so a
                     # planted file can't inject instructions into the model context.
+                    #
+                    # The FAILURE path is fenced too (v1.98.1). It used to be gated
+                    # on ``result.ok``, which held only while every such tool wrote
+                    # its own error string ("read denied: ..."). MCP breaks that:
+                    # an ``isError`` response returns the REMOTE text verbatim as
+                    # ``.error``, so gating on ok let attacker-authored content skip
+                    # the scan entirely. Both chat loops already fence unconditionally
+                    # — this aligns the runtime with them.
                     tool = self.p.registry.get(tc.name)
-                    if result.ok and getattr(tool, "returns_untrusted_content", False):
+                    if getattr(tool, "returns_untrusted_content", False):
                         from ..computeruse.safety import detect_injection, wrap_untrusted
 
                         inj = detect_injection(content)
