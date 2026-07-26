@@ -31,8 +31,16 @@
   --zinc-200: 228 228 231;
   --zinc-300: 212 212 216;
   --zinc-400: 161 161 170;
-  --zinc-500: 113 113 122;
-  --zinc-600: 82 82 91;
+  /* Secondary + tertiary text (v1.99.0). Was 113 113 122 / 82 82 91 — pure
+     neutrals that measured 4.02:1 and 2.52:1 on --ink-900, i.e. below the 4.5:1
+     AA floor and, for zinc-600, below even the 3:1 large-text floor. Washed-out
+     grey is also the single loudest "unfinished" signal in a dark UI, and these
+     two carry ~400 usages between them (timestamps, hints, metadata).
+     Now 6.78:1 and 4.71:1, biased slightly cool so the neutral reads as CHOSEN
+     against the cyan accent rather than inherited. Ramp order is preserved:
+     400 (7.59) > 500 (6.78) > 600 (4.71). Light Marks override both below. */
+  --zinc-500: 145 153 168;
+  --zinc-600: 118 125 140;
   --zinc-700: 63 63 70;
   --zinc-800: 39 39 42;
   --zinc-900: 24 24 27;

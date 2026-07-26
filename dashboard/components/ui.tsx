@@ -41,16 +41,26 @@ export function Card({
         hover ? "hover:-translate-y-0.5 hover:shadow-card-hover" : ""
       } ${className}`}
     >
+      {/* Header + body padding tightened 20px -> 16px (v1.99.0): this is a tool
+          driven daily, not a marketing page, and the looser padding cost roughly
+          a row of content per card without buying legibility. The vertical
+          rhythm BETWEEN cards (PageShell's space-y-6) is deliberately left
+          alone — Overview and Creative use that breathing room. */}
       {(title || right) && (
-        <header className="flex items-center justify-between gap-3 border-b hairline px-5 py-3.5">
+        <header className="flex items-center justify-between gap-3 border-b hairline px-4 py-3">
           <h2 className="flex items-center gap-2 text-[13px] font-semibold tracking-wide text-zinc-200">
-            {icon && <span className="text-accent-soft/80">{icon}</span>}
+            {/* Neutral, not accent (v1.99.0). This icon renders in EVERY card
+                header in the app, so tinting it accent-soft spent the brand
+                colour on decoration hundreds of times over — leaving nothing to
+                distinguish the things accent should mean: the active nav item,
+                the primary action, live state. Quiet here, loud where it counts. */}
+            {icon && <span className="text-zinc-500">{icon}</span>}
             {title}
           </h2>
           {right}
         </header>
       )}
-      <div className={pad ? "p-5" : ""}>{children}</div>
+      <div className={pad ? "p-4" : ""}>{children}</div>
     </section>
   );
 }
@@ -85,7 +95,9 @@ export function Stat({
         <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">
           {label}
         </div>
-        {icon && <span className="text-accent-soft/70">{icon}</span>}
+        {/* Neutral for the same reason as the Card header (v1.99.0) — every
+            stat tile carried the accent, so it stopped signalling anything. */}
+        {icon && <span className="text-zinc-500">{icon}</span>}
       </div>
       <div className="mt-2 text-3xl font-semibold tracking-tight text-zinc-50">
         {value}
@@ -207,8 +219,11 @@ export function StatusIcon({ status, size = 14 }: { status?: string; size?: numb
     return <CircleCheck size={size} className="text-emerald-400" />;
   if (["failed", "error", "rejected", "denied"].includes(v))
     return <CircleX size={size} className="text-rose-400" />;
+  // Amber, not accent (v1.99.0): this is a SEMANTIC scale and the other two
+  // rungs are already semantic (emerald / rose). Borrowing the brand colour for
+  // one rung made status read as branding and branding read as status.
   if (["active", "running", "pending"].includes(v))
-    return <Clock size={size} className="text-accent-soft" />;
+    return <Clock size={size} className="text-amber-400" />;
   return <CircleDot size={size} className="text-zinc-500" />;
 }
 

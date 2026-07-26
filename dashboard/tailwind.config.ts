@@ -8,6 +8,16 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      // Corner radius, tightened one step (v1.99.0). Tailwind's defaults put
+      // `xl` at 12px and `2xl` at 16px, and the app leans on them ~300 times —
+      // at that size a dense tool reads soft and consumer-ish. Redefining the
+      // two rungs shifts every surface coherently instead of editing 300 call
+      // sites, and reverts in one line if it ever feels too severe.
+      // Scale stays ascending: md 6 · lg 8 · xl 8 · 2xl 10.
+      borderRadius: {
+        xl: "0.5rem", // 12px -> 8px  (controls, chips, most panels)
+        "2xl": "0.625rem", // 16px -> 10px (cards, tiles, modals)
+      },
       colors: {
         // Deep "ink" surfaces + the accent are driven by CSS variables (see
         // globals.css) so the whole app re-skins per THEME ("Mark" arc reactors):
