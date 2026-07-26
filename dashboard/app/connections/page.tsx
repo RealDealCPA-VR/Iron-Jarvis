@@ -3,26 +3,31 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  PlugZap,
-  Sparkles,
+  ArrowRight,
+  Blocks,
   Bot,
-  Globe,
-  MoonStar,
-  Cpu,
-  KeyRound,
-  ShieldCheck,
-  ExternalLink,
-  Plug,
-  CheckCircle2,
-  Zap,
-  Star,
   Check,
-  Plus,
+  CheckCircle2,
   ChevronRight,
+  Cloud,
+  Compass,
+  Cpu,
+  ExternalLink,
+  Globe,
   HardDrive,
+  KeyRound,
+  MessagesSquare,
+  MoonStar,
+  Plug,
+  PlugZap,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  Sparkles,
+  Star,
   Terminal,
   Wrench,
-  RefreshCw,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 import { get, post, put, patch, del, ApiError } from "@/lib/api";
@@ -72,6 +77,7 @@ import {
   LoaderInline,
   ConfirmButton,
 } from "@/components/ui";
+import { RestHookups } from "@/components/connections/RestHookups";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { ProviderMark } from "@/components/BrandGlyph";
@@ -1159,6 +1165,69 @@ interface RescannedModel {
   detail: string;
 }
 
+
+/* -------------------------------------------------------------------------- */
+/*  Where else things connect                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The rest of the connect surfaces (v1.100.0).
+ *
+ * This directory used to live on a separate Integrations page. It is NOT
+ * redundant with the sidebar: /tools and /channels are Advanced-only, so in
+ * Simple mode — the default — these tiles are the ONLY way to reach them. The
+ * "AI accounts" tile is gone because you are already on that page.
+ */
+const CONNECT_ELSEWHERE = [
+  {
+    href: "/tools",
+    title: "Tool packs (MCP)",
+    desc: "Plug in ready-made tool packs that give Jarvis new abilities.",
+    icon: <Blocks size={17} />,
+  },
+  {
+    href: "/channels",
+    title: "Slack / Telegram / Email",
+    desc: "Get updates and reply to Jarvis where you already chat.",
+    icon: <MessagesSquare size={17} />,
+  },
+  {
+    href: "/memory?scope=longterm",
+    title: "Cloud drives for memory",
+    desc: "Box, Drive, Dropbox and more — long-term memory storage.",
+    icon: <Cloud size={17} />,
+  },
+];
+
+function ConnectElsewhereTile({
+  tile,
+}: {
+  tile: (typeof CONNECT_ELSEWHERE)[number];
+}) {
+  return (
+    <Link
+      href={tile.href}
+      className="group flex items-start gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3.5 py-3 transition-colors hover:border-accent/25 hover:bg-accent/[0.04]"
+    >
+      <span className="mt-0.5 shrink-0 text-zinc-500 transition-colors group-hover:text-accent-soft">
+        {tile.icon}
+      </span>
+      <span className="min-w-0">
+        <span className="flex items-center gap-1.5 text-[13px] font-medium text-zinc-200">
+          {tile.title}
+          <ArrowRight
+            size={13}
+            className="shrink-0 text-zinc-600 transition-all group-hover:translate-x-0.5 group-hover:text-accent-soft"
+          />
+        </span>
+        <span className="mt-0.5 block text-xs leading-relaxed text-zinc-500">
+          {tile.desc}
+        </span>
+      </span>
+    </Link>
+  );
+}
+
 export default function ConnectionsPage() {
   const { data, error, loading, reload } = useApi<{ connections: Connection[] }>("/connections");
   const { health, refresh: refreshHealth } = useDaemon();
@@ -1400,6 +1469,20 @@ export default function ConnectionsPage() {
           <p className="mt-3 text-[11px] leading-relaxed text-zinc-600">
             These use plans you already pay for — no API keys. Pick them in any model picker.
           </p>
+        </Card>
+      </Reveal>
+
+      <Reveal>
+        <RestHookups />
+      </Reveal>
+
+      <Reveal>
+        <Card title="Where else things connect" icon={<Compass size={15} />}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {CONNECT_ELSEWHERE.map((tile) => (
+              <ConnectElsewhereTile key={tile.href} tile={tile} />
+            ))}
+          </div>
         </Card>
       </Reveal>
 

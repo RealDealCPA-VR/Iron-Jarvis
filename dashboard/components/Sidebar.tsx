@@ -22,7 +22,6 @@ import {
   FileText,
   FolderKanban,
   KeyRound,
-  Plug,
   PlugZap,
   Megaphone,
   Store,
@@ -117,7 +116,6 @@ const NAV: NavSection[] = [
       // Advanced-only by construction: NOT in ESSENTIAL_HREFS below.
       { href: "/fleet", label: "Local fleet", icon: Server },
       { href: "/secrets", label: "Secrets", icon: KeyRound },
-      { href: "/integrations", label: "Integrations", icon: Plug },
       { href: "/channels", label: "Channels", icon: Megaphone },
     ],
   },
