@@ -1925,9 +1925,12 @@ export default function ChatPage() {
 
   // ------------------------------------------------- skills & tools (chat mode)
 
-  // "/" skill dropdown state, derived from the composer text.
-  const slashActive =
-    mode === "chat" && !busy && input.startsWith("/") && !slashDismissed;
+  // "/" skill dropdown state, derived from the composer text. Available in
+  // BOTH modes since v1.104.0 — it was gated to chat, so in Agent mode typing
+  // "/" silently did nothing and the feature read as missing. The two modes
+  // APPLY the skill differently (see sendAgent): chat injects the playbook
+  // server-side, an agent has skill_load and fetches it itself.
+  const slashActive = !busy && input.startsWith("/") && !slashDismissed;
   const slashQuery = slashActive ? input.slice(1).trim().toLowerCase() : "";
 
   const skillMatches = useMemo(() => {
@@ -2763,7 +2766,16 @@ export default function ChatPage() {
     const recap = conversationRecap(messages);
     // Match the kanban precedent: point the agent at the uploaded files in-text.
     const attachLines = atts.map((a) => `\n\nAttached file: ${a.path}`).join("");
-    const task = message + attachLines;
+    // A "/"-picked skill (v1.104.0). Chat mode sends `skill` on the body and
+    // the daemon injects the playbook; SessionCreate has no such field, so an
+    // agent is NAMED the skill and loads it with the skill_load tool it
+    // already carries — the split CLAUDE.md describes ("skills inject into
+    // prompts, the agent-facing tools are just search/load"). Directing rather
+    // than inlining also keeps the opening task short when the playbook is long.
+    const skillLine = activeSkill
+      ? `Use the "${activeSkill}" skill for this — load it with skill_load first.\n\n`
+      : "";
+    const task = skillLine + message + attachLines;
     setMessages((prev) => [
       ...prev,
       {
@@ -3576,10 +3588,34 @@ export default function ChatPage() {
             )}
             <Card
               pad={false}
-              className={`overflow-hidden transition-shadow ${
-                dragging ? "ring-2 ring-accent/60" : ""
-              } ${activeProject && projectView !== "chat" ? "hidden" : ""}`}
+              className={`relative overflow-hidden transition-shadow ${
+                activeProject && projectView !== "chat" ? "hidden" : ""
+              }`}
             >
+              {/* Drop affordance (v1.104.0). A 2px accent ring on the card edge
+                  was the whole signal before, which read as "this card is
+                  focused" rather than "let go and I'll take that file". The
+                  dashed inset border is the convention every file-drop surface
+                  uses, and stating what happens on release removes the guess.
+                  pointer-events-none is load-bearing: the drop itself is
+                  handled by window listeners, so an overlay that swallowed
+                  pointer events would break the very gesture it advertises. */}
+              {dragging && (
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 z-30 rounded-[inherit] bg-zinc-950/90 p-2 backdrop-blur-[3px]"
+                >
+                  <div className="flex h-full w-full flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-accent/70 bg-accent/[0.06]">
+                    <Paperclip size={20} className="text-accent-soft" />
+                    <p className="text-sm font-medium text-accent-soft">
+                      Drop to attach
+                    </p>
+                    <p className="text-xs text-zinc-400">
+                      Files are uploaded and grounded into this chat
+                    </p>
+                  </div>
+                </div>
+              )}
               {/* Message thread */}
               <div
                 ref={scrollRef}
@@ -3763,15 +3799,19 @@ export default function ChatPage() {
               )}
 
               {/* Chips queued for the next message — active skill + armed tools
-                  (chat mode) share the row with attachment chips. */}
+                  (chat mode) share the row with attachment chips. The skill
+                  chip is NOT mode-gated (v1.104.0): Agent mode can pick a skill
+                  now, and a picker whose selection leaves no trace on screen is
+                  indistinguishable from one that failed. Armed tools/connectors
+                  stay chat-only because those are chat-loop mechanics. */}
               {(attachments.length > 0 ||
                 threadDocs.length > 0 ||
+                activeSkill !== "" ||
                 (mode === "chat" &&
-                  (activeSkill !== "" ||
-                    selectedTools.length > 0 ||
+                  (selectedTools.length > 0 ||
                     selectedConnectors.length > 0))) && (
                 <div className="flex flex-wrap items-center gap-2 border-t hairline px-3 py-2.5">
-                  {mode === "chat" && activeSkill !== "" && (
+                  {activeSkill !== "" && (
                     <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300">
                       <Sparkles size={11} className="shrink-0 text-accent-soft" />
                       <span className="max-w-[14rem] truncate font-mono">
@@ -4115,74 +4155,80 @@ export default function ChatPage() {
                           </div>
                         )}
                       </div>
-                      {mode === "chat" && (
-                        <>
-                          <div className="relative">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPlusSub(plusSub === "skills" ? null : "skills");
-                                ensureSkills();
-                              }}
-                              aria-expanded={plusSub === "skills"}
-                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
-                            >
-                              <Sparkles size={14} className="shrink-0 text-zinc-400" />
-                              Skills
-                              {activeSkill && (
-                                <span className="max-w-[6rem] truncate rounded-full bg-accent/[0.12] px-1.5 text-[10px] text-accent-soft">
-                                  {activeSkill}
-                                </span>
-                              )}
-                              <ChevronRight size={13} className="ml-auto shrink-0 text-zinc-500" />
-                            </button>
-                            {plusSub === "skills" && (
-                              <div className="absolute bottom-0 left-full z-30 ml-1 max-h-64 w-60 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
-                                {activeSkill && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveSkill("");
-                                      markSetupChanged();
-                                    }}
-                                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-rose-300/90 transition-colors hover:bg-white/[0.06]"
-                                  >
-                                    <X size={12} /> Clear “{activeSkill}”
-                                  </button>
-                                )}
-                                {skills === null ? (
-                                  <div className="px-2.5 py-2">
-                                    <LoaderInline />
-                                  </div>
-                                ) : skills.length === 0 ? (
-                                  <p className="px-2.5 py-2 text-[11px] text-zinc-500">
-                                    No skills installed.
-                                  </p>
-                                ) : (
-                                  skills.map((s) => (
-                                    <button
-                                      key={s.name}
-                                      type="button"
-                                      onClick={() => {
-                                        pickSkill(s.name);
-                                        setToolsOpen(false);
-                                        setPlusSub(null);
-                                      }}
-                                      title={s.description}
-                                      className={`flex w-full flex-col rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-white/[0.06] ${
-                                        activeSkill === s.name ? "text-accent-soft" : "text-zinc-200"
-                                      }`}
-                                    >
-                                      <span className="truncate text-[12.5px]">{s.name}</span>
-                                      <span className="truncate text-[10.5px] text-zinc-500">
-                                        {s.description}
-                                      </span>
-                                    </button>
-                                  ))
-                                )}
+                      {/* Skills sit OUTSIDE the chat-only group (v1.104.0):
+                          Agent mode can invoke one now, so hiding the menu
+                          route would leave "/" as the only way in — findable
+                          only by someone who already knew. Armed tools and
+                          connectors stay chat-only; an agent already holds the
+                          whole registry, so arming a subset means nothing. */}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPlusSub(plusSub === "skills" ? null : "skills");
+                            ensureSkills();
+                          }}
+                          aria-expanded={plusSub === "skills"}
+                          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
+                        >
+                          <Sparkles size={14} className="shrink-0 text-zinc-400" />
+                          Skills
+                          {activeSkill && (
+                            <span className="max-w-[6rem] truncate rounded-full bg-accent/[0.12] px-1.5 text-[10px] text-accent-soft">
+                              {activeSkill}
+                            </span>
+                          )}
+                          <ChevronRight size={13} className="ml-auto shrink-0 text-zinc-500" />
+                        </button>
+                        {plusSub === "skills" && (
+                          <div className="absolute bottom-0 left-full z-30 ml-1 max-h-64 w-60 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
+                            {activeSkill && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveSkill("");
+                                  markSetupChanged();
+                                }}
+                                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-rose-300/90 transition-colors hover:bg-white/[0.06]"
+                              >
+                                <X size={12} /> Clear “{activeSkill}”
+                              </button>
+                            )}
+                            {skills === null ? (
+                              <div className="px-2.5 py-2">
+                                <LoaderInline />
                               </div>
+                            ) : skills.length === 0 ? (
+                              <p className="px-2.5 py-2 text-[11px] text-zinc-500">
+                                No skills installed.
+                              </p>
+                            ) : (
+                              skills.map((s) => (
+                                <button
+                                  key={s.name}
+                                  type="button"
+                                  onClick={() => {
+                                    pickSkill(s.name);
+                                    setToolsOpen(false);
+                                    setPlusSub(null);
+                                  }}
+                                  title={s.description}
+                                  className={`flex w-full flex-col rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-white/[0.06] ${
+                                    activeSkill === s.name ? "text-accent-soft" : "text-zinc-200"
+                                  }`}
+                                >
+                                  <span className="truncate text-[12.5px]">{s.name}</span>
+                                  <span className="truncate text-[10.5px] text-zinc-500">
+                                    {s.description}
+                                  </span>
+                                </button>
+                              ))
                             )}
                           </div>
+                        )}
+                      </div>
+                      {mode === "chat" && (
+                        <>
                           <div className="relative">
                             <button
                               type="button"
@@ -4469,7 +4515,7 @@ export default function ChatPage() {
                   autoFocus
                   rows={1}
                   aria-label="Message"
-                  placeholder="Message Iron Jarvis…  (Enter to send · Shift+Enter for a new line)"
+                  placeholder="Message Iron Jarvis…  (Enter to send · Shift+Enter new line · / for skills)"
                   className="field max-h-40 min-h-[2.75rem] flex-1 resize-none"
                 />
                 {(awaiting || (chatBusy && stream.streaming)) && (
