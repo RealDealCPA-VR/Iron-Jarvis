@@ -98,6 +98,7 @@ import remarkGfm from "remark-gfm";
 import { get, post, put, del, ApiError, API_BASE, ijToken } from "@/lib/api";
 import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
 import { timeAgo } from "@/lib/format";
+import { slashTokenAt, spliceToken } from "@/lib/slash";
 import { useEvents } from "@/lib/useEvents";
 import { useDictation } from "@/lib/useDictation";
 import { useTTS } from "@/lib/useTTS";
@@ -947,13 +948,17 @@ export default function ChatPage() {
   const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set());
   const [toolCatalog, setToolCatalog] = useState<ToolOption[] | null>(null);
   const [toolsError, setToolsError] = useState<string | null>(null);
-  // "/" SKILL PICKER (chat mode): the chosen skill rides along as `skill` on
+  // "/" SKILL PICKER (both modes): the chosen skill rides along as `skill` on
   // every turn until its chip is cleared. `slashDismissed` = Esc closed the
   // dropdown for the current "/…" text (any edit reopens it).
   const [skills, setSkills] = useState<SkillOption[] | null>(null);
   const [activeSkill, setActiveSkill] = useState("");
   const [skillIndex, setSkillIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
+  // Caret offset in the composer. The picker keys off the "/" token AT THE
+  // CARET (v1.105.0), not the start of the message, so it needs to know where
+  // the cursor is — mid-sentence "/" is the whole point of that change.
+  const [caret, setCaret] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
   // Threads sidebar: the saved-conversation list + which one is loaded.
@@ -1925,13 +1930,26 @@ export default function ChatPage() {
 
   // ------------------------------------------------- skills & tools (chat mode)
 
-  // "/" skill dropdown state, derived from the composer text. Available in
-  // BOTH modes since v1.104.0 — it was gated to chat, so in Agent mode typing
-  // "/" silently did nothing and the feature read as missing. The two modes
-  // APPLY the skill differently (see sendAgent): chat injects the playbook
-  // server-side, an agent has skill_load and fetches it itself.
-  const slashActive = !busy && input.startsWith("/") && !slashDismissed;
-  const slashQuery = slashActive ? input.slice(1).trim().toLowerCase() : "";
+  // The "/" token the caret is sitting in, or null. Until v1.105.0 this was
+  // `input.startsWith("/")`, so a skill could only be invoked when "/" was the
+  // FIRST character of an empty composer — you could not write the prompt you
+  // wanted and then reach for a skill part-way through it.
+  //
+  // The "/" must open a word: preceded by start-of-text or whitespace, and the
+  // token itself carries no further "/". That is what keeps ordinary typing
+  // from flickering a dropdown — `http://x`, `C:/Users`, `and/or` and `24/7`
+  // are all rejected because their "/" follows a non-space character.
+  //
+  // Available in BOTH modes since v1.104.0 (it was gated to chat, so in Agent
+  // mode "/" silently did nothing). The modes APPLY the skill differently, see
+  // sendAgent: chat injects the playbook server-side, an agent has skill_load.
+  const slashToken = useMemo(
+    () => (busy || slashDismissed ? null : slashTokenAt(input, caret)),
+    [input, caret, busy, slashDismissed],
+  );
+
+  const slashActive = slashToken !== null;
+  const slashQuery = slashToken?.query ?? "";
 
   const skillMatches = useMemo(() => {
     if (!slashActive) return [] as SkillOption[];
@@ -2158,10 +2176,26 @@ export default function ChatPage() {
   /** Select a skill from the "/" dropdown: chip on, "/query" text consumed. */
   function pickSkill(name: string) {
     setActiveSkill(name);
-    setInput("");
+    // Splice out ONLY the "/token" being typed and keep the rest of the message
+    // (v1.105.0). This was `setInput("")`, which was invisibly correct while
+    // "/" could lead a message and nothing else — the token WAS the whole
+    // message. The moment "/" is allowed mid-sentence, clearing would eat a
+    // prompt the user had already written.
+    const tok = slashToken;
+    const next = spliceToken(input, tok);
+    const pos = tok ? tok.start : 0;
+    setInput(next);
+    setCaret(pos); // keep the memo's view of the caret consistent THIS render
     setSlashDismissed(false);
     markSetupChanged();
     inputRef.current?.focus();
+    // The DOM selection has to be fixed after React commits the new value,
+    // otherwise the caret lands at the end of the spliced text and the next
+    // thing typed goes to the wrong place.
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (el) el.selectionStart = el.selectionEnd = pos;
+    });
   }
 
   // ---------------------------------------------------------- agent-mode machinery
@@ -4509,8 +4543,22 @@ export default function ChatPage() {
                   onChange={(e) => {
                     inputFromVoiceRef.current = false; // typed — never auto-send
                     setInput(e.target.value);
+                    setCaret(e.target.selectionStart ?? e.target.value.length);
                     setSlashDismissed(false); // editing reopens the "/" dropdown
                   }}
+                  // Caret moves that onChange never sees: arrow keys, clicking
+                  // into the middle of the text, Home/End, drag-select. All
+                  // four are wired because React's onSelect ALONE does not fire
+                  // for a collapsed caret — measured in a real browser, the DOM
+                  // selectionStart went 21 -> 8 on ArrowLeft while the tracked
+                  // value stayed at 21, so the picker refused to reopen when
+                  // you moved back into an earlier "/word". keyup and click are
+                  // the ones that actually fire for that; onSelect is kept for
+                  // drag-selection and onFocus for tabbing back in.
+                  onKeyUp={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+                  onClick={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+                  onFocus={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+                  onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
                   onKeyDown={onKeyDown}
                   autoFocus
                   rows={1}

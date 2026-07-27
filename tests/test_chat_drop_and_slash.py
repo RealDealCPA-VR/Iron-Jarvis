@@ -115,6 +115,20 @@ def test_the_plus_menu_offers_skills_in_both_modes(src: str):
     assert 'mode === "chat" && (' not in tail
 
 
+def test_the_picker_follows_the_caret_not_just_typing(src: str):
+    """v1.105.0. "/" opens the picker wherever the caret is, so the composer has
+    to TRACK the caret — and React's onSelect alone does not fire for a collapsed
+    caret move. Measured in a real browser: DOM selectionStart went 21 -> 8 on
+    ArrowLeft while the tracked value stayed 21, so moving back into an earlier
+    "/word" silently failed to reopen the picker. keyup and click are the events
+    that actually fire for that; losing either brings the bug back, and no unit
+    test of the pure helper can see it because the helper was always correct.
+    """
+    block = src[src.index("onKeyDown={onKeyDown}") - 1400 : src.index("onKeyDown={onKeyDown}")]
+    assert "onKeyUp=" in block, "arrow keys / Home / End stop moving the picker"
+    assert "onClick=" in block, "clicking into an earlier /word stops reopening it"
+
+
 def test_the_composer_advertises_the_slash_command(src: str):
     """Discoverability was the actual failure mode: the feature shipped, the
     user never learned it was there."""
