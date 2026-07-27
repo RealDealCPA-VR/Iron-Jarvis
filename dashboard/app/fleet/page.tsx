@@ -629,10 +629,27 @@ function UsageStrip({ usage }: { usage: FleetUsage | null }) {
                   key={n.node_id}
                   className="flex items-baseline justify-between gap-3 text-[11px]"
                 >
-                  <span className="truncate text-zinc-400">
+                  <span
+                    className={`truncate ${n.retired ? "text-zinc-600" : "text-zinc-400"}`}
+                    title={
+                      n.retired
+                        ? "This endpoint was removed — its past usage is kept here"
+                        : undefined
+                    }
+                  >
                     {n.label || n.node_id}
                     {n.models?.length ? (
-                      <span className="font-mono text-zinc-600"> · {n.models[0]}</span>
+                      <span
+                        className="font-mono text-zinc-600"
+                        /* HISTORY, not the live catalogue: these are models this
+                           endpoint has run. The current list comes from probing
+                           (snapshot.models), and conflating the two is why a
+                           single old gemma run looked like a model on offer. */
+                        title={`Models run here: ${n.models.join(", ")}`}
+                      >
+                        {" "}· {n.models[0]}
+                        {n.models.length > 1 ? ` +${n.models.length - 1}` : ""}
+                      </span>
                     ) : null}
                   </span>
                   <span className="shrink-0 tabular-nums text-zinc-500">

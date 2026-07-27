@@ -41,11 +41,6 @@ _DEFAULT_BASELINE = "anthropic:claude-opus-4-8"
 #: can answer honestly (and "off") before that lands.
 _DEFAULT_CODE_TASK_CLASSES = ("builder", "maintainer", "reviewer")
 
-#: Providers whose usage is LOCAL hardware even though they predate the fleet
-#: (the two auto-seeded endpoint slots). Everything else that is not a
-#: ``fleet-*`` provider is billed cloud tokens.
-_LOCAL_PROVIDERS = frozenset({"ollama", "custom"})
-
 #: The tiny tool a /verify completion is asked to call. Deliberately trivial —
 #: we are testing whether the server emits a tool call AT ALL, not reasoning.
 _PING_TOOL = {
@@ -776,8 +771,16 @@ def register(app: FastAPI, d) -> None:
             pm = parse_pm(_DEFAULT_BASELINE)
         comparison_provider, comparison_model = pm
 
-        summary = d.platform.observability.usage_summary(days) or {}
+        # The MERGED view, not the raw rollup (v1.102.0). This route used to call
+        # usage_summary() directly and so never saw the OpenCode sessions /usage
+        # has folded in since v1.94.0 — measured live, it reported 141,623 local
+        # tokens against a true 53,994,582, which reads as "my hardware is idle"
+        # when it is doing almost all the work.
+        from ...eval.usage_view import is_local_provider, merged_usage
+
+        summary = merged_usage(d.platform, days) or {}
         labels = {getattr(n, "id", ""): getattr(n, "label", "") for n in d.fleet.nodes()}
+        live_ids = set(labels)
 
         by_node: dict[str, dict[str, Any]] = {}
         local_tokens = cloud_tokens = 0
@@ -786,7 +789,7 @@ def register(app: FastAPI, d) -> None:
             provider = str(row.get("provider") or "")
             in_tok = int(row.get("input_tokens") or 0)
             out_tok = int(row.get("output_tokens") or 0)
-            is_local = provider.startswith("fleet-") or provider in _LOCAL_PROVIDERS
+            is_local = is_local_provider(provider)
             if not is_local:
                 cloud_tokens += in_tok + out_tok
                 cloud_cost_usd += float(row.get("cost_usd") or 0.0)
@@ -795,11 +798,29 @@ def register(app: FastAPI, d) -> None:
             avoided = cost_for(comparison_provider, comparison_model, in_tok, out_tok)
             est_avoided_usd += avoided
             node_id = provider[len("fleet-"):] if provider.startswith("fleet-") else provider
+            # THREE kinds of row, and conflating them misleads:
+            #   1. a live fleet node          -> its registry label
+            #   2. an endpoint the user REMOVED, whose usage history outlives it
+            #      -> say "(removed)"; it used to render with an EMPTY label,
+            #         i.e. a nameless endpoint they had already deleted
+            #   3. an EXTERNAL source that was never a fleet node at all
+            #      (opencode/*) -> name it for what it is. Marking this "removed"
+            #         would invent a deletion that never happened.
+            external = node_id.startswith("opencode/")
+            retired = not external and node_id not in live_ids
+            if external:
+                label = f"OpenCode · {node_id.split('/', 1)[1]}"
+            else:
+                label = labels.get(node_id) or (
+                    f"{node_id} (removed)" if retired else node_id
+                )
             entry = by_node.setdefault(
                 node_id,
                 {
                     "node_id": node_id,
-                    "label": labels.get(node_id, ""),
+                    "label": label,
+                    "retired": retired,
+                    "external": external,
                     "provider": provider,
                     "models": [],
                     "input_tokens": 0,
@@ -808,6 +829,9 @@ def register(app: FastAPI, d) -> None:
                     "est_avoided_usd": 0.0,
                 },
             )
+            # Historical: models this endpoint HAS run, not what it serves now.
+            # The live catalogue comes from probing (snapshot.models); conflating
+            # the two is why a one-off gemma run looked like a current model.
             model = str(row.get("model") or "")
             if model and model not in entry["models"]:
                 entry["models"].append(model)

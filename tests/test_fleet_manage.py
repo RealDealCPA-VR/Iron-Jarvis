@@ -140,3 +140,93 @@ def test_the_fleet_page_now_calls_patch_and_delete():
     assert "/fleet/nodes/${encodeURIComponent(node.id)}" in text
     assert "patch(" in text and "del<" in text
     assert "ConfirmButton" in text, "removal must be confirm-gated"
+
+
+# --- usage attribution (v1.102.0) --------------------------------------------
+
+
+def test_fleet_usage_names_a_removed_endpoint_instead_of_leaving_it_blank(client, monkeypatch):
+    """Usage rows OUTLIVE the endpoint that produced them. A node the user
+    deleted still has history, and it used to render with an EMPTY label — a
+    nameless endpoint they had already removed. The tokens are real and must not
+    vanish, but the row has to say the endpoint is gone."""
+    monkeypatch.setattr(
+        client.app.state.platform.observability,  # type: ignore[attr-defined]
+        "usage_summary",
+        lambda days: {
+            "since_days": days,
+            "totals": {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "runs": 0},
+            "by_day": [],
+            "by_model": [
+                # 'ollama' is NOT in the registry — the user removed it.
+                {"provider": "ollama", "model": "qwen3.6:27b", "input_tokens": 33702,
+                 "output_tokens": 6677, "cost_usd": 0.0, "runs": 8},
+            ],
+        },
+    )
+    rows = client.get("/fleet/usage").json()["by_node"]
+    row = next(r for r in rows if r["node_id"] == "ollama")
+
+    assert row["label"], "a removed endpoint rendered with no name at all"
+    assert "removed" in row["label"].lower()
+    assert row["retired"] is True
+    assert row["input_tokens"] == 33702  # history is preserved, not dropped
+
+
+def test_fleet_usage_counts_opencode_as_local(client, monkeypatch):
+    """The reported symptom: Usage showed ~54M tokens while the Local Fleet page
+    showed ~141k, because this route never saw the OpenCode merge."""
+    monkeypatch.setattr(
+        "iron_jarvis.eval.opencode_usage.opencode_usage",
+        lambda *a, **k: {
+            "available": True, "note": "n",
+            "totals": {"input_tokens": 53_852_959, "output_tokens": 270_176,
+                       "cache_tokens": 0, "cost_usd": 0.0, "runs": 14},
+            "by_model": [{"provider": "opencode/spark", "model": "fleet",
+                          "input_tokens": 53_852_959, "output_tokens": 270_176,
+                          "cost_usd": 0.0, "runs": 14}],
+            "by_day": [],
+        },
+    )
+    out = client.get("/fleet/usage").json()
+    assert out["local_tokens"] >= 54_000_000, "OpenCode work still missing from the fleet"
+    assert out["cloud_tokens"] == 0, "own-hardware tokens billed as cloud"
+    assert any(r["node_id"] == "opencode/spark" for r in out["by_node"])
+
+
+def test_opencode_is_named_as_a_source_not_marked_removed(client, monkeypatch):
+    """An external source is NOT a deleted endpoint.
+
+    First cut of this fix flagged anything absent from the registry as
+    "(removed)", so OpenCode — which was never a fleet node — rendered as
+    "opencode/spark (removed)", inventing a deletion that never happened.
+    """
+    monkeypatch.setattr(
+        "iron_jarvis.eval.opencode_usage.opencode_usage",
+        lambda *a, **k: {
+            "available": True, "note": "n",
+            "totals": {"input_tokens": 1000, "output_tokens": 100,
+                       "cache_tokens": 0, "cost_usd": 0.0, "runs": 1},
+            "by_model": [{"provider": "opencode/spark", "model": "fleet",
+                          "input_tokens": 1000, "output_tokens": 100,
+                          "cost_usd": 0.0, "runs": 1}],
+            "by_day": [],
+        },
+    )
+    row = next(
+        r for r in client.get("/fleet/usage").json()["by_node"]
+        if r["node_id"] == "opencode/spark"
+    )
+    assert row["retired"] is False, "OpenCode was never a node — it cannot be removed"
+    assert row["external"] is True
+    assert "removed" not in row["label"].lower()
+    assert row["label"] == "OpenCode · spark"
+
+
+def test_tests_never_read_the_real_opencode_store(client):
+    """conftest isolates it. Without that, this machine's ~54M real tokens leak
+    into every usage assertion while CI (no store) sees none — the two would
+    silently disagree."""
+    out = client.get("/fleet/usage").json()
+    assert out["by_node"] == []
+    assert out["local_tokens"] == 0

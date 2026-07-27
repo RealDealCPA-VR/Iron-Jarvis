@@ -193,7 +193,10 @@ export interface FleetUsage {
   by_node?: {
     node_id: string;
     label?: string | null;
+    /** True when the endpoint has been REMOVED but its usage history remains. */
+    retired?: boolean | null;
     provider?: string | null;
+    /** Models this endpoint HAS run — history, not its current catalogue. */
     models?: string[] | null;
     input_tokens?: number | null;
     output_tokens?: number | null;

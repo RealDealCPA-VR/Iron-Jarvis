@@ -72,3 +72,42 @@ def platform(project_root):
 @pytest.fixture
 def orchestrator(platform):
     return Orchestrator(platform)
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_opencode_store():
+    """Keep the developer's REAL OpenCode store out of every test (v1.102.0).
+
+    ``/usage`` and ``/fleet/usage`` both merge OpenCode's own SQLite store, which
+    ``opencode_db_path`` resolves from the real ``Path.home()``. On this machine
+    that store holds ~54M tokens, so a bare test asserting "no runs yet" saw a
+    fleet full of OpenCode work — while CI, which has no store, saw none. Local
+    and CI would diverge silently, the same trap ``GROK_HOME`` and CLI detection
+    are isolated for above.
+
+    Points the resolver at a path that does not exist, so the merge degrades to
+    ``available: False`` exactly as it does on a machine without OpenCode. Tests
+    that WANT the merge monkeypatch ``opencode_usage`` directly and are
+    unaffected.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from iron_jarvis.eval import opencode_usage as _mod
+
+    original = _mod.opencode_db_path
+    nowhere = Path(tempfile.mkdtemp(prefix="ij-test-no-opencode-")) / "opencode.db"
+
+    def _isolated(config=None):
+        # Honour an EXPLICIT opencode_data_dir — a test that builds its own store
+        # and points config at it is being deliberate, and must still work. Only
+        # the implicit fall-through to the real Path.home() is redirected.
+        if str(getattr(config, "opencode_data_dir", "") or "").strip():
+            return original(config)
+        return nowhere
+
+    _mod.opencode_db_path = _isolated
+    try:
+        yield
+    finally:
+        _mod.opencode_db_path = original
