@@ -653,6 +653,13 @@ class McpServerBody(BaseModel):
     auto_approve: bool = False
 
 
+class McpServerPatch(BaseModel):
+    """Edit a connected MCP pack (v1.103.0). ``None`` means "leave alone", so a
+    UI that only flips auto-approve can't blank the rest of the record."""
+
+    auto_approve: bool | None = None
+
+
 class McpSuggestBody(BaseModel):
     description: str
     provider: str = ""

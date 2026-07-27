@@ -27,7 +27,7 @@ import {
   Lightbulb,
   ChevronRight,
 } from "lucide-react";
-import { post, del, ApiError } from "@/lib/api";
+import { post, patch, del, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import {
   Card,
@@ -639,7 +639,7 @@ export default function ToolsPage() {
         auto_approve: autoApprove,
       });
       const approveNote = res.auto_approve
-        ? " Agents may use it without asking after the next restart."
+        ? " Autonomous agents may run MCP tools without asking after the next restart."
         : "";
       setMcpOk(
         res.note
@@ -654,6 +654,29 @@ export default function ToolsPage() {
     } catch (err) {
       setMcpError(err instanceof ApiError ? err.message : String(err));
       return false;
+    } finally {
+      setMcpBusy(null);
+    }
+  }
+
+  /** PATCH /mcp/servers/{name} — flip auto-approve on a CONNECTED pack. */
+  async function toggleAutoApprove(server: McpServer) {
+    const next = !server.auto_approve;
+    setMcpBusy(`auto:${server.name}`);
+    setMcpError(null);
+    setMcpOk(null);
+    try {
+      await patch(`/mcp/servers/${encodeURIComponent(server.name)}`, {
+        auto_approve: next,
+      });
+      setMcpOk(
+        next
+          ? `"${server.name}" set to auto-approve — restart Iron Jarvis for autonomous agents to pick it up. This trusts every connected pack's tools.`
+          : `"${server.name}" will ask before each use again — restart Iron Jarvis to apply.`,
+      );
+      reloadServers();
+    } catch (err) {
+      setMcpError(err instanceof ApiError ? err.message : String(err));
     } finally {
       setMcpBusy(null);
     }
@@ -1198,10 +1221,14 @@ export default function ToolsPage() {
                 Let agents use this without asking
               </span>
               <span className="mt-1 block text-[12px] leading-relaxed text-zinc-500">
-                When on, autonomous agents may run this pack&apos;s tools without a
-                prompt — chat already approves tools when you arm them. It applies after
-                the next Iron Jarvis restart and trusts every tool this pack exposes.
-                Leave off (the default) to keep approving each use.
+                Applies to the pack you connect next — you can change it any time
+                from its <span className="text-zinc-400">auto-approve</span> button
+                below. Note this is <span className="text-amber-200/90">coarse</span>:
+                MCP shares one permission, so trusting any pack lets autonomous agents
+                run tools from <span className="text-amber-200/90">every</span>
+                connected pack without a prompt. Takes effect after the next Iron
+                Jarvis restart. Chat is unaffected — arming a tool there is already
+                your approval.
               </span>
             </span>
           </label>
@@ -1465,9 +1492,33 @@ export default function ToolsPage() {
                             value={`${loaded} tool${loaded === 1 ? "" : "s"} loaded`}
                             tone={loaded > 0 ? "green" : "slate"}
                           />
-                          {s.auto_approve && (
-                            <Badge value="auto-approve" tone="amber" />
-                          )}
+                          {/* A TOGGLE, not a badge (v1.103.0). auto-approve
+                              could only be set at connect time, so changing
+                              your mind meant deleting the pack and re-adding
+                              it — and the checkbox above the catalog is a form
+                              field for the NEXT connect, which is why it never
+                              reflected or saved this. */}
+                          <button
+                            type="button"
+                            onClick={() => void toggleAutoApprove(s)}
+                            disabled={mcpBusy === `auto:${s.name}`}
+                            title={
+                              s.auto_approve
+                                ? "Autonomous agents may run MCP tools without asking. Click to require approval again."
+                                : "Agents ask before each MCP tool call. Click to let them run without asking (applies to ALL connected packs after a restart)."
+                            }
+                            className={`rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-50 ${
+                              s.auto_approve
+                                ? "border-amber-400/30 bg-amber-400/[0.08] text-amber-200/90 hover:bg-amber-400/[0.14]"
+                                : "border-white/10 text-zinc-500 hover:border-white/20 hover:text-zinc-300"
+                            }`}
+                          >
+                            {mcpBusy === `auto:${s.name}`
+                              ? "…"
+                              : s.auto_approve
+                                ? "auto-approve on"
+                                : "auto-approve off"}
+                          </button>
                           {Object.keys(s.env ?? {}).length > 0 && (
                             <Badge
                               value={`${Object.keys(s.env ?? {}).length} env`}

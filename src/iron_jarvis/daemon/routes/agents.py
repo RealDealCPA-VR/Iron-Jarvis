@@ -17,6 +17,7 @@ from ..schemas import (
     AgentPatch,
     CustomToolCreate,
     McpServerBody,
+    McpServerPatch,
     McpSuggestBody,
     RemoteAgentCreate,
     RemoteAgentRun,
@@ -586,6 +587,41 @@ def register(app: FastAPI, d) -> None:
             "tools_loaded": loaded,
             "auto_approve": bool(body.auto_approve),
             "note": note,
+        }
+
+    @app.patch("/mcp/servers/{name}")
+    def patch_mcp_server(name: str, body: McpServerPatch) -> dict[str, Any]:
+        """Change a connected pack's auto-approve (v1.103.0).
+
+        It could only ever be set at CONNECT time — changing your mind meant
+        deleting the pack and re-adding it, and the Tools page offered a
+        checkbox that looked like a setting but was really a form field for the
+        next connect, so it never reflected or changed what was stored.
+
+        Takes effect for autonomous agents at the next restart (the ask-resolver
+        is built once at boot), and the response says so rather than implying it
+        is live. Turning it OFF is honest immediately in the sense that it stops
+        being re-applied on the next boot.
+        """
+        servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
+        target = next((s for s in servers if s.get("name") == name), None)
+        if target is None:
+            raise HTTPException(status_code=404, detail="no such server")
+        if body.auto_approve is None:
+            return {"name": name, "auto_approve": bool(target.get("auto_approve"))}
+
+        if body.auto_approve:
+            target["auto_approve"] = True
+        else:
+            target.pop("auto_approve", None)  # absent == off, matching POST
+        d.platform.config.mcp_servers = servers
+        d._persist_config(["mcp_servers"])
+        return {
+            "name": name,
+            "auto_approve": bool(body.auto_approve),
+            "note": (
+                "saved — restart Iron Jarvis for autonomous agents to pick this up"
+            ),
         }
 
     @app.delete("/mcp/servers/{name}")
