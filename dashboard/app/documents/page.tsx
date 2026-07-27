@@ -18,6 +18,7 @@ import {
   Lightbulb,
   RefreshCw,
   CalendarClock,
+  ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
 import { get, post, del, ApiError } from "@/lib/api";
@@ -198,6 +199,37 @@ function baseName(path: string): string {
 const MEMORY_CAP = 8000; // /ltm/append + /memory text cap
 const LESSON_CAP = 500; // /lessons excerpt cap
 
+/** One reviewable PII candidate — a row with a checkbox in the redact card. */
+interface RedactFinding {
+  id: number;
+  category: string;
+  label: string;
+  value: string;
+  count: number;
+  context: string;
+}
+
+interface RedactScan {
+  source: string;
+  name: string;
+  findings: RedactFinding[];
+  /** Offered before approval so the output never lands somewhere unasked. */
+  default_output_path: string;
+  suffix: string;
+}
+
+type RedactStyle = "black" | "label" | "remove";
+
+interface RedactResult {
+  path: string;
+  name: string;
+  source: string;
+  style: string;
+  counts: Record<string, number>;
+  total: number;
+  note: string;
+}
+
 type MemoryTarget = "ltm" | "working" | "lessons";
 
 interface SaveTargetDef {
@@ -327,6 +359,88 @@ export default function DocumentsPage() {
   const [liveOffline, setLiveOffline] = useState(false);
   const [regenId, setRegenId] = useState<string | null>(null);
   const [liveActionError, setLiveActionError] = useState<string | null>(null);
+
+  // ---- Redact PII ---------------------------------------------------------
+  // Deliberately a two-step UI. Redaction used to be reachable only through an
+  // agent, where "show the user the findings first" was advice in a prompt —
+  // so it got skipped, and the output landed wherever the default pointed.
+  // Here the scan ALWAYS precedes the write and the destination is on screen
+  // before anything is approved.
+  const [redPath, setRedPath] = useState("");
+  const [redNames, setRedNames] = useState("");
+  const [redScan, setRedScan] = useState<RedactScan | null>(null);
+  const [redChecked, setRedChecked] = useState<Set<number>>(new Set());
+  const [redStyle, setRedStyle] = useState<RedactStyle>("black");
+  const [redOut, setRedOut] = useState("");
+  const [redScanBusy, setRedScanBusy] = useState(false);
+  const [redApplyBusy, setRedApplyBusy] = useState(false);
+  const [redError, setRedError] = useState<string | null>(null);
+  const [redResult, setRedResult] = useState<RedactResult | null>(null);
+  const [redBrowse, setRedBrowse] = useState(false);
+  const [redOutBrowse, setRedOutBrowse] = useState(false);
+  const [redOverwrite, setRedOverwrite] = useState(false);
+
+  const redTerms = () =>
+    (redScan?.findings ?? [])
+      .filter((f) => redChecked.has(f.id))
+      .map((f) => f.value);
+
+  async function runRedactScan(e: React.FormEvent) {
+    e.preventDefault();
+    const path = redPath.trim();
+    if (!path || redScanBusy) return;
+    setRedScanBusy(true);
+    setRedError(null);
+    setRedResult(null);
+    setRedScan(null);
+    try {
+      const extra = redNames
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const scan = await post<RedactScan>("/documents/redact/scan", {
+        path,
+        extra_terms: extra,
+      });
+      setRedScan(scan);
+      // Everything starts ticked: the common case is "redact all of it", and
+      // un-ticking the few you want to keep is less work than ticking twelve.
+      setRedChecked(new Set(scan.findings.map((f) => f.id)));
+      setRedOut(scan.default_output_path);
+      setRedOverwrite(false);
+    } catch (err) {
+      setRedError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setRedScanBusy(false);
+    }
+  }
+
+  async function runRedactApply() {
+    const terms = redTerms();
+    if (!terms.length || redApplyBusy) return;
+    setRedApplyBusy(true);
+    setRedError(null);
+    try {
+      const res = await post<RedactResult>("/documents/redact/apply", {
+        path: redScan?.source ?? redPath.trim(),
+        terms,
+        style: redStyle,
+        output_path: redOut.trim(),
+        overwrite: redOverwrite,
+      });
+      setRedResult(res);
+      setRedScan(null);
+      setRedChecked(new Set());
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : String(err);
+      setRedError(msg);
+      // 409 = a file is already there. Offer the override rather than making
+      // the user guess why nothing happened.
+      if (err instanceof ApiError && err.status === 409) setRedOverwrite(false);
+    } finally {
+      setRedApplyBusy(false);
+    }
+  }
 
   const liveDocs = [...(live.data?.docs ?? [])].sort(
     (a, b) =>
@@ -853,6 +967,245 @@ export default function DocumentsPage() {
         </div>
       </Reveal>
 
+      {/* ---- Redact PII --------------------------------------------------- */}
+      <Reveal>
+        <Card title="Redact PII" icon={<ShieldCheck size={15} />}>
+          <div className="space-y-5">
+            <p className="text-sm text-zinc-400">
+              Scan a document for personal data, tick exactly what should go,
+              and write a redacted copy in the same format. The original is
+              never modified.
+            </p>
+
+            <form onSubmit={runRedactScan} className="space-y-3.5">
+              <div className="space-y-1.5">
+                <label className="text-xs text-zinc-400">Document</label>
+                <div className="flex gap-2">
+                  <input
+                    value={redPath}
+                    onChange={(e) => setRedPath(e.target.value)}
+                    placeholder="C:\Clients\Alvarez\organizer.docx"
+                    className="field flex-1"
+                    aria-label="Document to redact"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setRedBrowse(true)}
+                    className="btn-ghost shrink-0"
+                  >
+                    <FolderOpen size={14} /> Browse
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs text-zinc-400">
+                  Names to also look for{" "}
+                  <span className="text-zinc-500">
+                    — comma separated. Patterns catch SSNs, EINs, emails,
+                    phones, cards, accounts, DOBs, addresses and IPs; people and
+                    employers need naming.
+                  </span>
+                </label>
+                <input
+                  value={redNames}
+                  onChange={(e) => setRedNames(e.target.value)}
+                  placeholder="Robert J. Alvarez, Maria Alvarez, Northwind CPA"
+                  className="field w-full"
+                  aria-label="Extra terms to flag"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={!redPath.trim() || redScanBusy}
+                className="btn-accent"
+              >
+                {redScanBusy ? <LoaderInline /> : <ShieldCheck size={14} />}
+                {redScanBusy ? "Scanning…" : "Scan for PII"}
+              </button>
+            </form>
+
+            {redError && <ErrorNote>{redError}</ErrorNote>}
+
+            {redResult && (
+              <SuccessNote>
+                Redacted {redResult.total} item
+                {redResult.total === 1 ? "" : "s"} →{" "}
+                <span className="font-mono">{redResult.path}</span>
+                {redResult.note ? ` · ${redResult.note}` : ""}
+              </SuccessNote>
+            )}
+
+            {redScan && (
+              <div className="space-y-4 border-t hairline pt-4">
+                {redScan.findings.length === 0 ? (
+                  <Empty icon={<ShieldCheck size={20} />}>
+                    No personal data found. If you expected names, add them
+                    above and scan again.
+                  </Empty>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-[13px] text-zinc-300">
+                        {redScan.findings.length} item
+                        {redScan.findings.length === 1 ? "" : "s"} found in{" "}
+                        <span className="font-mono text-zinc-400">
+                          {redScan.name}
+                        </span>{" "}
+                        — {redChecked.size} selected
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          className="btn-ghost text-xs"
+                          onClick={() =>
+                            setRedChecked(
+                              new Set(redScan.findings.map((f) => f.id)),
+                            )
+                          }
+                        >
+                          Select all
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-ghost text-xs"
+                          onClick={() => setRedChecked(new Set())}
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+
+                    <ul className="max-h-80 space-y-1 overflow-y-auto pr-1">
+                      {redScan.findings.map((f) => {
+                        const on = redChecked.has(f.id);
+                        return (
+                          <li key={f.id}>
+                            <label
+                              className={`flex cursor-pointer items-start gap-2.5 rounded-lg border p-2.5 transition-colors ${
+                                on
+                                  ? "border-accent/30 bg-accent/[0.06]"
+                                  : "border-white/[0.06] hover:bg-white/[0.03]"
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={on}
+                                onChange={() =>
+                                  setRedChecked((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(f.id)) next.delete(f.id);
+                                    else next.add(f.id);
+                                    return next;
+                                  })
+                                }
+                                className="mt-0.5 shrink-0 accent-accent"
+                                aria-label={`Redact ${f.label} ${f.value}`}
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Badge value={f.label} tone="cyan" />
+                                  <span className="truncate font-mono text-[12.5px] text-zinc-200">
+                                    {f.value}
+                                  </span>
+                                  {f.count > 1 && (
+                                    <span className="text-[11px] text-zinc-500">
+                                      ×{f.count}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="mt-1 truncate text-[11px] text-zinc-500">
+                                  …{f.context}…
+                                </p>
+                              </div>
+                            </label>
+                          </li>
+                        );
+                      })}
+                    </ul>
+
+                    <div className="grid gap-3.5 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-zinc-400">Style</label>
+                        <select
+                          value={redStyle}
+                          onChange={(e) =>
+                            setRedStyle(e.target.value as RedactStyle)
+                          }
+                          className="field w-full"
+                          aria-label="Redaction style"
+                        >
+                          <option value="black">
+                            Black bars — same length, layout preserved
+                          </option>
+                          <option value="label">
+                            Labels — [SSN], [EMAIL] tags
+                          </option>
+                          <option value="remove">Remove — deleted outright</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-zinc-400">Save to</label>
+                        <div className="flex gap-2">
+                          <input
+                            value={redOut}
+                            onChange={(e) => {
+                              setRedOut(e.target.value);
+                              setRedOverwrite(false);
+                            }}
+                            className="field flex-1 font-mono text-[12px]"
+                            aria-label="Output path"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setRedOutBrowse(true)}
+                            className="btn-ghost shrink-0"
+                            title="Choose a folder"
+                          >
+                            <FolderOpen size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={runRedactApply}
+                        disabled={redChecked.size === 0 || redApplyBusy}
+                        className="btn-accent"
+                      >
+                        {redApplyBusy ? <LoaderInline /> : <ShieldCheck size={14} />}
+                        {redApplyBusy
+                          ? "Redacting…"
+                          : `Redact ${redChecked.size} item${
+                              redChecked.size === 1 ? "" : "s"
+                            }`}
+                      </button>
+                      {redChecked.size === 0 && (
+                        <span className="text-xs text-zinc-500">
+                          Tick at least one item.
+                        </span>
+                      )}
+                      <label className="flex items-center gap-1.5 text-xs text-zinc-400">
+                        <input
+                          type="checkbox"
+                          checked={redOverwrite}
+                          onChange={(e) => setRedOverwrite(e.target.checked)}
+                          className="accent-accent"
+                        />
+                        Replace the file if one is already there
+                      </label>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </Card>
+      </Reveal>
+
       {/* ---- Living documents ------------------------------------------- */}
       <Reveal>
         <Card title="Living documents" icon={<RefreshCw size={15} />}>
@@ -1037,6 +1390,32 @@ export default function DocumentsPage() {
         onClose={() => setBrowseOpen(false)}
         onPick={(path) => setReadPath(path)}
         title="Pick a file to read"
+      />
+
+      <FilePickerModal
+        open={redBrowse}
+        onClose={() => setRedBrowse(false)}
+        onPick={(path) => {
+          setRedPath(path);
+          setRedScan(null); // a new source invalidates the previous findings
+          setRedResult(null);
+        }}
+        title="Pick a document to redact"
+      />
+
+      <FilePickerModal
+        open={redOutBrowse}
+        onClose={() => setRedOutBrowse(false)}
+        pickFolders
+        onPick={(folder) => {
+          // Keep the filename, swap the folder — the picker chooses WHERE, the
+          // name stays derived from the source so the format can't drift.
+          const name = redOut.split(/[\\/]/).pop() || "redacted";
+          const sep = folder.includes("\\") ? "\\" : "/";
+          setRedOut(folder.replace(/[\\/]$/, "") + sep + name);
+          setRedOverwrite(false);
+        }}
+        title="Choose where to save the redacted copy"
       />
     </PageShell>
   );

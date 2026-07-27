@@ -524,6 +524,40 @@ class DocWriteBody(BaseModel):
     kind: str | None = None
 
 
+class RedactScanBody(BaseModel):
+    """STEP 1 of PII redaction: list what was found so a human can approve it.
+
+    Detection is deterministic (regex + Luhn), so this returns candidates, not
+    a verdict — the point is that the user sees every item BEFORE anything is
+    written.
+    """
+
+    path: str
+    #: Extra literal strings to flag (names, employers) — regex can't see these.
+    extra_terms: list[str] = []
+    #: Optional category subset (ssn, ein, email, …); empty = all.
+    categories: list[str] = []
+
+
+class RedactApplyBody(BaseModel):
+    """STEP 2: redact EXACTLY the confirmed values into a chosen destination.
+
+    ``terms`` is the approved list from the scan. It is deliberately required
+    to be non-empty at the route: an empty list here would silently fall back
+    to auto-detection and redact things the user never approved.
+    """
+
+    path: str
+    #: The exact values the user ticked. Nothing else is touched.
+    terms: list[str]
+    #: black = █ blocks (default), label = [SSN] tags, remove = delete.
+    style: str = "black"
+    #: Absolute destination. Empty = "<name>.redacted.<ext>" beside the source.
+    output_path: str = ""
+    #: Refuse to clobber an existing file unless the user said so.
+    overwrite: bool = False
+
+
 class SecretSet(BaseModel):
     name: str
     value: str

@@ -17,6 +17,8 @@ from ..schemas import (
     DocumentOpenBody,
     DocWriteBody,
     LiveDocCreate,
+    RedactApplyBody,
+    RedactScanBody,
     UploadBody,
 )
 from ...core.db import session_scope
@@ -331,6 +333,123 @@ def register(app: FastAPI, d) -> None:
             except Exception as exc:  # noqa: BLE001 — OCR failure ≠ read failure
                 note = f"scanned PDF — OCR fallback failed ({type(exc).__name__}: {exc})"
         return {"path": path, "text": text[:20000], "note": note}
+
+    # ---------------------------------------------------------- PII redaction ---
+    # REPORTED: the redaction tool "didn't show me which items it recognized as
+    # PII for my approval" and "routed to a folder without asking me where to
+    # put this".
+    #
+    # Both were true, and both came from the same place: redaction was only ever
+    # reachable through an AGENT. The confirm-first contract lived in a tool
+    # description and a skill playbook — advice a model may or may not follow —
+    # and the pii-redaction skill in fact jumped straight to redact_pii, so the
+    # approval list was never shown and the destination defaulted silently.
+    #
+    # These two routes make the flow a real, deterministic UI: scan returns the
+    # candidates, apply redacts EXACTLY the confirmed values to a destination the
+    # user picked. No model in the loop, so the step cannot be skipped.
+
+    def _redact_source(path: str) -> Path:
+        ok, reason = fs_read_ok(path)
+        if not ok:
+            raise HTTPException(status_code=403, detail=reason)
+        src = Path(path).expanduser()
+        if not src.is_absolute():
+            src = (d.platform.config.home / "documents" / path).resolve()
+        if not src.is_file():
+            raise HTTPException(status_code=404, detail=f"not a file: {path}")
+        return src
+
+    @app.post("/documents/redact/scan")
+    async def documents_redact_scan(body: RedactScanBody) -> dict[str, Any]:
+        import asyncio as _asyncio
+
+        from ...documents.redact import ALL_CATEGORIES, scan_document
+
+        src = _redact_source(body.path)
+        cats = [str(c).strip().lower() for c in body.categories if str(c).strip()]
+        unknown = [c for c in cats if c not in ALL_CATEGORIES]
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown categories: {', '.join(unknown)} — "
+                       f"valid: {', '.join(sorted(ALL_CATEGORIES))}",
+            )
+        try:
+            findings = await _asyncio.to_thread(
+                scan_document,
+                src,
+                extra_terms=[t for t in body.extra_terms if t.strip()],
+                categories=set(cats) or None,
+            )
+        except Exception as exc:  # noqa: BLE001 — a bad file must not 500
+            raise HTTPException(status_code=400, detail=f"cannot scan: {exc}")
+        # The default destination is offered UP FRONT so the user can see and
+        # change where the output will land before approving anything.
+        default_out = src.with_name(f"{src.stem}.redacted{src.suffix}")
+        return {
+            "source": str(src),
+            "name": src.name,
+            "findings": findings,
+            "default_output_path": str(default_out),
+            "suffix": src.suffix.lower(),
+        }
+
+    @app.post("/documents/redact/apply")
+    async def documents_redact_apply(body: RedactApplyBody) -> dict[str, Any]:
+        import asyncio as _asyncio
+
+        from ...core.fs_policy import is_protected_path
+        from ...documents.redact import STYLES, redact_file
+
+        src = _redact_source(body.path)
+        style = (body.style or "black").strip().lower()
+        if style not in STYLES:
+            raise HTTPException(
+                status_code=400, detail=f"unknown style {style!r} — use {', '.join(STYLES)}"
+            )
+        terms = [t for t in body.terms if t and t.strip()]
+        if not terms:
+            # An empty list would fall through to auto-detection in the engine
+            # and redact things the user never ticked. Refuse instead.
+            raise HTTPException(
+                status_code=400,
+                detail="no items confirmed — tick at least one finding to redact",
+            )
+        target = (
+            Path(body.output_path).expanduser()
+            if body.output_path.strip()
+            else src.with_name(f"{src.stem}.redacted{src.suffix}")
+        )
+        if not target.is_absolute():
+            raise HTTPException(status_code=400, detail="output_path must be absolute")
+        if is_protected_path(target):
+            raise HTTPException(status_code=403, detail="destination is a protected path")
+        if target.resolve() == src.resolve():
+            raise HTTPException(
+                status_code=400,
+                detail="destination must differ from the source — the original is never overwritten",
+            )
+        if target.exists() and not body.overwrite:
+            raise HTTPException(
+                status_code=409, detail=f"{target.name} already exists at that location"
+            )
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            counts, note = await _asyncio.to_thread(
+                redact_file, src, target, style=style, only_terms=terms
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"cannot redact: {exc}")
+        return {
+            "path": str(target),
+            "name": target.name,
+            "source": str(src),
+            "style": style,
+            "counts": counts,
+            "total": sum(counts.values()),
+            "note": note,
+        }
 
     @app.post("/documents/write")
     def documents_write(body: DocWriteBody) -> dict[str, Any]:

@@ -79,6 +79,13 @@ _LABELS: dict[str, str] = {
     "custom": "REDACTED",
 }
 
+#: Display labels for the REVIEW list, which has different needs from the
+#: in-document replacement text. "custom" renders as "[REDACTED]" inside a
+#: document — correct there — but as a badge next to a value the user typed
+#: themselves it reads as a status ("this was redacted"), not as what it is:
+#: the one candidate that came from THEM rather than from a pattern.
+_SCAN_LABELS: dict[str, str] = {**_LABELS, "custom": "TERM"}
+
 ALL_CATEGORIES: frozenset[str] = frozenset(_LABELS)
 
 #: Redaction styles the tool accepts.
@@ -252,7 +259,7 @@ def scan_text(
         context = " ".join(text[ctx_start:ctx_end].split())
         findings[key] = {
             "category": cat,
-            "label": _LABELS.get(cat, "REDACTED"),
+            "label": _SCAN_LABELS.get(cat, "REDACTED"),
             "value": value,
             "count": 1,
             "context": context,
