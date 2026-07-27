@@ -230,3 +230,41 @@ def test_tests_never_read_the_real_opencode_store(client):
     out = client.get("/fleet/usage").json()
     assert out["by_node"] == []
     assert out["local_tokens"] == 0
+
+
+def test_a_rename_is_visible_without_re_probing(tmp_path):
+    """Renaming saved correctly and then never appeared (v1.102.1).
+
+    /fleet serves the sampler's snapshots, and a snapshot froze a COPY of the
+    node taken when it was last probed. So a PATCH updated the registry while
+    the page kept rendering the old label until the daemon restarted — the
+    rename control shipped in v1.100.0 looked like a no-op on both pages.
+
+    A snapshot is OBSERVATION; the node is CONFIG ("nothing here is measured").
+    Identity now comes from the registry on every read, and the observation is
+    left untouched — renaming a box must not blank its status.
+    """
+    from iron_jarvis.fleet.models import FleetNode, NodeSnapshot
+    from iron_jarvis.fleet.sampler import FleetSampler, _NodeState
+
+    class _Reg:
+        def __init__(self, node):
+            self._node = node
+
+        def nodes(self):
+            return [self._node]
+
+    node = FleetNode(id="box", label="old name", base_url="http://x:8000")
+    sampler = FleetSampler(_Reg(node))  # type: ignore[arg-type]
+
+    # Seed the cache with a snapshot carrying the node AS IT WAS when probed.
+    state = _NodeState()
+    state.snapshot = NodeSnapshot(node=node.model_copy(), status="online")
+    sampler._state["box"] = state  # noqa: SLF001 — seeding the cache IS the test
+
+    node.label = "new name"  # the registry is edited (what PATCH does)
+
+    out = sampler.snapshots()
+    assert out, "no snapshot returned — the test seeded nothing"
+    assert out[0].node.label == "new name", "the page would still show the old label"
+    assert out[0].status == "online", "renaming clobbered the observation"

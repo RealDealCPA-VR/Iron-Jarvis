@@ -251,12 +251,28 @@ class FleetSampler:
 
     def snapshots(self) -> list[NodeSnapshot]:
         """Latest snapshot per node, in registry order. Unsampled nodes are
-        omitted rather than invented."""
+        omitted rather than invented.
+
+        The node record is re-attached from the REGISTRY, not served from the
+        snapshot (v1.102.1). A snapshot is *observation*; the node is *config*
+        (``models.py``: "nothing here is measured"). Freezing config into the
+        observation meant a rename saved correctly and then never appeared —
+        the sampler kept handing back the label it captured when it last
+        probed, so editing a node looked like a no-op until the next restart.
+        Observation still comes from the snapshot; identity always comes from
+        the registry.
+        """
         out: list[NodeSnapshot] = []
         for node in self._nodes():
             snap = self.latest(node.id)
-            if snap is not None:
-                out.append(snap)
+            if snap is None:
+                continue
+            if getattr(snap, "node", None) is not node:
+                try:
+                    snap = snap.model_copy(update={"node": node})
+                except Exception:  # noqa: BLE001 — stale label beats no snapshot
+                    pass
+            out.append(snap)
         return out
 
     def series(self, node_id: str, limit: int | None = None) -> list[MetricPoint]:

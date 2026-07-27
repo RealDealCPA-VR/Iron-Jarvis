@@ -18,6 +18,7 @@ import {
   KeyRound,
   MessagesSquare,
   MoonStar,
+  Pencil,
   Plug,
   PlugZap,
   Plus,
@@ -273,6 +274,11 @@ function ConnectionCard({
   const [epName, setEpName] = useState("");
   const [epBusy, setEpBusy] = useState<string | null>(null);
   const [epError, setEpError] = useState<string | null>(null);
+  // Inline rename (v1.102.1). PATCH /fleet/nodes/{id} has always accepted a
+  // label — the Fleet page got the control in v1.100.0, but this is the page
+  // where endpoints are actually managed, so it was missing where it counts.
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
 
   async function reloadEndpoints() {
     try {
@@ -336,6 +342,22 @@ function ConnectionCard({
 
   /** Delete a user-added endpoint (its provider unregisters live); the vault
    *  key created with it is cleaned up best-effort. */
+  async function saveRename(ep: EndpointRow) {
+    const label = renameDraft.trim();
+    setRenaming(null);
+    if (!label || label === ep.label) return; // nothing to do — not an error
+    setEpBusy(ep.id);
+    setEpError(null);
+    try {
+      await patch(`/fleet/nodes/${encodeURIComponent(ep.id)}`, { label });
+      void reloadEndpoints();
+    } catch (err) {
+      setEpError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setEpBusy(null);
+    }
+  }
+
   async function removeEndpoint(ep: EndpointRow) {
     setEpBusy(ep.id);
     setEpError(null);
@@ -802,12 +824,36 @@ function ConnectionCard({
                   key={ep.id}
                   className="flex items-center gap-2 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2"
                 >
-                  <span
-                    className="max-w-[8rem] shrink-0 truncate text-[11px] font-medium text-zinc-300"
-                    title={ep.label}
-                  >
-                    {ep.label}
-                  </span>
+                  {renaming === ep.id ? (
+                    <input
+                      autoFocus
+                      value={renameDraft}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void saveRename(ep);
+                        if (e.key === "Escape") setRenaming(null);
+                      }}
+                      onBlur={() => void saveRename(ep)}
+                      aria-label="Endpoint name"
+                      className="w-32 shrink-0 rounded-md border border-accent/40 bg-ink-950 px-1.5 py-0.5 text-[11px] text-zinc-100 outline-none"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRenameDraft(ep.label);
+                        setRenaming(ep.id);
+                      }}
+                      title={`${ep.label} — click to rename`}
+                      className="group/rn flex max-w-[9rem] shrink-0 items-center gap-1 truncate rounded px-1 py-0.5 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-white/[0.06]"
+                    >
+                      <span className="truncate">{ep.label}</span>
+                      <Pencil
+                        size={10}
+                        className="shrink-0 text-zinc-600 opacity-0 transition-opacity group-hover/rn:opacity-100"
+                      />
+                    </button>
+                  )}
                   <span
                     className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-500"
                     title={ep.base_url}
