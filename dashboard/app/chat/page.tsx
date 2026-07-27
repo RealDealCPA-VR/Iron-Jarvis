@@ -3096,20 +3096,6 @@ export default function ChatPage() {
           subtitle="Talk to Iron Jarvis. Ask anything — quick answers come straight back, and work that needs files, tools or several steps just gets done."
           actions={
             <div className="flex flex-wrap items-center gap-2">
-              {/* Share the open thread — full transcript or compacted digest. */}
-              <button
-                type="button"
-                onClick={() => setShareOpen(true)}
-                disabled={!threadId}
-                title={
-                  threadId
-                    ? "Share this chat — full transcript or a compacted digest"
-                    : "A chat can be shared after its first reply (it saves automatically)"
-                }
-                className="btn-ghost px-2.5 py-1.5 text-[13px] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <Share2 size={14} /> Share
-              </button>
               {/* Voice: hands-free Voice Chat + spoken-replies toggle. */}
               <button
                 type="button"
@@ -4600,10 +4586,24 @@ export default function ChatPage() {
                   </button>
                 )}
               </div>
-              {/* Bottom-right: the minimalist model switcher — just the name
-                  and a chevron, no box. Providers list; each ▸ flys out that
-                  provider's models. */}
-              <div className="flex justify-end px-4 pb-2.5">
+              {/* Composer footer: share on the left (under the project
+                  control), the model switcher on the right. Both are the same
+                  quiet weight — present when wanted, silent otherwise. */}
+              <div className="flex items-center justify-between px-4 pb-2.5">
+                <button
+                  type="button"
+                  onClick={() => setShareOpen(true)}
+                  disabled={!threadId}
+                  aria-label="Share this chat"
+                  title={
+                    threadId
+                      ? "Share this chat — full transcript or a compacted digest"
+                      : "A chat can be shared after its first reply (it saves automatically)"
+                  }
+                  className="inline-flex items-center gap-1 text-[11.5px] text-zinc-500 transition-colors hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  <Share2 size={12} />
+                </button>
                 <div ref={modelPopRef} className="relative">
                   <button
                     type="button"
