@@ -524,6 +524,22 @@ class DocWriteBody(BaseModel):
     kind: str | None = None
 
 
+class SaveCopyBody(BaseModel):
+    """Copy a produced document out of the confined workspace to a real folder.
+
+    Chat's tools write inside the uploads scratch dir (or the grounded project
+    folder), so a finished file lands somewhere the user did not choose. This
+    is the "where do you want it?" answer.
+    """
+
+    source: str
+    #: Absolute destination FOLDER (the picker and the place buttons both send one).
+    dest_dir: str
+    #: Optional rename; empty keeps the source filename.
+    name: str = ""
+    overwrite: bool = False
+
+
 class RedactScanBody(BaseModel):
     """STEP 1 of PII redaction: list what was found so a human can approve it.
 

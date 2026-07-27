@@ -18,6 +18,8 @@ engine behind a UI the user drives, so the approval step cannot be skipped.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from fastapi.testclient import TestClient
@@ -224,3 +226,89 @@ def test_docx_keeps_its_formatting(client, tmp_path):
     assert "r.alvarez@northwindcpa.com" not in text
     assert any(run.bold for p in out.paragraphs for run in p.runs)  # styling intact
     assert out.tables  # structure intact
+
+
+# ---------------------------------------------------------------------------
+# v1.107.0 — "give me options with buttons as to where to store the file".
+#
+# Chat runs its tools inside a confined workspace (the uploads scratch dir, or
+# the grounded project folder), so anything it produces lands THERE by
+# construction — right for confinement, useless as a place to find a finished
+# document. The preview panel now offers real destinations.
+# ---------------------------------------------------------------------------
+
+
+def test_places_are_real_folders_on_this_machine(client):
+    places = client.get("/documents/places").json()["places"]
+    assert all({"key", "label", "path"} <= set(p) for p in places)
+    for p in places:
+        assert Path(p["path"]).is_dir()
+
+
+def test_a_produced_file_can_be_saved_where_the_user_points(client, doc, tmp_path):
+    dest = tmp_path / "Desktop"
+    dest.mkdir()
+    r = client.post(
+        "/documents/save-copy", json={"source": str(doc), "dest_dir": str(dest)}
+    )
+    assert r.status_code == 200
+    assert (dest / doc.name).read_text(encoding="utf-8") == SAMPLE
+    assert doc.is_file()  # a COPY — the original stays put
+
+
+def test_saving_can_rename(client, doc, tmp_path):
+    dest = tmp_path / "out"
+    dest.mkdir()
+    client.post(
+        "/documents/save-copy",
+        json={"source": str(doc), "dest_dir": str(dest), "name": "clean.txt"},
+    )
+    assert (dest / "clean.txt").is_file()
+
+
+def test_it_will_not_silently_replace_a_file(client, doc, tmp_path):
+    dest = tmp_path / "out"
+    dest.mkdir()
+    (dest / doc.name).write_text("mine", encoding="utf-8")
+    r = client.post(
+        "/documents/save-copy", json={"source": str(doc), "dest_dir": str(dest)}
+    )
+    assert r.status_code == 409
+    assert (dest / doc.name).read_text(encoding="utf-8") == "mine"
+
+
+def test_replacing_is_possible_once_asked_for(client, doc, tmp_path):
+    dest = tmp_path / "out"
+    dest.mkdir()
+    (dest / doc.name).write_text("mine", encoding="utf-8")
+    r = client.post(
+        "/documents/save-copy",
+        json={"source": str(doc), "dest_dir": str(dest), "overwrite": True},
+    )
+    assert r.status_code == 200
+    assert (dest / doc.name).read_text(encoding="utf-8") == SAMPLE
+
+
+def test_saving_onto_itself_is_refused(client, doc):
+    r = client.post(
+        "/documents/save-copy", json={"source": str(doc), "dest_dir": str(doc.parent)}
+    )
+    assert r.status_code == 400
+
+
+def test_a_missing_folder_is_404_not_a_silent_mkdir(client, doc, tmp_path):
+    """"Save to Desktop" must not invent a Desktop — a file the user cannot
+    find is the whole complaint being fixed."""
+    r = client.post(
+        "/documents/save-copy",
+        json={"source": str(doc), "dest_dir": str(tmp_path / "nope")},
+    )
+    assert r.status_code == 404
+    assert not (tmp_path / "nope").exists()
+
+
+def test_a_relative_folder_is_refused(client, doc):
+    r = client.post(
+        "/documents/save-copy", json={"source": str(doc), "dest_dir": "Desktop"}
+    )
+    assert r.status_code == 400

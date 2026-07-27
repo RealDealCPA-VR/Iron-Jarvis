@@ -10,8 +10,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Download,
   ExternalLink,
   FileText,
+  FolderOpen,
   Loader2,
   RefreshCw,
   X,
@@ -20,6 +22,14 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { get, post, ApiError, API_BASE, ijToken } from "@/lib/api";
 import { ErrorNote, LoaderInline } from "@/components/ui";
+import { FilePickerModal } from "@/components/FilePickerModal";
+
+/** A common save destination offered by GET /documents/places. */
+interface SavePlace {
+  key: string;
+  label: string;
+  path: string;
+}
 
 interface PreviewData {
   kind: "sheet" | "pdf" | "html" | "markdown" | "text";
@@ -103,6 +113,52 @@ export function DocPreview({
   const [sheet, setSheet] = useState<string>("");
   const [opening, setOpening] = useState(false);
   const [openNote, setOpenNote] = useState<string | null>(null);
+  const [places, setPlaces] = useState<SavePlace[]>([]);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [savedNote, setSavedNote] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [pickFolder, setPickFolder] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    get<{ places: SavePlace[] }>("/documents/places")
+      .then((r) => alive && setPlaces(r.places ?? []))
+      .catch(() => alive && setPlaces([])); // no places → the picker still works
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /** Copy the previewed file into *folder*, retrying once to overwrite. */
+  async function saveTo(folder: string, overwrite = false) {
+    setSaving(folder);
+    setSaveError(null);
+    setSavedNote(null);
+    setPickFolder(false);
+    try {
+      const r = await post<{ path: string; folder: string }>(
+        "/documents/save-copy",
+        { source: path, dest_dir: folder, overwrite },
+      );
+      setSavedNote(`Saved to ${r.path}`);
+    } catch (err) {
+      // 409 = same name already there. Ask rather than silently replacing
+      // someone's file — the whole point of this row is no surprises.
+      if (err instanceof ApiError && err.status === 409 && !overwrite) {
+        setSaving(null);
+        if (
+          window.confirm(
+            `${name} is already in that folder. Replace it?`,
+          )
+        )
+          return saveTo(folder, true);
+        return;
+      }
+      setSaveError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setSaving(null);
+    }
+  }
 
   const load = useCallback(
     async (wantSheet: string) => {
@@ -207,10 +263,56 @@ export function DocPreview({
           </button>
         </div>
       </div>
+      {/* Where to keep it (v1.107.0). Chat's tools run inside a confined
+          workspace, so anything they produce lands in the uploads scratch dir
+          by construction — right for confinement, useless as a place to find a
+          finished file. Buttons for the folders people actually use, plus a
+          picker for anywhere else. */}
+      <div className="flex shrink-0 flex-wrap items-center gap-1.5 px-1">
+        <span className="text-[11px] text-zinc-500">Save a copy to</span>
+        {places.map((pl) => (
+          <button
+            key={pl.key}
+            type="button"
+            onClick={() => void saveTo(pl.path)}
+            disabled={saving !== null}
+            title={pl.path}
+            className="inline-flex items-center gap-1 rounded-md border border-white/[0.08] px-2 py-0.5 text-[11px] text-zinc-300 transition-colors hover:bg-white/[0.06] disabled:opacity-50"
+          >
+            {saving === pl.path ? (
+              <Loader2 size={11} className="animate-spin" />
+            ) : (
+              <Download size={11} />
+            )}
+            {pl.label}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => setPickFolder(true)}
+          disabled={saving !== null}
+          className="inline-flex items-center gap-1 rounded-md border border-white/[0.08] px-2 py-0.5 text-[11px] text-zinc-300 transition-colors hover:bg-white/[0.06] disabled:opacity-50"
+        >
+          <FolderOpen size={11} /> Choose folder…
+        </button>
+      </div>
+      {savedNote && (
+        <p className="shrink-0 px-1 text-[11px] text-emerald-300/90">{savedNote}</p>
+      )}
+      {saveError && (
+        <p className="shrink-0 px-1 text-[11px] text-rose-300/90">{saveError}</p>
+      )}
       {openNote && (
         <p className="shrink-0 px-1 text-[11px] text-emerald-300/90">{openNote}</p>
       )}
       {error && <ErrorNote>{error}</ErrorNote>}
+      <FilePickerModal
+        open={pickFolder}
+        onClose={() => setPickFolder(false)}
+        pickFolders
+        onPick={(folder) => void saveTo(folder)}
+        title={`Where should ${name} go?`}
+      />
 
       {/* Body */}
       <div className="min-h-0 flex-1 overflow-auto rounded-xl border border-white/[0.06] bg-ink-850/40">

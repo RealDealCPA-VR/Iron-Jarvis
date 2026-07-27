@@ -19,6 +19,7 @@ from ..schemas import (
     LiveDocCreate,
     RedactApplyBody,
     RedactScanBody,
+    SaveCopyBody,
     UploadBody,
 )
 from ...core.db import session_scope
@@ -333,6 +334,65 @@ def register(app: FastAPI, d) -> None:
             except Exception as exc:  # noqa: BLE001 — OCR failure ≠ read failure
                 note = f"scanned PDF — OCR fallback failed ({type(exc).__name__}: {exc})"
         return {"path": path, "text": text[:20000], "note": note}
+
+    # ------------------------------------------------------- save a copy to… ---
+    # REPORTED: "the agent should give me options with buttons as to where to
+    # store the file."
+    #
+    # Chat runs its tools inside a confined workspace (the uploads scratch dir,
+    # or the grounded project folder), so anything it produces lands THERE by
+    # construction — correct for confinement, useless as a place to find a
+    # finished document. These two routes let the preview panel offer real
+    # destinations instead of leaving the user to hunt for the output.
+
+    def _places() -> list[dict[str, str]]:
+        home = Path.home()
+        out: list[dict[str, str]] = []
+        for key, label, p in (
+            ("desktop", "Desktop", home / "Desktop"),
+            ("documents", "Documents", home / "Documents"),
+            ("downloads", "Downloads", home / "Downloads"),
+        ):
+            if p.is_dir():
+                out.append({"key": key, "label": label, "path": str(p)})
+        return out
+
+    @app.get("/documents/places")
+    def documents_places() -> dict[str, Any]:
+        """Common save destinations that actually exist on this machine."""
+        return {"places": _places()}
+
+    @app.post("/documents/save-copy")
+    def documents_save_copy(body: SaveCopyBody) -> dict[str, Any]:
+        import shutil
+
+        from ...core.fs_policy import is_protected_path
+
+        ok, reason = fs_read_ok(body.source)
+        if not ok:
+            raise HTTPException(status_code=403, detail=reason)
+        src = Path(body.source).expanduser()
+        if not src.is_file():
+            raise HTTPException(status_code=404, detail=f"not a file: {body.source}")
+        dest_dir = Path(body.dest_dir).expanduser()
+        if not dest_dir.is_absolute():
+            raise HTTPException(status_code=400, detail="dest_dir must be absolute")
+        if is_protected_path(dest_dir):
+            raise HTTPException(status_code=403, detail="destination is a protected path")
+        if not dest_dir.is_dir():
+            raise HTTPException(status_code=404, detail=f"no such folder: {body.dest_dir}")
+        target = dest_dir / (body.name.strip() or src.name)
+        if target.resolve() == src.resolve():
+            raise HTTPException(status_code=400, detail="that is where the file already is")
+        if target.exists() and not body.overwrite:
+            raise HTTPException(
+                status_code=409, detail=f"{target.name} is already in that folder"
+            )
+        try:
+            shutil.copy2(src, target)
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"could not save: {exc}")
+        return {"path": str(target), "name": target.name, "folder": str(dest_dir)}
 
     # ---------------------------------------------------------- PII redaction ---
     # REPORTED: the redaction tool "didn't show me which items it recognized as

@@ -276,3 +276,37 @@ def select_auto_tools(
         key=lambda kv: (-kv[1], kv[0]),
     )
     return [name for name, _ in ranked[:cap]]
+
+
+def tools_named_in_playbook(
+    instructions: str,
+    *,
+    exclude: set[str] | frozenset[str] | None = None,
+    cap: int = 6,
+) -> list[str]:
+    """Safe-set tools a SKILL's playbook explicitly names, in first-mention order.
+
+    Invoking a skill with "/" says what the user wants far more precisely than
+    the sentence they typed, but auto-arming only ever read that sentence. So
+    "/pii-redaction" + "skill for the attached" armed NOTHING: the playbook told
+    the model to call ``redact_scan``, the tool was not in its tool list, and the
+    only honest move left was to tell the user to switch to Agent mode. The
+    skill knows its own tools — read them off it.
+
+    Restricted to :data:`AUTO_SAFE_TOOLS` on purpose. A tool name appearing in
+    prose is a weak signal, and it must never be enough to hand a skill ``shell``
+    or computer control; those stay behind explicit arming.
+    """
+    if cap <= 0 or not instructions:
+        return []
+    skip = set(exclude or ())
+    text = instructions[:8000]
+    hits: list[tuple[int, str]] = []
+    for name in AUTO_SAFE_TOOLS:
+        if name in skip:
+            continue
+        m = re.search(rf"\b{re.escape(name)}\b", text)
+        if m:
+            hits.append((m.start(), name))
+    hits.sort()
+    return [name for _, name in hits[:cap]]

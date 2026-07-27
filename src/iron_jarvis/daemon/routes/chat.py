@@ -203,20 +203,41 @@ def _resolve_armed_tools(d, body) -> tuple[list[str], list[str]]:
         t for t in (body.tools or [])[:_MAX_ARMED_TOOLS] if d.platform.registry.get(t)
     ]
     auto: list[str] = []
-    if getattr(body, "auto_tools", False) and len(explicit) < _MAX_ARMED_TOOLS:
+    # A "/"-invoked skill arms the tools ITS PLAYBOOK NAMES, ahead of anything
+    # inferred from the sentence. Auto-arming only ever read the user's text, so
+    # "/pii-redaction" + "skill for the attached" armed just read_document: the
+    # injected playbook told the model to call redact_scan, that tool was absent
+    # from its tool list, and the only honest move left was "switch to Agent
+    # mode". Picking the skill IS the request — it should carry its own tools.
+    skill_name = (getattr(body, "skill", "") or "").strip()
+    if skill_name and len(explicit) < _MAX_ARMED_TOOLS:
+        from ...tools.autoselect import tools_named_in_playbook
+
+        sk = d.platform.skills.get(skill_name)
+        if sk is not None:
+            auto += [
+                t
+                for t in tools_named_in_playbook(
+                    sk.instructions,
+                    exclude=set(explicit),
+                    cap=_MAX_ARMED_TOOLS - len(explicit),
+                )
+                if d.platform.registry.get(t)
+            ]
+    if getattr(body, "auto_tools", False) and len(explicit) + len(auto) < _MAX_ARMED_TOOLS:
         from ...tools.autoselect import select_auto_tools
 
         last_user = next(
             (m.content or "" for m in reversed(body.messages) if m.role == "user"),
             "",
         )
-        auto = [
+        auto += [
             t
             for t in select_auto_tools(
                 last_user,
                 attachments=[Path(a).name for a in (body.attachments or [])],
-                exclude=set(explicit),
-                cap=_MAX_ARMED_TOOLS - len(explicit),
+                exclude=set(explicit) | set(auto),
+                cap=_MAX_ARMED_TOOLS - len(explicit) - len(auto),
             )
             if d.platform.registry.get(t)
         ]
@@ -243,7 +264,16 @@ _NAME_DOC_RX = _re.compile(rf"[\w][\w()\-.]{{0,80}}\.{_DOC_SUFFIX}\b", _re.IGNOR
 #: Folder mentions ("at `C:\Users\VR\`") a bare filename can be joined to.
 _FOLDER_RX = _re.compile(r"(?:[A-Za-z]:\\|\\\\)[^\s\"'`|<>*?]*[\\/]")
 
-_DOC_WRITING_TOOLS = {"write_document", "excel_edit", "excel_apply_spec"}
+#: Tools whose output is a FILE the user should see. redact_pii joined in
+#: v1.107.0 — a redacted copy is the single most review-worthy thing chat
+#: produces ("did it actually take the SSNs out?") and it was the one
+#: document-producing tool that never triggered the preview.
+_DOC_WRITING_TOOLS = {
+    "write_document",
+    "excel_edit",
+    "excel_apply_spec",
+    "redact_pii",
+}
 
 #: File-creation intent in the user's message ("create an excel of…"), used
 #: for the no-file-was-written honesty note below.
@@ -1256,7 +1286,7 @@ def register(app: FastAPI, d) -> None:
                         tools_used.append(tc.name)
                         # Track created/edited documents (workspace-relative in
                         # the tool result) as ABSOLUTE paths for the preview.
-                        if tc.name in ("write_document", "excel_edit"):
+                        if tc.name in _DOC_WRITING_TOOLS:
                             _rel = str(
                                 (getattr(result, "data", None) or {}).get("path") or ""
                             )
@@ -1734,7 +1764,7 @@ def register(app: FastAPI, d) -> None:
                             tools_used.append(tc.name)
                             # Track created/edited documents for the preview
                             # (mirrors chat_complete).
-                            if tc.name in ("write_document", "excel_edit"):
+                            if tc.name in _DOC_WRITING_TOOLS:
                                 _rel = str(
                                     (getattr(result, "data", None) or {}).get("path")
                                     or ""
