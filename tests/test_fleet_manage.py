@@ -268,3 +268,48 @@ def test_a_rename_is_visible_without_re_probing(tmp_path):
     assert out, "no snapshot returned — the test seeded nothing"
     assert out[0].node.label == "new name", "the page would still show the old label"
     assert out[0].status == "online", "renaming clobbered the observation"
+
+
+def test_the_config_seeded_endpoint_is_listed_like_any_other(client):
+    """The office-PC report: "one custom endpoint is renameable, the other
+    isn't" (the un-renameable one being the seeded slot at custom_base_url).
+
+    The Connections page filtered its endpoint list to source == "user", so the
+    seeded node fell through to a bespoke row with the name hardcoded to
+    "custom" and no rename. And registry.update() deliberately KEEPS
+    source="config" when promoting a seed, so it would have stayed excluded
+    even after being renamed.
+    """
+    cfg = _cfg(client)
+    cfg.custom_base_url = "http://100.66.161.52:4000/v1"
+    cfg.custom_model = "brain"
+
+    seeded = client.app.state.platform.fleet.get("custom")  # type: ignore[attr-defined]
+    assert seeded is not None
+    assert seeded.source == "config" and seeded.routable, (
+        "the page lists routable nodes whose source is user OR config"
+    )
+
+    # It renames like any other endpoint, and stays listed afterwards.
+    r = client.patch("/fleet/nodes/custom", json={"label": "Office proxy (4000)"})
+    assert r.status_code == 200
+    assert r.json()["node"]["label"] == "Office proxy (4000)"
+
+    again = client.app.state.platform.fleet.get("custom")  # type: ignore[attr-defined]
+    assert again.label == "Office proxy (4000)"
+    assert again.source == "config", "promotion must not smuggle it out of the seed slot"
+    assert again.routable, "a renamed seed must stay in the endpoint list"
+    assert again.base_url == "http://100.66.161.52:4000/v1", "base_url stays config-driven"
+
+
+def test_the_connections_page_lists_seeded_endpoints():
+    """Pin the filter itself — this is the line that hid the seeded slot."""
+    from pathlib import Path
+
+    page = (
+        Path(__file__).resolve().parents[1]
+        / "dashboard" / "app" / "connections" / "page.tsx"
+    )
+    text = page.read_text(encoding="utf-8")
+    assert 'n.source === "user" || n.source === "config"' in text
+    assert "click to rename" in text

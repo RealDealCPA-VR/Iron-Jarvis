@@ -40,6 +40,10 @@ import type { Connection, ConnectionTestResult, OAuthStart } from "@/lib/types";
 interface EndpointRow {
   id: string;
   label: string;
+  /** True for the config-seeded slot (custom_base_url). It renders like any
+   *  other endpoint now, but deleting it clears the Settings keys it derives
+   *  from rather than removing a stored row. */
+  seeded: boolean;
   base_url: string;
   default_model: string;
   api_key_name: string;
@@ -264,13 +268,12 @@ function ConnectionCard({
   const canOAuth = (conn.supports_oauth ?? conn.method === "oauth") && !isMock;
   const canKey = (conn.supports_api_key ?? conn.method === "api_key") && !isMock;
 
-  // SAVED ENDPOINTS (custom card): the legacy single settings slot plus every
+  // SAVED ENDPOINTS (custom card): every routable custom endpoint —
   // user-added routable fleet node — each one its own provider ("fleet-<id>")
   // in every model picker. Loaded for DISPLAY ONLY: the add form always starts
   // EMPTY. (It used to prefill from the saved slot, so "add another endpoint"
   // silently round-tripped and overwrote the first one — the bug this fixes.)
   const [endpoints, setEndpoints] = useState<EndpointRow[]>([]);
-  const [legacy, setLegacy] = useState<{ url: string; model: string } | null>(null);
   const [epName, setEpName] = useState("");
   const [epBusy, setEpBusy] = useState<string | null>(null);
   const [epError, setEpError] = useState<string | null>(null);
@@ -282,29 +285,25 @@ function ConnectionCard({
 
   async function reloadEndpoints() {
     try {
-      const [s, f] = await Promise.all([
-        get<{ settings?: Record<string, unknown> }>("/settings"),
-        get<{ nodes?: { node?: EndpointNodeDump }[] }>("/fleet"),
-      ]);
-      const savedUrl = s.settings?.custom_base_url;
-      const savedModel = s.settings?.custom_model;
-      setLegacy(
-        typeof savedUrl === "string" && savedUrl
-          ? {
-              url: savedUrl,
-              model: typeof savedModel === "string" ? savedModel : "",
-            }
-          : null,
-      );
+      // /fleet alone (v1.103.1). The seeded slot used to be read separately
+      // from /settings to render its own row; it now comes through as a node
+      // like any other, so that extra request bought nothing.
+      const f = await get<{ nodes?: { node?: EndpointNodeDump }[] }>("/fleet");
       setEndpoints(
         (f.nodes ?? [])
           .map((row) => row.node)
+          // Include the config-seeded slot (v1.103.1). Filtering to
+          // source === "user" pushed it into a bespoke "legacy" row with the
+          // name hardcoded to "custom" and no rename — and registry.update()
+          // deliberately KEEPS source="config" after promoting a seed, so it
+          // would have stayed excluded even once renamed.
           .filter(
             (n): n is EndpointNodeDump =>
-              Boolean(n && n.id && n.source === "user" && n.routable),
+              Boolean(n && n.id && (n.source === "user" || n.source === "config") && n.routable),
           )
           .map((n) => ({
             id: n.id,
+            seeded: n.source === "config",
             label: n.label || n.id,
             base_url: n.base_url || "",
             default_model: n.default_model || "",
@@ -789,36 +788,11 @@ function ConnectionCard({
 
           {/* Saved endpoints (custom card): every endpoint added, each its own
               provider — with delete. The add form below always starts empty. */}
-          {isCustom && (legacy || endpoints.length > 0) && (
+          {isCustom && endpoints.length > 0 && (
             <div className="space-y-1.5">
               <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
                 Saved endpoints
               </span>
-              {legacy && (
-                <div className="flex items-center gap-2 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2">
-                  <span className="shrink-0 text-[11px] font-medium text-zinc-300">
-                    custom
-                  </span>
-                  <span
-                    className="min-w-0 flex-1 truncate font-mono text-[10px] text-zinc-500"
-                    title={legacy.url}
-                  >
-                    {legacy.url}
-                  </span>
-                  {legacy.model && (
-                    <span className="shrink-0 rounded bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
-                      {legacy.model}
-                    </span>
-                  )}
-                  <ConfirmButton
-                    className="shrink-0"
-                    onConfirm={removeLegacy}
-                    label={epBusy === "legacy" ? "…" : "Delete"}
-                    confirmLabel="Delete?"
-                    title="Remove this endpoint (the 'custom' provider entry disappears from the pickers)"
-                  />
-                </div>
-              )}
               {endpoints.map((ep) => (
                 <div
                   key={ep.id}
@@ -910,7 +884,7 @@ function ConnectionCard({
                   )}
                   <ConfirmButton
                     className="shrink-0"
-                    onConfirm={() => void removeEndpoint(ep)}
+                    onConfirm={() => void (ep.seeded ? removeLegacy() : removeEndpoint(ep))}
                     label={epBusy === ep.id ? "…" : "Delete"}
                     confirmLabel="Delete?"
                     title={`Remove "${ep.label}" — its provider disappears from every picker; the saved key is cleaned up`}
@@ -935,7 +909,7 @@ function ConnectionCard({
                 {canOAuth
                   ? "Use an API key instead"
                   : isCustom
-                    ? legacy || endpoints.length > 0
+                    ? endpoints.length > 0
                       ? "Add another endpoint"
                       : "Add an endpoint"
                     : "Connect"}
