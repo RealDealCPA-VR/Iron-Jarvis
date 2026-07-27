@@ -270,7 +270,7 @@ def test_chat_connector_toggle_arms_mcp_tool_group(tmp_path):
         },
     )
     assert r.status_code == 200
-    names = {t.get("name") for t in captured["tools"]}
+    names = {t.get("name") for t in captured["tools"]} - {"escalate_to_agent"}
     assert names == {"mcp__gmail__send", "mcp__gmail__list"}
     assert "Connector tools the user toggled on" in captured["system"]
 
@@ -293,7 +293,7 @@ def test_chat_connector_tools_do_not_eat_the_armed_cap(tmp_path):
         },
     )
     assert r.status_code == 200
-    names = {t.get("name") for t in captured["tools"]}
+    names = {t.get("name") for t in captured["tools"]} - {"escalate_to_agent"}
     assert "mcp__gh__issues" in names
     assert len(names) == 7  # the full individual cap PLUS the connector tool
 

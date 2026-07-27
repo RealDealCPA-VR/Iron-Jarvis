@@ -268,6 +268,47 @@ _FOLDER_RX = _re.compile(r"(?:[A-Za-z]:\\|\\\\)[^\s\"'`|<>*?]*[\\/]")
 #: v1.107.0 — a redacted copy is the single most review-worthy thing chat
 #: produces ("did it actually take the SSNs out?") and it was the one
 #: document-producing tool that never triggered the preview.
+#: The one surface (v1.108.0). Chat and Agent used to be a toggle the user had
+#: to get right BEFORE typing — and getting it wrong produced the worst possible
+#: outcome: a model that answers "you need to be in agent mode for that", which
+#: is the app asking the user to do its routing for it.
+#:
+#: Chat now escalates itself. This is not a registry tool — nothing executes. It
+#: is a declared EXIT: the model calls it, the turn stops, and the client re-runs
+#: the same message as a full agent session. Deterministic, and visible in the
+#: transcript as a real decision rather than a sentence of prose.
+#:
+#: The description is deliberately strict. Escalation costs a session spin-up and
+#: a workspace, so a model that reaches for it on "what's a 1099-NEC?" would make
+#: every answer slow — the exact thing the merge is meant to avoid.
+_ESCALATE_TOOL = "escalate_to_agent"
+_ESCALATE_SPEC = {
+    "name": _ESCALATE_TOOL,
+    "description": (
+        "Hand this request to the full agent, which has every tool, a real "
+        "workspace and many more steps. Call this ONLY when the request needs "
+        "sustained multi-step work you cannot finish here — building or "
+        "refactoring across files, running commands, long explore-edit-verify "
+        "loops, or a tool you have not been given. Do NOT call it for questions "
+        "you can answer, or for work the tools you already hold can do: it "
+        "restarts the turn and costs the user time. Never tell the user to "
+        "switch modes — there are no modes; call this instead."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "reason": {
+                "type": "string",
+                "description": (
+                    "One short line, shown to the user, on what this needs that "
+                    "you cannot do here (e.g. 'needs to edit several files')."
+                ),
+            }
+        },
+        "required": ["reason"],
+    },
+}
+
 _DOC_WRITING_TOOLS = {
     "write_document",
     "excel_edit",
@@ -927,8 +968,13 @@ def register(app: FastAPI, d) -> None:
         system = persona + (
             "\n\n# Environment\n"
             f"- You run locally on the user's machine; their home directory is {Path.home()}.\n"
-            "- You are the CHAT surface: answer directly. For multi-step jobs "
-            "with tools, the user can switch this conversation to Agent mode."
+            # THIS LINE caused the reported behaviour. It told the model that
+            # a mode existed and that switching was the USER's job, so when a
+            # request outgrew the turn it dutifully said "you need to be in
+            # agent mode" — the app asking the user to do its routing.
+            "- Answer directly. There are no modes for the user to pick: when "
+            "a request needs sustained multi-step work you cannot finish here, "
+            "call escalate_to_agent and it is taken over seamlessly."
         )
         # A project only applies INSIDE the Projects module: the in-project chat
         # sends an explicit project_id and grounds in that project's
@@ -1112,7 +1158,9 @@ def register(app: FastAPI, d) -> None:
         # seamless by default, explicit picks always first.
         armed, auto_armed = _resolve_armed_tools(d, body)
         armed += [t for t in conn_tools if t not in armed]
-        tool_specs = d.platform.registry.specs(armed) if armed else []
+        tool_specs = (d.platform.registry.specs(armed) if armed else []) + [
+            _ESCALATE_SPEC
+        ]
         tools_used: list[str] = []          # ONLY tools that actually executed
         last_tool_output = ""               # last SUCCESSFUL output (no-reply synthesis)
         denied_tools: list[str] = []        # armed tools the engine refused this turn
@@ -1230,6 +1278,8 @@ def register(app: FastAPI, d) -> None:
         # armed-tool turn is several separately-billed completions, not one.
         usage_in = usage_out = completions = 0
         stopped_note = ""  # honest note when the round budget cuts off tool calls
+        escalate = False        # the turn asked for the full agent
+        escalate_reason = ""
         made_docs: list[str] = []  # documents this turn created/edited (preview)
         try:
             for _round in range(_MAX_TOOL_ROUNDS):
@@ -1246,6 +1296,15 @@ def register(app: FastAPI, d) -> None:
                 usage_out += int(_u.get("output_tokens", 0) or 0)
                 completions += 1
                 calls = route.response.tool_calls or []
+                esc_call = next(
+                    (c for c in calls if c.name == _ESCALATE_TOOL), None
+                )
+                if esc_call is not None:
+                    escalate = True
+                    escalate_reason = str(
+                        (esc_call.arguments or {}).get("reason") or ""
+                    ).strip()
+                    break
                 if not calls or not armed:
                     break
                 if _round == _MAX_TOOL_ROUNDS - 1:
@@ -1255,6 +1314,10 @@ def register(app: FastAPI, d) -> None:
                     stopped_note = (
                         f"stopped after {_round} tool rounds; "
                         f"{len(calls)} tool call(s) not executed"
+                    )
+                    escalate = True
+                    escalate_reason = escalate_reason or (
+                        "this needs more steps than a quick answer allows"
                     )
                     break
                 msgs.append(LLMMessage(role="assistant",
@@ -1367,6 +1430,11 @@ def register(app: FastAPI, d) -> None:
             # What the seamless path armed on its own (honesty surface — the
             # client can show "auto-armed" distinctly from user picks).
             "auto_armed": auto_armed,
+            # One surface (v1.108.0): the turn decided it needs the full agent.
+            # The client re-runs the SAME message as a session — the user is
+            # never asked to pick a mode.
+            "escalate": escalate,
+            "escalate_reason": escalate_reason,
         }
 
     @app.post("/chat/stream")
@@ -1397,8 +1465,13 @@ def register(app: FastAPI, d) -> None:
         system = persona + (
             "\n\n# Environment\n"
             f"- You run locally on the user's machine; their home directory is {Path.home()}.\n"
-            "- You are the CHAT surface: answer directly. For multi-step jobs "
-            "with tools, the user can switch this conversation to Agent mode."
+            # THIS LINE caused the reported behaviour. It told the model that
+            # a mode existed and that switching was the USER's job, so when a
+            # request outgrew the turn it dutifully said "you need to be in
+            # agent mode" — the app asking the user to do its routing.
+            "- Answer directly. There are no modes for the user to pick: when "
+            "a request needs sustained multi-step work you cannot finish here, "
+            "call escalate_to_agent and it is taken over seamlessly."
         )
         pid = (body.project_id or "").strip() or None
         resolved_proj = None
@@ -1557,7 +1630,9 @@ def register(app: FastAPI, d) -> None:
 
         armed, auto_armed = _resolve_armed_tools(d, body)
         armed += [t for t in conn_tools if t not in armed]
-        tool_specs = d.platform.registry.specs(armed) if armed else []
+        tool_specs = (d.platform.registry.specs(armed) if armed else []) + [
+            _ESCALATE_SPEC
+        ]
         ctx = None
         if armed:
             from ...tools.base import ToolContext
@@ -1652,6 +1727,8 @@ def register(app: FastAPI, d) -> None:
             denied_tools: list[str] = []        # armed tools refused this turn
             last_tool_output = ""               # last SUCCESSFUL output (synthesis)
             stopped_note = ""                   # round budget cut off tool calls
+            escalate = False        # the turn asked for the full agent
+            escalate_reason = ""
             made_docs: list[str] = []           # documents created/edited (preview)
             reply_text = ""
             route_provider = provider_choice or ""
@@ -1719,6 +1796,15 @@ def register(app: FastAPI, d) -> None:
                     usage_out += int(_u.get("output_tokens", 0) or 0)
                     completions += 1
                     calls = final_resp.tool_calls or []
+                    esc_call = next(
+                        (c for c in calls if c.name == _ESCALATE_TOOL), None
+                    )
+                    if esc_call is not None:
+                        escalate = True
+                        escalate_reason = str(
+                            (esc_call.arguments or {}).get("reason") or ""
+                        ).strip()
+                        break
                     if not calls or not armed:
                         break
                     if _round == _MAX_TOOL_ROUNDS - 1:
@@ -1727,6 +1813,10 @@ def register(app: FastAPI, d) -> None:
                         stopped_note = (
                             f"stopped after {_round} tool rounds; "
                             f"{len(calls)} tool call(s) not executed"
+                        )
+                        escalate = True
+                        escalate_reason = escalate_reason or (
+                            "this needs more steps than a quick answer allows"
                         )
                         break
                     msgs.append(LLMMessage(role="assistant",
@@ -1842,6 +1932,8 @@ def register(app: FastAPI, d) -> None:
                 "denied_tools": denied_tools,
                 "auto_armed": auto_armed,
                 "documents": made_docs,
+                "escalate": escalate,
+                "escalate_reason": escalate_reason,
                 "usage": {"input_tokens": usage_in, "output_tokens": usage_out},
             })
 

@@ -91,6 +91,7 @@ import {
   Volume2,
   VolumeX,
   Wrench,
+  Zap,
   X,
 } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -124,11 +125,13 @@ import {
   type ChatSource,
 } from "@/components/chat/SourcesRow";
 
-type Mode = "chat" | "agent";
-
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  /** Set when a chat turn handed itself to the full agent (v1.108.0): the
+   *  reason, shown in place of the reply while the agent works. There are no
+   *  modes to pick, so the hand-off has to be visible or it reads as a stall. */
+  escalated?: string;
   /** Display names of files attached to this (user) message — footer chips. */
   attachmentNames?: string[];
   /** Uploaded paths of those attachments, so a Regenerate can re-ground on them
@@ -177,6 +180,9 @@ interface ChatResponse {
   tools_used?: string[];
   /** ABSOLUTE paths of documents this turn created/edited (preview panel). */
   documents?: string[];
+  /** The turn asked to be re-run as a full agent session (v1.108.0). */
+  escalate?: boolean;
+  escalate_reason?: string;
 }
 
 interface PersonaOption {
@@ -873,7 +879,6 @@ function StreamingText({ content }: { content: string }) {
 }
 
 export default function ChatPage() {
-  const [mode, setMode] = useState<Mode>("chat");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   // AGENT MODE: the session id of the turn currently in flight (null when idle).
@@ -1736,7 +1741,6 @@ export default function ChatPage() {
           setWorkspaceDir(proj.root);
         }
       }
-      setMode("chat"); // saved threads continue as direct chat
       setPersonaEditorOpen(false); // never carry a stale draft into another thread
       // A known name selects normally; an unlisted name / free-text instructions
       // are tolerated by the select (and sent verbatim, which the server treats
@@ -2109,11 +2113,6 @@ export default function ChatPage() {
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [projMenuOpen]);
-
-  // Agent mode hides both affordances — never leave the popover floating open.
-  useEffect(() => {
-    if (mode !== "chat") setToolsOpen(false);
-  }, [mode]);
 
   function toggleTool(name: string) {
     setSelectedTools((prev) =>
@@ -2613,6 +2612,8 @@ export default function ChatPage() {
           tools_used,
           provider: servedBy,
           documents: madeDocs,
+          escalate,
+          escalateReason,
         } = await stream.run(body, (_delta, full) => feedTTS(full, false));
         if (chatGenRef.current !== gen) return; // torn down mid-stream
         // One tick so the final tool_call frame's state flush lands before the
@@ -2636,6 +2637,21 @@ export default function ChatPage() {
             ...(via ? { viaProvider: via } : {}),
           },
         ];
+        // ONE SURFACE (v1.108.0): the turn decided it needs the full agent, so
+        // re-run the SAME message as a session instead of handing the user a
+        // reply that tells them to go flip a switch. The user's bubble and the
+        // attachment chips are already committed, hence escalatedFrom.
+        if (escalate) {
+          const lastUser = [...history].reverse().find((m) => m.role === "user");
+          setMessages(history);
+          void sendAgent(lastUser?.content ?? "", {
+            escalatedFrom: {
+              atts,
+              reason: escalateReason || "this one needs the full agent",
+            },
+          });
+          return;
+        }
         setMessages(full);
         queueSave(full); // the turn is complete — persist it
         showDocPreview(madeDocs); // a generated doc appears beside the chat
@@ -2704,6 +2720,17 @@ export default function ChatPage() {
           ...(viaPost ? { viaProvider: viaPost } : {}),
         },
       ];
+      if (res.escalate) {
+        const lastUser = [...history].reverse().find((m) => m.role === "user");
+        setMessages(history);
+        void sendAgent(lastUser?.content ?? "", {
+          escalatedFrom: {
+            atts,
+            reason: res.escalate_reason || "this one needs the full agent",
+          },
+        });
+        return;
+      }
       setMessages(full);
       // Nothing streamed on this path (endpoint absent), so this is the first and
       // only speak — no risk of re-voicing sentences speakMore already spoke.
@@ -2757,7 +2784,7 @@ export default function ChatPage() {
    * regenerated reply.
    */
   function regenerate() {
-    if (busy || mode !== "chat") return;
+    if (busy) return;
     const msgs = messages;
     const last = msgs[msgs.length - 1];
     if (!last || last.role !== "assistant") return;
@@ -2791,9 +2818,16 @@ export default function ChatPage() {
   }
 
   /** AGENT MODE: the original session flow (wait:false + live steps + finalize). */
-  async function sendAgent(message: string) {
-    const atts = attachments;
-    setAttachments([]); // chips are consumed by this message
+  async function sendAgent(
+    message: string,
+    opts: { escalatedFrom?: { atts: UploadedFile[]; reason: string } } = {},
+  ) {
+    // ESCALATION (v1.108.0): chat already appended the user's bubble and
+    // already consumed the attachment chips, so re-doing either would show the
+    // message twice and drop the files. The turn is being RE-RUN, not restarted.
+    const esc = opts.escalatedFrom;
+    const atts = esc ? esc.atts : attachments;
+    if (!esc) setAttachments([]); // chips are consumed by this message
     // A recap of the chat so far — prepended ONLY when opening a fresh session
     // below (switching to Agent mode drops all context otherwise). Captured
     // before the new user bubble is appended.
@@ -2810,14 +2844,20 @@ export default function ChatPage() {
       ? `Use the "${activeSkill}" skill for this — load it with skill_load first.\n\n`
       : "";
     const task = skillLine + message + attachLines;
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "user",
-        content: message,
-        ...(atts.length ? { attachmentNames: atts.map((a) => a.name) } : {}),
-      },
-    ]);
+    setMessages((prev) =>
+      esc
+        ? // The bubble is already there — mark WHY the turn grew instead, so the
+          // hand-off is visible rather than an unexplained pause.
+          [...prev, { role: "assistant" as const, content: "", escalated: esc.reason }]
+        : [
+            ...prev,
+            {
+              role: "user" as const,
+              content: message,
+              ...(atts.length ? { attachmentNames: atts.map((a) => a.name) } : {}),
+            },
+          ],
+    );
     // Mark where "this turn" begins in the event stream BEFORE kicking off work.
     sinceRef.current = eventsRef.current[0]?.id ?? null;
     try {
@@ -2880,8 +2920,10 @@ export default function ChatPage() {
     setError(null);
     setOffline(false);
     setInput("");
-    if (mode === "chat") void sendChat(message);
-    else void sendAgent(message);
+    // One entry point (v1.108.0). Every message starts as fast chat; the turn
+    // escalates itself when it needs the full agent (see completeChat), so the
+    // user never routes their own request.
+    void sendChat(message);
   }
 
   // Stop the in-flight turn and keep whatever streamed so far as the answer.
@@ -2991,17 +3033,6 @@ export default function ChatPage() {
     inputRef.current?.focus();
   }
 
-  /** Switch Chat↔Agent. Clears the bound `sessionId` on a real change so a later
-   *  Agent turn opens a FRESH session (recapping the visible thread) instead of
-   *  silently continuing a stale one that never saw the intervening chat turns.
-   *  An in-flight agent turn (tracked by awaitingIdRef) still finalizes. */
-  function switchMode(next: Mode) {
-    if (next === mode) return;
-    setSessionId(null);
-    setMode(next);
-    inputRef.current?.focus();
-  }
-
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     // Ignore keystrokes mid-IME-composition (CJK / accented input): Enter is
     // confirming a candidate, not sending a half-finished message.
@@ -3062,7 +3093,7 @@ export default function ChatPage() {
       <Reveal>
         <PageHeader
           title="Chat"
-          subtitle="Talk to Iron Jarvis. Chat mode answers directly in seconds; Agent mode does real work with tools."
+          subtitle="Talk to Iron Jarvis. Ask anything — quick answers come straight back, and work that needs files, tools or several steps just gets done."
           actions={
             <div className="flex flex-wrap items-center gap-2">
               {/* Share the open thread — full transcript or compacted digest. */}
@@ -3117,40 +3148,7 @@ export default function ChatPage() {
                   {tts.enabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
                 </button>
               )}
-              {/* Mode toggle: fast direct chat vs. the tool-using agent session. */}
-              <div
-                role="group"
-                aria-label="Mode"
-                className="flex items-center overflow-hidden rounded-xl border border-white/10 bg-white/[0.02]"
-              >
-                <button
-                  type="button"
-                  onClick={() => switchMode("chat")}
-                  aria-pressed={mode === "chat"}
-                  title="Direct replies in seconds"
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[13px] font-medium transition-colors ${
-                    mode === "chat"
-                      ? "bg-accent/15 text-accent-soft"
-                      : "text-zinc-400 hover:text-zinc-200"
-                  }`}
-                >
-                  <MessageSquare size={13} /> Chat
-                </button>
-                <button
-                  type="button"
-                  onClick={() => switchMode("agent")}
-                  aria-pressed={mode === "agent"}
-                  title="Does real work with tools — files, web, terminals; slower"
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[13px] font-medium transition-colors ${
-                    mode === "agent"
-                      ? "bg-accent/15 text-accent-soft"
-                      : "text-zinc-400 hover:text-zinc-200"
-                  }`}
-                >
-                  <Wrench size={13} /> Agent
-                </button>
-              </div>
-              {mode === "chat" && (
+              {(
                 <div className="flex items-center gap-1">
                   <select
                     aria-label="Persona"
@@ -3238,13 +3236,13 @@ export default function ChatPage() {
       <Reveal>
         <p className="flex items-center gap-2 text-xs text-zinc-500">
           <Sparkles size={13} className="shrink-0 text-accent-soft/70" />
-          {mode === "chat"
-            ? "Fast, direct answers — tools arm themselves from your request (Auto), or pin your own with +. Attach files or drop them anywhere on the page."
-            : "Replies come from a real agent that can read files, search, and use tools — you'll see its steps live as it works."}
+          Answers come back in seconds; when something needs real work — files,
+          tools, several steps — it takes that on by itself. Attach files or
+          drop them anywhere on the page.
         </p>
       </Reveal>
 
-      {mode === "chat" && personaEditorOpen && (
+      {personaEditorOpen && (
         <Reveal>
           <div className="rounded-2xl border border-accent/20 bg-accent/[0.03] p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
@@ -3659,9 +3657,9 @@ export default function ChatPage() {
                 {messages.length === 0 && !busy ? (
                   <div className="flex flex-1 flex-col items-center justify-center gap-4">
                     <Empty icon={<MessageSquare size={28} />}>
-                      {mode === "chat"
-                        ? "Start a conversation. Ask a question, pick a persona, drop in a file — replies come back in seconds."
-                        : "Start a conversation. Ask a question or describe what you need — your agent replies and reaches for tools on its own when they help."}
+                      Start a conversation. Ask a question or describe what you
+                      need — quick answers come straight back, and real work
+                      just gets done.
                     </Empty>
                     <div className="flex flex-wrap justify-center gap-2">
                       {EXAMPLES.map((ex) => (
@@ -3693,8 +3691,24 @@ export default function ChatPage() {
                         i === messages.length - 1 &&
                         i > 0 &&
                         messages[i - 1].role === "user" &&
-                        mode === "chat" &&
                         !busy;
+                      // The hand-off (v1.108.0). A turn that grew into a full
+                      // agent run has no reply of its own — say WHY out loud,
+                      // or the wait reads as the app having stalled.
+                      if (m.escalated)
+                        return (
+                          <div key={i} className="group/msg">
+                            <div className="ml-11 flex items-start gap-2 rounded-xl border border-accent/20 bg-accent/[0.05] px-3 py-2 text-[12px] text-zinc-300">
+                              <Zap
+                                size={13}
+                                className="mt-0.5 shrink-0 text-accent-soft"
+                              />
+                              <span>
+                                Taking this on properly — {m.escalated}.
+                              </span>
+                            </div>
+                          </div>
+                        );
                       return (
                         <div key={i} className="group/msg">
                           <Bubble role="assistant">
@@ -3841,9 +3855,8 @@ export default function ChatPage() {
               {(attachments.length > 0 ||
                 threadDocs.length > 0 ||
                 activeSkill !== "" ||
-                (mode === "chat" &&
-                  (selectedTools.length > 0 ||
-                    selectedConnectors.length > 0))) && (
+                selectedTools.length > 0 ||
+                selectedConnectors.length > 0) && (
                 <div className="flex flex-wrap items-center gap-2 border-t hairline px-3 py-2.5">
                   {activeSkill !== "" && (
                     <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300">
@@ -3865,8 +3878,7 @@ export default function ChatPage() {
                       </button>
                     </span>
                   )}
-                  {mode === "chat" &&
-                    selectedTools.map((name) => (
+                  {selectedTools.map((name) => (
                       <span
                         key={name}
                         className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300"
@@ -3886,8 +3898,7 @@ export default function ChatPage() {
                         </button>
                       </span>
                     ))}
-                  {mode === "chat" &&
-                    selectedConnectors.map((id) => (
+                  {selectedConnectors.map((id) => (
                       <span
                         key={`conn-${id}`}
                         className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300"
@@ -4261,7 +4272,7 @@ export default function ChatPage() {
                           </div>
                         )}
                       </div>
-                      {mode === "chat" && (
+                      {(
                         <>
                           <div className="relative">
                             <button
@@ -4600,11 +4611,11 @@ export default function ChatPage() {
                       setModelMenuOpen((v) => !v);
                       setModelSub(null);
                     }}
-                    disabled={mode === "agent" && sessionId !== null}
+                    disabled={awaiting && sessionId !== null}
                     aria-expanded={modelMenuOpen}
                     aria-haspopup="true"
                     title={
-                      mode === "agent" && sessionId !== null
+                      awaiting && sessionId !== null
                         ? "Start a new chat to switch models"
                         : "Switch model"
                     }

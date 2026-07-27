@@ -68,7 +68,10 @@ def test_armed_tools_reach_model_and_unknown_skipped(tmp_path, monkeypatch):
     })
     assert r.status_code == 200
     names = [t.get("name") for t in captured["tools"]]
-    assert names == ["list_folder"]  # armed + unknown skipped
+    # escalate_to_agent rides EVERY turn from v1.108.0 — it is the one-surface
+    # exit, not an armed tool, so it is expected here alongside the real one.
+    assert [n for n in names if n != "escalate_to_agent"] == ["list_folder"]
+    assert "escalate_to_agent" in names
     assert "armed these tools" in captured["system"]
     assert r.json()["tools_used"] == []  # mock returns no tool_calls
 

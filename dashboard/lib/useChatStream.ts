@@ -43,6 +43,9 @@ export type SSEEvent =
       denied_tools?: string[];
       /** ABSOLUTE paths of documents this turn created/edited (preview). */
       documents?: string[];
+      /** The turn decided it needs the full agent (v1.108.0 — one surface). */
+      escalate?: boolean;
+      escalate_reason?: string;
       usage?: { input_tokens?: number; output_tokens?: number };
     }
   | { type: "error"; detail: string; status?: number; offline?: boolean };
@@ -67,6 +70,10 @@ export interface ChatStreamResult {
   model?: string;
   /** ABSOLUTE paths of documents this turn created/edited (preview panel). */
   documents?: string[];
+  /** The turn asked to be re-run as a full agent session, and why. The caller
+   *  does that automatically — the user is never asked to pick a mode. */
+  escalate?: boolean;
+  escalateReason?: string;
 }
 
 // -------------------------------------------------------------- frame decoding
@@ -116,6 +123,9 @@ export function sseEventFrom(
       if (Array.isArray(data.denied_tools))
         ev.denied_tools = data.denied_tools as string[];
       if (Array.isArray(data.documents)) ev.documents = data.documents as string[];
+      if (typeof data.escalate === "boolean") ev.escalate = data.escalate;
+      if (typeof data.escalate_reason === "string")
+        ev.escalate_reason = data.escalate_reason;
       if (data.usage && typeof data.usage === "object")
         ev.usage = data.usage as { input_tokens?: number; output_tokens?: number };
       return ev;
@@ -382,6 +392,8 @@ export function useChatStream(): UseChatStream {
                 provider: ev.provider ?? provider,
                 model: ev.model ?? model,
                 documents: ev.documents,
+                escalate: ev.escalate,
+                escalateReason: ev.escalate_reason,
               };
               break;
             case "error":
