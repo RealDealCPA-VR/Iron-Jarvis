@@ -139,7 +139,15 @@ export function TitleBar({ right }: { right?: React.ReactNode }): React.JSX.Elem
             "calc(100% - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100%))",
         } as React.CSSProperties
       }
-      className="flex h-10 shrink-0 select-none items-center border-b border-white/[0.06] bg-ink-950/70 backdrop-blur-xl"
+      // `relative z-40` is LOAD-BEARING, not styling. backdrop-blur makes this
+      // header a stacking context, and it is the FIRST child of the app column
+      // — so at z:auto everything rendered after it (the whole page) paints on
+      // top, and any dropdown inside the bar (model switcher, bell, theme
+      // menu) is trapped underneath the content no matter what z-index the
+      // dropdown itself claims. The old in-page header carried z-30 for the
+      // same reason; 40 keeps the bar's flyouts above all page content while
+      // staying under the drawer/palette overlays at z-50.
+      className="relative z-40 flex h-10 shrink-0 select-none items-center border-b border-white/[0.06] bg-ink-950/70 backdrop-blur-xl"
     >
       <div className="flex h-full w-full items-center gap-2 px-2">
         {/* Left cluster: nav trigger · brand · you-are-here. */}

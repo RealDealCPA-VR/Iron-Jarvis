@@ -242,3 +242,24 @@ describe("native-overlay theming", () => {
     expect(setTitleBarOverlay).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// v1.112.1 — flyouts inside the bar must paint ABOVE page content.
+//
+// REPORTED: "the drop down options appear behind whatever is on screen." The
+// bar's backdrop-blur makes it a stacking context, and as the app column's
+// FIRST child it loses the paint order to everything after it at z:auto — so
+// any dropdown inside (model switcher, bell) was trapped under the page no
+// matter its own z-index. jsdom cannot see paint order (the real verification
+// was elementFromPoint in a browser: 4/4 probe points inside the open panel);
+// this pin just stops the load-bearing classes from being "cleaned up".
+// ---------------------------------------------------------------------------
+
+describe("stacking context", () => {
+  it("the bar carries relative z-40 so its flyouts beat page content", () => {
+    render(<TitleBar />);
+    const header = document.querySelector("header");
+    expect(header?.className).toContain("relative");
+    expect(header?.className).toContain("z-40");
+  });
+});
