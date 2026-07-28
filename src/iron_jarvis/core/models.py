@@ -71,6 +71,14 @@ class Project(SQLModel, table=True):
     #: project chats/tasks when the user hasn't picked one for the turn.
     default_provider: str = ""
     default_model: str = ""
+    #: LTM source names this project reads from, JSON list (v1.110.0). EMPTY is
+    #: meaningful and is the default: search every base, i.e. exactly the old
+    #: behaviour. Naming bases here NARROWS recall to them, so a client project
+    #: can be grounded in that client's notes without the rest of the firm's
+    #: memory bleeding in. Names, not ids — a base is identified by its name
+    #: everywhere else (LTMManager.search(source=...)), and storing ids would
+    #: invent a second identity for the same thing.
+    memory_sources: str = ""
     status: str = "active"  # active | archived
     created_at: datetime = Field(default_factory=utcnow)
 

@@ -158,7 +158,9 @@ class MemoryFabric:
         if "files" in wanted:
             hits += self._files(query, per_source)
         if "notes" in wanted:
-            hits += self._notes(query, per_source, qtokens)
+            hits += self._notes(
+                query, per_source, qtokens, self._project_bases(project_id)
+            )
         if "memory" in wanted:
             hits += self._memory(query, per_source)
         if "knowledge" in wanted and project_id:
@@ -200,6 +202,31 @@ class MemoryFabric:
             used += len(line)
         return "\n".join(lines) if len(lines) > 1 else ""
 
+    def _project_bases(self, project_id: "str | None") -> "list[str] | None":
+        """The LTM source names this project is bound to, or None for "all".
+
+        Stored as JSON on the project. Anything unreadable resolves to None so
+        grounding degrades to searching everything rather than to silence — a
+        project that recalls nothing looks far more broken than one that
+        recalls a bit too much.
+        """
+        if not project_id or self.engine is None:
+            return None
+        try:
+            import json
+
+            from ..core.models import Project  # local import: avoids cycles
+
+            with session_scope(self.engine) as db:
+                proj = db.get(Project, project_id)
+                raw = (getattr(proj, "memory_sources", "") or "").strip() if proj else ""
+            if not raw:
+                return None
+            names = [str(n).strip() for n in json.loads(raw) if str(n).strip()]
+            return names or None
+        except Exception:  # noqa: BLE001
+            return None
+
     # -- per-store adapters (each guarded; a failure yields no hits) ---------
     def _files(self, query: str, k: int) -> list[FabricHit]:
         fs = self.filesearch
@@ -227,12 +254,34 @@ class MemoryFabric:
             )
         return out
 
-    def _notes(self, query: str, k: int, qtokens: set[str]) -> list[FabricHit]:
+    def _notes(
+        self,
+        query: str,
+        k: int,
+        qtokens: set[str],
+        bases: "list[str] | None" = None,
+    ) -> list[FabricHit]:
+        """Long-term notes. *bases* (v1.110.0) restricts the search to the LTM
+        sources a project is bound to; None/empty searches every base, which is
+        both the default and the historical behaviour.
+
+        A named base that no longer exists is SKIPPED, not fatal — deleting a
+        source must not silently break grounding for every project that
+        referenced it (LTMManager.search raises ValueError on an unknown name).
+        """
         ltm = self.ltm
         if ltm is None:
             return []
         try:
-            raw = ltm.search(query, k=k)
+            if bases:
+                raw = []
+                for name in bases:
+                    try:
+                        raw += ltm.search(query, k=k, source=name)
+                    except Exception:  # noqa: BLE001 — a stale/broken base
+                        continue
+            else:
+                raw = ltm.search(query, k=k)
         except Exception:  # noqa: BLE001
             return []
         out: list[FabricHit] = []

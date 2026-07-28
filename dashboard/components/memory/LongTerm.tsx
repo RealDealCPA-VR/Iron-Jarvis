@@ -23,10 +23,23 @@ import {
   ChevronDown,
   ChevronRight,
   Info,
+  Server,
+  Boxes,
 } from "lucide-react";
 import { get, post, del, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import type { LtmResult, LtmSource } from "@/lib/types";
+import { BASE_CATALOG, EFFORT_TONE } from "./baseCatalog";
+
+/** Catalogue icon name -> component (the catalogue stays free of JSX imports). */
+const BASE_ICON = {
+  FolderOpen,
+  NotebookPen,
+  Cloud,
+  Server,
+  Boxes,
+  Globe,
+} as const;
 import {
   Card,
   Badge,
@@ -795,12 +808,67 @@ export function LongTerm() {
         <div className="space-y-3">
           <p className="px-1 text-sm text-zinc-400">
             Where long-term memory lives: the built-in local brain folder, plus
-            any sources you add — a local folder or Obsidian vault, Notion, a
-            cloud drive, SSH, or your own RAG endpoint.
+            any bases you add — a folder of notes, Notion, a cloud drive, a
+            machine over SSH, or your own search endpoint.
           </p>
+
+          {/* First-run walkthrough (v1.110.0). Shown only until the first base
+              exists, then it gets out of the way for good — an onboarding
+              panel that never leaves becomes furniture people stop reading.
+              Three steps because that is the whole job: what this is, add one,
+              point a project at it. */}
+          {customSources.length === 0 && (
+            <div className="rounded-2xl border border-accent/15 bg-accent/[0.04] p-4">
+              <div className="flex items-start gap-2.5">
+                <Info size={15} className="mt-0.5 shrink-0 text-accent-soft" />
+                <div className="min-w-0 space-y-3">
+                  <div>
+                    <h3 className="text-[13px] font-semibold text-zinc-100">
+                      Set up long-term memory
+                    </h3>
+                    <p className="mt-1 text-[12px] leading-relaxed text-zinc-400">
+                      Long-term memory is what Iron Jarvis can look things up in
+                      later — notes you already keep, wherever you keep them.
+                      Nothing is copied; each base is searched where it lives.
+                    </p>
+                  </div>
+                  <ol className="space-y-2">
+                    {[
+                      {
+                        t: "You already have one",
+                        d: "The built-in brain is a local folder that works out of the box. Everything below is optional.",
+                      },
+                      {
+                        t: "Add a base you already keep notes in",
+                        d: "Pick one on the right — a folder on this PC is the ten-second version. Each option says exactly what it will ask for.",
+                      },
+                      {
+                        t: "Point a project at it (optional)",
+                        d: "In a project → Memory bases, tick the ones it should read. Leave it alone and every project searches everything.",
+                      },
+                    ].map((step, i) => (
+                      <li key={step.t} className="flex gap-2.5">
+                        <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/[0.08] text-[11px] font-semibold text-accent-soft">
+                          {i + 1}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-[12.5px] text-zinc-200">
+                            {step.t}
+                          </span>
+                          <span className="block text-[11.5px] leading-snug text-zinc-500">
+                            {step.d}
+                          </span>
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              </div>
+            </div>
+          )}
           <div className="grid gap-6 lg:grid-cols-3">
             <div className="lg:col-span-1">
-              <Card title="Add memory source" icon={<FolderPlus size={15} />}>
+              <Card title="Add a memory base" icon={<FolderPlus size={15} />}>
                 <form onSubmit={addSource} className="space-y-3.5">
                   <div>
                     <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
@@ -813,25 +881,65 @@ export function LongTerm() {
                       className="field"
                     />
                   </div>
+                  {/* Where the notes live. Tiles rather than a <select>
+                      (v1.110.0): the old list was ordered most-technical-first
+                      and named every option after its transport, so someone who
+                      had a folder of notes had to work out that they wanted
+                      "markdown". Each tile says what you have, what lands in
+                      memory, and exactly what it will ask for. */}
                   <div>
                     <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                      Kind
+                      Where do the notes live?
                     </label>
-                    <select
-                      aria-label="Kind"
-                      value={srcKind}
-                      onChange={(e) => setSrcKind(e.target.value as Kind)}
-                      className="field"
+                    <div
+                      role="radiogroup"
+                      aria-label="Kind of memory base"
+                      className="grid gap-1.5"
                     >
-                      <option value="http_rag">Offsite RAG endpoint</option>
-                      <option value="mcp">MCP brain (paste config)</option>
-                      <option value="markdown">Local folder / Obsidian vault</option>
-                      <option value="ssh">Remote folder (SSH)</option>
-                      <option value="notion">Notion database</option>
-                      <option value="google_drive">Google Drive (memory)</option>
-                      <option value="onedrive">OneDrive (memory)</option>
-                      <option value="dropbox">Dropbox (memory)</option>
-                    </select>
+                      {BASE_CATALOG.map((b) => {
+                        const Icon = BASE_ICON[b.icon];
+                        const on = srcKind === b.kind;
+                        return (
+                          <button
+                            key={b.kind}
+                            type="button"
+                            role="radio"
+                            aria-checked={on}
+                            onClick={() => setSrcKind(b.kind as Kind)}
+                            className={`flex items-start gap-2.5 rounded-xl border p-2.5 text-left transition-colors ${
+                              on
+                                ? "border-accent/40 bg-accent/[0.07]"
+                                : "border-white/[0.06] hover:bg-white/[0.03]"
+                            }`}
+                          >
+                            <Icon
+                              size={15}
+                              className={`mt-0.5 shrink-0 ${
+                                on ? "text-accent-soft" : "text-zinc-500"
+                              }`}
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span className="flex flex-wrap items-baseline gap-x-2">
+                                <span className="text-[13px] text-zinc-200">
+                                  {b.label}
+                                </span>
+                                <span className={`text-[10px] ${EFFORT_TONE[b.effort]}`}>
+                                  {b.effort}
+                                </span>
+                              </span>
+                              <span className="mt-0.5 block text-[11px] leading-snug text-zinc-500">
+                                {b.blurb}
+                              </span>
+                              {on && (
+                                <span className="mt-1 block text-[11px] text-zinc-400">
+                                  You&apos;ll need: {b.needs}
+                                </span>
+                              )}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
 
                   {srcKind === "mcp" && (
@@ -885,7 +993,12 @@ export function LongTerm() {
                         <input
                           value={srcPath}
                           onChange={(e) => setSrcPath(e.target.value)}
-                          placeholder="C:\\Users\\me\\notes"
+                          // String.raw so the example path survives verbatim.
+                          // A JSX attribute STRING is literal and rendered
+                          // "C:\\Users\\me\\notes"; switching to a JS string
+                          // then ate \U and \m as escapes and rendered
+                          // "C:Usersme\notes". Neither is a path anyone has.
+                          placeholder={String.raw`C:\Users\me\notes`}
                           className="field flex-1 font-mono"
                         />
                         <button

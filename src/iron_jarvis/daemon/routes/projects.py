@@ -11,6 +11,8 @@ from pydantic import BaseModel
 from sqlmodel import select
 from typing import Any
 
+import json as _json
+
 from .. import app as _app
 from ..app import _agent_type, _session_view
 from ..schemas import (
@@ -206,6 +208,22 @@ def register(app: FastAPI, d) -> None:
                 project.default_provider = body.default_provider.strip()
             if body.default_model is not None:
                 project.default_model = body.default_model.strip()
+            if body.memory_sources is not None:
+                # Validated against the LIVE sources so a typo cannot quietly
+                # bind a project to a base that does not exist — the symptom
+                # would be a project that silently recalls nothing.
+                known = set(d.platform.ltm.sources())
+                names = [str(n).strip() for n in body.memory_sources if str(n).strip()]
+                unknown = [n for n in names if n not in known]
+                if unknown:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"unknown memory base(s): {', '.join(unknown)} — "
+                            f"available: {', '.join(sorted(known)) or 'none yet'}"
+                        ),
+                    )
+                project.memory_sources = _json.dumps(names)
             db.add(project)
             db.commit()
             db.refresh(project)
@@ -590,8 +608,6 @@ def register(app: FastAPI, d) -> None:
         need, so the UI can request permission for the WHOLE bundle at once
         instead of prompting per tool mid-run. Honest, best-effort: returns an
         empty plan (task still runnable) when no real model can answer."""
-        import json as _json
-
         from ...core.models import Project
         from ...providers.adapters.base import LLMMessage
 

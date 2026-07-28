@@ -19,6 +19,7 @@ import {
   Bot,
   Check,
   ChevronDown,
+  Database,
   ChevronRight,
   Folder,
   FolderOpen,
@@ -62,6 +63,8 @@ interface ProjectWorkspace extends Project {
   instructions?: string;
   default_provider?: string;
   default_model?: string;
+  /** JSON array of LTM source names; "" or "[]" = every base. */
+  memory_sources?: string;
 }
 interface ProjectDetail {
   project: ProjectWorkspace;
@@ -305,6 +308,10 @@ function ProjectWorkspaceInner({
   const searchParams = useSearchParams();
   const detail = useApi<ProjectDetail>(`/projects/${encodeURIComponent(id)}`);
   const models = useApi<{ models: ModelOption[] }>("/models");
+  // Live memory bases — the names the binding is validated against server-side,
+  // so the checkboxes can never offer something the PATCH would reject.
+  const ltm = useApi<{ active: string[] }>("/ltm/sources");
+  const ltmSources = ltm.data?.active ?? [];
 
   const project = detail.data?.project;
   const offline = detail.error && detail.error.status === 0;
@@ -364,6 +371,10 @@ function ProjectWorkspaceInner({
   const [briefDraft, setBriefDraft] = useState("");
   const [instrOpen, setInstrOpen] = useState(false);
   const [instrDraft, setInstrDraft] = useState("");
+  // Memory bases bound to this project (v1.110.0). Empty = search every base,
+  // which is the default and what every pre-existing project does.
+  const [basesOpen, setBasesOpen] = useState(false);
+  const [basesDraft, setBasesDraft] = useState<string[]>([]);
   const [savingField, setSavingField] = useState<string | null>(null);
   const [headerError, setHeaderError] = useState<string | null>(null);
   const [rootPickerOpen, setRootPickerOpen] = useState(false);
@@ -375,6 +386,12 @@ function ProjectWorkspaceInner({
     setNameDraft(project.name);
     setBriefDraft(project.brief ?? "");
     setInstrDraft(project.instructions ?? "");
+    try {
+      const raw = (project.memory_sources ?? "").trim();
+      setBasesDraft(raw ? (JSON.parse(raw) as string[]) : []);
+    } catch {
+      setBasesDraft([]); // unreadable → treat as "every base", same as the server
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.id]);
 
@@ -855,6 +872,107 @@ function ProjectWorkspaceInner({
                           "Save instructions"
                         )}
                       </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Memory bases (v1.110.0). Binding is opt-in: an empty list
+                  searches everything, which is what every project did before
+                  this existed. Naming bases NARROWS recall — the point being a
+                  client project that reads that client's notes and not the
+                  rest of the firm's. */}
+              <div className="rounded-2xl border hairline bg-white/[0.02]">
+                <button
+                  type="button"
+                  onClick={() => setBasesOpen((o) => !o)}
+                  aria-expanded={basesOpen}
+                  className="flex w-full items-center gap-2 px-4 py-3 text-sm font-medium text-zinc-200"
+                >
+                  {basesOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                  <Database size={14} className="text-accent-soft/80" />
+                  Memory bases
+                  <span className="ml-1 text-[11px] font-normal text-zinc-500">
+                    ·{" "}
+                    {basesDraft.length === 0
+                      ? "all"
+                      : `${basesDraft.length} selected`}
+                  </span>
+                </button>
+                {basesOpen && (
+                  <div className="space-y-2.5 border-t hairline px-4 py-3">
+                    <p className="text-[12px] text-zinc-500">
+                      Which long-term memory this project reads from. Leave
+                      everything unticked to search them all — tick specific
+                      bases to keep this project&apos;s recall to just those.
+                    </p>
+                    {ltmSources.length === 0 ? (
+                      <p className="text-[12px] text-zinc-500">
+                        No memory bases yet —{" "}
+                        <Link href="/memory?scope=longterm" className="text-accent-soft hover:underline">
+                          add one on the Memory page
+                        </Link>
+                        .
+                      </p>
+                    ) : (
+                      <ul className="grid gap-1.5 sm:grid-cols-2">
+                        {ltmSources.map((name) => {
+                          const on = basesDraft.includes(name);
+                          return (
+                            <li key={name}>
+                              <label
+                                className={`flex cursor-pointer items-center gap-2 rounded-lg border p-2 transition-colors ${
+                                  on
+                                    ? "border-accent/30 bg-accent/[0.06]"
+                                    : "border-white/[0.06] hover:bg-white/[0.03]"
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={on}
+                                  onChange={() =>
+                                    setBasesDraft((prev) =>
+                                      prev.includes(name)
+                                        ? prev.filter((n) => n !== name)
+                                        : [...prev, name],
+                                    )
+                                  }
+                                  className="accent-accent"
+                                  aria-label={`Use the ${name} memory base`}
+                                />
+                                <span className="truncate font-mono text-[12px] text-zinc-200">
+                                  {name}
+                                </span>
+                              </label>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void savePatch({ memory_sources: basesDraft }, "memory_sources")
+                        }
+                        disabled={savingField === "memory_sources"}
+                        className="btn-accent"
+                      >
+                        {savingField === "memory_sources" ? (
+                          <LoaderInline label="Saving…" />
+                        ) : (
+                          "Save memory bases"
+                        )}
+                      </button>
+                      {basesDraft.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setBasesDraft([])}
+                          className="btn-ghost text-xs"
+                        >
+                          Use all bases
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}

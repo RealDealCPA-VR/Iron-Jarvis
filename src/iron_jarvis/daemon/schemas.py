@@ -149,6 +149,9 @@ class ProjectPatch(BaseModel):
     instructions: str | None = None  # per-project custom instructions
     default_provider: str | None = None  # per-project default model halves
     default_model: str | None = None
+    #: LTM source names this project reads from (v1.110.0). [] = every base,
+    #: which is the default; naming bases NARROWS recall to them.
+    memory_sources: list[str] | None = None
 
 
 class ProjectKnowledgeBody(BaseModel):
