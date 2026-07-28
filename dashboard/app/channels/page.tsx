@@ -258,8 +258,8 @@ export default function ChannelsPage() {
     <PageShell>
       <Reveal>
         <PageHeader
-          title="Channels"
-          subtitle="Outbound notification channels. Add a channel, then send a test message to one or all of them."
+          title="Notifications"
+          subtitle="Where Iron Jarvis sends alerts. Add a destination, then send a test message to one or all of them."
           actions={
             <button
               type="button"
@@ -279,7 +279,7 @@ export default function ChannelsPage() {
               }}
               className={showAdd && !editing ? "btn-ghost" : "btn-accent"}
             >
-              <Plus size={14} /> Add channel
+              <Plus size={14} /> Add destination
             </button>
           }
         />
@@ -299,7 +299,7 @@ export default function ChannelsPage() {
       {showAdd && (
         <Reveal>
           <Card
-            title={editing ? `Edit “${editing}”` : "Add a channel"}
+            title={editing ? `Edit “${editing}”` : "Add a destination"}
             icon={editing ? <Pencil size={15} /> : <Plus size={15} />}
           >
             <form onSubmit={addChannel} className="space-y-3.5">
@@ -439,7 +439,7 @@ export default function ChannelsPage() {
                     </>
                   ) : (
                     <>
-                      <Plus size={14} /> Add channel
+                      <Plus size={14} /> Add destination
                     </>
                   )}
                 </button>
@@ -468,8 +468,8 @@ export default function ChannelsPage() {
               <SkeletonRows rows={3} />
             ) : channels.length === 0 ? (
               <Empty icon={<Megaphone size={22} />}>
-                No channels configured yet. Click{" "}
-                <span className="font-medium text-accent-soft">Add channel</span> to connect
+                No destinations configured yet. Click{" "}
+                <span className="font-medium text-accent-soft">Add destination</span> to connect
                 Slack, Discord, Telegram, or email.
               </Empty>
             ) : (

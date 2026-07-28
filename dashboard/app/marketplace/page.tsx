@@ -647,7 +647,7 @@ export default function MarketplacePage() {
     <PageShell>
       <Reveal>
         <PageHeader
-          title="Marketplace"
+          title="Directory"
           subtitle="Connect Iron Jarvis to your apps — one tap. Tokens are stored encrypted; nothing is sent anywhere but the service you connect."
           actions={
             /* Users arrive from the chat "+" menu (Marketplace has no nav

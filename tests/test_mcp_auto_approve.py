@@ -120,5 +120,7 @@ def test_the_ui_says_it_affects_every_connected_pack():
 
     page = Path(__file__).resolve().parents[1] / "dashboard" / "app" / "tools" / "page.tsx"
     text = page.read_text(encoding="utf-8")
-    assert "every" in text and "connected pack" in text
+    # v1.113.0 vocabulary pass: the UI says "plug-in" (one name per concept);
+    # the wire (/mcp/servers) and this test's behaviour pins are unchanged.
+    assert "every" in text and "connected plug-in" in text
     assert "auto-approve on" in text and "auto-approve off" in text  # it's a toggle

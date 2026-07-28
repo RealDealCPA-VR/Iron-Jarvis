@@ -365,7 +365,7 @@ const TOOL_CATEGORY_ORDER: ToolCategory[] = [
   "other",
 ];
 const TOOL_CATEGORY_LABEL: Record<ToolCategory, string> = {
-  integrations: "Integrations (MCP)",
+  integrations: "Plug-ins (MCP)",
   files: "Files",
   web: "Web",
   media: "Media",
@@ -3937,7 +3937,7 @@ export default function ChatPage() {
                         <button
                           type="button"
                           onClick={() => toggleConnector(id)}
-                          aria-label={`Turn off connector ${id}`}
+                          aria-label={`Turn off connection ${id}`}
                           title="Turn off for this chat"
                           className="text-zinc-500 transition-colors hover:text-rose-300"
                         >
@@ -4127,7 +4127,7 @@ export default function ChatPage() {
                     aria-expanded={toolsOpen}
                     aria-haspopup="true"
                     aria-label="Open the chat menu"
-                    title="Attach · skills · connectors · web & auto"
+                    title="Attach · skills · connections · web & auto"
                     className={`btn-ghost h-[2.75rem] px-3 py-0 ${
                       toolsOpen ||
                       selectedTools.length > 0 ||
@@ -4316,7 +4316,7 @@ export default function ChatPage() {
                               className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06]"
                             >
                               <PlugZap size={14} className="shrink-0 text-zinc-400" />
-                              Connectors
+                              Connections
                               <ChevronRight size={13} className="ml-auto shrink-0 text-zinc-500" />
                             </button>
                             {plusSub === "connectors" && (
@@ -4396,7 +4396,7 @@ export default function ChatPage() {
                                         key={c.id}
                                         href="/marketplace"
                                         onClick={() => setToolsOpen(false)}
-                                        title={`Connect ${c.name} in the Marketplace`}
+                                        title={`Connect ${c.name} in the Directory`}
                                         className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
                                       >
                                         <span className="w-4 shrink-0 text-center text-[13px]">

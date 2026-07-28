@@ -648,8 +648,8 @@ export default function ToolsPage() {
         : "";
       setMcpOk(
         res.note
-          ? `Tool pack "${serverName}" connected — ${res.note}${approveNote}`
-          : `Tool pack "${serverName}" connected — ${res.tools_loaded} tool${
+          ? `Plug-in "${serverName}" connected — ${res.note}${approveNote}`
+          : `Plug-in "${serverName}" connected — ${res.tools_loaded} tool${
               res.tools_loaded === 1 ? "" : "s"
             } ready to use.${approveNote}`,
       );
@@ -676,7 +676,7 @@ export default function ToolsPage() {
       });
       setMcpOk(
         next
-          ? `"${server.name}" set to auto-approve — restart Iron Jarvis for autonomous agents to pick it up. This trusts every connected pack's tools.`
+          ? `"${server.name}" set to auto-approve — restart Iron Jarvis for autonomous agents to pick it up. This trusts every connected plug-in's tools.`
           : `"${server.name}" will ask before each use again — restart Iron Jarvis to apply.`,
       );
       reloadServers();
@@ -693,7 +693,7 @@ export default function ToolsPage() {
     try {
       await del(`/mcp/servers/${encodeURIComponent(serverName)}`);
       setMcpOk(
-        `Tool pack "${serverName}" disconnected. Restart Iron Jarvis to fully unload its tools.`,
+        `Plug-in "${serverName}" disconnected. Restart Iron Jarvis to fully unload its tools.`,
       );
       reloadServers();
     } catch (err) {
@@ -1197,9 +1197,9 @@ export default function ToolsPage() {
       <Reveal>
         {/* ?focus=packs lands here — Card doesn't forward refs, so wrap it. */}
         <div ref={packsFocusRef}>
-        <Card title="Plug-in tool packs (MCP)" icon={<Plug size={15} />}>
+        <Card title="Plug-ins (MCP)" icon={<Plug size={15} />}>
           <p className="mb-4 text-sm text-zinc-400">
-            Tool packs bundle whole new abilities — talking to databases, browsing
+            Plug-ins bundle whole new abilities — talking to databases, browsing
             the web, using cloud apps. Connect one and everything inside it becomes
             available to your agents.
           </p>
@@ -1228,12 +1228,12 @@ export default function ToolsPage() {
                 Let agents use this without asking
               </span>
               <span className="mt-1 block text-[12px] leading-relaxed text-zinc-500">
-                Applies to the pack you connect next — you can change it any time
+                Applies to the plug-in you connect next — you can change it any time
                 from its <span className="text-zinc-400">auto-approve</span> button
                 below. Note this is <span className="text-amber-200/90">coarse</span>:
-                MCP shares one permission, so trusting any pack lets autonomous agents
+                MCP shares one permission, so trusting any plug-in lets autonomous agents
                 run tools from <span className="text-amber-200/90">every</span>
-                connected pack without a prompt. Takes effect after the next Iron
+                connected plug-in without a prompt. Takes effect after the next Iron
                 Jarvis restart. Chat is unaffected — arming a tool there is already
                 your approval.
               </span>
@@ -1242,14 +1242,14 @@ export default function ToolsPage() {
 
           {/* Catalog grid ------------------------------------------------- */}
           <div className="mb-2.5">
-            <SectionLabel>Popular packs</SectionLabel>
+            <SectionLabel>Popular plug-ins</SectionLabel>
           </div>
           {catError ? (
             <p className="text-[13px] text-zinc-600">
               Pack list unavailable{catError.status !== 0 ? ` — ${catError.message}` : ""}.
             </p>
           ) : catalog.length === 0 ? (
-            <p className="text-[13px] text-zinc-600">No packs to show.</p>
+            <p className="text-[13px] text-zinc-600">No plug-ins to show.</p>
           ) : (
             <div className="space-y-5">
               {catalog.some((e) => (e.category ?? "reference") === "reference") && (
@@ -1512,7 +1512,7 @@ export default function ToolsPage() {
                             title={
                               s.auto_approve
                                 ? "Autonomous agents may run MCP tools without asking. Click to require approval again."
-                                : "Agents ask before each MCP tool call. Click to let them run without asking (applies to ALL connected packs after a restart)."
+                                : "Agents ask before each MCP tool call. Click to let them run without asking (applies to ALL connected plug-ins after a restart)."
                             }
                             className={`rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-50 ${
                               s.auto_approve

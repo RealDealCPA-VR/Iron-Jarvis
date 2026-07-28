@@ -169,9 +169,10 @@ export const NAV: NavSectionDef[] = [
           "mcp servers",
           "packs",
           "plugins",
+          "plug-ins",
           "capabilities",
         ],
-        blurb: "What agents can DO — plus per-tool approval, MCP servers, and packs.",
+        blurb: "What agents can DO — plus per-tool approval and plug-ins (MCP).",
       },
       {
         href: "/autonomy",
@@ -337,10 +338,12 @@ export const NAV: NavSectionDef[] = [
       },
       {
         href: "/channels",
-        label: "Channels",
+        label: "Notifications",
         icon: Megaphone,
-        aliases: ["notify me", "email", "slack", "text me", "alerts to phone"],
-        blurb: "Outbound notification channels, with a test send for each.",
+        // "channels" stays an alias: the page carried that name until v1.113.0
+        // and search must keep answering the old vocabulary forever.
+        aliases: ["notify me", "email", "slack", "text me", "alerts to phone", "channels"],
+        blurb: "Where Iron Jarvis sends alerts, with a test send for each.",
       },
     ],
   },

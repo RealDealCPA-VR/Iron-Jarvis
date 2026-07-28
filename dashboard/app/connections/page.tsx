@@ -1207,8 +1207,8 @@ interface RescannedModel {
 const CONNECT_ELSEWHERE = [
   {
     href: "/tools",
-    title: "Tool packs (MCP)",
-    desc: "Plug in ready-made tool packs that give Jarvis new abilities.",
+    title: "Plug-ins (MCP)",
+    desc: "Ready-made plug-ins that give Jarvis new abilities.",
     icon: <Blocks size={17} />,
   },
   {
@@ -1416,7 +1416,7 @@ export default function ConnectionsPage() {
                       className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-xs text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
                     >
                       <Wrench size={14} className="text-amber-300" />
-                      <span className="flex-1">Tool packs (MCP)</span>
+                      <span className="flex-1">Plug-ins (MCP)</span>
                       <ChevronRight size={13} className="text-zinc-600" />
                     </Link>
                   </div>

@@ -577,9 +577,9 @@ export function LongTerm() {
             </div>
             <div className="w-40">
               <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                Source
+                Base
               </label>
-              <select aria-label="Source" value={source} onChange={(e) => setSource(e.target.value)} className="field">
+              <select aria-label="Base" value={source} onChange={(e) => setSource(e.target.value)} className="field">
                 <option value="">All</option>
                 {sourceOptions.map((s) => (
                   <option key={s} value={s}>
@@ -618,7 +618,7 @@ export function LongTerm() {
         <Card title="Browse memories" icon={<Database size={15} />}>
           <div className="flex flex-wrap items-center gap-2">
             <select
-              aria-label="Browse source"
+              aria-label="Browse base"
               value={browseSource}
               onChange={(e) => setBrowseSource(e.target.value)}
               className="field w-auto py-1.5 text-[13px]"
@@ -778,10 +778,10 @@ export function LongTerm() {
                 </div>
                 <div>
                   <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                    Source
+                    Base
                   </label>
                   <select
-                    aria-label="Source"
+                    aria-label="Base"
                     value={appendSource}
                     onChange={(e) => setAppendSource(e.target.value)}
                     className="field"
@@ -812,7 +812,7 @@ export function LongTerm() {
       <Reveal>
         <div className="space-y-3">
           <p className="px-1 text-sm text-zinc-400">
-            Where long-term memory lives: the built-in local brain folder, plus
+            Where long-term memory lives: the built-in base that works out of the box, plus
             any bases you add — a folder of notes, Notion, a cloud drive, a
             machine over SSH, or your own search endpoint.
           </p>
@@ -841,7 +841,7 @@ export function LongTerm() {
                     {[
                       {
                         t: "You already have one",
-                        d: "The built-in brain is a local folder that works out of the box. Everything below is optional.",
+                        d: "The built-in base is a local folder that works out of the box. Everything below is optional.",
                       },
                       {
                         t: "Add a base you already keep notes in",
@@ -984,8 +984,8 @@ export function LongTerm() {
                         mcp-remote wrappers are flattened to their direct HTTP
                         connection — no npx needed. The server&apos;s
                         search/append tools are discovered automatically, and
-                        this brain answers memory recalls alongside your other
-                        sources.
+                        it answers memory recalls alongside your other
+                        bases.
                       </p>
                     </div>
                   )}
@@ -1017,7 +1017,7 @@ export function LongTerm() {
                       </div>
                       <div className="mt-1 text-[11px] text-zinc-600">
                         Any folder of .md files — point it at an Obsidian vault to
-                        use it as Iron Jarvis&apos;s brain.
+                        use it as a memory base.
                       </div>
                     </div>
                   ) : srcKind === "ssh" ? (

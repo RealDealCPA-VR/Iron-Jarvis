@@ -55,7 +55,7 @@ const SCOPES: ScopeDef[] = [
     label: "Long-term",
     Icon: Database,
     blurb:
-      "The durable knowledge base — markdown brain, your vault, Notion, or cloud — that agents search on demand.",
+      "The durable memory bases — the built-in one, your vault, Notion, or cloud — that agents search on demand.",
   },
 ];
 

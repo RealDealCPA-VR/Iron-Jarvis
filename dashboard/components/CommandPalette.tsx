@@ -98,7 +98,7 @@ const DEEP_LINK_ITEMS: PaletteRow[] = [
   {
     id: "deep:packs",
     kind: "page",
-    label: "Tools → MCP packs",
+    label: "Tools → Plug-ins",
     blurb: "Connect an MCP pack and set what it may run without asking.",
     aliases: ["auto-approve", "mcp", "connect a pack"],
     href: "/tools?focus=packs",
