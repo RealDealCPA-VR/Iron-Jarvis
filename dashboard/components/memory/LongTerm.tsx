@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { get, post, del, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
+import { useFocusRef } from "@/lib/useFocusRef";
 import type { LtmResult, LtmSource } from "@/lib/types";
 import { BASE_CATALOG, EFFORT_TONE } from "./baseCatalog";
 
@@ -204,6 +205,10 @@ function sourceTone(kind: string): Tone {
 }
 
 export function LongTerm() {
+  // Deep-link target: /memory?focus=add-base lands on the "Add a memory base"
+  // card. Rides the column wrapper that already encloses it — no new node.
+  const addBaseFocusRef = useFocusRef<HTMLDivElement>("add-base");
+
   const {
     data: sourcesData,
     reload: reloadSources,
@@ -867,7 +872,7 @@ export function LongTerm() {
             </div>
           )}
           <div className="grid gap-6 lg:grid-cols-3">
-            <div className="lg:col-span-1">
+            <div ref={addBaseFocusRef} className="lg:col-span-1">
               <Card title="Add a memory base" icon={<FolderPlus size={15} />}>
                 <form onSubmit={addSource} className="space-y-3.5">
                   <div>

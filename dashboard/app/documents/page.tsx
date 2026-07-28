@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { get, post, del, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
+import { useFocusRef } from "@/lib/useFocusRef";
 import { timeAgo } from "@/lib/format";
 import type { DocumentRead, DocumentWriteResult } from "@/lib/types";
 import {
@@ -317,6 +318,9 @@ function SaveToMemoryRow({ filename, text }: { filename: string; text: string })
 /* -------------------------------------------------------------------------- */
 
 export default function DocumentsPage() {
+  // Deep-link target: /documents?focus=redact lands on the Redact card.
+  const redactFocusRef = useFocusRef<HTMLDivElement>("redact");
+
   /* ---- Read / extract --------------------------------------------------- */
   const [readPath, setReadPath] = useState("");
   const [readText, setReadText] = useState<string | null>(null);
@@ -969,6 +973,8 @@ export default function DocumentsPage() {
 
       {/* ---- Redact PII --------------------------------------------------- */}
       <Reveal>
+        {/* ?focus=redact lands here — Card doesn't forward refs, so wrap it. */}
+        <div ref={redactFocusRef}>
         <Card title="Redact PII" icon={<ShieldCheck size={15} />}>
           <div className="space-y-5">
             <p className="text-sm text-zinc-400">
@@ -1204,6 +1210,7 @@ export default function DocumentsPage() {
             )}
           </div>
         </Card>
+        </div>
       </Reveal>
 
       {/* ---- Living documents ------------------------------------------- */}

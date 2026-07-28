@@ -725,6 +725,19 @@ function createMainWindow() {
     backgroundColor: "#0a0a0f",
     show: false,
     title: "Iron Jarvis",
+    // Custom title bar (v1.111.0) — the frontier-desktop chrome the user asked
+    // for: the app draws its own top strip (hamburger · mark · global search)
+    // while close/max/min stay NATIVE via the Windows controls overlay, so
+    // Win11 snap layouts and OS conventions keep working. The dashboard's
+    // <TitleBar> owns the strip; height here must match its h-10 (40px), or
+    // the native buttons misalign against our row. Browser mode is unaffected
+    // (no overlay outside Electron — the bar just renders as a normal header).
+    titleBarStyle: "hidden",
+    titleBarOverlay: {
+      color: "#0a0a0f", // matches backgroundColor: the strip reads as one piece
+      symbolColor: "#a6b0ba", // window-control glyphs: zinc, not pure white
+      height: 40,
+    },
     icon: path.join(__dirname, "assets", "icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),

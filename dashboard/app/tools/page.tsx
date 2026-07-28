@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { post, patch, del, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
+import { useFocusRef } from "@/lib/useFocusRef";
 import {
   Card,
   Badge,
@@ -409,6 +410,10 @@ const TOOL_SUITE: SuiteTool[] = [
 ];
 
 export default function ToolsPage() {
+  // Deep-link target: /tools?focus=packs lands on the MCP tool-packs card
+  // (where auto-approve lives — the setting people search for by name).
+  const packsFocusRef = useFocusRef<HTMLDivElement>("packs");
+
   const { data, error, loading, reload } = usePolledApi<{ tools: CustomTool[] }>(
     "/tools/custom",
     8000,
@@ -1190,6 +1195,8 @@ export default function ToolsPage() {
       {/*  MCP — plug-in tool servers                                        */}
       {/* ------------------------------------------------------------------ */}
       <Reveal>
+        {/* ?focus=packs lands here — Card doesn't forward refs, so wrap it. */}
+        <div ref={packsFocusRef}>
         <Card title="Plug-in tool packs (MCP)" icon={<Plug size={15} />}>
           <p className="mb-4 text-sm text-zinc-400">
             Tool packs bundle whole new abilities — talking to databases, browsing
@@ -1603,6 +1610,7 @@ export default function ToolsPage() {
             </div>
           )}
         </Card>
+        </div>
       </Reveal>
 
       {/* ------------------------------------------------------------------ */}

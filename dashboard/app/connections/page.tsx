@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { get, post, put, patch, del, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
+import { useFocusRef } from "@/lib/useFocusRef";
 import { useDaemon } from "@/lib/daemon";
 import type { Connection, ConnectionTestResult, OAuthStart } from "@/lib/types";
 
@@ -203,6 +204,10 @@ function ConnectionCard({
   const meta = metaFor(conn.provider);
   const Icon = meta.icon;
   const isCustom = conn.provider === "custom";
+  // Deep-link target: /connections?focus=endpoints lands on the custom-endpoint
+  // card (where saved endpoints are added, renamed and deleted). One card owns
+  // the key — every other provider passes "" so its instance stays inert.
+  const endpointsFocusRef = useFocusRef<HTMLDivElement>(isCustom ? "endpoints" : "");
 
   // The active default provider comes from the shared /health poll. Calling
   // refresh() after switching keeps this card's badge and the topbar model
@@ -634,6 +639,7 @@ function ConnectionCard({
 
   return (
     <div
+      ref={endpointsFocusRef}
       id={id}
       className="card-surface flex scroll-mt-24 flex-col gap-4 p-5 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-card-hover"
     >

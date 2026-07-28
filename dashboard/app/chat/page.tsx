@@ -1309,6 +1309,49 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Global-search landing params (v1.111.0), all one-shot and all PREFILL/OPEN
+  // only — never auto-send. The consent rule is that side effects wait for the
+  // user's Enter, and a search box that fires agent work on its own breaks it.
+  // Same window.location pattern as ?project= above (static route — no
+  // useSearchParams).
+  //   ?ask=<text>    the "Ask Iron Jarvis: …" fallback row — prefill the composer
+  //   ?skill=<name>  a skill picked in search — arm it (chip shows; nothing runs)
+  //   ?thread=<id>   a saved conversation picked in search — open it
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const ask = (params.get("ask") || "").trim();
+      const skill = (params.get("skill") || "").trim();
+      const thread = (params.get("thread") || "").trim();
+      if (ask) {
+        setInput(ask);
+        setCaret(ask.length);
+        inputRef.current?.focus();
+      }
+      if (skill) {
+        // Arm, don't validate: an unknown name just yields a chip the user can
+        // clear, which beats silently dropping their pick. markSetupChanged so
+        // the armed skill persists with the thread like a "/"-picked one.
+        setActiveSkill(skill);
+        markSetupChanged();
+        inputRef.current?.focus();
+      }
+      if (thread) void openThread(thread);
+      if (ask || skill || thread) {
+        // Strip the params so a refresh doesn't resurrect stale state over
+        // whatever the user has done since.
+        const url = new URL(window.location.href);
+        url.searchParams.delete("ask");
+        url.searchParams.delete("skill");
+        url.searchParams.delete("thread");
+        window.history.replaceState(null, "", url.toString());
+      }
+    } catch {
+      /* a malformed URL must never break the page */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function choosePersona(value: string) {
     setPersona(value);
     prevPersonaRef.current = value;

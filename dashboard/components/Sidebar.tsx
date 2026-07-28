@@ -5,130 +5,20 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  LayoutDashboard,
-  MessageSquare,
-  Boxes,
-  History,
-  Images,
-  Sparkles,
-  BrainCircuit,
-  Code2,
   Package,
-  Workflow,
-  Bot,
-  Wrench,
-  CalendarClock,
-  FileSearch,
-  FileText,
-  FolderKanban,
-  KeyRound,
-  PlugZap,
-  Megaphone,
-  Store,
-  Webhook,
-  Zap,
-  MonitorCog,
-  Radar,
-  SquareTerminal,
   MoveUpRight,
-  GitBranch,
-  Gauge,
-  Server,
-  DownloadCloud,
   Settings,
-  LifeBuoy,
-  BarChart3,
-  LayoutTemplate,
   SlidersHorizontal,
-  Menu,
-  PanelLeftClose,
-  PanelLeftOpen,
   X,
-  type LucideIcon,
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 import { useDaemon } from "@/lib/daemon";
+import { NAV, type NavEntry as NavItem, type NavSectionDef as NavSection } from "@/lib/nav";
 
-interface NavItem {
-  href: string;
-  label: string;
-  icon: LucideIcon;
-}
-
-interface NavSection {
-  label: string;
-  items: NavItem[];
-}
-
-// THREE HERO SURFACES lead the nav: Chat (talk — with the project panel),
-// Build (terminals — make things), Projects (the context spine hub). Every
-// other page is support cast, grouped behind them and mostly Advanced-only;
-// Sessions/Activity are review surfaces shown only in Advanced mode.
-const NAV: NavSection[] = [
-  {
-    label: "Work",
-    items: [
-      { href: "/", label: "Overview", icon: LayoutDashboard },
-      // Projects is NOT a nav destination anymore: the module lives inside
-      // Chat (composer toggle + right-rail workspace); the wide surfaces
-      // (board/media/tasks) open from there. The routes stay alive.
-      { href: "/chat", label: "Chat", icon: MessageSquare },
-      { href: "/terminals", label: "Build", icon: SquareTerminal },
-      { href: "/sessions", label: "Sessions", icon: Boxes },
-      { href: "/activity", label: "Activity", icon: History },
-      { href: "/creative", label: "Creative", icon: Images },
-    ],
-  },
-  {
-    label: "Automate",
-    items: [
-      { href: "/workflows", label: "Workflows", icon: Workflow },
-      { href: "/schedules", label: "Schedules", icon: CalendarClock },
-      // Kanban lives INSIDE a project now (Projects → open a project → Board).
-      { href: "/templates", label: "Templates", icon: LayoutTemplate },
-      { href: "/agents", label: "Agents", icon: Bot },
-      { href: "/tools", label: "Tools", icon: Wrench },
-      { href: "/autonomy", label: "Autonomy", icon: Gauge },
-      { href: "/sentinels", label: "Sentinels", icon: Radar },
-      { href: "/computeruse", label: "Computer Control", icon: MonitorCog },
-      { href: "/webhooks", label: "Webhooks", icon: Webhook },
-      { href: "/reflex", label: "Reflexes", icon: Zap },
-      { href: "/self-dev", label: "Self-improvement", icon: GitBranch },
-    ],
-  },
-  {
-    label: "Knowledge",
-    items: [
-      // ONE memory surface (working / lessons / long-term live inside as scopes).
-      { href: "/memory", label: "Memory", icon: BrainCircuit },
-      { href: "/documents", label: "Documents", icon: FileText },
-      { href: "/filesearch", label: "File Search", icon: FileSearch },
-      { href: "/skills", label: "Skills", icon: Sparkles },
-      { href: "/artifacts", label: "Artifacts", icon: Code2 },
-    ],
-  },
-  {
-    label: "Connections",
-    items: [
-      // Marketplace left the nav: it's reached from the chat "+" menu's
-      // Connectors flyout (the route stays alive).
-      { href: "/connections", label: "Connections", icon: PlugZap },
-      // Advanced-only by construction: NOT in ESSENTIAL_HREFS below.
-      { href: "/fleet", label: "Local fleet", icon: Server },
-      { href: "/secrets", label: "Secrets", icon: KeyRound },
-      { href: "/channels", label: "Channels", icon: Megaphone },
-    ],
-  },
-  {
-    label: "System",
-    items: [
-      { href: "/usage", label: "Usage", icon: BarChart3 },
-      { href: "/updates", label: "Updates", icon: DownloadCloud },
-      { href: "/settings", label: "Settings", icon: Settings },
-      { href: "/help", label: "Help", icon: LifeBuoy },
-    ],
-  },
-];
+// NAV lives in lib/nav.ts now (v1.111.0). The global search needs the same
+// catalogue (plus aliases + blurbs), and two copies WOULD drift — the
+// palette carried a stale private page list for months and nobody noticed.
+// This file renders the drawer; lib/nav.ts owns what is in it.
 
 /**
  * The essentials shown in Simple mode (the default): the four heroes plus the
@@ -180,29 +70,6 @@ function useNavMode(): [boolean, () => void] {
     });
 
   return [advanced, toggle];
-}
-
-/** Persisted rail collapse (icons-only). Same SSR-safe pattern as useNavMode. */
-function useCollapsed(): [boolean, () => void] {
-  const [collapsed, setCollapsed] = useState(false);
-  useEffect(() => {
-    try {
-      setCollapsed(localStorage.getItem("ij_nav_collapsed") === "1");
-    } catch {
-      /* stay expanded */
-    }
-  }, []);
-  const toggle = () =>
-    setCollapsed((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem("ij_nav_collapsed", next ? "1" : "0");
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
-  return [collapsed, toggle];
 }
 
 /** The arc-reactor brand mark. `big` = the dominant collapsed-rail reactor. */
@@ -451,103 +318,19 @@ function SidebarFooter() {
 /** The desktop sidebar rail. Hidden below the `md` breakpoint (see MobileNav).
  *  Collapsible: the collapsed rail is a DOMINANT arc reactor over icons-only
  *  nav — no words, tooltips carry the names. */
-export function Sidebar() {
-  const [advanced, toggleAdvanced] = useNavMode();
-  const [collapsed, toggleCollapsed] = useCollapsed();
-  return (
-    <aside
-      className={`hidden shrink-0 flex-col border-r border-white/[0.06] bg-ink-900/70 backdrop-blur-xl transition-[width] duration-300 md:flex ${
-        collapsed ? "w-[4.5rem]" : "w-64"
-      }`}
-    >
-      {collapsed ? (
-        <div className="flex flex-col items-center gap-2 px-2 py-5">
-          <Link href="/" title="Iron Jarvis — Overview" className="text-accent">
-            <ArcMark big />
-          </Link>
-          <button
-            type="button"
-            onClick={toggleCollapsed}
-            title="Expand the sidebar"
-            aria-label="Expand the sidebar"
-            className="grid h-7 w-7 place-items-center rounded-lg text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
-          >
-            <PanelLeftOpen size={15} />
-          </button>
-        </div>
-      ) : (
-        <div className="flex items-center px-5 py-5">
-          <Brand />
-          <button
-            type="button"
-            onClick={toggleCollapsed}
-            title="Collapse the sidebar"
-            aria-label="Collapse the sidebar"
-            className="ml-auto grid h-7 w-7 place-items-center rounded-lg text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
-          >
-            <PanelLeftClose size={15} />
-          </button>
-        </div>
-      )}
-      <div className={`h-px bg-accent-line opacity-60 ${collapsed ? "mx-2" : "mx-5"}`} />
-      <nav
-        className={`flex-1 space-y-1 overflow-y-auto py-4 ${
-          collapsed ? "px-2" : "px-3"
-        }`}
-      >
-        <NavLinks layoutId="nav-active" advanced={advanced} collapsed={collapsed} />
-      </nav>
-      {collapsed ? (
-        <div className="flex flex-col items-center gap-2 border-t border-white/[0.06] px-2 py-3">
-          <button
-            type="button"
-            onClick={toggleAdvanced}
-            aria-pressed={advanced}
-            title={advanced ? "Advanced ON — click for essentials" : "Show every tool"}
-            className={`grid h-8 w-8 place-items-center rounded-lg transition-colors ${
-              advanced ? "text-accent" : "text-zinc-500 hover:text-zinc-200"
-            }`}
-          >
-            <SlidersHorizontal size={16} />
-          </button>
-          <CollapsedStatusDot />
-        </div>
-      ) : (
-        <>
-          <NavModeToggle advanced={advanced} onToggle={toggleAdvanced} />
-          <SidebarFooter />
-        </>
-      )}
-    </aside>
-  );
-}
-
-/** The collapsed rail's footer: one dot carrying version + connection state. */
-function CollapsedStatusDot() {
-  const { online: connected, health } = useDaemon();
-  return (
-    <span
-      title={`${connected ? "daemon connected" : "daemon offline"}${
-        health?.version ? ` · v${health.version}` : ""
-      }`}
-      className={`h-2.5 w-2.5 rounded-full ${
-        connected
-          ? "bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.5)] animate-pulse-glow"
-          : "bg-zinc-600"
-      }`}
-    />
-  );
-}
-
-/**
- * Mobile navigation: a hamburger button (shown only below `md`) that opens a
- * slide-over drawer with the same nav. Lives in the top bar so the desktop rail
- * is untouched.
- */
-export function MobileNav() {
+export function NavDrawer() {
   const [open, setOpen] = useState(false);
   const [advanced, toggleAdvanced] = useNavMode();
   const pathname = usePathname();
+
+  // The TitleBar's hamburger owns opening (v1.111.0): the drawer subscribes to
+  // ij:toggle-nav instead of rendering its own trigger, so ONE control serves
+  // every screen size — the old md:hidden mobile drawer, generalized.
+  useEffect(() => {
+    const onToggle = () => setOpen((o) => !o);
+    window.addEventListener("ij:toggle-nav", onToggle);
+    return () => window.removeEventListener("ij:toggle-nav", onToggle);
+  }, []);
 
   // Close the drawer whenever the route changes.
   useEffect(() => {
@@ -570,20 +353,7 @@ export function MobileNav() {
   }, [open]);
 
   return (
-    <div className="flex items-center gap-2 md:hidden">
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        aria-label="Open navigation"
-        className="grid h-9 w-9 place-items-center rounded-xl border border-white/10 bg-white/[0.02] text-zinc-300 transition-colors hover:border-white/20 hover:text-zinc-100"
-      >
-        <Menu size={18} />
-      </button>
-      <Link href="/" className="flex items-center gap-2 text-accent">
-        <span className="text-[14px] font-semibold tracking-tight text-zinc-50">Iron Jarvis</span>
-      </Link>
-
-      <AnimatePresence>
+    <AnimatePresence>
         {open && (
           <>
             <motion.div
@@ -630,7 +400,6 @@ export function MobileNav() {
             </motion.aside>
           </>
         )}
-      </AnimatePresence>
-    </div>
+    </AnimatePresence>
   );
 }

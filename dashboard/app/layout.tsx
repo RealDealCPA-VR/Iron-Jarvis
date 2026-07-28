@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
-import { Sidebar, MobileNav } from "@/components/Sidebar";
+import { NavDrawer } from "@/components/Sidebar";
+import { TitleBar } from "@/components/TitleBar";
 import { DaemonBanner } from "@/components/DaemonBanner";
 import { CommandPalette } from "@/components/CommandPalette";
 import { NotificationBell } from "@/components/NotificationBell";
@@ -60,38 +61,48 @@ export default function RootLayout({
         </a>
         <DaemonProvider>
           <div className="flex h-screen flex-col overflow-hidden">
-            {/* App-wide daemon-offline banner (shared /health source). */}
+            {/* Frontier-desktop chrome (v1.111.0): the TitleBar is the FIRST
+                child on purpose — in the frameless Electron window its drag
+                region must sit at the very top edge or the window cannot be
+                dragged, and the native close/max/min overlay would float over
+                whatever else rendered up here. Everything the old header held
+                (theme, model, mood, bell) rides in its right slot; the
+                hamburger inside it opens the NavDrawer; the search button is
+                the app's front door. */}
+            <TitleBar
+              right={
+                <>
+                  {/* Arc-reactor theme switcher (the "Marks"). */}
+                  <div className="hidden sm:block">
+                    <ThemeSwitcher />
+                  </div>
+                  {/* One-click switcher for the active provider/model. */}
+                  <ModelSwitcher />
+                  {/* Live "mood" orb — reflects idle / thinking / alert. */}
+                  <MoodOrb />
+                  <NotificationBell />
+                </>
+              }
+            />
+            {/* App-wide daemon-offline banner (below the chrome, above work). */}
             <DaemonBanner />
             <div className="relative flex flex-1 overflow-hidden">
               {/* Ambient arc-reactor glow behind everything. */}
               <div className="app-aura pointer-events-none absolute inset-0 -z-10" />
-              <Sidebar />
               <main className="flex flex-1 flex-col overflow-y-auto">
-                {/* Slim top bar: mobile hamburger (md:hidden) + the always-on
-                    notification bell, top-right on every screen size. */}
-                <header className="sticky top-0 z-30 flex items-center gap-3 border-b border-white/[0.06] bg-ink-950/70 px-4 py-2.5 backdrop-blur-xl lg:px-10">
-                  <MobileNav />
-                  <div className="ml-auto flex items-center gap-2">
-                    {/* Arc-reactor theme switcher (the "Marks"). */}
-                    <div className="hidden sm:block">
-                      <ThemeSwitcher />
-                    </div>
-                    {/* One-click switcher for the active provider/model. */}
-                    <ModelSwitcher />
-                    {/* Live "mood" orb — reflects idle / thinking / alert. */}
-                    <MoodOrb />
-                    <NotificationBell />
-                  </div>
-                </header>
                 {/* Persistent "simulated mode" strip — top of the content
-                    area (not over the sidebar) while no real provider is
-                    connected. Deliberately non-dismissable. */}
+                    area while no real provider is connected. Deliberately
+                    non-dismissable. */}
                 <SimulatedBanner />
                 <MainContent>{children}</MainContent>
               </main>
             </div>
           </div>
-          {/* ⌘K command palette — navigate, new session, connect a model. */}
+          {/* Navigation drawer — opened by the TitleBar hamburger
+              (ij:toggle-nav); the persistent rail is gone. */}
+          <NavDrawer />
+          {/* Global search / command palette — the TitleBar search button
+              (ij:open-palette) and Ctrl+K both open it. */}
           <CommandPalette />
           {/* Blocking first-run overlay (skips /connections + /settings so
               the user can actually go wire a model). */}
