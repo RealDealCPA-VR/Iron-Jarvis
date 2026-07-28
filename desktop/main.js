@@ -1061,6 +1061,31 @@ function installSpotlightIpc() {
     }
     return true;
   });
+  // Theme-aware window controls (v1.112.0). The native min/max/close strip is
+  // painted by WINDOWS from titleBarOverlay colors frozen at window creation —
+  // it cannot see CSS, so a light theme (Mark 8) left a black button strip on
+  // a white bar. The renderer resolves its theme's actual colors and pushes
+  // them here on boot and on every theme flip. Hex-validated because this
+  // crosses the IPC trust boundary; height stays pinned to the bar's 40px.
+  ipcMain.handle("titlebar:set-overlay", (_e, opts) => {
+    try {
+      const color = String(opts?.color ?? "");
+      const symbolColor = String(opts?.symbolColor ?? "");
+      if (!/^#[0-9a-f]{6}$/i.test(color) || !/^#[0-9a-f]{6}$/i.test(symbolColor))
+        return false;
+      if (
+        mainWin &&
+        !mainWin.isDestroyed() &&
+        typeof mainWin.setTitleBarOverlay === "function"
+      ) {
+        mainWin.setTitleBarOverlay({ color, symbolColor, height: 40 });
+        return true;
+      }
+    } catch {
+      /* overlay unsupported on this platform — the bar itself still themes */
+    }
+    return false;
+  });
   // Update control for the dashboard Updates page (the packaged-app updater —
   // distinct from the git self-update the page previously only knew about).
   ipcMain.handle("update:getState", () => ({

@@ -1,10 +1,27 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu, Search } from "lucide-react";
 import { NAV_ENTRIES } from "@/lib/nav";
+
+/** The desktop bridge surface this component uses (preload.js exposes it). */
+interface DesktopBridge {
+  setTitleBarOverlay?: (color: string, symbolColor: string) => Promise<boolean>;
+}
+
+/**
+ * `"7 8 9"` → `"#070809"`. The theme palette stores colors as bare RGB
+ * triplets (see globals.css `--ink-950: 7 8 9;`) so Tailwind can apply alpha;
+ * Electron's setTitleBarOverlay wants hex. Exported for tests.
+ */
+export function tripletToHex(triplet: string): string | null {
+  const parts = triplet.trim().split(/\s+/).map((n) => Number(n));
+  if (parts.length !== 3 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255))
+    return null;
+  return `#${parts.map((n) => n.toString(16).padStart(2, "0")).join("")}`;
+}
 
 /**
  * The app's own top strip (v1.111.0 frontier chrome).
@@ -27,6 +44,34 @@ import { NAV_ENTRIES } from "@/lib/nav";
 // the unqualified name no longer resolves. Same type, current spelling.
 export function TitleBar({ right }: { right?: React.ReactNode }): React.JSX.Element {
   const pathname = usePathname();
+
+  // NATIVE-OVERLAY THEMING (v1.112.0). Windows paints the min/max/close strip
+  // from titleBarOverlay colors frozen at window creation — it cannot see CSS,
+  // so switching to the light Mark left black buttons on a white bar. Resolve
+  // the bar's OWN palette (--ink-950 is exactly what this header renders on,
+  // --zinc-300 is its readable foreground in every Mark) and push it through
+  // the desktop bridge on mount and on every data-theme flip. In a browser the
+  // bridge is absent and this effect is a no-op.
+  useEffect(() => {
+    const bridge = (window as unknown as { ironjarvis?: DesktopBridge }).ironjarvis;
+    if (!bridge?.setTitleBarOverlay) return;
+    const push = () => {
+      const cs = getComputedStyle(document.documentElement);
+      const bg = tripletToHex(cs.getPropertyValue("--ink-950"));
+      const fg = tripletToHex(cs.getPropertyValue("--zinc-300"));
+      if (bg && fg) void bridge.setTitleBarOverlay!(bg, fg);
+    };
+    push();
+    // The ThemeSwitcher flips data-theme on <html>; observing the attribute
+    // (rather than subscribing to the switcher) keeps the coupling one-way and
+    // also catches the boot-time restore script in layout.tsx.
+    const mo = new MutationObserver(push);
+    mo.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
+    return () => mo.disconnect();
+  }, []);
 
   // WHERE AM I? With the whole nav hidden behind the hamburger, the rail is no
   // longer on screen to highlight the active page, so this label is the user's

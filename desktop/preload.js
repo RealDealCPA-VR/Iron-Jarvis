@@ -44,6 +44,11 @@ contextBridge.exposeInMainWorld("ironjarvis", {
   // paste/copy inside Electron (navigator.clipboard can be permission-gated).
   clipboardReadText: () => ipcRenderer.invoke("clipboard:read"),
   clipboardWriteText: (text) => ipcRenderer.invoke("clipboard:write", String(text ?? "")),
+  // Theme-aware window controls: the dashboard pushes its resolved theme
+  // colors so the native min/max/close strip matches the chosen Mark
+  // (titleBarOverlay is frozen at window creation otherwise — v1.112.0).
+  setTitleBarOverlay: (color, symbolColor) =>
+    ipcRenderer.invoke("titlebar:set-overlay", { color, symbolColor }),
   // App auto-update control for the Updates page (the packaged-app updater).
   update: {
     getState: () => ipcRenderer.invoke("update:getState"),

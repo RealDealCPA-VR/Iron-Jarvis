@@ -153,3 +153,92 @@ describe("TitleBar — page label (longest-prefix over NAV_ENTRIES)", () => {
     expect(container.textContent).not.toContain("/");
   });
 });
+
+// ---------------------------------------------------------------------------
+// v1.112.0 — the native window-controls strip follows the theme.
+//
+// REPORTED: "the minimize/maximize/close appear black even with a white theme."
+// titleBarOverlay colors are frozen at window creation; Windows paints the
+// buttons and never sees CSS. The fix: TitleBar resolves its own palette vars
+// and pushes them through the desktop bridge on mount and on every data-theme
+// flip. These tests drive that loop with a fake bridge + stubbed vars.
+// ---------------------------------------------------------------------------
+
+import { tripletToHex } from "@/components/TitleBar";
+
+describe("tripletToHex — the palette-var converter", () => {
+  it("converts the dark page triplet", () => {
+    expect(tripletToHex("7 8 9")).toBe("#070809");
+  });
+  it("converts the Mark 8 light page triplet", () => {
+    expect(tripletToHex("235 240 248")).toBe("#ebf0f8");
+  });
+  it("tolerates the leading space getPropertyValue returns", () => {
+    expect(tripletToHex(" 7 8 9 ")).toBe("#070809");
+  });
+  it.each([["", null], ["not a color", null], ["1 2", null], ["1 2 3 4", null],
+           ["256 0 0", null], ["-1 0 0", null], ["1.5 2 3", null]])(
+    "rejects %j (never send Windows garbage)", (input, want) => {
+      expect(tripletToHex(input as string)).toBe(want);
+    },
+  );
+});
+
+describe("native-overlay theming", () => {
+  function stubVars(vars: Record<string, string>) {
+    return vi.spyOn(window, "getComputedStyle").mockImplementation(
+      () =>
+        ({
+          getPropertyValue: (name: string) => vars[name] ?? "",
+        }) as unknown as CSSStyleDeclaration,
+    );
+  }
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete (window as unknown as { ironjarvis?: unknown }).ironjarvis;
+    document.documentElement.removeAttribute("data-theme");
+  });
+
+  it("pushes the resolved colors through the bridge on mount", () => {
+    const setTitleBarOverlay = vi.fn().mockResolvedValue(true);
+    (window as unknown as { ironjarvis: object }).ironjarvis = { setTitleBarOverlay };
+    stubVars({ "--ink-950": "7 8 9", "--zinc-300": "203 208 216" });
+    render(<TitleBar />);
+    expect(setTitleBarOverlay).toHaveBeenCalledWith("#070809", "#cbd0d8");
+  });
+
+  it("pushes again when the theme flips (the reported bug)", async () => {
+    const setTitleBarOverlay = vi.fn().mockResolvedValue(true);
+    (window as unknown as { ironjarvis: object }).ironjarvis = { setTitleBarOverlay };
+    const spy = stubVars({ "--ink-950": "7 8 9", "--zinc-300": "203 208 216" });
+    render(<TitleBar />);
+    // ThemeSwitcher flips data-theme; the palette now resolves LIGHT.
+    spy.mockImplementation(
+      () =>
+        ({
+          getPropertyValue: (name: string) =>
+            ({ "--ink-950": "235 240 248", "--zinc-300": "47 57 74" })[name] ?? "",
+        }) as unknown as CSSStyleDeclaration,
+    );
+    document.documentElement.setAttribute("data-theme", "mark8");
+    // MutationObserver callbacks are microtask-scheduled.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(setTitleBarOverlay).toHaveBeenLastCalledWith("#ebf0f8", "#2f394a");
+    expect(setTitleBarOverlay).toHaveBeenCalledTimes(2);
+  });
+
+  it("is a silent no-op in a plain browser (no bridge)", () => {
+    const spy = stubVars({ "--ink-950": "7 8 9", "--zinc-300": "203 208 216" });
+    expect(() => render(<TitleBar />)).not.toThrow();
+    // Without the bridge the effect must return before ever reading styles.
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing when a var is missing (never half-theme the strip)", () => {
+    const setTitleBarOverlay = vi.fn();
+    (window as unknown as { ironjarvis: object }).ironjarvis = { setTitleBarOverlay };
+    stubVars({ "--ink-950": "7 8 9" }); // --zinc-300 absent
+    render(<TitleBar />);
+    expect(setTitleBarOverlay).not.toHaveBeenCalled();
+  });
+});
