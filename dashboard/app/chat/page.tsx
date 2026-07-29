@@ -48,6 +48,8 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
+import { AnimatePresence, motion } from "framer-motion";
 import Link from "next/link";
 import {
   AudioLines,
@@ -72,6 +74,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Paperclip,
+  MoreHorizontal,
   Pencil,
   Pin,
   PinOff,
@@ -1045,6 +1048,80 @@ export default function ChatPage() {
 
   /** Rename any listed thread: fetch its messages, PUT them back with the new
    *  title (the save route treats omitted fields as untouched). */
+  // ⋯ THREAD MENU (v1.114.0). The four per-row hover icons (memory / pin /
+  // rename / delete) compressed into one kebab whose popout also gained "Add
+  // to project". Rendered through a PORTAL with position:fixed — the sidebar
+  // Card is overflow-hidden with an inner scroll area, and under Mark 8 the
+  // card surface carries backdrop-blur, which hijacks fixed positioning for
+  // descendants — a portal to <body> escapes both.
+  const [threadMenu, setThreadMenu] = useState<{
+    id: string;
+    x: number;
+    y: number;
+    up: boolean;
+  } | null>(null);
+  const [threadMenuProjects, setThreadMenuProjects] = useState(false);
+  const [assigningThread, setAssigningThread] = useState(false);
+  const threadMenuRef = useRef<HTMLDivElement | null>(null);
+
+  function openThreadMenu(e: React.MouseEvent, id: string) {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    // Open upward when the row sits near the viewport bottom — a fixed menu
+    // can't rely on a scroll container to make room for it.
+    const up = window.innerHeight - r.bottom < 340;
+    setThreadMenuProjects(false);
+    setThreadMenu({ id, x: r.right, y: up ? r.top - 4 : r.bottom + 4, up });
+  }
+
+  useEffect(() => {
+    if (!threadMenu) return;
+    const close = () => setThreadMenu(null);
+    const onDown = (e: MouseEvent) => {
+      if (!threadMenuRef.current?.contains(e.target as Node)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    // Any scroll OUTSIDE the menu strands a fixed popout at stale coordinates
+    // — close instead of drifting. Scrolls INSIDE it (the project list) are
+    // the menu working as intended.
+    const onScroll = (e: Event) => {
+      if (threadMenuRef.current?.contains(e.target as Node)) return;
+      close();
+    };
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [threadMenu]);
+
+  /** Tag a thread to a project (or null to untag) — the same read-then-PUT
+   *  shape renameThread uses; the daemon treats an explicit project_id key as
+   *  assign-or-clear and never infers one on update. */
+  async function assignThreadProject(id: string, pid: string | null) {
+    setAssigningThread(true);
+    try {
+      const t = await get<ThreadDetail>(`/chat/threads/${encodeURIComponent(id)}`);
+      await put(`/chat/threads/${encodeURIComponent(id)}`, {
+        messages: t.messages ?? [],
+        project_id: pid,
+      });
+      void refreshThreads();
+      setThreadMenu(null);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 0) setOffline(true);
+      else setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setAssigningThread(false);
+    }
+  }
+
   async function renameThread(id: string, title: string) {
     const clean = title.trim();
     setRenamingId(null);
@@ -3508,7 +3585,7 @@ export default function ChatPage() {
                           <button
                             type="button"
                             onClick={() => void openThread(t.id)}
-                            className="w-full px-2.5 py-2 pr-[6.25rem] text-left"
+                            className="w-full px-2.5 py-2 pr-9 text-left"
                             title={t.title || "Untitled chat"}
                           >
                             <span
@@ -3541,70 +3618,25 @@ export default function ChatPage() {
                           </button>
                           )}
                           {renamingId !== t.id && (
-                            <span className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/thread:opacity-100">
+                            <span
+                              className={`absolute right-1.5 top-1/2 -translate-y-1/2 transition-opacity focus-within:opacity-100 group-hover/thread:opacity-100 ${
+                                threadMenu?.id === t.id ? "opacity-100" : "opacity-0"
+                              }`}
+                            >
                               <button
                                 type="button"
-                                onClick={() => void rememberThread(t.id)}
-                                disabled={rememberingId !== null}
-                                aria-label={`Commit ${t.title || "chat"} to memory`}
-                                title="Commit to memory — distill this chat into long-term memory"
+                                onClick={(e) => openThreadMenu(e, t.id)}
+                                aria-label={`Options for ${t.title || "chat"}`}
+                                aria-haspopup="menu"
+                                aria-expanded={threadMenu?.id === t.id}
+                                title="Chat options"
                                 className={`grid h-6 w-6 place-items-center rounded-md transition-colors hover:bg-white/[0.06] ${
-                                  rememberedId === t.id
-                                    ? "text-emerald-300"
-                                    : "text-zinc-500 hover:text-accent-soft"
-                                }`}
-                              >
-                                {rememberingId === t.id ? (
-                                  <Loader2 size={13} className="animate-spin" />
-                                ) : rememberedId === t.id ? (
-                                  <Check size={13} />
-                                ) : (
-                                  <Brain size={13} />
-                                )}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => togglePin(t.id)}
-                                aria-label={
-                                  pinnedIds.includes(t.id) ? "Unpin chat" : "Pin chat"
-                                }
-                                title={
-                                  pinnedIds.includes(t.id)
-                                    ? "Unpin — drop back into the recency order"
-                                    : "Pin to the top of the list"
-                                }
-                                className={`grid h-6 w-6 place-items-center rounded-md transition-colors hover:bg-white/[0.06] ${
-                                  pinnedIds.includes(t.id)
-                                    ? "text-accent-soft"
+                                  threadMenu?.id === t.id
+                                    ? "bg-white/[0.06] text-zinc-200"
                                     : "text-zinc-500 hover:text-zinc-200"
                                 }`}
                               >
-                                {pinnedIds.includes(t.id) ? (
-                                  <PinOff size={13} />
-                                ) : (
-                                  <Pin size={13} />
-                                )}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setRenameDraft(t.title || "");
-                                  setRenamingId(t.id);
-                                }}
-                                aria-label={`Rename ${t.title || "chat"}`}
-                                title="Rename this chat"
-                                className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
-                              >
-                                <Pencil size={13} />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void removeThread(t.id)}
-                                aria-label={`Delete ${t.title || "chat"}`}
-                                title="Delete this chat"
-                                className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-rose-300"
-                              >
-                                <Trash2 size={13} />
+                                <MoreHorizontal size={14} />
                               </button>
                             </span>
                           )}
@@ -3616,6 +3648,182 @@ export default function ChatPage() {
               </div>
             </Card>
           </aside>
+
+          {/* ⋯ thread menu popout (v1.114.0) — portaled to <body> so neither
+              the Card's overflow-hidden nor a themed backdrop-filter can clip
+              or reposition it. One menu at a time; every action either closes
+              it or (memory) shows its progress inline. */}
+          {typeof document !== "undefined" &&
+            createPortal(
+              <AnimatePresence>
+                {threadMenu &&
+                  (() => {
+                    const mt = threads.find((x) => x.id === threadMenu.id);
+                    if (!mt) return null;
+                    const pinned = pinnedIds.includes(mt.id);
+                    const item =
+                      "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06]";
+                    return (
+                      <motion.div
+                        ref={threadMenuRef}
+                        role="menu"
+                        aria-label={`Options for ${mt.title || "chat"}`}
+                        initial={{ opacity: 0, scale: 0.96, y: threadMenu.up ? 4 : -4 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.98 }}
+                        transition={{ duration: 0.12, ease: "easeOut" }}
+                        style={{
+                          position: "fixed",
+                          left: Math.max(8, threadMenu.x - 224),
+                          ...(threadMenu.up
+                            ? { bottom: window.innerHeight - threadMenu.y }
+                            : { top: threadMenu.y }),
+                          transformOrigin: threadMenu.up ? "bottom right" : "top right",
+                        }}
+                        className="z-50 w-56 rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40"
+                      >
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className={item}
+                          onClick={() => {
+                            setRenameDraft(mt.title || "");
+                            setRenamingId(mt.id);
+                            setThreadMenu(null);
+                          }}
+                        >
+                          <Pencil size={14} className="shrink-0 text-zinc-400" />
+                          Rename
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className={item}
+                          onClick={() => {
+                            togglePin(mt.id);
+                            setThreadMenu(null);
+                          }}
+                        >
+                          {pinned ? (
+                            <PinOff size={14} className="shrink-0 text-zinc-400" />
+                          ) : (
+                            <Pin size={14} className="shrink-0 text-zinc-400" />
+                          )}
+                          {pinned ? "Unpin" : "Pin to top"}
+                        </button>
+                        {/* Memory keeps the menu OPEN: the spinner→check that
+                            used to live on the row icon now lives here, and
+                            closing instantly would hide the only feedback. */}
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className={item}
+                          disabled={rememberingId !== null}
+                          onClick={() => void rememberThread(mt.id)}
+                        >
+                          {rememberingId === mt.id ? (
+                            <Loader2 size={14} className="shrink-0 animate-spin text-accent-soft" />
+                          ) : rememberedId === mt.id ? (
+                            <Check size={14} className="shrink-0 text-emerald-300" />
+                          ) : (
+                            <Brain size={14} className="shrink-0 text-zinc-400" />
+                          )}
+                          {rememberedId === mt.id ? "Saved to memory" : "Commit to memory"}
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          aria-expanded={threadMenuProjects}
+                          className={item}
+                          onClick={() => setThreadMenuProjects((v) => !v)}
+                        >
+                          <FolderKanban size={14} className="shrink-0 text-zinc-400" />
+                          Add to project
+                          <ChevronRight
+                            size={13}
+                            className={`ml-auto shrink-0 text-zinc-500 transition-transform ${
+                              threadMenuProjects ? "rotate-90" : ""
+                            }`}
+                          />
+                        </button>
+                        <AnimatePresence initial={false}>
+                          {threadMenuProjects && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.14, ease: "easeOut" }}
+                              className="overflow-hidden"
+                            >
+                              <div className="max-h-44 overflow-y-auto pl-4">
+                                {projects.length === 0 ? (
+                                  <p className="px-2.5 py-2 text-[11.5px] text-zinc-500">
+                                    No projects yet — create one from the Project
+                                    button above the chat.
+                                  </p>
+                                ) : (
+                                  <>
+                                    {projects.map((pr) => (
+                                      <button
+                                        key={pr.id}
+                                        type="button"
+                                        role="menuitem"
+                                        className={item}
+                                        disabled={assigningThread}
+                                        onClick={() =>
+                                          void assignThreadProject(mt.id, pr.id)
+                                        }
+                                      >
+                                        <span className="min-w-0 flex-1 truncate">
+                                          {pr.name}
+                                        </span>
+                                        {mt.project_id === pr.id && (
+                                          <Check
+                                            size={13}
+                                            className="shrink-0 text-accent-soft"
+                                          />
+                                        )}
+                                      </button>
+                                    ))}
+                                    {mt.project_id && (
+                                      <button
+                                        type="button"
+                                        role="menuitem"
+                                        className={`${item} text-zinc-400`}
+                                        disabled={assigningThread}
+                                        onClick={() =>
+                                          void assignThreadProject(mt.id, null)
+                                        }
+                                      >
+                                        <X size={13} className="shrink-0" />
+                                        Remove from project
+                                      </button>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                        <div className="my-1 h-px bg-white/[0.06]" />
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-rose-300 transition-colors hover:bg-rose-500/10"
+                          onClick={() => {
+                            void removeThread(mt.id);
+                            setThreadMenu(null);
+                          }}
+                        >
+                          <Trash2 size={14} className="shrink-0" />
+                          Delete chat
+                        </button>
+                      </motion.div>
+                    );
+                  })()}
+              </AnimatePresence>,
+              document.body,
+            )}
 
           {/* Conversation pane */}
           <div className="min-w-0 flex-1">
