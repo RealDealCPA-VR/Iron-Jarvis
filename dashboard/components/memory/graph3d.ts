@@ -129,3 +129,34 @@ export function deletableKind(id: string): { ok: boolean; base?: string } {
   if (id.startsWith("ltm:")) return { ok: false, base: id.split(":", 3)[1] };
   return { ok: false };
 }
+
+/** What the sidecar fetches on select (POST /memory/graph/node). */
+export interface NodeDetail {
+  id: string;
+  group: MemGroup;
+  text: string;
+  /** True for ltm nodes: full text lives in the user's base, not here. */
+  partial: boolean;
+  meta: Record<string, string | null>;
+}
+
+/** The selected node's direct connections, deduped, manual links first —
+ *  the sidecar lists these as jump targets so the graph is walkable without
+ *  aiming at spheres. */
+export function neighborsOf(
+  id: string,
+  links: Link3D[],
+): Array<{ id: string; kind: EdgeKind }> {
+  const out = new Map<string, EdgeKind>();
+  for (const l of links) {
+    const a = typeof l.source === "string" ? l.source : l.source.id;
+    const b = typeof l.target === "string" ? l.target : l.target.id;
+    const other = a === id ? b : b === id ? a : null;
+    if (!other) continue;
+    // A manual link outranks a similarity link to the same neighbour.
+    if (out.get(other) !== "manual") out.set(other, l.kind);
+  }
+  return [...out.entries()]
+    .map(([nid, kind]) => ({ id: nid, kind }))
+    .sort((x, y) => Number(y.kind === "manual") - Number(x.kind === "manual"));
+}

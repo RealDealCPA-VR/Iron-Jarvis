@@ -88,6 +88,108 @@ export default function Graph3DCanvas({
     };
   }, []);
 
+  // AMBIENT (v1.116.0). Two quiet motions make the scene feel alive between
+  // interactions: a slow camera orbit and a sparse starfield whose parallax
+  // the orbit reveals. Three rules keep it from being annoying:
+  //   1. the orbit YIELDS — any grab pauses it, and it resumes only after 8s
+  //      of idle, so the camera is never fighting the user's hand;
+  //   2. it holds still while a node is SELECTED — you're reading the sidecar,
+  //      not watching a carousel;
+  //   3. prefers-reduced-motion turns the whole layer off.
+  const selectedRef = useRef<string | null>(selectedId);
+  selectedRef.current = selectedId;
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    if (reduced) return;
+
+    type Orbitish = {
+      autoRotate: boolean;
+      autoRotateSpeed: number;
+      addEventListener: (ev: string, fn: () => void) => void;
+      removeEventListener: (ev: string, fn: () => void) => void;
+    };
+    const controls = fg.controls() as unknown as Orbitish;
+    if (!controls || typeof controls.addEventListener !== "function") return;
+    controls.autoRotateSpeed = 0.45; // one lap ≈ 80s — drift, not spin
+
+    let idleTimer: number | undefined;
+    const setRotate = () => {
+      controls.autoRotate = selectedRef.current === null;
+    };
+    const onStart = () => {
+      controls.autoRotate = false;
+      if (idleTimer) window.clearTimeout(idleTimer);
+    };
+    const onEnd = () => {
+      if (idleTimer) window.clearTimeout(idleTimer);
+      idleTimer = window.setTimeout(setRotate, 8000);
+    };
+    controls.addEventListener("start", onStart);
+    controls.addEventListener("end", onEnd);
+    setRotate();
+    // Selection changes flow through this poller-free path: the ref above is
+    // read on every resume, and this effect re-runs on selectedId to
+    // stop/start immediately rather than on the next idle window.
+    return () => {
+      controls.autoRotate = false;
+      controls.removeEventListener("start", onStart);
+      controls.removeEventListener("end", onEnd);
+      if (idleTimer) window.clearTimeout(idleTimer);
+    };
+  }, [selectedId]);
+
+  // The starfield: ~240 dim points on a far shell. Static geometry — the
+  // orbiting camera supplies all the motion — so it costs one draw call.
+  useEffect(() => {
+    let cancelled = false;
+    let cleanup: (() => void) | undefined;
+    (async () => {
+      try {
+        const THREE = await import("three");
+        if (cancelled) return;
+        const scene = fgRef.current?.scene?.();
+        if (!scene) return;
+        const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+        const N = 240;
+        const pos = new Float32Array(N * 3);
+        for (let i = 0; i < N; i++) {
+          // Uniform-ish shell between r=900 and r=1400 — far enough that
+          // zoomToFit never frames them as "nodes".
+          const r = 900 + Math.random() * 500;
+          const theta = Math.random() * Math.PI * 2;
+          const phi = Math.acos(2 * Math.random() - 1);
+          pos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+          pos[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+          pos[i * 3 + 2] = r * Math.cos(phi);
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+        const mat = new THREE.PointsMaterial({
+          color: 0x4a5a6a,
+          size: reduced ? 0 : 1.6,
+          transparent: true,
+          opacity: 0.55,
+          sizeAttenuation: true,
+        });
+        const stars = new THREE.Points(geo, mat);
+        scene.add(stars);
+        cleanup = () => {
+          scene.remove(stars);
+          geo.dispose();
+          mat.dispose();
+        };
+      } catch {
+        /* no starfield — the graph is unaffected */
+      }
+    })();
+    return () => {
+      cancelled = true;
+      cleanup?.();
+    };
+  }, []);
+
   const flyTo = useCallback(
     (id: string) => {
       const fg = fgRef.current;
@@ -124,6 +226,7 @@ export default function Graph3DCanvas({
         width={size.w}
         height={size.h}
         graphData={{ nodes, links }}
+        rendererConfig={{ preserveDrawingBuffer: true }}
         backgroundColor="rgba(0,0,0,0)"
         showNavInfo={false}
         // Simple glowing spheres — NO text sprites. The text lives in the

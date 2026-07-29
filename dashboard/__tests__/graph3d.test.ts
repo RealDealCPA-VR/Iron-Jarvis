@@ -5,6 +5,7 @@ import {
   deletableKind,
   escapeHtml,
   linkTooltip,
+  neighborsOf,
   nodeColorFor,
   toGraphData,
   tooltipHtml,
@@ -100,5 +101,35 @@ describe("deletableKind — the canvas must not reach into memory bases", () => 
   });
   it("unknown prefixes refuse", () => {
     expect(deletableKind("sess:1").ok).toBe(false);
+  });
+});
+
+describe("neighborsOf — the sidecar's walkable connections (v1.116.0)", () => {
+  const links = [
+    { source: "a", target: "b", kind: "auto" as const, weight: 0.5 },
+    { source: "b", target: "a", kind: "manual" as const, weight: 1 }, // dup pair, manual wins
+    { source: "a", target: "c", kind: "auto" as const, weight: 0.6 },
+    { source: "x", target: "y", kind: "manual" as const, weight: 1 }, // unrelated
+  ];
+  it("finds both directions, dedupes, and lets manual outrank auto", () => {
+    const n = neighborsOf("a", links);
+    expect(n).toEqual([
+      { id: "b", kind: "manual" },
+      { id: "c", kind: "auto" },
+    ]);
+  });
+  it("resolves object endpoints (the force engine mutates links in place)", () => {
+    const objLinks = [
+      {
+        source: { id: "a", label: "", group: "memory" as const, snippet: "" },
+        target: { id: "z", label: "", group: "note" as const, snippet: "" },
+        kind: "auto" as const,
+        weight: 0.7,
+      },
+    ];
+    expect(neighborsOf("a", objLinks)).toEqual([{ id: "z", kind: "auto" }]);
+  });
+  it("no connections → empty", () => {
+    expect(neighborsOf("solo", links)).toEqual([]);
   });
 });

@@ -104,3 +104,41 @@ def test_garbage_ids_are_400(client):
     assert _delete(client, "").status_code == 400
     assert _delete(client, "sess:123").status_code == 400
     assert _delete(client, "wm:onlytwo").status_code == 400
+
+
+# --- the sidecar's full-text read (v1.116.0) ---------------------------------
+
+
+def _detail(client, node_id):
+    return client.post("/memory/graph/node", json={"id": node_id})
+
+
+def test_detail_returns_the_FULL_text_not_the_graph_snippet(client):
+    """The graph payload clips snippets to ~220 chars; the sidecar exists to
+    show what is actually in the node."""
+    long_text = "always confirm the year. " * 30  # ~750 chars, well past the clip
+    lid = client.post("/lessons", json={"text": long_text}).json()["id"]
+    body = _detail(client, f"lesson:{lid}").json()
+    assert body["partial"] is False
+    assert len(body["text"]) > 500
+    assert body["text"].startswith("always confirm the year.")
+
+
+def test_detail_reads_working_memory_with_colon_keys(client):
+    client.post("/memory", json={"layer": "user", "key": "q: one", "text": "full body here"})
+    body = _detail(client, "wm:user:-:q: one").json()
+    assert body["text"] == "full body here"
+    assert body["meta"]["layer"] == "user"
+
+
+def test_detail_is_honest_about_ltm_nodes(client):
+    body = _detail(client, "ltm:clientA:note.md").json()
+    assert body["partial"] is True
+    assert body["meta"]["base"] == "clientA"
+
+
+def test_detail_404s_and_400s_match_delete_semantics(client):
+    assert _detail(client, "lesson:nope").status_code == 404
+    assert _detail(client, "wm:user:-:nope").status_code == 404
+    assert _detail(client, "junk:1").status_code == 400
+    assert _detail(client, "").status_code == 400

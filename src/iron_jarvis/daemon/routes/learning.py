@@ -190,6 +190,66 @@ def register(app: FastAPI, d) -> None:
             d.platform, threshold=max(0.0, min(float(threshold), 1.0))
         )
 
+    @app.post("/memory/graph/node")
+    def memory_graph_node_detail(body: GraphNodeDeleteBody) -> dict[str, Any]:
+        """FULL contents of one graph node (v1.116.0) — the sidecar's read.
+
+        The graph payload clips every snippet to ~220 chars so a 300-node
+        scene stays light; "see what is in the node" needs the real text. POST
+        with the id in the body (like the delete sibling) because wm keys
+        legally contain ':' and '/' — a path/query param is an encoding bug
+        farm. ltm nodes return partial=True with an empty text: long-term
+        notes are files in the user's base and the connectors are search/append
+        surfaces, not random-access readers — the sidecar says where to look.
+        """
+        node_id = (body.id or "").strip()
+        if not node_id:
+            raise HTTPException(status_code=400, detail="node id required")
+        if node_id.startswith("lesson:"):
+            from ...learning.models import LessonRecord
+
+            with session_scope(d.platform.engine) as db:
+                r = db.get(LessonRecord, node_id.split(":", 1)[1])
+            if r is None:
+                raise HTTPException(status_code=404, detail=f"no such node: {node_id}")
+            return {
+                "id": node_id,
+                "group": "lesson",
+                "text": r.text or "",
+                "partial": False,
+                "meta": {"created_at": str(getattr(r, "created_at", "") or "")},
+            }
+        if node_id.startswith("wm:"):
+            parts = node_id.split(":", 3)
+            if len(parts) != 4:
+                raise HTTPException(status_code=400, detail=f"malformed node id: {node_id}")
+            _, layer, scope, key = parts
+            try:
+                text = d.platform.memory.read(
+                    layer, key, scope_id=None if scope == "-" else scope
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            if text is None:
+                raise HTTPException(status_code=404, detail=f"no such node: {node_id}")
+            return {
+                "id": node_id,
+                "group": "memory",
+                "text": text,
+                "partial": False,
+                "meta": {"layer": layer, "scope": None if scope == "-" else scope},
+            }
+        if node_id.startswith("ltm:"):
+            base = node_id.split(":", 2)[1]
+            return {
+                "id": node_id,
+                "group": "note",
+                "text": "",
+                "partial": True,
+                "meta": {"base": base},
+            }
+        raise HTTPException(status_code=400, detail=f"unknown node kind: {node_id}")
+
     @app.post("/memory/graph/node/delete")
     def memory_graph_node_delete(body: GraphNodeDeleteBody) -> dict[str, Any]:
         """Delete the MEMORY behind a graph node (v1.115.0), by composite id.

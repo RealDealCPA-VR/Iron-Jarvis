@@ -49,10 +49,12 @@ import { Reveal } from "@/components/motion";
 import {
   GROUP_3D,
   deletableKind,
+  neighborsOf,
   toGraphData,
   type GraphDto,
   type Link3D,
   type Node3D,
+  type NodeDetail,
 } from "./graph3d";
 import type { Graph3DApi } from "./Graph3DCanvas";
 
@@ -80,7 +82,34 @@ export default function MemoryGraph() {
   const [linkFrom, setLinkFrom] = useState<string | null>(null);
   const [busy, setBusy] = useState(false); // link/unlink/delete in flight
   const [find, setFind] = useState("");
+  // Sidecar contents (v1.116.0): the graph payload only carries a ~220-char
+  // snippet per node, so selecting fetches the FULL text. Keyed by id so a
+  // stale response for a previous selection can't paint over the current one.
+  const [detail, setDetail] = useState<NodeDetail | null>(null);
+  const [detailBusy, setDetailBusy] = useState(false);
   const apiRef = useRef<Graph3DApi | null>(null);
+
+  useEffect(() => {
+    if (!selectedId) {
+      setDetail(null);
+      return;
+    }
+    let stale = false;
+    setDetailBusy(true);
+    post<NodeDetail>("/memory/graph/node", { id: selectedId })
+      .then((d) => {
+        if (!stale) setDetail(d);
+      })
+      .catch(() => {
+        if (!stale) setDetail(null); // the snippet still shows — degrade, don't blank
+      })
+      .finally(() => {
+        if (!stale) setDetailBusy(false);
+      });
+    return () => {
+      stale = true;
+    };
+  }, [selectedId]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -107,6 +136,12 @@ export default function MemoryGraph() {
     () => data.nodes.find((n) => n.id === selectedId) ?? null,
     [data.nodes, selectedId],
   );
+  const neighbors = useMemo(() => {
+    if (!selectedId) return [];
+    return neighborsOf(selectedId, data.links)
+      .map((nb) => ({ ...nb, node: data.nodes.find((n) => n.id === nb.id) }))
+      .filter((nb): nb is typeof nb & { node: Node3D } => Boolean(nb.node));
+  }, [selectedId, data.links, data.nodes]);
   const counts = useMemo(() => {
     const c = { lesson: 0, memory: 0, note: 0 };
     for (const n of data.nodes) c[n.group] += 1;
@@ -317,12 +352,60 @@ export default function MemoryGraph() {
                   <p className="mt-0.5 break-words text-[13px] font-medium text-zinc-100">
                     {selected.label}
                   </p>
-                  {selected.snippet && (
-                    <p className="mt-1 max-h-28 overflow-y-auto whitespace-pre-wrap text-[12px] leading-relaxed text-zinc-400">
-                      {selected.snippet}
+                  {/* FULL contents, fetched on select — the graph snippet is
+                      a 220-char teaser; this is the node. */}
+                  {detailBusy ? (
+                    <p className="mt-1 flex items-center gap-1.5 text-[12px] text-zinc-500">
+                      <Loader2 size={12} className="animate-spin" /> Loading contents…
+                    </p>
+                  ) : (
+                    <p className="mt-1 max-h-52 overflow-y-auto whitespace-pre-wrap text-[12px] leading-relaxed text-zinc-400">
+                      {detail && !detail.partial && detail.text
+                        ? detail.text
+                        : selected.snippet}
+                    </p>
+                  )}
+                  {detail?.partial && (
+                    <p className="mt-1 text-[11px] text-zinc-600">
+                      Preview only — the full note lives in the{" "}
+                      <span className="text-zinc-400">{detail.meta.base}</span> base.
+                    </p>
+                  )}
+                  {detail && !detail.partial && detail.meta.layer && (
+                    <p className="mt-1 text-[11px] text-zinc-600">
+                      layer {detail.meta.layer}
+                      {detail.meta.scope ? ` · scope ${detail.meta.scope}` : ""}
                     </p>
                   )}
                 </div>
+                {neighbors.length > 0 && (
+                  <div>
+                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
+                      Connected to
+                    </p>
+                    <ul className="max-h-28 space-y-0.5 overflow-y-auto">
+                      {neighbors.map((nb) => (
+                        <li key={nb.id}>
+                          <button
+                            type="button"
+                            onClick={() => pickNode(nb.node)}
+                            title={nb.kind === "manual" ? "Your link — jump to it" : "Similar — jump to it"}
+                            className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-[12px] text-zinc-300 transition-colors hover:bg-white/[0.06]"
+                          >
+                            <span
+                              className="h-1.5 w-1.5 shrink-0 rounded-full"
+                              style={{
+                                background:
+                                  nb.kind === "manual" ? "#22d3ee" : "#526073",
+                              }}
+                            />
+                            <span className="min-w-0 truncate">{nb.node.label}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
