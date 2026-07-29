@@ -124,3 +124,26 @@ describe("the wire is untouched", () => {
     expect(read("app/channels/page.tsx")).toContain("/comm/channels");
   });
 });
+
+describe("the README stays true (v1.117.0)", () => {
+  // The front door of the repo makes CLAIMS; these pins keep the ones that
+  // went stale once from going stale silently again.
+  const readme = () => readFileSync(join(DASH, "..", "README.md"), "utf-8");
+  it("never sells the mode picker that was deleted in v1.108.0", () => {
+    expect(readme()).not.toMatch(/Two modes|Agent mode/);
+  });
+  it("never promises the marketplace that was decided against", () => {
+    expect(readme()).not.toMatch(/marketplace/i);
+  });
+  it("its screenshots are the current-chrome captures", () => {
+    const s = readme();
+    expect(s).toContain("readme-chat.png");
+    expect(s).toContain("readme-search.png");
+    expect(s).toContain("readme-memory-graph.png");
+    expect(s).not.toMatch(/overview-v2\.png|feat-workflows-n8n\.png|kanban\.png/);
+  });
+  it("speaks the canon: bases, not custom sources", () => {
+    expect(readme()).not.toContain("Add a custom source");
+    expect(readme()).toContain("Add a memory base");
+  });
+});

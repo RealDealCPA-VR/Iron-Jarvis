@@ -14,13 +14,15 @@ No cloud lock-in. No black boxes. Every action logged, every change reviewable, 
 
 ---
 
-> **TL;DR** — Iron Jarvis turns a fleet of AI agents into a real operating system: a supervisor delegates to specialist subagents, work runs in sandboxed git worktrees you approve before merge, projects give every task the same context, and a layered memory + long-term knowledge base keeps it all straight. A beautiful Next.js control center — **n8n-style workflow canvas**, **voice chat**, a **creative studio**, and a **live dashboard for the GPUs you own** — lets you drive it. Runs **fully offline** with a deterministic mock model; bring your own key, your own subscription CLI, or your own hardware when you want the real thing.
+> **TL;DR** — Iron Jarvis turns a fleet of AI agents into a real operating system: **one chat surface** that answers in seconds and silently escalates to a full tool-using agent when the request needs real work, a **search bar in the title bar** that reaches every page, skill, and buried control by plain English, and a supervisor that delegates to specialist subagents in sandboxed git worktrees **you approve before merge**. Memory isn't a bullet point — it's a **3D constellation you can orbit**, wire together, and prune. A frontier-style desktop app (custom title bar, native window controls that follow your theme) wraps an **n8n-style workflow canvas**, **voice chat**, a **creative studio**, and a **live dashboard for the GPUs you own**. Runs **fully offline** with a deterministic mock model; bring your own key, your own subscription CLI, or your own hardware when you want the real thing.
 
 > **Platform support:** the packaged desktop app (installer + auto-update + multi-terminal ConPTY) ships for **Windows**. On macOS/Linux you can run the daemon + dashboard **from source** (`uv run ironjarvis serve` + `pnpm dev`); no installer is published for those yet.
 
 <div align="center">
 
-![Overview](dashboard/proof/overview-v2.png)
+![Chat — one surface, frontier chrome](dashboard/proof/readme-chat.png)
+
+*One surface. Ask anything — quick answers come straight back; real work escalates to a full agent by itself. No mode picker anywhere.*
 
 </div>
 
@@ -31,8 +33,9 @@ No cloud lock-in. No black boxes. Every action logged, every change reviewable, 
 You've used AI chat. This is the next thing: **AI that does the work and shows you exactly what it did.**
 
 - **It's an OS, not a chatbot.** A Supervisor decomposes your goal, spins up specialist subagents (Planner, Builder, Reviewer, Researcher…), and each works in an isolated, disposable workspace.
+- **One surface, zero routing.** There is no chat-vs-agent switch: every message starts as a fast answer, and when a request needs sustained tool work the turn hands itself to a full agent — visibly, with a reason — instead of ever telling *you* to go flip a mode.
 - **You stay in control.** Every tool call passes a **fail-closed permission engine**. Risky actions ask first. Code changes land on a git branch and **never auto-merge** — you review the diff and approve.
-- **It remembers.** Four-layer memory (session → project → user → org) plus pluggable **long-term memory** (Obsidian, Notion, or any markdown "brain").
+- **It remembers — and shows you.** Four-layer memory (session → project → user → org) plus **memory bases** you plug in: a folder or Obsidian vault, Notion, a cloud drive, a machine over SSH, or an MCP memory server — bindable **per project**, so a client engagement recalls that client's notes and nothing else. The whole thing renders as a **3D graph** you can orbit, connect, and prune.
 - **It plugs into your world.** Encrypted secrets vault, integrations, Slack/Telegram/Discord alerts, inbound + outbound webhooks, cron-scheduled tasks, cross-drive file search.
 - **Agents extend themselves.** They can create new agents, schedule their own jobs, add webhooks, write to long-term memory, and **build workflows you then see and edit on a visual canvas.**
 - **Local-first & private.** SQLite by default, secrets encrypted at rest, sandboxed execution. The network is optional.
@@ -48,7 +51,7 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 | 🌳 **Git-native sessions** | branch → work → diff → **you approve** → merge (no auto-merge) |
 | 🧩 **n8n-style workflows** | drag step-nodes, wire them, run the graph — agents can build them too |
 | 📁 **Projects as a context spine** | a brief, custom instructions, a real folder, and a knowledge base — every chat, task, and agent run inside a project inherits all of it |
-| 💬 **Chat that remembers how you work** | armed tools, skill, workspace, and model persist **per thread** — reopen a conversation and it's still set up. One-click **Share**: the verbatim transcript or an AI-compacted digest, as Markdown or a self-contained web page |
+| 💬 **One chat surface** | no chat/agent toggle — answers come back in seconds, and a turn that needs real multi-step work escalates itself to a full agent with a visible reason. Type **/** anywhere in a message to invoke a skill; drop files anywhere on the page; armed tools, skill, workspace, and model persist **per thread**. Each thread's ⋯ menu renames, pins, commits to memory, **adds it to a project**, or deletes. One-click **Share**: verbatim transcript or an AI-compacted digest |
 | 🖥️ **Your own GPUs, watched live** | a **Local fleet** page for the machines you own: tokens/sec, concurrency, queue depth, models loaded, VRAM, context windows — and a metric it *can't* read says so instead of showing a fake zero |
 | 🎬 **Creative studio** | generate images, video, music, and speech; browse your own media folders in a Library; and drive an AI coding CLI in a managed terminal that saves straight into the folder you picked |
 | 🧪 **The code agents write, kept** | when an agent solves something by writing a script, that script used to die with its disposable workspace. Now it lands in **Artifacts** — read the source, see its real exit code and output, and **run it again** in its own durable folder, months later |
@@ -57,7 +60,9 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 | 📅 **Scheduled tasks** | friendly repeat presets or a specific date/time — no cron syntax required |
 | 🔭 **Observability** | live event stream, traces, per-run evaluation metrics |
 | 🕰️ **Audit + time-travel** | one replayable **Activity** timeline of every action, tool, token & decision — and **undo** any reversible action (file writes, documents, notes, settings) with a since-changed guard so a rollback never clobbers newer work |
-| 🖥️ **Beautiful dashboard** | arc-reactor dark UI, Kanban board, real-time everything |
+| 🖥️ **Frontier desktop chrome** | a custom title bar with **native window controls that follow your theme** (five arc-reactor Marks, including a full light mode), a hamburger nav drawer, and real-time everything |
+| 🔭 **Search as the front door** | the search field lives **in the title bar**: type "redact", "rename endpoint", or "auto-approve" and land on the exact card, mid-page, highlighted — pages, skills, chats, and projects in one index, with an **"Ask Iron Jarvis"** fallback so no query ever dead-ends |
+| 🕸️ **A 3D memory you can touch** | the memory graph is a WebGL constellation — bloom-lit nodes (text on **hover**, not clutter), your hand-drawn links glowing with particles against the similarity mesh, an ambient orbit that yields the moment you grab it, and a sidecar that shows any node's **full contents** with one-click connect / delete |
 | 📄 **Every file type** | read & write **PDF, Word, Excel, PowerPoint, CSV, Markdown, text** — like a colleague would |
 | 🕶️ **PII redaction** | say "redact the PII" (or invoke the **/pii** skill) and get a privacy-safe copy in the **same format and styling** — SSNs/EINs, emails, phones, cards, accounts, DOBs, addresses blacked out (█), labeled, or removed; deterministic detection, the original file never touched, and PDFs **rebuilt** rather than cosmetically painted over (fake black boxes leave text extractable — this refuses to do that) |
 | 🌱 **Self-correcting** | feedback + reflections become lessons — deduped and **distilled by a real model** into short reusable guidance injected into future runs |
@@ -74,9 +79,9 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 
 <div align="center">
 
-![Workflows](dashboard/proof/feat-workflows-n8n.png)
+![Global search](dashboard/proof/readme-search.png)
 
-*The workflow canvas — agents can author these and you can drag the nodes around.*
+*The front door: one search over pages, skills, chats, and buried controls — with card-level deep links and an ask-the-AI fallback.*
 
 </div>
 
@@ -209,7 +214,7 @@ On top of that it self-heals silently: a **corrupt database is quarantined at bo
 **Dashboard → Projects.** A project is the context spine: give it a **brief**, **custom instructions**, a **folder on disk**, and a **knowledge base** (upload documents or paste notes). Everything you do inside it inherits that context — chats scoped to it, file tasks that write deliverables straight into the folder, and any agent session tagged to it. Conversations happen in the main **Chat** with the project selected in its panel (hit **Open in Chat** from the hub); the hub keeps the management surfaces — tasks, board, media, knowledge. Sessions, threads, and terminals carry the project badge, so a month later you can see exactly what happened for which client.
 
 ### Chat with your tools armed 💬
-**Dashboard → Chat.** Two modes: **Chat** answers directly in seconds; **Agent** does real work with tools. Leave **Auto** on and each request **arms the tools it needs by itself** — mention a spreadsheet and document tools arm, paste a link and web fetch arms, ask for a report and document writing arms (from a safe set only: files, documents, web, images — never shell, browser, or paid media). Or arm exactly what a turn may touch from the **+** menu; explicit picks always win, and every reply lists which tools actually ran. Pick a skill or persona — that setup **sticks to the thread**, so round two of a recurring job starts where round one left off. The right-hand **Project panel** scopes the whole surface: pick a project (or any folder — one click turns it into a project) and replies ground in its instructions + knowledge, threads filter to it, and file tools aim at its folder. One click flips **Web** research on. Replies that used the web show their **sources**. Hit **Share** to hand someone the whole conversation or an AI-compacted digest, as Markdown or a standalone web page.
+**Dashboard → Chat.** One surface: ask anything and quick answers come straight back; when a request needs sustained multi-step work, the turn **escalates itself to a full agent** and says why — you never pick a mode. Type **/** anywhere in a message to invoke a skill (its playbook arms its own tools). Leave **Auto** on and each request **arms the tools it needs by itself** — mention a spreadsheet and document tools arm, paste a link and web fetch arms, ask for a report and document writing arms (from a safe set only: files, documents, web, images — never shell, browser, or paid media). Or arm exactly what a turn may touch from the **+** menu; explicit picks always win, and every reply lists which tools actually ran. Pick a skill or persona — that setup **sticks to the thread**, so round two of a recurring job starts where round one left off. The right-hand **Project panel** scopes the whole surface: pick a project (or any folder — one click turns it into a project) and replies ground in its instructions + knowledge, threads filter to it, and file tools aim at its folder. One click flips **Web** research on. Replies that used the web show their **sources**. Hit **Share** to hand someone the whole conversation or an AI-compacted digest, as Markdown or a standalone web page.
 
 ### Watch the machines you own 🖥️
 **Dashboard → Local fleet** (Advanced). Every local inference server in one place: what's **loaded**, **tokens/sec**, **running vs queued** requests, **KV-cache pressure**, **VRAM**, and **context windows** — with a live sparkline per node. A LiteLLM-style proxy expands into the backends behind it. Anything that can't be read from this machine says so with the one command that fixes it, and a local-vs-cloud strip shows what your own hardware saved you against a **named** baseline model. Endpoints you already configured appear automatically.
@@ -232,7 +237,7 @@ uv run ironjarvis rerun  <session-id>     # clone its inputs and run again
 Iron Jarvis can **grow new capabilities at runtime**. From **Dashboard → Tools** (or when an agent calls `tool_create`), you define a reusable tool: a name, typed parameters, and a command template whose `{param}` placeholders are filled from the call arguments — e.g. `wc_lines(file)` → `["wc", "-l", "{file}"]`. The tool is **persisted and instantly available to every future agent and session** (it's advertised to agents via a `custom:*` capability), so a tool one agent builds, the next agent can use. Each runs argv-style (no shell, so a parameter value can't inject commands) inside the session workspace, gated under its own `custom:<name>` permission (defaults to *ask* — you approve the first use, like `shell`). Manage them on the Tools page.
 
 ### Reuse tasks & watch your spend 📝💰
-**Dashboard → Templates** is your library of saved prompts: name a frequent task once, then **Run** it to jump straight into a pre-filled New Session (no retyping). **Dashboard → Usage** charts your **token + dollar cost over time** — totals for the window, a by-day cost trend, and a per-provider/per-model breakdown — so a daily driver never surprises you on the bill. Press **⌘K / Ctrl+K** anywhere for the command palette to jump to any page or start a new session instantly.
+**Dashboard → Templates** is your library of saved prompts: name a frequent task once, then **Run** it to jump straight into a pre-filled New Session (no retyping). **Dashboard → Usage** charts your **token + dollar cost over time** — totals for the window, a by-day cost trend, and a per-provider/per-model breakdown — so a daily driver never surprises you on the bill. The **search field in the title bar** (or **⌘K / Ctrl+K**) jumps to any page, skill, chat, or buried control — "redact" lands you on the Redact card itself, highlighted — and always ends with an **Ask Iron Jarvis** row so a query can never dead-end.
 
 ### Settings, Self-development & Help
 **Dashboard → Settings** edits the safe config keys (default model, sandbox runtime, self-dev, local Ollama endpoint…) without touching `config.toml`, and holds the **daemon access-token** box so you can log into a deployed instance without a rebuild. **Dashboard → Self-development** shows whether the Maintainer can edit Iron Jarvis's own source and starts a review-gated session. **Dashboard → Help** is an in-app guide to every subsystem. A **🔔 bell** in the top bar surfaces pending reviews and computer-use approvals.
@@ -266,8 +271,8 @@ Set `ollama_base_url` in config (e.g. `http://localhost:11434/v1/chat/completion
 uv run ironjarvis schedule-add nightly-books "0 2 * * *" --kind workflow
 ```
 
-### Long-term memory (bring your own brain)
-**Dashboard → Long-term Memory.** Search and append notes. **Add a custom source** — point it at an Obsidian vault / any markdown folder, or a Notion database (token from the vault). Custom sources show up in the search filter instantly.
+### Long-term memory (bring your own bases)
+**Dashboard → Memory → Long-term.** Search and append notes, or open the **Graph** view and orbit the whole thing in 3D. **Add a memory base** from a plain-English chooser — a folder on this PC (or Obsidian vault), Notion, Google Drive / OneDrive / Dropbox, a machine over SSH, an MCP memory server, or your own search endpoint — each tile says exactly what it will ask for. Then, **per project**, tick which bases that project reads: a client engagement recalls that client's notes without the rest of your memory bleeding in.
 ```bash
 uv run ironjarvis ltm-append "Client checklist" "EIN, prior returns, bank statements"
 uv run ironjarvis ltm-search "onboarding"
@@ -275,8 +280,8 @@ uv run ironjarvis ltm-search "onboarding"
 
 ### Secrets, integrations & channels
 - **Secrets** — encrypted vault; values are write-only and never shown to agents or the UI.
-- **Integrations** — enable / configure / **test** external services (each bound to a secret).
-- **Channels** — connect Slack / Telegram / Discord; Iron Jarvis auto-alerts on review-requested, workflow-completed, and provider-failed events.
+- **Connections** — every account and endpoint in one place: AI accounts, local endpoints (rename them, remove dead ones), REST hookups, and plug-ins (MCP), each testable.
+- **Notifications** — where alerts go: Slack / Telegram / Discord / email destinations; Iron Jarvis auto-alerts on review-requested, workflow-completed, and provider-failed events.
 
 ### Webhooks & file search
 - **Webhooks** — **+ Add webhook** (inbound or outbound, HMAC-signed); inbound gives you a `POST /webhooks/{slug}` trigger URL.
@@ -326,8 +331,9 @@ src/iron_jarvis/
   workflows/   engine + triggers + persisted defs
   eval/        evaluation, pricing + observability
   daemon/      FastAPI app (REST + WS, ~24 route modules) + Typer CLI
-dashboard/     Next.js 15 control center — 40 pages (Chat, Projects, Kanban,
-               n8n canvas, Creative, Local fleet, Memory graph, voice)
+dashboard/     Next.js 15 control center — 41 pages (one-surface Chat, Projects,
+               Kanban, n8n canvas, Creative, Local fleet, 3D memory graph, voice)
+               + frontier chrome: TitleBar, nav drawer, global search
 ```
 
 Built from `SPEC.MD` (§10–33) + reconstructed `SPEC-SECTIONS-01-09.md`. See [`docs/`](docs/) for the build log and audit history.
@@ -352,7 +358,9 @@ Built from `SPEC.MD` (§10–33) + reconstructed `SPEC-SECTIONS-01-09.md`. See [
 
 <div align="center">
 
-![Kanban](dashboard/proof/kanban.png)
+![3D memory graph](dashboard/proof/readme-memory-graph.png)
+
+*The memory graph: hover for text, click for full contents, connect or prune from the sidecar — while the scene idles in a slow orbit.*
 
 </div>
 
@@ -360,7 +368,7 @@ Built from `SPEC.MD` (§10–33) + reconstructed `SPEC-SECTIONS-01-09.md`. See [
 
 ## 🗺️ Roadmap
 
-A mobile companion, distributed agent clusters, a skills/agent marketplace, and team-shared org memory. The foundation is built — everything else stacks on top.
+**Packs** — hand your whole working setup (skills, personas, permissions, a memory base) to a teammate as one installable bundle. A guided three-question first run. A recipes gallery of one-click automations. A mobile companion, distributed agent clusters, and team-shared org memory. The foundation is built — everything else stacks on top.
 
 ## License
 
