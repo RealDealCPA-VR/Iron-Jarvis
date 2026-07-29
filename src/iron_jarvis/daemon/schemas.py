@@ -370,6 +370,14 @@ class FsMkdirBody(BaseModel):
     path: str
 
 
+class GraphNodeDeleteBody(BaseModel):
+    """Delete one memory-graph node by its composite id (POST body, not a URL
+    segment — wm keys legally contain ':' and '/' and URL-escaping those is a
+    bug farm)."""
+
+    id: str
+
+
 class GraphLinkBody(BaseModel):
     """Connect or disconnect two memory-graph nodes (opaque node ids)."""
 

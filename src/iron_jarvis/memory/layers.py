@@ -92,6 +92,24 @@ class MemoryLayers:
         """Cosine-similarity search across (optionally) a single layer/scope (§22)."""
         return self.retriever.search(query, k=k, layer=layer, scope_id=scope_id)
 
+    def delete(self, layer: str, key: str, scope_id: str | None = None) -> bool:
+        """Remove one remembered row. Returns False when nothing matched —
+        the graph's node-delete wants a 404 it can trust, not a silent no-op
+        that leaves the node on screen after a refresh."""
+        self._check_layer(layer)
+        conds = [MemoryRecord.layer == layer, MemoryRecord.key == key]
+        if scope_id is None:
+            conds.append(MemoryRecord.scope_id.is_(None))
+        else:
+            conds.append(MemoryRecord.scope_id == scope_id)
+        with session_scope(self.engine) as db:
+            r = db.exec(select(MemoryRecord).where(*conds)).first()
+            if r is None:
+                return False
+            db.delete(r)
+            db.commit()
+            return True
+
     def _find(
         self, layer: str, key: str, scope_id: str | None
     ) -> MemoryRecord | None:

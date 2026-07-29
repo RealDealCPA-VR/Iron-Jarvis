@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException
 from typing import Any
 
-from ..schemas import GraphLinkBody, LessonCreateBody, MemoryWrite
+from ..schemas import GraphNodeDeleteBody, GraphLinkBody, LessonCreateBody, MemoryWrite
 from ...core.db import session_scope
 
 
@@ -189,6 +189,81 @@ def register(app: FastAPI, d) -> None:
         return build_memory_graph(
             d.platform, threshold=max(0.0, min(float(threshold), 1.0))
         )
+
+    @app.post("/memory/graph/node/delete")
+    def memory_graph_node_delete(body: GraphNodeDeleteBody) -> dict[str, Any]:
+        """Delete the MEMORY behind a graph node (v1.115.0), by composite id.
+
+        Dispatches on the id prefix the graph builder mints:
+          lesson:<id>              -> the lesson row
+          wm:<layer>:<scope>:<key> -> the working-memory row (scope "-" = None;
+                                      the key may itself contain ':' — split 3)
+          ltm:<base>:<ref>         -> REFUSED. Long-term notes are files in the
+                                      user's memory base (their vault, Notion…);
+                                      a canvas click must never reach into those
+                                      — the error says where to manage it.
+        Either way the node's graph links (manual AND blocks) are cleaned up,
+        so a later note with the same key doesn't inherit ghost edges.
+        """
+        from ...memory.graph import MemoryLinkRecord
+
+        node_id = (body.id or "").strip()
+        if not node_id:
+            raise HTTPException(status_code=400, detail="node id required")
+
+        deleted = False
+        if node_id.startswith("lesson:"):
+            from ...learning.models import LessonRecord
+
+            with session_scope(d.platform.engine) as db:
+                r = db.get(LessonRecord, node_id.split(":", 1)[1])
+                if r is not None:
+                    db.delete(r)
+                    db.commit()
+                    deleted = True
+        elif node_id.startswith("wm:"):
+            parts = node_id.split(":", 3)
+            if len(parts) != 4:
+                raise HTTPException(status_code=400, detail=f"malformed node id: {node_id}")
+            _, layer, scope, key = parts
+            try:
+                deleted = d.platform.memory.delete(
+                    layer, key, scope_id=None if scope == "-" else scope
+                )
+            except ValueError as exc:  # unknown layer
+                raise HTTPException(status_code=400, detail=str(exc))
+        elif node_id.startswith("ltm:"):
+            base = node_id.split(":", 2)[1]
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"this note lives in the '{base}' memory base — manage it "
+                    "there (deleting from the graph would reach into your own "
+                    "files)"
+                ),
+            )
+        else:
+            raise HTTPException(status_code=400, detail=f"unknown node kind: {node_id}")
+
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"no such node: {node_id}")
+
+        # Sweep this node's edges — manual links AND similarity blocks — so a
+        # future item reusing the key starts clean.
+        with session_scope(d.platform.engine) as db:
+            from sqlmodel import or_, select as _select
+
+            rows = list(
+                db.exec(
+                    _select(MemoryLinkRecord).where(
+                        or_(MemoryLinkRecord.a == node_id, MemoryLinkRecord.b == node_id)
+                    )
+                )
+            )
+            for r in rows:
+                db.delete(r)
+            db.commit()
+        return {"deleted": node_id, "links_removed": len(rows)}
 
     @app.post("/memory/graph/link")
     def memory_graph_link(body: GraphLinkBody) -> dict[str, Any]:

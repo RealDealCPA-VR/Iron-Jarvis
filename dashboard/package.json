@@ -21,10 +21,12 @@
     "next": "^15.1.6",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-force-graph-3d": "^1.29.1",
     "react-markdown": "^10.1.0",
     "react-rnd": "^10.5.3",
     "remark-gfm": "^4.0.1",
-    "simple-icons": "^16.26.0"
+    "simple-icons": "^16.26.0",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.1",
@@ -33,6 +35,7 @@
     "@types/node": "^20.17.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/three": "^0.185.1",
     "@vitejs/plugin-react": "^6.0.3",
     "autoprefixer": "^10.4.20",
     "jsdom": "^29.1.1",
