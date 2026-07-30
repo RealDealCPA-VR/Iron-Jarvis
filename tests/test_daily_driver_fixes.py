@@ -376,12 +376,18 @@ def test_unknown_schedule_run_is_400_not_500(tmp_path):
 # --- Convergence round 1: workflow scheduling, MCP timeout, rehydration -------
 
 
-def test_empty_workflow_schedule_raises_instead_of_silent_success(platform):
-    # The old behavior ran an empty workflow and reported "completed" (a silent
-    # no-op); now a workflow schedule with no steps fails loudly when it fires.
+def test_empty_workflow_schedule_records_error_instead_of_silent_success(platform):
+    # The oldest behavior ran an empty workflow and reported "completed" (a
+    # silent no-op); the interim fix raised out of the fire. Since v1.119.0 the
+    # dispatcher goes one better: it RECORDS the failure on the row (and
+    # delivers it to destinations) instead of dumping a traceback into the
+    # scheduler thread nobody watches — so the fire must NOT raise, and the row
+    # must tell the truth.
     platform.scheduler.add_task("empty-wf", "0 0 * * *", kind="workflow", payload={})
-    with pytest.raises(ValueError):
-        asyncio.run(platform.scheduler.run_now("empty-wf"))
+    asyncio.run(platform.scheduler.run_now("empty-wf"))
+    rec = platform.scheduler.get("empty-wf")
+    assert rec.last_status == "error"
+    assert "no steps" in rec.last_detail
 
 
 def test_scheduled_saved_workflow_runs_its_steps(platform):

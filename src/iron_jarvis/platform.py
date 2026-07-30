@@ -8,6 +8,7 @@ registry, and the permission engine.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 from dataclasses import dataclass
@@ -169,6 +170,11 @@ class Platform:
     #: FX-01 ephemeral per-session token/tool stream hub (NOT the event bus — see
     #: core/streams.py). Optional so bare-platform unit tests still construct.
     streams: "StreamHub | None" = None
+    #: The agent orchestrator, attached by the daemon after it builds one
+    #: (v1.119.0) — task-kind schedules fire real agent sessions through it.
+    #: Optional so bare-platform unit tests still construct; the dispatcher
+    #: raises an honest error when a task schedule fires without it.
+    orchestrator: "object | None" = None
     #: LOCAL FLEET registry (the user's own inference machines). Seeded from the
     #: two config endpoint slots, so it is populated with zero setup.
     fleet: "object | None" = None
@@ -761,42 +767,137 @@ def build_platform(
     for tool in blackboard_tools(platform.blackboard):
         platform.registry.register(tool)
 
-    # Scheduled tasks (cron): a task runs a workflow or emits an event on fire.
-    def _run_scheduled(task):
-        payload = json.loads(task.payload_json or "{}")
-        if task.kind == "workflow":
-            from .workflows.engine import WorkflowEngine, load_workflow
-            from .workflows.store import WorkflowStore
+    # Scheduled fires (v1.119.0): a fire runs an agent TASK (the primary kind),
+    # a saved workflow, or emits an event — then records how it went on the row
+    # and delivers the result to the user's destinations. The recording is what
+    # turns "it fired at 9:02" into "here is what happened".
+    def _record_outcome(name: str, status: str, detail: str, session_id: str = "") -> None:
+        from sqlmodel import select
 
-            # The UI can only express a SAVED workflow by name; resolve it to its
-            # stored steps. (Inline steps in the payload still work for API callers.)
-            ref = payload.get("workflow") or payload.get("name")
-            steps = payload.get("steps")
-            if ref and not steps:
-                store = WorkflowStore(platform.engine)
-                rec = store.get(ref)
-                if rec is None:
-                    raise ValueError(f"scheduled workflow {ref!r} not found")
-                payload = {
-                    "name": rec.name,
-                    "steps": json.loads(rec.steps_json or "[]"),
-                    # A scheduled SAVED workflow keeps its project pin — the
-                    # whole point of pinning is recurring in-project work.
-                    "project_id": store.get_project_id(rec.name),
-                }
-            # Never silently "complete" a zero-step workflow — that masked every
-            # mis-configured schedule as a success.
-            if not payload.get("steps"):
-                raise ValueError(
-                    "scheduled workflow has no steps — set a 'workflow' name or "
-                    "inline 'steps' in the schedule payload"
+        from .scheduling.models import ScheduledTaskRecord
+
+        with session_scope(engine) as db:
+            rec = db.exec(
+                select(ScheduledTaskRecord).where(ScheduledTaskRecord.name == name)
+            ).first()
+            if rec is None:
+                return  # deleted mid-fire — nothing to stamp
+            rec.last_status = status
+            rec.last_detail = " ".join((detail or "").split())[:300]
+            rec.last_session_id = session_id or ""
+            db.add(rec)
+            db.commit()
+
+    def _deliver_outcome(task, payload: dict, status: str, detail: str) -> None:
+        # A schedule is explicit intent, so the default audience is EVERY
+        # destination ("This PC" included) — the pre-v1.119 default (default
+        # channel only) meant results landed on the mock channel and nobody
+        # ever saw them. payload.notify_channels narrows the audience;
+        # notify=False silences it. Delivery failure never fails the fire:
+        # the row already recorded the truth.
+        if payload.get("notify") is False:
+            return
+        excerpt = " ".join((detail or "").split())
+        if len(excerpt) > 200:
+            excerpt = excerpt[:200] + "…"
+        head = "done" if status == "ok" else "FAILED"
+        message = f"Schedule “{task.name}”: {head}" + (f" — {excerpt}" if excerpt else "")
+        try:
+            targets = payload.get("notify_channels") or platform.notifier.channels()
+            platform.notifier.notify(message, list(targets))
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _dispatch_scheduled(task, payload: dict, fired: dict) -> str:
+        """Run one fire; returns the human detail. ``fired['session_id']`` is
+        set as soon as a task-kind session exists so a mid-run failure still
+        records WHICH session to look at."""
+        if task.kind == "task":
+            prompt = str(payload.get("task") or "").strip()
+            if not prompt:
+                raise ValueError("scheduled task has no 'task' text")
+            if platform.orchestrator is None:
+                raise RuntimeError(
+                    "task schedules need the daemon's agent orchestrator"
                 )
-            return WorkflowEngine(platform).run(load_workflow(payload))
-        if task.kind == "event":
-            return platform.event_bus.publish(
-                payload.get("type", "schedule.fired"), payload
+            session = await platform.orchestrator.create_session(
+                prompt,
+                provider=payload.get("provider") or None,
+                model=payload.get("model") or None,
+                project_id=payload.get("project_id") or None,
+                origin=f"schedule:{task.name}",
             )
-        return None
+            fired["session_id"] = session.id
+            done = await platform.orchestrator.run_session(session.id)
+            status = getattr(done.status, "value", str(done.status))
+            if status != "completed":
+                raise RuntimeError(
+                    f"session ended {status}: {(done.summary or 'no summary')[:200]}"
+                )
+            return (done.summary or "").strip() or "session completed"
+        if task.kind == "workflow":
+            result = _run_scheduled_workflow(payload)
+            if inspect.isawaitable(result):
+                await result
+            ref = payload.get("workflow") or payload.get("name") or "inline"
+            return f"workflow “{ref}” ran"
+        if task.kind == "event":
+            etype = payload.get("type", "schedule.fired")
+            result = platform.event_bus.publish(etype, payload)
+            if inspect.isawaitable(result):
+                await result
+            return f"event {etype} published"
+        raise ValueError(f"unknown schedule kind {task.kind!r}")
+
+    def _run_scheduled(task):
+        async def _fire():
+            payload = json.loads(task.payload_json or "{}")
+            fired: dict = {"session_id": ""}
+            try:
+                detail = await _dispatch_scheduled(task, payload, fired)
+            except Exception as exc:  # noqa: BLE001
+                # Record + deliver the failure, then swallow: the row and the
+                # notification ARE the error surface. Re-raising would only
+                # skip last_run stamping and dump a traceback into the
+                # scheduler thread nobody watches.
+                _record_outcome(
+                    task.name, "error", f"{type(exc).__name__}: {exc}", fired["session_id"]
+                )
+                _deliver_outcome(task, payload, "error", str(exc))
+                return
+            _record_outcome(task.name, "ok", detail, fired["session_id"])
+            _deliver_outcome(task, payload, "ok", detail)
+
+        return _fire()
+
+    def _run_scheduled_workflow(payload: dict):
+        from .workflows.engine import WorkflowEngine, load_workflow
+        from .workflows.store import WorkflowStore
+
+        # The UI can only express a SAVED workflow by name; resolve it to its
+        # stored steps. (Inline steps in the payload still work for API callers.)
+        ref = payload.get("workflow") or payload.get("name")
+        steps = payload.get("steps")
+        if ref and not steps:
+            store = WorkflowStore(platform.engine)
+            rec = store.get(ref)
+            if rec is None:
+                raise ValueError(f"scheduled workflow {ref!r} not found")
+            payload = {
+                "name": rec.name,
+                "steps": json.loads(rec.steps_json or "[]"),
+                # A scheduled SAVED workflow keeps its project pin — the
+                # whole point of pinning is recurring in-project work.
+                "project_id": store.get_project_id(rec.name),
+            }
+        # Never silently "complete" a zero-step workflow — that masked every
+        # mis-configured schedule as a success.
+        if not payload.get("steps"):
+            raise ValueError(
+                "scheduled workflow has no steps — set a 'workflow' name or "
+                "inline 'steps' in the schedule payload"
+            )
+        return WorkflowEngine(platform).run(load_workflow(payload))
 
     platform.scheduler = Scheduler(engine, _run_scheduled)
 

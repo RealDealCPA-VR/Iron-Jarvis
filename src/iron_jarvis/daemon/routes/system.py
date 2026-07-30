@@ -174,6 +174,23 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/schedules")
     def add_schedule(body: ScheduleAdd) -> dict[str, Any]:
+        # Fail at ADD time, not at 3am fire time: a task schedule needs its
+        # prompt, and a typo'd destination would silently deliver to nobody.
+        payload = body.payload or {}
+        if body.kind == "task" and not str(payload.get("task") or "").strip():
+            raise HTTPException(
+                status_code=400, detail="a task schedule needs 'task' text in payload"
+            )
+        wanted = payload.get("notify_channels")
+        if wanted:
+            known = set(d.platform.notifier.channels())
+            unknown = [c for c in wanted if c not in known]
+            if unknown:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"unknown destination(s): {', '.join(unknown)} — "
+                    f"add them on the Notifications page first",
+                )
         try:
             rec = d.platform.scheduler.add_task(
                 body.name,
@@ -193,8 +210,17 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/schedules/{name}/run")
     async def run_schedule(name: str) -> dict[str, Any]:
+        """Fire now and return the OUTCOME (v1.119.0) — testing a schedule
+        should feel like testing a destination: you learn how it went, not
+        just that a trigger was pulled."""
         await d.platform.scheduler.run_now(name)
-        return {"ran": name}
+        rec = next((t for t in d.platform.scheduler.list() if t.name == name), None)
+        return {
+            "ran": name,
+            "last_status": getattr(rec, "last_status", ""),
+            "last_detail": getattr(rec, "last_detail", ""),
+            "last_session_id": getattr(rec, "last_session_id", ""),
+        }
 
     @app.websocket("/events")
     async def events(ws: WebSocket) -> None:

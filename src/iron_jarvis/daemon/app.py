@@ -134,6 +134,9 @@ def _session_view(session) -> dict[str, Any]:
         "id": session.id,
         "project_id": getattr(session, "project_id", None),
         "task": session.task,
+        # Where the session came from (v1.119.0): "schedule:<name>" for
+        # schedule-fired runs, "self_dev", or None for user-started work.
+        "origin": getattr(session, "origin", None),
         "agent_type": session.agent_type.value,
         "provider": session.provider,
         "model": session.model,
@@ -237,6 +240,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
     if _env_truthy("IRONJARVIS_GIT_NATIVE"):
         platform.config.git_native = True
     orchestrator = Orchestrator(platform)
+    # Task-kind schedules (v1.119.0) fire real agent sessions: the scheduler's
+    # dispatcher lives in build_platform, so hand it the orchestrator here.
+    platform.orchestrator = orchestrator
     # Health of the background loops (auto-backup/autonomy/sentinel/inbound), so a
     # silent failure (e.g. backups failing) is visible in /diagnostics, not just
     # buried in the log. Keyed by loop name.

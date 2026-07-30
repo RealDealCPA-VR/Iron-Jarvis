@@ -17,8 +17,12 @@ from sqlmodel import Field, SQLModel
 from ..core.ids import new_id, utcnow
 
 # The action kinds a scheduled task may carry. ('callback' was removed: the run
-# dispatcher only handles workflow/event, so it would have been a silent no-op.)
-KINDS: tuple[str, ...] = ("workflow", "event")
+# dispatcher only handles task/workflow/event, so it would have been a silent
+# no-op.) "task" (v1.119.0) is the PRIMARY kind: a plain-English prompt that
+# opens a real agent session on fire — the thing people actually mean when they
+# say "every Friday, summarize my projects". workflow/event remain for
+# pre-built graphs and API callers.
+KINDS: tuple[str, ...] = ("task", "workflow", "event")
 
 # The trigger kinds a scheduled task may fire on.
 TRIGGER_TYPES: tuple[str, ...] = ("cron", "date", "interval")
@@ -38,11 +42,18 @@ class ScheduledTaskRecord(SQLModel, table=True):
     trigger_type: str = "cron"  # cron | date | interval
     run_at: datetime | None = None  # one-time fire time (date trigger)
     interval_seconds: int | None = None  # repeat period (interval trigger)
-    kind: str = "workflow"  # workflow | event
+    kind: str = "workflow"  # task | workflow | event
     payload_json: str = "{}"
     enabled: bool = True
     last_run: datetime | None = None
     next_run: datetime | None = None
+    # v1.119.0 — the row tells the TRUTH, not just the time: how the last fire
+    # went ("ok" | "error" | "" = never fired), a short human-readable detail,
+    # and the session it spawned (task kind) so the UI links straight to the
+    # actual work. Additive columns; open_db's diff-migration adds them.
+    last_status: str = ""
+    last_detail: str = ""
+    last_session_id: str = ""
     created_at: datetime = Field(default_factory=utcnow)
 
     def decoded_payload(self) -> dict:

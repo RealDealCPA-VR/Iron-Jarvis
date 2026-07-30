@@ -1,8 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarClock, Plus, Play, Clock, Repeat, Timer } from "lucide-react";
-import { post, del, ApiError } from "@/lib/api";
+import Link from "next/link";
+import {
+  CalendarClock,
+  Plus,
+  Play,
+  Clock,
+  Repeat,
+  Timer,
+  Sparkles,
+  Workflow,
+  Radio,
+  ArrowUpRight,
+} from "lucide-react";
+import { post, del, get, ApiError } from "@/lib/api";
 import { usePolledApi, useApi } from "@/lib/useApi";
 import type { Schedule } from "@/lib/types";
 import {
@@ -19,9 +31,61 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { ChooserTiles } from "@/components/ChooserTiles";
+import { useFocusRef } from "@/lib/useFocusRef";
 
-// Matches the backend's scheduling/models.py KINDS ("callback" was removed).
-const KINDS = ["workflow", "event"];
+/** What a fire DOES (v1.119.0) — task leads because "have an agent do X every
+ * morning" is the schedule people actually mean; workflow/event serve
+ * canvas-builders and API callers. Matches scheduling/models.py KINDS. */
+const KIND_OPTIONS = [
+  {
+    key: "task",
+    label: "Run a task",
+    blurb: "An agent does this on schedule and reports back.",
+    needs: "just the words — plus, optionally, a project and where to send the result",
+    effort: "quickest" as const,
+    icon: <Sparkles size={15} />,
+  },
+  {
+    key: "workflow",
+    label: "Run a saved workflow",
+    blurb: "Fire a multi-step workflow you built on the canvas.",
+    needs: "a saved workflow to pick",
+    effort: "easy" as const,
+    icon: <Workflow size={15} />,
+  },
+  {
+    key: "event",
+    label: "Emit an event",
+    blurb: "Publish a raw event on the internal bus — for automation builders.",
+    needs: "an event type string (optional)",
+    effort: "technical" as const,
+    icon: <Radio size={15} />,
+  },
+];
+
+/** Ready-made schedules (the on-ramp): one click fills the whole form with a
+ * real, useful recipe — answering "what would I even use this for?". */
+const TEMPLATES: { label: string; name: string; task: string; cron: string }[] = [
+  {
+    label: "Morning briefing",
+    name: "morning-briefing",
+    task: "Write my morning briefing: summarize what happened yesterday across my projects and what is scheduled today, in five crisp bullet points.",
+    cron: "0 8 * * 1-5",
+  },
+  {
+    label: "Friday digest",
+    name: "friday-digest",
+    task: "Write a Friday digest of this week's work: what got done, what is still open, and what deserves attention next week.",
+    cron: "0 16 * * 5",
+  },
+  {
+    label: "Tidy Downloads",
+    name: "tidy-downloads",
+    task: "Tidy my Downloads folder: group files by type into subfolders, list exactly what you moved, and flag anything you were unsure about.",
+    cron: "0 18 * * *",
+  },
+];
 
 /** Friendly repeat presets that each map to a 5-field cron expression. */
 const REPEAT_PRESETS: { label: string; cron: string }[] = [
@@ -30,8 +94,11 @@ const REPEAT_PRESETS: { label: string; cron: string }[] = [
   { label: "Hourly", cron: "0 * * * *" },
   { label: "Daily at midnight", cron: "0 0 * * *" },
   { label: "Daily at 9am", cron: "0 9 * * *" },
+  { label: "Weekdays at 8am", cron: "0 8 * * 1-5" },
   { label: "Weekdays at 9am", cron: "0 9 * * 1-5" },
   { label: "Weekly Mon 9am", cron: "0 9 * * 1" },
+  { label: "Weekly Fri 4pm", cron: "0 16 * * 5" },
+  { label: "Daily at 6pm", cron: "0 18 * * *" },
   { label: "Monthly 1st", cron: "0 0 1 * *" },
 ];
 
@@ -54,6 +121,19 @@ function triggerLabel(s: Schedule): string {
   return "—";
 }
 
+/** One-line "what this schedule does" for the row (task text > workflow name). */
+function whatLabel(s: Schedule): string {
+  let p: Record<string, unknown> = {};
+  try {
+    p = JSON.parse(s.payload_json || "{}");
+  } catch {
+    /* unparseable payload — fall through to bare labels */
+  }
+  if (s.kind === "task") return String(p.task ?? "");
+  if (s.kind === "workflow") return `Workflow: ${p.workflow ?? p.name ?? "?"}`;
+  return `Event: ${p.type ?? "schedule.fired"}`;
+}
+
 export default function SchedulesPage() {
   const { data, error, loading, reload } = usePolledApi<{ schedules: Schedule[] }>(
     "/schedules",
@@ -64,18 +144,44 @@ export default function SchedulesPage() {
   // Saved workflows a "workflow" schedule can reference by name.
   const workflows = useApi<{ workflows: { name: string }[] }>("/workflows");
   const workflowNames = workflows.data?.workflows?.map((w) => w.name) ?? [];
+  // Projects a task schedule can run inside; destinations its result can reach.
+  const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
+  const [destinations, setDestinations] = useState<string[]>([]);
+  useEffect(() => {
+    get<{ projects: { id: string; name: string }[] }>("/projects")
+      .then((r) => setProjects(r.projects ?? []))
+      .catch(() => setProjects([]));
+    get<{ channels: { name: string }[] }>("/comm/channels")
+      .then((r) =>
+        setDestinations(
+          (r.channels ?? [])
+            .map((c) => c.name)
+            // Internal test channels aren't a place a person sends results.
+            .filter((n) => n !== "mock" && n !== "console"),
+        ),
+      )
+      .catch(() => setDestinations([]));
+  }, []);
 
   const [name, setName] = useState("");
+  const [kind, setKind] = useState("task");
+  const [taskText, setTaskText] = useState("");
+  const [projectId, setProjectId] = useState("");
+  // "all" = every destination (the default), "none" = silent, else one name.
+  const [dest, setDest] = useState("all");
   const [workflowName, setWorkflowName] = useState("");
+  const [eventType, setEventType] = useState("");
   // "repeat" holds a preset cron, or the ADVANCED / ONCE sentinels.
   const [repeat, setRepeat] = useState<string>("0 9 * * *");
   const [advancedCron, setAdvancedCron] = useState("");
   const [runAt, setRunAt] = useState(""); // datetime-local value
-  const [kind, setKind] = useState("workflow");
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   const [acting, setActing] = useState<string | null>(null);
+
+  // ?focus=add (the global search's deep link) rings the add card.
+  const addFocusRef = useFocusRef<HTMLDivElement>("add");
 
   // Deep-link from the workflow editor's "Schedule…" button: ?workflow=<name>
   // prefills the create form for that workflow. Read window.location to avoid a
@@ -97,9 +203,19 @@ export default function SchedulesPage() {
 
   // Whether the schedule-defining field for the current mode is filled in.
   const triggerReady = isOnce ? !!runAt : isAdvanced ? !!advancedCron.trim() : !!repeat;
-  // A "workflow" schedule MUST reference a saved workflow, else it would fire and
-  // run nothing (the backend now rejects an empty workflow at execution time).
-  const payloadReady = kind !== "workflow" || !!workflowName;
+  // A task schedule needs its words; a workflow schedule MUST reference a saved
+  // workflow, else it would fire and run nothing.
+  const payloadReady =
+    kind === "task" ? !!taskText.trim() : kind === "workflow" ? !!workflowName : true;
+
+  function applyTemplate(t: (typeof TEMPLATES)[number]) {
+    setKind("task");
+    setName(t.name);
+    setTaskText(t.task);
+    setRepeat(t.cron);
+    setOk(null);
+    setFormError(null);
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -108,9 +224,21 @@ export default function SchedulesPage() {
     setFormError(null);
     setOk(null);
 
-    // Exactly one of cron / run_at must be sent. A workflow schedule carries the
-    // saved workflow's name so the daemon can run its steps (not an empty no-op).
-    const payload = kind === "workflow" ? { workflow: workflowName } : {};
+    // Exactly one of cron / run_at must be sent. The payload carries what the
+    // fire should do — and, for tasks, where the result should go.
+    let payload: Record<string, unknown> = {};
+    if (kind === "task") {
+      payload = { task: taskText.trim() };
+      if (projectId) payload.project_id = projectId;
+      if (dest === "none") payload.notify = false;
+      else if (dest !== "all") payload.notify_channels = [dest];
+    } else if (kind === "workflow") {
+      payload = { workflow: workflowName };
+      if (dest === "none") payload.notify = false;
+      else if (dest !== "all") payload.notify_channels = [dest];
+    } else if (eventType.trim()) {
+      payload = { type: eventType.trim() };
+    }
     const body: Record<string, unknown> = { name: name.trim(), kind, payload };
     if (isOnce) {
       const d = new Date(runAt);
@@ -121,22 +249,26 @@ export default function SchedulesPage() {
       }
       body.run_at = d.toISOString();
     } else {
-      body.cron = (isAdvanced ? advancedCron.trim() : repeat);
+      body.cron = isAdvanced ? advancedCron.trim() : repeat;
     }
 
     try {
       await post("/schedules", body);
       setOk(`Schedule "${name.trim()}" added.`);
       setName("");
+      setTaskText("");
+      setProjectId("");
+      setDest("all");
       setRepeat("0 9 * * *");
       setAdvancedCron("");
       setRunAt("");
-      setKind("workflow");
+      setKind("task");
       setWorkflowName("");
+      setEventType("");
       reload();
     } catch (err) {
       // The daemon's 400 detail is already specific (bad cron, duplicate name,
-      // unknown kind, missing workflow) — show it verbatim, don't mislabel it.
+      // missing task text, unknown destination) — show it verbatim.
       setFormError(err instanceof ApiError ? err.message : String(err));
     } finally {
       setBusy(false);
@@ -148,8 +280,18 @@ export default function SchedulesPage() {
     setOk(null);
     setFormError(null);
     try {
-      await post(`/schedules/${encodeURIComponent(schedName)}/run`);
-      setOk(`Ran "${schedName}".`);
+      // Run-now returns the OUTCOME (v1.119.0) — report how it went, not
+      // just that a trigger was pulled.
+      const r = await post<{
+        ran: string;
+        last_status: string;
+        last_detail: string;
+      }>(`/schedules/${encodeURIComponent(schedName)}/run`);
+      if (r.last_status === "error") {
+        setFormError(`"${schedName}" failed — ${r.last_detail || "no detail"}`);
+      } else {
+        setOk(`Ran "${schedName}" ✓${r.last_detail ? ` — ${r.last_detail}` : ""}`);
+      }
       reload();
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : String(err));
@@ -176,7 +318,7 @@ export default function SchedulesPage() {
       <Reveal>
         <PageHeader
           title="Schedules"
-          subtitle="Recurring or one-time tasks. Pick a friendly repeat preset or a specific date & time — no cron syntax required."
+          subtitle="Hand work to an agent on a schedule — it runs the task, records how it went, and sends the result to your destinations."
         />
       </Reveal>
       {offline && (
@@ -188,8 +330,146 @@ export default function SchedulesPage() {
       <Reveal>
         <div className="grid gap-6 lg:grid-cols-3">
           <div className="lg:col-span-1">
+            <div ref={addFocusRef}>
             <Card title="Add schedule" icon={<Plus size={15} />}>
               <form onSubmit={submit} className="space-y-3.5">
+                <div>
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    What should happen?
+                  </label>
+                  <ChooserTiles
+                    ariaLabel="Schedule kind"
+                    value={kind}
+                    onChange={(k) => {
+                      setKind(k);
+                      setFormError(null);
+                    }}
+                    options={KIND_OPTIONS}
+                  />
+                  {kind === "task" && (
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      <span className="text-[11px] text-zinc-600">Try:</span>
+                      {TEMPLATES.map((t) => (
+                        <button
+                          key={t.name}
+                          type="button"
+                          onClick={() => applyTemplate(t)}
+                          className="rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11.5px] text-accent-soft transition-colors hover:bg-accent/[0.12]"
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {kind === "task" && (
+                  <>
+                    <div>
+                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        The task
+                      </label>
+                      <textarea
+                        value={taskText}
+                        onChange={(e) => setTaskText(e.target.value)}
+                        placeholder="Every fire, an agent gets exactly these words. e.g. Summarize yesterday's work and today's plan."
+                        rows={3}
+                        aria-label="Task text"
+                        className="field resize-y text-sm leading-relaxed"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        Run inside a project
+                      </label>
+                      <select
+                        aria-label="Project"
+                        value={projectId}
+                        onChange={(e) => setProjectId(e.target.value)}
+                        className="field"
+                      >
+                        <option value="">No project</option>
+                        {projects.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="mt-1 text-[11px] text-zinc-600">
+                        The agent runs with that project&apos;s context and files.
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {kind === "workflow" && (
+                  <div>
+                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      Workflow to run
+                    </label>
+                    {workflowNames.length === 0 ? (
+                      <div className="text-[11px] text-amber-300/80">
+                        No saved workflows yet — create one on the Workflows page first.
+                      </div>
+                    ) : (
+                      <select
+                        aria-label="Workflow to run"
+                        value={workflowName}
+                        onChange={(e) => setWorkflowName(e.target.value)}
+                        className="field"
+                      >
+                        <option value="">Select a workflow…</option>
+                        {workflowNames.map((w) => (
+                          <option key={w} value={w}>
+                            {w}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                )}
+
+                {kind === "event" && (
+                  <div>
+                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      Event type
+                    </label>
+                    <input
+                      value={eventType}
+                      onChange={(e) => setEventType(e.target.value)}
+                      placeholder="schedule.fired"
+                      aria-label="Event type"
+                      className="field font-mono text-sm"
+                    />
+                  </div>
+                )}
+
+                {kind !== "event" && (
+                  <div>
+                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      Send the result to
+                    </label>
+                    <select
+                      aria-label="Send the result to"
+                      value={dest}
+                      onChange={(e) => setDest(e.target.value)}
+                      className="field"
+                    >
+                      <option value="all">All destinations</option>
+                      {destinations.map((d) => (
+                        <option key={d} value={d}>
+                          {d === "this-pc" ? "This PC" : d}
+                        </option>
+                      ))}
+                      <option value="none">Don&apos;t notify</option>
+                    </select>
+                    <div className="mt-1 text-[11px] text-zinc-600">
+                      Add more on the Notifications page — Telegram puts results on
+                      your phone.
+                    </div>
+                  </div>
+                )}
+
                 <div>
                   <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                     Name
@@ -197,7 +477,7 @@ export default function SchedulesPage() {
                   <input
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="nightly-report"
+                    placeholder="morning-briefing"
                     className="field"
                   />
                 </div>
@@ -257,45 +537,6 @@ export default function SchedulesPage() {
                   </div>
                 )}
 
-                <div>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                    Kind
-                  </label>
-                  <select aria-label="Task kind" value={kind} onChange={(e) => setKind(e.target.value)} className="field">
-                    {KINDS.map((k) => (
-                      <option key={k} value={k}>
-                        {k}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {kind === "workflow" && (
-                  <div>
-                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                      Workflow to run
-                    </label>
-                    {workflowNames.length === 0 ? (
-                      <div className="text-[11px] text-amber-300/80">
-                        No saved workflows yet — create one on the Workflows page first.
-                      </div>
-                    ) : (
-                      <select
-                        aria-label="Workflow to run"
-                        value={workflowName}
-                        onChange={(e) => setWorkflowName(e.target.value)}
-                        className="field"
-                      >
-                        <option value="">Select a workflow…</option>
-                        {workflowNames.map((w) => (
-                          <option key={w} value={w}>
-                            {w}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-                )}
                 <button
                   type="submit"
                   disabled={busy || !name.trim() || !triggerReady || !payloadReady}
@@ -307,6 +548,7 @@ export default function SchedulesPage() {
                 {formError && <ErrorNote>{formError}</ErrorNote>}
               </form>
             </Card>
+            </div>
           </div>
 
           <div className="lg:col-span-2">
@@ -325,7 +567,7 @@ export default function SchedulesPage() {
                       <tr className="border-b hairline text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                         <th className="px-2 py-2.5 font-medium">Name</th>
                         <th className="px-2 py-2.5 font-medium">Repeat</th>
-                        <th className="px-2 py-2.5 font-medium">Kind</th>
+                        <th className="px-2 py-2.5 font-medium">Last result</th>
                         <th className="px-2 py-2.5 font-medium">Next run</th>
                         <th className="px-2 py-2.5 font-medium" />
                       </tr>
@@ -339,7 +581,17 @@ export default function SchedulesPage() {
                           <td className="px-2 py-2.5">
                             <span className="flex items-center gap-2">
                               <Dot on={!!s.enabled} />
-                              <span className="text-zinc-100">{s.name}</span>
+                              <span className="min-w-0">
+                                <span className="block text-zinc-100">{s.name}</span>
+                                {whatLabel(s) && (
+                                  <span
+                                    className="block max-w-[260px] truncate text-[11px] text-zinc-500"
+                                    title={whatLabel(s)}
+                                  >
+                                    {whatLabel(s)}
+                                  </span>
+                                )}
+                              </span>
                             </span>
                           </td>
                           <td className="px-2 py-2.5">
@@ -351,7 +603,33 @@ export default function SchedulesPage() {
                             )}
                           </td>
                           <td className="px-2 py-2.5">
-                            <Badge value={s.kind} tone="violet" />
+                            {/* The row tells the TRUTH (v1.119.0): how the last
+                                fire went + a link to the actual session. */}
+                            {s.last_status === "ok" ? (
+                              <span className="text-[12px] text-emerald-300">✓ ok</span>
+                            ) : s.last_status === "error" ? (
+                              <span className="text-[12px] text-rose-300">✗ failed</span>
+                            ) : (
+                              <span className="text-[12px] text-zinc-600">
+                                not run yet
+                              </span>
+                            )}
+                            {s.last_detail ? (
+                              <div
+                                className="max-w-[220px] truncate text-[11px] text-zinc-500"
+                                title={s.last_detail}
+                              >
+                                {s.last_detail}
+                              </div>
+                            ) : null}
+                            {s.last_session_id ? (
+                              <Link
+                                href={`/sessions/${s.last_session_id}`}
+                                className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-accent-soft transition-colors hover:text-accent"
+                              >
+                                open session <ArrowUpRight size={11} />
+                              </Link>
+                            ) : null}
                           </td>
                           <td className="px-2 py-2.5 text-zinc-500">
                             <span className="inline-flex items-center gap-1.5">

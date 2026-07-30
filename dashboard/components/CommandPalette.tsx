@@ -20,6 +20,7 @@ import {
   BarChart3,
   Bot,
   FolderKanban,
+  CalendarClock,
   type LucideIcon,
 } from "lucide-react";
 import { NAV_ENTRIES } from "@/lib/nav";
@@ -104,6 +105,15 @@ const DEEP_LINK_ITEMS: PaletteRow[] = [
     aliases: ["auto-approve", "mcp", "connect a pack", "connect a plug-in"],
     href: "/tools?focus=packs",
     icon: Package,
+  },
+  {
+    id: "deep:schedule-task",
+    kind: "page",
+    label: "Schedules → Schedule a task",
+    blurb: "An agent runs it on repeat and sends the result to your destinations.",
+    aliases: ["schedule a task", "remind me", "every morning", "daily digest", "recurring task"],
+    href: "/schedules?focus=add",
+    icon: CalendarClock,
   },
   {
     id: "deep:add-destination",

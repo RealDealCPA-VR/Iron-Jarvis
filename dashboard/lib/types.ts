@@ -319,6 +319,11 @@ export interface Schedule {
   trigger_type?: string;
   run_at?: string | null;
   interval_seconds?: number | null;
+  payload_json?: string;
+  // v1.119.0 outcome truth: how the last fire went + the session it spawned.
+  last_status?: string;
+  last_detail?: string;
+  last_session_id?: string;
   [k: string]: unknown;
 }
 

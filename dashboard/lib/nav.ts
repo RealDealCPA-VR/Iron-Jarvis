@@ -137,8 +137,19 @@ export const NAV: NavSectionDef[] = [
         label: "Schedules",
         icon: CalendarClock,
         // "cron" earns a slot even though the page deliberately hides it.
-        aliases: ["recurring", "every day", "cron", "timer", "reminder", "later"],
-        blurb: "Recurring or one-time tasks — friendly presets, no cron syntax.",
+        aliases: [
+          "recurring",
+          "every day",
+          "cron",
+          "timer",
+          "reminder",
+          "remind me",
+          "later",
+          "morning briefing",
+          "daily digest",
+          "automate",
+        ],
+        blurb: "Hand work to an agent on a schedule — it runs and reports to your destinations.",
       },
       // Kanban lives INSIDE a project now (Projects → open a project → Board).
       {
