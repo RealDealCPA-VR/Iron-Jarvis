@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { NavDrawer } from "@/components/Sidebar";
+import { DesktopNotifyBridge } from "@/components/DesktopNotifyBridge";
 import { TitleBar } from "@/components/TitleBar";
 import { DaemonBanner } from "@/components/DaemonBanner";
 import { CommandPalette } from "@/components/CommandPalette";
@@ -104,6 +105,9 @@ export default function RootLayout({
           {/* Global search / command palette — the TitleBar search button
               (ij:open-palette) and Ctrl+K both open it. */}
           <CommandPalette />
+          {/* "This PC" notifications: comm.desktop events → native OS toast
+              via the Electron preload (no-op in a plain browser). */}
+          <DesktopNotifyBridge />
           {/* Blocking first-run overlay (skips /connections + /settings so
               the user can actually go wire a model). */}
           <FirstRunWizard />

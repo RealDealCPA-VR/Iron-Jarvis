@@ -168,7 +168,23 @@ def register(app: FastAPI, d) -> None:
         configured = (d.platform.config.comm or {}).get("channels") or {}
         out = []
         for name in d.platform.notifier.channels():
-            out.append({"name": name, "type": (configured.get(name) or {}).get("type", name)})
+            spec = configured.get(name) or {}
+            # Built-ins have no config row; their TYPE identity lives on the
+            # live channel instance (this-pc -> "desktop"), not in config.
+            live = d.platform.notifier.get(name)
+            out.append(
+                {
+                    "name": name,
+                    "type": spec.get("type") or getattr(live, "name", None) or name,
+                    # v1.118.0 — the row's honesty surface: built-ins need no
+                    # config; configured rows carry their LAST REAL test result
+                    # so "green" provably means "worked", not "saved".
+                    "builtin": name not in configured,
+                    "last_test_ok": spec.get("last_test_ok"),
+                    "last_test_at": spec.get("last_test_at"),
+                    "events": spec.get("events") or [],
+                }
+            )
         return {"channels": out}
 
     @app.get("/comm/channel-types")
@@ -239,6 +255,24 @@ def register(app: FastAPI, d) -> None:
         problem = _channel_config_problem(ctype, config)
         if problem:
             raise HTTPException(status_code=400, detail=problem)
+
+        # Per-destination event routing (v1.118.0): an optional list of event
+        # types this destination receives; absent/empty = everything (the old
+        # behaviour). Validated against the alert set so a typo can't silently
+        # subscribe a destination to nothing.
+        raw_events = (body.config or {}).get("events")
+        if raw_events:
+            from ...comm.notifier import DEFAULT_ALERT_EVENTS
+
+            wanted = [str(e).strip() for e in raw_events if str(e).strip()]
+            unknown = [e for e in wanted if e not in DEFAULT_ALERT_EVENTS]
+            if unknown:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"unknown alert event(s): {', '.join(unknown)} — "
+                           f"valid: {', '.join(sorted(DEFAULT_ALERT_EVENTS))}",
+                )
+            config["events"] = wanted
 
         # Persist to config.comm.channels (survives restart) + atomic write.
         comm = dict(d.platform.config.comm or {})
@@ -419,6 +453,62 @@ def register(app: FastAPI, d) -> None:
                     _log.exception("slack channel reflex failed on %r", name)
         return {"ok": True}
 
+    @app.post("/comm/telegram/detect-chat")
+    def telegram_detect_chat(body: dict) -> dict[str, Any]:
+        """The chat-id wall, removed (v1.118.0): paste the bot token, send the
+        bot any message, and this reads ``getUpdates`` ONCE to list the chats
+        that messaged it — the UI polls while showing "waiting for your
+        message…" and fills the id on the first hit. The token rides the body
+        over loopback exactly like the add-channel form's secret fields; it is
+        vaulted at save time, not here."""
+        from ...comm import httpx_get
+
+        token = str((body or {}).get("token") or "").strip()
+        if not token:
+            raise HTTPException(status_code=400, detail="bot token required")
+        try:
+            resp = httpx_get(
+                f"https://api.telegram.org/bot{token}/getUpdates",
+                {"timeout": 0, "limit": 20},
+            )
+        except Exception as exc:  # noqa: BLE001 — offline is an answer, not a 500
+            raise HTTPException(
+                status_code=502, detail=f"could not reach Telegram: {exc}"
+            )
+        data = resp if isinstance(resp, dict) else {}
+        if hasattr(resp, "json"):
+            try:
+                data = resp.json()
+            except Exception:  # noqa: BLE001
+                data = {}
+        if not data.get("ok"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Telegram rejected that token — check it against @BotFather "
+                    f"({(data.get('description') or 'no detail')})"
+                ),
+            )
+        chats: dict[int, str] = {}
+        for upd in data.get("result") or []:
+            msg = upd.get("message") or upd.get("edited_message") or {}
+            chat = msg.get("chat") or {}
+            cid = chat.get("id")
+            if cid is None:
+                continue
+            label = (
+                chat.get("title")
+                or " ".join(
+                    x for x in (chat.get("first_name"), chat.get("last_name")) if x
+                )
+                or chat.get("username")
+                or str(cid)
+            )
+            chats[int(cid)] = str(label)
+        return {
+            "chats": [{"id": cid, "label": label} for cid, label in chats.items()],
+        }
+
     @app.post("/comm/channels/{name}/test")
     def test_comm_channel(name: str) -> dict[str, Any]:
         """Send a REAL test message through one channel and report honestly —
@@ -429,6 +519,21 @@ def register(app: FastAPI, d) -> None:
             "✅ Iron Jarvis test — this channel is wired up and working.", [name]
         )
         r = results.get(name) or {"ok": False, "detail": "channel produced no result"}
+        # Persist the outcome on the CONFIGURED row (v1.118.0) so the state dot
+        # survives reloads — a Slack app that died in March must not look green
+        # in July. Built-ins have no config row; their state is definitional.
+        comm = dict(d.platform.config.comm or {})
+        channels = dict(comm.get("channels") or {})
+        if name in channels:
+            from ...core.ids import utcnow as _now
+
+            row = dict(channels[name])
+            row["last_test_ok"] = bool(r.get("ok"))
+            row["last_test_at"] = _now().isoformat()
+            channels[name] = row
+            comm["channels"] = channels
+            d.platform.config.comm = comm
+            d._persist_config(["comm"])
         return {"name": name, **r}
 
     @app.post("/comm/notify")

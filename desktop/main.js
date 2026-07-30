@@ -1046,6 +1046,28 @@ function installSpotlightIpc() {
     if (spotlightWin && !spotlightWin.isDestroyed()) spotlightWin.hide();
   });
   // Native clipboard for the terminal (paste/copy) — never permission-gated.
+  // Native toast for the "This PC" notification destination (v1.118.0).
+  // Clicking it restores the window — the alert is an invitation back in.
+  ipcMain.handle("notify:show", (_e, opts) => {
+    try {
+      const note = new Notification({
+        title: String(opts?.title || "Iron Jarvis"),
+        body: String(opts?.body || ""),
+      });
+      note.on("click", () => {
+        try {
+          if (mainWin && !mainWin.isDestroyed()) {
+            mainWin.show();
+            mainWin.focus();
+          }
+        } catch {}
+      });
+      note.show();
+      return true;
+    } catch {
+      return false;
+    }
+  });
   ipcMain.handle("clipboard:read", () => {
     try {
       return clipboard.readText();

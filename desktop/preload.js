@@ -49,6 +49,12 @@ contextBridge.exposeInMainWorld("ironjarvis", {
   // (titleBarOverlay is frozen at window creation otherwise — v1.112.0).
   setTitleBarOverlay: (color, symbolColor) =>
     ipcRenderer.invoke("titlebar:set-overlay", { color, symbolColor }),
+  // "This PC" notifications (v1.118.0): the dashboard's bridge component turns
+  // comm.desktop events into native OS toasts. The renderer stays alive while
+  // the window is minimized to the tray, so these land exactly when the user
+  // is NOT looking at the app.
+  notify: (title, body) =>
+    ipcRenderer.invoke("notify:show", { title: String(title ?? ""), body: String(body ?? "") }),
   // App auto-update control for the Updates page (the packaged-app updater).
   update: {
     getState: () => ipcRenderer.invoke("update:getState"),

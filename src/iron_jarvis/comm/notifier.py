@@ -115,4 +115,19 @@ class Notifier:
         etype = _event_field(event, "type")
         if etype not in self.event_types:
             return None
-        return self.notify(self._formatter(event))
+        # v1.118.0: fan out to EVERY channel whose per-registration config
+        # allows this event type — not just the default. A channel config may
+        # carry ``events: [...]`` to narrow what it receives (the Notifications
+        # page's per-destination checkboxes); absent/empty means everything,
+        # which is exactly the old behaviour for existing channels. Before this,
+        # notify(None-targets) meant auto-alerts only ever reached the DEFAULT
+        # channel — a second connected destination silently got nothing.
+        targets = [
+            name
+            for name, ch in sorted(self._channels.items())
+            if not (getattr(ch, "config", None) or {}).get("events")
+            or etype in (ch.config.get("events") or [])
+        ]
+        if not targets:
+            return {}
+        return self.notify(self._formatter(event), targets)

@@ -672,6 +672,25 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         # Expose the arm functions + this loop to put_settings (threadpool).
         _live_rearm["loop"] = asyncio.get_running_loop()
+
+        # "This PC" destination (v1.118.0): DesktopChannel.send runs in sync
+        # route threads, so its sink schedules the bus publish onto THIS loop
+        # thread-safely. The dashboard's bridge turns the comm.desktop event
+        # into a native OS toast via the Electron preload.
+        from ..comm.channels import DesktopChannel
+
+        def _desktop_sink(title: str, message: str) -> None:
+            loop = _live_rearm.get("loop")
+            if loop is None:
+                raise RuntimeError("daemon loop not running")
+            asyncio.run_coroutine_threadsafe(
+                platform.event_bus.publish(
+                    "comm.desktop", {"title": title, "message": message}
+                ),
+                loop,
+            )
+
+        DesktopChannel.sink = staticmethod(_desktop_sink)
         _live_rearm["autonomy"] = _arm_autonomy
         _live_rearm["sentinels"] = _arm_sentinels
         _live_rearm["calendar"] = _arm_calendar

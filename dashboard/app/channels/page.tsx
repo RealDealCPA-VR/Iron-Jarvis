@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  Search,
   Megaphone,
   Send,
   Radio,
@@ -29,12 +30,21 @@ import {
   ConfirmButton,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
+import { timeAgo } from "@/lib/format";
 import { PageShell, Reveal } from "@/components/motion";
+import { ChooserTiles } from "@/components/ChooserTiles";
+import { useFocusRef } from "@/lib/useFocusRef";
 
 /** A configured outbound channel. Shape changed from string[] → object list. */
 interface ChannelInfo {
   name: string;
   type: string;
+  /** No config row — mock/console/this-pc; ready by definition. */
+  builtin?: boolean;
+  /** The LAST REAL test result, persisted: green provably means "delivered". */
+  last_test_ok?: boolean | null;
+  last_test_at?: string | null;
+  events?: string[];
 }
 
 /** A field the add-form must collect for a given channel type. */
@@ -100,6 +110,62 @@ function tipFor(detail?: string): string {
   return "open Edit and re-check the channel's details.";
 }
 
+/** Tile metadata per addable type (v1.118.0): what you have, what it asks
+ * for, honest effort — easiest first. The built-in "This PC" is not here
+ * because it needs nothing; the list card shows it pre-connected instead. */
+const DEST_META: Record<
+  string,
+  { label: string; blurb: string; needs: string; effort: "quickest" | "easy" | "needs a token" | "technical"; order: number }
+> = {
+  telegram: {
+    label: "Telegram",
+    blurb: "Alerts on your phone, via a bot you own.",
+    needs: "a bot token from @BotFather — your chat is detected automatically",
+    effort: "quickest",
+    order: 1,
+  },
+  slack: {
+    label: "Slack",
+    blurb: "Messages into a channel your team watches.",
+    needs: "one Incoming Webhook URL (two-way setup is optional, under Advanced)",
+    effort: "easy",
+    order: 2,
+  },
+  discord: {
+    label: "Discord",
+    blurb: "Messages into a server channel.",
+    needs: "one webhook URL (channel settings → Integrations → Webhooks)",
+    effort: "easy",
+    order: 3,
+  },
+  email: {
+    label: "Email",
+    blurb: "Plain email to any address you choose.",
+    needs: "SMTP details (host, from, to)",
+    effort: "technical",
+    order: 4,
+  },
+};
+
+/** Which fields form the EASY path per type; everything else is Advanced.
+ * null = no split (email is all-primary — it is honest about being technical). */
+const PRIMARY_KEYS: Record<string, string[] | null> = {
+  slack: ["webhook_url"],
+  discord: ["webhook_url"],
+  telegram: ["token", "chat_id"],
+  email: null,
+};
+
+/** Friendly names for the per-destination event routing checkboxes (N5). */
+const EVENT_LABELS: Array<{ key: string; label: string }> = [
+  { key: "review.requested", label: "A review needs you" },
+  { key: "session.completed", label: "A task finished" },
+  { key: "workflow.completed", label: "A workflow finished" },
+  { key: "provider.failed", label: "A model failed" },
+  { key: "provider.failover", label: "A model failed over" },
+  { key: "autonomy.executed", label: "Autonomy acted on its own" },
+];
+
 export default function ChannelsPage() {
   const { data, error, loading, reload } = useApi<{ channels: ChannelInfo[] }>("/comm/channels");
   const { data: typesData } = useApi<{ types: ChannelType[] }>("/comm/channel-types");
@@ -125,6 +191,68 @@ export default function ChannelsPage() {
   // Non-null when the add form is reconfiguring an EXISTING channel (Edit). The
   // add endpoint replaces on the same name, so Edit = re-submit through it.
   const [editing, setEditing] = useState<string | null>(null);
+  // Advanced fields collapsed by default (v1.118.0): Slack used to present
+  // NINE fields as equals; the easy path is one webhook URL.
+  const [advOpen, setAdvOpen] = useState(false);
+  // Per-destination event routing (N5). Full set = "everything" = omitted on
+  // the wire, which is the pre-v1.118 behaviour for every existing channel.
+  const [addEvents, setAddEvents] = useState<string[]>(EVENT_LABELS.map((e) => e.key));
+  // Telegram chat-id auto-detect (N3): poll getUpdates while the user goes and
+  // messages their bot — the classic "what is my chat id" wall, removed.
+  const [detecting, setDetecting] = useState(false);
+  const [detectErr, setDetectErr] = useState<string | null>(null);
+  const [detectChats, setDetectChats] = useState<Array<{ id: number; label: string }>>([]);
+  const detectTimerRef = useRef<number | null>(null);
+
+  function stopDetect() {
+    if (detectTimerRef.current) window.clearInterval(detectTimerRef.current);
+    detectTimerRef.current = null;
+    setDetecting(false);
+  }
+  useEffect(() => () => stopDetect(), []); // never leak the poller
+
+  function startDetect() {
+    const token = (addValues["token"] ?? "").trim();
+    if (!token || detecting) return;
+    setDetectErr(null);
+    setDetectChats([]);
+    setDetecting(true);
+    const poll = async () => {
+      try {
+        const r = await post<{ chats: Array<{ id: number; label: string }> }>(
+          "/comm/telegram/detect-chat",
+          { token },
+        );
+        if (r.chats.length === 1) {
+          // One chat answered — that's you. Fill and stop.
+          setAddValues((v) => ({ ...v, chat_id: String(r.chats[0].id) }));
+          stopDetect();
+        } else if (r.chats.length > 1) {
+          setDetectChats(r.chats); // several chats — let the user pick
+          stopDetect();
+        }
+      } catch (err) {
+        // A bad token is an answer, not a retry loop.
+        setDetectErr(err instanceof ApiError ? err.message : String(err));
+        stopDetect();
+      }
+    };
+    void poll();
+    detectTimerRef.current = window.setInterval(() => void poll(), 2500);
+    // Watching an unmessaged bot forever helps nobody — give up after 90s.
+    window.setTimeout(() => stopDetect(), 90_000);
+  }
+
+  // ?focus=add (the global search's deep link) opens the form directly.
+  const addFocusRef = useFocusRef<HTMLDivElement>("add");
+  useEffect(() => {
+    try {
+      if (new URLSearchParams(window.location.search).get("focus") === "add")
+        setShowAdd(true);
+    } catch {
+      /* malformed URL — ignore */
+    }
+  }, []);
 
   /* --- One-paste app manifest (slack) --------------------------------------- */
   // Open by default — the one-paste manifest is the EASIEST setup path and was
@@ -206,18 +334,47 @@ export default function ChannelsPage() {
     try {
       // All field values (secret + plain) go into `config` keyed by field.key;
       // the server routes secret fields to the encrypted vault.
-      const config: Record<string, string> = {};
+      const config: Record<string, string | string[]> = {};
       selectedType?.fields.forEach((f) => {
         config[f.key] = addValues[f.key] ?? "";
       });
+      // Full set = everything = omit (the server treats absent as all).
+      if (addEvents.length && addEvents.length < EVENT_LABELS.length)
+        config["events"] = addEvents;
       await post("/comm/channels", { name, type: addType, config });
-      setAddSuccess(`Channel “${name}” ${editing ? "updated" : "added"}.`);
+      // ADDING IS TESTING (v1.118.0): a destination that only fails later, the
+      // night it mattered, is the exact trap this flow exists to remove. Send
+      // the real test now; green means delivered, red keeps the form open with
+      // the actionable fix.
+      let tested: { ok: boolean; detail?: string };
+      try {
+        tested = await post<ChannelTestResult>(
+          `/comm/channels/${encodeURIComponent(name)}/test`,
+        );
+      } catch (err) {
+        tested = {
+          ok: false,
+          detail: err instanceof ApiError ? err.message : String(err),
+        };
+      }
+      reload();
+      if (!tested.ok) {
+        setAddError(
+          `Saved, but the test message did not deliver — ${tested.detail ?? "no detail"}. ` +
+            `Fix: ${tipFor(tested.detail)}`,
+        );
+        return; // form stays open; the row already shows its red state
+      }
+      setAddSuccess(
+        `“${name}” ${editing ? "updated" : "added"} — test message delivered ✓`,
+      );
       setAddName("");
       setAddType("");
       setAddValues({});
+      setAddEvents(EVENT_LABELS.map((e) => e.key));
+      setAdvOpen(false);
       setShowAdd(false);
       setEditing(null);
-      reload();
     } catch (err) {
       // Keep the form open so the user can fix a bad name/type/config — the
       // daemon's detail carries the actionable tip (e.g. Slack needs a webhook).
@@ -298,6 +455,7 @@ export default function ChannelsPage() {
 
       {showAdd && (
         <Reveal>
+          <div ref={addFocusRef}>
           <Card
             title={editing ? `Edit “${editing}”` : "Add a destination"}
             icon={editing ? <Pencil size={15} /> : <Plus size={15} />}
@@ -312,30 +470,42 @@ export default function ChannelsPage() {
                   channel).
                 </div>
               )}
-              <div>
-                <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                  Type
-                </label>
-                <select
-                  aria-label="Channel type"
-                  value={addType}
-                  disabled={!!editing}
-                  onChange={(e) => {
-                    setAddType(e.target.value);
-                    setAddValues({});
-                    setManifestOpen(false);
-                    setManifestCopied(false);
-                  }}
-                  className="field disabled:opacity-60"
-                >
-                  <option value="">Select a type…</option>
-                  {channelTypes.map((t) => (
-                    <option key={t.type} value={t.type}>
-                      {t.type}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {editing ? (
+                <div>
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    Type
+                  </label>
+                  <Badge value={DEST_META[addType]?.label ?? addType} tone="cyan" />
+                </div>
+              ) : (
+                <div>
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    Where should alerts go?
+                  </label>
+                  <ChooserTiles
+                    ariaLabel="Destination type"
+                    value={addType}
+                    onChange={(key: string) => {
+                      setAddType(key);
+                      setAddValues({});
+                      setAdvOpen(false);
+                      stopDetect();
+                      setDetectErr(null);
+                      setDetectChats([]);
+                      setManifestOpen(false);
+                      setManifestCopied(false);
+                    }}
+                    options={channelTypes
+                      .filter((t) => DEST_META[t.type])
+                      .sort((a, b) => DEST_META[a.type].order - DEST_META[b.type].order)
+                      .map((t) => ({
+                        key: t.type,
+                        ...DEST_META[t.type],
+                        icon: <Megaphone size={15} />,
+                      }))}
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
@@ -356,26 +526,143 @@ export default function ChannelsPage() {
                 </p>
               </div>
 
-              {selectedType?.fields.map((f) => (
-                <div key={f.key}>
-                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                    {f.label}
-                  </label>
-                  <input
-                    type={f.secret ? "password" : "text"}
-                    value={addValues[f.key] ?? ""}
-                    onChange={(e) =>
-                      setAddValues((v) => ({ ...v, [f.key]: e.target.value }))
-                    }
-                    aria-label={f.label}
-                    autoComplete="off"
-                    className={`field text-sm ${f.secret ? "font-mono" : ""}`}
-                  />
-                  {f.help && (
-                    <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">{f.help}</p>
-                  )}
-                </div>
-              ))}
+              {(() => {
+                if (!selectedType) return null;
+                const primaryKeys = PRIMARY_KEYS[addType] ?? null;
+                const primary = primaryKeys
+                  ? selectedType.fields.filter((f) => primaryKeys.includes(f.key))
+                  : selectedType.fields;
+                const advanced = primaryKeys
+                  ? selectedType.fields.filter((f) => !primaryKeys.includes(f.key))
+                  : [];
+                const renderField = (f: ChannelField) => (
+                  <div key={f.key}>
+                    <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                      {f.label}
+                    </label>
+                    <input
+                      type={f.secret ? "password" : "text"}
+                      value={addValues[f.key] ?? ""}
+                      onChange={(e) =>
+                        setAddValues((v) => ({ ...v, [f.key]: e.target.value }))
+                      }
+                      aria-label={f.label}
+                      autoComplete="off"
+                      className={`field text-sm ${f.secret ? "font-mono" : ""}`}
+                    />
+                    {f.help && (
+                      <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">{f.help}</p>
+                    )}
+                    {addType === "telegram" && f.key === "chat_id" && (
+                      <div className="mt-2 space-y-2">
+                        {detecting ? (
+                          <p className="flex items-center gap-2 text-[12px] text-accent-soft">
+                            <Radio size={13} className="animate-pulse" />
+                            Now send your bot any message — watching…
+                            <button
+                              type="button"
+                              onClick={stopDetect}
+                              className="text-zinc-500 transition-colors hover:text-zinc-300"
+                            >
+                              stop
+                            </button>
+                          </p>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={startDetect}
+                            disabled={!(addValues["token"] ?? "").trim()}
+                            className="btn-ghost px-2.5 py-1.5 text-[12px] disabled:opacity-40"
+                            title="Reads your bot's recent messages once to find your chat"
+                          >
+                            <Search size={13} /> Detect my chat ID
+                          </button>
+                        )}
+                        {detectChats.length > 1 && (
+                          <div className="flex flex-wrap gap-1.5">
+                            {detectChats.map((c) => (
+                              <button
+                                key={c.id}
+                                type="button"
+                                onClick={() => {
+                                  setAddValues((v) => ({ ...v, chat_id: String(c.id) }));
+                                  setDetectChats([]);
+                                }}
+                                className="rounded-full border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-[11.5px] text-accent-soft transition-colors hover:bg-accent/[0.14]"
+                              >
+                                {c.label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {detectErr && (
+                          <p className="text-[11.5px] text-rose-300">{detectErr}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+                return (
+                  <>
+                    {primary.map(renderField)}
+                    <div className="rounded-xl border border-white/[0.05] bg-white/[0.02]">
+                      <button
+                        type="button"
+                        onClick={() => setAdvOpen((v) => !v)}
+                        aria-expanded={advOpen}
+                        className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[11px] uppercase tracking-[0.1em] text-zinc-400 transition-colors hover:text-accent-soft"
+                      >
+                        {advOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                        Advanced
+                        {advanced.length > 0 ? ` · two-way & extras (${advanced.length})` : ""}
+                        {" · which alerts"}
+                      </button>
+                      {advOpen && (
+                        <div className="space-y-3.5 border-t hairline px-3 py-3">
+                          {advanced.map(renderField)}
+                          <div>
+                            <p className="mb-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                              Send this destination
+                            </p>
+                            <div className="grid gap-1.5 sm:grid-cols-2">
+                              {EVENT_LABELS.map((ev) => {
+                                const on = addEvents.includes(ev.key);
+                                return (
+                                  <label
+                                    key={ev.key}
+                                    className={`flex cursor-pointer items-center gap-2 rounded-lg border p-2 text-[12px] transition-colors ${
+                                      on
+                                        ? "border-accent/25 bg-accent/[0.05] text-zinc-200"
+                                        : "border-white/[0.06] text-zinc-500 hover:bg-white/[0.03]"
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={on}
+                                      onChange={() =>
+                                        setAddEvents((prev) =>
+                                          prev.includes(ev.key)
+                                            ? prev.filter((k) => k !== ev.key)
+                                            : [...prev, ev.key],
+                                        )
+                                      }
+                                      className="accent-accent"
+                                    />
+                                    {ev.label}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                            <p className="mt-1 text-[11px] text-zinc-600">
+                              Everything ticked = all alerts (the default).
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
 
               {/* One-paste app setup: only for types that ship a manifest (slack). */}
               {selectedType?.manifest && (
@@ -458,12 +745,13 @@ export default function ChannelsPage() {
               {addError && <ErrorNote>{addError}</ErrorNote>}
             </form>
           </Card>
+          </div>
         </Reveal>
       )}
 
       <Reveal>
         <div className="grid gap-6 lg:grid-cols-2">
-          <Card title={`Configured channels${channels.length ? ` · ${channels.length}` : ""}`} icon={<Radio size={15} />}>
+          <Card title={`Destinations${channels.length ? ` · ${channels.length}` : ""}`} icon={<Radio size={15} />}>
             {loading && !data ? (
               <SkeletonRows rows={3} />
             ) : channels.length === 0 ? (
@@ -480,11 +768,41 @@ export default function ChannelsPage() {
                     className="flex items-center justify-between gap-2.5 rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2.5"
                   >
                     <div className="flex min-w-0 items-center gap-2.5">
-                      <Dot on />
-                      <span className="truncate font-mono text-sm text-zinc-200">{c.name}</span>
-                      {c.type && <Badge value={c.type} tone="cyan" />}
+                      {/* v1.118.0: the dot is a TEST RESULT, not decoration —
+                          green = last real send delivered; rose = it failed;
+                          zinc = never tested. Built-ins are ready by nature. */}
+                      <span
+                        className={`h-2 w-2 shrink-0 rounded-full ${
+                          c.builtin || c.last_test_ok
+                            ? "bg-emerald-400"
+                            : c.last_test_ok === false
+                              ? "bg-rose-400"
+                              : "bg-zinc-600"
+                        }`}
+                      />
+                      <div className="min-w-0">
+                        <span className="flex items-center gap-2">
+                          <span className="truncate font-mono text-sm text-zinc-200">
+                            {c.name === "this-pc" ? "This PC" : c.name}
+                          </span>
+                          {c.type && <Badge value={c.type} tone="cyan" />}
+                        </span>
+                        <span className="block text-[11px] text-zinc-500">
+                          {c.name === "this-pc"
+                            ? "Pops a notification on this device — no setup (desktop app)"
+                            : c.builtin
+                              ? "Built-in — always available"
+                              : c.last_test_ok
+                                ? `Working — tested ${c.last_test_at ? timeAgo(c.last_test_at) : "earlier"}`
+                                : c.last_test_ok === false
+                                  ? "Failing — open Test for the fix"
+                                  : "Untested — hit Test once"}
+                          {(c.events?.length ?? 0) > 0 &&
+                            ` · ${c.events!.length} alert kind${c.events!.length === 1 ? "" : "s"}`}
+                        </span>
+                      </div>
                     </div>
-                    {!BUILTIN.has(c.name) && (
+                    {!(c.builtin ?? BUILTIN.has(c.name)) && (
                       <div className="flex shrink-0 items-center gap-1.5">
                         <button
                           type="button"
@@ -514,6 +832,23 @@ export default function ChannelsPage() {
                           title={`Delete channel ${c.name}`}
                         />
                       </div>
+                    )}
+                    {(c.builtin ?? BUILTIN.has(c.name)) && c.name === "this-pc" && (
+                      <button
+                        type="button"
+                        onClick={() => testChannel(c.name)}
+                        disabled={testBusy !== null}
+                        title="Pop a test notification on this device right now"
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
+                      >
+                        {testBusy === c.name ? (
+                          <LoaderInline label="Testing…" />
+                        ) : (
+                          <>
+                            <Send size={13} /> Test
+                          </>
+                        )}
+                      </button>
                     )}
                   </li>
                 ))}

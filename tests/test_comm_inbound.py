@@ -123,7 +123,8 @@ def test_daemon_boots_with_no_inbound_and_makes_no_channels(tmp_path):
         # default comm => the mock channel only; nothing inbound-enabled.
         # (/comm/channels returns {name,type} objects so the UI can label/delete.)
         channels = client.get("/comm/channels").json()["channels"]
-        assert [c["name"] for c in channels] == ["mock"]
+        # v1.118.0: this-pc (the built-in desktop destination) rides along.
+        assert [c["name"] for c in channels] == ["mock", "this-pc"]
 
 
 # --------------------------------------------------------------------------- #

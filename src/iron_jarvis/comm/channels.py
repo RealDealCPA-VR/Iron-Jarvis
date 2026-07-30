@@ -161,6 +161,42 @@ class MockChannel(Channel):
         return {"ok": True, "detail": f"recorded ({len(self.sent)})"}
 
 
+class DesktopChannel(Channel):
+    """"This PC" (v1.118.0) — a destination that needs ZERO setup.
+
+    ``send`` hands the message to a process-wide sink the daemon wires at
+    startup (an event-bus publish scheduled thread-safely onto the loop); the
+    dashboard's bridge component turns the resulting ``comm.desktop`` event
+    into a native OS notification via the Electron preload. The renderer stays
+    alive while the window is minimized to the tray, so alerts land exactly
+    when they matter most — when the user is NOT looking at the app.
+
+    The sink is a class attribute rather than a constructor arg on purpose:
+    channels are built in two places (boot + the add-channel route) through a
+    uniform constructor, and threading a loop handle through both would couple
+    comm to the daemon. Unset sink (CLI runs, unit tests) fails HONESTLY —
+    "configured" must never silently mean "sent nowhere".
+    """
+
+    name = "desktop"
+
+    #: set by the daemon lifespan: Callable[[str title, str message], None].
+    sink = None  # type: ignore[var-annotated]
+
+    def send(self, message: str, **kw: Any) -> dict[str, Any]:
+        sink = type(self).sink
+        if sink is None:
+            return {
+                "ok": False,
+                "detail": "desktop notifications need the running app (daemon not up)",
+            }
+        try:
+            sink(str(kw.get("title") or "Iron Jarvis"), message)
+        except Exception as exc:  # noqa: BLE001 — a bad sink must not break fan-out
+            return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
+        return {"ok": True, "detail": "notification shown on this device"}
+
+
 class ConsoleChannel(Channel):
     """Logs/prints the message locally; always ok. Useful as a safe fallback."""
 
@@ -438,6 +474,7 @@ CHANNEL_TYPES: dict[str, type[Channel]] = {
         DiscordChannel,
         TelegramChannel,
         EmailChannel,
+        DesktopChannel,
         MockChannel,
         ConsoleChannel,
     )

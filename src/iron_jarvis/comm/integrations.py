@@ -146,4 +146,12 @@ def build_notifier(
 
     if not notifier.channels():
         notifier.add_channel("mock", MockChannel())
+    # "This PC" (v1.118.0): a built-in, zero-config destination so the module
+    # never starts empty. Added AFTER the fallback on purpose — the offline
+    # default channel stays "mock", so nothing that pinned the old default
+    # moves; this-pc participates in event fan-out and is testable by name.
+    if notifier.get("this-pc") is None:
+        from .channels import DesktopChannel
+
+        notifier.add_channel("this-pc", DesktopChannel({"type": "desktop"}))
     return notifier

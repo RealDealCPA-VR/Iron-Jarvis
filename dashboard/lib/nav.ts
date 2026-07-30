@@ -342,7 +342,17 @@ export const NAV: NavSectionDef[] = [
         icon: Megaphone,
         // "channels" stays an alias: the page carried that name until v1.113.0
         // and search must keep answering the old vocabulary forever.
-        aliases: ["notify me", "email", "slack", "text me", "alerts to phone", "channels"],
+        aliases: [
+          "notify me",
+          "email",
+          "slack",
+          "telegram",
+          "discord",
+          "text me",
+          "alerts to phone",
+          "channels",
+          "add a destination",
+        ],
         blurb: "Where Iron Jarvis sends alerts, with a test send for each.",
       },
     ],

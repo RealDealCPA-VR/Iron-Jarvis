@@ -91,6 +91,11 @@ describe("alerts live under 'Notifications'", () => {
     expect(s).not.toContain('title="Channels"');
     expect(s).not.toContain("Add a channel");
   });
+  it("the list card says Destinations, not channels (v1.118.0)", () => {
+    const s = read("app/channels/page.tsx");
+    expect(s).toContain("`Destinations${");
+    expect(s).not.toContain("Configured channels");
+  });
   it("but Slack's own 'channel' concept is still allowed to be called one", () => {
     // "a bot token + a channel" is SLACK's channel — their word, correct
     // usage. The ban is on OUR concept wearing that name.

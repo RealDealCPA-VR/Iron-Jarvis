@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  Megaphone,
   Search,
   PlugZap,
   Cpu,
@@ -99,10 +100,19 @@ const DEEP_LINK_ITEMS: PaletteRow[] = [
     id: "deep:packs",
     kind: "page",
     label: "Tools → Plug-ins",
-    blurb: "Connect an MCP pack and set what it may run without asking.",
-    aliases: ["auto-approve", "mcp", "connect a pack"],
+    blurb: "Connect a plug-in and set what it may run without asking.",
+    aliases: ["auto-approve", "mcp", "connect a pack", "connect a plug-in"],
     href: "/tools?focus=packs",
     icon: Package,
+  },
+  {
+    id: "deep:add-destination",
+    kind: "page",
+    label: "Notifications → Add a destination",
+    blurb: "Send alerts to your phone, Slack, Discord, or email — Telegram takes ~2 minutes.",
+    aliases: ["telegram", "slack", "discord", "notify my phone", "add destination"],
+    href: "/channels?focus=add",
+    icon: Megaphone,
   },
   {
     id: "deep:add-base",

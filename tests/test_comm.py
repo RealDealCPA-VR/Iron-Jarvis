@@ -283,14 +283,17 @@ def test_build_notifier_from_config_offline():
     notifier = build_notifier(
         cfg, secret_resolver=lambda n: "TOK", http_post=post
     )
-    assert notifier.channels() == ["slack", "tg"]
+    # v1.118.0: "this-pc" is the built-in zero-config desktop destination.
+    assert notifier.channels() == ["slack", "tg", "this-pc"]
     notifier.notify("hi", channels=["slack"])
     assert post.last[0] == "https://hooks/X"
 
 
 def test_build_notifier_falls_back_to_mock():
     notifier = build_notifier(None)
-    assert notifier.channels() == ["mock"]
+    # v1.118.0: the offline fallback keeps mock as DEFAULT, plus this-pc.
+    assert notifier.channels() == ["mock", "this-pc"]
+    assert notifier.default_channel == "mock"
     assert isinstance(notifier.get("mock"), MockChannel)
 
 
