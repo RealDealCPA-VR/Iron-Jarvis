@@ -228,6 +228,20 @@ class WorkflowEngine:
                 session_ids=session_ids,
                 outputs=outputs,
             )
+            # Narrate the run live (v1.120.0): chat renders these as the run
+            # card's step chips lighting up.
+            await self.platform.event_bus.publish(
+                EventType.WORKFLOW_STEP_STARTED,
+                {
+                    "run_id": run_id,
+                    "workflow": workflow.name,
+                    "step": step.name,
+                    "index": idx,
+                    "total": len(steps),
+                    "agent": step.agent,
+                    "session_id": session.id,
+                },
+            )
             task = asyncio.ensure_future(orch.run_session(session.id))
             orch.register_running(session.id, task)
             try:
@@ -257,6 +271,20 @@ class WorkflowEngine:
                 current_session_id=None,
                 session_ids=session_ids,
                 outputs=outputs,
+            )
+            await self.platform.event_bus.publish(
+                EventType.WORKFLOW_STEP_COMPLETED,
+                {
+                    "run_id": run_id,
+                    "workflow": workflow.name,
+                    "step": step.name,
+                    "index": idx,
+                    "total": len(steps),
+                    "agent": step.agent,
+                    "session_id": session.id,
+                    "status": session.status.value,
+                    "summary": (session.summary or "")[:_MAX_STEP_SUMMARY],
+                },
             )
             if session.status is SessionStatus.COMPLETED:
                 completed.append((step.name, session.summary or ""))

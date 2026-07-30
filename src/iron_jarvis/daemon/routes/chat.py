@@ -16,6 +16,7 @@ from typing import Any
 
 from ..schemas import (
     ChatBody,
+    ChatCrystallizeBody,
     ChatRememberBody,
     ChatShareBody,
     PersonaCreateBody,
@@ -308,6 +309,103 @@ _ESCALATE_SPEC = {
         "required": ["reason"],
     },
 }
+
+#: The second declared EXIT (v1.120.0): the model proposes a REUSABLE workflow
+#: instead of describing steps in prose. Like escalate_to_agent, nothing
+#: executes — the turn stops and the client renders the proposal as a draft
+#: card (Save / Run once / Open in editor). This is how a conversation
+#: crystallizes into a process without the user ever opening a builder.
+_WORKFLOW_DRAFT_TOOL = "workflow_draft"
+_WORKFLOW_DRAFT_AGENTS = {"builder", "planner", "researcher", "reviewer", "supervisor"}
+_WORKFLOW_DRAFT_SPEC = {
+    "name": _WORKFLOW_DRAFT_TOOL,
+    "description": (
+        "Propose a reusable, repeatable workflow when the user describes a "
+        "multi-step PROCESS they will want again — 'every Friday…', 'whenever "
+        "a client sends…', 'first gather X, then check Y, then report Z'. "
+        "The user sees the steps as a card they can save, run once, or edit — "
+        "so call this INSTEAD of writing the steps out in prose. Do NOT call "
+        "it for one-off requests, questions, or work to do right now; for "
+        "those, answer or use your tools."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "kebab-case-name"},
+            "description": {"type": "string", "description": "one line"},
+            "steps": {
+                "type": "array",
+                "description": "2-6 ordered steps; each runs `agent` on `task`",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "agent": {
+                            "type": "string",
+                            "description": (
+                                "one of: builder, planner, researcher, "
+                                "reviewer, supervisor"
+                            ),
+                        },
+                        "task": {
+                            "type": "string",
+                            "description": "a clear, self-contained instruction",
+                        },
+                    },
+                    "required": ["name", "task"],
+                },
+            },
+        },
+        "required": ["name", "steps"],
+    },
+}
+
+
+def _sanitize_draft(args: dict | None) -> dict | None:
+    """Coerce a workflow_draft call's arguments into the canonical draft shape
+    (mirrors _build_workflow's step sanitizing). Returns None when nothing
+    usable survives — the turn then just ends with its text.
+
+    Hardening (the steps are MODEL OUTPUT, possibly steered by untrusted chat
+    content): step count capped (one click must not queue dozens of billable
+    sessions), task length capped, step names DEDUPED (live-run state and the
+    engine's outputs are name-keyed), and the workflow name slugged to a safe
+    charset (a "/" in a name makes the saved row unreachable through the
+    GET/DELETE /workflows/{name} routes)."""
+    args = args or {}
+    steps: list[dict] = []
+    seen_names: set[str] = set()
+    for s in (args.get("steps") or [])[:12]:
+        if not isinstance(s, dict):
+            continue
+        task = str(s.get("task") or "").strip()[:4000]
+        name = str(s.get("name") or "").strip()
+        if not task and not name:
+            continue
+        agent = str(s.get("agent") or "builder").strip().lower()
+        base = (name or task)[:80]
+        uniq, i = base, 2
+        while uniq in seen_names:
+            uniq = f"{base[:76]}-{i}"
+            i += 1
+        seen_names.add(uniq)
+        steps.append(
+            {
+                "name": uniq,
+                "agent": agent if agent in _WORKFLOW_DRAFT_AGENTS else "builder",
+                "task": task or name,
+                "tool": None,
+            }
+        )
+    if not steps:
+        return None
+    raw = str(args.get("name") or "").strip()[:80]
+    name = _re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-._") or "drafted-workflow"
+    return {
+        "name": name,
+        "description": str(args.get("description") or "")[:200],
+        "steps": steps,
+    }
 
 _DOC_WRITING_TOOLS = {
     "write_document",
@@ -880,6 +978,103 @@ def register(app: FastAPI, d) -> None:
             out["note"] = note
         return out
 
+    @app.post("/chat/threads/{thread_id}/crystallize")
+    async def crystallize_chat_thread(
+        thread_id: str, body: ChatCrystallizeBody
+    ) -> dict[str, Any]:
+        """Turn a saved thread into a reusable workflow DRAFT (v1.120.0).
+
+        Reads the transcript (message text + per-message tool names — the
+        maximum storage keeps) and asks a one-shot model to GENERALIZE what
+        happened into 2-6 ordered steps: one-off specifics become parameters,
+        so the workflow works next time too. Returns the draft; nothing is
+        saved — the card's Save button decides (suggest-don't-act). Unlike
+        /remember there is no verbatim fallback: a fabricated workflow from a
+        mock model would be worse than none, so offline → an honest 400."""
+        from ...core.models import ChatThreadRecord
+        from ...providers.adapters.base import LLMMessage
+        from ...providers.adapters.mock import MockLLMAdapter
+
+        with session_scope(d.platform.engine) as db:
+            r = db.get(ChatThreadRecord, thread_id)
+        if r is None:
+            raise HTTPException(status_code=404, detail="no such thread")
+        try:
+            msgs = json.loads(r.messages_json or "[]")
+        except Exception:  # noqa: BLE001
+            msgs = []
+        if not msgs:
+            raise HTTPException(
+                status_code=400, detail="this thread has no messages to turn into a workflow"
+            )
+
+        provider = body.provider or d.platform.config.default_provider
+        model = body.model or d.platform.config.default_model
+        try:
+            adapter = d.platform.providers.get(provider, model)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+        if isinstance(adapter, MockLLMAdapter):
+            adapter, provider = d._failover_adapter("mock")
+            if adapter is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="connect a model on the Connections page to turn chats into workflows",
+                )
+
+        title = (r.title or "Chat").strip() or "Chat"
+        transcript = _share_transcript(title, r.persona or "", r.updated_at, msgs)
+        if len(transcript) > _REMEMBER_INPUT:
+            head, tail = _REMEMBER_INPUT // 3, _REMEMBER_INPUT * 2 // 3
+            transcript = (
+                transcript[:head]
+                + "\n\n[… middle of the conversation omitted for length …]\n\n"
+                + transcript[-tail:]
+            )
+        system = (
+            "You turn a finished chat conversation into a REUSABLE Iron Jarvis "
+            "workflow: the repeatable process behind what actually happened. "
+            "GENERALIZE — replace one-off specifics (a particular file name, "
+            "date, client) with role words ('the provided file', 'this week') "
+            "so the workflow works next time too. Base the steps ONLY on what "
+            "the conversation actually did or clearly set out to do; never "
+            "invent work that didn't happen. Respond with ONLY a JSON object "
+            "(no prose, no code fence) of the exact shape: "
+            '{"name": "kebab-case-name", "description": "one line", '
+            '"steps": [{"name": "Step name", "agent": "builder", "task": '
+            '"a clear instruction for this step", "tool": null}]}. '
+            "agent MUST be one of: builder, planner, researcher, reviewer, "
+            "supervisor. Prefer 2-6 steps."
+        )
+        try:
+            resp, used_provider, _m = await d._one_shot_complete(
+                provider, adapter, system=system,
+                messages=[LLMMessage(role="user", content=transcript)],
+            )
+        except HTTPException:
+            raise  # _one_shot_complete raises CLEAN typed errors (429 etc.)
+        except Exception as exc:  # noqa: BLE001 — honest failure, no fabrication
+            raise HTTPException(status_code=502, detail=f"the model failed: {exc}")
+        from ..app import _extract_workflow_json
+
+        try:
+            wf = _extract_workflow_json(resp.text or "")
+        except Exception:  # noqa: BLE001
+            wf = {}
+        draft = _sanitize_draft(wf if isinstance(wf, dict) else None)
+        if draft is None:
+            raise HTTPException(
+                status_code=422,
+                detail="the model did not return a usable workflow — try again",
+            )
+        # The thread's project rides along so a Save can pin the workflow.
+        return {
+            **draft,
+            "project_id": r.project_id or None,
+            "thread": thread_id,
+            "provider": used_provider,
+        }
+
     def _persona_store():
         from ...personas import PersonaStore
 
@@ -974,7 +1169,10 @@ def register(app: FastAPI, d) -> None:
             # agent mode" — the app asking the user to do its routing.
             "- Answer directly. There are no modes for the user to pick: when "
             "a request needs sustained multi-step work you cannot finish here, "
-            "call escalate_to_agent and it is taken over seamlessly."
+            "call escalate_to_agent and it is taken over seamlessly.\n"
+            "- When the user describes a repeatable multi-step process (\"every "
+            "Friday…\", \"whenever a client sends…\"), call workflow_draft so "
+            "they get a saveable workflow card instead of prose steps."
         )
         # A project only applies INSIDE the Projects module: the in-project chat
         # sends an explicit project_id and grounds in that project's
@@ -1159,7 +1357,8 @@ def register(app: FastAPI, d) -> None:
         armed, auto_armed = _resolve_armed_tools(d, body)
         armed += [t for t in conn_tools if t not in armed]
         tool_specs = (d.platform.registry.specs(armed) if armed else []) + [
-            _ESCALATE_SPEC
+            _ESCALATE_SPEC,
+            _WORKFLOW_DRAFT_SPEC,
         ]
         tools_used: list[str] = []          # ONLY tools that actually executed
         last_tool_output = ""               # last SUCCESSFUL output (no-reply synthesis)
@@ -1280,6 +1479,7 @@ def register(app: FastAPI, d) -> None:
         stopped_note = ""  # honest note when the round budget cuts off tool calls
         escalate = False        # the turn asked for the full agent
         escalate_reason = ""
+        workflow_draft = None   # the turn proposed a reusable workflow (v1.120.0)
         made_docs: list[str] = []  # documents this turn created/edited (preview)
         try:
             for _round in range(_MAX_TOOL_ROUNDS):
@@ -1296,6 +1496,13 @@ def register(app: FastAPI, d) -> None:
                 usage_out += int(_u.get("output_tokens", 0) or 0)
                 completions += 1
                 calls = route.response.tool_calls or []
+                draft_call = next(
+                    (c for c in calls if c.name == _WORKFLOW_DRAFT_TOOL), None
+                )
+                if draft_call is not None:
+                    workflow_draft = _sanitize_draft(draft_call.arguments)
+                    if workflow_draft is not None:
+                        break
                 esc_call = next(
                     (c for c in calls if c.name == _ESCALATE_TOOL), None
                 )
@@ -1404,18 +1611,27 @@ def register(app: FastAPI, d) -> None:
         # than the bare "(no reply)" placeholder (which reads like the turn did
         # nothing). Denied armed tools get an honest footer note.
         reply = route.response.text or ""
-        if not reply.strip() and last_tool_output:
-            snippet = last_tool_output.strip()[:600]
-            ran = ", ".join(dict.fromkeys(tools_used)) or "the armed tools"
-            reply = f"Ran {ran}. Result:\n{snippet}"
-        elif not reply.strip():
-            reply = "(no reply)"
-        if denied_tools:
-            names = ", ".join(dict.fromkeys(denied_tools))
-            reply += f"\n\n_Note: {names} could not run (permission denied)._"
-        if stopped_note:
-            reply += f"\n\n_Note: {stopped_note}._"
-        reply += _creation_honesty_note(body, armed, tools_used)
+        if workflow_draft is not None:
+            # A draft exit SUCCEEDED by proposing — the card is the reply. No
+            # "(no reply)" placeholder (the client captions the card), and no
+            # creation-honesty note (it would call this turn a failure).
+            reply = reply.strip()
+            if denied_tools:
+                names = ", ".join(dict.fromkeys(denied_tools))
+                reply += f"\n\n_Note: {names} could not run (permission denied)._"
+        else:
+            if not reply.strip() and last_tool_output:
+                snippet = last_tool_output.strip()[:600]
+                ran = ", ".join(dict.fromkeys(tools_used)) or "the armed tools"
+                reply = f"Ran {ran}. Result:\n{snippet}"
+            elif not reply.strip():
+                reply = "(no reply)"
+            if denied_tools:
+                names = ", ".join(dict.fromkeys(denied_tools))
+                reply += f"\n\n_Note: {names} could not run (permission denied)._"
+            if stopped_note:
+                reply += f"\n\n_Note: {stopped_note}._"
+            reply += _creation_honesty_note(body, armed, tools_used)
         return {
             "reply": reply,
             "provider": route.provider,
@@ -1435,6 +1651,7 @@ def register(app: FastAPI, d) -> None:
             # never asked to pick a mode.
             "escalate": escalate,
             "escalate_reason": escalate_reason,
+            "workflow_draft": workflow_draft,
         }
 
     @app.post("/chat/stream")
@@ -1471,7 +1688,10 @@ def register(app: FastAPI, d) -> None:
             # agent mode" — the app asking the user to do its routing.
             "- Answer directly. There are no modes for the user to pick: when "
             "a request needs sustained multi-step work you cannot finish here, "
-            "call escalate_to_agent and it is taken over seamlessly."
+            "call escalate_to_agent and it is taken over seamlessly.\n"
+            "- When the user describes a repeatable multi-step process (\"every "
+            "Friday…\", \"whenever a client sends…\"), call workflow_draft so "
+            "they get a saveable workflow card instead of prose steps."
         )
         pid = (body.project_id or "").strip() or None
         resolved_proj = None
@@ -1631,7 +1851,8 @@ def register(app: FastAPI, d) -> None:
         armed, auto_armed = _resolve_armed_tools(d, body)
         armed += [t for t in conn_tools if t not in armed]
         tool_specs = (d.platform.registry.specs(armed) if armed else []) + [
-            _ESCALATE_SPEC
+            _ESCALATE_SPEC,
+            _WORKFLOW_DRAFT_SPEC,
         ]
         ctx = None
         if armed:
@@ -1729,6 +1950,7 @@ def register(app: FastAPI, d) -> None:
             stopped_note = ""                   # round budget cut off tool calls
             escalate = False        # the turn asked for the full agent
             escalate_reason = ""
+            workflow_draft = None           # proposed reusable workflow (v1.120.0)
             made_docs: list[str] = []           # documents created/edited (preview)
             reply_text = ""
             route_provider = provider_choice or ""
@@ -1796,6 +2018,13 @@ def register(app: FastAPI, d) -> None:
                     usage_out += int(_u.get("output_tokens", 0) or 0)
                     completions += 1
                     calls = final_resp.tool_calls or []
+                    draft_call = next(
+                        (c for c in calls if c.name == _WORKFLOW_DRAFT_TOOL), None
+                    )
+                    if draft_call is not None:
+                        workflow_draft = _sanitize_draft(draft_call.arguments)
+                        if workflow_draft is not None:
+                            break
                     esc_call = next(
                         (c for c in calls if c.name == _ESCALATE_TOOL), None
                     )
@@ -1912,18 +2141,26 @@ def register(app: FastAPI, d) -> None:
             # Reply honesty (mirrors chat_complete): synthesize from the last tool
             # output when the model returned no final text; note denied tools.
             reply = reply_text or ""
-            if not reply.strip() and last_tool_output:
-                snippet = last_tool_output.strip()[:600]
-                ran_names = ", ".join(dict.fromkeys(tools_used)) or "the armed tools"
-                reply = f"Ran {ran_names}. Result:\n{snippet}"
-            elif not reply.strip():
-                reply = "(no reply)"
-            if denied_tools:
-                names = ", ".join(dict.fromkeys(denied_tools))
-                reply += f"\n\n_Note: {names} could not run (permission denied)._"
-            if stopped_note:
-                reply += f"\n\n_Note: {stopped_note}._"
-            reply += _creation_honesty_note(body, armed, tools_used)
+            if workflow_draft is not None:
+                # Mirrors chat_complete: a draft exit is a success — no
+                # placeholder, no creation-honesty note.
+                reply = reply.strip()
+                if denied_tools:
+                    names = ", ".join(dict.fromkeys(denied_tools))
+                    reply += f"\n\n_Note: {names} could not run (permission denied)._"
+            else:
+                if not reply.strip() and last_tool_output:
+                    snippet = last_tool_output.strip()[:600]
+                    ran_names = ", ".join(dict.fromkeys(tools_used)) or "the armed tools"
+                    reply = f"Ran {ran_names}. Result:\n{snippet}"
+                elif not reply.strip():
+                    reply = "(no reply)"
+                if denied_tools:
+                    names = ", ".join(dict.fromkeys(denied_tools))
+                    reply += f"\n\n_Note: {names} could not run (permission denied)._"
+                if stopped_note:
+                    reply += f"\n\n_Note: {stopped_note}._"
+                reply += _creation_honesty_note(body, armed, tools_used)
             yield _sse("done", {
                 "reply": reply,
                 "provider": route_provider,
@@ -1934,6 +2171,7 @@ def register(app: FastAPI, d) -> None:
                 "documents": made_docs,
                 "escalate": escalate,
                 "escalate_reason": escalate_reason,
+                "workflow_draft": workflow_draft,
                 "usage": {"input_tokens": usage_in, "output_tokens": usage_out},
             })
 

@@ -309,6 +309,22 @@ export interface FsListing {
 }
 
 /* ---- Schedules ----------------------------------------------------------- */
+/** A proposed (unsaved) workflow — chat's workflow_draft exit tool and the
+ * thread-crystallize endpoint both return this shape (v1.120.0). */
+export interface WorkflowDraftStep {
+  name: string;
+  agent: string;
+  task: string;
+  tool?: string | null;
+}
+export interface WorkflowDraft {
+  name: string;
+  description: string;
+  steps: WorkflowDraftStep[];
+  /** Rides along from a crystallized thread so Save can pin the workflow. */
+  project_id?: string | null;
+}
+
 export interface Schedule {
   name: string;
   cron: string;

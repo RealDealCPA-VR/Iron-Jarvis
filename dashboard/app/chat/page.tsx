@@ -96,10 +96,13 @@ import {
   Wrench,
   Zap,
   X,
+  GitBranch,
 } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { get, post, put, del, ApiError, API_BASE, ijToken } from "@/lib/api";
+import { WorkflowDraftCard } from "@/components/chat/WorkflowDraftCard";
+import type { WorkflowDraft } from "@/lib/types";
 import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
 import { timeAgo } from "@/lib/format";
 import { slashTokenAt, spliceToken } from "@/lib/slash";
@@ -152,6 +155,12 @@ interface ChatMessage {
   /** This assistant reply was cut off mid-stream (Stop, or a committed failure)
    *  — shown with a subtle marker so a partial answer never looks complete. */
   interrupted?: boolean;
+  /** The turn proposed a reusable workflow — rendered as a draft card
+   *  (v1.120.0). Persists with the thread like every other field. */
+  workflowDraft?: WorkflowDraft;
+  /** The agent session that produced this reply — the "Keep this as a
+   *  workflow?" chip's hook (v1.120.0). */
+  fromSession?: string;
 }
 
 /** What POST /chat expects. */
@@ -186,6 +195,8 @@ interface ChatResponse {
   /** The turn asked to be re-run as a full agent session (v1.108.0). */
   escalate?: boolean;
   escalate_reason?: string;
+  /** The turn proposed a reusable workflow instead of prose (v1.120.0). */
+  workflow_draft?: WorkflowDraft | null;
 }
 
 interface PersonaOption {
@@ -1930,6 +1941,48 @@ export default function ChatPage() {
    *  daemon distills it through a real model (or stores an honest verbatim
    *  excerpt offline) into the default brain. The button shows a transient
    *  check on success; the note lands on the Memory page. */
+  // "Turn into workflow" (v1.120.0): the thread's work, generalized into a
+  // reusable draft by the daemon, appended to the conversation as a card.
+  const [crystallizingId, setCrystallizingId] = useState<string | null>(null);
+  async function crystallizeThread(id: string) {
+    if (crystallizingId) return;
+    setCrystallizingId(id);
+    try {
+      if (threadId !== id) await openThread(id);
+      // Flush pending autosaves FIRST: the daemon distills the STORED
+      // transcript, and the chip can render before the final agent turn's PUT
+      // has landed — crystallizing then would omit the newest work.
+      await saveChainRef.current.catch(() => {});
+      // The crystallize POST is a multi-second model call. If the user opens
+      // another thread or starts a new chat meanwhile, appending via the refs
+      // would write this draft into the WRONG thread — the same teardown class
+      // completeChat guards with chatGenRef.
+      const gen = chatGenRef.current;
+      const draft = await post<WorkflowDraft>(
+        `/chat/threads/${encodeURIComponent(id)}/crystallize`,
+        {},
+      );
+      setThreadMenu(null);
+      if (chatGenRef.current !== gen) return; // conversation moved on — drop
+      const full: ChatMessage[] = [
+        ...messagesRef.current,
+        {
+          role: "assistant",
+          content: "Here's this conversation as a reusable workflow:",
+          workflowDraft: draft,
+        },
+      ];
+      setMessages(full);
+      queueSave(full);
+    } catch (e) {
+      setThreadMenu(null);
+      // The honest offline 400 ("connect a model…") lands here too.
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setCrystallizingId(null);
+    }
+  }
+
   async function rememberThread(id: string) {
     if (rememberingId) return; // one commit at a time
     setRememberingId(id);
@@ -2405,7 +2458,7 @@ export default function ChatPage() {
             `The agent stopped before finishing (${status}). Please try again.`;
       const full: ChatMessage[] = [
         ...messagesRef.current,
-        { role: "assistant", content },
+        { role: "assistant", content, fromSession: id },
       ];
       setMessages(full);
       tts.speak(content); // no-op unless voice replies are on
@@ -2734,6 +2787,7 @@ export default function ChatPage() {
           documents: madeDocs,
           escalate,
           escalateReason,
+          workflowDraft,
         } = await stream.run(body, (_delta, full) => feedTTS(full, false));
         if (chatGenRef.current !== gen) return; // torn down mid-stream
         // One tick so the final tool_call frame's state flush lands before the
@@ -2757,6 +2811,29 @@ export default function ChatPage() {
             ...(via ? { viaProvider: via } : {}),
           },
         ];
+        // The turn crystallized into a workflow proposal (v1.120.0): commit
+        // the card instead of prose. Checked before escalate — a validated
+        // draft must not be discarded by a stray escalate in the same reply.
+        if (workflowDraft) {
+          const done: ChatMessage[] = [
+            ...history,
+            {
+              role: "assistant",
+              content:
+                (reply ?? "").trim() || "Here's that as a reusable workflow:",
+              workflowDraft,
+              // Earlier rounds of THIS turn may have run tools — their
+              // provenance must survive the draft exit like any other turn.
+              ...(toolsUsed.length ? { toolsUsed } : {}),
+              ...(sources.length ? { sources } : {}),
+              ...(via ? { viaProvider: via } : {}),
+            },
+          ];
+          setMessages(done);
+          queueSave(done);
+          showDocPreview(madeDocs); // docs written before the exit still count
+          return;
+        }
         // ONE SURFACE (v1.108.0): the turn decided it needs the full agent, so
         // re-run the SAME message as a session instead of handing the user a
         // reply that tells them to go flip a switch. The user's bubble and the
@@ -2840,6 +2917,27 @@ export default function ChatPage() {
           ...(viaPost ? { viaProvider: viaPost } : {}),
         },
       ];
+      if (res.workflow_draft) {
+        // NOT the pre-defaulted `reply` ("(no response)" is truthy) — the raw
+        // wire value decides whether the caption fallback fires.
+        const caption =
+          (res.reply ?? "").trim() || "Here's that as a reusable workflow:";
+        const done: ChatMessage[] = [
+          ...history,
+          {
+            role: "assistant",
+            content: caption,
+            workflowDraft: res.workflow_draft,
+            ...(toolsUsed.length ? { toolsUsed } : {}),
+            ...(viaPost ? { viaProvider: viaPost } : {}),
+          },
+        ];
+        setMessages(done);
+        queueSave(done);
+        if (!ttsStreamStartedRef.current) tts.speak(caption);
+        showDocPreview(res.documents);
+        return;
+      }
       if (res.escalate) {
         const lastUser = [...history].reverse().find((m) => m.role === "user");
         setMessages(history);
@@ -3733,6 +3831,20 @@ export default function ChatPage() {
                         <button
                           type="button"
                           role="menuitem"
+                          className={item}
+                          disabled={crystallizingId !== null}
+                          onClick={() => void crystallizeThread(mt.id)}
+                        >
+                          {crystallizingId === mt.id ? (
+                            <Loader2 size={14} className="shrink-0 animate-spin text-accent-soft" />
+                          ) : (
+                            <GitBranch size={14} className="shrink-0 text-zinc-400" />
+                          )}
+                          Turn into workflow
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
                           aria-expanded={threadMenuProjects}
                           className={item}
                           onClick={() => setThreadMenuProjects((v) => !v)}
@@ -3932,6 +4044,17 @@ export default function ChatPage() {
                       // The hand-off (v1.108.0). A turn that grew into a full
                       // agent run has no reply of its own — say WHY out loud,
                       // or the wait reads as the app having stalled.
+                      if (m.workflowDraft)
+                        return (
+                          <div key={i} className="group/msg space-y-2">
+                            {m.content && (
+                              <Bubble role="assistant">
+                                <MemoMarkdown content={m.content} />
+                              </Bubble>
+                            )}
+                            <WorkflowDraftCard draft={m.workflowDraft} events={events} />
+                          </div>
+                        );
                       if (m.escalated)
                         return (
                           <div key={i} className="group/msg">
@@ -3981,6 +4104,26 @@ export default function ChatPage() {
                           {m.sources && m.sources.length > 0 && (
                             <SourcesRow sources={m.sources} />
                           )}
+                          {/* Crystallize nudge (v1.120.0): agent turns are by
+                              definition multi-step — offer to keep the process. */}
+                          {m.fromSession &&
+                            i === messages.length - 1 &&
+                            !busy &&
+                            threadId && (
+                              <button
+                                type="button"
+                                disabled={crystallizingId !== null}
+                                onClick={() => void crystallizeThread(threadId)}
+                                className="ml-11 mt-1.5 inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11.5px] text-accent-soft transition-colors hover:bg-accent/[0.12] disabled:opacity-50"
+                              >
+                                {crystallizingId ? (
+                                  <Loader2 size={12} className="animate-spin" />
+                                ) : (
+                                  <GitBranch size={12} />
+                                )}
+                                Keep this as a workflow?
+                              </button>
+                            )}
                           <div className="ml-11 mt-1 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100">
                             <CopyIconButton text={m.content} title="Copy message" />
                             {canRegen && (

@@ -17,6 +17,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { API_BASE, ApiError, ijToken } from "./api";
+import type { WorkflowDraft } from "@/lib/types";
 
 // ------------------------------------------------------------------ wire types
 
@@ -46,6 +47,8 @@ export type SSEEvent =
       /** The turn decided it needs the full agent (v1.108.0 — one surface). */
       escalate?: boolean;
       escalate_reason?: string;
+      /** The turn proposed a reusable workflow instead of prose (v1.120.0). */
+      workflow_draft?: WorkflowDraft | null;
       usage?: { input_tokens?: number; output_tokens?: number };
     }
   | { type: "error"; detail: string; status?: number; offline?: boolean };
@@ -74,6 +77,8 @@ export interface ChatStreamResult {
    *  does that automatically — the user is never asked to pick a mode. */
   escalate?: boolean;
   escalateReason?: string;
+  /** The turn proposed a reusable workflow — render it as a draft card. */
+  workflowDraft?: WorkflowDraft | null;
 }
 
 // -------------------------------------------------------------- frame decoding
@@ -126,6 +131,8 @@ export function sseEventFrom(
       if (typeof data.escalate === "boolean") ev.escalate = data.escalate;
       if (typeof data.escalate_reason === "string")
         ev.escalate_reason = data.escalate_reason;
+      if (data.workflow_draft && typeof data.workflow_draft === "object")
+        ev.workflow_draft = data.workflow_draft as WorkflowDraft;
       if (data.usage && typeof data.usage === "object")
         ev.usage = data.usage as { input_tokens?: number; output_tokens?: number };
       return ev;
@@ -394,6 +401,7 @@ export function useChatStream(): UseChatStream {
                 documents: ev.documents,
                 escalate: ev.escalate,
                 escalateReason: ev.escalate_reason,
+                workflowDraft: ev.workflow_draft,
               };
               break;
             case "error":

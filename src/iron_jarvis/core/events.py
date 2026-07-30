@@ -44,6 +44,12 @@ class EventType:
     ARTIFACT_GENERATED = "artifact.generated"
     MEMORY_UPDATED = "memory.updated"
     WORKFLOW_COMPLETED = "workflow.completed"
+    # Live run narration (v1.120.0): the engine publishes one event as each step
+    # begins and one as it settles, so chat can stream a run's progress in-thread.
+    # step_started: {run_id, workflow, step, index, total, agent, session_id};
+    # step_completed adds {status, summary}.
+    WORKFLOW_STEP_STARTED = "workflow.step_started"
+    WORKFLOW_STEP_COMPLETED = "workflow.step_completed"
     REVIEW_REQUESTED = "review.requested"
     PROVIDER_FAILED = "provider.failed"
     PROVIDER_FAILOVER = "provider.failover"

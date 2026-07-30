@@ -87,7 +87,10 @@ def test_the_escalation_exit_rides_every_turn(client, monkeypatch):
 
     monkeypatch.setattr(platform.providers, "get", spy)
     assert _chat(client).status_code == 200
-    assert seen["tools"] == ["escalate_to_agent"]
+    # v1.120.0: BOTH declared exits ride every turn — escalation and the
+    # workflow-draft proposal (tests/test_workflow_chat_synergy.py owns the
+    # draft side's behavior).
+    assert seen["tools"] == ["escalate_to_agent", "workflow_draft"]
 
 
 def test_a_normal_turn_does_not_escalate(client):

@@ -116,6 +116,17 @@ class ChatRememberBody(BaseModel):
     model: str = ""
 
 
+class ChatCrystallizeBody(BaseModel):
+    """Turn a saved chat thread into a reusable workflow DRAFT (v1.120.0).
+
+    The one-shot model generalizes what actually happened in the conversation
+    into 2-6 ordered steps. Nothing is saved — the client renders the draft as
+    a card and the user decides (suggest-don't-act)."""
+
+    provider: str = ""  # one-shot LLM override ("" = default)
+    model: str = ""
+
+
 class DocumentOpenBody(BaseModel):
     """Open a document with its OS-associated app (preview panel's button)."""
 
