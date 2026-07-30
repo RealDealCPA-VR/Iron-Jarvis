@@ -874,6 +874,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
     app.state.orchestrator = orchestrator
     # Reflex Loop: the webhook handler + reflex routes reach these via app.state.
     app.state.reflex_router = reflex_router
+    # Also reachable from platform-bound tools (v1.122.0): the agent-facing
+    # webhook_add must install a reflex-firing handler like the route does.
+    platform.reflex_router = reflex_router
     app.state.command_interpreter = command_interpreter
     # Background session tasks are registered on the orchestrator keyed by
     # session_id (a strong ref preventing premature GC, and the handle the

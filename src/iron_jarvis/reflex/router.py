@@ -150,7 +150,7 @@ class ReflexRouter:
         raises — a bad rule reports an error and the others still fire."""
         try:
             if rule.action == "workflow":
-                result = self._run_workflow(rule)
+                result = self._run_workflow(rule, context)
             elif rule.action == "remote_agent":
                 result = self._run_remote(rule, context)
             elif rule.action == "session":
@@ -166,7 +166,7 @@ class ReflexRouter:
         await self._publish(rule, result)
         return {"rule": rule.name, "rule_id": rule.id, **result}
 
-    def _run_workflow(self, rule: ReflexRule) -> dict[str, Any]:
+    def _run_workflow(self, rule: ReflexRule, context: dict[str, str]) -> dict[str, Any]:
         from ..workflows.engine import WorkflowEngine, load_workflow
         from ..workflows.store import WorkflowStore
 
@@ -176,7 +176,22 @@ class ReflexRouter:
         wf = load_workflow({"name": rec.name, "steps": _json.loads(rec.steps_json or "[]")})
         engine = WorkflowEngine(self.p, self.orch)
         run = engine.create_record(wf)  # synchronous: persists a run record now
-        self._launch(engine.run_record(run, wf), run.id)
+        # v1.122.0: the signal's payload used to be DROPPED for workflow
+        # actions. It now rides the run as a synthetic "Trigger" output, so any
+        # step can reference {{Trigger}} in its task/args/message — the webhook
+        # body (or inbound message text) flows into the process.
+        trigger_text = (context.get("text") or context.get("body") or "").strip()
+        # Reserved-name guard: if the def has a REAL step named "Trigger", the
+        # synthetic pre-seeded output would mark that step completed before it
+        # ran (wrong context chains, wrong run-history truth) — the def owns
+        # the name, so the injection simply steps aside.
+        collides = any(s.name == "Trigger" for s in wf.steps)
+        outputs = (
+            {"Trigger": {"status": "completed", "summary": trigger_text[:1500], "kind": "trigger"}}
+            if trigger_text and not collides
+            else None
+        )
+        self._launch(engine.run_record(run, wf, outputs=outputs), run.id)
         return {"ok": True, "kind": "workflow", "workflow": rec.name, "run_id": run.id}
 
     def _run_remote(self, rule: ReflexRule, context: dict[str, str]) -> dict[str, Any]:

@@ -275,16 +275,39 @@ export default function ReflexPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [formOk, setFormOk] = useState<string | null>(null);
 
+  // Deep link from the workflow editor's trigger node (v1.122.0):
+  // ?workflow=<name> opens the add form prefilled to fire THAT workflow.
+  useEffect(() => {
+    try {
+      const wf = new URLSearchParams(window.location.search).get("workflow");
+      if (wf) {
+        setOpen(true);
+        setAction("workflow");
+        setTarget(wf);
+        setName(`run-${wf}`);
+      }
+    } catch {
+      /* malformed URL — ignore */
+    }
+  }, []);
+
   // Per-row state
   const [acting, setActing] = useState<string | null>(null); // "toggle:id" | "test:id"
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
   const [rowError, setRowError] = useState<string | null>(null);
 
   const targetNeeded = action === "workflow" || action === "remote_agent";
+  // A deep-linked target that isn't a saved workflow would create a rule that
+  // only errors at fire time — warn and hold the Add button instead.
+  const targetUnknown =
+    action === "workflow" &&
+    !!target.trim() &&
+    workflowNames.length > 0 &&
+    !workflowNames.includes(target.trim());
   const templateShown = action === "session" || action === "remote_agent";
   const matchReady = source !== "webhook" || !!match.trim();
   const targetReady = !targetNeeded || !!target.trim();
-  const canSubmit = matchReady && targetReady && !busy;
+  const canSubmit = matchReady && targetReady && !targetUnknown && !busy;
 
   function pickSource(v: ReflexSource) {
     setSource(v);
@@ -603,6 +626,9 @@ export default function ReflexPage() {
                               {w}
                             </option>
                           ))}
+                          {targetUnknown && (
+                            <option value={target}>{target} (not saved yet)</option>
+                          )}
                         </select>
                       ) : (
                         <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-3 py-2 text-[11px] text-amber-300/90">
@@ -635,6 +661,12 @@ export default function ReflexPage() {
                         </Link>{" "}
                         page first.
                       </div>
+                    )}
+                    {targetUnknown && (
+                      <p className="mt-1.5 text-[11px] text-amber-300/90">
+                        “{target}” isn&apos;t a saved workflow yet — save it on
+                        the Workflows page, then add this rule.
+                      </p>
                     )}
                   </div>
                 )}

@@ -76,7 +76,17 @@ class WebhookAddTool(Tool):
                 await self.platform.event_bus.publish(
                     "webhook.received", {"slug": _slug, "body": body}
                 )
-                return {"ok": True}
+                # v1.122.0: fire bound reflex rules immediately — the same
+                # skip-until-restart bug the create route fixed lived here too
+                # for agent-created webhooks.
+                fired = []
+                router = getattr(self.platform, "reflex_router", None)
+                if router is not None:
+                    try:
+                        fired = await router.on_webhook(_slug, body)
+                    except Exception:  # noqa: BLE001 — never break the ack
+                        pass
+                return {"ok": True, "reflexes_fired": len(fired)}
 
             self.platform.inbound_webhooks.register(
                 slug, handler, secret=secret, secret_name=secret_name

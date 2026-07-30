@@ -561,12 +561,27 @@ def register(app: FastAPI, d) -> None:
                 secret=secret,
                 secret_name=body.secret_name or None,  # persist the real vault key
             )
-        else:  # inbound: a default handler that emits a webhook.received event
+        else:  # inbound: publish the event AND fire any bound reflex rules.
+            # v1.122.0 fix: the create-time handler used to only publish, so a
+            # freshly created webhook silently skipped reflexes until the next
+            # daemon restart installed the lifespan handler — "create webhook,
+            # create rule, POST, nothing happens" with a 200 ack.
             async def _handler(payload: dict, _slug: str = body.slug) -> dict[str, Any]:
                 await d.platform.event_bus.publish(
                     "webhook.received", {"slug": _slug, "body": payload}
                 )
-                return {"ok": True, "slug": _slug}
+                fired: list[Any] = []
+                try:
+                    router = getattr(app.state, "reflex_router", None)
+                    if router is not None:
+                        fired = await router.on_webhook(_slug, payload)
+                except Exception:  # noqa: BLE001 — a reflex failure never breaks the ack
+                    from ...core.logging import get_logger
+
+                    get_logger("webhooks").exception(
+                        "reflex on_webhook failed for %r", _slug
+                    )
+                return {"ok": True, "slug": _slug, "reflexes_fired": len(fired)}
 
             d.platform.inbound_webhooks.register(
                 body.slug, _handler, secret=secret, secret_name=body.secret_name or None

@@ -26,7 +26,7 @@ function TriggerNodeImpl({ data, selected }: NodeProps) {
           {d.label || "Trigger"}
         </div>
         <div className="text-[10px] uppercase tracking-[0.14em] text-accent-soft/70">
-          On run
+          On run · click to change
         </div>
       </div>
       <Handle

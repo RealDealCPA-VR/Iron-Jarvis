@@ -58,6 +58,7 @@ import {
 import { StepNode } from "./StepNode";
 import { TriggerNode } from "./TriggerNode";
 import { NodeInspector } from "./NodeInspector";
+import { TriggerInspector } from "./TriggerInspector";
 import {
   agentMeta,
   type StepNodeData,
@@ -514,7 +515,10 @@ function Canvas() {
   );
 
   const onNodeClick = useCallback(
-    (_: unknown, node: Node) => setSelectedId(node.type === "step" ? node.id : null),
+    // The trigger is selectable too (v1.122.0) — it opens the "when should
+    // this run?" panel instead of the step inspector.
+    (_: unknown, node: Node) =>
+      setSelectedId(node.type === "step" || node.id === "trigger" ? node.id : null),
     [],
   );
   const onPaneClick = useCallback(() => setSelectedId(null), []);
@@ -1019,6 +1023,13 @@ function Canvas() {
             data={selData}
             onChange={(patch) => updateData(selected!.id, patch)}
             onDelete={() => deleteNode(selected!.id)}
+            onClose={() => setSelectedId(null)}
+          />
+        )}
+        {selectedId === "trigger" && (
+          <TriggerInspector
+            workflowName={name}
+            saved={defs.some((d) => d.name === name.trim())}
             onClose={() => setSelectedId(null)}
           />
         )}
