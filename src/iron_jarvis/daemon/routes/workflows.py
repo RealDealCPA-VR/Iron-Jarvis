@@ -13,6 +13,7 @@ from typing import Any
 from ..schemas import (
     TemplateCreateBody,
     WorkflowGenerateBody,
+    WorkflowAnswerBody,
     WorkflowRunBody,
     WorkflowSaveBody,
 )
@@ -80,7 +81,9 @@ def register(app: FastAPI, d) -> None:
     def workflow_run_cancel(run_id: str) -> dict[str, Any]:
         """Ask a live run to stop. Flips status to 'cancelling' (the engine
         checks it before each step) AND best-effort cancels the in-flight step
-        session. Cancelling a finished run → 409."""
+        session. A WAITING (parked) run has no engine loop to notice the flag,
+        so it cancels directly. Cancelling a finished run → 409."""
+        from ...core.ids import utcnow
         from ...workflows.models import WorkflowRunRecord
 
         with session_scope(d.platform.engine) as db:
@@ -89,7 +92,12 @@ def register(app: FastAPI, d) -> None:
                 raise HTTPException(status_code=404, detail="no such run")
             if rec.status in ("completed", "failed", "cancelled", "interrupted"):
                 raise HTTPException(status_code=409, detail=f"run already {rec.status}")
-            rec.status = "cancelling"
+            if rec.status == "waiting":
+                rec.status = "cancelled"
+                rec.waiting_json = ""
+                rec.finished_at = rec.finished_at or utcnow()
+            else:
+                rec.status = "cancelling"
             current = rec.current_session_id
             db.add(rec)
             db.commit()
@@ -101,6 +109,47 @@ def register(app: FastAPI, d) -> None:
             except Exception:  # noqa: BLE001 — best-effort; the pre-step check still stops it
                 pass
         return {"id": run_id, "status": status}
+
+    @app.post("/workflows/runs/{run_id}/answer")
+    async def workflow_run_answer(run_id: str, body: WorkflowAnswerBody) -> dict[str, Any]:
+        """Answer a parked run's question (v1.121.0): the human gate opens and
+        the remaining steps run in the background. Returns the resumed record
+        immediately (run polling / step events carry the rest, exactly like
+        POST /workflows/run)."""
+        from ...workflows.engine import WorkflowEngine
+        from ...workflows.models import WorkflowRunRecord
+
+        answer = (body.answer or "").strip()
+        if not answer:
+            raise HTTPException(status_code=400, detail="an answer is required")
+        # ATOMIC claim (waiting -> resuming): the gate is answerable from two
+        # surfaces at once (the chat card and this page), and a double-submit
+        # without a compare-and-set would resume the tail TWICE — duplicate
+        # sessions, duplicate notify sends, interleaved record writes.
+        from sqlalchemy import update as _sql_update
+
+        with session_scope(d.platform.engine) as db:
+            rec = db.get(WorkflowRunRecord, run_id)
+            if rec is None:
+                raise HTTPException(status_code=404, detail="no such run")
+            claimed = db.exec(
+                _sql_update(WorkflowRunRecord)
+                .where(
+                    WorkflowRunRecord.id == run_id,
+                    WorkflowRunRecord.status == "waiting",
+                )
+                .values(status="resuming")
+            )
+            db.commit()
+            if getattr(claimed, "rowcount", 0) != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"run is {rec.status}, not waiting — it may already be answered",
+                )
+            db.refresh(rec)
+        engine = WorkflowEngine(d.platform, d.orchestrator)
+        d._spawn_bg(rec.id, engine.resume_after_answer(rec, answer))
+        return {"id": run_id, "status": "running", "answered": True}
 
     # Saved workflow definitions (agents author these; the editor loads/saves them).
     @app.get("/workflows")

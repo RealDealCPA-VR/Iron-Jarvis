@@ -316,6 +316,9 @@ export interface WorkflowDraftStep {
   agent: string;
   task: string;
   tool?: string | null;
+  /** v1.121.0 — agent | tool | ask | notify (absent = agent). */
+  kind?: string;
+  message?: string;
 }
 export interface WorkflowDraft {
   name: string;

@@ -5,7 +5,7 @@
 
 import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { agentMeta, type StepNodeData } from "./agents";
+import { agentMeta, KIND_META, type StepKind, type StepNodeData } from "./agents";
 
 const handleClass =
   "!h-3 !w-3 !rounded-full !border-2 !border-ink-950 !bg-accent " +
@@ -15,6 +15,8 @@ function StepNodeImpl({ data, selected }: NodeProps) {
   const d = data as StepNodeData;
   const meta = agentMeta(d.agent);
   const Icon = meta.icon;
+  const kind = (d.kind ?? "agent") as StepKind;
+  const kindMeta = KIND_META[kind] ?? KIND_META.agent;
 
   return (
     <div
@@ -38,10 +40,17 @@ function StepNodeImpl({ data, selected }: NodeProps) {
             {d.name || "Untitled step"}
           </div>
           <span
-            className={`mt-1 inline-flex items-center rounded-full border px-1.5 py-px text-[10px] font-medium uppercase tracking-wide ${meta.chip}`}
+            className={`mt-1 inline-flex items-center rounded-full border px-1.5 py-px text-[10px] font-medium uppercase tracking-wide ${
+              kind === "agent" ? meta.chip : kindMeta.chip
+            }`}
           >
-            {meta.label}
+            {kind === "agent" ? meta.label : kindMeta.label}
           </span>
+          {d.group ? (
+            <span className="ml-1 mt-1 inline-flex items-center rounded-full border border-white/[0.1] px-1.5 py-px text-[10px] text-zinc-500">
+              ∥ {d.group}
+            </span>
+          ) : null}
         </div>
         {d.index != null && (
           <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white/[0.04] text-[10px] font-semibold text-zinc-500">
@@ -53,7 +62,17 @@ function StepNodeImpl({ data, selected }: NodeProps) {
       {/* Body — truncated task */}
       <div className="px-3.5 py-2.5">
         <p className="line-clamp-2 text-[11.5px] leading-relaxed text-zinc-400">
-          {d.task?.trim() ? d.task : (
+          {kind === "tool" ? (
+            <span className="font-mono">{d.tool || "pick a tool…"}</span>
+          ) : kind === "ask" || kind === "notify" ? (
+            (d.message ?? "").trim() || (
+              <span className="italic text-zinc-600">
+                {kind === "ask" ? "What should it ask you?" : "What should it say?"}
+              </span>
+            )
+          ) : d.task?.trim() ? (
+            d.task
+          ) : (
             <span className="italic text-zinc-600">No task yet — click to edit…</span>
           )}
         </p>

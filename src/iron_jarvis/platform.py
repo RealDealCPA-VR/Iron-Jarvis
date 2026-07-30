@@ -838,8 +838,16 @@ def build_platform(
         if task.kind == "workflow":
             result = _run_scheduled_workflow(payload)
             if inspect.isawaitable(result):
-                await result
+                result = await result
             ref = payload.get("workflow") or payload.get("name") or "inline"
+            # The run RECORD is the truth (v1.121.0): a gated workflow that
+            # parked is not "done", and a failed run is not a success — the
+            # old blind "ran" stamped ok the instant either happened.
+            status = getattr(result, "status", None)
+            if status == "failed":
+                raise RuntimeError(f"workflow “{ref}” run failed — see its run history")
+            if status == "waiting":
+                return f"workflow “{ref}” is waiting for your answer (Workflows page)"
             return f"workflow “{ref}” ran"
         if task.kind == "event":
             etype = payload.get("type", "schedule.fired")
@@ -897,7 +905,12 @@ def build_platform(
                 "scheduled workflow has no steps — set a 'workflow' name or "
                 "inline 'steps' in the schedule payload"
             )
-        return WorkflowEngine(platform).run(load_workflow(payload))
+        # The SHARED orchestrator (attached in v1.119.0), so the cancel route
+        # can find and stop a scheduled run's step sessions — a throwaway
+        # orchestrator made cancels silently ineffective.
+        return WorkflowEngine(platform, platform.orchestrator).run(
+            load_workflow(payload)
+        )
 
     platform.scheduler = Scheduler(engine, _run_scheduled)
 

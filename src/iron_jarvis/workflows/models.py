@@ -42,6 +42,10 @@ class WorkflowRunRecord(SQLModel, table=True):
     #: The step session currently executing, so the cancel route can stop it
     #: mid-run. Nullable; cleared once the run settles.
     current_session_id: str | None = None
+    #: v1.121.0 — the human gate: when status is ``waiting``, this holds
+    #: {index, step, question} for the parked ``ask`` step. Additive column;
+    #: old DBs self-heal it via the diff-migration.
+    waiting_json: str = ""
     started_at: datetime = Field(default_factory=utcnow)
     finished_at: datetime | None = None
 
@@ -55,7 +59,12 @@ def reconcile_interrupted_runs(engine: Engine) -> int:
         rows = list(
             db.exec(
                 select(WorkflowRunRecord).where(
-                    WorkflowRunRecord.status.in_(("running", "cancelling"))
+                    # "waiting" is deliberately ABSENT: parked runs are not
+                    # executing — they survive restarts by design (v1.121.0).
+                    # "resuming" is a claimed-but-not-yet-running answer; a
+                    # crash there leaves nothing executing either, so it
+                    # reconciles like running.
+                    WorkflowRunRecord.status.in_(("running", "cancelling", "resuming"))
                 )
             )
         )

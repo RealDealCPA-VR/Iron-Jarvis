@@ -91,6 +91,39 @@ export function agentLabel(agent: string): string {
 
 /* ---- Node data shapes ---------------------------------------------------- */
 
+/** What a step IS (v1.121.0) — mirrors the engine's STEP_KINDS. */
+export const STEP_KINDS = ["agent", "tool", "ask", "notify"] as const;
+export type StepKind = (typeof STEP_KINDS)[number];
+
+export const KIND_META: Record<StepKind, { label: string; blurb: string; chip: string }> = {
+  agent: {
+    label: "Agent",
+    blurb: "An agent works the task with judgment and tools.",
+    chip: "border-accent/30 bg-accent/10 text-accent-soft",
+  },
+  tool: {
+    label: "Tool call",
+    blurb: "ONE deterministic tool call — same every run, no model.",
+    chip: "border-sky-500/30 bg-sky-500/10 text-sky-300",
+  },
+  ask: {
+    label: "Ask you",
+    blurb: "The run pauses and asks you — it resumes when you answer.",
+    chip: "border-amber-500/30 bg-amber-500/10 text-amber-300",
+  },
+  notify: {
+    label: "Notify",
+    blurb: "Sends a message to your destinations.",
+    chip: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+  },
+};
+
+export const ON_FAILURE_OPTIONS = [
+  { key: "halt", label: "Stop the run (default)" },
+  { key: "retry", label: "Retry once, then stop" },
+  { key: "skip", label: "Skip it and continue" },
+] as const;
+
 export interface StepNodeData {
   name: string;
   /** Built-in AgentType OR a dynamic/agent-authored agent name — kept verbatim
@@ -99,6 +132,16 @@ export interface StepNodeData {
   task: string;
   /** Optional tool tag carried through load/save/run (generated workflows use it). */
   tool?: string | null;
+  /** v1.121.0 — agent | tool | ask | notify. */
+  kind?: string;
+  /** v1.121.0 — halt | retry | skip. */
+  on_failure?: string;
+  /** v1.121.0 — consecutive steps sharing a group run concurrently. */
+  group?: string | null;
+  /** v1.121.0 — tool-kind arguments (templatable with {{Step Name}}). */
+  args?: Record<string, unknown>;
+  /** v1.121.0 — ask/notify text (the question / the notification). */
+  message?: string;
   /** 1-based index shown on the card; kept in sync by the canvas. */
   index?: number;
   [key: string]: unknown;

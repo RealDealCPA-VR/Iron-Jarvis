@@ -120,6 +120,11 @@ interface RawStep {
   agent?: string;
   task?: string;
   tool?: string | null;
+  kind?: string;
+  on_failure?: string;
+  group?: string | null;
+  args?: Record<string, unknown>;
+  message?: string;
 }
 
 /** Turn a saved `[{name,agent,task}]` list into a Trigger → step₁ → … chain
@@ -141,17 +146,26 @@ function buildGraph(steps: RawStep[]): { nodes: Node[]; edges: Edge[] } {
     // Preserve the saved agent verbatim (built-in OR dynamic) — never coerce an
     // unknown agent to "builder"; the inspector renders it as-is.
     const agent = String(s.agent || "builder");
-    nodes.push(
-      mkStep(
-        id,
-        s.name?.trim() || `Step ${i + 1}`,
-        agent,
-        s.task ?? "",
-        STEP_X0 + i * STEP_DX,
-        STEP_Y,
-        s.tool ?? null,
-      ),
+    const node = mkStep(
+      id,
+      s.name?.trim() || `Step ${i + 1}`,
+      agent,
+      s.task ?? "",
+      STEP_X0 + i * STEP_DX,
+      STEP_Y,
+      s.tool ?? null,
     );
+    // v1.121.0 fields ride node data verbatim — the editor must never
+    // silently strip a kind/gate/group off a def it re-saves.
+    node.data = {
+      ...node.data,
+      kind: s.kind ?? "agent",
+      on_failure: s.on_failure ?? "halt",
+      group: s.group ?? null,
+      args: s.args && typeof s.args === "object" ? s.args : {},
+      message: s.message ?? "",
+    };
+    nodes.push(node);
     edges.push(mkEdge(prev, id));
     prev = id;
   });
@@ -666,6 +680,11 @@ function Canvas() {
         agent: d.agent,
         task: (d.task ?? "").trim(),
         tool: d.tool ?? null,
+        kind: d.kind ?? "agent",
+        on_failure: d.on_failure ?? "halt",
+        group: d.group ?? null,
+        args: d.args ?? {},
+        message: d.message ?? "",
       };
     });
     const wfName = name.trim();
@@ -721,6 +740,11 @@ function Canvas() {
         agent: d.agent,
         task: (d.task ?? "").trim(),
         tool: d.tool ?? null,
+        kind: d.kind ?? "agent",
+        on_failure: d.on_failure ?? "halt",
+        group: d.group ?? null,
+        args: d.args ?? {},
+        message: d.message ?? "",
       };
     });
     const wfName = name.trim() || "demo-workflow";

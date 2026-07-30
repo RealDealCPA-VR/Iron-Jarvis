@@ -11,6 +11,10 @@ import {
   AGENT_TYPES,
   agentMeta,
   agentLabel,
+  KIND_META,
+  ON_FAILURE_OPTIONS,
+  STEP_KINDS,
+  type StepKind,
   type StepNodeData,
 } from "./agents";
 
@@ -67,6 +71,38 @@ export function NodeInspector({
 
         <div>
           <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+            What is this step?
+          </label>
+          <div className="space-y-1.5">
+            {STEP_KINDS.map((k) => {
+              const meta = KIND_META[k];
+              const active = (data.kind ?? "agent") === k;
+              return (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => onChange({ kind: k })}
+                  className={`flex w-full items-start gap-2 rounded-xl border px-2.5 py-2 text-left transition-colors ${
+                    active
+                      ? `${meta.chip} ring-1 ring-inset ring-white/10`
+                      : "border-white/[0.08] bg-white/[0.02] text-zinc-400 hover:border-white/20 hover:text-zinc-200"
+                  }`}
+                >
+                  <span className="min-w-0">
+                    <span className="block text-xs font-medium">{meta.label}</span>
+                    <span className="mt-0.5 block text-[10.5px] leading-snug opacity-70">
+                      {meta.blurb}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {(data.kind ?? "agent") === "agent" && (
+        <div>
+          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
             Agent type
           </label>
           <div className="grid grid-cols-2 gap-2">
@@ -92,7 +128,9 @@ export function NodeInspector({
             })}
           </div>
         </div>
+        )}
 
+        {(data.kind ?? "agent") === "agent" && (
         <div>
           <div className="mb-1.5 flex items-center justify-between">
             <label className="text-[11px] uppercase tracking-[0.1em] text-zinc-400">
@@ -109,23 +147,107 @@ export function NodeInspector({
             value={data.task}
             onChange={(e) => onChange({ task: e.target.value })}
             rows={6}
-            placeholder="What should this agent do?"
+            placeholder="What should this agent do? {{Earlier Step}} pastes its result."
             className="field resize-y"
           />
+        </div>
+        )}
+
+        {(data.kind ?? "agent") === "tool" && (
+          <>
+            <div>
+              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                Tool to call
+              </label>
+              <input
+                value={data.tool ?? ""}
+                onChange={(e) => onChange({ tool: e.target.value || null })}
+                placeholder="e.g. list_folder"
+                className="field font-mono"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                Arguments (JSON)
+              </label>
+              <textarea
+                key={`args-${String(data.index ?? data.name)}`}
+                defaultValue={JSON.stringify(data.args ?? {}, null, 2)}
+                onBlur={(e) => {
+                  try {
+                    const parsed = JSON.parse(e.target.value || "{}");
+                    if (parsed && typeof parsed === "object")
+                      onChange({ args: parsed as Record<string, unknown> });
+                  } catch {
+                    /* leave the last valid args — the hint below explains */
+                  }
+                }}
+                rows={4}
+                spellCheck={false}
+                className="field resize-y font-mono text-[12px]"
+              />
+              <p className="mt-1.5 text-[11px] text-zinc-500">
+                Must be valid JSON (checked when you click away).
+                {" {{Earlier Step}}"} in a value pastes that step&apos;s result.
+              </p>
+            </div>
+          </>
+        )}
+
+        {((data.kind ?? "agent") === "ask" || (data.kind ?? "agent") === "notify") && (
+          <div>
+            <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+              {(data.kind ?? "agent") === "ask" ? "The question" : "The message"}
+            </label>
+            <textarea
+              value={data.message ?? ""}
+              onChange={(e) => onChange({ message: e.target.value })}
+              rows={4}
+              placeholder={
+                (data.kind ?? "agent") === "ask"
+                  ? "e.g. Send the draft ({{Draft}})? The run waits for your answer."
+                  : "e.g. Weekly report done: {{Report}}"
+              }
+              className="field resize-y"
+            />
+            <p className="mt-1.5 text-[11px] text-zinc-500">
+              {(data.kind ?? "agent") === "ask"
+                ? "Delivered to your destinations; the run parks until you answer — in chat or on this page."
+                : "Sent to every notification destination."}
+            </p>
+          </div>
+        )}
+
+        <div>
+          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+            If this step fails
+          </label>
+          <select
+            aria-label="If this step fails"
+            value={data.on_failure ?? "halt"}
+            onChange={(e) => onChange({ on_failure: e.target.value })}
+            className="field"
+          >
+            {ON_FAILURE_OPTIONS.map((o) => (
+              <option key={o.key} value={o.key}>
+                {o.label}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div>
           <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-            Tool (optional)
+            Parallel group (optional)
           </label>
           <input
-            value={data.tool ?? ""}
-            onChange={(e) => onChange({ tool: e.target.value || null })}
-            placeholder="e.g. web_search"
+            value={data.group ?? ""}
+            onChange={(e) => onChange({ group: e.target.value.trim() || null })}
+            placeholder="e.g. research"
             className="field"
           />
           <p className="mt-1.5 text-[11px] text-zinc-500">
-            Advanced: tag this step with a tool name.
+            Neighbouring steps with the same group run at the same time.
           </p>
         </div>
       </div>

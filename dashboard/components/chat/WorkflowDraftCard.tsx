@@ -23,7 +23,7 @@ import {
 
 import { ApiError, get, post } from "@/lib/api";
 import type { IJEvent, WorkflowDraft, WorkflowRun } from "@/lib/types";
-import { agentLabel, agentMeta } from "@/components/workflow/agents";
+import { agentLabel, agentMeta, KIND_META, type StepKind } from "@/components/workflow/agents";
 
 type StepState = "pending" | "running" | "completed" | "failed" | "skipped";
 
@@ -52,6 +52,13 @@ export function WorkflowDraftCard({
   // True once the run RECORD confirmed the terminal state — events alone may
   // have gaps (the WS has no replay), so the record stays the authority.
   const [reconciled, setReconciled] = useState(false);
+  // The human gate (v1.121.0): a parked run's question + the reply being typed.
+  const [waitingQ, setWaitingQ] = useState<string | null>(null);
+  const [answerText, setAnswerText] = useState("");
+  const [answering, setAnswering] = useState(false);
+  // Question already answered — a stale poll/event replaying the SAME question
+  // must not resurrect the banner (a later, different ask still shows).
+  const answeredQRef = useRef<string | null>(null);
   const [steps, setSteps] = useState<Record<string, LiveStep>>({});
   const [error, setError] = useState<string | null>(null);
   // Events already applied to `steps` — useEvents re-delivers its rolling
@@ -78,6 +85,13 @@ export function WorkflowDraftCard({
             summary: String(p.summary ?? ""),
           },
         }));
+      } else if (ev.type === "workflow.waiting") {
+        seenRef.current.add(ev.id);
+        const q = String(p.question ?? "This run needs your answer.");
+        if (q !== answeredQRef.current) {
+          setRunStatus("waiting");
+          setWaitingQ(q);
+        }
       } else if (ev.type === "workflow.completed") {
         seenRef.current.add(ev.id);
         setRunStatus(String(p.status ?? "completed"));
@@ -96,6 +110,20 @@ export function WorkflowDraftCard({
       try {
         const rec = await get<WorkflowRun>(`/workflows/runs/${runId}`);
         if (stop) return;
+        if (rec.status === "waiting") {
+          try {
+            const w = JSON.parse(String(rec.waiting_json || "{}")) as {
+              question?: string;
+            };
+            const q = w.question || "This run needs your answer.";
+            if (q !== answeredQRef.current) {
+              setRunStatus("waiting");
+              setWaitingQ(q);
+            }
+          } catch {
+            /* record readable next tick */
+          }
+        }
         if (rec.status && TERMINAL.has(rec.status)) {
           setRunStatus(rec.status);
           setReconciled(true);
@@ -173,6 +201,9 @@ export function WorkflowDraftCard({
     setSteps({});
     setRunStatus(null);
     setReconciled(false);
+    setWaitingQ(null);
+    setAnswerText("");
+    answeredQRef.current = null;
     seenRef.current = new Set();
     try {
       const rec = await post<WorkflowRun>("/workflows/run", {
@@ -187,6 +218,24 @@ export function WorkflowDraftCard({
       setRunStatus(String(rec.status || "running"));
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
+    }
+  }
+
+  async function submitAnswer() {
+    const text = answerText.trim();
+    if (!text || !runId || answering) return;
+    setAnswering(true);
+    setError(null);
+    try {
+      await post(`/workflows/runs/${runId}/answer`, { answer: text });
+      answeredQRef.current = waitingQ;
+      setWaitingQ(null);
+      setAnswerText("");
+      setRunStatus("running"); // the stream takes it from here
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setAnswering(false);
     }
   }
 
@@ -253,14 +302,24 @@ export function WorkflowDraftCard({
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline gap-x-2">
                   <span className="text-[12.5px] text-zinc-200">{s.name}</span>
-                  <span
-                    className={`rounded-full border px-1.5 py-px text-[10px] ${meta.chip}`}
-                  >
-                    {agentLabel(s.agent)}
-                  </span>
+                  {(s.kind ?? "agent") === "agent" ? (
+                    <span
+                      className={`rounded-full border px-1.5 py-px text-[10px] ${meta.chip}`}
+                    >
+                      {agentLabel(s.agent)}
+                    </span>
+                  ) : (
+                    <span
+                      className={`rounded-full border px-1.5 py-px text-[10px] ${
+                        (KIND_META[(s.kind ?? "agent") as StepKind] ?? KIND_META.agent).chip
+                      }`}
+                    >
+                      {(KIND_META[(s.kind ?? "agent") as StepKind] ?? KIND_META.agent).label}
+                    </span>
+                  )}
                 </div>
-                <p className="line-clamp-2 text-[11.5px] leading-snug text-zinc-500" title={s.task}>
-                  {s.task}
+                <p className="line-clamp-2 text-[11.5px] leading-snug text-zinc-500" title={s.task || s.message || ""}>
+                  {s.task || s.message || (s.kind === "tool" ? s.tool ?? "" : "")}
                 </p>
                 {live?.summary && live.state !== "running" && (
                   <p
@@ -276,6 +335,31 @@ export function WorkflowDraftCard({
         })}
       </ol>
 
+      {runStatus === "waiting" && waitingQ && (
+        <div className="mx-3.5 mb-2.5 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-2.5 py-2">
+          <p className="text-[12px] text-amber-200">{waitingQ}</p>
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <input
+              value={answerText}
+              onChange={(e) => setAnswerText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void submitAnswer();
+              }}
+              placeholder="Type your answer — the run continues from here"
+              aria-label="Answer the workflow"
+              className="field flex-1 py-1.5 text-[12.5px]"
+            />
+            <button
+              type="button"
+              onClick={() => void submitAnswer()}
+              disabled={answering || !answerText.trim()}
+              className="btn-accent px-3 py-1.5 text-[12px] disabled:opacity-50"
+            >
+              {answering ? "Sending…" : "Answer"}
+            </button>
+          </div>
+        </div>
+      )}
       {runStatus && TERMINAL.has(runStatus) && (
         <div
           className={`mx-3.5 mb-2.5 rounded-lg border px-2.5 py-1.5 text-[12px] ${

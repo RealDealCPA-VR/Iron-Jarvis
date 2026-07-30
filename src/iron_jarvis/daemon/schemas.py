@@ -508,6 +508,12 @@ class WorkflowRunBody(BaseModel):
     project_id: str | None = None
 
 
+class WorkflowAnswerBody(BaseModel):
+    """Answer a parked (waiting) run's ask-step question (v1.121.0)."""
+
+    answer: str
+
+
 class WorkflowSaveBody(BaseModel):
     name: str
     steps: list[dict] = []

@@ -286,6 +286,16 @@ function parseStepOuts(r: WorkflowRun): Record<string, StepOut> {
   }
 }
 
+/** A waiting run's parked question (v1.121.0). */
+function parseWaiting(r: WorkflowRun): { question?: string } | null {
+  try {
+    const w = JSON.parse(String((r as { waiting_json?: string }).waiting_json || ""));
+    return w && typeof w === "object" ? (w as { question?: string }) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Count the sessions a run spawned — from `session_ids_json`, falling back to
  *  the per-step outputs (each completed step carries its session id). */
 function sessionCount(r: WorkflowRun): number {
@@ -313,10 +323,34 @@ function RunHistory() {
     "/workflows/runs?limit=50",
   );
   const [expanded, setExpanded] = useState<string | null>(null);
+  // The human gate (v1.121.0): per-run answer drafts for parked (waiting) runs.
+  const [answerDraft, setAnswerDraft] = useState<Record<string, string>>({});
+  const [answeringId, setAnsweringId] = useState<string | null>(null);
+  const [answerErr, setAnswerErr] = useState<string | null>(null);
+
+  async function submitAnswer(runId: string) {
+    const text = (answerDraft[runId] ?? "").trim();
+    if (!text || answeringId) return;
+    setAnsweringId(runId);
+    setAnswerErr(null);
+    try {
+      await post(`/workflows/runs/${encodeURIComponent(runId)}/answer`, {
+        answer: text,
+      });
+      setAnswerDraft((d) => ({ ...d, [runId]: "" }));
+      reload();
+    } catch (e) {
+      setAnswerErr(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setAnsweringId(null);
+    }
+  }
 
   // Refetch the moment a workflow finishes (the engine emits workflow.completed).
   const { events } = useEvents(50);
-  const lastCompleted = events.find((e) => e.type === "workflow.completed");
+  const lastCompleted = events.find(
+    (e) => e.type === "workflow.completed" || e.type === "workflow.waiting",
+  );
   useEffect(() => {
     if (lastCompleted) reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -405,6 +439,54 @@ function RunHistory() {
                             <div className="mb-2 text-[12px] text-amber-300/80">
                               This run was interrupted (the daemon restarted
                               mid-run) — steps below reflect how far it got.
+                            </div>
+                          )}
+                          {r.status === "waiting" && (
+                            <div className="mb-2 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-2.5 py-2">
+                              <p className="text-[12.5px] text-amber-200">
+                                {parseWaiting(r)?.question ??
+                                  "This run is waiting for your answer."}
+                              </p>
+                              <div className="mt-1.5 flex items-center gap-1.5">
+                                <input
+                                  value={answerDraft[String(r.id)] ?? ""}
+                                  onChange={(e) =>
+                                    setAnswerDraft((d) => ({
+                                      ...d,
+                                      [String(r.id)]: e.target.value,
+                                    }))
+                                  }
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter")
+                                      void submitAnswer(String(r.id));
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                  placeholder="Type your answer — the run continues from here"
+                                  aria-label="Answer the workflow"
+                                  className="field flex-1 py-1.5 text-[12.5px]"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void submitAnswer(String(r.id));
+                                  }}
+                                  disabled={
+                                    answeringId === String(r.id) ||
+                                    !(answerDraft[String(r.id)] ?? "").trim()
+                                  }
+                                  className="btn-accent px-3 py-1.5 text-[12px] disabled:opacity-50"
+                                >
+                                  {answeringId === String(r.id)
+                                    ? "Sending…"
+                                    : "Answer"}
+                                </button>
+                              </div>
+                              {answerErr && (
+                                <p className="mt-1 text-[11.5px] text-rose-300">
+                                  {answerErr}
+                                </p>
+                              )}
                             </div>
                           )}
                           <ol className="space-y-1.5">

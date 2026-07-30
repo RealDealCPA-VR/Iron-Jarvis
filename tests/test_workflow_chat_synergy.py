@@ -288,16 +288,18 @@ async def test_engine_narrates_each_step_live(tmp_path):
     assert [e.payload["step"] for e in started] == ["gather", "report"]
     assert [e.payload["step"] for e in settled] == ["gather", "report"]
 
-    # Every event carries what the run card needs: identity, position, session.
+    # Every event carries what the run card needs: identity and position.
+    # (v1.121.0: step_started fires the moment the step BEGINS — before any
+    # session exists — so the session id rides step_completed instead.)
     first = started[0].payload
     assert first["run_id"] == rec.id
     assert first["workflow"] == "narrated"
     assert (first["index"], first["total"]) == (0, 2)
-    assert first["session_id"].startswith("session_")
 
     done = settled[-1].payload
     assert done["status"] == "completed"
     assert "summary" in done
+    assert done["session_id"].startswith("session_")
 
     # The terminal workflow.completed event still fires after the narration.
     terminal = [e for e in heard if e.type == EventType.WORKFLOW_COMPLETED]
