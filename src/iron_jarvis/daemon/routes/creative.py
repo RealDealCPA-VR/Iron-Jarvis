@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from ..schemas import (
     CreativeIngestBody,
@@ -399,7 +399,23 @@ def register(app: FastAPI, d) -> None:
         thumb = thumbnail_for(d.platform, p)
         if thumb is None:
             raise HTTPException(status_code=404, detail="no thumbnail for this file")
-        return FileResponse(thumb, media_type="image/jpeg")
+        # Serve BYTES, not the path (v1.123.1): FileResponse streams the cache
+        # file lazily, and on Windows a concurrent request atomically
+        # publishing the SAME key (os.replace) collides with that open handle —
+        # a sharing-violation PermissionError in the response path. Thumbs are
+        # tiny; a whole-file read with a short retry closes the race, and
+        # os.replace's atomicity guarantees every read sees a complete JPEG.
+        import time as _time
+
+        for attempt in range(5):
+            try:
+                return Response(content=thumb.read_bytes(), media_type="image/jpeg")
+            except OSError:
+                if attempt == 4:
+                    raise HTTPException(
+                        status_code=503, detail="thumbnail cache busy — retry"
+                    )
+                _time.sleep(0.03)
 
     @app.get("/creative/file-by-path")
     def creative_file_by_path(path: str):
