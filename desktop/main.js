@@ -45,6 +45,7 @@ const http = require("http");
 const path = require("path");
 
 const windowState = require("./windowState");
+const integrity = require("./integrity");
 
 // --- Configuration -------------------------------------------------------
 
@@ -616,6 +617,116 @@ function clearUpdatePending() {
   } catch {
     /* not present */
   }
+}
+
+// --- Bundled-install integrity gate (packaged only) -----------------------
+// The v1.124.0 auto-update once landed HALF-EXTRACTED (NSIS interrupted):
+// resources/dashboard/node_modules stopped partway through `next`, the
+// dashboard crash-looped on "Cannot find module", and nothing told the user
+// their INSTALL was damaged. afterPack now inventories every bundled file
+// (install-manifest.json); this gate verifies the inventory BEFORE spawning
+// anything and, on damage, offers a one-click repair from the already-
+// downloaded installer instead of a crash loop.
+
+function verifyInstallIntegrity() {
+  const clean = { ok: true, checked: 0, missing: [], mismatched: [] };
+  if (!IS_PACKAGED) return clean;
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(integrity.manifestPath(RES_DIR), "utf8"));
+  } catch {
+    return clean; // pre-manifest install — nothing to verify against
+  }
+  const res = integrity.verifyManifest(RES_DIR, manifest);
+  if (!res.ok) {
+    const log = fileLogger("desktop");
+    log(
+      `[integrity] DAMAGED install: ${res.missing.length} missing, ` +
+        `${res.mismatched.length} wrong-size (of ${res.checked} checked)\n`
+    );
+    for (const f of res.missing.slice(0, 20)) log(`[integrity] missing: ${f}\n`);
+    for (const f of res.mismatched.slice(0, 20)) log(`[integrity] wrong size: ${f}\n`);
+  }
+  return res;
+}
+
+// Orphaned frozen daemons (a crashed session's child that never died) hold
+// file locks inside resources/daemon — NSIS then can't replace those files and
+// the next boot comes up half-installed. The image name is unique to Iron
+// Jarvis, so force-killing every instance is safe. Best-effort, synchronous
+// (the installer must not start until the locks are gone).
+function sweepOrphanDaemons() {
+  if (process.platform !== "win32") return;
+  try {
+    spawnSync("taskkill", ["/F", "/T", "/IM", "ironjarvis.exe"], { windowsHide: true });
+  } catch {
+    /* best effort */
+  }
+}
+
+// The updater keeps the last downloaded installer + its sha512 under
+// %LOCALAPPDATA%/iron-jarvis-desktop-updater/pending — re-running it is a full
+// repair (the v1.124.0 incident's installer was INTACT; only the extraction
+// was interrupted). Returns the exe path only when the digest matches; never
+// run a half-downloaded installer.
+function findCachedInstaller() {
+  try {
+    const base = process.env.LOCALAPPDATA;
+    if (!base) return null;
+    const pending = path.join(base, "iron-jarvis-desktop-updater", "pending");
+    const info = JSON.parse(fs.readFileSync(path.join(pending, "update-info.json"), "utf8"));
+    if (!info || !info.fileName) return null;
+    const exe = path.join(pending, info.fileName);
+    const digest = crypto.createHash("sha512").update(fs.readFileSync(exe)).digest("base64");
+    if (info.sha512 && digest !== info.sha512) return null;
+    return exe;
+  } catch {
+    return null;
+  }
+}
+
+// Damaged-install dialog: name the damage precisely, then repair with one
+// click when a verified installer is cached (else point at Releases). Quits
+// either way — booting half-installed code would only corrupt trust further.
+function handleCorruptInstall(result) {
+  const examples = result.missing.concat(result.mismatched).slice(0, 5).join("\n    ");
+  const cached = findCachedInstaller();
+  const buttons = cached
+    ? ["Repair now", "Open releases page", "Quit"]
+    : ["Open releases page", "Quit"];
+  const choice = dialog.showMessageBoxSync({
+    type: "error",
+    buttons,
+    defaultId: 0,
+    cancelId: buttons.length - 1,
+    noLink: true,
+    title: "Iron Jarvis — installation damaged",
+    message: "The last update did not install completely.",
+    detail:
+      `${result.missing.length} bundled file(s) are missing and ${result.mismatched.length} ` +
+      `have the wrong size (of ${result.checked} checked) — the installer was likely ` +
+      "interrupted.\n\n" +
+      (cached
+        ? "Repair re-runs the already-downloaded installer."
+        : "Reinstall the latest version from the Releases page.") +
+      " Your data, settings, and sessions are untouched.\n\n" +
+      `First affected files:\n    ${examples}`,
+  });
+  isQuitting = true;
+  if (cached && choice === 0) {
+    sweepOrphanDaemons(); // clear any locks BEFORE the installer extracts
+    try {
+      const child = spawn(cached, [], { detached: true, stdio: "ignore" });
+      child.unref();
+    } catch (err) {
+      console.error("[integrity] could not launch repair installer:", err && err.message);
+      shell.openExternal("https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/latest");
+    }
+  } else if (choice === (cached ? 1 : 0)) {
+    shell.openExternal("https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/latest");
+  }
+  shutdown();
+  app.quit();
 }
 
 // --- Window-state persistence -------------------------------------------
@@ -1279,6 +1390,10 @@ function applyPendingUpdate() {
   isQuitting = true; // allow the window to actually close
   markUpdatePending(pendingUpdateInfo.version); // recovery marker for a bad update
   shutdown();
+  // Our own children are dead (shutdown() blocks on taskkill), but an ORPHANED
+  // daemon from an earlier crashed session still locks resources/daemon and
+  // makes NSIS extract a partial install. Sweep them before handing off.
+  sweepOrphanDaemons();
   try {
     _autoUpdater.quitAndInstall(false, true);
   } catch (err) {
@@ -1457,6 +1572,14 @@ async function startup() {
     // PACKAGED: frozen daemon exe + standalone dashboard run by Electron's Node.
     // No Python/uv/Node/pnpm required on the user's machine. Both children run
     // under the crash supervisor (auto-restart with backoff).
+    //
+    // FIRST: the install-integrity gate. A half-extracted update must repair,
+    // not boot into a crash loop (the v1.124.0 incident).
+    const integrityResult = verifyInstallIntegrity();
+    if (!integrityResult.ok) {
+      handleCorruptInstall(integrityResult);
+      return;
+    }
     const stateDir = userDataDir; // the daemon's .ironjarvis lives here
     // Bundled OFFLINE voice model (Vosk). extraResources ships it next to the
     // daemon; point the daemon at it so speech-to-text works with no key/server/
@@ -1542,6 +1665,14 @@ async function startup() {
   try {
     await waitForDaemon(STARTUP_TIMEOUT_MS, 500);
   } catch (err) {
+    // A failed health gate on a DAMAGED install (e.g. files were still being
+    // extracted when the pre-spawn check ran) routes to repair, not the
+    // generic port-conflict message.
+    const integrityResult = verifyInstallIntegrity();
+    if (!integrityResult.ok) {
+      handleCorruptInstall(integrityResult);
+      return;
+    }
     handleStartupFailure(
       "Iron Jarvis — daemon did not start",
       `The Iron Jarvis daemon did not answer on http://127.0.0.1:${DAEMON_PORT} within ` +
@@ -1555,6 +1686,11 @@ async function startup() {
   try {
     await waitForDashboard(STARTUP_TIMEOUT_MS, 500);
   } catch (err) {
+    const integrityResult = verifyInstallIntegrity();
+    if (!integrityResult.ok) {
+      handleCorruptInstall(integrityResult);
+      return;
+    }
     handleStartupFailure(
       "Iron Jarvis — dashboard did not start",
       `The dashboard at ${DASHBOARD_PROBE_URL} did not respond within ` +
@@ -1694,6 +1830,9 @@ if (!gotLock) {
     quitProcessed = true;
     requestDaemonShutdown(2000).finally(() => {
       shutdown(); // force-kills whatever is still alive (incl. the dashboard)
+      // autoInstallOnAppQuit runs NSIS after this quit — clear any orphaned
+      // daemons' file locks first, exactly like the explicit-update path.
+      if (pendingUpdateInfo) sweepOrphanDaemons();
       app.quit(); // re-enters before-quit; falls through this time
     });
   });

@@ -10,6 +10,13 @@
 const fs = require("fs");
 const path = require("path");
 
+const integrity = require("./integrity");
+
+// A real bundle has thousands of files (frozen daemon alone is >1000). A count
+// under this floor means extraResources silently dropped something big — fail
+// the BUILD, not the user's boot.
+const MANIFEST_FLOOR = 1000;
+
 exports.default = async function afterPack(context) {
   const src = path.join(__dirname, "..", "dashboard", ".next", "standalone", "node_modules");
   const dst = path.join(context.appOutDir, "resources", "dashboard", "node_modules");
@@ -21,4 +28,17 @@ exports.default = async function afterPack(context) {
   const ok = fs.existsSync(path.join(dst, "next"));
   console.log(`[afterPack] staged dashboard node_modules -> ${dst} (next present: ${ok})`);
   if (!ok) throw new Error("[afterPack] node_modules/next did not land — dashboard would not boot");
+
+  // Inventory everything we just shipped so the packaged app can verify at boot
+  // that the NSIS extraction actually completed (see integrity.js for the
+  // v1.124.0 truncated-update incident this guards against).
+  const resourcesDir = path.join(context.appOutDir, "resources");
+  const version = context.packager.appInfo.version;
+  const manifest = integrity.buildManifest(resourcesDir, ["daemon", "dashboard", "vosk-model"], version);
+  const count = Object.keys(manifest.files).length;
+  if (count < MANIFEST_FLOOR) {
+    throw new Error(`[afterPack] install manifest has only ${count} files — the bundle is hollow`);
+  }
+  fs.writeFileSync(integrity.manifestPath(resourcesDir), JSON.stringify(manifest));
+  console.log(`[afterPack] install manifest: ${count} files recorded (v${version})`);
 };
