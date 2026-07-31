@@ -1354,12 +1354,39 @@ def register(app: FastAPI, d) -> None:
         # The turn's tool loop: "+"-armed tools (explicit consent) plus, with
         # body.auto_tools, safe auto-selected tools filling the free slots —
         # seamless by default, explicit picks always first.
-        armed, auto_armed = _resolve_armed_tools(d, body)
-        armed += [t for t in conn_tools if t not in armed]
-        tool_specs = (d.platform.registry.specs(armed) if armed else []) + [
-            _ESCALATE_SPEC,
-            _WORKFLOW_DRAFT_SPEC,
-        ]
+        # An EXPLICITLY picked text-only CLI (codex exec has no structured
+        # tool-calling) used to be capability-REROUTED here — the user asked
+        # for their Codex subscription and got a different provider every
+        # time. Honest fix (v1.125.0): honor the pick and serve the turn
+        # TEXT-ONLY — no armed tools, no exit tools — with a note when tools
+        # were explicitly requested. Only for explicit picks; default/auto
+        # routes keep full capability routing.
+        text_only_pick = False
+        if (body.provider or "").strip() not in ("", "auto"):
+            try:
+                _picked = d.platform.providers.get(
+                    provider_choice, model_choice or None
+                )
+                from ...providers.router import _capabilities
+
+                # The ROUTER's accessor (adapter.capabilities()) — the same
+                # truth the capability reroute reads, so the two can never
+                # disagree about what "text-only" means.
+                text_only_pick = not bool(
+                    _capabilities(_picked).get("tool_use", True)
+                )
+            except Exception:  # noqa: BLE001 — resolution failures rout normally
+                text_only_pick = False
+        if text_only_pick:
+            armed, auto_armed = [], []
+            tool_specs = []
+        else:
+            armed, auto_armed = _resolve_armed_tools(d, body)
+            armed += [t for t in conn_tools if t not in armed]
+            tool_specs = (d.platform.registry.specs(armed) if armed else []) + [
+                _ESCALATE_SPEC,
+                _WORKFLOW_DRAFT_SPEC,
+            ]
         tools_used: list[str] = []          # ONLY tools that actually executed
         last_tool_output = ""               # last SUCCESSFUL output (no-reply synthesis)
         denied_tools: list[str] = []        # armed tools the engine refused this turn
@@ -1632,6 +1659,11 @@ def register(app: FastAPI, d) -> None:
             if stopped_note:
                 reply += f"\n\n_Note: {stopped_note}._"
             reply += _creation_honesty_note(body, armed, tools_used)
+            if text_only_pick and (body.tools or []):
+                reply += (
+                    f"\n\n_Note: {provider_choice} can't run tools — this "
+                    f"turn was answered text-only._"
+                )
         return {
             "reply": reply,
             "provider": route.provider,
@@ -1848,12 +1880,39 @@ def register(app: FastAPI, d) -> None:
                     m.images = images
                     break
 
-        armed, auto_armed = _resolve_armed_tools(d, body)
-        armed += [t for t in conn_tools if t not in armed]
-        tool_specs = (d.platform.registry.specs(armed) if armed else []) + [
-            _ESCALATE_SPEC,
-            _WORKFLOW_DRAFT_SPEC,
-        ]
+        # An EXPLICITLY picked text-only CLI (codex exec has no structured
+        # tool-calling) used to be capability-REROUTED here — the user asked
+        # for their Codex subscription and got a different provider every
+        # time. Honest fix (v1.125.0): honor the pick and serve the turn
+        # TEXT-ONLY — no armed tools, no exit tools — with a note when tools
+        # were explicitly requested. Only for explicit picks; default/auto
+        # routes keep full capability routing.
+        text_only_pick = False
+        if (body.provider or "").strip() not in ("", "auto"):
+            try:
+                _picked = d.platform.providers.get(
+                    provider_choice, model_choice or None
+                )
+                from ...providers.router import _capabilities
+
+                # The ROUTER's accessor (adapter.capabilities()) — the same
+                # truth the capability reroute reads, so the two can never
+                # disagree about what "text-only" means.
+                text_only_pick = not bool(
+                    _capabilities(_picked).get("tool_use", True)
+                )
+            except Exception:  # noqa: BLE001 — resolution failures rout normally
+                text_only_pick = False
+        if text_only_pick:
+            armed, auto_armed = [], []
+            tool_specs = []
+        else:
+            armed, auto_armed = _resolve_armed_tools(d, body)
+            armed += [t for t in conn_tools if t not in armed]
+            tool_specs = (d.platform.registry.specs(armed) if armed else []) + [
+                _ESCALATE_SPEC,
+                _WORKFLOW_DRAFT_SPEC,
+            ]
         ctx = None
         if armed:
             from ...tools.base import ToolContext
@@ -2161,6 +2220,11 @@ def register(app: FastAPI, d) -> None:
                 if stopped_note:
                     reply += f"\n\n_Note: {stopped_note}._"
                 reply += _creation_honesty_note(body, armed, tools_used)
+            if text_only_pick and (body.tools or []):
+                reply += (
+                    f"\n\n_Note: {provider_choice} can't run tools — this "
+                    f"turn was answered text-only._"
+                )
             yield _sse("done", {
                 "reply": reply,
                 "provider": route_provider,
