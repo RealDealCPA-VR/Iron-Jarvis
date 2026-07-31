@@ -295,6 +295,50 @@ def runtime_checks(platform) -> list[dict]:
     except Exception as exc:  # noqa: BLE001
         checks.append(_result("disk_space", False, f"disk-space check failed: {exc}", level=RECOMMENDED))
 
+    # The custom endpoint's configured model actually EXISTS on that gateway.
+    # A renamed gateway alias otherwise 400s every request routed there with a
+    # cryptic provider error (live-hit 2026-07-31: model 'brain' after the
+    # gateway's list became fleet/vision/frontier).
+    try:
+        base = (getattr(platform.config, "custom_base_url", "") or "").strip()
+        model = (getattr(platform.config, "custom_model", "") or "").strip()
+        if base and model:
+            import httpx
+
+            key = None
+            try:
+                key = platform.secrets.get("custom_api_key")
+            except Exception:  # noqa: BLE001
+                key = None
+            headers = {"Authorization": f"Bearer {key}"} if key else {}
+            r = httpx.get(base.rstrip("/") + "/models", headers=headers, timeout=5)
+            if r.status_code == 200:
+                ids = [
+                    str(m.get("id"))
+                    for m in (r.json().get("data") or [])
+                    if isinstance(m, dict) and m.get("id")
+                ]
+                ok = model in ids
+                checks.append(
+                    _result(
+                        "custom_endpoint_model",
+                        ok,
+                        f"endpoint model '{model}' is served by the gateway"
+                        if ok
+                        else (
+                            f"endpoint model '{model}' is NOT on the gateway — "
+                            f"it serves: {', '.join(ids[:6]) or 'nothing'}"
+                        ),
+                        fix=""
+                        if ok
+                        else "Pick one of the served models for the custom endpoint on the Connections page.",
+                        level=RECOMMENDED,
+                    )
+                )
+            # non-200/unreachable: the provider-connected check owns that story.
+    except Exception:  # noqa: BLE001 — a network hiccup must not fail the doctor
+        pass
+
     return checks
 
 

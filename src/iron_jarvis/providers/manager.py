@@ -461,6 +461,10 @@ class ProviderManager:
                     else "local"
                     if name in ("ollama", "custom", "grok-cli", "opencode-cli")
                     or name.startswith("fleet-")
+                    # Subscription CLIs are their own thing — labelling them
+                    # "mock" read like they weren't real (v1.124.0).
+                    else "cli"
+                    if name in ("claude-cli", "codex-cli")
                     else "mock"
                 ),
             }

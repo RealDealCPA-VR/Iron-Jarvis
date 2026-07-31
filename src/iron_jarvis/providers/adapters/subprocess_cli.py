@@ -25,6 +25,23 @@ import asyncio
 import json
 import os
 import shutil
+
+
+def _which_cli(binary: str) -> str | None:
+    """Resolve a CLI binary like the AVAILABILITY probe does (v1.124.0).
+
+    ``available()`` uses ``terminals.ai_clis._find`` (PATH + the per-user bin
+    dirs a GUI-launched daemon's PATH misses: npm shims, pipx, cargo, ...). The
+    adapters used bare ``shutil.which`` — so in the PACKAGED app a provider
+    could report available and then error "not installed/on PATH" on the very
+    first request, forcing a pointless failover. One resolver, one truth.
+    """
+    try:
+        from ...terminals.ai_clis import _find
+
+        return _find(binary)
+    except Exception:  # noqa: BLE001 — degraded envs keep the plain probe
+        return shutil.which(binary)
 import subprocess
 import tempfile
 from pathlib import Path
@@ -105,7 +122,7 @@ class SubprocessCliAdapter(LLMAdapter):
         *,
         model: str = "subscription",
         runner: Callable[..., tuple[int, str, str]] | None = None,
-        which: Callable[[str], str | None] = shutil.which,
+        which: Callable[[str], str | None] = _which_cli,
         output_last_message_flag: str | None = None,
     ) -> None:
         self.provider = provider
@@ -294,7 +311,7 @@ class ClaudeCliAdapter(LLMAdapter):
         *,
         model: str = "subscription",
         runner: Callable[..., tuple[int, str, str]] | None = None,
-        which: Callable[[str], str | None] = shutil.which,
+        which: Callable[[str], str | None] = _which_cli,
     ) -> None:
         self.model = model
         self._runner = runner or _run
