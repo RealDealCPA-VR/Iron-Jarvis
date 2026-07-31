@@ -18,6 +18,22 @@ const integrity = require("./integrity");
 const MANIFEST_FLOOR = 1000;
 
 exports.default = async function afterPack(context) {
+  // Local-module drift check: every `require("./x")` in the desktop sources
+  // must be listed in build.files, or the packaged main process dies at its
+  // require line before any window exists (v1.126.0 shipped without
+  // integrity.js exactly this way). Fail the BUILD, not the user's launch.
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
+  const bundled = new Set(pkg.build.files);
+  for (const entry of ["main.js", "preload.js", "spotlight-preload.js"]) {
+    const srcText = fs.readFileSync(path.join(__dirname, entry), "utf8");
+    for (const m of srcText.matchAll(/require\(["']\.\/([\w-]+)["']\)/g)) {
+      const dep = `${m[1]}.js`;
+      if (!bundled.has(dep)) {
+        throw new Error(`[afterPack] ${entry} requires ./${m[1]} but build.files omits ${dep} — the packaged app would crash at boot`);
+      }
+    }
+  }
+
   const src = path.join(__dirname, "..", "dashboard", ".next", "standalone", "node_modules");
   const dst = path.join(context.appOutDir, "resources", "dashboard", "node_modules");
   if (!fs.existsSync(src)) {

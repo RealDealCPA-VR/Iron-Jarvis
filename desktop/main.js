@@ -45,7 +45,16 @@ const http = require("http");
 const path = require("path");
 
 const windowState = require("./windowState");
-const integrity = require("./integrity");
+// FAIL-OPEN require: v1.126.0 shipped with integrity.js missing from
+// build.files — the packaged main process died at this line before a single
+// window existed. A helper module being absent from the bundle must degrade
+// (integrity checking off, loudly logged) — never brick the boot.
+let integrity = null;
+try {
+  integrity = require("./integrity");
+} catch (err) {
+  console.error("[integrity] module missing — install verification disabled:", err && err.message);
+}
 
 // --- Configuration -------------------------------------------------------
 
@@ -630,7 +639,7 @@ function clearUpdatePending() {
 
 function verifyInstallIntegrity() {
   const clean = { ok: true, checked: 0, missing: [], mismatched: [] };
-  if (!IS_PACKAGED) return clean;
+  if (!IS_PACKAGED || !integrity) return clean;
   let manifest;
   try {
     manifest = JSON.parse(fs.readFileSync(integrity.manifestPath(RES_DIR), "utf8"));
