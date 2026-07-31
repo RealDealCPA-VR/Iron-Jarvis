@@ -31,6 +31,7 @@ import { useApi } from "@/lib/useApi";
 import { useFocusRef } from "@/lib/useFocusRef";
 import type { LtmResult, LtmSource } from "@/lib/types";
 import { BASE_CATALOG, EFFORT_TONE } from "./baseCatalog";
+import { ImportFromAI } from "./ImportFromAI";
 
 /** Catalogue icon name -> component (the catalogue stays free of JSX imports). */
 const BASE_ICON = {
@@ -710,6 +711,10 @@ export function LongTerm() {
             </div>
           )}
         </Card>
+      </Reveal>
+
+      <Reveal>
+        <ImportFromAI onImported={reloadSources} />
       </Reveal>
 
       <Reveal>

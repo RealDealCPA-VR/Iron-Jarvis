@@ -9,7 +9,14 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException
 from typing import Any
 
-from ..schemas import GraphNodeDeleteBody, GraphLinkBody, LessonCreateBody, MemoryWrite
+from ..schemas import (
+    GraphNodeDeleteBody,
+    GraphLinkBody,
+    LessonCreateBody,
+    MemoryImportCommitBody,
+    MemoryImportPreviewBody,
+    MemoryWrite,
+)
 from ...core.db import session_scope
 
 
@@ -177,6 +184,210 @@ def register(app: FastAPI, d) -> None:
             "count": len(hits),
             "query": q,
         }
+
+    # ---- import another model's memories (v1.123.0) ---------------------- #
+    # (POSTs — no clash with GET /memory/{layer}/{key}; registered up here
+    #  anyway per this file's ordering rule.)
+
+    _IMPORT_PROVIDERS = {"chatgpt", "claude", "gemini", "grok", "other"}
+
+    def _provider_label(p: str) -> str:
+        p = (p or "other").strip().lower()
+        return p if p in _IMPORT_PROVIDERS else "other"
+
+    @app.post("/memory/import/preview")
+    async def memory_import_preview(body: MemoryImportPreviewBody) -> dict[str, Any]:
+        """CANDIDATE memories from a pasted dump or an uploaded export —
+        nothing is saved. The deterministic list parser runs first (offline-
+        safe); prose and conversation exports go through one-shot distillation
+        via a REAL model only — an invented identity fact is worse than none,
+        so offline refuses with the working alternative (paste the list)."""
+        from ...memory.importers import (
+            DISTILL_SYSTEM,
+            MAX_EXPORT_INPUT,
+            extract_export_text,
+            parse_memory_dump,
+        )
+
+        provider = _provider_label(body.provider)
+        text = (body.text or "").strip()
+        detected = ""
+        if body.path:
+            # Same fail-closed gate every path-accepting route uses — the
+            # upload flow always passes, but a hand-crafted request must not
+            # read secrets/ or protected files through the extractor.
+            from ...core.fs_policy import fs_read_ok, is_protected_path
+
+            ok, reason = fs_read_ok(body.path)
+            if not ok or is_protected_path(body.path):
+                raise HTTPException(
+                    status_code=403, detail=reason or "path not allowed"
+                )
+            try:
+                text, detected = extract_export_text(body.path)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            if provider == "other" and detected in _IMPORT_PROVIDERS:
+                provider = detected
+        if not text:
+            raise HTTPException(
+                status_code=400,
+                detail="paste your model's memory list, or upload its data export",
+            )
+
+        facts = parse_memory_dump(text)
+        distilled = False
+        used_provider = None
+        # A recognizable pasted LIST needs no model at all. Prose (or an
+        # export's conversation text) needs distillation to become memories.
+        if len(facts) < 3:
+            from ...providers.adapters.base import LLMMessage
+            from ...providers.adapters.mock import MockLLMAdapter
+
+            llm = body.llm_provider or d.platform.config.default_provider
+            model = body.model or d.platform.config.default_model
+            try:
+                adapter = d.platform.providers.get(llm, model)
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+            if isinstance(adapter, MockLLMAdapter):
+                adapter, llm = d._failover_adapter("mock")
+                if adapter is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "distilling needs a real model — connect one on the "
+                            "Connections page, or paste your model's memory "
+                            "LIST instead (that works offline)"
+                        ),
+                    )
+            try:
+                resp, used_provider, _m = await d._one_shot_complete(
+                    llm, adapter, system=DISTILL_SYSTEM,
+                    messages=[LLMMessage(role="user", content=text[:MAX_EXPORT_INPUT])],
+                )
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=502, detail=f"the model failed: {exc}")
+            facts = parse_memory_dump(resp.text or "")
+            distilled = True
+            if not facts:
+                raise HTTPException(
+                    status_code=422,
+                    detail="no durable memories could be extracted from this text",
+                )
+
+        # Near-duplicate flags against what Iron Jarvis ALREADY remembers —
+        # surfaced, never silently merged. Degrades to no-flag on embedder
+        # trouble (the attachment-RAG rule: similarity is an assist, not a gate).
+        def _cos(a: list[float], b: list[float]) -> float:
+            num = sum(x * y for x, y in zip(a, b))
+            da = sum(x * x for x in a) ** 0.5
+            db = sum(y * y for y in b) ** 0.5
+            return num / (da * db) if da and db else 0.0
+
+        candidates: list[dict[str, Any]] = []
+        embedder = d.platform.embedder
+        for fact in facts:
+            dup = False
+            try:
+                # k=5 across the MERGED stores: with k=1 the round-robin gave
+                # the single slot to the brain's top lexical hit, so the
+                # import base's own copy was never consulted and re-imports
+                # sailed through unflagged on any lived-in install.
+                for h in d.platform.ltm.search(fact, k=5):
+                    known = f"{h.get('title', '')}\n{h.get('snippet', '')}"
+                    # Exact containment catches the common case (re-importing
+                    # the same dump) deterministically; the embedder adds
+                    # fuzzy matches when a real one is connected.
+                    if fact.lower() in known.lower():
+                        dup = True
+                        break
+                    if embedder is not None and (
+                        _cos(embedder.embed(fact), embedder.embed(known)) >= 0.93
+                    ):
+                        dup = True
+                        break
+            except Exception:  # noqa: BLE001 — a flaky embedder never blocks preview
+                dup = False
+            candidates.append({"text": fact, "duplicate": dup})
+
+        out: dict[str, Any] = {
+            "candidates": candidates,
+            "count": len(candidates),
+            "distilled": distilled,
+            "provider": provider,
+        }
+        if detected:
+            out["detected"] = detected
+        if used_provider and distilled:
+            out["llm_provider"] = used_provider
+        return out
+
+    @app.post("/memory/import/commit")
+    def memory_import_commit(body: MemoryImportCommitBody) -> dict[str, Any]:
+        """Write reviewed candidates into a provenance-tagged memory base
+        ('chatgpt-memories', …) — its own base, not anonymously stirred into
+        the brain, so recall/graph show WHERE a fact came from and the whole
+        import stays deletable as a unit."""
+        from datetime import date
+
+        from ...ltm.sources import CustomSourceStore, connector_from_record
+        from ...memory.importers import MAX_FACT_CHARS, MAX_FACTS
+
+        provider = _provider_label(body.provider)
+        items = [
+            " ".join((i or "").split())[:MAX_FACT_CHARS]
+            for i in (body.items or [])
+            if (i or "").strip()
+        ][:MAX_FACTS]
+        if not items:
+            raise HTTPException(status_code=400, detail="nothing selected to import")
+
+        base = f"{provider}-memories"
+        if d.platform.ltm.get(base) is None:
+            root = d.platform.config.home / "imported" / provider
+            root.mkdir(parents=True, exist_ok=True)
+            store = CustomSourceStore(d.platform.engine)
+            try:
+                rec = store.add(base, "markdown", path=str(root))
+            except ValueError:
+                rec = next((r for r in store.list() if r.name == base), None)
+                if rec is None:
+                    raise HTTPException(
+                        status_code=500, detail=f"could not create base '{base}'"
+                    )
+            import httpx
+
+            d.platform.ltm.register(
+                connector_from_record(
+                    rec,
+                    secret_resolver=d.platform.secrets.get,
+                    http_factory=lambda: httpx.Client(timeout=30),
+                    embedder=getattr(d.platform, "embedder", None),
+                )
+            )
+
+        import hashlib
+
+        stamp = date.today().isoformat()
+        added = 0
+        for fact in items:
+            # The 4-hex tag keeps DISTINCT facts that share their first words
+            # from slugging into one note (append would merge them silently).
+            tag = hashlib.md5(fact.encode("utf-8")).hexdigest()[:4]
+            title = f"From {provider}: {' '.join(fact.split()[:6])[:60]} \u00b7 {tag}"
+            content = f"{fact}\n\n---\nimported from {provider} on {stamp}"
+            try:
+                d.platform.ltm.append(title, content, source=base)
+                added += 1
+            except Exception as exc:  # noqa: BLE001 — surface, don't half-lie
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"stored {added} of {len(items)}, then failed: {exc}",
+                )
+        return {"added": added, "source": base}
 
     # NOTE: /memory/graph* must register BEFORE /memory/{layer}/{key}.
     @app.get("/memory/graph")

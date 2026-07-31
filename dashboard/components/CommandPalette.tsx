@@ -125,6 +125,17 @@ const DEEP_LINK_ITEMS: PaletteRow[] = [
     icon: Megaphone,
   },
   {
+    id: "deep:import-ai-memories",
+    kind: "page",
+    label: "Memory → Import from another AI",
+    blurb: "Bring what ChatGPT, Claude or Gemini remembers about you into Iron Jarvis.",
+    aliases: ["import chatgpt memories", "chatgpt memory", "import memories", "bring memories", "gemini saved info"],
+    // scope picks the tab, focus picks the card, and view=list overrides a
+    // persisted graph view (the card only exists in list view).
+    href: "/memory?scope=longterm&view=list&focus=import-ai",
+    icon: Database,
+  },
+  {
     id: "deep:add-base",
     kind: "page",
     label: "Memory → Add a memory base",

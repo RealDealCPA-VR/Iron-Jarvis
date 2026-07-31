@@ -487,6 +487,24 @@ class CodeArtifactRun(BaseModel):
     timeout_s: int | None = None
 
 
+class MemoryImportPreviewBody(BaseModel):
+    """Turn a pasted memory dump OR an uploaded export file into CANDIDATE
+    memories (v1.123.0). Nothing is saved — the commit route does that."""
+
+    text: str = ""  # pasted "everything you remember about me" reply
+    path: str = ""  # server path of an uploaded export (zip/json/txt)
+    provider: str = ""  # chatgpt | claude | gemini | grok | other (label only)
+    llm_provider: str = ""  # distillation override ("" = default)
+    model: str = ""
+
+
+class MemoryImportCommitBody(BaseModel):
+    """Commit reviewed candidates into a provenance-tagged memory base."""
+
+    items: list[str]
+    provider: str = "other"
+
+
 class MemoryWrite(BaseModel):
     """Body of the (single) POST /memory. ``layer`` defaults to "user" — the
     layer that endpoint has always actually written to; this model once
