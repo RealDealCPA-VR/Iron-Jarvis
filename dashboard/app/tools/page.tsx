@@ -561,7 +561,11 @@ export default function ToolsPage() {
     data: mcpData,
     loading: mcpLoading,
     reload: reloadServers,
-  } = usePolledApi<{ servers: McpServer[] }>("/mcp/servers", 10000);
+  } = usePolledApi<{
+    servers: McpServer[];
+    auto_approve_global?: boolean;
+    auto_approve_effective?: boolean;
+  }>("/mcp/servers", 10000);
   const servers = mcpData?.servers ?? [];
   const serverNames = new Set(servers.map((s) => s.name));
 
@@ -574,8 +578,34 @@ export default function ToolsPage() {
   const [mcpError, setMcpError] = useState<string | null>(null);
   const [mcpOk, setMcpOk] = useState<string | null>(null);
 
-  // Auto-approve: applies to whatever pack you connect next (default OFF).
-  const [autoApprove, setAutoApprove] = useState(false);
+  // Auto-approve is a PERSISTED setting (v1.127.0), not a form field for the
+  // next connect — that version was reported twice as "the box doesn't stick".
+  // The checkbox binds to the daemon's EFFECTIVE state (global switch OR any
+  // per-plug-in flag) so it can never show "off" while agents are trusted.
+  const autoApprove = mcpData?.auto_approve_effective ?? false;
+  const [autoApproveBusy, setAutoApproveBusy] = useState(false);
+
+  /** PATCH /mcp/settings — save the global auto-approve switch immediately. */
+  async function saveAutoApprove(next: boolean) {
+    setAutoApproveBusy(true);
+    setMcpError(null);
+    setMcpOk(null);
+    try {
+      const res = await patch<{ note?: string | null }>("/mcp/settings", {
+        auto_approve: next,
+      });
+      setMcpOk(
+        res.note
+          ? `Auto-approve ${next ? "on" : "off"} — ${res.note}.`
+          : `Auto-approve ${next ? "on" : "off"} — saved.`,
+      );
+      reloadServers();
+    } catch (err) {
+      setMcpError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setAutoApproveBusy(false);
+    }
+  }
 
   // Per-server "Test" (live tool listing) — busy name + results keyed by name.
   const [mcpTestBusy, setMcpTestBusy] = useState<string | null>(null);
@@ -636,12 +666,14 @@ export default function ToolsPage() {
     setMcpError(null);
     setMcpOk(null);
     try {
+      // No auto_approve here: trust is governed by the persisted global switch
+      // (the checkbox above the catalog), not stamped per-connect — a per-row
+      // stamp would silently survive the user later unchecking the box.
       const res = await post<McpAddResult>("/mcp/servers", {
         name: serverName,
         command: cmd,
         args,
         env,
-        auto_approve: autoApprove,
       });
       const approveNote = res.auto_approve
         ? " Autonomous agents may run MCP tools without asking after the next restart."
@@ -1215,27 +1247,27 @@ export default function ToolsPage() {
             </div>
           )}
 
-          {/* Auto-approve — applies to whatever pack you connect next ------ */}
+          {/* Auto-approve — a persisted setting; saves the moment it's clicked */}
           <label className="mb-4 flex cursor-pointer items-start gap-3 rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-3 transition-colors hover:border-white/10">
             <input
               type="checkbox"
               checked={autoApprove}
-              onChange={(e) => setAutoApprove(e.target.checked)}
-              className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
+              disabled={autoApproveBusy || mcpLoading}
+              onChange={(e) => saveAutoApprove(e.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-accent disabled:opacity-50"
             />
             <span className="min-w-0 text-sm">
               <span className="font-medium text-zinc-200">
-                Let agents use this without asking
+                Let agents use plug-in tools without asking
               </span>
               <span className="mt-1 block text-[12px] leading-relaxed text-zinc-500">
-                Applies to the plug-in you connect next — you can change it any time
-                from its <span className="text-zinc-400">auto-approve</span> button
-                below. Note this is <span className="text-amber-200/90">coarse</span>:
-                MCP shares one permission, so trusting any plug-in lets autonomous agents
-                run tools from <span className="text-amber-200/90">every</span>
-                connected plug-in without a prompt. Takes effect after the next Iron
-                Jarvis restart. Chat is unaffected — arming a tool there is already
-                your approval.
+                Saves the moment you click — no separate save step. This is{" "}
+                <span className="text-amber-200/90">coarse</span>: MCP shares one
+                permission, so it applies to{" "}
+                <span className="text-amber-200/90">every</span> connected plug-in
+                (including ones you connect later), and unchecking it makes every
+                plug-in ask again. Takes effect after the next Iron Jarvis restart.
+                Chat is unaffected — arming a tool there is already your approval.
               </span>
             </span>
           </label>

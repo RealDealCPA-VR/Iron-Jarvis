@@ -713,7 +713,9 @@ def build_platform(
     # already approves-by-arming. Opt-in per server, default off. Coarse by
     # design: mcp_call is one shared perm key, so trusting any server trusts
     # every connected MCP tool (applied at boot; add a server then restart).
-    _mcp_auto = any(
+    # v1.127.0: the Tools page checkbox persists as the GLOBAL flag; the older
+    # per-server flags still grant too (either path opens the one shared key).
+    _mcp_auto = bool(getattr(config, "mcp_auto_approve", False)) or any(
         (s or {}).get("auto_approve")
         for s in (getattr(config, "mcp_servers", None) or [])
     )

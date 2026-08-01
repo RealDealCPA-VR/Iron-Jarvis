@@ -194,6 +194,11 @@ class Config(BaseModel):
     notion_database_id: str | None = None  # long-term memory Notion DB
     computer_use: dict[str, Any] = Field(default_factory=default_computer_use)
     mcp_servers: list[dict[str, Any]] = Field(default_factory=list)  # external MCP servers (mcp_call)
+    # The Tools page's "Let agents use plug-in tools without asking" checkbox —
+    # a real persisted setting (v1.127.0; it used to be an unsaved per-connect
+    # form field, reported twice as "the box doesn't stick"). Coarse by design:
+    # mcp_call is one permission key, so this trusts EVERY connected plug-in.
+    mcp_auto_approve: bool = False
     # Bounded rolling window (was 0 = keep-forever). The persisted event log grows
     # with every session/tool/autonomous tick and is the root of the unbounded
     # EventRecord table that made /metrics, memory-recall, integrity_check and

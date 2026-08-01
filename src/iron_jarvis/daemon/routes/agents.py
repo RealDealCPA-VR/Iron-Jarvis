@@ -18,6 +18,7 @@ from ..schemas import (
     CustomToolCreate,
     McpServerBody,
     McpServerPatch,
+    McpSettingsPatch,
     McpSuggestBody,
     RemoteAgentCreate,
     RemoteAgentRun,
@@ -512,7 +513,63 @@ def register(app: FastAPI, d) -> None:
                     "tool_names": [n.split("__", 2)[-1] for n in loaded],
                 }
             )
-        return {"servers": servers}
+        # The Tools page checkbox binds to EFFECTIVE (what the boot-time
+        # resolver actually grants: the global switch OR any per-server flag) —
+        # a checkbox showing "off" while agents run tools unprompted would be
+        # the dishonest kind of simple.
+        _global = bool(getattr(d.platform.config, "mcp_auto_approve", False))
+        _effective = _global or any(bool(s.get("auto_approve")) for s in servers)
+        return {
+            "servers": servers,
+            "auto_approve_global": _global,
+            "auto_approve_effective": _effective,
+        }
+
+    @app.patch("/mcp/settings")
+    def patch_mcp_settings(body: McpSettingsPatch) -> dict[str, Any]:
+        """The global "Let agents use plug-in tools without asking" switch
+        (v1.127.0). Twice reported as "the checkbox doesn't stick": it used to
+        be an unsaved form field consumed only by the next connect. Now it IS
+        the setting.
+
+        ON sets the persisted global flag. OFF turns the global flag off AND
+        clears every per-server auto_approve — an unchecked box must mean
+        "agents ask", not "agents ask unless some older per-plug-in flag still
+        trusts everything" (mcp_call is one shared permission key, so any
+        surviving flag would keep the blanket grant alive). ``None`` reads
+        without changing. Applied by the ask-resolver at boot, so the response
+        says restart rather than pretending it is live.
+        """
+        servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
+        if body.auto_approve is None:
+            _global = bool(getattr(d.platform.config, "mcp_auto_approve", False))
+            return {
+                "auto_approve_global": _global,
+                "auto_approve_effective": _global
+                or any(bool(s.get("auto_approve")) for s in servers),
+                "note": None,
+            }
+        changed_keys = ["mcp_auto_approve"]
+        d.platform.config.mcp_auto_approve = bool(body.auto_approve)
+        if not body.auto_approve:
+            cleared = False
+            for s in servers:
+                if "auto_approve" in s:
+                    s.pop("auto_approve", None)  # absent == off, matching POST/PATCH
+                    cleared = True
+            if cleared:
+                d.platform.config.mcp_servers = servers
+                changed_keys.append("mcp_servers")
+        d._persist_config(changed_keys)
+        return {
+            "auto_approve_global": bool(body.auto_approve),
+            "auto_approve_effective": bool(body.auto_approve),
+            "note": (
+                "saved — restart Iron Jarvis so autonomous agents may use plug-in tools without asking"
+                if body.auto_approve
+                else "saved — every plug-in will ask before use again after the next restart"
+            ),
+        }
 
     @app.post("/mcp/servers/{name}/test")
     def test_mcp_server(name: str) -> dict[str, Any]:

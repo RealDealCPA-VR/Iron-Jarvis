@@ -756,6 +756,13 @@ class McpServerPatch(BaseModel):
     auto_approve: bool | None = None
 
 
+class McpSettingsPatch(BaseModel):
+    """The GLOBAL MCP auto-approve switch (v1.127.0) — the Tools page checkbox.
+    ``None`` reads the current state without changing anything."""
+
+    auto_approve: bool | None = None
+
+
 class McpSuggestBody(BaseModel):
     description: str
     provider: str = ""
