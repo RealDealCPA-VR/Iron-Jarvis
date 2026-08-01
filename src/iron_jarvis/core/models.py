@@ -262,7 +262,11 @@ class SavedPromptRecord(SQLModel, table=True):
 
     id: str = Field(default_factory=lambda: new_id("prompt"), primary_key=True)
     name: str = ""
-    agent_type: AgentType = AgentType.BUILDER
+    #: Plain string, NOT AgentType (v1.128.0): the pickers offer DYNAMIC agent
+    #: names too, and the enum cast rejected every one of them with a 400.
+    #: Legacy rows hold enum NAMES ("BUILDER") — TemplateStore normalizes on
+    #: read, so never query this column raw.
+    agent_type: str = "builder"
     task: str = ""
     provider: str | None = None
     model: str | None = None

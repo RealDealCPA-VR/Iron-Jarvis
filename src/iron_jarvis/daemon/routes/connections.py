@@ -17,6 +17,135 @@ from typing import Any
 from ..schemas import ConnectionKeyBody, EndpointModelsBody, OAuthCompleteBody
 
 
+def selectable_models(d) -> list[dict[str, Any]]:
+    """Every {provider, model} the pickers offer, with availability flags.
+
+    Extracted from GET /models (v1.128.0) so the templates requirements
+    engine checks pinned models against EXACTLY what the pickers show —
+    a narrower list would raise false “not connected” warnings."""
+    from ...agents.dynamic import available_models
+
+    # Hide the internal offline 'mock' model — not a selectable option in
+    # the pickers (it stays the engine's silent fallback).
+    models = [m for m in available_models() if m.get("provider") != "mock"]
+    # Config-driven entries LIGHT UP once configured: the local model and
+    # the custom endpoint appear in every picker (topbar switcher, New
+    # Session, per-terminal AI) without hardcoding dead options.
+    cfg = d.platform.config
+    if cfg.ollama_base_url:
+        models.append({"provider": "ollama", "model": cfg.ollama_model})
+    if cfg.custom_base_url:
+        models.append(
+            {"provider": "custom", "model": cfg.custom_model or "default"}
+        )
+    # OpenCode CLI: ONLY the models that genuinely run on the user's own
+    # hardware. Its hosted tier and any paid passthrough alias are excluded
+    # upstream, so a picker can never offer a model this provider refuses.
+    try:
+        if d.platform.providers.available("opencode-cli"):
+            for entry in d.platform.providers._opencode_allowed():  # noqa: SLF001
+                models.append({"provider": "opencode-cli", "model": entry})
+    except Exception:  # noqa: BLE001 — a picker never breaks on detection
+        pass
+    # LIVE DISCOVERY: ask each CONNECTED provider what it actually serves
+    # (cached ~10 min). Discovered ids are ADDED; curated ids drop only when
+    # the live list is non-empty (a failed probe — e.g. an OAuth token that
+    # can't list models — degrades safely to the curated set).
+    from ...providers.discovery import discover_models
+
+    for prov in ("anthropic", "openai", "openrouter", "ollama", "custom"):
+        try:
+            if not d.platform.providers.available(prov):
+                continue
+            live = discover_models(
+                prov,
+                lambda p=prov: d.platform.providers._cred(p),  # noqa: SLF001
+                base_url=(
+                    cfg.ollama_base_url
+                    if prov == "ollama"
+                    else cfg.custom_base_url
+                    if prov == "custom"
+                    else ""
+                ),
+            )
+            if not live:
+                continue
+            live_set = set(live)
+            models = [
+                m for m in models
+                if m["provider"] != prov or m["model"] in live_set
+            ]
+            known = {m["model"] for m in models if m["provider"] == prov}
+            for mid in live:
+                if mid not in known:
+                    models.append({"provider": prov, "model": mid})
+        except Exception:  # noqa: BLE001 — discovery must never break the picker
+            continue
+    # CUSTOM ENDPOINTS (fleet nodes marked routable): each one is its own
+    # provider ("fleet-<id>"), so EVERY endpoint the user added shows in
+    # every picker — not just the single legacy custom slot. `name` carries
+    # the user's label so pickers can render it instead of the raw id.
+    # Per-endpoint live discovery reuses the same URL-keyed cache.
+    try:
+        for node in d.fleet.routable_nodes():
+            prov = f"fleet-{node.id}"
+            label = node.label or node.id
+            ids: list[str] = []
+            try:
+                ids = discover_models(
+                    prov,
+                    lambda n=node: (
+                        d.platform.secrets.get(n.api_key_name)
+                        if n.api_key_name
+                        else None
+                    ),
+                    base_url=node.base_url,
+                )
+            except Exception:  # noqa: BLE001 — discovery never breaks the picker
+                ids = []
+            if not ids:
+                ids = [node.default_model or "default"]
+            for mid in ids:
+                models.append(
+                    {
+                        "provider": prov,
+                        "model": mid,
+                        "name": label,
+                        "source": "endpoint",
+                    }
+                )
+    except Exception:  # noqa: BLE001 — a fleet fault never breaks the picker
+        pass
+    # Honesty flag: which entries the user can ACTUALLY run right now
+    # (provider connected/configured). Pickers show available ones first
+    # and grey/hide the rest — no more dead options that silently fail.
+    for m in models:
+        try:
+            m["available"] = bool(d.platform.providers.available(m["provider"]))
+        except Exception:  # noqa: BLE001
+            m["available"] = False
+    # Locally-installed CLI providers (e.g. the `grok` CLI) are DETECTED on
+    # disk, not configured — so a CLI a user just installed surfaces in every
+    # picker automatically, no restart. Detection is live + cheap and never
+    # raises; each entry carries its own freshly-computed `available` flag.
+    try:
+        from ...providers.cli_detect import detect_cli_providers
+
+        for dm in detect_cli_providers():
+            models.append(
+                {
+                    "provider": dm.provider,
+                    "model": dm.model,
+                    "name": dm.name,
+                    "available": bool(dm.available),
+                    "source": "cli",
+                }
+            )
+    except Exception:  # noqa: BLE001 — detection must never break the picker
+        pass
+    return models
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/providers")
@@ -170,127 +299,7 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/models")
     def list_models() -> dict[str, Any]:
-        from ...agents.dynamic import available_models
-
-        # Hide the internal offline 'mock' model — not a selectable option in
-        # the pickers (it stays the engine's silent fallback).
-        models = [m for m in available_models() if m.get("provider") != "mock"]
-        # Config-driven entries LIGHT UP once configured: the local model and
-        # the custom endpoint appear in every picker (topbar switcher, New
-        # Session, per-terminal AI) without hardcoding dead options.
-        cfg = d.platform.config
-        if cfg.ollama_base_url:
-            models.append({"provider": "ollama", "model": cfg.ollama_model})
-        if cfg.custom_base_url:
-            models.append(
-                {"provider": "custom", "model": cfg.custom_model or "default"}
-            )
-        # OpenCode CLI: ONLY the models that genuinely run on the user's own
-        # hardware. Its hosted tier and any paid passthrough alias are excluded
-        # upstream, so a picker can never offer a model this provider refuses.
-        try:
-            if d.platform.providers.available("opencode-cli"):
-                for entry in d.platform.providers._opencode_allowed():  # noqa: SLF001
-                    models.append({"provider": "opencode-cli", "model": entry})
-        except Exception:  # noqa: BLE001 — a picker never breaks on detection
-            pass
-        # LIVE DISCOVERY: ask each CONNECTED provider what it actually serves
-        # (cached ~10 min). Discovered ids are ADDED; curated ids drop only when
-        # the live list is non-empty (a failed probe — e.g. an OAuth token that
-        # can't list models — degrades safely to the curated set).
-        from ...providers.discovery import discover_models
-
-        for prov in ("anthropic", "openai", "openrouter", "ollama", "custom"):
-            try:
-                if not d.platform.providers.available(prov):
-                    continue
-                live = discover_models(
-                    prov,
-                    lambda p=prov: d.platform.providers._cred(p),  # noqa: SLF001
-                    base_url=(
-                        cfg.ollama_base_url
-                        if prov == "ollama"
-                        else cfg.custom_base_url
-                        if prov == "custom"
-                        else ""
-                    ),
-                )
-                if not live:
-                    continue
-                live_set = set(live)
-                models = [
-                    m for m in models
-                    if m["provider"] != prov or m["model"] in live_set
-                ]
-                known = {m["model"] for m in models if m["provider"] == prov}
-                for mid in live:
-                    if mid not in known:
-                        models.append({"provider": prov, "model": mid})
-            except Exception:  # noqa: BLE001 — discovery must never break the picker
-                continue
-        # CUSTOM ENDPOINTS (fleet nodes marked routable): each one is its own
-        # provider ("fleet-<id>"), so EVERY endpoint the user added shows in
-        # every picker — not just the single legacy custom slot. `name` carries
-        # the user's label so pickers can render it instead of the raw id.
-        # Per-endpoint live discovery reuses the same URL-keyed cache.
-        try:
-            for node in d.fleet.routable_nodes():
-                prov = f"fleet-{node.id}"
-                label = node.label or node.id
-                ids: list[str] = []
-                try:
-                    ids = discover_models(
-                        prov,
-                        lambda n=node: (
-                            d.platform.secrets.get(n.api_key_name)
-                            if n.api_key_name
-                            else None
-                        ),
-                        base_url=node.base_url,
-                    )
-                except Exception:  # noqa: BLE001 — discovery never breaks the picker
-                    ids = []
-                if not ids:
-                    ids = [node.default_model or "default"]
-                for mid in ids:
-                    models.append(
-                        {
-                            "provider": prov,
-                            "model": mid,
-                            "name": label,
-                            "source": "endpoint",
-                        }
-                    )
-        except Exception:  # noqa: BLE001 — a fleet fault never breaks the picker
-            pass
-        # Honesty flag: which entries the user can ACTUALLY run right now
-        # (provider connected/configured). Pickers show available ones first
-        # and grey/hide the rest — no more dead options that silently fail.
-        for m in models:
-            try:
-                m["available"] = bool(d.platform.providers.available(m["provider"]))
-            except Exception:  # noqa: BLE001
-                m["available"] = False
-        # Locally-installed CLI providers (e.g. the `grok` CLI) are DETECTED on
-        # disk, not configured — so a CLI a user just installed surfaces in every
-        # picker automatically, no restart. Detection is live + cheap and never
-        # raises; each entry carries its own freshly-computed `available` flag.
-        try:
-            from ...providers.cli_detect import detect_cli_providers
-
-            for dm in detect_cli_providers():
-                models.append(
-                    {
-                        "provider": dm.provider,
-                        "model": dm.model,
-                        "name": dm.name,
-                        "available": bool(dm.available),
-                        "source": "cli",
-                    }
-                )
-        except Exception:  # noqa: BLE001 — detection must never break the picker
-            pass
-        return {"models": models}
+        return {"models": selectable_models(d)}
 
     @app.post("/providers/rescan")
     def rescan_cli_providers() -> dict[str, Any]:

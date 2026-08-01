@@ -668,6 +668,20 @@ class TemplateCreateBody(BaseModel):
     description: str = ""  # "use this when…" — makes the template self-explanatory
 
 
+class TemplateUpdateBody(BaseModel):
+    """Edit a saved template (v1.128.0). ``None`` leaves a field alone;
+    ``clear_model`` drops a pinned provider/model back to the session default
+    (None can't express "unset")."""
+
+    name: str | None = None
+    task: str | None = None
+    agent_type: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    description: str | None = None
+    clear_model: bool = False
+
+
 class ToolGenerateBody(BaseModel):
     """Describe the tool you want in plain language; an LLM designs it."""
 

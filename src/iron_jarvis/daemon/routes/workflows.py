@@ -12,6 +12,7 @@ from typing import Any
 
 from ..schemas import (
     TemplateCreateBody,
+    TemplateUpdateBody,
     WorkflowGenerateBody,
     WorkflowAnswerBody,
     WorkflowRunBody,
@@ -217,14 +218,79 @@ def register(app: FastAPI, d) -> None:
 
         return {"suggestions": TemplateStore(d.platform.engine).suggest_from_history()}
 
+    # Requirement annotation (v1.128.0): every template says what it needs to
+    # actually run (pinned model connected? Pixio key present? email plug-in
+    # live?) and WHERE to set it up — before the run fails, not after.
+    def _requirement_context() -> dict:
+        from ...agents.types import _DEFINITIONS
+        from .connections import selectable_models
+
+        try:
+            models = selectable_models(d)
+        except Exception:  # noqa: BLE001 — annotation must never break listing
+            models = []
+        try:
+            dynamic = [r.name for r in d.platform.agents_registry.list()]
+        except Exception:  # noqa: BLE001
+            dynamic = []
+        return {
+            "selectable_models": models,
+            "live_tools": list(d.platform.registry.names()),
+            "has_secret": d.platform.secrets.get,
+            "comm_config": dict(getattr(d.platform.config, "comm", None) or {}),
+            "agent_names": [t.value for t in _DEFINITIONS] + dynamic,
+        }
+
+    def _annotate(row: dict, ctx: dict) -> dict:
+        from ...templates import analyze_requirements
+
+        try:
+            reqs = analyze_requirements(
+                row.get("task") or "",
+                row.get("provider"),
+                row.get("model"),
+                row.get("agent_type"),
+                **ctx,
+            )
+        except Exception:  # noqa: BLE001 — a checker bug must never hide templates
+            reqs = []
+        row["requirements"] = reqs
+        row["ready"] = all(r["ok"] for r in reqs)
+        return row
+
     # Saved prompts / task templates (one-click re-run of a frequent task).
     @app.get("/templates")
     def list_templates() -> dict[str, Any]:
         from ...templates import TemplateStore
 
+        ctx = _requirement_context()
         return {
-            "templates": [t.model_dump() for t in TemplateStore(d.platform.engine).list()]
+            "templates": [
+                _annotate(t.model_dump(), ctx)
+                for t in TemplateStore(d.platform.engine).list()
+            ]
         }
+
+    @app.get("/templates/starters")
+    def template_starters() -> dict[str, Any]:
+        """The browsable starter library (v1.128.0) — curated templates the
+        user can add ANY time, each annotated with what it needs and where to
+        set that up. ``already_added`` = a saved template with the same name
+        exists (case-insensitive), so the page can offer Add once."""
+        from ...templates import STARTER_CATALOG, TemplateStore
+
+        ctx = _requirement_context()
+        existing = {
+            (t.name or "").strip().lower()
+            for t in TemplateStore(d.platform.engine).list()
+        }
+        starters = []
+        for entry in STARTER_CATALOG:
+            row = {k: v for k, v in entry.items() if k != "seed"}
+            row = _annotate(row, ctx)
+            row["already_added"] = entry["name"].strip().lower() in existing
+            starters.append(row)
+        return {"starters": starters}
 
     @app.post("/templates")
     def create_template(body: TemplateCreateBody) -> dict[str, Any]:
@@ -241,6 +307,26 @@ def register(app: FastAPI, d) -> None:
             description=body.description,
         )
         return rec.model_dump()
+
+    @app.patch("/templates/{prompt_id}")
+    def update_template(prompt_id: str, body: TemplateUpdateBody) -> dict[str, Any]:
+        """Edit a template in place (v1.128.0) — fixing a typo or repointing
+        the model used to mean delete + retype everything."""
+        from ...templates import TemplateStore
+
+        rec = TemplateStore(d.platform.engine).update(
+            prompt_id,
+            name=body.name,
+            task=body.task,
+            agent_type=body.agent_type,
+            provider=body.provider,
+            model=body.model,
+            description=body.description,
+            clear_model=body.clear_model,
+        )
+        if rec is None:
+            raise HTTPException(status_code=404, detail="no such template")
+        return _annotate(rec.model_dump(), _requirement_context())
 
     @app.delete("/templates/{prompt_id}")
     def delete_template(prompt_id: str) -> dict[str, Any]:
