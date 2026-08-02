@@ -498,10 +498,22 @@ class MemoryImportPreviewBody(BaseModel):
     model: str = ""
 
 
-class MemoryImportCommitBody(BaseModel):
-    """Commit reviewed candidates into a provenance-tagged memory base."""
+class MemoryImportEntry(BaseModel):
+    """One reviewed candidate with the structure the categorized export
+    prompt preserves (v1.129.0): its category and original date."""
 
-    items: list[str]
+    text: str
+    category: str = ""  # Instructions | Identity | Career | Projects | Preferences | ""
+    date: str = ""  # YYYY-MM-DD from the source model, "" when unknown
+
+
+class MemoryImportCommitBody(BaseModel):
+    """Commit reviewed candidates into a provenance-tagged memory base.
+    ``entries`` carries category+date (v1.129.0); plain ``items`` still
+    works for uncategorized imports."""
+
+    items: list[str] = []
+    entries: list[MemoryImportEntry] = []
     provider: str = "other"
 
 

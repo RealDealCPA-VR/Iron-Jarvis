@@ -1,19 +1,22 @@
 "use client";
 
-// Bring memories from another AI (v1.123.0). No provider exposes a memory
-// API, so this card powers the two honest lanes: ask your model to LIST what
-// it remembers and paste the reply (deterministic parse, works offline), or
-// drop the provider's official data export (distilled by a real model —
-// never fabricated). Whatever the lane, extraction only produces CANDIDATES:
-// a checkbox review decides what actually becomes memory, with already-known
-// facts flagged and pre-unchecked. Imports land in their own provenance base
+// Bring memories from another AI (v1.123.0; categorized export v1.129.0).
+// No provider exposes a memory API, so this card powers the two honest
+// lanes: hand your model the predefined export prompt (categorized —
+// Instructions / Identity / Career / Projects / Preferences, dated lines)
+// and paste the reply (deterministic parse, works offline), or drop the
+// provider's official data export (distilled by a real model — never
+// fabricated). Whatever the lane, extraction only produces CANDIDATES: a
+// checkbox review — grouped by category when the export carries one —
+// decides what actually becomes memory, with already-known facts flagged
+// and pre-unchecked. Imports land in their own provenance base
 // ("chatgpt-memories"), so recall and the graph always show where a fact
 // came from — and one import stays deletable as a unit.
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, ClipboardCopy, FileUp, Import, Sparkles } from "lucide-react";
 
-import { post, ApiError } from "@/lib/api";
+import { get, post, ApiError } from "@/lib/api";
 import { Card, ErrorNote, LoaderInline, SuccessNote } from "@/components/ui";
 import { useFocusRef } from "@/lib/useFocusRef";
 
@@ -25,23 +28,63 @@ const PROVIDERS = [
   { key: "other", label: "Another AI" },
 ];
 
-const DUMP_PROMPT =
-  "Please list everything you remember about me from our conversations — " +
-  "every saved memory, verbatim, as a plain bulleted list. Include facts " +
-  "about my work and life, my preferences, and my ongoing projects. Don't " +
-  "summarize and don't omit anything.";
+// Display fallback only — the daemon owns the canonical prompt
+// (GET /memory/import/prompt, same module as its parser) and replaces
+// this on mount so the ask and the read-back can never drift.
+const FALLBACK_PROMPT =
+  "Export all of my stored memories and any context you've learned about " +
+  "me from past conversations, as a categorized list (Instructions, " +
+  "Identity, Career, Projects, Preferences), one entry per line formatted " +
+  "as [YYYY-MM-DD] - Entry ([unknown] when undated), wrapped in a single " +
+  "code block.";
+
+const CATEGORY_ORDER = [
+  "Instructions",
+  "Identity",
+  "Career",
+  "Projects",
+  "Preferences",
+];
 
 const MAX_EXPORT_MB = 100;
+
+/** Order candidates into labeled groups: known categories first (canonical
+ *  order), stray labels next, uncategorized last (unlabeled). Indices are
+ *  kept because `checked` is positional over the flat candidate list. */
+function groupCandidates(cands: { category?: string }[]) {
+  const byLabel = new Map<string, number[]>();
+  cands.forEach((c, i) => {
+    const label = c.category ?? "";
+    byLabel.set(label, [...(byLabel.get(label) ?? []), i]);
+  });
+  const ordered: { label: string; indices: number[] }[] = [];
+  for (const label of CATEGORY_ORDER) {
+    const idx = byLabel.get(label);
+    if (idx) {
+      ordered.push({ label, indices: idx });
+      byLabel.delete(label);
+    }
+  }
+  for (const [label, indices] of byLabel) {
+    if (label) ordered.push({ label, indices });
+  }
+  const rest = byLabel.get("");
+  if (rest) ordered.push({ label: "", indices: rest });
+  return ordered;
+}
 
 interface Candidate {
   text: string;
   duplicate: boolean;
+  category?: string;
+  date?: string;
 }
 
 interface PreviewResult {
   candidates: Candidate[];
   count: number;
   distilled: boolean;
+  structured?: boolean;
   provider: string;
 }
 
@@ -59,6 +102,22 @@ export function ImportFromAI({ onImported }: { onImported?: () => void }) {
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
   const [checked, setChecked] = useState<boolean[]>([]);
   const [distilled, setDistilled] = useState(false);
+  const [prompt, setPrompt] = useState(FALLBACK_PROMPT);
+  const [promptOpen, setPromptOpen] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    get<{ prompt: string }>("/memory/import/prompt")
+      .then((out) => {
+        if (alive && out.prompt) setPrompt(out.prompt);
+      })
+      .catch(() => {
+        /* fallback copy stays usable */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   function applyPreview(out: PreviewResult) {
     setCandidates(out.candidates);
@@ -71,7 +130,7 @@ export function ImportFromAI({ onImported }: { onImported?: () => void }) {
 
   async function copyPrompt() {
     try {
-      await navigator.clipboard.writeText(DUMP_PROMPT);
+      await navigator.clipboard.writeText(prompt);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -131,14 +190,16 @@ export function ImportFromAI({ onImported }: { onImported?: () => void }) {
 
   async function importChecked() {
     if (!candidates || importing) return;
-    const items = candidates.filter((_, i) => checked[i]).map((c) => c.text);
-    if (items.length === 0) return;
+    const entries = candidates
+      .filter((_, i) => checked[i])
+      .map((c) => ({ text: c.text, category: c.category ?? "", date: c.date ?? "" }));
+    if (entries.length === 0) return;
     setImporting(true);
     setError(null);
     try {
       const out = await post<{ added: number; source: string }>(
         "/memory/import/commit",
-        { items, provider },
+        { entries, provider },
       );
       setOk(
         `Imported ${out.added} memor${out.added === 1 ? "y" : "ies"} into ` +
@@ -183,12 +244,27 @@ export function ImportFromAI({ onImported }: { onImported?: () => void }) {
 
           <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
             <p className="text-[12px] text-zinc-400">
-              1 · Ask it what it remembers — paste this prompt there:
+              1 · Ask it to export what it remembers — paste this prompt there
+              (it returns memories by category: Instructions, Identity, Career,
+              Projects, Preferences — dated, your words preserved):
             </p>
             <div className="mt-1.5 flex items-start gap-2">
-              <p className="flex-1 rounded-lg bg-black/30 px-2.5 py-2 font-mono text-[11.5px] leading-relaxed text-zinc-300">
-                {DUMP_PROMPT}
-              </p>
+              <div className="min-w-0 flex-1">
+                <pre
+                  className={`whitespace-pre-wrap rounded-lg bg-black/30 px-2.5 py-2 font-mono text-[11.5px] leading-relaxed text-zinc-300 ${
+                    promptOpen ? "max-h-80 overflow-y-auto" : "max-h-20 overflow-hidden"
+                  }`}
+                >
+                  {prompt}
+                </pre>
+                <button
+                  type="button"
+                  onClick={() => setPromptOpen((v) => !v)}
+                  className="mt-1 text-[11.5px] text-zinc-500 transition-colors hover:text-accent-soft"
+                >
+                  {promptOpen ? "Collapse the prompt" : "Show the full prompt"}
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={() => void copyPrompt()}
@@ -212,7 +288,9 @@ export function ImportFromAI({ onImported }: { onImported?: () => void }) {
               value={pasteText}
               onChange={(e) => setPasteText(e.target.value)}
               rows={4}
-              placeholder={"- You are a CPA running a tax firm…\n- You prefer concise answers…"}
+              placeholder={
+                "## Identity\n[2024-11-02] - You are a CPA running a tax firm…\n\n## Preferences\n[unknown] - You prefer concise answers…"
+              }
               aria-label="Pasted memory list"
               className="field mt-1.5 resize-y font-mono text-[12.5px]"
             />
@@ -273,32 +351,51 @@ export function ImportFromAI({ onImported }: { onImported?: () => void }) {
                   </button>
                 </div>
               </div>
-              <ul className="mt-2 max-h-72 space-y-1 overflow-y-auto pr-1">
-                {candidates.map((c, i) => (
-                  <li key={i}>
-                    <label className="flex cursor-pointer items-start gap-2 rounded-lg px-1.5 py-1 transition-colors hover:bg-white/[0.03]">
-                      <input
-                        type="checkbox"
-                        checked={checked[i] ?? false}
-                        onChange={() =>
-                          setChecked((prev) =>
-                            prev.map((v, j) => (j === i ? !v : v)),
-                          )
-                        }
-                        className="mt-0.5 accent-accent"
-                      />
-                      <span className="min-w-0 flex-1 text-[12.5px] leading-snug text-zinc-300">
-                        {c.text}
-                        {c.duplicate && (
-                          <span className="ml-2 rounded-full border border-amber-400/25 bg-amber-400/[0.08] px-1.5 py-px text-[10px] text-amber-200/90">
-                            already known
-                          </span>
-                        )}
-                      </span>
-                    </label>
-                  </li>
+              <div className="mt-2 max-h-72 space-y-2 overflow-y-auto pr-1">
+                {groupCandidates(candidates).map((g) => (
+                  <div key={g.label || "·uncategorized"}>
+                    {g.label && (
+                      <p className="mb-0.5 text-[10.5px] uppercase tracking-[0.12em] text-accent-soft/80">
+                        {g.label}
+                      </p>
+                    )}
+                    <ul className="space-y-1">
+                      {g.indices.map((i) => {
+                        const c = candidates[i];
+                        return (
+                          <li key={i}>
+                            <label className="flex cursor-pointer items-start gap-2 rounded-lg px-1.5 py-1 transition-colors hover:bg-white/[0.03]">
+                              <input
+                                type="checkbox"
+                                checked={checked[i] ?? false}
+                                onChange={() =>
+                                  setChecked((prev) =>
+                                    prev.map((v, j) => (j === i ? !v : v)),
+                                  )
+                                }
+                                className="mt-0.5 accent-accent"
+                              />
+                              <span className="min-w-0 flex-1 text-[12.5px] leading-snug text-zinc-300">
+                                {c.date && (
+                                  <span className="mr-1.5 font-mono text-[10.5px] text-zinc-500">
+                                    {c.date}
+                                  </span>
+                                )}
+                                {c.text}
+                                {c.duplicate && (
+                                  <span className="ml-2 rounded-full border border-amber-400/25 bg-amber-400/[0.08] px-1.5 py-px text-[10px] text-amber-200/90">
+                                    already known
+                                  </span>
+                                )}
+                              </span>
+                            </label>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
                 ))}
-              </ul>
+              </div>
               <button
                 type="button"
                 onClick={() => void importChecked()}

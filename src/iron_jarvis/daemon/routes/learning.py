@@ -195,6 +195,17 @@ def register(app: FastAPI, d) -> None:
         p = (p or "other").strip().lower()
         return p if p in _IMPORT_PROVIDERS else "other"
 
+    # NOTE: must register before GET /memory/{layer}/{key} (this file's
+    # ordering rule) or "import"/"prompt" would be swallowed as layer/key.
+    @app.get("/memory/import/prompt")
+    def memory_import_prompt() -> dict[str, Any]:
+        """The predefined categorized-export prompt (v1.129.0) the user
+        pastes into another AI — served from the same module as its parser
+        so the ask and the read-back can never drift."""
+        from ...memory.importers import CATEGORIES, EXPORT_PROMPT
+
+        return {"prompt": EXPORT_PROMPT, "categories": list(CATEGORIES)}
+
     @app.post("/memory/import/preview")
     async def memory_import_preview(body: MemoryImportPreviewBody) -> dict[str, Any]:
         """CANDIDATE memories from a pasted dump or an uploaded export —
@@ -206,6 +217,7 @@ def register(app: FastAPI, d) -> None:
             DISTILL_SYSTEM,
             MAX_EXPORT_INPUT,
             extract_export_text,
+            parse_categorized_dump,
             parse_memory_dump,
         )
 
@@ -235,12 +247,17 @@ def register(app: FastAPI, d) -> None:
                 detail="paste your model's memory list, or upload its data export",
             )
 
-        facts = parse_memory_dump(text)
+        # The predefined-prompt shape first (v1.129.0): categories + dates
+        # survive the round trip. Anything else takes the loose list parser.
+        entries = parse_categorized_dump(text)
+        structured = bool(entries)
+        facts = [e["text"] for e in entries] if structured else parse_memory_dump(text)
         distilled = False
         used_provider = None
         # A recognizable pasted LIST needs no model at all. Prose (or an
-        # export's conversation text) needs distillation to become memories.
-        if len(facts) < 3:
+        # export's conversation text) needs distillation to become memories —
+        # but a small STRUCTURED export is already exact; never distill it.
+        if not structured and len(facts) < 3:
             from ...providers.adapters.base import LLMMessage
             from ...providers.adapters.mock import MockLLMAdapter
 
@@ -289,7 +306,7 @@ def register(app: FastAPI, d) -> None:
 
         candidates: list[dict[str, Any]] = []
         embedder = d.platform.embedder
-        for fact in facts:
+        for idx, fact in enumerate(facts):
             dup = False
             try:
                 # k=5 across the MERGED stores: with k=1 the round-robin gave
@@ -311,12 +328,17 @@ def register(app: FastAPI, d) -> None:
                         break
             except Exception:  # noqa: BLE001 — a flaky embedder never blocks preview
                 dup = False
-            candidates.append({"text": fact, "duplicate": dup})
+            cand: dict[str, Any] = {"text": fact, "duplicate": dup}
+            if structured:
+                cand["category"] = entries[idx]["category"]
+                cand["date"] = entries[idx]["date"]
+            candidates.append(cand)
 
         out: dict[str, Any] = {
             "candidates": candidates,
             "count": len(candidates),
             "distilled": distilled,
+            "structured": structured,
             "provider": provider,
         }
         if detected:
@@ -337,10 +359,17 @@ def register(app: FastAPI, d) -> None:
         from ...memory.importers import MAX_FACT_CHARS, MAX_FACTS
 
         provider = _provider_label(body.provider)
+        # entries carry category+date (v1.129.0); bare items normalize to
+        # the same triple so one storage loop serves both bodies.
+        raw = (
+            [(e.text, e.category, e.date) for e in body.entries]
+            if body.entries
+            else [(i, "", "") for i in (body.items or [])]
+        )
         items = [
-            " ".join((i or "").split())[:MAX_FACT_CHARS]
-            for i in (body.items or [])
-            if (i or "").strip()
+            (" ".join((f or "").split())[:MAX_FACT_CHARS], (c or "").strip(), (dt or "").strip())
+            for f, c, dt in raw
+            if (f or "").strip()
         ][:MAX_FACTS]
         if not items:
             raise HTTPException(status_code=400, detail="nothing selected to import")
@@ -373,12 +402,17 @@ def register(app: FastAPI, d) -> None:
 
         stamp = date.today().isoformat()
         added = 0
-        for fact in items:
+        for fact, category, original_date in items:
             # The 4-hex tag keeps DISTINCT facts that share their first words
             # from slugging into one note (append would merge them silently).
             tag = hashlib.md5(fact.encode("utf-8")).hexdigest()[:4]
             title = f"From {provider}: {' '.join(fact.split()[:6])[:60]} \u00b7 {tag}"
-            content = f"{fact}\n\n---\nimported from {provider} on {stamp}"
+            meta = [
+                *((f"category: {category}",) if category else ()),
+                *((f"original date: {original_date}",) if original_date else ()),
+                f"imported from {provider} on {stamp}",
+            ]
+            content = f"{fact}\n\n---\n" + "\n".join(meta)
             try:
                 d.platform.ltm.append(title, content, source=base)
                 added += 1

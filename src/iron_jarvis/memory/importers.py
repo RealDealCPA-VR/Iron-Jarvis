@@ -4,8 +4,13 @@ Every major assistant keeps memories about its user, and none of them expose
 an API for it — so this module powers the two honest intake lanes:
 
   paste   the user asks their model "list everything you remember about me"
-          and pastes the reply. :func:`parse_memory_dump` handles the list
-          shapes assistants actually produce, DETERMINISTICALLY — no model
+          and pastes the reply. :data:`EXPORT_PROMPT` (v1.129.0) is the
+          predefined ask — a categorized, dated export (Instructions /
+          Identity / Career / Projects / Preferences, ``[YYYY-MM-DD] -``
+          lines in a code block) that :func:`parse_categorized_dump` reads
+          back with category + date intact. Free-form replies still land in
+          :func:`parse_memory_dump`, which handles the list shapes
+          assistants actually produce. Both are DETERMINISTIC — no model
           call, works offline. Prose that isn't a list returns [] and the
           route falls back to distillation.
   export  the provider's official data export (ChatGPT export zip, Google
@@ -49,6 +54,120 @@ def _clean(fact: str) -> str:
     fact = _BOLD_RX.sub(r"\1", fact).strip()
     fact = re.sub(r"\s+", " ", fact)
     return fact[:MAX_FACT_CHARS]
+
+
+# --------------------------------------------------------------------------- #
+# the predefined export prompt + its structured read-back (v1.129.0)
+# --------------------------------------------------------------------------- #
+
+#: Canonical category order — the prompt asks for it, the preview groups by it.
+CATEGORIES = ("Instructions", "Identity", "Career", "Projects", "Preferences")
+
+#: The prompt the user pastes into ChatGPT/Claude/Gemini/Grok. Served by
+#: GET /memory/import/prompt so the dashboard and the parser can never drift.
+EXPORT_PROMPT = """\
+Export all of my stored memories and any context you've learned about me from \
+past conversations. Preserve my words verbatim where possible, especially for \
+instructions and preferences.
+
+## Categories (output in this order):
+
+1. **Instructions**: Rules I've explicitly asked you to follow going forward — \
+tone, format, style, "always do X", "never do Y", and corrections to your \
+behavior. Only include rules from stored memories, not from conversations.
+
+2. **Identity**: Name, age, location, education, family, relationships, \
+languages, and personal interests.
+
+3. **Career**: Current and past roles, companies, and general skill areas.
+
+4. **Projects**: Projects I meaningfully built or committed to. Ideally ONE \
+entry per project. Include what it does, current status, and any key \
+decisions. Use the project name or a short descriptor as the first words of \
+the entry.
+
+5. **Preferences**: Opinions, tastes, and working-style preferences that \
+apply broadly.
+
+## Format:
+
+Use section headers for each category. Within each category, list one entry \
+per line, sorted by oldest date first. Format each line as:
+
+[YYYY-MM-DD] - Entry content here.
+
+If no date is known, use [unknown] instead.
+
+## Output:
+- Wrap the entire export in a single code block for easy copying.
+- After the code block, state whether this is the complete set or if more \
+remain."""
+
+# "[2025-03-14] - entry" / "[unknown]: entry", optionally behind a bullet.
+_DATED_RX = re.compile(
+    r"""^\s*(?:[-*•]\s+)?\[\s*(?P<date>\d{4}-\d{2}-\d{2}|unknown)\s*\]
+        \s*(?:[-–—:]\s*)?(?P<body>.+)$""",
+    re.IGNORECASE | re.VERBOSE,
+)
+# "## Instructions", "**Identity**", "3. Career:" — a known category header.
+_CATEGORY_RX = re.compile(
+    r"^\s*(?:#{1,6}\s*)?(?:\d{1,2}[.)]\s*)?\**\s*"
+    r"(?P<label>" + "|".join(CATEGORIES) + r")\s*\**\s*:?\s*$",
+    re.IGNORECASE,
+)
+_CANON_CATEGORY = {c.lower(): c for c in CATEGORIES}
+
+
+def parse_categorized_dump(text: str) -> list[dict[str, str]]:
+    """Read back a reply to :data:`EXPORT_PROMPT` with structure intact.
+
+    Returns ``[{"text", "category", "date"}, ...]`` ("" when unknown) — or
+    [] when the text doesn't carry the structured shape (fewer than two
+    ``[date] -`` lines), so callers fall back to :func:`parse_memory_dump`.
+    Deterministic and lenient: code fences and the after-the-block
+    completeness sentence are ignored, headers may wear ##/**/numbering,
+    and an undated bullet under a known category still counts.
+    """
+    entries: list[dict[str, str]] = []
+    dated = 0
+    category = ""
+    for raw in (text or "").splitlines():
+        if not raw.strip() or raw.lstrip().startswith("```"):
+            continue
+        m = _CATEGORY_RX.match(raw)
+        if m:
+            category = _CANON_CATEGORY[m.group("label").lower()]
+            continue
+        m = _DATED_RX.match(raw)
+        if m:
+            body = _clean(m.group("body"))
+            if len(body) >= 4:
+                date = m.group("date").lower()
+                entries.append({
+                    "text": body,
+                    "category": category,
+                    "date": "" if date == "unknown" else date,
+                })
+                dated += 1
+            continue
+        if category:
+            # Inside a category: a plain bullet keeps the entry (models drop
+            # dates); an indented line continues the previous entry.
+            b = _BULLET_RX.match(raw)
+            if b:
+                body = _clean(b.group("body"))
+                if len(body) >= 4:
+                    entries.append({"text": body, "category": category, "date": ""})
+                continue
+            if entries and raw.startswith((" ", "\t")):
+                entries[-1]["text"] = _clean(entries[-1]["text"] + " " + raw.strip())
+                continue
+        # Preamble / the completeness sentence — ignored, and it ends any
+        # open category so trailing prose can't be stamped under one.
+        category = ""
+    if dated < 2:
+        return []
+    return entries[:MAX_FACTS]
 
 
 def parse_memory_dump(text: str) -> list[str]:
