@@ -36,6 +36,18 @@ function readTokenArg() {
   }
 })();
 
+// Watchdog heartbeat (v1.130.0): main pings, we pong. This handler runs on
+// the renderer's MAIN thread — if the page's event loop is wedged, the pong
+// stops, which is precisely the signal: main.js then recovers the window.
+// No page code involved, so it works even when the dashboard bundle is broken.
+ipcRenderer.on("watchdog:ping", () => {
+  try {
+    ipcRenderer.send("watchdog:pong");
+  } catch {
+    /* mid-teardown */
+  }
+});
+
 contextBridge.exposeInMainWorld("ironjarvis", {
   // Lets the dashboard detect it's running inside the desktop shell.
   isDesktop: true,

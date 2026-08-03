@@ -222,17 +222,27 @@ function loadDesktopSettings() {
   }
 }
 
-function setKeepRunningPref(value) {
-  keepRunningPref = !!value;
+// Merge one key into desktop-settings.json without clobbering the others —
+// the file now carries more than the close preference (hardware-acceleration
+// opt-out for the GPU-crash fallback), so every writer must read-merge-write.
+function writeDesktopSetting(key, value) {
   try {
-    fs.writeFileSync(
-      desktopSettingsFile(),
-      JSON.stringify({ keepRunningInBackground: keepRunningPref }),
-      "utf8"
-    );
+    let raw = {};
+    try {
+      raw = JSON.parse(fs.readFileSync(desktopSettingsFile(), "utf8")) || {};
+    } catch {
+      /* first write */
+    }
+    raw[key] = value;
+    fs.writeFileSync(desktopSettingsFile(), JSON.stringify(raw), "utf8");
   } catch (err) {
     console.error("[settings] could not persist desktop-settings.json:", err && err.message);
   }
+}
+
+function setKeepRunningPref(value) {
+  keepRunningPref = !!value;
+  writeDesktopSetting("keepRunningInBackground", keepRunningPref);
   refreshMenus(); // reflect the new state in the tray + app-menu checkboxes
 }
 
@@ -987,6 +997,11 @@ function createMainWindow() {
     mainWin = null;
   });
 
+  // A frozen or crashed renderer must self-heal, never strand the user
+  // (v1.130.0). Attached per-creation: hide-to-tray destroys the window and
+  // showMainWindow rebuilds it, so the watchdog rides every incarnation.
+  installRendererWatchdog(mainWin);
+
   mainWin.loadURL(DASHBOARD_URL);
 }
 
@@ -1277,12 +1292,22 @@ function buildTrayContextMenu() {
   template.push(
     { label: "Open Iron Jarvis", click: () => showMainWindow() },
     { label: "Quick task…  (Ctrl+Shift+Space)", click: () => toggleSpotlight() },
+    // The always-available unfreeze: reloads just the UI (state lives in the
+    // daemon). Discoverable here because a frozen window can't show its own
+    // menus — the tray keeps working even when the renderer doesn't.
+    { label: "Reload UI", click: () => reloadUI() },
     { type: "separator" },
     {
       label: "Keep running in background",
       type: "checkbox",
       checked: keepRunningPref === true,
       click: (item) => setKeepRunningPref(item.checked),
+    },
+    {
+      label: "Use hardware acceleration",
+      type: "checkbox",
+      checked: !hwAccelDisabled,
+      click: (item) => setHwAccelPref(!item.checked),
     }
   );
   if (IS_PACKAGED) {
@@ -1573,6 +1598,7 @@ async function startup() {
 
   buildMenu();
   installSpotlightIpc(); // wire the quick-task overlay's IPC before the hotkey
+  installGpuFallback(); // GPU-crash counter -> offer software rendering
   createTray();
   if (!START_HIDDEN) createLoadingWindow(); // login-boot goes straight to tray
   registerHotkey();
@@ -1785,7 +1811,331 @@ function registerHotkey() {
   }
 }
 
+// --- Renderer watchdog (v1.130.0) ----------------------------------------
+// The daemon and dashboard children have a crash supervisor; until now the
+// RENDERER — the process the user actually looks at — had nothing. A wedged
+// or dead renderer left a frozen window forever (the 2026-08-03 incident).
+// Three layers fix that:
+//   detect   'unresponsive' (Chromium's own hang signal) + a main->preload
+//            heartbeat that catches soft freezes Chromium never flags.
+//   recover  kill the hung renderer; 'render-process-gone' reloads it. The
+//            dashboard is stateless-by-design (all state in the daemon), so a
+//            reload is a ~3s blip, not data loss. A breaker stops reload
+//            storms and levels with the user instead.
+//   learn    every incident goes to logs/renderer.log AND the daemon's event
+//            log (desktop.incident) so the NEXT freeze arrives with evidence.
+
+const WATCHDOG_PING_MS = 5000;
+const WATCHDOG_MISSED_LIMIT = 3; // ≥15s of a blocked renderer thread = frozen
+const RECOVERY_WINDOW_MS = 5 * 60 * 1000;
+const RECOVERY_MAX_IN_WINDOW = 3;
+
+let _wdMissed = 0;
+let _wdTimer = null;
+let _wdRecoveries = []; // timestamps of recent auto-recoveries (breaker)
+let _wdUnresponsiveTimer = null;
+
+function rendererLog(line) {
+  const stamp = new Date().toISOString();
+  fileLogger("renderer")(`${stamp} ${line}\n`);
+}
+
+// Fire-and-forget incident record into the daemon's event log — makes freezes
+// first-class, queryable events (SELECT .. FROM eventrecord WHERE type LIKE
+// 'desktop.%'). Must never throw and never block recovery.
+function reportIncident(kind, detail) {
+  rendererLog(`[incident] ${kind}: ${detail}`);
+  try {
+    fetch(`http://127.0.0.1:${DAEMON_PORT}/system/incident`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      },
+      body: JSON.stringify({ kind, detail: String(detail || "") }),
+    }).catch(() => {});
+  } catch {
+    /* daemon down — renderer.log still has it */
+  }
+}
+
+// The breaker: recovery is only a cure if it converges. A renderer that dies
+// 3+ times in 5 minutes has a systemic cause (GPU driver, bad state) — stop
+// the reload loop and tell the user what to try, honestly.
+function recoveryAllowed() {
+  const now = Date.now();
+  _wdRecoveries = _wdRecoveries.filter((t) => now - t < RECOVERY_WINDOW_MS);
+  return _wdRecoveries.length < RECOVERY_MAX_IN_WINDOW;
+}
+
+function notifyRecovered(reason) {
+  try {
+    new Notification({
+      title: "Iron Jarvis",
+      body: `The window stopped responding (${reason}) and was reloaded. Nothing was lost — chats and settings live in the local service.`,
+    }).show();
+  } catch {
+    /* notifications unavailable */
+  }
+}
+
+function recoveryExhausted() {
+  reportIncident("recovery-exhausted", "renderer failed repeatedly; auto-heal paused");
+  if (!mainWin || mainWin.isDestroyed()) return;
+  dialog
+    .showMessageBox(mainWin, {
+      type: "warning",
+      buttons: ["Restart Iron Jarvis", "Turn off hardware acceleration + restart", "Not now"],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true,
+      title: "Iron Jarvis — the window keeps failing",
+      message: "The app window has stopped responding several times in a row.",
+      detail:
+        "A full restart usually clears this. If it keeps happening, turning off " +
+        "hardware acceleration works around GPU-driver problems (the most common " +
+        "cause). Your data is safe either way.",
+    })
+    .then(({ response }) => {
+      if (response === 1) writeDesktopSetting("disableHardwareAcceleration", true);
+      if (response === 0 || response === 1) {
+        isQuitting = true;
+        app.relaunch();
+        app.quit();
+      }
+    })
+    .catch(() => {});
+}
+
+// Recover from a HUNG (still-alive) renderer: kill it so 'render-process-gone'
+// runs the one shared reload path. Guarded by the breaker.
+function recoverRenderer(reason) {
+  if (!mainWin || mainWin.isDestroyed()) return;
+  if (!recoveryAllowed()) {
+    recoveryExhausted();
+    return;
+  }
+  _wdRecoveries.push(Date.now());
+  reportIncident("renderer-frozen", reason);
+  try {
+    mainWin.webContents.forcefullyCrashRenderer();
+  } catch (err) {
+    rendererLog(`[watchdog] forcefullyCrashRenderer failed: ${err && err.message}`);
+  }
+  notifyRecovered(reason);
+}
+
+// Heartbeat pong — registered ONCE (createMainWindow can run many times as the
+// window is destroyed/rebuilt on hide-to-tray).
+let _wdPongInstalled = false;
+function installWatchdogPong() {
+  if (_wdPongInstalled) return;
+  _wdPongInstalled = true;
+  ipcMain.on("watchdog:pong", () => {
+    _wdMissed = 0;
+  });
+}
+
+function installRendererWatchdog(win) {
+  installWatchdogPong();
+  const wc = win.webContents;
+
+  // Chromium's own hang detector. Give it a short grace ('responsive' often
+  // follows a momentary stall, e.g. the OS paging under memory pressure) —
+  // only a hang that OUTLIVES the grace gets recovered.
+  wc.on("unresponsive", () => {
+    rendererLog("[watchdog] renderer reported unresponsive");
+    if (_wdUnresponsiveTimer) clearTimeout(_wdUnresponsiveTimer);
+    _wdUnresponsiveTimer = setTimeout(() => {
+      _wdUnresponsiveTimer = null;
+      recoverRenderer("unresponsive");
+    }, 5000);
+  });
+  wc.on("responsive", () => {
+    rendererLog("[watchdog] renderer responsive again");
+    if (_wdUnresponsiveTimer) {
+      clearTimeout(_wdUnresponsiveTimer);
+      _wdUnresponsiveTimer = null;
+    }
+  });
+
+  // The one shared recovery path: any renderer death that isn't an intentional
+  // teardown reloads the window in place. Covers forcefullyCrashRenderer
+  // (watchdog), real crashes, and OOM kills.
+  wc.on("render-process-gone", (_event, details) => {
+    const why = `${details.reason} (exit ${details.exitCode})`;
+    if (details.reason === "clean-exit" || shuttingDown || isQuitting) {
+      rendererLog(`[watchdog] renderer gone: ${why} — intentional, no action`);
+      return;
+    }
+    reportIncident("renderer-gone", why);
+    // 'killed' is the watchdog's own forcefullyCrashRenderer (already counted
+    // + notified in recoverRenderer); anything else is a spontaneous death
+    // that must pass the same breaker so a crash loop can't reload forever.
+    if (details.reason !== "killed") {
+      if (!recoveryAllowed()) {
+        recoveryExhausted();
+        return;
+      }
+      _wdRecoveries.push(Date.now());
+      notifyRecovered(details.reason);
+    }
+    setTimeout(() => {
+      try {
+        if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.reload();
+      } catch (err) {
+        rendererLog(`[watchdog] reload after crash failed: ${err && err.message}`);
+      }
+    }, 250);
+  });
+
+  // Renderer console errors -> logs/renderer.log. This is the observability
+  // this incident lacked: until now the UI's errors were written NOWHERE.
+  // (Supports both the legacy positional and the newer event-object shapes.)
+  wc.on("console-message", (eventOrLegacy, level, message) => {
+    try {
+      const isNew = eventOrLegacy && typeof eventOrLegacy.level === "string";
+      const lvl = isNew ? eventOrLegacy.level : level;
+      const text = isNew ? eventOrLegacy.message : message;
+      if (lvl === "error" || lvl === 3) rendererLog(`[console] ${text}`);
+    } catch {
+      /* logging must never break the app */
+    }
+  });
+
+  // Heartbeat: catches soft freezes 'unresponsive' never fires for (input
+  // dead but compositor alive). Only enforced while the window is visible —
+  // a hidden/minimized window may be throttled and must not false-positive.
+  if (_wdTimer) clearInterval(_wdTimer);
+  _wdMissed = 0;
+  _wdTimer = setInterval(() => {
+    if (!mainWin || mainWin.isDestroyed()) return;
+    if (!mainWin.isVisible() || mainWin.isMinimized()) {
+      _wdMissed = 0;
+      return;
+    }
+    if (wc.isLoading()) {
+      _wdMissed = 0; // navigation/reload in flight — pings can't land yet
+      return;
+    }
+    _wdMissed += 1;
+    if (_wdMissed > WATCHDOG_MISSED_LIMIT) {
+      _wdMissed = 0;
+      recoverRenderer("heartbeat");
+      return;
+    }
+    try {
+      wc.send("watchdog:ping");
+    } catch {
+      /* webContents mid-teardown */
+    }
+  }, WATCHDOG_PING_MS);
+
+  win.on("closed", () => {
+    if (_wdTimer) clearInterval(_wdTimer);
+    _wdTimer = null;
+    if (_wdUnresponsiveTimer) clearTimeout(_wdUnresponsiveTimer);
+    _wdUnresponsiveTimer = null;
+  });
+}
+
+// Always-available escape hatch (tray + Ctrl+R): reload just the UI. All
+// state lives in the daemon, so this is always safe.
+function reloadUI() {
+  if (mainWin && !mainWin.isDestroyed()) {
+    try {
+      mainWin.webContents.reloadIgnoringCache();
+      return;
+    } catch {
+      /* fall through to a rebuild */
+    }
+  }
+  showMainWindow();
+}
+
+// --- GPU-crash fallback (v1.130.0) ----------------------------------------
+// Repeated GPU-process deaths are the classic driver-vs-Chromium fight and a
+// prime suspect for compositor freezes. After 2 in one session, offer a
+// relaunch with hardware acceleration off — persisted, reversible in the tray.
+
+let _gpuCrashes = 0;
+let _gpuPromptShown = false;
+
+function installGpuFallback() {
+  app.on("child-process-gone", (_event, details) => {
+    if (!details || details.type !== "GPU") return;
+    if (details.reason === "clean-exit") return;
+    _gpuCrashes += 1;
+    reportIncident("gpu-process-gone", `${details.reason} (#${_gpuCrashes} this session)`);
+    if (_gpuCrashes < 2 || _gpuPromptShown || hwAccelDisabled) return;
+    _gpuPromptShown = true;
+    dialog
+      .showMessageBox({
+        type: "warning",
+        buttons: ["Restart without hardware acceleration", "Not now"],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+        title: "Iron Jarvis — graphics driver trouble",
+        message: "The graphics process has crashed twice this session.",
+        detail:
+          "This is almost always a GPU-driver issue. Running without hardware " +
+          "acceleration avoids it (slightly higher CPU use; you can turn it back " +
+          "on any time from the tray menu).",
+      })
+      .then(({ response }) => {
+        if (response === 0) {
+          writeDesktopSetting("disableHardwareAcceleration", true);
+          isQuitting = true;
+          app.relaunch();
+          app.quit();
+        }
+      })
+      .catch(() => {});
+  });
+}
+
 // --- App lifecycle -------------------------------------------------------
+
+// Hardware-acceleration opt-out must apply BEFORE app ready — read the
+// persisted flag early (userDataDir isn't set yet; derive the path directly).
+let hwAccelDisabled = false;
+try {
+  const early = JSON.parse(
+    fs.readFileSync(path.join(app.getPath("userData"), "desktop-settings.json"), "utf8")
+  );
+  if (early && early.disableHardwareAcceleration === true) {
+    app.disableHardwareAcceleration();
+    hwAccelDisabled = true;
+  }
+} catch {
+  /* no settings yet — hardware acceleration stays on (the default) */
+}
+
+function setHwAccelPref(disabled) {
+  writeDesktopSetting("disableHardwareAcceleration", !!disabled);
+  dialog
+    .showMessageBox({
+      type: "question",
+      buttons: ["Restart now", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+      title: "Iron Jarvis",
+      message: "Restart to apply the graphics change?",
+      detail: "The hardware-acceleration setting takes effect on the next launch.",
+    })
+    .then(({ response }) => {
+      if (response === 0) {
+        isQuitting = true;
+        app.relaunch();
+        app.quit();
+      } else {
+        refreshMenus();
+      }
+    })
+    .catch(() => refreshMenus());
+}
 
 // Single-instance: a second launch focuses/opens the existing window instead of
 // spawning a duplicate daemon/dashboard pair.

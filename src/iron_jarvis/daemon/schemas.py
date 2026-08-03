@@ -517,6 +517,15 @@ class MemoryImportCommitBody(BaseModel):
     provider: str = "other"
 
 
+class DesktopIncidentBody(BaseModel):
+    """One desktop-shell incident (v1.130.0): the Electron renderer watchdog
+    reports freezes / renderer crashes / GPU-process deaths here so they land
+    in the same event log as everything else instead of vanishing."""
+
+    kind: str
+    detail: str = ""
+
+
 class MemoryWrite(BaseModel):
     """Body of the (single) POST /memory. ``layer`` defaults to "user" — the
     layer that endpoint has always actually written to; this model once

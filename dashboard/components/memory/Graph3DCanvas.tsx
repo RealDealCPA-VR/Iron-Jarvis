@@ -88,6 +88,26 @@ export default function Graph3DCanvas({
     };
   }, []);
 
+  // A WebGL scene must not render to a page nobody is looking at (v1.130.0).
+  // The lib's RAF loop otherwise keeps the GPU/compositor warm through a
+  // hidden tab or a tray-minimized window — sustained idle load for zero
+  // pixels, and exactly the kind of churn that raises renderer-stall odds.
+  // pauseAnimation freezes the tick; resume redraws everything on return.
+  useEffect(() => {
+    const onVisibility = () => {
+      const fg = fgRef.current;
+      if (!fg) return;
+      try {
+        if (document.hidden) fg.pauseAnimation();
+        else fg.resumeAnimation();
+      } catch {
+        /* renderer mid-teardown — nothing to pause */
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
   // AMBIENT (v1.116.0). Two quiet motions make the scene feel alive between
   // interactions: a slow camera orbit and a sparse starfield whose parallax
   // the orbit reveals. Three rules keep it from being annoying:

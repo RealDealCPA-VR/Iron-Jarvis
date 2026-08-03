@@ -13,7 +13,7 @@ from typing import Any
 
 from .. import app as _app
 from ..app import _ws_token_ok
-from ..schemas import ScheduleAdd, UpdateBody
+from ..schemas import DesktopIncidentBody, ScheduleAdd, UpdateBody
 from ... import __version__
 from ...core.db import session_scope
 
@@ -83,6 +83,26 @@ def register(app: FastAPI, d) -> None:
         except Exception:  # noqa: BLE001
             out["recent_provider_failures"] = 0
         return out
+
+    @app.post("/system/incident")
+    async def system_incident(body: DesktopIncidentBody) -> dict[str, Any]:
+        """Desktop-shell incident intake (v1.130.0). The Electron watchdog
+        reports renderer freezes, renderer crashes, and GPU-process deaths
+        here; publishing lands them in the persisted event log (type
+        ``desktop.incident``) — so the next "the app froze" arrives with
+        queryable evidence instead of a shrug. Inputs are clamped: this is
+        a log line, not a payload channel."""
+        kind = (
+            "".join(
+                c for c in (body.kind or "").strip().lower() if c.isalnum() or c in "-_"
+            )[:40]
+            or "unknown"
+        )
+        detail = " ".join((body.detail or "").split())[:500]
+        await d.platform.event_bus.publish(
+            "desktop.incident", {"kind": kind, "detail": detail}
+        )
+        return {"ok": True, "kind": kind}
 
     @app.get("/blackboard/{board_id}")
     def blackboard(board_id: str) -> dict[str, Any]:
