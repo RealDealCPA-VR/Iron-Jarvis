@@ -16,6 +16,12 @@ The pipeline keeps every LLM call bounded regardless of folder size:
 4. :func:`synthesize`  — deliverables are produced from the EXTRACTIONS ONLY
    (per-doc summaries + facts, total clipped) — never from raw document text —
    through the existing :func:`write_document` writers.
+5. Self-review QA (v1.134.0): every written deliverable is linted by the
+   deterministic checks in :mod:`.lint`; error findings get exactly ONE
+   refinement round (:func:`refine_deliverable`) under the same synthesis
+   contract, and whichever version lints BETTER is kept — refinement can never
+   make a deliverable worse. The result's ``qa`` block reports
+   findings/refined/refinement_error per deliverable, honestly.
 
 :func:`run_batch` orchestrates. Per-document failures are collected and
 reported, never fatal, and — CLAUDE.md hard rule — a real-provider failure
@@ -36,6 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core.fs_policy import fs_read_ok
+from .lint import lint_docx, lint_xlsx
 from .readers import _IMAGE_SUFFIXES, SUPPORTED_READ, extract_text
 from .writers import write_document
 
@@ -170,18 +177,30 @@ def sweep(
 # --- one-shot completion ------------------------------------------------------
 
 
-async def _one_shot(router: Any, system: str, user: str, task_class: str) -> str:
+async def _one_shot(
+    router: Any, system: str, user: str, task_class: str, *, llm: Any = None
+) -> str:
     """One completion through the router — the same resolver-provided router the
     other document tools use. A provider failure RAISES to the caller (per-doc
     error entry / synthesis error); and the offline mock must never 'extract' a
-    real document's facts — fabricated extraction is worse than none."""
+    real document's facts — fabricated extraction is worse than none.
+
+    ``llm`` (v1.135.0 step-aware routing) is a :class:`RoleResolution` from
+    ``run_batch``: when its mapping APPLIED, the resolved provider/model are
+    passed to ``router.complete`` — still THROUGH the router, so failover and
+    the mock-refusal below are unchanged. Otherwise the call is byte-for-byte
+    the pre-v1.135.0 one (no extra kwargs, so narrow fake routers keep working)."""
     from ..providers.adapters.base import LLMMessage  # lazy: no import cycle
 
+    route_kwargs: dict[str, Any] = {}
+    if llm is not None and getattr(llm, "applied", False):
+        route_kwargs = {"provider": llm.provider, "model": llm.model}
     route = await router.complete(
         system=system,
         messages=[LLMMessage(role="user", content=user)],
         tools=[],
         task_class=task_class,
+        **route_kwargs,
     )
     if getattr(route, "provider", "") == "mock":
         raise RuntimeError(
@@ -268,7 +287,7 @@ def _repair_prompt(error: Exception, raw: str) -> str:
 
 
 async def extract_one(
-    path: str | Path, router: Any, instructions: str = ""
+    path: str | Path, router: Any, instructions: str = "", *, llm: Any = None
 ) -> dict[str, Any]:
     """Extract ONE document into the structured-facts contract.
 
@@ -294,14 +313,14 @@ async def extract_one(
         (f"Batch instructions: {instructions.strip()}\n\n" if instructions.strip() else "")
         + f"Document: {path.name}\n---\n{clipped}{trunc_note}"
     )
-    raw = await _one_shot(router, _EXTRACT_SYSTEM, user, "extract")
+    raw = await _one_shot(router, _EXTRACT_SYSTEM, user, "extract", llm=llm)
     try:
         return _parse_extraction(raw)
     except ValueError as exc:
         # ONE repair round: the specific validation error goes back to the
         # model; a second violation propagates as this document's failure.
         raw2 = await _one_shot(
-            router, _EXTRACT_SYSTEM, _repair_prompt(exc, raw), "extract"
+            router, _EXTRACT_SYSTEM, _repair_prompt(exc, raw), "extract", llm=llm
         )
         return _parse_extraction(raw2)
 
@@ -436,6 +455,163 @@ def _validate_sheets(obj: dict[str, Any]) -> dict[str, Any]:
     return {"sheets": sheets}
 
 
+def _md_with_excluded(md: str, excluded: list[tuple[str, str]]) -> str:
+    """The docx honesty section, appended BY CODE (never by model compliance).
+    THE single append path — first-pass synthesis and QA refinement both render
+    through it, so a refined rewrite can never drop the failure section."""
+    if not excluded:
+        return md
+    return md + "\n\n## Documents not included\n\n" + "\n".join(
+        f"- {name} — {reason}" for name, reason in excluded
+    )
+
+
+def _spec_with_excluded(
+    spec: dict[str, Any], excluded: list[tuple[str, str]]
+) -> dict[str, Any]:
+    """The xlsx honesty sheet, added BY CODE on a COPY (the model's own spec
+    stays pristine for the refinement prompt). Same single-path rule as
+    :func:`_md_with_excluded`."""
+    out = {"sheets": dict(spec["sheets"])}
+    if not excluded:
+        return out
+    name, i = "Not included", 2
+    while name in out["sheets"]:  # never clobber a model sheet
+        name = f"Not included ({i})"
+        i += 1
+    out["sheets"][name] = [["File", "Reason"]] + [[n, r] for n, r in excluded]
+    return out
+
+
+# --- self-review QA (v1.134.0) --------------------------------------------------
+
+#: deliverable format → its deterministic linter.
+_LINT_FOR_FMT = {"docx": lint_docx, "xlsx": lint_xlsx}
+
+
+def _lint_rank(findings: list[dict[str, str]]) -> tuple[int, int]:
+    """(errors, warnings) — the KEEP-BETTER comparison key: fewer errors wins,
+    warnings break ties. Plain tuple ordering, nothing cleverer."""
+    sev = [f.get("severity") for f in findings]
+    return sev.count("error"), sev.count("warn")
+
+
+async def refine_deliverable(
+    target: Path,
+    fmt: str,
+    model_content: Any,
+    findings: list[dict[str, str]],
+    *,
+    router: Any,
+    user: str,
+    excluded: list[tuple[str, str]],
+    llm: Any = None,
+) -> "tuple[bool, str | None, list[dict[str, str]]]":
+    """ONE bounded refinement round for a deliverable that linted with errors.
+
+    Lives here (not in :mod:`.lint`) deliberately: refinement must reuse THIS
+    module's synthesis contract end-to-end — the same system prompts, the same
+    ``_validate_sheets`` shape validation, the same ``_one_shot`` (mock
+    refused, provider failure raises) and the same code-appended excluded
+    sections — so the rewrite goes through the identical path as first-pass
+    synthesis, never around it.
+
+    Returns ``(refined, refinement_error, kept_findings)``. KEEP-BETTER rule:
+    the candidate is written to a sibling temp file, re-linted, and replaces
+    the original ONLY when it lints strictly better (fewer errors, then fewer
+    warnings) — a tie keeps the original (no churn without improvement), so
+    refinement can never make a deliverable worse. A failed LLM call, invalid
+    output, or a no-better candidate keeps the original with the reason
+    RECORDED, never raised — the deliverable already on disk stays shipped."""
+    problem_lines = "\n".join(
+        f"- [{f['severity']}] {f['code']} at {f['where']}: {f['detail']}"
+        for f in findings
+    )
+    prev = (
+        model_content
+        if isinstance(model_content, str)
+        else json.dumps(model_content, ensure_ascii=False)
+    )
+    if len(prev) > MAX_SYNTHESIS_CHARS:  # refinement prompts stay bounded too
+        prev = prev[:MAX_SYNTHESIS_CHARS] + "\n[previous reply clipped]"
+    refine_user = (
+        user
+        + "\n\nYour previous reply (below) was rendered into the document and "
+        "a deterministic QA check found these problems:\n"
+        + problem_lines
+        + "\n\nPrevious reply:\n"
+        + prev
+        + "\n\nReply with the corrected COMPLETE version in the exact same "
+        "contract, fixing every problem. Use ONLY the provided extractions."
+    )
+    system = _SYNTH_DOCX_SYSTEM if fmt == "docx" else _SYNTH_XLSX_SYSTEM
+    try:
+        raw = await _one_shot(router, system, refine_user, "synthesize", llm=llm)
+        if fmt == "docx":
+            if not raw.strip():
+                raise ValueError("model returned an empty refinement")
+            content: Any = _md_with_excluded(raw, excluded)
+        else:
+            content = _spec_with_excluded(
+                _validate_sheets(_parse_json_object(raw)), excluded
+            )
+    except Exception as exc:  # noqa: BLE001 — a failed refinement keeps the original
+        return False, f"{type(exc).__name__}: {exc}", findings
+    cand = target.with_name(f".{target.stem}.refine-{os.getpid()}{target.suffix}")
+    try:
+        await asyncio.to_thread(write_document, cand, content)
+        new_lint = await asyncio.to_thread(_LINT_FOR_FMT[fmt], cand)
+        if _lint_rank(new_lint["findings"]) < _lint_rank(findings):
+            os.replace(cand, target)
+            return True, None, new_lint["findings"]
+        old_e, _old_w = _lint_rank(findings)
+        new_e, _new_w = _lint_rank(new_lint["findings"])
+        return (
+            False,
+            f"refined version did not lint better ({new_e} error(s) vs "
+            f"{old_e}) — original kept",
+            findings,
+        )
+    except Exception as exc:  # noqa: BLE001 — candidate trouble keeps the original
+        return False, f"{type(exc).__name__}: {exc}", findings
+    finally:
+        cand.unlink(missing_ok=True)
+
+
+async def _qa_deliverable(
+    target: Path,
+    fmt: str,
+    model_content: Any,
+    *,
+    router: Any,
+    user: str,
+    excluded: list[tuple[str, str]],
+    llm: Any = None,
+) -> dict[str, Any]:
+    """Lint one written deliverable; ERROR findings trigger the single
+    refinement round (warnings alone never spend an LLM call). Returns the qa
+    entry ``{"findings", "refined", "refinement_error"}`` where ``findings``
+    always describes the file actually on disk."""
+    lint = await asyncio.to_thread(_LINT_FOR_FMT[fmt], target)
+    if lint["ok"]:
+        return {
+            "findings": lint["findings"],
+            "refined": False,
+            "refinement_error": None,
+        }
+    refined, error, kept = await refine_deliverable(
+        target,
+        fmt,
+        model_content,
+        lint["findings"],
+        router=router,
+        user=user,
+        excluded=excluded,
+        llm=llm,
+    )
+    return {"findings": kept, "refined": refined, "refinement_error": error}
+
+
 async def synthesize(
     extractions: list[dict[str, Any]],
     *,
@@ -445,14 +621,17 @@ async def synthesize(
     formats: tuple[str, ...],
     failed: "list[dict[str, str]] | None" = None,
     skipped: "list[dict[str, str]] | None" = None,
-) -> tuple[list[Path], list[dict[str, str]]]:
+    llm: Any = None,
+) -> tuple[list[Path], list[dict[str, str]], dict[str, Any]]:
     """Produce the deliverables from the EXTRACTIONS. docx: one-shot markdown →
     the existing markdown-aware writer. xlsx: one-shot sheets-JSON (validated
     against the writer's existing shape, one repair round) → the existing xlsx
     writer. Failed/skipped documents are appended to every deliverable BY CODE
-    — honesty by construction, not by model compliance. Returns
-    ``(deliverable_paths, errors)``; a failed format is an error entry, never a
-    fabricated file."""
+    — honesty by construction, not by model compliance. Each written
+    deliverable is then QA-linted, with one refinement round on error findings
+    (:func:`_qa_deliverable`). Returns ``(deliverable_paths, errors, qa)``
+    where ``qa`` is keyed by deliverable file name; a failed format is an
+    error entry, never a fabricated file."""
     out_dir = Path(out_dir)
     failed = failed or []
     skipped = skipped or []
@@ -464,20 +643,24 @@ async def synthesize(
     excluded = _excluded_lines(failed, skipped)
     deliverables: list[Path] = []
     errors: list[dict[str, str]] = []
+    qa: dict[str, Any] = {}
     for fmt in formats:
         target = out_dir / f"synthesis.{fmt}"
         try:
             if fmt == "docx":
-                md = await _one_shot(router, _SYNTH_DOCX_SYSTEM, user, "synthesize")
+                md = await _one_shot(
+                    router, _SYNTH_DOCX_SYSTEM, user, "synthesize", llm=llm
+                )
                 if not md.strip():
                     raise ValueError("model returned an empty synthesis")
-                if excluded:
-                    md += "\n\n## Documents not included\n\n" + "\n".join(
-                        f"- {name} — {reason}" for name, reason in excluded
-                    )
-                await asyncio.to_thread(write_document, target, md)
+                await asyncio.to_thread(
+                    write_document, target, _md_with_excluded(md, excluded)
+                )
+                model_content: Any = md
             elif fmt == "xlsx":
-                raw = await _one_shot(router, _SYNTH_XLSX_SYSTEM, user, "synthesize")
+                raw = await _one_shot(
+                    router, _SYNTH_XLSX_SYSTEM, user, "synthesize", llm=llm
+                )
                 try:
                     spec = _validate_sheets(_parse_json_object(raw))
                 except ValueError as exc:
@@ -489,17 +672,13 @@ async def synthesize(
                         _SYNTH_XLSX_SYSTEM,
                         _repair_prompt(exc, raw),
                         "synthesize",
+                        llm=llm,
                     )
                     spec = _validate_sheets(_parse_json_object(raw2))
-                if excluded:
-                    name, i = "Not included", 2
-                    while name in spec["sheets"]:  # never clobber a model sheet
-                        name = f"Not included ({i})"
-                        i += 1
-                    spec["sheets"][name] = [["File", "Reason"]] + [
-                        [n, r] for n, r in excluded
-                    ]
-                await asyncio.to_thread(write_document, target, spec)
+                await asyncio.to_thread(
+                    write_document, target, _spec_with_excluded(spec, excluded)
+                )
+                model_content = spec
             else:  # defensive — run_batch validates the format list
                 raise ValueError(f"unknown synthesis format {fmt!r}")
             deliverables.append(target)
@@ -507,7 +686,19 @@ async def synthesize(
             errors.append(
                 {"output": fmt, "error": f"{type(exc).__name__}: {exc}"}
             )
-    return deliverables, errors
+            continue
+        # Self-review: the deliverable is already shipped (in `deliverables`)
+        # — QA can only improve or annotate it, never un-ship it.
+        qa[target.name] = await _qa_deliverable(
+            target,
+            fmt,
+            model_content,
+            router=router,
+            user=user,
+            excluded=excluded,
+            llm=llm,
+        )
+    return deliverables, errors, qa
 
 
 # --- orchestration ------------------------------------------------------------
@@ -528,12 +719,32 @@ async def run_batch(
     instructions: str = "",
     output: str = "both",
     max_files: int = 25,
+    config: Any = None,
 ) -> dict[str, Any]:
     """The whole pipeline: sweep → per-doc extract (resumable, persisted) →
     synthesize from the extractions. Per-document failures are COLLECTED —
-    one bad file, one provider hiccup, never aborts the rest."""
+    one bad file, one provider hiccup, never aborts the rest.
+
+    ``config`` (v1.135.0 step-aware routing) enables ``config.model_roles``:
+    the "extract"/"synthesize" roles are resolved ONCE per batch — so a
+    mapped-but-unavailable provider logs one fallback, not one per document —
+    against the router's own manager, and the resolved pairs ride every
+    one-shot. ``None`` (or an empty mapping) keeps the pipeline byte-for-byte
+    unchanged: the fallbacks are (None, None), the router's default route,
+    which is exactly the call this module always made."""
     folder = Path(folder)
     out_dir = Path(out_dir)
+    extract_llm = synth_llm = None
+    if config is not None:
+        from ..providers.roles import resolve_role  # lazy: no import cycle
+
+        manager = getattr(router, "manager", None)
+        extract_llm = resolve_role(
+            config, manager, "extract", fallback_provider=None, fallback_model=None
+        )
+        synth_llm = resolve_role(
+            config, manager, "synthesize", fallback_provider=None, fallback_model=None
+        )
     formats = _OUTPUT_FORMATS.get(str(output).strip().lower())
     if formats is None:
         raise ValueError(f"unknown output {output!r} — use xlsx, docx, or both")
@@ -553,7 +764,7 @@ async def run_batch(
                 cached += 1
                 extractions.append(record)
                 continue
-            extraction = await extract_one(path, router, instructions)
+            extraction = await extract_one(path, router, instructions, llm=extract_llm)
             st = path.stat()
             record = {
                 "source": str(path),
@@ -573,8 +784,9 @@ async def run_batch(
             )
     deliverable_paths: list[Path] = []
     synthesis_errors: list[dict[str, str]] = []
+    qa: dict[str, Any] = {}
     if extractions:
-        deliverable_paths, synthesis_errors = await synthesize(
+        deliverable_paths, synthesis_errors, qa = await synthesize(
             extractions,
             router=router,
             instructions=instructions,
@@ -582,6 +794,7 @@ async def run_batch(
             formats=formats,
             failed=failed,
             skipped=skipped,
+            llm=synth_llm,
         )
     elif files:  # every doc failed — say so, don't synthesize from nothing
         synthesis_errors.append(
@@ -597,5 +810,8 @@ async def run_batch(
         "skipped": skipped,
         "deliverables": [str(p) for p in deliverable_paths],
         "synthesis_errors": synthesis_errors,
+        # Self-review QA per deliverable file name: {"findings", "refined",
+        # "refinement_error"} — findings always describe the file ON DISK.
+        "qa": qa,
         "extraction_dir": str(ext_dir),
     }

@@ -32,6 +32,7 @@ from typing import Any, Callable
 
 from ..core.fs_policy import fs_read_ok
 from ..providers.adapters.base import LLMMessage
+from ..providers.roles import resolve_role
 from .base import Tool, ToolContext, ToolResult, safe_path
 
 #: () -> the platform's ModelRouter (anything with an async ``complete``).
@@ -204,12 +205,29 @@ class ViewImageTool(_ImageTool):
                 }
             ],
         )
+        # Step-aware routing (v1.135.0): the "vision" role may pin this call to
+        # the dedicated vision model. RESOLUTION only — the call still goes
+        # through router.complete, so failover/health semantics are unchanged,
+        # and an unmapped/unknown/unavailable role keeps today's default route
+        # byte-for-byte (no extra kwargs, so narrow fake routers keep working).
+        router = self._router_resolver()
+        vision = resolve_role(
+            ctx.config,
+            getattr(router, "manager", None),
+            "vision",
+            fallback_provider=None,
+            fallback_model=None,
+        )
+        route_kwargs: dict[str, Any] = (
+            {"provider": vision.provider, "model": vision.model} if vision.applied else {}
+        )
         # Exceptions from the router are wrapped by _ImageTool.execute.
-        result = await self._router_resolver().complete(
+        result = await router.complete(
             system="You are a precise visual analyst.",
             messages=[message],
             tools=[],
             session_id=ctx.session_id,
+            **route_kwargs,
         )
         text = (getattr(result.response, "text", "") or "").strip()
         if not text:

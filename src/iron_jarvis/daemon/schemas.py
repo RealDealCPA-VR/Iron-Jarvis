@@ -229,6 +229,9 @@ _SETTINGS_KEYS = [
     # — scales attachment budgets for local endpoints that don't advertise
     # theirs (a 128k fleet model gets whole documents inline; 8k gets RAG).
     "model_context_windows",
+    # Step-aware routing (v1.135.0): role -> "provider:model" overrides for
+    # plan/synthesize/extract/judge/vision one-shots inside multi-step runs.
+    "model_roles",
     # OpenCode store override for the Usage merge (dir or .db path).
     "opencode_data_dir",
     # Voice speech-to-text — an optional DEDICATED whisper endpoint + model, so a

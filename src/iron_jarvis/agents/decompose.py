@@ -27,6 +27,7 @@ from typing import Any
 
 from ..core.events import EventType
 from ..providers.adapters.base import LLMMessage
+from ..providers.roles import RoleResolution, resolve_role
 
 #: Plan size bounds: fewer than 2 steps means "no decomposition needed" (the
 #: flat loop handles it); more than 8 is clipped — a short-horizon model can't
@@ -145,15 +146,29 @@ class StepResult:
 
 # ------------------------------------------------------------------- one-shots
 async def _one_shot(
-    runtime, run, session, *, system: str, messages: list[LLMMessage], task_class: str
+    runtime,
+    run,
+    session,
+    *,
+    system: str,
+    messages: list[LLMMessage],
+    task_class: str,
+    llm: "RoleResolution | None" = None,
 ) -> str:
     """One completion through the router (its retry/failover spine included),
     with the tokens folded into the run's aggregate + a best-effort
     ``llm.completed`` audit event — the same accounting the loop rounds get, so
-    plan/judge/assemble calls aren't invisible on the Usage timeline."""
+    plan/judge/assemble calls aren't invisible on the Usage timeline.
+
+    ``llm`` (v1.135.0 step-aware routing) is the pre-resolved role pair from
+    :func:`run_decomposed`; ``None`` keeps the session's own provider/model
+    exactly as before. Either way the call goes THROUGH the router — role
+    resolution never bypasses failover/health/prompted-wrap semantics."""
+    provider = llm.provider if llm is not None else session.provider
+    model = llm.model if llm is not None else session.model
     route = await runtime.p.router.complete(
-        provider=session.provider,
-        model=session.model,
+        provider=provider,
+        model=model,
         system=system,
         messages=messages,
         tools=[],
@@ -169,19 +184,23 @@ async def _one_shot(
     try:
         from ..eval.pricing import cost_for
 
+        payload = {
+            "run_id": run.id,
+            "step": run.steps,
+            "provider": route.provider,
+            "model": route.model,
+            "input_tokens": step_in,
+            "output_tokens": step_out,
+            "cost_usd": cost_for(route.provider, route.model, step_in, step_out),
+            "task_class": task_class,
+        }
+        # Step-aware routing audit (v1.135.0): ADDITIVE payload key on the
+        # existing event, only when a role mapping actually changed the pair —
+        # the dormant path publishes byte-for-byte the same payload as before.
+        if llm is not None and llm.applied:
+            payload["role"] = llm.role
         await runtime.p.event_bus.publish(
-            EventType.LLM_COMPLETED,
-            {
-                "run_id": run.id,
-                "step": run.steps,
-                "provider": route.provider,
-                "model": route.model,
-                "input_tokens": step_in,
-                "output_tokens": step_out,
-                "cost_usd": cost_for(route.provider, route.model, step_in, step_out),
-                "task_class": task_class,
-            },
-            session_id=session.id,
+            EventType.LLM_COMPLETED, payload, session_id=session.id
         )
     except Exception:  # noqa: BLE001 — telemetry must never break the run
         pass
@@ -254,12 +273,15 @@ def _parse_plan(text: str) -> tuple[list[PlanStep] | None, str | None]:
     return steps, None
 
 
-async def plan_task(runtime, run, session, agent_def) -> list[PlanStep] | None:
+async def plan_task(
+    runtime, run, session, agent_def, *, llm: "RoleResolution | None" = None
+) -> list[PlanStep] | None:
     """One-shot plan with ONE parse-repair round (the validation error is fed
     back verbatim with the failed reply). Returns ``None`` — "no decomposition
     needed" — for a degenerate plan (0 or 1 steps), an unrepairable reply, or a
     planner call that errors: planning must never break a run, the flat loop is
-    always the fallback. Oversized plans are clipped to :data:`MAX_PLAN_STEPS`."""
+    always the fallback. Oversized plans are clipped to :data:`MAX_PLAN_STEPS`.
+    ``llm`` = the "plan" role's resolved pair (None → the session's own)."""
     user = (
         f"Task:\n{session.task}\n\n"
         f"Available tools: {', '.join(agent_def.tools)}"
@@ -267,7 +289,13 @@ async def plan_task(runtime, run, session, agent_def) -> list[PlanStep] | None:
     messages = [LLMMessage(role="user", content=user)]
     try:
         text = await _one_shot(
-            runtime, run, session, system=_PLAN_SYSTEM, messages=messages, task_class="plan"
+            runtime,
+            run,
+            session,
+            system=_PLAN_SYSTEM,
+            messages=messages,
+            task_class="plan",
+            llm=llm,
         )
     except asyncio.CancelledError:
         raise
@@ -287,7 +315,13 @@ async def plan_task(runtime, run, session, agent_def) -> list[PlanStep] | None:
         ]
         try:
             text = await _one_shot(
-                runtime, run, session, system=_PLAN_SYSTEM, messages=messages, task_class="plan"
+                runtime,
+                run,
+                session,
+                system=_PLAN_SYSTEM,
+                messages=messages,
+                task_class="plan",
+                llm=llm,
             )
         except asyncio.CancelledError:
             raise
@@ -339,9 +373,17 @@ def criteria_files(criteria: str) -> list[str]:
 
 
 async def verify_step(
-    runtime, run, session, workspace: Path, step: PlanStep, output: str
+    runtime,
+    run,
+    session,
+    workspace: Path,
+    step: PlanStep,
+    output: str,
+    *,
+    llm: "RoleResolution | None" = None,
 ) -> tuple[bool, str, str]:
     """The per-step gate. Returns ``(ok, reason, method)``.
+    ``llm`` = the "judge" role's resolved pair (None → the session's own).
 
     (a) DETERMINISTIC first: when the criteria name file(s), existence in the
     workspace IS the gate — cheap and unfoolable, no model call. (b) Otherwise
@@ -372,7 +414,13 @@ async def verify_step(
     for round_ in (0, 1):
         try:
             text = await _one_shot(
-                runtime, run, session, system=_JUDGE_SYSTEM, messages=messages, task_class="verify"
+                runtime,
+                run,
+                session,
+                system=_JUDGE_SYSTEM,
+                messages=messages,
+                task_class="verify",
+                llm=llm,
             )
         except asyncio.CancelledError:
             raise
@@ -439,13 +487,18 @@ async def execute_plan(
     tool_specs: list[dict[str, Any]],
     session_allow: set[str],
     sink,
+    judge_llm: "RoleResolution | None" = None,
 ) -> list[StepResult]:
     """Execute each step in a FRESH bounded mini-loop through the runtime's
     ``perceive_act`` seam (same routing/streaming/tool machinery, same run
     record + sink). A verify-gate failure earns ONE retry with the verifier's
     reason prepended; a second failure is recorded and the REMAINING steps
     still run (kept simple by design — later steps see the failure in their
-    prior-step context and the final answer surfaces it honestly)."""
+    prior-step context and the final answer surfaces it honestly).
+
+    ``judge_llm`` (v1.135.0) reroutes ONLY the verify gate's judge one-shots;
+    the mini-loops themselves are the tool-using lane and always keep the
+    SESSION's provider/model (``perceive_act`` is deliberately untouched)."""
     p = runtime.p
     workspace = Path(session.workspace_path)
     task_line = " ".join((session.task or "").split())[:MAX_TASK_ONELINER_CHARS]
@@ -497,7 +550,7 @@ async def execute_plan(
                 "(step stopped: mini-loop budget reached before a final answer)"
             )
             ok, reason, method = await verify_step(
-                runtime, run, session, workspace, step, output
+                runtime, run, session, workspace, step, output, llm=judge_llm
             )
             if ok or attempt == 1:
                 break
@@ -536,12 +589,20 @@ _ASSEMBLE_SYSTEM = (
 )
 
 
-async def assemble(runtime, run, session, results: list[StepResult]) -> str:
+async def assemble(
+    runtime,
+    run,
+    session,
+    results: list[StepResult],
+    *,
+    llm: "RoleResolution | None" = None,
+) -> str:
     """Final one-shot synthesizing the step results. NEVER fabricates success:
     when any step failed, a deterministic failure note is appended by CODE —
     honesty is not delegated to the model (it is also instructed to be honest,
     but the note guarantees it regardless of what the model writes). A failed
-    or empty assemble call degrades to a plain deterministic summary."""
+    or empty assemble call degrades to a plain deterministic summary.
+    ``llm`` = the "synthesize" role's resolved pair (None → the session's own)."""
     failed = [r for r in results if not r.ok]
     unverified = [r for r in results if r.ok and r.verified == "unverified"]
     lines = [f"Task: {session.task}", "", "Step results:"]
@@ -561,6 +622,7 @@ async def assemble(runtime, run, session, results: list[StepResult]) -> str:
             system=_ASSEMBLE_SYSTEM,
             messages=[LLMMessage(role="user", content="\n".join(lines))],
             task_class="assemble",
+            llm=llm,
         )
     except asyncio.CancelledError:
         raise
@@ -603,7 +665,28 @@ async def run_decomposed(
     declines (degenerate/unparseable plan) — the caller then runs the flat
     loop unchanged. An error DURING execution propagates exactly as a flat-loop
     error would (the orchestrator's failure handling applies either way)."""
-    plan = await plan_task(runtime, run, session, agent_def)
+    # Step-aware routing (v1.135.0): resolve each one-shot ROLE exactly once
+    # per run — plan/judge/synthesize may name a stronger local model while the
+    # mini-loops (the tool-using lane) keep the session's own provider. All
+    # fallbacks are the session pair, so with model_roles empty every
+    # resolution is a no-op and this path is byte-for-byte unchanged. getattr:
+    # bare stub platforms (tests) without config/providers stay dormant too.
+    p = runtime.p
+    cfg = getattr(p, "config", None)
+    provs = getattr(p, "providers", None)
+    plan_llm = resolve_role(
+        cfg, provs, "plan",
+        fallback_provider=session.provider, fallback_model=session.model,
+    )
+    judge_llm = resolve_role(
+        cfg, provs, "judge",
+        fallback_provider=session.provider, fallback_model=session.model,
+    )
+    synth_llm = resolve_role(
+        cfg, provs, "synthesize",
+        fallback_provider=session.provider, fallback_model=session.model,
+    )
+    plan = await plan_task(runtime, run, session, agent_def, llm=plan_llm)
     if plan is None:
         return None
     await runtime.p.event_bus.publish(
@@ -621,5 +704,6 @@ async def run_decomposed(
         tool_specs=tool_specs,
         session_allow=session_allow,
         sink=sink,
+        judge_llm=judge_llm,
     )
-    return await assemble(runtime, run, session, results)
+    return await assemble(runtime, run, session, results, llm=synth_llm)

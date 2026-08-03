@@ -274,6 +274,16 @@ class Config(BaseModel):
     #: provider is LOCAL-ONLY by design — OpenCode's hosted tier and any paid
     #: passthrough alias are excluded, so it can never bill you by surprise.
     opencode_local_models: str = ""
+    # STEP-AWARE ROUTING (v1.135.0) — role → model for the ONE-SHOT steps inside
+    # multi-step local runs: planning/synthesis on the strongest local model,
+    # per-doc extraction on the cheap one, image checks on the vision one. Keys
+    # are the step roles ("plan", "synthesize", "extract", "judge", "vision");
+    # values are "provider:model" or a bare "model" (same provider). Resolution
+    # (providers/roles.py) is fail-open: an unmapped role, unknown provider, or
+    # unavailable provider keeps the call's own provider/model unchanged — so
+    # with this dict empty (the default; a persisted config without the key
+    # loads cleanly to {}) the feature is fully dormant.
+    model_roles: dict[str, str] = Field(default_factory=dict)
     # SHORT-HORIZON DECOMPOSITION (v1.132.0) — when a run's model is a local
     # text-only adapter served via the prompted-tools scaffold, a plausibly
     # multi-step task is split into plan → execute → verify → assemble

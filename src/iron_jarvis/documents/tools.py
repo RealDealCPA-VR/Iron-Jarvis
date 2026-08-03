@@ -22,6 +22,7 @@ from typing import Any
 from ..core.fs_policy import fs_read_ok
 from ..tools.base import Reversibility, Tool, ToolContext, ToolResult, safe_path
 from ..tools.undo import make_file_descriptor, revert_workspace_file, sha256_bytes
+from .lint import lint_document
 from .pdf_markdown import MARKITDOWN_SUFFIXES, document_to_markdown
 from .readers import SUPPORTED_READ, extract_text
 from .writers import SUPPORTED_WRITE, write_document
@@ -192,7 +193,10 @@ class WriteDocumentTool(Tool):
         "POLISHED .docx/.xlsx pick a `theme` (never write styling code) and "
         "optionally pass `options`; an .xlsx sheet value may be {'rows': "
         "[...], 'charts': [{type: bar/line/pie, title, data_range, "
-        "categories_range, anchor}]} for engine-drawn charts."
+        "categories_range, anchor}]} for engine-drawn charts. Every "
+        ".docx/.xlsx write is QA-linted (empty sections, zero-row tables, "
+        "error cells...) and findings are reported back — fix and rewrite "
+        "when they matter."
     )
     input_schema = {
         "type": "object",
@@ -291,11 +295,45 @@ class WriteDocumentTool(Tool):
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
         rel = str(out.relative_to(Path(ctx.workspace).resolve())).replace("\\", "/")
         size = out.stat().st_size
+        # Self-review QA (v1.134.0): lint the written .docx/.xlsx and SURFACE
+        # the findings — no refinement round here, the CALLING agent is the
+        # refiner (it has the content and can rewrite); other formats have no
+        # linter and get no lint chatter. QA must never fail a landed write.
+        try:
+            lint = await asyncio.to_thread(lint_document, out, kind=args.get("kind"))
+        except Exception:  # noqa: BLE001 — pragma: no cover (lint never raises)
+            lint = None
+        qa_line = ""
+        if lint is not None:
+            if lint["findings"]:
+                n_err = sum(1 for f in lint["findings"] if f["severity"] == "error")
+                shown = lint["findings"][:12]
+                qa_line = (
+                    f"\nqa lint: {n_err} error(s), "
+                    f"{len(lint['findings']) - n_err} warning(s)"
+                    + "".join(
+                        f"\n- [{f['severity']}] {f['code']} {f['where']}: {f['detail']}"
+                        for f in shown
+                    )
+                    + (
+                        f"\n- ...and {len(lint['findings']) - len(shown)} more"
+                        if len(lint["findings"]) > len(shown)
+                        else ""
+                    )
+                )
+            else:
+                qa_line = "\nqa lint: clean"
         return ToolResult(
             ok=True,
             output=f"wrote {size} bytes to {rel}"
-            + ("".join(f"\nwarning: {w}" for w in warns)),
-            data={"path": rel, "bytes": size, **({"warnings": warns} if warns else {})},
+            + ("".join(f"\nwarning: {w}" for w in warns))
+            + qa_line,
+            data={
+                "path": rel,
+                "bytes": size,
+                **({"warnings": warns} if warns else {}),
+                **({"lint": lint} if lint is not None else {}),
+            },
         )
 
 
@@ -742,7 +780,10 @@ class BatchDocumentsTool(Tool):
         "deliverable(s) are synthesized from those extractions — never from "
         "raw document text. Re-running the same folder RESUMES: files whose "
         "content hash is unchanged are not re-extracted. Per-file failures "
-        "are collected and reported, never fatal. Reads are policy-gated."
+        "are collected and reported, never fatal. Reads are policy-gated. "
+        "Every deliverable is QA-linted (empty sections, zero-row tables, "
+        "error cells...) with ONE bounded refinement round on errors; "
+        "per-deliverable results are reported under `qa`."
     )
     input_schema = {
         "type": "object",
@@ -812,6 +853,9 @@ class BatchDocumentsTool(Tool):
                 instructions=str(args.get("instructions") or ""),
                 output=output,
                 max_files=max_files,
+                # Step-aware routing (v1.135.0): the live config carries
+                # model_roles so extraction/synthesis can resolve their roles.
+                config=ctx.config,
             )
         except Exception as exc:  # noqa: BLE001 — a batch fails as a report, not a crash
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
@@ -840,6 +884,21 @@ class BatchDocumentsTool(Tool):
             f"synthesis ({e['output']}) FAILED: {e['error']}"
             for e in result["synthesis_errors"]
         ]
+        # Self-review QA (v1.134.0): one honest line per deliverable — clean,
+        # refined, or the findings/refinement failure that remain on disk.
+        for name, entry in (result.get("qa") or {}).items():
+            n_err = sum(1 for f in entry["findings"] if f["severity"] == "error")
+            n_warn = len(entry["findings"]) - n_err
+            status = (
+                "clean"
+                if not entry["findings"]
+                else f"{n_err} error(s), {n_warn} warning(s)"
+            )
+            if entry["refined"]:
+                status += " after one refinement round"
+            elif entry["refinement_error"]:
+                status += f" (refinement kept the original: {entry['refinement_error']})"
+            lines.append(f"qa {name}: {status}")
         lines += [
             f"failed: {Path(f['file']).name} — {f['error']}"
             for f in result["failed"]
