@@ -274,6 +274,15 @@ class Config(BaseModel):
     #: provider is LOCAL-ONLY by design — OpenCode's hosted tier and any paid
     #: passthrough alias are excluded, so it can never bill you by surprise.
     opencode_local_models: str = ""
+    # SHORT-HORIZON DECOMPOSITION (v1.132.0) — when a run's model is a local
+    # text-only adapter served via the prompted-tools scaffold, a plausibly
+    # multi-step task is split into plan → execute → verify → assemble
+    # (agents/decompose.py) so a small model that loses the thread over a long
+    # flat loop still lands multi-step work. ON by default: it only ever
+    # engages for prompted-mode adapters, so frontier/native-tool runs are
+    # byte-for-byte unchanged. A persisted config without this key defaults
+    # cleanly to True (pydantic field default).
+    decompose_local_tasks: bool = True
     # Self-tuning router (§6 phase-1) — OFF by default. When enabled AND the local
     # Ollama model is configured AND eval/observability shows it has met the
     # quality bar for a task class, the router prefers it for that class. With the

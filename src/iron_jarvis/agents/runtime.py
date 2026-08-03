@@ -18,6 +18,7 @@ from ..core.ids import utcnow
 from ..core.models import AgentRun, AgentState, Session
 from ..providers.adapters.base import LLMMessage
 from ..tools.base import ToolContext
+from . import decompose as _decompose
 from .types import AgentDefinition
 
 _TERMINAL = {AgentState.COMPLETED, AgentState.FAILED, AgentState.CANCELLED}
@@ -196,7 +197,6 @@ class AgentRuntime:
             session_allow = set()
         messages: list[LLMMessage] = [LLMMessage(role="user", content=session.task)]
         tool_specs = self.p.registry.specs(agent_def.tools)
-        final_text = ""
 
         system_prompt = agent_def.system_prompt
         # Auto-inject any configured default skills (§23) into the prompt.
@@ -267,7 +267,85 @@ class AgentRuntime:
             except Exception:  # noqa: BLE001 — grounding must never break a run
                 pass
 
-        for step in range(self.p.config.max_agent_steps):
+        # v1.132.0 SHORT-HORIZON DECOMPOSITION: a local model served through the
+        # prompted-tools scaffold loses the thread over a long flat loop, so a
+        # plausibly multi-step task is split into plan → execute → verify →
+        # assemble (agents/decompose.py) — reusing this SAME run record, state
+        # transitions, event bus, and sink, so the dashboard sees a normal run.
+        # Native tool-callers, simple tasks, and the flag-off case keep the flat
+        # loop byte-for-byte unchanged; a planner that declines (degenerate/
+        # unparseable plan) falls back to it too.
+        final_text: str | None = None
+        if _decompose.should_decompose(self.p, session):
+            final_text = await _decompose.run_decomposed(
+                self,
+                run,
+                session,
+                agent_def,
+                system_prompt=system_prompt,
+                tool_specs=tool_specs,
+                session_allow=session_allow,
+                sink=sink,
+            )
+        if final_text is None:
+            finished, final_text = await self.perceive_act(
+                run,
+                session,
+                agent_def,
+                system_prompt=system_prompt,
+                messages=messages,
+                tool_specs=tool_specs,
+                session_allow=session_allow,
+                sink=sink,
+                max_steps=self.p.config.max_agent_steps,
+            )
+            if not finished:
+                run.result = "stopped: reached max steps before completion"
+                await self._set_state(run, AgentState.FAILED, session.id)
+                await self.p.event_bus.publish(
+                    EventType.AGENT_COMPLETED,
+                    {"run_id": run.id, "ok": False, "result": run.result},
+                    session_id=session.id,
+                )
+                if sink:
+                    sink.done(ok=False, result=run.result)
+                return run
+
+        run.result = final_text or "(no final message)"
+        await self._set_state(run, AgentState.COMPLETED, session.id)
+        await self.p.event_bus.publish(
+            EventType.AGENT_COMPLETED,
+            {"run_id": run.id, "ok": True, "result": run.result},
+            session_id=session.id,
+        )
+        if sink:
+            sink.done(ok=True, result=run.result)
+        return run
+
+    async def perceive_act(
+        self,
+        run: AgentRun,
+        session: Session,
+        agent_def: AgentDefinition,
+        *,
+        system_prompt: str,
+        messages: list[LLMMessage],
+        tool_specs: list,
+        session_allow: set[str],
+        sink,
+        max_steps: int,
+    ) -> tuple[bool, str]:
+        """The per-round route → tool-execute body of the perceive→act loop —
+        extracted (v1.132.0) as THE reusable seam so the decomposition
+        mini-loops run the exact same routing/streaming/tool machinery as the
+        flat loop, never a copy. Returns ``(finished, final_text)``:
+        ``finished=False`` means ``max_steps`` rounds were spent before the
+        model finalized (the caller decides whether that fails the run — the
+        flat path — or just this step — a decomposition mini-loop).
+        ``run.steps`` ACCUMULATES across calls, so a decomposed run's rounds
+        all count on the one AgentRun record."""
+        workspace = Path(session.workspace_path)
+        for _ in range(max_steps):
             # FX-01: consume the router as a TOKEN STREAM. Text deltas are pushed to
             # the SSE sink the moment they arrive; the terminal ``final`` frame
             # carries the SAME aggregate LLMResponse (+ resolved provider/model) that
@@ -290,9 +368,9 @@ class AgentRuntime:
                 elif ev.get("type") == "final":
                     route_resp = ev
             resp = route_resp["response"]
-            run.steps = step + 1
+            run.steps += 1
             run.provider, run.model = route_resp["provider"], route_resp["model"]
-            if sink and step == 0:
+            if sink and run.steps == 1:
                 sink.meta(run.provider, run.model)
             usage = getattr(resp, "usage", None) or {}
             step_in = int(usage.get("input_tokens", 0) or 0)
@@ -309,7 +387,7 @@ class AgentRuntime:
                     EventType.LLM_COMPLETED,
                     {
                         "run_id": run.id,
-                        "step": step + 1,
+                        "step": run.steps,
                         "provider": run.provider,
                         "model": run.model,
                         "input_tokens": step_in,
@@ -323,9 +401,8 @@ class AgentRuntime:
                 pass
 
             if not resp.wants_tools:
-                final_text = resp.text
                 self._save(run)
-                break
+                return True, resp.text
 
             messages.append(
                 LLMMessage(
@@ -428,26 +505,7 @@ class AgentRuntime:
                 )
             self._save(run)
             if sink:
-                sink.step_end(step + 1)
-        else:
-            run.result = "stopped: reached max steps before completion"
-            await self._set_state(run, AgentState.FAILED, session.id)
-            await self.p.event_bus.publish(
-                EventType.AGENT_COMPLETED,
-                {"run_id": run.id, "ok": False, "result": run.result},
-                session_id=session.id,
-            )
-            if sink:
-                sink.done(ok=False, result=run.result)
-            return run
-
-        run.result = final_text or "(no final message)"
-        await self._set_state(run, AgentState.COMPLETED, session.id)
-        await self.p.event_bus.publish(
-            EventType.AGENT_COMPLETED,
-            {"run_id": run.id, "ok": True, "result": run.result},
-            session_id=session.id,
-        )
-        if sink:
-            sink.done(ok=True, result=run.result)
-        return run
+                sink.step_end(run.steps)
+        # Round budget spent before the model finalized — the CALLER owns what
+        # that means (whole-run failure vs. a single step's outcome).
+        return False, ""

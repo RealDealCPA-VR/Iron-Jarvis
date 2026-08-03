@@ -50,6 +50,13 @@ class EventType:
     # step_completed adds {status, summary}.
     WORKFLOW_STEP_STARTED = "workflow.step_started"
     WORKFLOW_STEP_COMPLETED = "workflow.step_completed"
+    # Short-horizon decomposition (v1.132.0): a local (prompted-tools) model's
+    # task is split into small verifiable steps (agents/decompose.py).
+    # plan.created {run_id, steps: [goals]}; plan.step_started {run_id, index,
+    # goal}; plan.step_completed {run_id, index, ok}. All tagged session_id.
+    PLAN_CREATED = "plan.created"
+    PLAN_STEP_STARTED = "plan.step_started"
+    PLAN_STEP_COMPLETED = "plan.step_completed"
     REVIEW_REQUESTED = "review.requested"
     PROVIDER_FAILED = "provider.failed"
     PROVIDER_FAILOVER = "provider.failover"
