@@ -1264,6 +1264,117 @@ def create_app(project_root: str | None = None) -> FastAPI:
             # Every connected provider is rate-limited: surface the ORIGINAL error.
             raise _provider_error_http(exc)
 
+    # --- Skill learning (v1.135.0): distill glue + proposal event ---------
+
+    def _skill_distill_complete():
+        """The REAL-provider ``complete`` callable a skill distill sweep rides,
+        or ``None`` when only the offline mock is available. Crystallize's
+        honest-mock rule: a fabricated skill draft would poison future runs, so
+        mock-only installs get None (the handler skips silently; the manual
+        route 400s honestly). The returned callable goes through
+        ``_one_shot_complete`` — retry-on-transient + cross-provider failover,
+        the one-shot hard rule."""
+        from ..providers.adapters.mock import MockLLMAdapter
+
+        provider = platform.config.default_provider
+        model = platform.config.default_model
+        try:
+            adapter = platform.providers.get(provider, model)
+        except Exception:  # noqa: BLE001 — fall through to failover
+            adapter = None
+        if adapter is None or isinstance(adapter, MockLLMAdapter):
+            adapter, provider = _failover_adapter("mock")
+        if adapter is None:
+            return None
+
+        from ..providers.adapters.base import LLMMessage
+
+        async def _complete(system: str, prompt: str) -> str:
+            resp, _p, _m = await _one_shot_complete(
+                provider,
+                adapter,
+                system=system,
+                messages=[LLMMessage(role="user", content=prompt)],
+            )
+            return resp.text or ""
+
+        return _complete
+
+    def _publish_skill_proposal(record) -> None:
+        """``on_proposal`` callback: publish ``skill.proposal_created`` so the
+        dashboard event feed + Notifications routing can deliver it.
+        Best-effort: normally called on the daemon loop (the distill sweep is
+        an asyncio task), falls back to the lifespan loop for a foreign-thread
+        caller, and drops silently when no loop exists (bare create_app in
+        unit tests — the engine logs callback failures itself)."""
+        from ..core.events import EventType
+
+        coro = platform.event_bus.publish(
+            EventType.SKILL_PROPOSAL_CREATED,
+            {
+                "proposal_id": record.id,
+                "kind": record.kind,
+                "skill_name": record.skill_name,
+                # status "approved" means the explicit auto-approve setting
+                # already wrote the skill to disk — the alert should say so.
+                "auto": record.status == "approved",
+            },
+        )
+        try:
+            asyncio.get_running_loop().create_task(coro)
+        except RuntimeError:
+            loop = _live_rearm.get("loop")
+            if loop is not None and loop.is_running():
+                asyncio.run_coroutine_threadsafe(coro, loop)
+            else:
+                coro.close()  # no loop to publish on — best-effort by design
+
+    if platform.skill_learning is not None:
+        platform.skill_learning.on_proposal = _publish_skill_proposal
+
+    def _on_skill_session_completed(event: Any) -> None:
+        """SESSION_COMPLETED → schedule a distill sweep (the _on_livedoc_event
+        precedent: a SYNC bus handler that schedules async work). Fully guarded
+        so it can never break the event bus. Under a mock-only install the
+        sweep exits before any model call — never fabricate. Overlapping
+        sweeps are debounced by the engine itself."""
+        try:
+            from ..core.events import EventType
+
+            etype = getattr(event, "type", None) or (
+                event.get("type") if isinstance(event, dict) else None
+            )
+            if etype != EventType.SESSION_COMPLETED:
+                return
+            engine_ = getattr(platform, "skill_learning", None)
+            if engine_ is None:
+                return
+            if not bool(getattr(platform.config, "skill_learning_enabled", True)):
+                return
+
+            async def _sweep() -> None:
+                try:
+                    complete = _skill_distill_complete()
+                    if complete is None:
+                        return  # mock-only — candidates keep queueing offline
+                    await engine_.distill_candidates(complete)
+                except Exception:  # noqa: BLE001 — a sweep must never surface
+                    log.exception("skill distill sweep failed")
+
+            # Sync handlers run off the loop (bus._dispatch → to_thread), so
+            # hop onto the daemon loop thread-safely; without one (bare
+            # create_app in unit tests) skip silently — _on_livedoc_event's rule.
+            try:
+                asyncio.get_running_loop().create_task(_sweep())
+            except RuntimeError:
+                loop = _live_rearm.get("loop")
+                if loop is not None and loop.is_running():
+                    asyncio.run_coroutine_threadsafe(_sweep(), loop)
+        except Exception:  # noqa: BLE001 — the bus must survive any handler
+            log.exception("skill-learning session handler failed")
+
+    platform.event_bus.add_handler(_on_skill_session_completed)
+
     # --- Workflows (§24, §25) ---------------------------------------------
 
     async def _build_workflow(
@@ -1656,6 +1767,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
         _cu_status=_cu_status,
         _failover_adapter=_failover_adapter,
         _one_shot_complete=_one_shot_complete,
+        _skill_distill_complete=_skill_distill_complete,
         _build_workflow=_build_workflow,
         _goal_view=_goal_view,
         _proposal_view=_proposal_view,
@@ -1688,6 +1800,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
     _routes.connectors.register(app, d)
     _routes.routing.register(app, d)
     _routes.comm.register(app, d)
+    # skill_learning BEFORE agents: agents.py's GET /skills/{name} catch-all
+    # would otherwise swallow the literal /skills/learning path.
+    _routes.skill_learning.register(app, d)
     _routes.agents.register(app, d)
     _routes.reflex.register(app, d)
     _routes.triggers.register(app, d)

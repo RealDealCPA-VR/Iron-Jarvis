@@ -25,6 +25,7 @@ from . import (  # noqa: F401
     routing,
     sessions,
     settings,
+    skill_learning,
     system,
     terminals,
     triggers,

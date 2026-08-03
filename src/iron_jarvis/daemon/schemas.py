@@ -273,6 +273,10 @@ _SETTINGS_KEYS = [
     # OpenCode CLI provider — CSV of "provider/model" it may serve.
     # "" = auto-detect the models that genuinely run on your own hardware.
     "opencode_local_models",
+    # Skill learning (v1.135.0) — the suggest-only skill loop's two switches.
+    # Also settable from the Skills page via PATCH /skills/learning/settings.
+    "skill_learning_enabled",
+    "skill_learning_auto_approve",
 ]
 
 
@@ -805,6 +809,23 @@ class McpSuggestBody(BaseModel):
     description: str
     provider: str = ""
     model: str = ""
+
+
+class SkillProposalApproveBody(BaseModel):
+    """Approve a learned-skill proposal (v1.135.0). ``body_md`` carries an
+    edited SKILL.md that wins over the stored draft; ``None`` approves the
+    draft as distilled."""
+
+    body_md: str | None = None
+
+
+class SkillLearningSettingsPatch(BaseModel):
+    """The Skills page's two learning toggles (v1.135.0) — real persisted
+    settings, the v1.127.0 MCP-auto-approve pattern: ``None`` means "leave
+    alone", so a UI flipping one switch can't blank the other."""
+
+    enabled: bool | None = None
+    auto_approve: bool | None = None
 
 
 class SessionsClearBody(BaseModel):

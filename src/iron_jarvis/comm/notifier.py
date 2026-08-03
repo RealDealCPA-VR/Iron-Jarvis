@@ -22,6 +22,7 @@ DEFAULT_ALERT_EVENTS: frozenset[str] = frozenset(
         EventType.SESSION_COMPLETED,
         EventType.AUTONOMY_EXECUTED,
         EventType.PROVIDER_FAILOVER,
+        EventType.SKILL_PROPOSAL_CREATED,
     }
 )
 
@@ -36,6 +37,13 @@ def format_event(event: Any) -> str:
     """Build a concise human-readable alert line from an event."""
     etype = _event_field(event, "type", "event")
     payload = _event_field(event, "payload", {}) or {}
+    if etype == EventType.SKILL_PROPOSAL_CREATED:
+        name = str(payload.get("skill_name") or "").strip() or "a new skill"
+        if payload.get("auto"):
+            # auto=True: the explicit auto-approve setting already wrote the
+            # skill to disk — "review it" would point at an empty review queue.
+            return f"New skill added automatically: {name} — see it on the Skills page"
+        return f"New skill suggested: {name} — review it on the Skills page"
     session_id = _event_field(event, "session_id")
     parts = [
         f"{k}={v}"

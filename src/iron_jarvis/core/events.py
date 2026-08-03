@@ -78,6 +78,10 @@ class EventType:
     # action (proposed), or auto-executed one within governance (executed).
     AUTONOMY_PROPOSED = "autonomy.proposed"
     AUTONOMY_EXECUTED = "autonomy.executed"
+    # Skill learning (v1.135.0): the distill sweep minted a reviewable draft
+    # skill. {proposal_id, kind, skill_name, auto} — auto=True means the
+    # explicit auto-approve setting already wrote it to the skills directory.
+    SKILL_PROPOSAL_CREATED = "skill.proposal_created"
 
 
 @dataclass

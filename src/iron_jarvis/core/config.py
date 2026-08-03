@@ -199,6 +199,17 @@ class Config(BaseModel):
     # form field, reported twice as "the box doesn't stick"). Coarse by design:
     # mcp_call is one permission key, so this trusts EVERY connected plug-in.
     mcp_auto_approve: bool = False
+    # SKILL LEARNING (v1.135.0) — finished sessions feed a suggest-only skill
+    # loop: candidate gating is pure-DB and free (so ON by default costs
+    # nothing); the distill step additionally requires a REAL provider and
+    # never runs under mock. OFF stops new candidates/proposals; passive
+    # use/stat telemetry keeps accruing either way.
+    skill_learning_enabled: bool = True
+    # The explicit escape hatch from review: a freshly distilled proposal is
+    # approved (written to the skills directory) immediately. OFF by default —
+    # suggest-don't-act is the product thesis; flipping this is the user
+    # consciously trading review for speed.
+    skill_learning_auto_approve: bool = False
     # Bounded rolling window (was 0 = keep-forever). The persisted event log grows
     # with every session/tool/autonomous tick and is the root of the unbounded
     # EventRecord table that made /metrics, memory-recall, integrity_check and

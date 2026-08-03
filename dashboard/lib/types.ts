@@ -128,6 +128,43 @@ export interface SkillDetail extends Skill {
   instructions: string;
 }
 
+/** A learned-skill draft awaiting review (the skill learning loop, v1.135). */
+export interface SkillProposal {
+  id: string;
+  /** "create" = a brand-new skill distilled from finished sessions;
+   *  "refine" = an improvement to an existing skill that underperformed. */
+  kind: "create" | "refine";
+  skill_name: string;
+  description: string;
+  /** Full SKILL.md content (frontmatter + playbook) the approval would write. */
+  body_md: string;
+  /** Refine only: the current on-disk body, for the before/after diff. */
+  prev_body_md?: string | null;
+  status: "pending" | "approved" | "rejected";
+  created_at?: string;
+  decided_at?: string | null;
+  [k: string]: unknown;
+}
+
+/** Rolling per-skill outcome stats maintained by the skill learning loop. */
+export interface SkillStat {
+  skill_name: string;
+  use_count: number;
+  avg_score: number | null;
+  success_rate: number | null;
+  last_used_at?: string | null;
+}
+
+/** GET /skills/learning — loop settings + review-queue summary. */
+export interface SkillLearningOverview {
+  enabled: boolean;
+  auto_approve: boolean;
+  proposals: SkillProposal[];
+  stats: SkillStat[];
+  pending_candidates?: number;
+  [k: string]: unknown;
+}
+
 export interface WorkflowRun {
   id?: string;
   workflow_name?: string;

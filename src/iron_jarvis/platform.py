@@ -41,7 +41,7 @@ from .eval.observability import Observability
 from .memory.layers import MemoryLayers
 from .memory.tools import memory_tools
 from .sandbox.shell_tool import SandboxedShellTool
-from .skills import SkillRegistry, skill_tools
+from .skills import SkillLearningEngine, SkillRegistry, skill_tools
 from .workflows import models as _wf_models  # noqa: F401  (registers WorkflowRunRecord)
 
 # Robust feature set (each importing its package registers any SQLModel tables).
@@ -155,6 +155,9 @@ class Platform:
     tools_registry: "DynamicToolRegistry | None" = None
     intent: "IntentEngine | None" = None
     improvement: "ImprovementEngine | None" = None
+    #: Skill learning (v1.135.0): finished sessions feed a suggest-only loop
+    #: that distils repeatable procedures into reviewable draft skills.
+    skill_learning: "SkillLearningEngine | None" = None
     #: The SHARED embedder (real Ollama when reachable, offline mock otherwise;
     #: persistent-cached). Built once and injected into filesearch/ltm — kept on
     #: the platform so later consumers (memory graph, runtime-added LTM sources)
@@ -981,5 +984,12 @@ def build_platform(
     # orchestrator (cheap, never-raising, runs on every session completion); the
     # model-driven reflect() stays on-demand (POST /improvement/reflect).
     platform.improvement = ImprovementEngine(platform)
+
+    # SkillLearningEngine (v1.135.0): observes every session completion (hooked
+    # in the orchestrator, cheap + never-raising) and turns qualifying runs into
+    # reviewable draft skills. Its tables auto-registered when .skills imported
+    # above. ``on_proposal`` stays None here — publishing the minted-proposal
+    # event is daemon wiring (the daemon owns the event-loop scheduling).
+    platform.skill_learning = SkillLearningEngine(platform)
 
     return platform

@@ -4,7 +4,8 @@ import { useRef, useState } from "react";
 import { Sparkles, BookOpen, Plus, Save, RefreshCw, Play, Copy, Check, Cpu } from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { post, ApiError } from "@/lib/api";
-import type { Skill, SkillDetail } from "@/lib/types";
+import type { Skill, SkillDetail, SkillLearningOverview } from "@/lib/types";
+import { SuggestedSkills } from "@/components/skills/SuggestedSkills";
 
 /** Response of POST /skills/{name}/apply — a one-shot "use it right now" run. */
 interface SkillApplyResult {
@@ -78,6 +79,12 @@ export default function SkillsPage() {
   }>("/skills");
   const [selected, setSelected] = useState<string | null>(null);
   const detail = useApi<SkillDetail>(selected ? `/skills/${selected}` : null, [selected]);
+
+  // The skill learning loop (v1.135.0): pending suggestions + settings + per-
+  // skill stats. On daemons without the endpoint this just stays null and the
+  // page renders exactly as before.
+  const learning = useApi<SkillLearningOverview>("/skills/learning");
+  const statByName = new Map((learning.data?.stats ?? []).map((st) => [st.skill_name, st]));
 
   // --- "Use this skill" bubble state -----------------------------------------
   // Cleared whenever a different skill is selected; the ref lets an in-flight
@@ -230,6 +237,19 @@ export default function SkillsPage() {
         </Reveal>
       )}
 
+      {/* Suggested skills — full-width review strip above the lists so drafts
+          awaiting a decision are seen before the catalog. Absent entirely on
+          daemons without the learning loop. */}
+      {learning.data && (
+        <Reveal>
+          <SuggestedSkills
+            overview={learning.data}
+            onRefresh={learning.reload}
+            onSkillsChanged={reload}
+          />
+        </Reveal>
+      )}
+
       <Reveal>
         <div className="grid gap-6 lg:grid-cols-3">
           <div className="space-y-6 lg:col-span-1">
@@ -349,24 +369,38 @@ export default function SkillsPage() {
                 <Empty icon={<Sparkles size={22} />}>No skills.</Empty>
               ) : (
                 <ul className="max-h-[70vh] space-y-1 overflow-auto">
-                  {skills.map((s) => (
-                    <li key={s.name}>
-                      <button
-                        onClick={() => selectSkill(s.name)}
-                        className={`w-full rounded-xl border px-3 py-2.5 text-left text-sm transition-colors ${
-                          selected === s.name
-                            ? "border-accent/30 bg-accent/[0.08] text-accent-soft"
-                            : "border-transparent text-zinc-300 hover:border-white/10 hover:bg-white/[0.04]"
-                        }`}
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="min-w-0 flex-1 truncate font-medium">{s.name}</span>
-                          <SourceBadge source={s.source} />
-                        </div>
-                        <div className="truncate text-xs text-zinc-500">{s.description}</div>
-                      </button>
-                    </li>
-                  ))}
+                  {skills.map((s) => {
+                    // Subtle usage hint from the learning loop, when it has one.
+                    const stat = statByName.get(s.name);
+                    const pct =
+                      stat?.success_rate == null
+                        ? null
+                        : Math.round(stat.success_rate <= 1 ? stat.success_rate * 100 : stat.success_rate);
+                    return (
+                      <li key={s.name}>
+                        <button
+                          onClick={() => selectSkill(s.name)}
+                          className={`w-full rounded-xl border px-3 py-2.5 text-left text-sm transition-colors ${
+                            selected === s.name
+                              ? "border-accent/30 bg-accent/[0.08] text-accent-soft"
+                              : "border-transparent text-zinc-300 hover:border-white/10 hover:bg-white/[0.04]"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="min-w-0 flex-1 truncate font-medium">{s.name}</span>
+                            <SourceBadge source={s.source} />
+                          </div>
+                          <div className="truncate text-xs text-zinc-500">{s.description}</div>
+                          {stat && stat.use_count > 0 && (
+                            <div className="mt-0.5 truncate text-[10px] text-zinc-600">
+                              {stat.use_count} {stat.use_count === 1 ? "use" : "uses"}
+                              {pct != null ? ` · ${pct}% success` : ""}
+                            </div>
+                          )}
+                        </button>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </Card>

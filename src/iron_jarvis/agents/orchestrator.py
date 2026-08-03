@@ -295,6 +295,18 @@ class Orchestrator:
         except Exception:  # noqa: BLE001
             log.exception("reflection failed for session %s", session.id)
 
+        # Skill learning (v1.135.0): derive skill uses + mint suggest-only
+        # create/refine candidates from this finished run. Runs AFTER
+        # record_outcome (it reads the OutcomeRecord score, never re-scores).
+        # Pure-DB, deterministic, internally never-raising — the guard here is
+        # belt-and-braces like the steps above.
+        skill_learning = getattr(self.p, "skill_learning", None)
+        if skill_learning is not None:
+            try:
+                skill_learning.observe_session(session)
+            except Exception:  # noqa: BLE001
+                log.exception("skill-learning observe failed for session %s", session.id)
+
     async def _finalize_failed(self, session: Session, error: Exception) -> None:
         """Mark a crashed run FAILED, persist, emit SESSION_COMPLETED(ok=False), GC
         its worktree — so an unexpected exception never leaves a zombie ACTIVE
