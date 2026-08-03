@@ -157,9 +157,12 @@ def _capture_bus():
 # --------------------------------------------------------------------------- #
 # Capability-aware routing (#3): tools must never land on codex-cli.
 # --------------------------------------------------------------------------- #
-def test_tool_request_swaps_off_text_only_primary():
+def test_tool_request_wraps_text_only_primary_in_prompted_scaffold():
     # openai resolves (keyless inheritance) to a TEXT-ONLY codex-cli-like
-    # adapter; a tool request must be re-routed to a tool-capable provider.
+    # adapter. v1.131.0 CONTRACT CHANGE: the chosen adapter now KEEPS the
+    # request, wrapped in the prompted-tools scaffold (before: rerouted to a
+    # tool-capable provider — the "asked for codex, got anthropic" complaint).
+    # It must never receive the raw tool specs it can't execute.
     codex = _Adapter("codex-cli", tool_use=False, vision=False)
     anth = _Adapter("anthropic", tool_use=True)
     mgr = _Manager({"openai": codex, "anthropic": anth, "mock": _Adapter("mock")})
@@ -168,10 +171,13 @@ def test_tool_request_swaps_off_text_only_primary():
     res = asyncio.run(
         r.complete(provider="openai", system="", messages=[LLMMessage("user", "hi")], tools=_tools())
     )
-    assert res.provider == "anthropic"  # never the text-only codex-cli
-    assert codex.calls == 0  # the text-only adapter is never even called
+    assert res.provider == "codex-cli"  # the pick keeps the request
+    assert res.response.text == "from codex-cli"
+    assert codex.calls == 1  # served exactly once, via the wrapper
+    assert anth.calls == 0  # no reroute
     routed = [e for e in events if e.type == EventType.PROVIDER_ROUTED]
-    assert routed and routed[0].payload["resolved_provider"] == "anthropic"
+    assert routed and routed[0].payload["resolved_provider"] == "codex-cli"
+    assert routed[0].payload["reason"] == "prompted-tools"
 
 
 def test_tool_failover_excludes_text_only_codex_cli():

@@ -9,9 +9,11 @@ Reliability spine (best-in-class routing):
 * **Typed classification** — :func:`is_transient_error` decides transient-vs-
   permanent by exception TYPE + HTTP status (via :class:`ProviderError`), not by
   substring-matching an error body (which false-positives on token counts/ids).
-* **Capability-aware routing** — a tool-using request never lands on a text-only
-  adapter (e.g. codex-cli) that would silently return ``tool_calls=[]`` and stall
-  the agent loop; images prefer a vision-capable adapter.
+* **Capability-aware routing** — a tool-using request never RAW-lands on a
+  text-only adapter that would silently return ``tool_calls=[]`` and stall the
+  agent loop: since v1.131.0 the chosen adapter is wrapped in the prompted-tools
+  scaffold (``adapters/prompted_tools.py``) so it serves the loop itself; images
+  still prefer a vision-capable adapter (no prompt makes a text model see).
 * **Circuit breaker** — a provider that fails N times in a row is skipped for a
   short cooldown (half-open probe after), so a dead provider stops absorbing
   latency on every request.
@@ -39,6 +41,7 @@ from .adapters.base import (
     ProviderError,
     TRANSIENT_STATUS,
 )
+from .adapters.prompted_tools import PromptedToolsAdapter
 from .manager import ProviderManager
 
 #: httpx is an adapter dependency, but guard the import so a stripped-down
@@ -204,6 +207,27 @@ def _supports_vision(adapter: Any) -> bool:
 
 def _wants_images(messages: list[LLMMessage]) -> bool:
     return any(getattr(m, "images", None) for m in messages)
+
+
+def wrap_prompted_tools(adapter: LLMAdapter) -> LLMAdapter:
+    """The v1.131.0 wrap decision for a TOOL-carrying request whose resolved
+    adapter can't call tools natively: scaffold it with
+    :class:`PromptedToolsAdapter` so the CHOSEN model serves the agent loop via
+    the prompted contract, instead of rerouting to a different provider (the
+    "I picked my local model and got someone else" complaint — the same honesty
+    v1.125.0 established for chat) or silently stalling on ``tool_calls=[]``
+    when no native-capable provider is connected. Idempotent, and a no-op for a
+    natively tool-capable adapter, so double application can't stack prompts.
+
+    Deliberately the ROUTER's seam, not ``ProviderManager.get()``: the manager
+    can't know whether a request carries tools, and its direct consumers must
+    keep seeing the honest inner adapter — fleet verify probes an endpoint's
+    NATIVE tool_calls (a wrapped probe would record a fabricated capability),
+    and chat's explicit text-only-pick check reads the same truth.
+    """
+    if isinstance(adapter, PromptedToolsAdapter) or _supports_tools(adapter):
+        return adapter
+    return PromptedToolsAdapter(adapter)
 
 
 class RouteResult:
@@ -422,6 +446,12 @@ class ModelRouter:
                 }
         # Fallback: the strongest connected real provider (its own default model).
         fp = self._first_available_real(need_tools=need_tools)
+        if fp is None and need_tools:
+            # Only text-only providers are connected (a local-fleet-only box):
+            # take the strongest anyway — the capability block downstream wraps
+            # it in the prompted-tools scaffold. Before v1.131.0 this dropped a
+            # tool request to MOCK while a real model was connected.
+            fp = self._first_available_real(need_tools=False)
         if fp is not None:
             return self.manager.get(fp), fp, False, {
                 "tier": (decision or {}).get("tier", "") if decision else "",
@@ -537,15 +567,21 @@ class ModelRouter:
                 "the pin off in Settings) and retry."
             )
 
-        # CAPABILITY-AWARE ROUTING (the critical bug): a tool-using request must
-        # never resolve to a text-only adapter (codex-cli, inherited-openai) that
-        # silently returns tool_calls=[] and stalls the agent loop. Swap to the
-        # first tool-capable connected provider; images prefer a vision-capable
-        # one. Only re-route a REAL resolved adapter (never the mock/downgrade).
-        # Under the pin the user's pick keeps the request — tools are offered to
-        # the chosen adapter as-is (an unverified local endpoint often CAN call
-        # tools; the verify chip in Connections is the way to prove it).
+        # CAPABILITY-AWARE ROUTING. Tools (v1.131.0): a tool-carrying request
+        # that resolved to a text-only adapter is WRAPPED in the prompted-tools
+        # scaffold — the CHOSEN model keeps the request and drives the loop via
+        # the fenced-JSON contract. (Before: rerouted to a different provider,
+        # or a silent tool_calls=[] stall when no capable provider existed.)
+        # Vision keeps the reroute: no prompt makes a text model see, so images
+        # still prefer a vision-capable adapter. Only a REAL resolved adapter
+        # (never the mock/downgrade). Under the pin the user's pick keeps the
+        # request — tools are offered to the chosen adapter RAW, no wrap (an
+        # unverified local endpoint often CAN call tools natively; the verify
+        # chip in Connections is the way to prove it).
         if not pinned and not downgraded and adapter.provider != "mock":
+            if need_tools and not _supports_tools(adapter):
+                adapter = wrap_prompted_tools(adapter)
+                reason = "prompted-tools"
             repl = self._enforce_capabilities(adapter, need_tools, need_vision, avail)
             if repl is not None:
                 adapter = repl
@@ -849,10 +885,15 @@ class ModelRouter:
                 "the pin off in Settings) and retry."
             )
 
-        # Capability-aware routing: never stream a tool request to a text-only
-        # adapter (it returns tool_calls=[] and stalls the agent loop). Under
-        # the pin the user's pick keeps the request, tools offered as-is.
+        # Capability-aware routing — same contract as complete(): a tool
+        # request on a text-only adapter is wrapped in the prompted-tools
+        # scaffold (v1.131.0; the wrapper streams via the base single-chunk
+        # default), vision keeps the reroute. Under the pin the user's pick
+        # keeps the request, tools offered RAW (no wrap).
         if not pinned and not downgraded and adapter.provider != "mock":
+            if need_tools and not _supports_tools(adapter):
+                adapter = wrap_prompted_tools(adapter)
+                reason = "prompted-tools"
             repl = self._enforce_capabilities(adapter, need_tools, need_vision, avail)
             if repl is not None:
                 adapter = repl

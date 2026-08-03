@@ -122,7 +122,11 @@ async def test_stream_pinned_pick_keeps_tools_no_swap():
     assert frontier.calls == 0
 
 
-async def test_stream_pin_off_still_swaps_capability():
+async def test_stream_pin_off_wraps_text_only_pick_in_prompted_scaffold():
+    # v1.131.0 CONTRACT CHANGE: pin OFF used to capability-SWAP a text-only
+    # pick with tools to a different provider; now the chosen adapter keeps
+    # the request wrapped in the prompted-tools scaffold (router seam) and the
+    # stream serves it via the base single-chunk default.
     local = _NoTools()
     frontier = _Capable()
     manager = _Manager(
@@ -134,7 +138,9 @@ async def test_stream_pin_off_still_swaps_capability():
         r.stream(provider="fleet-box", model="llama3", system="", messages=_MSG, tools=_TOOL)
     )
     final = next(f for f in frames if f.get("type") == "final")
-    assert final["provider"] == "anthropic"  # the pre-pin contract, unchanged
+    assert final["provider"] == "fleet-box"  # the pick keeps the request
+    assert final["response"].text == "local answer"
+    assert frontier.calls == 0  # no reroute
 
 
 # ------------------------------------------- 2. fleet in the failover pool ---
