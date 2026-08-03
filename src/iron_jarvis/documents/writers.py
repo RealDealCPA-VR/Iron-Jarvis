@@ -34,6 +34,22 @@ becomes paragraphs, so flat strings keep working everywhere.
 Every writer saves to a sibling temp file then ``os.replace()`` onto the target
 (atomic): a mid-save failure never clobbers an existing good file or leaves a
 0-byte document. Parent directories are created as needed; the Path is returned.
+
+BEAUTY layer (v1.134.0): ``write_document`` also takes an optional ``options``
+dict — DECLARATIVE polish the engine applies so models pick options instead of
+writing styling code. For ``.docx``: ``theme`` (a :mod:`.themes` name),
+``cover`` (title page from the first H1; optional ``subtitle``; ``date`` True/
+str/False), ``header_text``, ``footer`` (``"page-numbers"`` for a live page
+number, or text — a literal ``{page}`` inside the text becomes the live field,
+which is how "text plus page numbers" is expressed). For ``.xlsx``: ``theme``,
+``autosize`` (defaults ON when a theme is set), ``freeze_header``, ``banded``,
+``number_formats`` ({column letter: Excel format string}). An ``.xlsx`` sheet
+value may also be ``{"rows": [...], "charts": [...]}`` where each chart is
+``{"type": "bar"|"line"|"pie", "title", "data_range", "categories_range",
+"anchor"}`` — ranges are validated (A1-style, within the used cells) and an
+invalid chart is SKIPPED with a recorded warning, never a crashed write. With
+no options the output is exactly the legacy output — the default flow is
+untouched.
 """
 
 from __future__ import annotations
@@ -49,6 +65,7 @@ from pathlib import Path
 from typing import Any
 
 from .markdown import Block, Run, parse_markdown
+from .themes import THEME_NAMES, Theme, get_theme
 
 #: Suffixes with a dedicated writer (everything else falls back to UTF-8 text).
 SUPPORTED_WRITE: set[str] = {
@@ -69,18 +86,34 @@ SUPPORTED_WRITE: set[str] = {
 
 
 def write_document(
-    path: str | Path, content: Any, *, kind: str | None = None
+    path: str | Path,
+    content: Any,
+    *,
+    kind: str | None = None,
+    options: "dict[str, Any] | None" = None,
+    warnings: "list[str] | None" = None,
 ) -> Path:
-    """Write ``content`` to ``path`` as a real document. Returns the Path."""
+    """Write ``content`` to ``path`` as a real document. Returns the Path.
+
+    ``options`` is the declarative beauty layer (module docstring) — honored
+    by ``.docx``/``.xlsx``, ignored (with a recorded warning) elsewhere.
+    ``warnings`` is a caller-supplied OUT list: non-fatal issues (skipped
+    charts, unknown theme names) are appended so tools can surface them —
+    a beauty problem degrades the polish, never the write.
+    """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
 
     suffix = ("." + kind.lstrip(".")).lower() if kind else p.suffix.lower()
 
+    if options and suffix not in (".docx", ".xlsx"):
+        # Honest, not fatal: the write proceeds exactly as without options.
+        _warn(warnings, f"beauty options are honored for .docx/.xlsx only — ignored for {suffix or 'this format'}")
+
     if suffix == ".docx":
-        _write_docx(p, content)
+        _write_docx(p, content, options=options, warnings=warnings)
     elif suffix == ".xlsx":
-        _write_xlsx(p, content)
+        _write_xlsx(p, content, options=options, warnings=warnings)
     elif suffix == ".pptx":
         _write_pptx(p, content)
     elif suffix == ".pdf":
@@ -128,6 +161,27 @@ def _atomic_text(p: Path, data: str) -> None:
 
 
 # --- helpers ------------------------------------------------------------------
+
+
+def _warn(warnings: "list[str] | None", msg: str) -> None:
+    """Record a non-fatal beauty issue when the caller gave us somewhere to."""
+    if warnings is not None:
+        warnings.append(msg)
+
+
+def _beauty_opts(
+    options: "dict[str, Any] | None", warnings: "list[str] | None"
+) -> "tuple[dict[str, Any] | None, Theme | None]":
+    """(opts, theme) — opts is None when there is nothing to apply, which is
+    the guard every beauty step hangs off (no options => the legacy path)."""
+    opts = options if isinstance(options, dict) and options else None
+    theme = get_theme(str(opts.get("theme") or "")) if opts else None
+    if opts and opts.get("theme") and theme is None:
+        _warn(
+            warnings,
+            f"unknown theme {opts['theme']!r} — available: {', '.join(THEME_NAMES)}",
+        )
+    return opts, theme
 
 
 def _as_text(content: Any) -> str:
@@ -189,17 +243,172 @@ def _write_yaml(p: Path, content: Any) -> None:
 # --- docx ----------------------------------------------------------------------
 
 
-def _write_docx(p: Path, content: Any) -> None:
+def _write_docx(
+    p: Path,
+    content: Any,
+    options: "dict[str, Any] | None" = None,
+    warnings: "list[str] | None" = None,
+) -> None:
     import docx
 
+    # BEAUTY is strictly additive: with no options this function must produce
+    # exactly the document the legacy path always did, so every styling /
+    # cover / header-footer step below is gated on the options dict.
+    opts, theme = _beauty_opts(options, warnings)
+
     doc = docx.Document()
-    if isinstance(content, str):
-        _docx_render(doc, parse_markdown(content))
+    if theme is not None:
+        _docx_apply_theme(doc, theme)
+    blocks = parse_markdown(content) if isinstance(content, str) else None
+    if opts and opts.get("cover"):
+        _docx_cover(doc, blocks, opts, theme, fallback_title=p.stem)
+    if opts and (str(opts.get("header_text") or "").strip() or str(opts.get("footer") or "").strip()):
+        _docx_header_footer(doc, opts)
+    if blocks is not None:
+        _docx_render(doc, blocks)
     else:
         for line in _as_lines(content):
             doc.add_paragraph(line)
     with _atomic(p) as tmp:
         doc.save(str(tmp))
+
+
+def _docx_apply_theme(doc: Any, theme: Theme) -> None:
+    """Retune the NAMED styles (Normal, Heading 1-4, Title) + page margins.
+
+    Styling via named styles — not per-run formatting — means every paragraph
+    the renderer emits (and anything the user types later in Word) inherits
+    the theme, and Word's style pane still shows honest style names.
+    """
+    from docx.shared import Inches, Pt, RGBColor
+
+    styles = doc.styles
+    try:
+        normal = styles["Normal"]
+        normal.font.name = theme.body_font
+        normal.font.size = Pt(theme.body_size_pt)
+    except KeyError:  # pragma: no cover - Normal always exists in the template
+        pass
+    for level in (1, 2, 3, 4):
+        try:
+            st = styles[f"Heading {level}"]
+        except KeyError:  # style missing from the template -> skip, never crash
+            continue
+        st.font.name = theme.heading_font
+        st.font.size = Pt(theme.heading_size(level))
+        st.font.color.rgb = RGBColor(*theme.accent_rgb)
+        st.font.bold = True
+
+    top, right, bottom, left = theme.margins_in
+    for section in doc.sections:
+        section.top_margin = Inches(top)
+        section.right_margin = Inches(right)
+        section.bottom_margin = Inches(bottom)
+        section.left_margin = Inches(left)
+
+
+def _docx_cover(
+    doc: Any,
+    blocks: "list[Block] | None",
+    opts: dict[str, Any],
+    theme: "Theme | None",
+    *,
+    fallback_title: str,
+) -> None:
+    """Title page: first H1 (or the filename), optional subtitle, date, then a
+    page break so the body starts on page 2. The H1 stays in the body too —
+    a cover ADDS a page, it never rewrites the content."""
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Pt, RGBColor
+
+    title = next(
+        (b.text for b in (blocks or []) if b.kind == "heading" and b.level == 1),
+        "",
+    ).strip() or str(opts.get("title") or "").strip() or fallback_title or "Document"
+
+    for _ in range(5):  # push the title toward the visual center of the page
+        doc.add_paragraph()
+    tp = doc.add_paragraph()
+    tp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = tp.add_run(title)
+    run.bold = True
+    run.font.size = Pt(34)
+    if theme is not None:
+        run.font.name = theme.heading_font
+        run.font.color.rgb = RGBColor(*theme.accent_rgb)
+
+    subtitle = str(opts.get("subtitle") or "").strip()
+    if subtitle:
+        sp = doc.add_paragraph()
+        sp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        srun = sp.add_run(subtitle)
+        srun.italic = True
+        srun.font.size = Pt(14)
+
+    # date: True (default) -> today; a string -> verbatim; falsy -> none.
+    date = opts.get("date", True)
+    date_text = (
+        str(date).strip()
+        if isinstance(date, str)
+        else (datetime.now().strftime("%B %d, %Y") if date else "")
+    )
+    if date_text:
+        dp = doc.add_paragraph()
+        dp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        dp.add_run(date_text).font.size = Pt(11)
+
+    doc.add_page_break()
+
+
+def _docx_page_number_field(paragraph: Any) -> None:
+    """Append a live PAGE number field to ``paragraph``.
+
+    python-docx has no field API, so this is the standard fieldcode dance:
+    a run carrying the raw ``w:fldChar begin`` / ``w:instrText PAGE`` /
+    ``w:fldChar end`` triplet, which Word renders as the current page number.
+    """
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    run = paragraph.add_run()
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldCharType"), "begin")
+    instr = OxmlElement("w:instrText")
+    instr.set(qn("xml:space"), "preserve")
+    instr.text = "PAGE"
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldCharType"), "end")
+    run._r.append(begin)
+    run._r.append(instr)
+    run._r.append(end)
+
+
+def _docx_header_footer(doc: Any, opts: dict[str, Any]) -> None:
+    """Section header text + footer. ``footer`` contract: the sentinel
+    ``"page-numbers"`` renders just the centered live page number; any other
+    text renders as-is, with a literal ``{page}`` token replaced by the live
+    field — that token is how "text AND page numbers" is expressed."""
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    header_text = str(opts.get("header_text") or "").strip()
+    footer = str(opts.get("footer") or "").strip()
+    for section in doc.sections:
+        if header_text:
+            hp = section.header.paragraphs[0]
+            hp.text = header_text
+            hp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        if footer:
+            fp = section.footer.paragraphs[0]
+            fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            if footer == "page-numbers":
+                _docx_page_number_field(fp)
+            else:
+                parts = footer.split("{page}")
+                for i, part in enumerate(parts):
+                    if i:
+                        _docx_page_number_field(fp)
+                    if part:
+                        fp.add_run(part)
 
 
 def _docx_hyperlink(paragraph: Any, url: str, text: str, *, code: bool = False) -> None:
@@ -331,8 +540,19 @@ def _docx_render(doc: Any, blocks: list[Block]) -> None:
 # --- xlsx ----------------------------------------------------------------------
 
 
-def _write_xlsx(p: Path, content: Any) -> None:
+def _write_xlsx(
+    p: Path,
+    content: Any,
+    options: "dict[str, Any] | None" = None,
+    warnings: "list[str] | None" = None,
+) -> None:
     from openpyxl import Workbook
+
+    # BEAUTY is strictly additive here too: without options every statement
+    # below is the legacy flow. The one CONTENT extension is chart specs — a
+    # sheet value may be {"rows": [...], "charts": [...]} (a shape the legacy
+    # writer never accepted, so no existing content changes meaning).
+    opts, theme = _beauty_opts(options, warnings)
 
     wb = Workbook()
     if isinstance(content, dict) and isinstance(content.get("sheets"), dict):
@@ -343,7 +563,14 @@ def _write_xlsx(p: Path, content: Any) -> None:
             while title in wb.sheetnames:  # duplicate names must not crash
                 n += 1
                 title = f"{base[:28]}~{n}"
-            _xlsx_fill(wb.create_sheet(title=title), rows)
+            charts = None
+            if isinstance(rows, dict) and "rows" in rows:
+                charts = rows.get("charts")
+                rows = rows.get("rows")
+            ws = wb.create_sheet(title=title)
+            _xlsx_fill(ws, rows)
+            if charts:
+                xlsx_add_charts(ws, charts, warnings)
     else:
         ws = wb.active
         if isinstance(content, (list, tuple)):
@@ -355,6 +582,9 @@ def _write_xlsx(p: Path, content: Any) -> None:
         else:
             for line in _as_lines(content):
                 ws.append([line])
+    if opts:
+        for ws in wb.worksheets:
+            xlsx_apply_beauty(ws, theme, opts, warnings)
     with _atomic(p) as tmp:
         wb.save(str(tmp))
 
@@ -447,6 +677,200 @@ def _xlsx_fill(ws: Any, rows: Any) -> None:
             widths[i] = max(widths.get(i, 0), len(str(c)))
     for i, w in widths.items():
         ws.column_dimensions[get_column_letter(i)].width = min(max(w + 2, 8), 60)
+
+
+# --- xlsx beauty (v1.134.0) -----------------------------------------------------
+# Public (no underscore) because excel_apply_spec applies the SAME declarative
+# options + chart specs — one implementation, one validation, one behavior.
+
+#: A1-style range/cell — validated up front so a model's typo becomes a
+#: recorded warning, never an openpyxl traceback mid-write.
+_A1_RANGE_RX = re.compile(r"^\$?[A-Za-z]{1,3}\$?\d{1,7}(:\$?[A-Za-z]{1,3}\$?\d{1,7})?$")
+_A1_CELL_RX = re.compile(r"^\$?[A-Za-z]{1,3}\$?\d{1,7}$")
+_COL_LETTER_RX = re.compile(r"^[A-Za-z]{1,3}$")
+
+_CHART_TYPES = ("bar", "line", "pie")
+
+
+def _chart_bounds(ws: Any, ref: Any) -> "tuple[int, int, int, int] | None":
+    """(min_col, min_row, max_col, max_row) for an A1 ref that is well-formed
+    AND inside the sheet's used dimensions; None otherwise."""
+    from openpyxl.utils import range_boundaries
+
+    s = str(ref or "").strip()
+    if not _A1_RANGE_RX.fullmatch(s):
+        return None
+    try:
+        min_col, min_row, max_col, max_row = range_boundaries(s.upper())
+    except Exception:  # noqa: BLE001 — malformed refs must degrade, not crash
+        return None
+    if None in (min_col, min_row, max_col, max_row):
+        return None
+    if min_col > max_col or min_row > max_row:
+        return None
+    if max_row > ws.max_row or max_col > ws.max_column:
+        return None
+    return min_col, min_row, max_col, max_row
+
+
+def xlsx_add_charts(ws: Any, charts: Any, warnings: "list[str] | None") -> int:
+    """Add declared charts to ``ws``; returns how many landed.
+
+    Each spec: {"type": "bar"|"line"|"pie", "title": str, "data_range":
+    "B2:B10", "categories_range": "A2:A10", "anchor": "E2"}. Anything invalid
+    (unknown type, malformed/out-of-bounds range, bad anchor) SKIPS that chart
+    with a recorded warning — a chart typo must never cost the workbook.
+    """
+    from openpyxl.chart import BarChart, LineChart, PieChart, Reference
+
+    if not isinstance(charts, (list, tuple)):
+        _warn(warnings, f"charts must be a list of chart specs on sheet {ws.title!r}")
+        return 0
+    added = 0
+    for i, spec in enumerate(charts, start=1):
+        label = f"chart {i} on sheet {ws.title!r}"
+        if not isinstance(spec, dict):
+            _warn(warnings, f"{label} skipped: spec must be an object")
+            continue
+        ctype = str(spec.get("type") or "").strip().lower()
+        if ctype not in _CHART_TYPES:
+            _warn(
+                warnings,
+                f"{label} skipped: unknown type {spec.get('type')!r} "
+                f"(use one of {', '.join(_CHART_TYPES)})",
+            )
+            continue
+        data = _chart_bounds(ws, spec.get("data_range"))
+        if data is None:
+            _warn(
+                warnings,
+                f"{label} skipped: data_range {spec.get('data_range')!r} is not "
+                f"an A1 range inside the used cells "
+                f"(sheet spans A1:{_col_letter(ws.max_column)}{ws.max_row})",
+            )
+            continue
+        cats = None
+        if str(spec.get("categories_range") or "").strip():
+            cats = _chart_bounds(ws, spec.get("categories_range"))
+            if cats is None:
+                _warn(
+                    warnings,
+                    f"{label} skipped: categories_range "
+                    f"{spec.get('categories_range')!r} is not an A1 range "
+                    f"inside the used cells",
+                )
+                continue
+        anchor = str(spec.get("anchor") or "").strip().upper() or "E2"
+        if not _A1_CELL_RX.fullmatch(anchor):
+            _warn(warnings, f"{label} skipped: anchor {spec.get('anchor')!r} is not a cell like 'E2'")
+            continue
+        chart = {"bar": BarChart, "line": LineChart, "pie": PieChart}[ctype]()
+        title = str(spec.get("title") or "").strip()
+        if title:
+            chart.title = title
+        chart.add_data(
+            Reference(ws, min_col=data[0], min_row=data[1], max_col=data[2], max_row=data[3]),
+            titles_from_data=False,
+        )
+        if cats is not None:
+            chart.set_categories(
+                Reference(ws, min_col=cats[0], min_row=cats[1], max_col=cats[2], max_row=cats[3])
+            )
+        ws.add_chart(chart, anchor.replace("$", ""))
+        added += 1
+    return added
+
+
+def _col_letter(idx: int) -> str:
+    from openpyxl.utils import get_column_letter
+
+    return get_column_letter(max(int(idx), 1))
+
+
+def _xlsx_header_like(ws: Any) -> bool:
+    """Same heuristic as ``_xlsx_fill``: >=2 rows and a first row that is all
+    non-formula text reads as a header row."""
+    if ws.max_row < 2:
+        return False
+    first = [c.value for c in ws[1]]
+    return bool(first) and all(
+        isinstance(v, str) and not v.startswith("=") for v in first
+    )
+
+
+def xlsx_apply_beauty(
+    ws: Any,
+    theme: "Theme | None",
+    opts: dict[str, Any],
+    warnings: "list[str] | None",
+) -> None:
+    """Apply the declarative beauty options on top of a filled worksheet.
+
+    * ``autosize`` (default ON when a theme is set): width from the longest
+      cell text per column, clamped 8..60.
+    * ``freeze_header``: freeze row 1.
+    * themed header row (fill + contrast font) when a header row is detected.
+    * ``banded``: alternate data rows get the theme band fill (or a neutral
+      grey without a theme).
+    * ``number_formats``: {column letter: Excel format} on data rows.
+    """
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import column_index_from_string
+
+    max_row, max_col = ws.max_row, ws.max_column
+    header = _xlsx_header_like(ws)
+
+    if bool(opts.get("autosize", theme is not None)):
+        widths: dict[int, int] = {}
+        for row in ws.iter_rows(min_row=1, max_row=max_row, max_col=max_col):
+            for c in row:
+                if c.value is not None:
+                    widths[c.column] = max(widths.get(c.column, 0), len(str(c.value)))
+        for ci, w in widths.items():
+            ws.column_dimensions[_col_letter(ci)].width = min(max(w + 2, 8), 60)
+
+    if bool(opts.get("freeze_header")):
+        ws.freeze_panes = "A2"
+
+    if theme is not None and header:
+        head_fill = PatternFill(
+            start_color=theme.table_header_fill,
+            end_color=theme.table_header_fill,
+            fill_type="solid",
+        )
+        head_font = Font(bold=True, color=theme.table_header_font)
+        for c in ws[1]:
+            c.fill = head_fill
+            c.font = head_font
+
+    if bool(opts.get("banded")) and max_row >= 2:
+        band_rgb = theme.band_fill if theme is not None else "F2F2F2"
+        band = PatternFill(start_color=band_rgb, end_color=band_rgb, fill_type="solid")
+        # Shade every second data row (3, 5, ...) so the row right under the
+        # header stays clean — the classic banded-table look.
+        for ri in range(3, max_row + 1, 2):
+            for ci in range(1, max_col + 1):
+                ws.cell(row=ri, column=ci).fill = band
+
+    fmts = opts.get("number_formats")
+    if isinstance(fmts, dict):
+        for letter, fmt in fmts.items():
+            col = str(letter or "").strip().upper()
+            if not _COL_LETTER_RX.fullmatch(col):
+                _warn(
+                    warnings,
+                    f"number_formats key {letter!r} skipped on sheet "
+                    f"{ws.title!r}: use a column letter like 'B'",
+                )
+                continue
+            ci = column_index_from_string(col)
+            if ci > max_col:
+                continue  # a format for an unused column is a harmless no-op
+            first = 2 if header else 1  # header labels keep General
+            for ri in range(first, max_row + 1):
+                ws.cell(row=ri, column=ci).number_format = str(fmt)
+    elif fmts is not None:
+        _warn(warnings, "number_formats must be {column letter: format string} — ignored")
 
 
 # --- pptx ----------------------------------------------------------------------

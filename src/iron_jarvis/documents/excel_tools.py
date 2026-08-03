@@ -763,7 +763,12 @@ class ExcelApplySpecTool(Tool):
         "formula against the target's real values. With "
         "verify_against_source=true it also compares each computed result to "
         "the spec's recorded values — proving the reproduction matches the "
-        "original. Creates the file/sheet when missing. Undoable."
+        "original. The spec may also carry beauty `options` (theme "
+        "professional/minimal/warm, autosize, freeze_header, banded, "
+        "number_formats) and `charts` ([{type: bar/line/pie, title, "
+        "data_range, categories_range, anchor}]) — the engine applies them; "
+        "invalid charts are skipped with warnings, never a failed write. "
+        "Creates the file/sheet when missing. Undoable."
     )
     input_schema = {
         "type": "object",
@@ -860,6 +865,26 @@ class ExcelApplySpecTool(Tool):
                     ws.merge_cells(str(rng))
                 except Exception:  # noqa: BLE001 — a bad merge must not abort the rest
                     pass
+
+            # BEAUTY (v1.134.0): a spec MAY carry declarative "options"
+            # (theme/autosize/freeze_header/banded/number_formats) and
+            # "charts" — applied via the SAME engine helpers write_document
+            # uses, with invalid charts skipped into `warnings`. Legacy specs
+            # carry neither key, so this block is a no-op for them and the
+            # historical behavior is untouched.
+            from .themes import get_theme
+            from .writers import xlsx_add_charts, xlsx_apply_beauty
+
+            warnings: list[str] = []
+            charts_added = 0
+            if isinstance(spec.get("charts"), list):
+                charts_added = xlsx_add_charts(ws, spec["charts"], warnings)
+            beauty = spec.get("options")
+            if isinstance(beauty, dict) and beauty:
+                theme = get_theme(str(beauty.get("theme") or ""))
+                if beauty.get("theme") and theme is None:
+                    warnings.append(f"unknown theme {beauty['theme']!r}")
+                xlsx_apply_beauty(ws, theme, beauty, warnings)
             wb.save(str(target))
 
             # VALIDATE: compute every written formula against the saved target.
@@ -887,7 +912,8 @@ class ExcelApplySpecTool(Tool):
             finally:
                 grid.close()
             return {"sheet": sheet_name, "applied": applied,
-                    "validation": checks, "failed": failed, "verified": verify}
+                    "validation": checks, "failed": failed, "verified": verify,
+                    "charts_added": charts_added, "beauty_warnings": warnings}
 
         try:
             data = await asyncio.to_thread(_apply)
@@ -903,6 +929,12 @@ class ExcelApplySpecTool(Tool):
             f"{head}: {data['applied']['formulas']} formula(s) + "
             f"{data['applied']['formats']} formatted cell(s) on {data['sheet']} of {rel}"
         )
+        # Beauty extras surface only when the spec asked for them — a legacy
+        # spec's output line reads exactly as it always has.
+        if data["charts_added"]:
+            out += f" + {data['charts_added']} chart(s)"
+        if data["beauty_warnings"]:
+            out += "\n" + "\n".join(f"warning: {w}" for w in data["beauty_warnings"])
         return ToolResult(ok=True, output=out, data={"path": rel, **data})
 
 

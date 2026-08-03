@@ -188,7 +188,11 @@ class WriteDocumentTool(Tool):
         "tables and '---' rules become REAL headings, lists, tables and slides "
         "in .docx/.pdf/.pptx/.html (plain text still works everywhere). A list "
         "of rows (list[list]) writes spreadsheet/CSV rows, and .xlsx also "
-        "accepts {'sheets': {name: rows}} for a multi-sheet workbook."
+        "accepts {'sheets': {name: rows}} for a multi-sheet workbook. For a "
+        "POLISHED .docx/.xlsx pick a `theme` (never write styling code) and "
+        "optionally pass `options`; an .xlsx sheet value may be {'rows': "
+        "[...], 'charts': [{type: bar/line/pie, title, data_range, "
+        "categories_range, anchor}]} for engine-drawn charts."
     )
     input_schema = {
         "type": "object",
@@ -199,12 +203,34 @@ class WriteDocumentTool(Tool):
                     "A string (markdown renders as rich formatting; plain text "
                     "becomes paragraphs/lines), a list of rows for "
                     "spreadsheet/CSV output, or {'sheets': {name: rows}} for a "
-                    "multi-sheet .xlsx."
+                    "multi-sheet .xlsx (a sheet value may also be {'rows': "
+                    "[...], 'charts': [...]})."
                 )
             },
             "kind": {
                 "type": "string",
                 "description": "Optional format override, e.g. 'pdf' or 'docx'.",
+            },
+            "theme": {
+                "type": "string",
+                # Must mirror themes.THEME_NAMES — pinned by the beauty tests.
+                "enum": ["professional", "minimal", "warm"],
+                "description": (
+                    "Named look for .docx/.xlsx — the engine applies fonts, "
+                    "colors, header fills and margins. Just pick one."
+                ),
+            },
+            "options": {
+                "type": "object",
+                "description": (
+                    "Beauty options. .docx: cover (bool title page from the "
+                    "first '# ' heading), subtitle, header_text, footer "
+                    "('page-numbers', or text where '{page}' becomes the live "
+                    "page number). .xlsx: autosize (bool, default on with a "
+                    "theme), freeze_header (bool), banded (bool), "
+                    "number_formats ({column letter: Excel format, e.g. "
+                    "{'B': '#,##0.00'}})."
+                ),
             },
         },
         "required": ["path", "content"],
@@ -246,17 +272,30 @@ class WriteDocumentTool(Tool):
         return await revert_workspace_file(undo, ctx)
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        # Fold the flat `theme` shortcut into the options dict; with neither,
+        # options stays None and the writer takes its exact legacy path.
+        opts = dict(args["options"]) if isinstance(args.get("options"), dict) else {}
+        if str(args.get("theme") or "").strip():
+            opts["theme"] = str(args["theme"]).strip()
+        warns: list[str] = []
         try:
             target = safe_path(ctx.workspace, args["path"])
-            out = write_document(target, args["content"], kind=args.get("kind"))
+            out = write_document(
+                target,
+                args["content"],
+                kind=args.get("kind"),
+                options=opts or None,
+                warnings=warns,
+            )
         except Exception as exc:
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
         rel = str(out.relative_to(Path(ctx.workspace).resolve())).replace("\\", "/")
         size = out.stat().st_size
         return ToolResult(
             ok=True,
-            output=f"wrote {size} bytes to {rel}",
-            data={"path": rel, "bytes": size},
+            output=f"wrote {size} bytes to {rel}"
+            + ("".join(f"\nwarning: {w}" for w in warns)),
+            data={"path": rel, "bytes": size, **({"warnings": warns} if warns else {})},
         )
 
 
@@ -688,6 +727,126 @@ class RedactPiiTool(Tool):
         )
 
 
+class BatchDocumentsTool(Tool):
+    name = "batch_documents"
+    # Default IRREVERSIBLE stands: a batch spends real provider tokens and
+    # writes a whole tree of files — there is no single pre-image an undo
+    # could honestly restore.
+    returns_untrusted_content = True  # digests of read files can carry planted text
+    description = (
+        "Process a WHOLE FOLDER of documents without blowing the context "
+        "window: each supported file (top level only; subfolders are reported, "
+        "not descended) is extracted ALONE — first ~12k characters per "
+        "document — into structured facts, persisted as JSON under the "
+        "workspace, then the "
+        "deliverable(s) are synthesized from those extractions — never from "
+        "raw document text. Re-running the same folder RESUMES: files whose "
+        "content hash is unchanged are not re-extracted. Per-file failures "
+        "are collected and reported, never fatal. Reads are policy-gated."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "folder": {
+                "type": "string",
+                "description": "Folder of documents (absolute, or workspace-relative)",
+            },
+            "instructions": {
+                "type": "string",
+                "description": (
+                    "What to extract per document and what the deliverable "
+                    "should cover"
+                ),
+            },
+            "output": {
+                "type": "string",
+                "enum": ["xlsx", "docx", "both"],
+                "description": "Deliverable format(s) — default both",
+            },
+            "max_files": {
+                "type": "number",
+                "description": "Max documents per run (default 25, cap 100)",
+            },
+        },
+        "required": ["folder"],
+    }
+
+    def __init__(self, router_resolver: "Any | None" = None) -> None:
+        #: () -> the platform's ModelRouter — powers extraction + synthesis.
+        #: Optional so a bare factory (tests) still constructs; execute then
+        #: reports honestly instead of crashing.
+        self._router_resolver = router_resolver
+
+    async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        from . import batch as _batch
+
+        if self._router_resolver is None:
+            return ToolResult(
+                ok=False,
+                error="batch_documents needs a model router and none is wired",
+            )
+        folder = _resolve_read_path(str(args.get("folder", "")), ctx)
+        ok, reason = fs_read_ok(str(folder))
+        if not ok:
+            return ToolResult(ok=False, error=f"read denied: {reason}")
+        if not folder.is_dir():
+            return ToolResult(ok=False, error=f"not a folder: {folder}")
+        output = str(args.get("output") or "both").strip().lower()
+        if output not in ("xlsx", "docx", "both"):
+            return ToolResult(
+                ok=False,
+                error=f"unknown output {output!r} — use xlsx, docx, or both",
+            )
+        # 0/omitted falls to the default — the same `or`-default convention as
+        # list_folder's `limit` (a 0-document batch is never what was meant).
+        max_files = max(1, min(int(args.get("max_files") or 25), 100))
+        try:
+            # Outputs + the extraction cache live INSIDE the session workspace
+            # (writes are always workspace-confined, same as write_document),
+            # keyed by the source folder so a re-run of the same folder RESUMES.
+            out_dir = safe_path(ctx.workspace, f"batch/{_batch.slug_for(folder)}")
+            result = await _batch.run_batch(
+                folder,
+                out_dir,
+                self._router_resolver(),
+                instructions=str(args.get("instructions") or ""),
+                output=output,
+                max_files=max_files,
+            )
+        except Exception as exc:  # noqa: BLE001 — a batch fails as a report, not a crash
+            return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+        ws = Path(ctx.workspace).resolve()
+
+        def _rel(p: str) -> str:
+            try:
+                return str(Path(p).resolve().relative_to(ws)).replace("\\", "/")
+            except ValueError:  # pragma: no cover - deliverables are ws-confined
+                return p
+
+        result["deliverables"] = [_rel(p) for p in result["deliverables"]]
+        parts = [
+            f"{result['processed']} extracted",
+            f"{result['cached']} cached",
+        ]
+        if result["failed"]:
+            parts.append(f"{len(result['failed'])} FAILED")
+        if result["skipped"]:
+            parts.append(f"{len(result['skipped'])} skipped")
+        lines = [f"batch over {folder}: " + ", ".join(parts)]
+        if not result["processed"] and not result["cached"] and not result["failed"]:
+            lines.append("no supported documents found in the folder")
+        lines += [f"deliverable: {p}" for p in result["deliverables"]]
+        lines += [
+            f"synthesis ({e['output']}) FAILED: {e['error']}"
+            for e in result["synthesis_errors"]
+        ]
+        lines += [
+            f"failed: {Path(f['file']).name} — {f['error']}"
+            for f in result["failed"]
+        ]
+        return ToolResult(ok=True, output="\n".join(lines), data=result)
+
+
 def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:
     """Build the document tools. ``router_resolver`` (() -> ModelRouter) is
     optional and powers the scanned-PDF OCR fallback in ``read_document``;
@@ -702,5 +861,6 @@ def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:
         ListFolderTool(),
         RedactScanTool(),
         RedactPiiTool(),
+        BatchDocumentsTool(router_resolver),
         *excel_tools(),
     ]
