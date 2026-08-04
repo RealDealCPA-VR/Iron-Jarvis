@@ -265,6 +265,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
     command_interpreter = CommandInterpreter(platform, orchestrator, reflex_router)
 
     from ..comm import InboundPoller
+    from ..comm.threads import CommThreadStore
+    from .chat_turn import run_chat_turn
+
+    # FULL CHAT over comm (v1.136.0): the store that owns daemon-side chat
+    # threads (identity → thread, atomic appends, chat.thread_updated), plus
+    # the injected turn service — a chat-enabled destination runs the SAME
+    # engine as POST /chat. ``personas`` is assigned below once the builtin
+    # defaults dict exists (it is defined later in this factory).
+    comm_thread_store = CommThreadStore(platform.engine, event_bus=platform.event_bus)
 
     inbound_poller = InboundPoller(
         platform.notifier,
@@ -273,6 +282,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
         event_bus=platform.event_bus,
         command_interpreter=command_interpreter,
         reflex_router=reflex_router,
+        thread_store=comm_thread_store,
+        chat_turn=run_chat_turn,
+        platform=platform,
     )
 
     # CX-05 "inbound everything": the calendar trigger poller. Cheap to build (no
@@ -678,6 +690,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         # Expose the arm functions + this loop to put_settings (threadpool).
         _live_rearm["loop"] = asyncio.get_running_loop()
+        # Comm thread appends can happen from sync route threads — hand the
+        # store this loop so chat.thread_updated still publishes from there.
+        comm_thread_store.set_loop(_live_rearm["loop"])
 
         # "This PC" destination (v1.118.0): DesktopChannel.send runs in sync
         # route threads, so its sink schedules the bus publish onto THIS loop
@@ -702,18 +717,20 @@ def create_app(project_root: str | None = None) -> FastAPI:
         _live_rearm["calendar"] = _arm_calendar
         _live_rearm["fleet"] = _arm_fleet
 
-        # Two-way comm inbound poller — the receive leg. GUARDED by
-        # poller.enabled() (True only when a channel has inbound_enabled +
-        # credentials), so by default + in tests the loop is NEVER created and no
-        # network happens. Mirrors the loops above: sleeps before the first poll
-        # (never blocks boot) and is cancelled on shutdown. Disable explicitly via
-        # IRONJARVIS_INBOUND=off.
+        # Two-way comm inbound poller — the receive leg. The task is ALWAYS
+        # created (v1.136.0 live re-arm) but each pass re-checks
+        # poller.enabled() and IDLES when no channel is inbound-enabled +
+        # credentialed — so enabling two-way from the Channels page starts
+        # polling within one interval, NO RESTART (the old boot-only gate
+        # meant a runtime toggle silently did nothing until restart). With
+        # nothing enabled the pass is a cheap in-memory check: zero network,
+        # zero sessions — the same posture the boot-only gate gave tests +
+        # default installs. Disable the whole loop via IRONJARVIS_INBOUND=off
+        # (the env kill-switch still gates task CREATION, unchanged).
         inbound_task = None
-        if (
-            inbound_poller.enabled()
-            and os.environ.get("IRONJARVIS_INBOUND", "on").strip().lower()
-            not in {"0", "false", "no", "off"}
-        ):
+        if os.environ.get("IRONJARVIS_INBOUND", "on").strip().lower() not in {
+            "0", "false", "no", "off",
+        }:
 
             async def _inbound_loop() -> None:
                 # 15s default (was 3s): a 3s short-poll is ~28,800 round-trips/day that
@@ -728,7 +745,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 await asyncio.sleep(20)  # let boot settle before the first poll
                 while True:
                     try:
-                        await inbound_poller.poll_once()
+                        # Idle-sleep re-arm: the enabled() verdict is LIVE —
+                        # POST/DELETE /comm/channels changes what the next
+                        # pass sees without touching this task.
+                        if inbound_poller.enabled():
+                            await inbound_poller.poll_once()
                     except asyncio.CancelledError:
                         raise
                     except Exception:  # noqa: BLE001 - a poll must never kill the daemon
@@ -878,6 +899,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # webhook_add must install a reflex-firing handler like the route does.
     platform.reflex_router = reflex_router
     app.state.command_interpreter = command_interpreter
+    # v1.136.0 messaging surfaces: reachable for tests + diagnostics (the
+    # routes go through ``d``; TestClient callers only have app.state).
+    app.state.inbound_poller = inbound_poller
+    app.state.comm_thread_store = comm_thread_store
     # Background session tasks are registered on the orchestrator keyed by
     # session_id (a strong ref preventing premature GC, and the handle the
     # cancel endpoint uses). Exceptions are surfaced (logged), not swallowed.
@@ -956,6 +981,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
             ),
         },
     }
+
+    # The inbound poller's full-chat turns resolve personas from the SAME
+    # builtin defaults POST /chat uses (constructed above, before this dict
+    # existed — completed here).
+    inbound_poller.personas = _PERSONAS
 
     # --- Voice (server-side dictation fallback) ---------------------------
     # The dashboard prefers the browser's Web Speech engine (free, streaming),
@@ -1585,6 +1615,20 @@ def create_app(project_root: str | None = None) -> FastAPI:
              "help": "From @BotFather."},
             {"key": "chat_id", "label": "Chat ID", "secret": False,
              "help": "Your numeric chat id (message @userinfobot to find it)."},
+            {"key": "inbound_enabled", "label": "Enable two-way (true/false)", "secret": False,
+             "help": "Set to true so Iron Jarvis listens for messages sent to "
+                     "the bot (commands like /status, and chat when enabled "
+                     "below). Off by default."},
+            {"key": "chat_enabled", "label": "Chat with Iron Jarvis (true/false)", "secret": False,
+             "help": "Set to true to hold a real conversation with Iron Jarvis "
+                     "from this destination — replies remember the thread, and "
+                     "the whole conversation shows up live on the desktop. "
+                     "Chat implies listening: turning this on also turns "
+                     "two-way ON when saved."},
+            {"key": "allowed_senders", "label": "Allowlist (Telegram user IDs)", "secret": False,
+             "help": "Comma-separated numeric user ids allowed to talk to the "
+                     "bot (message @userinfobot to find yours). FAIL-CLOSED: an "
+                     "empty allowlist means NOBODY may command or chat."},
         ],
         "email": [
             {"key": "host", "label": "SMTP host", "secret": False, "help": "e.g. smtp.gmail.com"},
@@ -1751,6 +1795,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
         orchestrator=orchestrator,
         loop_health=loop_health,
         inbound_poller=inbound_poller,
+        comm_thread_store=comm_thread_store,
         _live_rearm=_live_rearm,
         _loopback_servers=_loopback_servers,
         _spawn_bg=_spawn_bg,

@@ -14,6 +14,8 @@ from typing import Any
 
 from ..schemas import (
     ChannelCreate,
+    ChatBody,
+    CommThreadSendBody,
     IntegrationConfigBody,
     IntegrationCreate,
     IntegrationEnableBody,
@@ -21,6 +23,10 @@ from ..schemas import (
     SecretSet,
     WebhookCreate,
 )
+# Referenced as a module-global at call time so tests can monkeypatch
+# ``iron_jarvis.daemon.routes.comm.run_chat_turn`` (same idiom as chat.py);
+# production normally rides d.inbound_poller.chat_turn (the injected seam).
+from ..chat_turn import run_chat_turn
 from ...core.db import session_scope
 
 
@@ -172,6 +178,15 @@ def register(app: FastAPI, d) -> None:
             # Built-ins have no config row; their TYPE identity lives on the
             # live channel instance (this-pc -> "desktop"), not in config.
             live = d.platform.notifier.get(name)
+            # v1.136.0 — two-way/chat badging, read from the LIVE channel so
+            # the verdict is the one the poller actually uses. Only the COUNT
+            # of allowlisted senders leaves the daemon, never the ids.
+            try:
+                inbound_on = bool(live is not None and live.inbound_enabled())
+                chat_on = bool(live is not None and live.chat_enabled())
+                allowed_count = len(live.allowed_senders()) if live is not None else 0
+            except Exception:  # noqa: BLE001 — a config quirk never breaks the list
+                inbound_on, chat_on, allowed_count = False, False, 0
             out.append(
                 {
                     "name": name,
@@ -183,6 +198,9 @@ def register(app: FastAPI, d) -> None:
                     "last_test_ok": spec.get("last_test_ok"),
                     "last_test_at": spec.get("last_test_at"),
                     "events": spec.get("events") or [],
+                    "inbound_enabled": inbound_on,
+                    "chat_enabled": chat_on,
+                    "allowed_senders_count": allowed_count,
                 }
             )
         return {"channels": out}
@@ -244,10 +262,20 @@ def register(app: FastAPI, d) -> None:
             elif key == "allowed_senders":
                 # Comma-separated ids -> the list the fail-closed allowlist reads.
                 config[key] = [s.strip() for s in str(value).split(",") if s.strip()]
-            elif key == "inbound_enabled":
+            elif key in ("inbound_enabled", "chat_enabled"):
                 config[key] = str(value).strip().lower() in ("1", "true", "yes", "on")
             else:
                 config[key] = value
+
+        # CHAT IMPLIES LISTENING: normalize at save time so stored config and
+        # the effective verdict can never disagree. Without this, chat=true +
+        # two-way=false would be stored as-is, GET /comm/channels (which reads
+        # the EFFECTIVE state off the live channel) would report chat OFF, and
+        # the edit form — seeded from GET — would silently persist chat=false
+        # on the next save (the v1.127 "control that reads as a setting must
+        # BE the setting" bug class).
+        if config.get("chat_enabled") is True:
+            config["inbound_enabled"] = True
 
         # Reject a channel with no working delivery method up front, with a tip —
         # far better than silently saving one that only fails at test time. (Edit
@@ -310,6 +338,128 @@ def register(app: FastAPI, d) -> None:
                     except Exception:  # noqa: BLE001
                         pass
         return {"name": name, "removed": removed or cfg is not None}
+
+    @app.post("/comm/threads/{thread_id}/send")
+    async def comm_thread_send(thread_id: str, body: CommThreadSendBody) -> dict[str, Any]:
+        """Desktop reply fan-out (v1.136.0): the dashboard composer for a
+        DAEMON-owned comm thread posts here instead of autosaving via PUT.
+
+        Runs EXACTLY the inbound free-form pipeline (append user → history →
+        chat turn → append reply) and ALSO sends the reply out the thread's
+        bound destination, chunked to its size cap — a desktop reply in a
+        phone conversation lands on the phone too. ``escalate: true`` acks
+        immediately and runs the supervised session in the BACKGROUND (the
+        HTTP request never blocks on an agent); the summary arrives on the
+        thread via chat.thread_updated. Response: the chat-turn dict +
+        ``{"sent": bool}``.
+        """
+        from ...comm.inbound import ESCALATE_ACK, RATE_LIMIT_REPLY
+        from ...core.models import ChatThreadRecord
+
+        store = d.comm_thread_store
+        poller = d.inbound_poller
+        text = (body.text or "").strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="text is required")
+        with session_scope(d.platform.engine) as db:
+            rec = db.get(ChatThreadRecord, thread_id)
+            # Migrated rows read owner as NULL — that's "user" (coalesced).
+            owner = (rec.owner or "user") if rec is not None else ""
+        if rec is None:
+            raise HTTPException(status_code=404, detail="no such chat thread")
+        if owner != "daemon":
+            raise HTTPException(
+                status_code=409,
+                detail="this thread is not managed by a messaging destination — "
+                "save it from the chat page like any other thread",
+            )
+        binding = store.thread_channel(thread_id)
+        if binding is None:
+            raise HTTPException(
+                status_code=409,
+                detail="This conversation is no longer linked to a destination.",
+            )
+        channel_name, sender_id = binding
+        ch = d.platform.notifier.get(channel_name)
+        if ch is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"the destination '{channel_name}' no longer exists — "
+                "this conversation has nowhere to deliver",
+            )
+        if not ch.has_credentials():
+            raise HTTPException(
+                status_code=409,
+                detail=f"the destination '{channel_name}' has no working "
+                "credentials — fix it on the Channels page first",
+            )
+        # SHARED per-identity flood guard (same counter the poller uses).
+        if not poller.rate_ok(channel_name, sender_id):
+            raise HTTPException(status_code=429, detail=RATE_LIMIT_REPLY)
+
+        try:
+            store.append(thread_id, "user", text)
+        except ValueError:
+            # Vanished between the read above and the append (dashboard
+            # delete racing this request) — honest 404, nothing half-done.
+            raise HTTPException(status_code=404, detail="no such chat thread")
+        history = store.history_body(thread_id, limit=30) or [
+            {"role": "user", "content": text}
+        ]
+        # The injected seam when wired (production: run_chat_turn; tests may
+        # swap either the poller's callable or this module's global).
+        turn = poller.chat_turn or run_chat_turn
+        personas = poller.personas or d._PERSONAS
+
+        def _append_reply(content: str) -> None:
+            try:
+                store.append(thread_id, "assistant", content)
+            except Exception:  # noqa: BLE001 — the reply must still deliver
+                pass
+
+        try:
+            result = await turn(d.platform, personas, ChatBody(messages=history, auto_tools=True))
+        except HTTPException as exc:
+            # Mirror the inbound pipeline: the honest error IS the reply —
+            # appended to the thread, delivered to the phone, rendered by the
+            # dashboard like a normal turn (not surfaced as a raw 4xx/5xx).
+            reply = f"I hit a problem: {exc.detail}"
+            _append_reply(reply)
+            sent = await poller.send_chunked(ch, reply, chat_id=sender_id)
+            return {
+                "reply": reply,
+                "provider": "",
+                "model": "",
+                "tools_used": [],
+                "escalate": False,
+                "error": str(exc.detail),
+                "sent": sent,
+            }
+
+        if result.get("escalate"):
+            _append_reply(ESCALATE_ACK)
+            sent = await poller.send_chunked(ch, ESCALATE_ACK, chat_id=sender_id)
+            task = poller.recap_task(history, text)
+            session = await d.orchestrator.create_session(task, poller.agent_type)
+
+            async def _finish() -> None:
+                try:
+                    s = await d.orchestrator.run_session(session.id)
+                    summary = (s.summary or "(no result)").strip()
+                except Exception as exc:  # noqa: BLE001 — deliver, don't vanish
+                    summary = f"I hit a problem: {type(exc).__name__}: {exc}"
+                _append_reply(summary)
+                await poller.send_chunked(ch, summary, chat_id=sender_id)
+
+            # BACKGROUND: the HTTP request returns the ack-shaped response now;
+            # the session summary lands via chat.thread_updated when done.
+            d._spawn_bg(session.id, _finish())
+            return {**result, "reply": ESCALATE_ACK, "session_id": session.id, "sent": sent}
+
+        reply = str(result.get("reply") or "").strip() or "(no reply)"
+        _append_reply(reply)
+        sent = await poller.send_chunked(ch, reply, chat_id=sender_id)
+        return {**result, "sent": sent}
 
     # Slack redelivers an event on any non-2xx reply or network blip. This bounded
     # per-process ring dedups by Slack's `event_id` so a redelivery can NOT

@@ -50,6 +50,43 @@ class InboundMessage:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+def split_message(text: str, limit: int) -> list[str]:
+    """Split ``text`` into chunks of at most ``limit`` chars for a surface with
+    a hard message-size cap (Telegram: 4096).
+
+    Prefers clean boundaries in order: paragraph break (``\\n\\n``), newline,
+    space — so a chunk never ends mid-word when any word boundary exists inside
+    the window. A single unbroken run longer than ``limit`` is hard-cut (the
+    only honest option left). The separator that was cut on is dropped (the
+    chunk boundary replaces it); all other whitespace is preserved verbatim.
+    Reply senders (the inbound poller + the desktop fan-out route) call this
+    with the channel's :attr:`Channel.chunk_limit`.
+    """
+    text = str(text if text is not None else "")
+    limit = max(1, int(limit))
+    if len(text) <= limit:
+        return [text]
+    out: list[str] = []
+    rest = text
+    while len(rest) > limit:
+        cut = -1
+        sep_len = 0
+        for sep in ("\n\n", "\n", " "):
+            # The separator must END within the window (idx + len(sep) <=
+            # limit + 1 via rfind's end bound) and leave a non-empty chunk.
+            idx = rest.rfind(sep, 1, limit + 1)
+            if idx > 0:
+                cut, sep_len = idx, len(sep)
+                break
+        if cut <= 0:  # one unbroken run — hard cut, never drop characters
+            cut, sep_len = limit, 0
+        out.append(rest[:cut])
+        rest = rest[cut + sep_len :]
+    if rest:
+        out.append(rest)
+    return out
+
+
 def _no_transport(url: str, payload: dict[str, Any]) -> Any:  # pragma: no cover
     raise RuntimeError("no http_post transport configured for this channel")
 
@@ -154,6 +191,11 @@ class Channel(ABC):
     #: so they are never polled.
     supports_inbound: bool = False
 
+    #: Hard per-message size cap for chunked replies (:func:`split_message`).
+    #: Conservative generic default; channels with a known platform limit
+    #: override it (Telegram: 4096).
+    chunk_limit: int = 3500
+
     #: which Reflex ``source`` an inbound message on this channel fires (CX-05).
     #: The generic chat channels stay ``"comm"``; channels that map to a distinct
     #: trigger source override it (EmailChannel -> ``"email"``, SlackChannel ->
@@ -225,6 +267,21 @@ class Channel(ABC):
         """True only when this channel TYPE supports inbound AND the user has
         explicitly opted in via ``inbound_enabled = true`` in its config."""
         return self.supports_inbound and bool(self.config.get("inbound_enabled", False))
+
+    def chat_enabled(self) -> bool:
+        """True only when this destination is a FULL CHAT surface.
+
+        Chat IMPLIES inbound: the flag is meaningless without a receive leg, so
+        this requires the type to support inbound AND the user's explicit
+        ``chat_enabled = true`` AND :meth:`inbound_enabled` (which itself
+        requires ``supports_inbound`` + the ``inbound_enabled`` opt-in) — a
+        ``chat_enabled`` toggle on its own, with two-way off, changes NOTHING
+        (fail-closed, like every other inbound gate)."""
+        return (
+            self.supports_inbound
+            and bool(self.config.get("chat_enabled", False))
+            and self.inbound_enabled()
+        )
 
     def allowed_senders(self) -> set[str]:
         """The configured sender allowlist (ids as strings); empty by default."""

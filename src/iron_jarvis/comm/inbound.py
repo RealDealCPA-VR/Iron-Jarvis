@@ -28,8 +28,11 @@ blocks boot, and is cancelled on shutdown.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import time
+from collections import deque
+from typing import Any, Callable
 
+from fastapi import HTTPException
 from sqlalchemy import Engine
 
 from ..core.db import session_scope
@@ -37,10 +40,27 @@ from ..core.events import EventType
 from ..core.ids import utcnow
 from ..core.logging import get_logger
 from ..core.models import AgentType
-from .base import Channel, InboundMessage
+from .base import Channel, InboundMessage, split_message
 from .models import InboundOffsetRecord
 
 log = get_logger("comm.inbound")
+
+#: Wire copy for the messaging surfaces (v1.136.0) — pinned here so the poller,
+#: the desktop fan-out route, and the tests all speak the same words.
+NEW_THREAD_REPLY = "Fresh start — next message begins a new conversation."
+ESCALATE_ACK = "On it — this needs real work. I'll send the result here."
+RATE_LIMIT_REPLY = "Getting a lot of messages — pausing for a minute."
+
+#: Per-identity flood guard: more than this many handled chat turns inside the
+#: rolling window gets an honest "pausing" reply instead of a model call (a
+#: forwarded-message flood must not become a token bill — see the design doc).
+RATE_MAX_TURNS = 8
+RATE_WINDOW_SECONDS = 60.0
+
+#: Escalation recap: how many thread-tail messages ride into the session task,
+#: and the per-message char cap inside the recap block.
+_RECAP_MESSAGES = 6
+_RECAP_CHARS = 500
 
 
 class InboundPoller:
@@ -59,6 +79,11 @@ class InboundPoller:
         max_reply_chars: int = 3500,
         command_interpreter: Any = None,
         reflex_router: Any = None,
+        thread_store: Any = None,
+        chat_turn: Callable[..., Any] | None = None,
+        personas: dict[str, Any] | None = None,
+        platform: Any = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self.notifier = notifier
         self.orchestrator = orchestrator
@@ -68,6 +93,22 @@ class InboundPoller:
         self.agent_type = agent_type
         self.reply_prefix = reply_prefix
         self.max_reply_chars = max_reply_chars
+        #: FULL CHAT (v1.136.0) — all four are optional so every existing
+        #: construction keeps its one-shot behavior byte-for-byte. When a
+        #: channel has ``chat_enabled`` AND ``thread_store`` is wired, free-form
+        #: messages become real chat turns on a durable daemon-owned thread:
+        #: ``chat_turn`` is the injected turn service (production passes
+        #: ``daemon.chat_turn.run_chat_turn``; tests pass a fake async
+        #: callable), ``personas`` the builtin-persona defaults dict, and
+        #: ``platform`` the Platform the turn runs against.
+        self.thread_store = thread_store
+        self.chat_turn = chat_turn
+        self.personas = personas if personas is not None else {}
+        self.platform = platform
+        #: Injectable monotonic clock for the per-identity rate cap
+        #: (deterministic tests); production uses ``time.monotonic``.
+        self._clock: Callable[[], float] = clock or time.monotonic
+        self._turn_times: dict[tuple[str, str], deque[float]] = {}
         #: The Reflex command grammar (``/status``, ``/run`` …). When set, an
         #: authorized message that starts with ``/`` is handled as a fast,
         #: deterministic command instead of spawning a full agent session.
@@ -114,6 +155,159 @@ class InboundPoller:
             rec.updated_at = utcnow()
             db.merge(rec)
             db.commit()
+
+    # -- full-chat plumbing (v1.136.0) -------------------------------------
+    def _chat_ready(self, ch: Channel) -> bool:
+        """Full chat only when the channel opted in AND the store + turn
+        service are wired (a chat-enabled channel on a poller without the
+        v1.136.0 plumbing falls back to the legacy one-shot — fail-open to
+        the OLD behavior, never to a crash)."""
+        try:
+            return (
+                bool(ch.chat_enabled())
+                and self.thread_store is not None
+                and self.chat_turn is not None
+            )
+        except Exception:  # noqa: BLE001 — a config quirk must never break _handle
+            return False
+
+    def rate_ok(self, channel: str, sender_id: Any) -> bool:
+        """Per-identity flood guard, shared by the poller AND the desktop
+        fan-out route (both count against the SAME identity budget).
+
+        Records the turn and returns True when under the cap; returns False
+        (recording nothing) once more than :data:`RATE_MAX_TURNS` handled
+        turns landed inside the rolling :data:`RATE_WINDOW_SECONDS`.
+        """
+        now = self._clock()
+        key = (channel, str(sender_id))
+        dq = self._turn_times.setdefault(key, deque())
+        while dq and now - dq[0] >= RATE_WINDOW_SECONDS:
+            dq.popleft()
+        if len(dq) >= RATE_MAX_TURNS:
+            return False
+        dq.append(now)
+        return True
+
+    async def send_chunked(self, ch: Channel, reply: str, *, chat_id: Any) -> bool:
+        """Send ``reply`` (prefixed) split on the channel's ``chunk_limit`` —
+        the full-chat replacement for the one-shot ``[:max_reply_chars]``
+        truncation (a long answer must ARRIVE, not get cut). True iff every
+        chunk reported ok."""
+        limit = int(getattr(ch, "chunk_limit", 3500) or 3500)
+        ok = True
+        for chunk in split_message(f"{self.reply_prefix}{reply}", limit):
+            res = await asyncio.to_thread(ch.send, chunk, chat_id=chat_id)
+            ok = ok and bool(res.get("ok"))
+        return ok
+
+    def _safe_append(
+        self,
+        thread_id: str,
+        role: str,
+        content: str,
+        *,
+        channel: str | None = None,
+        sender_id: Any = None,
+        display: str = "",
+    ) -> str:
+        """Append that never raises into the per-message pipeline.
+
+        A ``ValueError`` means the thread vanished mid-flight (dashboard
+        delete racing the turn): re-resolve ONCE (which heals — mints a fresh
+        thread and re-binds the identity) and retry, then give up honestly.
+        Returns the thread id the message actually landed on, or ``""`` when
+        it could not land (callers keep going — a lost transcript line must
+        not lose the phone its reply).
+        """
+        if self.thread_store is None:
+            return ""
+        try:
+            self.thread_store.append(thread_id, role, content)
+            return thread_id
+        except ValueError:
+            if channel is None:
+                return ""
+            try:
+                fresh = self.thread_store.resolve(channel, str(sender_id), display)
+                self.thread_store.append(fresh.id, role, content)
+                return fresh.id
+            except Exception:  # noqa: BLE001
+                log.warning(
+                    "comm thread append could not land after re-resolve (%s)",
+                    thread_id,
+                    exc_info=True,
+                )
+                return ""
+        except Exception:  # noqa: BLE001 — store trouble must not drop the reply
+            log.warning("comm thread append failed (%s)", thread_id, exc_info=True)
+            return ""
+
+    def _append_exchange(
+        self,
+        name: str,
+        msg: InboundMessage,
+        display: str,
+        user_text: str,
+        assistant_text: str,
+    ) -> str:
+        """resolve → append user → append assistant, never raising. Returns
+        the thread id the exchange landed on ("" when nothing landed)."""
+        if self.thread_store is None:
+            return ""
+        try:
+            thread = self.thread_store.resolve(name, str(msg.sender_id), display)
+        except Exception:  # noqa: BLE001 — store trouble must not break the reply
+            log.warning("comm thread resolve failed on %r", name, exc_info=True)
+            return ""
+        tid = self._safe_append(
+            thread.id, "user", user_text,
+            channel=name, sender_id=msg.sender_id, display=display,
+        )
+        if tid:
+            self._safe_append(
+                tid, "assistant", assistant_text,
+                channel=name, sender_id=msg.sender_id, display=display,
+            )
+        return tid
+
+    @staticmethod
+    def _display(msg: InboundMessage) -> str:
+        """Best-effort human display name from the raw update (Telegram shape);
+        empty string when unknown — the store then labels by sender id."""
+        try:
+            m = (msg.raw or {}).get("message") or (msg.raw or {}).get("edited_message") or {}
+            frm = m.get("from") or {}
+            name = " ".join(
+                str(x) for x in (frm.get("first_name"), frm.get("last_name")) if x
+            )
+            return (name or str(frm.get("username") or "")).strip()[:120]
+        except Exception:  # noqa: BLE001
+            return ""
+
+    @staticmethod
+    def recap_task(history: list[dict[str, str]], text: str) -> str:
+        """The escalated-session task: a thread-tail recap block + the request.
+
+        ``history`` is ChatBody-shaped ``[{role, content}]`` INCLUDING the
+        current request as its last entry (exactly what the turn just ran on);
+        the request is lifted out into ``Request:`` and the up-to-6 messages
+        before it become the context block, each capped at 500 chars.
+        """
+        tail = [m for m in history[:-1] if str(m.get("content") or "").strip()]
+        tail = tail[-_RECAP_MESSAGES:]
+        lines = [
+            f"{'user' if m.get('role') == 'user' else 'assistant'}: "
+            f"{str(m.get('content') or '').strip()[:_RECAP_CHARS]}"
+            for m in tail
+        ]
+        if not lines:
+            return text
+        return (
+            "Context from our recent conversation:\n"
+            + "\n".join(lines)
+            + f"\n\nRequest: {text}"
+        )
 
     # -- one polling pass --------------------------------------------------
     async def poll_once(self) -> list[dict[str, Any]]:
@@ -187,6 +381,33 @@ class InboundPoller:
         if not text:
             return {"channel": name, "status": "empty"}
 
+        # FULL CHAT (v1.136.0): when this destination opted into chat
+        # (``chat_enabled`` — implies inbound) AND the thread store + turn
+        # service are wired, the conversation lives on a durable daemon-owned
+        # thread: real chat turns with memory/skills/project spine, visible
+        # live on the desktop. With chat OFF every path below stays
+        # byte-equivalent to the one-shot behavior (pinned by tests).
+        chat_on = self._chat_ready(ch)
+        display = self._display(msg) if chat_on else ""
+
+        # "/new" — the chat-only thread reset, handled BEFORE the command
+        # grammar (which does not know it). Append the exchange to the OLD
+        # thread FIRST so the desktop sees the handoff, then retire the
+        # binding so the next message mints a fresh thread.
+        if chat_on and text.lower() == "/new":
+            tid = self._append_exchange(name, msg, display, text, NEW_THREAD_REPLY)
+            try:
+                self.thread_store.retire(name, str(msg.sender_id))
+            except Exception:  # noqa: BLE001 — never lose the reply over a retire
+                log.warning("comm thread retire failed on %r", name, exc_info=True)
+            sent = await self.send_chunked(ch, NEW_THREAD_REPLY, chat_id=msg.reply_to)
+            return {
+                "channel": name,
+                "status": "new_thread",
+                "thread_id": tid,
+                "sent": sent,
+            }
+
         # COMMAND GRAMMAR: an authorized "/command" is a fast, deterministic
         # operation (status / run a workflow / cancel / ask a remote agent),
         # replied immediately — no agent session spun up. Non-command text falls
@@ -194,6 +415,9 @@ class InboundPoller:
         if self.command_interpreter is not None and text.startswith("/"):
             reply = await self.command_interpreter.interpret(text)
             if reply is not None:
+                if chat_on:
+                    # The desktop sees the command exchange too — cheap, honest.
+                    self._append_exchange(name, msg, display, text, reply)
                 body = f"{self.reply_prefix}{reply}"[: self.max_reply_chars]
                 send_res = await asyncio.to_thread(ch.send, body, chat_id=msg.reply_to)
                 await self._publish(
@@ -232,6 +456,9 @@ class InboundPoller:
                 summary = "; ".join(
                     f"{f.get('kind', 'action')} {f.get('rule', '')}".strip() for f in fired
                 )
+                if chat_on:
+                    # The reflex-fired exchange lands on the thread too.
+                    self._append_exchange(name, msg, display, text, f"Triggered: {summary}")
                 body = f"{self.reply_prefix}Triggered: {summary}"[: self.max_reply_chars]
                 send_res = await asyncio.to_thread(ch.send, body, chat_id=msg.reply_to)
                 return {
@@ -240,6 +467,12 @@ class InboundPoller:
                     "fired": len(fired),
                     "sent": bool(send_res.get("ok")),
                 }
+
+        # FREE-FORM, full chat: a real conversational turn on the durable
+        # thread (memory + skills + project spine via the injected turn
+        # service), replying chunked to the channel's own size cap.
+        if chat_on:
+            return await self._handle_chat(name, ch, msg, text, display)
 
         # Spawn a NORMAL supervised session (same orchestrator + permission
         # engine as a local user) and await its result.
@@ -261,6 +494,126 @@ class InboundPoller:
             "status": "handled",
             "session_id": session.id,
             "sent": bool(send_res.get("ok")),
+        }
+
+    async def _handle_chat(
+        self, name: str, ch: Channel, msg: InboundMessage, text: str, display: str
+    ) -> dict[str, Any]:
+        """One FULL-CHAT turn for an authorized free-form message.
+
+        resolve → rate cap → append user → history → chat_turn → append reply
+        → chunked send. ``HTTPException`` from the turn service (404 unknown
+        skill / 400 / 502 provider) becomes an HONEST reply, never a crash of
+        the poll loop. ``escalate: true`` sends an ack, runs the normal
+        supervised session with a thread-tail recap, and delivers the summary
+        both to the phone and onto the thread (the desktop hears it via
+        chat.thread_updated).
+        """
+        # ALWAYS re-resolve per message — it heals a dashboard-deleted thread.
+        try:
+            thread = self.thread_store.resolve(name, str(msg.sender_id), display)
+        except Exception:  # noqa: BLE001 — store trouble gets an honest reply
+            log.exception("comm thread resolve failed on %r", name)
+            sent = await self.send_chunked(
+                ch,
+                "I hit a problem: could not open our conversation thread.",
+                chat_id=msg.reply_to,
+            )
+            return {"channel": name, "status": "chat_error", "sent": sent}
+
+        # Per-identity flood guard — an honest pause instead of a token bill.
+        if not self.rate_ok(name, msg.sender_id):
+            sent = await self.send_chunked(ch, RATE_LIMIT_REPLY, chat_id=msg.reply_to)
+            return {
+                "channel": name,
+                "status": "rate_limited",
+                "sender": str(msg.sender_id),
+                "sent": sent,
+            }
+
+        tid = self._safe_append(
+            thread.id, "user", text,
+            channel=name, sender_id=msg.sender_id, display=display,
+        )
+        history = self.thread_store.history_body(tid, limit=30) if tid else []
+        if not history:
+            # The append could not land (or the read hiccuped): the turn still
+            # runs on the bare message — the phone gets its answer regardless.
+            history = [{"role": "user", "content": text}]
+
+        await self._publish(
+            EventType.COMM_RECEIVED,
+            {"channel": name, "sender": str(msg.sender_id), "task": text},
+        )
+
+        # Lazy import: comm must stay importable without pulling the daemon
+        # package at module-load time (schemas is pydantic-only, but the
+        # dependency direction stays visible + deferred here).
+        from ..daemon.schemas import ChatBody
+
+        body = ChatBody(messages=history, auto_tools=True)
+        try:
+            result = await self.chat_turn(self.platform, self.personas, body)
+        except HTTPException as exc:
+            reply = f"I hit a problem: {exc.detail}"
+            if tid:
+                tid = self._safe_append(
+                    tid, "assistant", reply,
+                    channel=name, sender_id=msg.sender_id, display=display,
+                )
+            sent = await self.send_chunked(ch, reply, chat_id=msg.reply_to)
+            return {"channel": name, "status": "chat_error", "thread_id": tid, "sent": sent}
+        except Exception as exc:  # noqa: BLE001 — the loop must reply, not die
+            log.exception("chat turn failed on %r", name)
+            reply = f"I hit a problem: {type(exc).__name__}: {exc}"
+            if tid:
+                tid = self._safe_append(
+                    tid, "assistant", reply,
+                    channel=name, sender_id=msg.sender_id, display=display,
+                )
+            sent = await self.send_chunked(ch, reply, chat_id=msg.reply_to)
+            return {"channel": name, "status": "chat_error", "thread_id": tid, "sent": sent}
+
+        if not result.get("escalate"):
+            reply = str(result.get("reply") or "").strip() or "(no reply)"
+            if tid:
+                tid = self._safe_append(
+                    tid, "assistant", reply,
+                    channel=name, sender_id=msg.sender_id, display=display,
+                ) or tid
+            sent = await self.send_chunked(ch, reply, chat_id=msg.reply_to)
+            return {"channel": name, "status": "chat", "thread_id": tid, "sent": sent}
+
+        # ESCALATE: ack now, run the normal supervised session (same
+        # orchestrator + permission engine — a remote sender gains no power),
+        # then deliver the summary here AND onto the thread.
+        task = self.recap_task(history, text)
+        if tid:
+            tid = self._safe_append(
+                tid, "assistant", ESCALATE_ACK,
+                channel=name, sender_id=msg.sender_id, display=display,
+            ) or tid
+        await self.send_chunked(ch, ESCALATE_ACK, chat_id=msg.reply_to)
+        session = await self.orchestrator.create_session(task, self.agent_type)
+        await self._publish(
+            EventType.COMM_RECEIVED,
+            {"channel": name, "sender": str(msg.sender_id), "task": text},
+            session_id=session.id,
+        )
+        session = await self.orchestrator.run_session(session.id)
+        summary = (session.summary or "(no result)").strip()
+        if tid:
+            tid = self._safe_append(
+                tid, "assistant", summary,
+                channel=name, sender_id=msg.sender_id, display=display,
+            ) or tid
+        sent = await self.send_chunked(ch, summary, chat_id=msg.reply_to)
+        return {
+            "channel": name,
+            "status": "chat_escalated",
+            "thread_id": tid,
+            "session_id": session.id,
+            "sent": sent,
         }
 
     async def _publish(self, etype: str, payload: dict[str, Any], **kw: Any) -> None:

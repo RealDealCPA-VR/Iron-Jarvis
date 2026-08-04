@@ -85,6 +85,8 @@ class TelegramChannel(Channel):
 
     name = "telegram"
     supports_inbound = True
+    #: Telegram's hard sendMessage cap — chunked replies fill the full window.
+    chunk_limit = 4096
 
     def send(self, message: str, **kw: Any) -> dict[str, Any]:
         token_secret = self.config.get("token_secret")

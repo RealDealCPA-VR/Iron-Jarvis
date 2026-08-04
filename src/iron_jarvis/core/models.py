@@ -251,6 +251,17 @@ class ChatThreadRecord(SQLModel, table=True):
     #: works in it, not just what was said (repetitive work stops being
     #: re-setup work). "" = none. Additive column (auto-reconciled).
     setup_json: str = ""
+    #: Who WRITES this thread (v1.136.0 messaging surfaces): "user" = the
+    #: browser owns messages_json (client assembles + autosaves via PUT, the
+    #: status quo); "daemon" = a comm thread — the SERVER appends inbound
+    #: messages and its own replies atomically (comm/threads.py), so a PUT
+    #: messages write from the dashboard is rejected elsewhere (route guard)
+    #: to stop the client autosave clobbering the daemon's copy. Additive
+    #: columns (auto-reconciled); pre-existing rows read NULL → treat as
+    #: "user", the zero-behavior-change default.
+    owner: str = "user"
+    comm_channel: str = ""  # daemon-owned only: the channel name, e.g. "telegram"
+    comm_display: str = ""  # daemon-owned only: human label for the sender ("Val")
     project_id: str | None = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)

@@ -82,6 +82,12 @@ class EventType:
     # skill. {proposal_id, kind, skill_name, auto} — auto=True means the
     # explicit auto-approve setting already wrote it to the skills directory.
     SKILL_PROPOSAL_CREATED = "skill.proposal_created"
+    # Messaging surfaces (v1.136.0): the DAEMON appended a message to a chat
+    # thread (comm/threads.py — inbound phone message or the daemon's reply),
+    # so an open dashboard thread can live-refresh. {thread_id, messages} —
+    # messages = the thread's NEW message count after the append. Published
+    # only for daemon-origin writes; desktop PUT saves don't self-notify.
+    CHAT_THREAD_UPDATED = "chat.thread_updated"
 
 
 @dataclass

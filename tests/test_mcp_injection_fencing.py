@@ -223,18 +223,43 @@ def test_END_TO_END_benign_mcp_output_reaches_the_model(platform):
 # --- the real wiring ---------------------------------------------------------
 
 
-@pytest.mark.parametrize("site", ["chat_complete", "chat_stream"])
-def test_both_chat_loops_fence_on_the_same_attribute(site):
+@pytest.mark.parametrize(
+    ("site", "module_name"),
+    [
+        # v1.136.0 moved the non-streaming loop (and its fence) into the
+        # chat_turn service so headless comm callers share it; /chat/stream
+        # keeps its own inline copy in routes/chat.py. One fence site EACH —
+        # and still exactly two in total, same invariant as before the move.
+        ("chat_complete", "iron_jarvis.daemon.chat_turn"),
+        ("chat_stream", "iron_jarvis.daemon.routes.chat"),
+    ],
+)
+def test_both_chat_loops_fence_on_the_same_attribute(site, module_name):
     """The chat loops look the tool up with registry.get(tc.name) and check the
     attribute, so declaring it on MCPRemoteTool is enough — verified against the
     source so a refactor that drops a fence site fails here."""
+    import importlib
     import inspect
 
+    src = inspect.getsource(importlib.import_module(module_name))
+    assert src.count('getattr(_t, "returns_untrusted_content", False)') == 1
+    assert src.count("wrap_untrusted(") == 1
+
+
+def test_the_two_chat_fence_sites_total_exactly_two():
+    """The pre-extraction invariant, preserved across modules: the product has
+    exactly TWO chat tool loops (turn service + SSE), each with ONE fence —
+    a third copy appearing unfenced, or a fence being dropped, fails here."""
+    import inspect
+
+    from iron_jarvis.daemon import chat_turn
     from iron_jarvis.daemon.routes import chat
 
-    src = inspect.getsource(chat)
-    assert src.count('getattr(_t, "returns_untrusted_content", False)') == 2
-    assert src.count("wrap_untrusted(") == 2
+    total = sum(
+        inspect.getsource(m).count('getattr(_t, "returns_untrusted_content", False)')
+        for m in (chat_turn, chat)
+    )
+    assert total == 2
 
 
 def test_a_registered_mcp_tool_is_resolvable_by_the_name_the_fence_uses(tmp_path):

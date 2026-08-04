@@ -436,6 +436,14 @@ class ChannelCreate(BaseModel):
     config: dict[str, Any] = {}
 
 
+class CommThreadSendBody(BaseModel):
+    """Desktop reply fan-out (v1.136.0): one user message into a daemon-owned
+    comm thread — runs the same chat turn and ALSO sends the reply out the
+    thread's bound destination (the phone)."""
+
+    text: str
+
+
 class IntegrationCreate(BaseModel):
     """Add a custom REST integration (bearer token stored in the vault)."""
 

@@ -12,6 +12,7 @@ import {
   ChevronUp,
   Copy,
   FileCode2,
+  Info,
   Pencil,
   Lightbulb,
 } from "lucide-react";
@@ -45,6 +46,12 @@ interface ChannelInfo {
   last_test_ok?: boolean | null;
   last_test_at?: string | null;
   events?: string[];
+  /** Two-way (v1.136.0): the destination also LISTENS for messages. */
+  inbound_enabled?: boolean;
+  /** Full chat from this destination — replies mirror to the desktop Chat page. */
+  chat_enabled?: boolean;
+  /** How many sender ids the fail-closed allowlist holds (0 = nobody). */
+  allowed_senders_count?: number;
 }
 
 /** A field the add-form must collect for a given channel type. */
@@ -53,6 +60,8 @@ interface ChannelField {
   label: string;
   secret: boolean;
   help?: string;
+  /** Optional server hint; "bool" renders as a real toggle (v1.136.0). */
+  type?: string;
 }
 
 interface ChannelType {
@@ -164,7 +173,30 @@ const EVENT_LABELS: Array<{ key: string; label: string }> = [
   { key: "provider.failed", label: "A model failed" },
   { key: "provider.failover", label: "A model failed over" },
   { key: "autonomy.executed", label: "Autonomy acted on its own" },
+  { key: "skill.proposal_created", label: "Skill suggestions" },
 ];
+
+/** What the user READS on the telegram two-way fields (v1.136.0). The server's
+ * own labels stay wire-honest ("true/false"); the screen speaks plainly. The
+ * chat toggle's exact wording is the vocabulary decision from the messaging
+ * plan: two-way is a per-destination upgrade, not a new noun. */
+const TELEGRAM_FIELD_COPY: Record<string, { label?: string; help?: string }> = {
+  chat_enabled: {
+    label: "Chat with Iron Jarvis from this destination",
+    help:
+      "Message your bot and talk to the full Iron Jarvis. Replies land on your phone AND in a shared conversation on the desktop Chat page. Needs the allowed senders list — it fails closed, so an empty list allows nobody.",
+  },
+  inbound_enabled: {
+    label: "Listen for incoming messages",
+    help:
+      "Let Iron Jarvis read messages sent to this bot — required for commands and for chat.",
+  },
+  allowed_senders: {
+    label: "Allowed senders",
+    help:
+      "Comma-separated Telegram user ids allowed to talk to Iron Jarvis. Fails closed — empty allows nobody. In a private chat with your bot, the detected chat ID above is usually also your user id.",
+  },
+};
 
 export default function ChannelsPage() {
   const { data, error, loading, reload } = useApi<{ channels: ChannelInfo[] }>("/comm/channels");
@@ -389,7 +421,17 @@ export default function ChannelsPage() {
     setEditing(c.name);
     setAddType(c.type);
     setAddName(c.name);
-    setAddValues({});
+    // Seed the two-way TOGGLES from the row's live state (v1.136.0): the add
+    // endpoint replaces config wholesale and drops blank fields, so an edit
+    // that opened with the toggles blank would silently switch two-way OFF —
+    // and a toggle that reads as the setting must BE the setting (v1.127.0).
+    // Older daemons omit these GET fields; then this seeds nothing (status quo).
+    const seed: Record<string, string> = {};
+    if (typeof c.inbound_enabled === "boolean")
+      seed.inbound_enabled = String(c.inbound_enabled);
+    if (typeof c.chat_enabled === "boolean")
+      seed.chat_enabled = String(c.chat_enabled);
+    setAddValues(seed);
     setShowAdd(true);
     setAddError(null);
     setAddSuccess(null);
@@ -468,6 +510,14 @@ export default function ChannelsPage() {
                   your security, saved secrets aren&apos;t shown — re-paste the ones
                   you&apos;re setting (Slack: a webhook URL, or a bot token + a
                   channel).
+                  {selectedType?.fields.some((f) => f.key === "allowed_senders") && (
+                    <>
+                      {" "}
+                      The allowed senders list starts blank here too — re-enter
+                      it under Advanced, or saving clears it (it fails closed:
+                      empty allows nobody).
+                    </>
+                  )}
                 </div>
               )}
               {editing ? (
@@ -535,10 +585,60 @@ export default function ChannelsPage() {
                 const advanced = primaryKeys
                   ? selectedType.fields.filter((f) => !primaryKeys.includes(f.key))
                   : [];
-                const renderField = (f: ChannelField) => (
+                const renderField = (f: ChannelField) => {
+                  const copy =
+                    addType === "telegram" ? TELEGRAM_FIELD_COPY[f.key] : undefined;
+                  const label = copy?.label ?? f.label;
+                  const help = copy?.help ?? f.help;
+                  // Boolean settings render as REAL toggles (v1.136.0) — a
+                  // control that reads as a setting must BE the setting
+                  // (v1.127.0 lesson). The form state still stores the wire's
+                  // "true"/"false" strings, so POST semantics are unchanged.
+                  const isBool =
+                    f.type === "bool" ||
+                    f.key === "inbound_enabled" ||
+                    f.key === "chat_enabled";
+                  if (isBool) {
+                    const on =
+                      (addValues[f.key] ?? "").trim().toLowerCase() === "true";
+                    return (
+                      <label
+                        key={f.key}
+                        className={`flex cursor-pointer items-start gap-2.5 rounded-xl border p-2.5 transition-colors ${
+                          on
+                            ? "border-accent/25 bg-accent/[0.05]"
+                            : "border-white/[0.06] hover:bg-white/[0.03]"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          onChange={() =>
+                            setAddValues((v) => ({
+                              ...v,
+                              [f.key]: on ? "false" : "true",
+                            }))
+                          }
+                          aria-label={label}
+                          className="mt-0.5 accent-accent"
+                        />
+                        <span className="min-w-0">
+                          <span className="block text-[12.5px] text-zinc-200">
+                            {label}
+                          </span>
+                          {help && (
+                            <span className="block text-[11px] leading-snug text-zinc-500">
+                              {help}
+                            </span>
+                          )}
+                        </span>
+                      </label>
+                    );
+                  }
+                  return (
                   <div key={f.key}>
                     <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                      {f.label}
+                      {label}
                     </label>
                     <input
                       type={f.secret ? "password" : "text"}
@@ -546,12 +646,12 @@ export default function ChannelsPage() {
                       onChange={(e) =>
                         setAddValues((v) => ({ ...v, [f.key]: e.target.value }))
                       }
-                      aria-label={f.label}
+                      aria-label={label}
                       autoComplete="off"
                       className={`field text-sm ${f.secret ? "font-mono" : ""}`}
                     />
-                    {f.help && (
-                      <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">{f.help}</p>
+                    {help && (
+                      <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">{help}</p>
                     )}
                     {addType === "telegram" && f.key === "chat_id" && (
                       <div className="mt-2 space-y-2">
@@ -601,7 +701,8 @@ export default function ChannelsPage() {
                       </div>
                     )}
                   </div>
-                );
+                  );
+                };
                 return (
                   <>
                     {primary.map(renderField)}
@@ -749,6 +850,62 @@ export default function ChannelsPage() {
         </Reveal>
       )}
 
+      {/* First-run walkthrough (v1.136.0, the LongTerm idiom): shown until one
+          chat-enabled destination exists, then it gets out of the way for good
+          — an onboarding panel that never leaves becomes furniture. Gated on a
+          loaded list so it never flashes over an offline or still-loading page. */}
+      {data && !channels.some((c) => c.chat_enabled) && (
+        <Reveal>
+          <div className="rounded-2xl border border-accent/15 bg-accent/[0.04] p-4">
+            <div className="flex items-start gap-2.5">
+              <Info size={15} className="mt-0.5 shrink-0 text-accent-soft" />
+              <div className="min-w-0 space-y-3">
+                <div>
+                  <h3 className="text-[13px] font-semibold text-zinc-100">
+                    Chat with Iron Jarvis from your phone
+                  </h3>
+                  <p className="mt-1 text-[12px] leading-relaxed text-zinc-400">
+                    A destination doesn&apos;t have to be one-way. Turn on chat
+                    and your Telegram bot becomes a real conversation with Iron
+                    Jarvis — the same one you see on the desktop Chat page.
+                  </p>
+                </div>
+                <ol className="space-y-2">
+                  {[
+                    {
+                      t: "Add a Telegram destination",
+                      d: "Create a bot with @BotFather, paste its token here, and use Detect my chat ID.",
+                    },
+                    {
+                      t: "Turn on “Chat with Iron Jarvis from this destination”",
+                      d: "It's under Advanced. Add your Telegram user id to the allowed senders list — it fails closed, so an empty list allows nobody.",
+                    },
+                    {
+                      t: "Message your bot",
+                      d: "Replies come back on your phone, and the conversation appears in Chat on this desktop too.",
+                    },
+                  ].map((step, i) => (
+                    <li key={step.t} className="flex gap-2.5">
+                      <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full border border-accent/30 bg-accent/[0.08] text-[11px] font-semibold text-accent-soft">
+                        {i + 1}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-[12.5px] text-zinc-200">
+                          {step.t}
+                        </span>
+                        <span className="block text-[11.5px] leading-snug text-zinc-500">
+                          {step.d}
+                        </span>
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </div>
+          </div>
+        </Reveal>
+      )}
+
       <Reveal>
         <div className="grid gap-6 lg:grid-cols-2">
           <Card title={`Destinations${channels.length ? ` · ${channels.length}` : ""}`} icon={<Radio size={15} />}>
@@ -786,6 +943,12 @@ export default function ChannelsPage() {
                             {c.name === "this-pc" ? "This PC" : c.name}
                           </span>
                           {c.type && <Badge value={c.type} tone="cyan" />}
+                          {/* Two-way (v1.136.0): this destination also
+                              LISTENS — with chat on, it's a full conversation
+                              mirrored to the desktop Chat page. */}
+                          {(c.chat_enabled || c.inbound_enabled) && (
+                            <Badge value="two-way" tone="violet" />
+                          )}
                         </span>
                         <span className="block text-[11px] text-zinc-500">
                           {c.name === "this-pc"
@@ -799,6 +962,7 @@ export default function ChannelsPage() {
                                   : "Untested — hit Test once"}
                           {(c.events?.length ?? 0) > 0 &&
                             ` · ${c.events!.length} alert kind${c.events!.length === 1 ? "" : "s"}`}
+                          {c.chat_enabled && " · chat on"}
                         </span>
                       </div>
                     </div>

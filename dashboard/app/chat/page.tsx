@@ -101,6 +101,7 @@ import {
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { get, post, put, del, ApiError, API_BASE, ijToken } from "@/lib/api";
+import { CommThreadBanner } from "@/components/chat/CommThreadBanner";
 import { WorkflowDraftCard } from "@/components/chat/WorkflowDraftCard";
 import type { WorkflowDraft } from "@/lib/types";
 import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
@@ -261,6 +262,13 @@ interface ThreadSummary {
   project_id?: string | null;
   messages: number | ChatMessage[];
   updated_at: string;
+  /** "user" (default) or "daemon" — daemon-owned rows are MESSAGING threads
+   *  the server writes; the page must never PUT their messages (409). */
+  owner?: string;
+  /** Messaging origin id (e.g. "telegram") when daemon-owned. */
+  comm_channel?: string;
+  /** Human sender label (e.g. "Val") when daemon-owned. */
+  comm_display?: string;
 }
 
 /** Per-thread setup the daemon stores alongside the transcript: what was armed
@@ -293,11 +301,21 @@ interface ThreadDetail {
   /** Transcript-derived document paths for threads saved before v1.91.0
    *  recorded them — existence-checked server-side, so chips are real. */
   derived_documents?: string[];
+  /** "user" (default) or "daemon" — daemon-owned = a MESSAGING thread: the
+   *  server appends both sides; the page renders it live and replies through
+   *  POST /comm/threads/{id}/send, never PUT. */
+  owner?: string;
+  /** Messaging origin id (e.g. "telegram") when daemon-owned. */
+  comm_channel?: string;
+  /** Human sender label (e.g. "Val") when daemon-owned. */
+  comm_display?: string;
 }
 
 /** PUT /chat/threads/{id} body + response. */
 interface ThreadSaveBody {
-  messages: ChatMessage[];
+  /** Omitted for title/project-only updates on daemon-owned (messaging)
+   *  threads — writing `messages` there is a 409. */
+  messages?: ChatMessage[];
   title?: string;
   persona?: string;
   setup?: ThreadSetup;
@@ -983,6 +1001,16 @@ export default function ChatPage() {
   // Threads sidebar: the saved-conversation list + which one is loaded.
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
+  // Open MESSAGING thread (owner === "daemon", v1.136.0): the daemon writes it
+  // (phone conversation mirrored here live); the composer replies through
+  // POST /comm/threads/{id}/send and the page NEVER autosaves it.
+  const [commMeta, setCommMeta] = useState<{
+    channel: string;
+    display: string;
+  } | null>(null);
+  // Mirror for send()/watchers that fire from keydown handlers and timers.
+  const commMetaRef = useRef<{ channel: string; display: string } | null>(null);
+  commMetaRef.current = commMeta;
   // Share dialog for the OPEN thread (full transcript / compacted digest).
   const [shareOpen, setShareOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false); // mobile-only toggle
@@ -1118,11 +1146,19 @@ export default function ChatPage() {
   async function assignThreadProject(id: string, pid: string | null) {
     setAssigningThread(true);
     try {
-      const t = await get<ThreadDetail>(`/chat/threads/${encodeURIComponent(id)}`);
-      await put(`/chat/threads/${encodeURIComponent(id)}`, {
-        messages: t.messages ?? [],
-        project_id: pid,
-      });
+      // Daemon-owned (messaging) threads reject `messages` writes with 409 —
+      // tag them with a project_id-only body (the route's carve-out).
+      if (threads.find((x) => x.id === id)?.owner === "daemon") {
+        await put(`/chat/threads/${encodeURIComponent(id)}`, { project_id: pid });
+      } else {
+        const t = await get<ThreadDetail>(
+          `/chat/threads/${encodeURIComponent(id)}`,
+        );
+        await put(`/chat/threads/${encodeURIComponent(id)}`, {
+          messages: t.messages ?? [],
+          project_id: pid,
+        });
+      }
       void refreshThreads();
       setThreadMenu(null);
     } catch (e) {
@@ -1138,11 +1174,19 @@ export default function ChatPage() {
     setRenamingId(null);
     if (!clean) return;
     try {
-      const t = await get<ThreadDetail>(`/chat/threads/${encodeURIComponent(id)}`);
-      await put(`/chat/threads/${encodeURIComponent(id)}`, {
-        messages: t.messages ?? [],
-        title: clean,
-      });
+      // Same 409 carve-out as assignThreadProject: rename a messaging thread
+      // with a title-only body — its messages belong to the daemon.
+      if (threads.find((x) => x.id === id)?.owner === "daemon") {
+        await put(`/chat/threads/${encodeURIComponent(id)}`, { title: clean });
+      } else {
+        const t = await get<ThreadDetail>(
+          `/chat/threads/${encodeURIComponent(id)}`,
+        );
+        await put(`/chat/threads/${encodeURIComponent(id)}`, {
+          messages: t.messages ?? [],
+          title: clean,
+        });
+      }
       void refreshThreads();
     } catch (e) {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
@@ -1280,7 +1324,11 @@ export default function ChatPage() {
   // for an old conversation keep writing to the old box even if the user
   // switches threads before the chain drains.
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
-  const saveTargetRef = useRef<{ id: string | null }>({ id: null });
+  // `daemon: true` marks the box as a MESSAGING thread: the server owns its
+  // messages, so every queued save against that box is a deliberate no-op.
+  const saveTargetRef = useRef<{ id: string | null; daemon?: boolean }>({
+    id: null,
+  });
   // The persona selected before "+ New persona" — restored if the new-persona
   // editor is closed without saving.
   const prevPersonaRef = useRef("assistant");
@@ -1743,6 +1791,60 @@ export default function ChatPage() {
     }
   }
 
+  /** Re-pull the OPEN messaging thread after a daemon-side append
+   *  (chat.thread_updated). Replace-only: the server owns comm threads, so its
+   *  array is truth — never merged, never PUT back. Scroll behaves sanely for
+   *  free: the messages effect follows only while the reader is pinned near
+   *  the bottom, and an un-pinned reader keeps their place because content
+   *  only grows below the fold. */
+  async function refetchCommThread() {
+    const id = saveTargetRef.current.id;
+    if (!id) return;
+    const gen = chatGenRef.current;
+    try {
+      const t = await get<ThreadDetail>(`/chat/threads/${encodeURIComponent(id)}`);
+      // The user may have switched conversations while the fetch was airborne.
+      if (chatGenRef.current !== gen || saveTargetRef.current.id !== id) return;
+      setMessages(t.messages ?? []);
+      if (t.owner === "daemon") {
+        setCommMeta({
+          channel: t.comm_channel ?? "",
+          display: t.comm_display ?? "",
+        });
+        saveTargetRef.current.daemon = true;
+      }
+    } catch {
+      /* quiet — the next thread_updated event retries */
+    }
+  }
+
+  // LIVE COMM UPDATES (v1.136.0): the daemon appends to messaging threads
+  // server-side (phone messages + its own replies) and announces every write
+  // as a chat.thread_updated event on the /events socket. New frames refetch
+  // the open thread when it's the one that changed, and opportunistically
+  // refresh the sidebar list either way. The seen-boundary is an event id so
+  // a re-render never re-processes old frames into refetch loops.
+  const commEventSeenRef = useRef<string | null>(null);
+  useEffect(() => {
+    const newest = events[0];
+    if (!newest) return;
+    const boundary = commEventSeenRef.current;
+    commEventSeenRef.current = newest.id;
+    let listStale = false;
+    let openStale = false;
+    for (const e of events) {
+      if (e.id === boundary) break; // frames already processed
+      if (e.type !== "chat.thread_updated") continue;
+      listStale = true;
+      const tid = (e.payload as { thread_id?: unknown } | null)?.thread_id;
+      if (typeof tid === "string" && tid === saveTargetRef.current.id)
+        openStale = true;
+    }
+    if (listStale) void refreshThreads();
+    if (openStale) void refetchCommThread();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [events]);
+
   /** The thread-setup snapshot for saves: exactly what's armed right now. All
    *  five keys always ride along so a cleared skill/model reads as deliberately
    *  cleared, not merely omitted. */
@@ -1774,6 +1876,9 @@ export default function ChatPage() {
   useEffect(() => {
     if (setupVersion === 0) return;
     if (!saveTargetRef.current.id || messagesRef.current.length === 0) return;
+    // Daemon-owned (messaging) threads are server-authoritative — a setup
+    // tweak must never PUT their messages (the route 409s it anyway).
+    if (saveTargetRef.current.daemon) return;
     queueSave(messagesRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setupVersion]);
@@ -1786,6 +1891,10 @@ export default function ChatPage() {
   function queueSave(msgs: ChatMessage[]) {
     if (msgs.length === 0) return;
     const target = saveTargetRef.current; // the conversation this save belongs to
+    // MESSAGING threads (owner === "daemon") are the server's to write: the
+    // daemon has already persisted every message, and PUT would 409. The next
+    // chat.thread_updated refetch reconciles the view instead.
+    if (target.daemon) return;
     const personaValue = personaForSend();
     // Setup rides along only once it was restored from this thread or the user
     // actually changed something (see sendSetupRef) — never clobber a stored
@@ -1850,7 +1959,15 @@ export default function ChatPage() {
       const t = await get<ThreadDetail>(`/chat/threads/${id}`);
       setMessages(t.messages ?? []);
       setThreadId(t.id);
-      saveTargetRef.current = { id: t.id };
+      // MESSAGING thread? The server owns it: mark the save box daemon so
+      // every queued autosave no-ops, and surface the origin banner.
+      const isDaemon = t.owner === "daemon";
+      setCommMeta(
+        isDaemon
+          ? { channel: t.comm_channel ?? "", display: t.comm_display ?? "" }
+          : null,
+      );
+      saveTargetRef.current = { id: t.id, daemon: isDaemon };
       // Context follows the conversation: a project-tagged thread scopes the
       // chat to its project; an untagged one unscopes it. armDefaults stays
       // off — the thread's own saved setup (restored below) wins; without a
@@ -2657,6 +2774,7 @@ export default function ChatPage() {
    *  PUT runs. */
   function queueSaveDocs(docs: string[]) {
     const target = saveTargetRef.current;
+    if (target.daemon) return; // messaging threads: server-owned, never PUT
     const personaValue = personaForSend();
     const setup = { ...currentSetup(), documents: docs.slice(-MAX_THREAD_DOCS) };
     sendSetupRef.current = true; // future saves keep carrying the setup
@@ -2978,6 +3096,89 @@ export default function ChatPage() {
     }
   }
 
+  /** MESSAGING (daemon-owned) thread reply: the desktop composer posts through
+   *  POST /comm/threads/{id}/send — the daemon persists BOTH sides itself and
+   *  also delivers the reply out to the phone, so this path never queueSaves.
+   *  The optimistic render is reconciled against the server's stored truth
+   *  (an immediate refetch, plus every chat.thread_updated event). */
+  async function sendComm(message: string) {
+    const gen = chatGenRef.current;
+    const id = saveTargetRef.current.id;
+    if (!id) {
+      sendingRef.current = false;
+      return;
+    }
+    const before = messagesRef.current;
+    const history: ChatMessage[] = [
+      ...before,
+      { role: "user", content: message },
+    ];
+    setMessages(history); // optimistic — the daemon persists it server-side
+    pinnedRef.current = true;
+    setShowJump(false);
+    setFailedTurn(null);
+    setChatBusy(true);
+    try {
+      const res = await post<ChatResponse & { sent?: boolean }>(
+        `/comm/threads/${encodeURIComponent(id)}/send`,
+        { text: message },
+      );
+      if (chatGenRef.current !== gen) return; // conversation moved on
+      // The turn ran and persisted, but the outbound copy never reached the
+      // phone — say so instead of letting the banner's promise quietly break.
+      if (res.sent === false)
+        setError(
+          "Saved to the conversation, but delivery to your phone failed — check the destination on the Notifications page.",
+        );
+      const toolsUsed = (res.tools_used ?? []).filter((t) => Boolean(t));
+      const reply = (res.reply ?? "").trim() || "(no response)";
+      if (res.escalate) {
+        // The daemon runs the escalated session SERVER-SIDE (it has to reply
+        // to the phone too) — never spawn the browser's own agent path here.
+        // The finished answer lands via chat.thread_updated; until then the
+        // hand-off note keeps the wait honest.
+        setMessages([
+          ...history,
+          {
+            role: "assistant",
+            content: "",
+            escalated:
+              res.escalate_reason ||
+              "working on it — the full reply will land here and on your phone",
+          },
+        ]);
+        return;
+      }
+      setMessages([
+        ...history,
+        {
+          role: "assistant",
+          content: reply,
+          ...(toolsUsed.length ? { toolsUsed } : {}),
+        },
+      ]);
+      tts.speak(reply); // no-op unless spoken replies are on
+      // Reconcile with the daemon's stored truth right away (it has already
+      // persisted both sides) — via GET, never a PUT.
+      void refetchCommThread();
+    } catch (e) {
+      if (chatGenRef.current !== gen) return;
+      // The send never reached the phone lane: roll the optimistic bubble back
+      // (the daemon stored nothing) and hand the text back to the composer.
+      setMessages(before);
+      if (e instanceof ApiError && e.status === 0) setOffline(true);
+      else setError(e instanceof ApiError ? e.message : String(e));
+      inputFromVoiceRef.current = false; // programmatic restore, never voice
+      setInput((cur) => (cur.trim() ? cur : message));
+    } finally {
+      sendingRef.current = false;
+      if (chatGenRef.current === gen) {
+        setChatBusy(false);
+        inputRef.current?.focus();
+      }
+    }
+  }
+
   /** CHAT MODE: append the user's message and run one completion. */
   async function sendChat(message: string) {
     const atts = attachments;
@@ -3130,6 +3331,14 @@ export default function ChatPage() {
     // `busy` is React state (lags a frame); `sendingRef` flips synchronously so
     // two Enter keydowns in the same tick can't both start a turn.
     if (!message || busy || sendingRef.current) return;
+    // MESSAGING threads take plain text only — refuse honestly instead of
+    // silently dropping the files (the composer keeps both text and chips).
+    if (commMetaRef.current && attachmentsRef.current.length > 0) {
+      setError(
+        "Attachments can't be sent to a messaging thread yet — remove them, or start a new chat.",
+      );
+      return;
+    }
     sendingRef.current = true;
     // A new turn always follows: re-pin so the user's own message + the reply
     // scroll into view even if they'd scrolled up to re-read earlier context.
@@ -3138,6 +3347,12 @@ export default function ChatPage() {
     setError(null);
     setOffline(false);
     setInput("");
+    // MESSAGING thread (owner === "daemon"): the reply goes out the comm lane
+    // — the daemon runs the turn, stores it, and mirrors it to the phone.
+    if (commMetaRef.current) {
+      void sendComm(message);
+      return;
+    }
     // One entry point (v1.108.0). Every message starts as fast chat; the turn
     // escalates itself when it needs the full agent (see completeChat), so the
     // user never routes their own request.
@@ -3224,6 +3439,7 @@ export default function ChatPage() {
     setError(null);
     setOffline(false);
     setThreadId(null);
+    setCommMeta(null); // a fresh conversation is browser-owned again
     // Back to the defaults — the project folder while a project is selected,
     // else the user's own saved workspace/persona choices.
     try {
@@ -3697,9 +3913,18 @@ export default function ChatPage() {
                               <span className="min-w-0 truncate">
                                 {t.title || "Untitled chat"}
                               </span>
-                              {/* In the unscoped view, project threads carry a
-                                  small origin chip (scoped lists don't need it). */}
-                              {!projectId && t.project_id && (
+                              {/* Origin chip: a MESSAGING thread names where it
+                                  comes from (the stronger signal, so it wins
+                                  the slot); otherwise, in the unscoped view,
+                                  project threads carry the project chip. */}
+                              {t.owner === "daemon" ? (
+                                <span
+                                  className="ml-auto max-w-[5.5rem] shrink-0 truncate rounded-full border border-accent/25 bg-accent/[0.08] px-1.5 text-[9px] uppercase tracking-wide text-accent-soft"
+                                  title="Messaging thread"
+                                >
+                                  {t.comm_channel || "linked"}
+                                </span>
+                              ) : !projectId && t.project_id ? (
                                 <span
                                   className="ml-auto max-w-[5.5rem] shrink-0 truncate rounded-full border border-white/10 bg-white/[0.04] px-1.5 text-[9px] uppercase tracking-wide text-zinc-500"
                                   title="Project thread"
@@ -3707,7 +3932,7 @@ export default function ChatPage() {
                                   {projects.find((p) => p.id === t.project_id)?.name ??
                                     "project"}
                                 </span>
-                              )}
+                              ) : null}
                             </span>
                             <span className="block text-[11px] text-zinc-500">
                               {timeAgo(t.updated_at)} · {count} msg
@@ -3997,6 +4222,14 @@ export default function ChatPage() {
                   </div>
                 </div>
               )}
+              {/* MESSAGING thread banner: an open daemon-owned conversation
+                  says where it also lives and what a reply here does. */}
+              {commMeta && (
+                <CommThreadBanner
+                  channel={commMeta.channel}
+                  display={commMeta.display}
+                />
+              )}
               {/* Message thread */}
               <div
                 ref={scrollRef}
@@ -4036,7 +4269,11 @@ export default function ChatPage() {
                         );
                       }
                       // Assistant: markdown + hover actions (copy / regenerate).
+                      // No regenerate on MESSAGING threads: the daemon owns the
+                      // transcript, so a browser-side re-run could never be
+                      // saved (and would silently diverge from the phone).
                       const canRegen =
+                        !commMeta &&
                         i === messages.length - 1 &&
                         i > 0 &&
                         messages[i - 1].role === "user" &&
