@@ -26,6 +26,7 @@ _HELP = (
     "/run <name> — start a workflow\n"
     "/runs — recent workflow runs\n"
     "/cancel <run_id> — stop a running workflow\n"
+    "/answer <text> — answer a waiting workflow question\n"
     "/agents — list remote agents\n"
     "/ask <agent> <task> — ask a remote agent\n"
     "/sessions — recent sessions\n"
@@ -137,6 +138,18 @@ class CommandInterpreter:
             except Exception:  # noqa: BLE001 — the status flip is the real signal
                 pass
         return f"Cancelling run '{run_id}'."
+
+    async def _cmd_answer(self, _rest: str) -> str:
+        # The REAL resolution lives upstream in the inbound poller (v1.137.0,
+        # comm/inbound.py) — it intercepts "/answer" BEFORE this grammar
+        # because answering is identity-bound (the poller knows the channel +
+        # sender and holds the pending-prompt store; this interpreter sees
+        # only text). Reaching this handler means no prompt machinery is
+        # wired for the surface, so the honest reply is the same one the
+        # poller gives when nothing is open.
+        from ..comm.prompts import NOTHING_WAITING_REPLY
+
+        return NOTHING_WAITING_REPLY
 
     async def _cmd_agents(self, _rest: str) -> str:
         from ..agents.remote import RemoteAgentRegistry

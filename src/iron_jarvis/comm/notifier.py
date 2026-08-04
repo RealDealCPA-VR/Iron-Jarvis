@@ -14,6 +14,15 @@ from ..core.events import EventType
 from .base import Channel
 
 #: event types that, by default, raise an outbound alert.
+#:
+#: ``workflow.waiting`` is deliberately NOT here: the workflow engine already
+#: delivers the parked-run question to every destination itself at park time
+#: (``WorkflowEngine._deliver``, v1.121.0), and the pending-prompt handler
+#: (``comm/prompts.py``, v1.137.0) additionally sends chat-enabled identities
+#: the answerable copy — adding it to the default alert set would triple-send
+#: the same question. :func:`format_event` still knows the type so a user who
+#: EXPLICITLY subscribes it (``comm.event_types`` in config) gets a
+#: phone-friendly line instead of the generic key=value dump.
 DEFAULT_ALERT_EVENTS: frozenset[str] = frozenset(
     {
         EventType.REVIEW_REQUESTED,
@@ -37,6 +46,16 @@ def format_event(event: Any) -> str:
     """Build a concise human-readable alert line from an event."""
     etype = _event_field(event, "type", "event")
     payload = _event_field(event, "payload", {}) or {}
+    if etype == "workflow.waiting":
+        # Phone-friendly park alert (v1.137.0): carry the question and point
+        # at the answer paths a pocket actually has.
+        wf = str(payload.get("workflow") or payload.get("run_id") or "a workflow")
+        q = str(payload.get("question") or "").strip()
+        detail = f": {q}" if q else ""
+        return (
+            f"Workflow '{wf}' needs you{detail} — reply with a number or "
+            "/answer <text> from a chat-enabled destination."
+        )
     if etype == EventType.SKILL_PROPOSAL_CREATED:
         name = str(payload.get("skill_name") or "").strip() or "a new skill"
         if payload.get("auto"):

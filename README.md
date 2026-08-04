@@ -52,6 +52,7 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 | 🧩 **n8n-style workflows** | drag step-nodes, wire them, run the graph — agents can build them too |
 | 📁 **Projects as a context spine** | a brief, custom instructions, a real folder, and a knowledge base — every chat, task, and agent run inside a project inherits all of it |
 | 💬 **One chat surface** | no chat/agent toggle — answers come back in seconds, and a turn that needs real multi-step work escalates itself to a full agent with a visible reason. Type **/** anywhere in a message to invoke a skill; drop files anywhere on the page; armed tools, skill, workspace, and model persist **per thread**. Each thread's ⋯ menu renames, pins, commits to memory, **adds it to a project**, or deletes. One-click **Share**: verbatim transcript or an AI-compacted digest |
+| 📱 **Chat from your phone** | make a Telegram destination **two-way** ("Chat with Iron Jarvis from this destination") and text your bot like a person — same brain, same memory, full tools, behind a fail-closed sender allowlist. The conversation lands in the desktop **Chat** page's shared history, a desktop reply goes back out to your phone, and `/new` starts a fresh thread |
 | 🖥️ **Your own GPUs, watched live** | a **Local fleet** page for the machines you own: tokens/sec, concurrency, queue depth, models loaded, VRAM, context windows — and a metric it *can't* read says so instead of showing a fake zero |
 | 🎬 **Creative studio** | generate images, video, music, and speech; browse your own media folders in a Library; and drive an AI coding CLI in a managed terminal that saves straight into the folder you picked |
 | 🧪 **The code agents write, kept** | when an agent solves something by writing a script, that script used to die with its disposable workspace. Now it lands in **Artifacts** — read the source, see its real exit code and output, and **run it again** in its own durable folder, months later |
@@ -278,7 +279,7 @@ uv run ironjarvis ltm-append "Client checklist" "EIN, prior returns, bank statem
 uv run ironjarvis ltm-search "onboarding"
 ```
 
-### Secrets, integrations & channels
+### Secrets, connections & notifications
 - **Secrets** — encrypted vault; values are write-only and never shown to agents or the UI.
 - **Connections** — every account and endpoint in one place: AI accounts, local endpoints (rename them, remove dead ones), REST hookups, and plug-ins (MCP), each testable.
 - **Notifications** — where alerts go: Slack / Telegram / Discord / email destinations; Iron Jarvis auto-alerts on review-requested, workflow-completed, and provider-failed events.

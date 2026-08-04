@@ -18,6 +18,8 @@ import {
   CheckCircle2,
   Eye,
   Smartphone,
+  MessageCircle,
+  Megaphone,
   Wifi,
   KeyRound,
   ShieldCheck,
@@ -83,6 +85,12 @@ const SUBSYSTEMS: Subsystem[] = [
     title: "Connections & secrets",
     icon: PlugZap,
     desc: "Connect a model with an API key or OAuth; keys and tokens live in an encrypted, write-only vault.",
+  },
+  {
+    href: "/channels",
+    title: "Notifications",
+    icon: Megaphone,
+    desc: "Where alerts go — and a destination can be two-way, so you chat with Iron Jarvis from your phone.",
   },
   {
     href: "/computeruse",
@@ -157,6 +165,10 @@ const GLOSSARY: GlossaryTerm[] = [
   {
     term: "Connections",
     def: "Your model accounts — Claude, OpenAI, and others — used to run agents.",
+  },
+  {
+    term: "Two-way destination",
+    def: "A Notifications destination you can talk back to — messages you send it become real conversations with Iron Jarvis, shared with the desktop Chat page.",
   },
   {
     term: "Terminals",
@@ -268,6 +280,79 @@ export default function HelpPage() {
       <Reveal>
         <Card title="On your phone or another device" icon={<Smartphone size={15} />}>
           <p className="text-[13px] leading-relaxed text-zinc-400">
+            Two ways to take Iron Jarvis with you: chat with it over{" "}
+            <span className="text-zinc-300">Telegram</span> — the easiest by far — or open the full
+            dashboard on the go.
+          </p>
+
+          {/* Easiest: a two-way destination (v1.136.0) */}
+          <div className="relative mt-5 rounded-2xl border border-accent/20 bg-accent/[0.04] px-4 py-4">
+            <div className="flex items-center gap-3">
+              <span className="grid h-9 w-9 place-items-center rounded-xl border border-accent/25 bg-accent/[0.08] text-accent-soft">
+                <MessageCircle size={17} />
+              </span>
+              <div>
+                <div className="text-sm font-semibold text-zinc-100">
+                  Chat over Telegram — a two-way destination
+                </div>
+                <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-accent-soft/70">
+                  Easiest
+                </div>
+              </div>
+            </div>
+            <p className="mt-3 text-[13px] leading-relaxed text-zinc-400">
+              Text your bot like a person — same brain, same memory, and the conversation shows up
+              in{" "}
+              <Link href="/chat" className="text-accent-soft hover:text-accent">
+                Chat
+              </Link>{" "}
+              on your desktop. Set it up once on the{" "}
+              <Link href="/channels" className="text-accent-soft hover:text-accent">
+                Notifications
+              </Link>{" "}
+              page:
+            </p>
+            <ol className="mt-3 space-y-2 text-[13px] leading-relaxed text-zinc-400">
+              <li>
+                <span className="text-zinc-300">1.</span> Add a{" "}
+                <span className="text-zinc-200">Telegram</span> destination — create a bot with{" "}
+                <Kbd>@BotFather</Kbd>, paste its token, and click{" "}
+                <Kbd>Detect my chat ID</Kbd>.
+              </li>
+              <li>
+                <span className="text-zinc-300">2.</span> Under{" "}
+                <span className="text-zinc-200">Advanced</span>, turn on{" "}
+                <span className="text-zinc-200">
+                  &ldquo;Chat with Iron Jarvis from this destination&rdquo;
+                </span>{" "}
+                and add your Telegram user id to the allowed senders list.
+              </li>
+              <li>
+                <span className="text-zinc-300">3.</span> Message your bot. Replies come back on
+                your phone, and the same conversation appears in Chat here — a desktop reply goes
+                out to your phone too.
+              </li>
+            </ol>
+            <p className="mt-3 text-[12px] leading-relaxed text-zinc-500">
+              Send <Code>/new</Code> to start a fresh conversation (the old one stays in your
+              desktop thread list). A waiting workflow can ask you a question there too — reply
+              with a number or <Code>/answer</Code>.
+            </p>
+            <div className="mt-3 flex items-start gap-3 rounded-2xl border border-amber-500/25 bg-amber-500/[0.07] px-4 py-3.5">
+              <ShieldCheck size={18} className="mt-0.5 shrink-0 text-amber-300" aria-hidden="true" />
+              <div className="text-[13px] leading-relaxed text-amber-100/90">
+                <span className="font-semibold text-amber-200">
+                  The allowed senders list fails closed.
+                </span>{" "}
+                An empty list allows nobody — only the Telegram user ids you add can talk to Iron
+                Jarvis, and everyone else is silently ignored.
+              </div>
+            </div>
+          </div>
+
+          {/* The full dashboard on the go */}
+          <p className="mt-6 text-[13px] leading-relaxed text-zinc-400">
+            <span className="font-semibold text-zinc-200">The full dashboard on the go.</span>{" "}
             Iron Jarvis already runs a local web app — this dashboard — and installs as a{" "}
             <span className="text-zinc-300">PWA</span>, so it behaves like a native app on any
             device. To reach it from your phone, both devices need to be on the same network and
@@ -275,7 +360,7 @@ export default function HelpPage() {
             ways to get there.
           </p>
 
-          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
             {/* Recommended: Tailscale */}
             <div className="relative rounded-2xl border border-accent/20 bg-accent/[0.04] px-4 py-4">
               <div className="flex items-center gap-3">

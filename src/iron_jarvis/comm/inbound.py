@@ -42,6 +42,14 @@ from ..core.logging import get_logger
 from ..core.models import AgentType
 from .base import Channel, InboundMessage, split_message
 from .models import InboundOffsetRecord
+from .prompts import (
+    ALREADY_ANSWERED_REPLY,
+    ANSWER_USAGE_REPLY,
+    NOTHING_WAITING_REPLY,
+    answer_echo,
+    pending_reminder,
+    prompt_options,
+)
 
 log = get_logger("comm.inbound")
 
@@ -84,6 +92,8 @@ class InboundPoller:
         personas: dict[str, Any] | None = None,
         platform: Any = None,
         clock: Callable[[], float] | None = None,
+        prompt_store: Any = None,
+        answer_run: Callable[..., Any] | None = None,
     ) -> None:
         self.notifier = notifier
         self.orchestrator = orchestrator
@@ -109,6 +119,15 @@ class InboundPoller:
         #: (deterministic tests); production uses ``time.monotonic``.
         self._clock: Callable[[], float] = clock or time.monotonic
         self._turn_times: dict[tuple[str, str], deque[float]] = {}
+        #: PENDING PROMPTS (v1.137.0) — both optional so every existing
+        #: construction keeps its behavior byte-for-byte. ``prompt_store`` is
+        #: the :class:`~.prompts.PendingPromptStore`; ``answer_run`` the
+        #: injected atomic-claim answer path ``(run_id, answer) -> awaitable
+        #: {"ok": bool, ...}`` (production passes a partial of
+        #: ``prompts.answer_parked_run`` — the HTTP route's exact semantics;
+        #: tests pass a fake). See ``comm/prompts.py`` for the resolution rule.
+        self.prompt_store = prompt_store
+        self.answer_run = answer_run
         #: The Reflex command grammar (``/status``, ``/run`` …). When set, an
         #: authorized message that starts with ``/`` is handled as a fast,
         #: deterministic command instead of spawning a full agent session.
@@ -408,6 +427,17 @@ class InboundPoller:
                 "sent": sent,
             }
 
+        # PENDING PROMPTS (v1.137.0): "/answer" is identity-bound, so it is
+        # handled HERE — where (channel, sender) is known — BEFORE the command
+        # grammar, which would otherwise call it an unknown command. Works on
+        # any inbound channel; prompts only ever exist for identities that
+        # earned one (chat-enabled channel + established thread + allowlist).
+        low = text.lower()
+        if self.prompt_store is not None and (
+            low == "/answer" or low.startswith("/answer ")
+        ):
+            return await self._handle_answer_command(name, ch, msg, text, display, chat_on)
+
         # COMMAND GRAMMAR: an authorized "/command" is a fast, deterministic
         # operation (status / run a workflow / cancel / ask a remote agent),
         # replied immediately — no agent session spun up. Non-command text falls
@@ -430,6 +460,41 @@ class InboundPoller:
                     "command": text.split()[0],
                     "sent": bool(send_res.get("ok")),
                 }
+
+        # PENDING PROMPTS: a bare PURE-INTEGER message while a fresh prompt is
+        # open is the one-tap answer path. With options it must be an in-range
+        # numbered pick (out-of-range falls through to chat — the reminder
+        # re-points); WITHOUT options (every workflow ask today) the integer
+        # itself is the answer ("How many clients?" → "3") — this keeps the
+        # park alert's "reply with a number or /answer" promise true. It sits
+        # after the command grammar (commands always work) and BEFORE reflex,
+        # so a keyword rule can never steal "1" from an open gate. isdecimal
+        # (not isdigit) — "²" passes isdigit but crashes int().
+        if self.prompt_store is not None and text.isdecimal():
+            prompt, gone_status = self._fresh_open_prompt_ex(name, msg.sender_id)
+            if prompt is not None:
+                options = prompt_options(prompt)
+                pick = int(text)
+                if options and 1 <= pick <= len(options):
+                    return await self._resolve_prompt(
+                        name, ch, msg, display, chat_on, prompt, options[pick - 1], text
+                    )
+                if not options:
+                    return await self._resolve_prompt(
+                        name, ch, msg, display, chat_on, prompt, text, text
+                    )
+            elif gone_status:
+                # The newest prompt just expired ON THIS LOOK (the run un-parked
+                # elsewhere): this integer was aimed at the dead gate — reply
+                # honestly instead of misfiring a chat turn on "1".
+                reply = (
+                    ALREADY_ANSWERED_REPLY
+                    if gone_status in ("resuming", "running", "completed")
+                    else NOTHING_WAITING_REPLY
+                )
+                return await self._answer_reply(
+                    name, ch, msg, display, chat_on, text, reply, "answer_expired"
+                )
 
         # REFLEX: a non-command message that matches a keyword rule fires that
         # rule (run a workflow / remote agent / session) instead of a free-form
@@ -581,7 +646,11 @@ class InboundPoller:
                     tid, "assistant", reply,
                     channel=name, sender_id=msg.sender_id, display=display,
                 ) or tid
-            sent = await self.send_chunked(ch, reply, chat_id=msg.reply_to)
+            # PENDING PROMPTS: a free-form message never resolves an open gate
+            # (see comm/prompts.py) — instead the OUTBOUND copy carries a
+            # gentle reminder. The thread keeps the clean reply only.
+            outbound = reply + self._pending_reminder(name, msg.sender_id)
+            sent = await self.send_chunked(ch, outbound, chat_id=msg.reply_to)
             return {"channel": name, "status": "chat", "thread_id": tid, "sent": sent}
 
         # ESCALATE: ack now, run the normal supervised session (same
@@ -615,6 +684,177 @@ class InboundPoller:
             "session_id": session.id,
             "sent": sent,
         }
+
+    # -- pending prompts (v1.137.0) ----------------------------------------
+    def _run_state(self, run_id: str) -> str:
+        """The prompt's run status ("missing" when gone). On a read failure
+        say "waiting" — the atomic claim is the real arbiter; a flaky read
+        must not expire a live gate."""
+        try:
+            from ..workflows.models import WorkflowRunRecord
+
+            with session_scope(self.engine) as db:
+                rec = db.get(WorkflowRunRecord, run_id)
+            return rec.status if rec is not None else "missing"
+        except Exception:  # noqa: BLE001
+            return "waiting"
+
+    def _fresh_open_prompt(self, channel: str, sender_id: Any) -> Any:
+        """The identity's newest open prompt, or None (see the _ex variant)."""
+        return self._fresh_open_prompt_ex(channel, sender_id)[0]
+
+    def _fresh_open_prompt_ex(self, channel: str, sender_id: Any) -> tuple[Any, str]:
+        """The identity's newest open prompt, EXPIRING it first when its run
+        un-parked by other means (answered from the desktop, cancelled) — the
+        phone must never resolve, or be nagged about, a dead gate.
+
+        Returns ``(prompt, "")`` when fresh, ``(None, <run status>)`` when the
+        newest prompt just expired on this look (so callers can reply honestly
+        about WHY the gate is gone), ``(None, "")`` when nothing was open at
+        all. Never raises."""
+        if self.prompt_store is None:
+            return None, ""
+        try:
+            prompt = self.prompt_store.newest_open(channel, str(sender_id))
+            if prompt is None:
+                return None, ""
+            status = self._run_state(prompt.ref_id)
+            if status != "waiting":
+                self.prompt_store.expire(prompt.id, status="expired")
+                return None, status
+            return prompt, ""
+        except Exception:  # noqa: BLE001 — a prompt lookup must never break a turn
+            log.warning("pending prompt lookup failed on %r", channel, exc_info=True)
+            return None, ""
+
+    def _pending_reminder(self, channel: str, sender_id: Any) -> str:
+        """The '(A workflow is still waiting…)' suffix for the outbound phone
+        copy of a normal chat reply — '' when nothing fresh is open."""
+        prompt = self._fresh_open_prompt(channel, sender_id)
+        if prompt is None:
+            return ""
+        return pending_reminder(prompt.question)
+
+    async def _answer_reply(
+        self,
+        name: str,
+        ch: Channel,
+        msg: InboundMessage,
+        display: str,
+        chat_on: bool,
+        user_text: str,
+        reply: str,
+        status: str,
+        outbound_suffix: str = "",
+        **extra: Any,
+    ) -> dict[str, Any]:
+        """Append the exchange (best-effort, chat-enabled channels only — a
+        command-only channel must not start minting desktop threads) + send
+        the reply — the shared tail of every answer-path outcome.
+
+        ``outbound_suffix`` rides the PHONE copy only (the still-waiting
+        reminder after resolving one of several open prompts) — never the
+        thread, same rule as the chat-reply reminder."""
+        tid = (
+            self._append_exchange(name, msg, display, user_text, reply)
+            if chat_on
+            else ""
+        )
+        sent = await self.send_chunked(
+            ch, reply + outbound_suffix, chat_id=msg.reply_to
+        )
+        return {
+            "channel": name,
+            "status": status,
+            "thread_id": tid,
+            "sent": sent,
+            **extra,
+        }
+
+    async def _handle_answer_command(
+        self,
+        name: str,
+        ch: Channel,
+        msg: InboundMessage,
+        text: str,
+        display: str,
+        chat_on: bool,
+    ) -> dict[str, Any]:
+        """Explicit ``/answer <text>`` — resolves the identity's newest open
+        prompt, mid-conversation or not. Honest replies for nothing-waiting
+        and for an empty answer. A numeric argument maps to the prompt's
+        options exactly like a bare numbered pick."""
+        answer = text[len("/answer"):].strip()
+        prompt = self._fresh_open_prompt(name, msg.sender_id)
+        if prompt is None:
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, text,
+                NOTHING_WAITING_REPLY, "answer_none",
+            )
+        if not answer:
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, text,
+                ANSWER_USAGE_REPLY, "answer_usage",
+            )
+        options = prompt_options(prompt)
+        if options and answer.isdecimal() and 1 <= int(answer) <= len(options):
+            answer = options[int(answer) - 1]
+        return await self._resolve_prompt(
+            name, ch, msg, display, chat_on, prompt, answer, text
+        )
+
+    async def _resolve_prompt(
+        self,
+        name: str,
+        ch: Channel,
+        msg: InboundMessage,
+        display: str,
+        chat_on: bool,
+        prompt: Any,
+        answer: str,
+        original_text: str,
+    ) -> dict[str, Any]:
+        """Resolve ``prompt`` with ``answer`` via the injected atomic-claim
+        answer path (the HTTP route's exact first-answer-wins semantics). A
+        won claim marks the prompt answered and echoes what happened; a lost
+        claim (answered/cancelled elsewhere) gets the honest already-answered
+        reply and marks the prompt superseded."""
+        if self.answer_run is None:
+            # Wired prompts without an answer path is a misconfiguration —
+            # be honest rather than pretending the gate opened.
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, original_text,
+                "I can't deliver answers right now — use the Workflows page.",
+                "answer_error",
+            )
+        try:
+            res = await self.answer_run(prompt.ref_id, answer)
+        except Exception as exc:  # noqa: BLE001 — the loop must reply, not die
+            log.exception("pending prompt answer failed on %r", name)
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, original_text,
+                f"I hit a problem: {type(exc).__name__}: {exc}",
+                "answer_error",
+            )
+        if (res or {}).get("ok"):
+            self.prompt_store.resolve(prompt.id, answer)
+            echo = answer_echo(prompt.question, str(res.get("run_name") or prompt.ref_id))
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, original_text, echo, "answered",
+                # ANOTHER run may still be parked (back-to-back gates): now
+                # that this prompt is closed, surface the next-open one on the
+                # phone copy so it is not orphaned until the next chat reply.
+                outbound_suffix=self._pending_reminder(name, msg.sender_id),
+                prompt_id=prompt.id, run_id=prompt.ref_id,
+            )
+        # Claim lost: first answer wins, and it wasn't this one.
+        self.prompt_store.expire(prompt.id, status="superseded")
+        return await self._answer_reply(
+            name, ch, msg, display, chat_on, original_text,
+            ALREADY_ANSWERED_REPLY, "answer_superseded",
+            outbound_suffix=self._pending_reminder(name, msg.sender_id),
+            prompt_id=prompt.id, run_id=prompt.ref_id,
+        )
 
     async def _publish(self, etype: str, payload: dict[str, Any], **kw: Any) -> None:
         if self.event_bus is None:

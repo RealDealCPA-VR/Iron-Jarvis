@@ -275,6 +275,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # defaults dict exists (it is defined later in this factory).
     comm_thread_store = CommThreadStore(platform.engine, event_bus=platform.event_bus)
 
+    # PENDING PROMPTS (v1.137.0): parked workflow runs become answerable from
+    # the phone. The store is durable rows; ``answer_run`` (the atomic-claim
+    # answer path, same semantics as POST /workflows/runs/{id}/answer) is
+    # attached below once ``_spawn_bg`` exists.
+    from ..comm.prompts import PendingPromptStore, handle_workflow_waiting
+
+    pending_prompt_store = PendingPromptStore(platform.engine)
+
     inbound_poller = InboundPoller(
         platform.notifier,
         orchestrator,
@@ -285,7 +293,21 @@ def create_app(project_root: str | None = None) -> FastAPI:
         thread_store=comm_thread_store,
         chat_turn=run_chat_turn,
         platform=platform,
+        prompt_store=pending_prompt_store,
     )
+
+    def _on_workflow_waiting(event: Any) -> None:
+        """workflow.waiting → register answerable prompts on every chat-enabled
+        identity's thread (+ send them the question). A sync bus handler (runs
+        off the loop via to_thread); the body is fully guarded in comm/prompts."""
+        handle_workflow_waiting(
+            event,
+            store=pending_prompt_store,
+            notifier=platform.notifier,
+            thread_store=comm_thread_store,
+        )
+
+    platform.event_bus.add_handler(_on_workflow_waiting)
 
     # CX-05 "inbound everything": the calendar trigger poller. Cheap to build (no
     # network); OFF unless calendar_trigger_enabled AND a secret ICS URL is stored
@@ -903,6 +925,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # routes go through ``d``; TestClient callers only have app.state).
     app.state.inbound_poller = inbound_poller
     app.state.comm_thread_store = comm_thread_store
+    app.state.pending_prompt_store = pending_prompt_store
     # Background session tasks are registered on the orchestrator keyed by
     # session_id (a strong ref preventing premature GC, and the handle the
     # cancel endpoint uses). Exceptions are surfaced (logged), not swallowed.
@@ -926,6 +949,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # background task launcher (now that it exists), so a webhook POST returns
     # immediately while the bound workflow/session runs in the background.
     reflex_router.spawn_bg = _spawn_bg
+
+    # PENDING PROMPTS: the poller's answer path — the exact atomic-claim +
+    # background-resume semantics of POST /workflows/runs/{id}/answer, with
+    # the resume launched through the same _spawn_bg the route uses.
+    async def _answer_parked_run(run_id: str, answer: str) -> dict[str, Any]:
+        from ..comm.prompts import answer_parked_run
+
+        return await answer_parked_run(platform, orchestrator, _spawn_bg, run_id, answer)
+
+    inbound_poller.answer_run = _answer_parked_run
 
     def _visible_providers() -> list[dict[str, Any]]:
         """Provider health with the internal 'mock' offline model hidden.

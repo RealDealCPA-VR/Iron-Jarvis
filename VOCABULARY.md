@@ -20,7 +20,15 @@ PR that ships it.
 | An MCP server (a connection that adds tools) | **plug-in** | tool pack, MCP pack |
 | Anything Iron Jarvis knows how to do | **skill** | — |
 | Where alerts go | **Notifications** (page) / **destination** (row) | channels |
+| A destination you can talk back to | **two-way destination** | gateway, messaging platform |
 | The one-tap connect gallery | **Directory** | marketplace |
+
+Two-way is a per-destination *upgrade*, not a new noun (decided in the
+messaging plan, shipped v1.136.0): the toggle that creates one reads
+**"Chat with Iron Jarvis from this destination"**. "Gateway" and "messaging
+platform" never shipped as user-visible words, so they are not search aliases
+in `lib/nav.ts` — they are retired-on-arrival; if one ever gets added to
+search, it goes in as an alias only.
 
 ## Reserved
 
