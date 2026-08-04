@@ -108,6 +108,13 @@ class TerminalSession:
         # printing?" signal for the studio's phase detection (a running TUI
         # repaints its status bar about once a second).
         self.last_output_at: float = 0.0
+        # Set the instant kill() runs. Real backends terminate the child
+        # FIRE-AND-FORGET, and Windows can keep reporting the process alive
+        # for a beat after terminate() returns (slow ConPTY teardown on
+        # Server 2025 turned this into a CI-visible race: a say/write in
+        # that window still saw alive=True). A session we killed is dead to
+        # every caller the moment we killed it.
+        self._killed = False
 
     def start(self, env: dict | None = None) -> "TerminalSession":
         """Spawn the shell (idempotent)."""
@@ -206,11 +213,12 @@ class TerminalSession:
 
     def kill(self) -> None:
         self._drain_stop.set()  # stop the background reader before the PTY dies
+        self._killed = True  # alive flips NOW — backend termination may lag
         self.backend.kill()
 
     @property
     def alive(self) -> bool:
-        return self._started and self.backend.is_alive()
+        return self._started and not self._killed and self.backend.is_alive()
 
     @property
     def exit_code(self) -> int | None:

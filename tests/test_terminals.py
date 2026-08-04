@@ -272,3 +272,31 @@ def test_healthy_pty_verified_once_no_degrade(monkeypatch):
     assert s.degraded is False
     assert m._pty_ok is True
     assert s.info()["degraded"] is False
+
+
+class _SlowDeathBackend(FakeBackend):
+    """Simulates Windows ConPTY on Server 2025: terminate() returns while the
+    child still reports alive for a beat. The v1.137.0 CI failure class."""
+
+    def kill(self) -> None:  # deliberately does NOT flip _alive
+        self._killed = True
+
+
+def test_killed_session_is_dead_immediately_even_if_backend_lags():
+    s = TerminalSession(
+        cwd="/work", shell="fake", argv=["fake"], backend=_SlowDeathBackend()
+    ).start()
+    assert s.alive
+    s.kill()
+    # The backend still claims the process is running — the session must not.
+    assert s.backend.is_alive()
+    assert s.alive is False
+
+
+def test_manager_kill_purges_lagging_backend_session(tmp_path):
+    m = TerminalManager(state_path=tmp_path / "terminals.json")
+    s = m.create(cwd="/work", backend=_SlowDeathBackend())
+    assert m.kill(s.id) is True
+    got = m.get(s.id)
+    # Either evicted (404 path) or retained-but-dead (409 path) — never alive.
+    assert got is None or got.alive is False
