@@ -23,6 +23,7 @@ import {
   type ThreadRow,
 } from "@/components/agents/identity";
 import { SetupCard, type DynamicAgentFull } from "@/components/agents/SetupCard";
+import { RosterStrip } from "@/components/agents/RosterStrip";
 import { PanelPicker } from "@/components/agents/PanelPicker";
 import { ThreadView } from "@/components/agents/ThreadView";
 
@@ -167,6 +168,11 @@ export default function AgentsPage() {
           onRemotesChanged={reloadRemotes}
         />
       </Reveal>
+
+      {/* Roster (v1.139.0) — who can take delegated work. Renders nothing on
+          daemons that predate GET /agents/roster (it carries its own Reveal,
+          so hiding leaves no empty gap). */}
+      <RosterStrip />
 
       {/* The threads area */}
       <Reveal>

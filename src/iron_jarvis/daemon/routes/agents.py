@@ -166,6 +166,38 @@ def register(app: FastAPI, d) -> None:
         )
         return {"name": rec.name, "provider": rec.provider, "model": rec.model}
 
+    @app.get("/agents/roster")
+    def agents_roster() -> dict[str, Any]:
+        """The capability roster (v1.139.0): every agent that could take work
+        — builtin specialists, dynamic ("custom:<slug>") and remote
+        ("remote:<name>") agents — with delegability, live health, and honest
+        measured stats (sample counts always included; None when unmeasured).
+        Read-only composition over existing data; the dashboard renders each
+        entry's ``line`` verbatim."""
+        try:
+            from ...agents.roster import build_roster
+
+            entries = build_roster(d.platform)
+        except Exception:  # noqa: BLE001 — an empty roster beats a 500
+            entries = []
+        roster = []
+        for e in entries:
+            try:
+                roster.append(
+                    {
+                        "name": e.name,
+                        "kind": e.kind,
+                        "description": e.description,
+                        "delegable": e.delegable,
+                        "healthy": e.healthy,
+                        "stats": e.stats,
+                        "line": e.line(),
+                    }
+                )
+            except Exception:  # noqa: BLE001 — one bad entry must not drop the rest
+                continue
+        return {"roster": roster}
+
     # --- Remote agents (run elsewhere) ------------------------------------
     # Registered BEFORE the /agents/{name} routes below so the literal
     # /agents/remote path is never swallowed by the {name} param match.

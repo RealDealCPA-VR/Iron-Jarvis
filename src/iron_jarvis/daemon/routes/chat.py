@@ -48,6 +48,7 @@ from ..chat_turn import (
     _resolve_armed_tools,
     _resolve_connectors,
     _sanitize_draft,
+    _validated_escalate_agent,
     run_chat_turn,
 )
 
@@ -988,6 +989,24 @@ def register(app: FastAPI, d) -> None:
                 "FOLLOW this playbook for this request.\n" + sk.instructions[:8000]
             )
 
+        # CAPABILITY ROSTER (v1.139.0): who could take escalated work — after
+        # the skills section, before the tools block, so the model can NAME a
+        # specialist in escalate_to_agent's optional ``agent`` arg. Skipped
+        # cleanly when empty; a missing/broken roster module never breaks a
+        # turn.
+        # MIRROR NOTE (lock-step): this is an inline copy of the same block in
+        # chat_turn.run_chat_turn. The stream prep started as a byte-identical
+        # lift of the turn service; from v1.139.0 it is kept in lock-step BY
+        # HAND — edit both sites or neither.
+        try:
+            from ...agents.roster import roster_block
+
+            _roster = roster_block(d.platform)
+            if _roster:
+                system += "\n\n" + _roster
+        except Exception:  # noqa: BLE001 — the roster must never break a turn
+            pass
+
         msgs: list[LLMMessage] = []
         for m in body.messages[-30:]:
             role = m.role if m.role in ("user", "assistant") else "user"
@@ -1127,6 +1146,7 @@ def register(app: FastAPI, d) -> None:
             stopped_note = ""                   # round budget cut off tool calls
             escalate = False        # the turn asked for the full agent
             escalate_reason = ""
+            escalate_agent = None   # v1.139.0: validated roster target (None = default)
             workflow_draft = None           # proposed reusable workflow (v1.120.0)
             made_docs: list[str] = []           # documents created/edited (preview)
             reply_text = ""
@@ -1207,9 +1227,15 @@ def register(app: FastAPI, d) -> None:
                     )
                     if esc_call is not None:
                         escalate = True
-                        escalate_reason = str(
-                            (esc_call.arguments or {}).get("reason") or ""
-                        ).strip()
+                        _esc_args = esc_call.arguments or {}
+                        escalate_reason = str(_esc_args.get("reason") or "").strip()
+                        # v1.139.0 roster target — validated; None keeps every
+                        # caller default. MIRROR NOTE (lock-step): same
+                        # extraction as chat_turn.run_chat_turn's escalate
+                        # branch — edit both or neither.
+                        escalate_agent = _validated_escalate_agent(
+                            d.platform, _esc_args.get("agent")
+                        )
                         break
                     if not calls or not armed:
                         break
@@ -1353,6 +1379,9 @@ def register(app: FastAPI, d) -> None:
                 "documents": made_docs,
                 "escalate": escalate,
                 "escalate_reason": escalate_reason,
+                # v1.139.0 pinned contract change: the validated roster target
+                # (None = the caller's default builder), same as POST /chat.
+                "escalate_agent": escalate_agent,
                 "workflow_draft": workflow_draft,
                 "usage": {"input_tokens": usage_in, "output_tokens": usage_out},
             })

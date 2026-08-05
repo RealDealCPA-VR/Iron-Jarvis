@@ -377,10 +377,13 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
     r = client.post("/chat", json={"messages": [{"role": "user", "content": "hi"}]})
     assert r.status_code == 200
     body = r.json()
+    # v1.139.0 (capability roster): the response dict grew EXACTLY ONE key —
+    # "escalate_agent" (the validated roster target; None = caller default).
+    # This is the one deliberate, pinned contract change of that arc.
     assert set(body.keys()) == {
         "reply", "provider", "model", "attached", "images", "skill",
         "tools_used", "documents", "auto_armed", "escalate",
-        "escalate_reason", "workflow_draft",
+        "escalate_reason", "escalate_agent", "workflow_draft",
     }
     assert body["reply"] == "hello"
     assert body["provider"] == "mock" and body["model"] == "mock"
@@ -389,6 +392,7 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
     assert body["tools_used"] == [] and body["documents"] == []
     assert body["auto_armed"] == []
     assert body["escalate"] is False and body["escalate_reason"] == ""
+    assert body["escalate_agent"] is None
     assert body["workflow_draft"] is None
 
 

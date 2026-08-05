@@ -139,6 +139,10 @@ interface ChatMessage {
    *  reason, shown in place of the reply while the agent works. There are no
    *  modes to pick, so the hand-off has to be visible or it reads as a stall. */
   escalated?: string;
+  /** Who the turn handed itself to, as a human phrase ("the researcher",
+   *  "your invoice-chaser agent") — only set when a NON-default roster target
+   *  was actually chosen (v1.139.0), so the bubble names the specialist. */
+  escalatedTo?: string;
   /** Display names of files attached to this (user) message — footer chips. */
   attachmentNames?: string[];
   /** Uploaded paths of those attachments, so a Regenerate can re-ground on them
@@ -196,8 +200,27 @@ interface ChatResponse {
   /** The turn asked to be re-run as a full agent session (v1.108.0). */
   escalate?: boolean;
   escalate_reason?: string;
+  /** Validated roster name for the hand-off (v1.139.0): "researcher",
+   *  "custom:<slug>", "remote:<name>" — null/absent keeps the builder default. */
+  escalate_agent?: string | null;
   /** The turn proposed a reusable workflow instead of prose (v1.120.0). */
   workflow_draft?: WorkflowDraft | null;
+}
+
+/** Human phrase for a roster agent name (v1.139.0), used by the hand-off
+ *  bubble: "researcher" → "the researcher"; "custom:invoice-chaser" → "your
+ *  invoice-chaser agent"; "remote:hermes-mac-mini" → "the hermes-mac-mini
+ *  remote agent". Plain and honest — no prefixes shown to the user. */
+function agentPhrase(name: string): string {
+  const custom = name.startsWith("custom:");
+  const remote = name.startsWith("remote:");
+  const bare = (custom || remote ? name.slice(name.indexOf(":") + 1) : name).trim();
+  // A degenerate name (empty slug etc.) can only arrive on a broken wire —
+  // degrade to a sane phrase, never "your  agent" / "the undefined".
+  if (!bare) return "a specialist agent";
+  if (custom) return `your ${bare} agent`;
+  if (remote) return `the ${bare} remote agent`;
+  return `the ${bare}`;
 }
 
 interface PersonaOption {
@@ -2905,6 +2928,7 @@ export default function ChatPage() {
           documents: madeDocs,
           escalate,
           escalateReason,
+          escalateAgent,
           workflowDraft,
         } = await stream.run(body, (_delta, full) => feedTTS(full, false));
         if (chatGenRef.current !== gen) return; // torn down mid-stream
@@ -2964,6 +2988,9 @@ export default function ChatPage() {
               atts,
               reason: escalateReason || "this one needs the full agent",
             },
+            // The turn's own validated roster pick (v1.139.0); null/absent
+            // keeps the builder default.
+            ...(escalateAgent ? { agentType: escalateAgent } : {}),
           });
           return;
         }
@@ -3064,6 +3091,9 @@ export default function ChatPage() {
             atts,
             reason: res.escalate_reason || "this one needs the full agent",
           },
+          // The turn's own validated roster pick (v1.139.0); null/absent
+          // keeps the builder default.
+          ...(res.escalate_agent ? { agentType: res.escalate_agent } : {}),
         });
         return;
       }
@@ -3145,6 +3175,10 @@ export default function ChatPage() {
             escalated:
               res.escalate_reason ||
               "working on it — the full reply will land here and on your phone",
+            // NO escalatedTo here: POST /comm/threads/{id}/send spawns its
+            // long-standing supervisor default (routes/comm.py) and does NOT
+            // read escalate_agent — naming the turn's pick would put a
+            // specialist's name on a session the supervisor actually runs.
           },
         ]);
         return;
@@ -3239,7 +3273,15 @@ export default function ChatPage() {
   /** AGENT MODE: the original session flow (wait:false + live steps + finalize). */
   async function sendAgent(
     message: string,
-    opts: { escalatedFrom?: { atts: UploadedFile[]; reason: string } } = {},
+    opts: {
+      escalatedFrom?: { atts: UploadedFile[]; reason: string };
+      /** Roster target the escalating turn chose (v1.139.0): a builtin name
+       *  rides as the opening session's agent_type, "custom:<slug>" opens via
+       *  POST /agents/{slug}/spawn, "remote:<name>" degrades to the default
+       *  (no session-shaped run exists for remotes). Absent → "builder",
+       *  exactly today's behavior. */
+      agentType?: string;
+    } = {},
   ) {
     // ESCALATION (v1.108.0): chat already appended the user's bubble and
     // already consumed the attachment chips, so re-doing either would show the
@@ -3263,11 +3305,40 @@ export default function ChatPage() {
       ? `Use the "${activeSkill}" skill for this — load it with skill_load first.\n\n`
       : "";
     const task = skillLine + message + attachLines;
+    // A NON-default roster pick only applies when this turn OPENS the session
+    // — `continue` stays on the existing session's agent, so naming a
+    // specialist there would be a lie the transcript can't cash. And the pick
+    // must be one this page can actually honor: POST /sessions understands
+    // builtin types ONLY (an unknown agent_type SILENTLY coerces to builder —
+    // daemon/app.py _agent_type), a dynamic "custom:<slug>" runs through
+    // POST /agents/{slug}/spawn (the same stored-definition + runtime path
+    // the daemon itself uses for its own escalations), and a "remote:<name>"
+    // has no session-shaped run at all — it stays on the unnamed builder
+    // default, the same call the daemon's comm escalation makes for remotes.
+    const picked = (!sessionId && opts.agentType) || "";
+    // Slug stripped from the CANONICAL name (roster.py's NAME CONTRACT: the
+    // remainder after ":" is the registry key, original casing preserved).
+    const customSlug = picked.startsWith("custom:")
+      ? picked.slice("custom:".length)
+      : "";
+    const builtinPick =
+      picked && !picked.includes(":") && picked !== "builder" ? picked : "";
+    // The hand-off bubble names ONLY what will truly run.
+    const target = customSlug ? picked : builtinPick || null;
     setMessages((prev) =>
       esc
         ? // The bubble is already there — mark WHY the turn grew instead, so the
-          // hand-off is visible rather than an unexplained pause.
-          [...prev, { role: "assistant" as const, content: "", escalated: esc.reason }]
+          // hand-off is visible rather than an unexplained pause. When a
+          // specialist was chosen, name it (v1.139.0).
+          [
+            ...prev,
+            {
+              role: "assistant" as const,
+              content: "",
+              escalated: esc.reason,
+              ...(target ? { escalatedTo: agentPhrase(target) } : {}),
+            },
+          ]
         : [
             ...prev,
             {
@@ -3292,16 +3363,31 @@ export default function ChatPage() {
         // the agent inherits the conversation instead of starting cold.
         const { provider, model } = splitChoice(choice);
         const openingTask = recap ? `${recap}\n\n---\n\n${task}` : task;
-        session = await post<SessionView>("/sessions", {
-          task: openingTask,
-          agent_type: "builder",
-          wait: false,
-          ...(provider ? { provider } : {}),
-          ...(model ? { model } : {}),
-          // Context spine: the run lands in the selected project (continues
-          // inherit it server-side, so only the opener needs the tag).
-          ...(projectIdRef.current ? { project_id: projectIdRef.current } : {}),
-        });
+        session = customSlug
+          ? // The escalating turn picked one of YOUR agents (v1.139.0): spawn
+            // its stored definition — prompt, tool allowlist, and its OWN
+            // pinned provider/model, which is why the model picker and the
+            // project tag deliberately don't ride along here. Returns a flat
+            // SessionView (wait:false parity with POST /sessions), so the
+            // chaining below is identical.
+            await post<SessionView>(
+              `/agents/${encodeURIComponent(customSlug)}/spawn`,
+              { task: openingTask, wait: false },
+            )
+          : await post<SessionView>("/sessions", {
+              task: openingTask,
+              // The escalating turn's builtin pick (already roster-validated
+              // by the daemon); absent keeps the builder default (v1.139.0).
+              agent_type: builtinPick || "builder",
+              wait: false,
+              ...(provider ? { provider } : {}),
+              ...(model ? { model } : {}),
+              // Context spine: the run lands in the selected project (continues
+              // inherit it server-side, so only the opener needs the tag).
+              ...(projectIdRef.current
+                ? { project_id: projectIdRef.current }
+                : {}),
+            });
       }
       // ALWAYS chain forward to the returned session id: `continue` spawns a NEW
       // session (recapping the old one), so the next turn must continue from it —
@@ -4301,7 +4387,14 @@ export default function ChatPage() {
                                 className="mt-0.5 shrink-0 text-accent-soft"
                               />
                               <span>
-                                Taking this on properly — {m.escalated}.
+                                {m.escalatedTo ? (
+                                  <>
+                                    Handing this to {m.escalatedTo} —{" "}
+                                    {m.escalated}.
+                                  </>
+                                ) : (
+                                  <>Taking this on properly — {m.escalated}.</>
+                                )}
                               </span>
                             </div>
                           </div>

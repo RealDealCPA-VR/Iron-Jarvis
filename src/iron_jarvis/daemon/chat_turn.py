@@ -23,11 +23,15 @@ HTTP route re-raises these as-is; a headless caller must catch
 crashing its loop. On success it returns the response dict POST /chat has
 always returned: {reply, provider, model, attached, images, skill,
 tools_used, documents, auto_armed, escalate, escalate_reason,
-workflow_draft}.
+escalate_agent, workflow_draft}.
 
 NOTE: ``routes/chat.py`` imports the helpers below back from this module —
 POST /chat/stream deliberately keeps its own inline copy of the loop (SSE
 stays out of this arc) and calls these helpers with the same signatures.
+The stream copy started as a byte-identical lift; since the v1.139.0
+capability-roster edits the two are kept in LOCK-STEP by hand — every edit
+to the prep or the escalate branch here must land in the stream copy too
+(each site carries a mirror comment at the exact spot).
 """
 
 from __future__ import annotations
@@ -217,11 +221,43 @@ _ESCALATE_SPEC = {
                     "One short line, shown to the user, on what this needs that "
                     "you cannot do here (e.g. 'needs to edit several files')."
                 ),
-            }
+            },
+            # v1.139.0 capability roster: OPTIONAL — the model may NAME who
+            # should take the escalated work. Validated post-call through
+            # agents/roster.resolve_target; anything unknown/offline/non-
+            # delegable degrades to None, i.e. every caller's default builder.
+            "agent": {
+                "type": "string",
+                "description": (
+                    "Optional: who should take this — a name from 'Who can "
+                    "take this work'. Leave out for the default builder."
+                ),
+            },
         },
         "required": ["reason"],
     },
 }
+
+
+def _validated_escalate_agent(platform, raw) -> "str | None":
+    """The escalate exit's optional ``agent`` argument, validated through the
+    capability roster (agents/roster.resolve_target — case-insensitive, trims,
+    accepts bare slugs for the prefixed forms). Returns the roster entry's
+    CANONICAL name, or None for anything absent/unknown/offline/non-delegable
+    — and None is the contract for "caller default unchanged": the dashboard
+    keeps spawning its builder, comm keeps its supervisor. The roster module
+    never raises per its API, but a missing/broken module must degrade to the
+    default too, so the import + call are guarded anyway."""
+    name = str(raw or "").strip()
+    if not name:
+        return None
+    try:
+        from ..agents.roster import resolve_target
+
+        entry = resolve_target(platform, name)
+    except Exception:  # noqa: BLE001 — validation must never break a turn
+        return None
+    return entry.name if entry is not None else None
 
 #: The second declared EXIT (v1.120.0): the model proposes a REUSABLE workflow
 #: instead of describing steps in prose. Like escalate_to_agent, nothing
@@ -661,6 +697,22 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
             "FOLLOW this playbook for this request.\n" + sk.instructions[:8000]
         )
 
+    # CAPABILITY ROSTER (v1.139.0): who could take escalated work — injected
+    # after the skills section, before the tools block, so the model can NAME
+    # a specialist in escalate_to_agent's optional ``agent`` arg. Cheap and
+    # compact (roster_block is bounded); skipped cleanly when empty, and a
+    # missing/broken roster module must never break a turn.
+    # MIRROR NOTE (lock-step): routes/chat.py POST /chat/stream carries an
+    # inline copy of this block — edit both or neither.
+    try:
+        from ..agents.roster import roster_block
+
+        _roster = roster_block(platform)
+        if _roster:
+            system += "\n\n" + _roster
+    except Exception:  # noqa: BLE001 — the roster must never break a turn
+        pass
+
     # Full multi-turn history (bounded), images ride on the LAST user turn.
     msgs: list[LLMMessage] = []
     for m in body.messages[-30:]:
@@ -834,6 +886,7 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     stopped_note = ""  # honest note when the round budget cuts off tool calls
     escalate = False        # the turn asked for the full agent
     escalate_reason = ""
+    escalate_agent = None   # v1.139.0: validated roster target (None = default)
     workflow_draft = None   # the turn proposed a reusable workflow (v1.120.0)
     made_docs: list[str] = []  # documents this turn created/edited (preview)
     try:
@@ -863,9 +916,16 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
             )
             if esc_call is not None:
                 escalate = True
-                escalate_reason = str(
-                    (esc_call.arguments or {}).get("reason") or ""
-                ).strip()
+                _esc_args = esc_call.arguments or {}
+                escalate_reason = str(_esc_args.get("reason") or "").strip()
+                # v1.139.0: the model may NAME who takes it. Validate through
+                # the roster; anything that doesn't resolve stays None so
+                # every caller's default behavior is unchanged.
+                # MIRROR NOTE (lock-step): the stream loop in routes/chat.py
+                # carries this same extraction — edit both or neither.
+                escalate_agent = _validated_escalate_agent(
+                    platform, _esc_args.get("agent")
+                )
                 break
             if not calls or not armed:
                 break
@@ -1014,5 +1074,10 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         # never asked to pick a mode.
         "escalate": escalate,
         "escalate_reason": escalate_reason,
+        # v1.139.0 (the ONE pinned contract change of the roster arc): the
+        # validated escalate target from the roster, or None — None means
+        # every caller's default (the dashboard's builder, comm's supervisor)
+        # applies exactly as before.
+        "escalate_agent": escalate_agent,
         "workflow_draft": workflow_draft,
     }

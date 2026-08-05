@@ -656,20 +656,35 @@ class InboundPoller:
         # ESCALATE: ack now, run the normal supervised session (same
         # orchestrator + permission engine — a remote sender gains no power),
         # then deliver the summary here AND onto the thread.
+        # v1.139.0 informed delegation: a turn that NAMED who should take it
+        # (``escalate_agent``) overrides the hard-coded supervisor default —
+        # re-validated through the roster here; None keeps the default
+        # byte-for-byte (see ``_escalate_plan``).
         task = self.recap_task(history, text)
+        agent_type, dyn_def, esc_provider, esc_model = self._escalate_plan(result)
         if tid:
             tid = self._safe_append(
                 tid, "assistant", ESCALATE_ACK,
                 channel=name, sender_id=msg.sender_id, display=display,
             ) or tid
         await self.send_chunked(ch, ESCALATE_ACK, chat_id=msg.reply_to)
-        session = await self.orchestrator.create_session(task, self.agent_type)
+        _spawn_kwargs: dict[str, Any] = {}
+        if esc_provider:
+            _spawn_kwargs["provider"] = esc_provider
+        if esc_model:
+            _spawn_kwargs["model"] = esc_model
+        session = await self.orchestrator.create_session(
+            task, agent_type, **_spawn_kwargs
+        )
         await self._publish(
             EventType.COMM_RECEIVED,
             {"channel": name, "sender": str(msg.sender_id), "task": text},
             session_id=session.id,
         )
-        session = await self.orchestrator.run_session(session.id)
+        if dyn_def is not None:
+            session = await self._run_dynamic_session(session, dyn_def)
+        else:
+            session = await self.orchestrator.run_session(session.id)
         summary = (session.summary or "(no result)").strip()
         if tid:
             tid = self._safe_append(
@@ -684,6 +699,81 @@ class InboundPoller:
             "session_id": session.id,
             "sent": sent,
         }
+
+    # -- informed escalation (v1.139.0) ------------------------------------
+    def _escalate_plan(self, result: dict[str, Any]) -> tuple[Any, Any, Any, Any]:
+        """WHO takes the escalated session, as ``(agent_type,
+        dynamic_definition | None, provider | None, model | None)``.
+
+        The default — ``(self.agent_type, None, None, None)`` — is the
+        long-standing hard-coded supervisor, returned byte-for-byte whenever
+        the turn named nobody, the name does not RE-validate through the
+        roster right now (the value crossed a dict boundary, and health can
+        change between the turn and the spawn), or the target cannot run as a
+        comm session:
+
+        * builtin → that specialist type runs the session directly;
+        * dynamic ("custom:<slug>") → its stored definition runs through the
+          agent runtime (the same path POST /agents/{name}/spawn uses),
+          honoring the record's pinned provider/model;
+        * remote ("remote:<name>") → stays on the supervisor default — a
+          remote ask returns bare text, not the supervised session the comm
+          reply contract is built on, and the supervisor reaches remotes
+          itself via delegation.
+
+        Never raises.
+        """
+        default = (self.agent_type, None, None, None)
+        name = str((result or {}).get("escalate_agent") or "").strip()
+        if not name or self.platform is None:
+            return default
+        try:
+            from ..agents.roster import resolve_target
+
+            entry = resolve_target(self.platform, name)
+        except Exception:  # noqa: BLE001 — roster trouble keeps the default
+            return default
+        if entry is None:
+            return default
+        if entry.kind == "builtin":
+            try:
+                return (AgentType(entry.name), None, None, None)
+            except ValueError:
+                return default
+        if entry.kind == "dynamic":
+            try:
+                slug = entry.name.split(":", 1)[-1]
+                registry = getattr(self.platform, "agents_registry", None)
+                definition = (
+                    registry.definition(slug) if registry is not None else None
+                )
+                if definition is None:
+                    return default
+                rec = registry.get(slug)
+                provider = (rec.provider or None) if rec is not None else None
+                model = (rec.model or None) if rec is not None else None
+                return (definition.type, definition, provider, model)
+            except Exception:  # noqa: BLE001 — a broken record keeps the default
+                return default
+        return default
+
+    async def _run_dynamic_session(self, session: Any, definition: Any) -> Any:
+        """Run an escalated session on a DYNAMIC agent's stored definition —
+        the same runtime path POST /agents/{name}/spawn uses (``run_session``
+        only knows builtin definitions), with the same status reflection."""
+        from ..agents.runtime import AgentRuntime
+        from ..core.models import AgentState, SessionStatus
+
+        run = await AgentRuntime(self.platform).run(session, definition)
+        session.status = (
+            SessionStatus.COMPLETED
+            if run.state is AgentState.COMPLETED
+            else SessionStatus.FAILED
+        )
+        session.summary = run.result
+        session.finished_at = utcnow()
+        self.orchestrator._save(session)
+        return session
 
     # -- pending prompts (v1.137.0) ----------------------------------------
     def _run_state(self, run_id: str) -> str:

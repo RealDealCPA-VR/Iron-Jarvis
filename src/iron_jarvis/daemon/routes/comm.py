@@ -440,11 +440,30 @@ def register(app: FastAPI, d) -> None:
             _append_reply(ESCALATE_ACK)
             sent = await poller.send_chunked(ch, ESCALATE_ACK, chat_id=sender_id)
             task = poller.recap_task(history, text)
-            session = await d.orchestrator.create_session(task, poller.agent_type)
+            # v1.139.0 informed delegation — MIRRORS comm/inbound.py's escalate
+            # path: a turn that NAMED who should take it (``escalate_agent``,
+            # re-validated through the roster by ``_escalate_plan``) overrides
+            # the hard-coded supervisor default; builtin + dynamic targets are
+            # honored (a dynamic record's pinned provider/model included),
+            # remote targets keep the supervisor default for the same rationale
+            # (a remote ask returns bare text, not a supervised session), and
+            # None keeps the default byte-for-byte.
+            agent_type, dyn_def, esc_provider, esc_model = poller._escalate_plan(result)
+            _spawn_kwargs: dict[str, Any] = {}
+            if esc_provider:
+                _spawn_kwargs["provider"] = esc_provider
+            if esc_model:
+                _spawn_kwargs["model"] = esc_model
+            session = await d.orchestrator.create_session(
+                task, agent_type, **_spawn_kwargs
+            )
 
             async def _finish() -> None:
                 try:
-                    s = await d.orchestrator.run_session(session.id)
+                    if dyn_def is not None:
+                        s = await poller._run_dynamic_session(session, dyn_def)
+                    else:
+                        s = await d.orchestrator.run_session(session.id)
                     summary = (s.summary or "(no result)").strip()
                 except Exception as exc:  # noqa: BLE001 — deliver, don't vanish
                     summary = f"I hit a problem: {type(exc).__name__}: {exc}"

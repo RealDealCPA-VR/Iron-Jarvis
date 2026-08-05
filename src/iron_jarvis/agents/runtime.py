@@ -15,7 +15,7 @@ from pathlib import Path
 from ..core.db import session_scope
 from ..core.events import EventType
 from ..core.ids import utcnow
-from ..core.models import AgentRun, AgentState, Session
+from ..core.models import AgentRun, AgentState, AgentType, Session
 from ..providers.adapters.base import LLMMessage
 from ..tools.base import ToolContext
 from . import decompose as _decompose
@@ -213,6 +213,22 @@ class AgentRuntime:
             try:
                 system_prompt = learning.apply_to_prompt(system_prompt)
             except Exception:  # never block a run on the learning layer
+                pass
+        # CAPABILITY ROSTER (v1.139.0): ONLY the agent types that make
+        # delegation choices see the roster — the supervisor picks `delegate`
+        # targets, the planner assigns work to agents; a builder/reviewer run
+        # would just carry the noise. A dynamic agent BASED on one of these
+        # types inherits the injection (agent_def.type is its base type).
+        # Same precedent as the skills + learning injections above: bounded,
+        # best-effort, never blocks a run.
+        if agent_def.type in (AgentType.SUPERVISOR, AgentType.PLANNER):
+            try:
+                from .roster import roster_block
+
+                _roster = roster_block(self.p)
+                if _roster:
+                    system_prompt += "\n\n" + _roster
+            except Exception:  # noqa: BLE001 — the roster must never break a run
                 pass
         # CONTEXT SPINE: a session tagged into a project carries the project's
         # brief + recent activity, so chat/terminals/workflows share one thread
