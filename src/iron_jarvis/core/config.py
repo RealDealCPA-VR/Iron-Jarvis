@@ -54,7 +54,6 @@ def default_permissions() -> dict[str, str]:
         "browser_use": "deny",  # computer-control capability — never default-allow
         "mcp_call": "ask",
         "create_document": "deny",  # superseded by write_document — fail-closed
-        "extract_pdf": "allow",
         "image_analysis": "deny",  # no tool yet — fail-closed
         "delete_file": "ask",
         "internet": "ask",
@@ -90,6 +89,10 @@ def default_permissions() -> dict[str, str]:
         "read_document": "allow",
         "write_document": "allow",
         "extract_pdf": "allow",
+        # Page-level PDF ops (arrange/split): inputs read-gated, outputs are
+        # NEW workspace files only (never the source) and TX-01 undoable.
+        "pdf_arrange": "allow",
+        "pdf_split": "allow",
         # Confirmed redaction: the scan is read-only; redact_pii writes only a
         # NEW .redacted copy (never the source) and is TX-01 undoable.
         "redact_scan": "allow",

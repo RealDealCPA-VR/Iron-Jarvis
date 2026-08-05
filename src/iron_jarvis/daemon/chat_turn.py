@@ -788,6 +788,13 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                 else ""
             )
             + (
+                "\nPDF PAGES: for page-level PDF work (merge/split/rotate/"
+                "reorder) use pdf_arrange/pdf_split — they write NEW files"
+                " and never modify the original."
+                if any(t in ("pdf_arrange", "pdf_split") for t in armed)
+                else ""
+            )
+            + (
                 f"\nYour file tools operate INSIDE the folder {tool_ws}; "
                 "read, edit, and create files there directly, and use the absolute paths "
                 "that file_search returns."

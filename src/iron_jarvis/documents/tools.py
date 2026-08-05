@@ -911,6 +911,7 @@ def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:
     optional and powers the scanned-PDF OCR fallback in ``read_document``;
     without it the tools behave exactly as before (no platform dependency)."""
     from .excel_tools import excel_tools
+    from .pdf_tools import pdf_page_tools
 
     return [
         ReadDocumentTool(router_resolver),
@@ -922,4 +923,5 @@ def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:
         RedactPiiTool(),
         BatchDocumentsTool(router_resolver),
         *excel_tools(),
+        *pdf_page_tools(),
     ]

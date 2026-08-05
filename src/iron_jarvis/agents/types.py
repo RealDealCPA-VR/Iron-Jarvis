@@ -61,6 +61,9 @@ _DOCUMENT_TOOLS = [
     "excel_accounts_diff",
     # Confirmed redaction: scan → the user approves → targeted removal.
     "redact_scan", "redact_pii",
+    # Page-level PDF work (v1.138.0): merge/split/rotate/reorder into NEW
+    # workspace files — sources are never modified, every write is undoable.
+    "pdf_arrange", "pdf_split",
 ]
 # Self-correction: record preferences learned mid-task; recall past lessons.
 _LEARNING_TOOLS = ["remember_preference", "recall_lessons"]

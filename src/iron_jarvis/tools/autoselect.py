@@ -44,6 +44,11 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         # redact_scan is the read-only confirm-first step.
         "redact_pii",
         "redact_scan",
+        # Page-level PDF work (merge/split/rotate/reorder/crop): writes only
+        # NEW workspace files, never touches the source PDFs (inputs are
+        # read-gated; outputs undoable).
+        "pdf_arrange",
+        "pdf_split",
         # Structured spreadsheet work (read anywhere; edits workspace-confined
         # + undoable). profile/query are engine-computed reads — exact figures
         # instead of model arithmetic (the local-model failure mode);
@@ -173,6 +178,21 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             re.IGNORECASE,
         ),
         {"convert_document": 7},
+    ),
+    # Page-level PDF work — a page verb and a page-y noun (pdf/page/scan) in
+    # either order: "merge these pdfs", "the pdf needs splitting", "split the
+    # scan into separate pages", "rotate the last page". Verb-only sentences
+    # ("merge these cells", "split the string") deliberately do NOT fire: one
+    # of the nouns must appear.
+    (
+        re.compile(
+            r"\b(merge|split|rotate|reorder|rearrange|combine|reverse)\b"
+            r".{0,40}\b(?:pdfs?|pages?|scans?)\b|"
+            r"\b(?:pdfs?|pages?|scans?)\b.{0,40}\b(merge|split|rotate|reorder|"
+            r"rearrange|combine|reverse)\w*\b",
+            re.IGNORECASE,
+        ),
+        {"pdf_arrange": 8, "pdf_split": 6},
     ),
     # --- spreadsheets -----------------------------------------------------
     (
