@@ -22,6 +22,7 @@ PR that ships it.
 | Where alerts go | **Notifications** (page) / **destination** (row) | channels |
 | A destination you can talk back to | **two-way destination** | gateway, messaging platform |
 | The one-tap connect gallery | **Directory** | marketplace |
+| Talking it out with several agents at once (the Agents page; each conversation is a *thread*, its seated agents the *panel*) | **round-table** | — |
 
 Two-way is a per-destination *upgrade*, not a new noun (decided in the
 messaging plan, shipped v1.136.0): the toggle that creates one reads

@@ -88,6 +88,13 @@ class EventType:
     # messages = the thread's NEW message count after the append. Published
     # only for daemon-origin writes; desktop PUT saves don't self-notify.
     CHAT_THREAD_UPDATED = "chat.thread_updated"
+    # Live round-tables (v1.140.0): the agent-thread store persisted one round
+    # entry — the user's turn or one participant's answer — so an open
+    # Agents-page thread can render the round AS it unfolds (agents/threads.py
+    # publishes after every atomic per-entry append). {thread_id, who,
+    # entries} — who = "user" or the participant key "<source>:<name>";
+    # entries = the thread's NEW total message count after the append.
+    AGENT_THREAD_UPDATED = "agent_thread.updated"
 
 
 @dataclass

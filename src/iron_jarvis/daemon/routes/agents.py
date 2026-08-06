@@ -392,7 +392,15 @@ def register(app: FastAPI, d) -> None:
     async def agent_thread_say(thread_id: str, body: dict) -> dict[str, Any]:
         """One speaking round: the user's message (optional — empty continues
         the panel), then every participant answers in order, each seeing the
-        replies before it. Failures are honest per-participant entries."""
+        replies before it. Failures are honest per-participant entries.
+
+        LIVE + DIRECTED (v1.140.0): entries persist one-by-one and each
+        publishes AGENT_THREAD_UPDATED {thread_id, who, entries} so the UI can
+        follow along; @-mentions in the message (name / role / key's name
+        part, case-insensitive) restrict who speaks this round — see
+        AgentThreads.run_round for the exact rule. Response is additive:
+        {"entries": [the full round], "spoke": [keys that answered, honest
+        errors included], "skipped": [remote keys skipped as offline]}."""
         try:
             return await _threads().run_round(
                 thread_id, str(body.get("message") or ""), d

@@ -7,7 +7,7 @@
 // "87%"). Older daemons don't serve the endpoint, so the whole section simply
 // doesn't exist rather than erroring over a feature the daemon predates.
 
-import { WifiOff } from "lucide-react";
+import { MessageCircle, WifiOff } from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { Card } from "@/components/ui";
 import { Reveal } from "@/components/motion";
@@ -82,7 +82,14 @@ function statsText(e: RosterEntry): string {
  * ANY fetch error (a pre-roster daemon 404s here — hiding beats a scary
  * error), and on an empty roster.
  */
-export function RosterStrip() {
+export function RosterStrip({
+  onTalk,
+}: {
+  /** The Talk button: open (or start) a 1:1 thread with this agent at the
+   *  round-table. Only offered for delegable + healthy entries; omit the
+   *  prop (older daemons without thread routes) and no button renders. */
+  onTalk?: (kind: AgentSource, name: string) => void;
+} = {}) {
   const { data, error } = useApi<{ roster?: RosterEntry[] }>("/agents/roster");
   const entries = (data?.roster ?? []).filter(
     (e): e is RosterEntry => Boolean(e) && typeof e.name === "string",
@@ -156,6 +163,16 @@ export function RosterStrip() {
               <span className="shrink-0 text-[11px] tabular-nums text-zinc-500">
                 {statsText(e)}
               </span>
+              {onTalk && e.delegable && e.healthy && (
+                <button
+                  type="button"
+                  onClick={() => onTalk(e.kind, shown)}
+                  title={`Talk with ${shown} at the round-table`}
+                  className="btn-ghost shrink-0 px-2 py-1 text-[11px]"
+                >
+                  <MessageCircle size={12} /> Talk
+                </button>
+              )}
             </li>
           );
         })}

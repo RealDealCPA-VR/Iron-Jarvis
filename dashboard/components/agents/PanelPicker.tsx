@@ -4,6 +4,10 @@
 // sources (Built-in / Yours / Remote) as selectable cards; selecting one opens
 // its role picker (preset chips + free text). The assembled panel shows as a
 // horizontal strip of chips — that order is the speaking order.
+//
+// The catalog is roster-fed when the daemon serves GET /agents/roster (the
+// caller maps entries to options, offline remotes included-but-disabled);
+// older daemons fall back to the raw /agents + /agents/remote lists.
 
 import { useEffect, useState, type ReactNode } from "react";
 import {
@@ -15,10 +19,10 @@ import {
   Save,
   Sparkles,
   Users,
+  WifiOff,
   X,
 } from "lucide-react";
 import { ApiError } from "@/lib/api";
-import type { DynamicAgent } from "@/lib/types";
 import { ErrorNote, LoaderInline } from "@/components/ui";
 import {
   AgentAvatar,
@@ -29,14 +33,23 @@ import {
   participantKey,
   type AgentSource,
   type Participant,
-  type RemoteAgentInfo,
 } from "./identity";
 
-/** What the picker needs to offer: the full agent catalog, grouped by source. */
+/** One pickable agent. Offline remotes are shown but not addable — an honest
+ *  seat you can see exists, not a silent omission. */
+export interface PickerOption {
+  source: AgentSource;
+  name: string;
+  description?: string;
+  /** True → shown with the offline pill and not selectable. */
+  offline?: boolean;
+}
+
+/** What the picker offers: the full agent catalog, grouped by source. */
 export interface PickerCatalog {
-  builtin: string[];
-  dynamic: DynamicAgent[];
-  remotes: RemoteAgentInfo[];
+  builtin: PickerOption[];
+  dynamic: PickerOption[];
+  remotes: PickerOption[];
 }
 
 function SourceGroup({
@@ -73,46 +86,62 @@ function SourceGroup({
 }
 
 function AgentPickCard({
-  source,
-  name,
-  description,
+  option,
   selected,
   role,
   onToggle,
   onRole,
 }: {
-  source: AgentSource;
-  name: string;
-  description?: string;
+  option: PickerOption;
   selected: boolean;
   role: string;
   onToggle: () => void;
   onRole: (role: string) => void;
 }) {
+  const { source, name, description, offline } = option;
   const key = participantKey(source, name);
+  // An offline remote can't be ADDED — but if it's already seated (edit mode),
+  // removing it must stay possible.
+  const locked = Boolean(offline) && !selected;
   return (
     <div
       className={`rounded-xl border transition-colors ${
         selected
           ? "border-accent/40 bg-accent/[0.07]"
-          : "border-white/[0.06] bg-white/[0.02] hover:border-white/15"
+          : locked
+            ? "border-white/[0.06] bg-white/[0.02] opacity-55"
+            : "border-white/[0.06] bg-white/[0.02] hover:border-white/15"
       }`}
     >
       <button
         type="button"
         onClick={onToggle}
+        disabled={locked}
         aria-pressed={selected}
-        title={selected ? `Remove ${name} from the panel` : `Add ${name} to the panel`}
-        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left"
+        title={
+          locked
+            ? `${name} is offline — it can't join right now`
+            : selected
+              ? `Remove ${name} from the panel`
+              : `Add ${name} to the panel`
+        }
+        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left disabled:cursor-not-allowed"
       >
         <AgentAvatar agentKey={key} name={name} size="md" />
         <span className="min-w-0 flex-1">
-          <span
-            className={`block truncate text-[13px] font-medium ${
-              selected ? "text-accent-soft" : "text-zinc-100"
-            }`}
-          >
-            {name}
+          <span className="flex items-center gap-1.5">
+            <span
+              className={`truncate text-[13px] font-medium ${
+                selected ? "text-accent-soft" : "text-zinc-100"
+              }`}
+            >
+              {name}
+            </span>
+            {offline && (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-rose-500/25 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-medium text-rose-300">
+                <WifiOff size={10} /> offline
+              </span>
+            )}
           </span>
           {description && (
             <span className="block truncate text-[11px] text-zinc-500">{description}</span>
@@ -213,6 +242,22 @@ export function PanelPicker({
     return selected.find((p) => p.key === key)?.role ?? "";
   }
 
+  function cards(options: PickerOption[]) {
+    return options.map((o) => {
+      const key = participantKey(o.source, o.name);
+      return (
+        <AgentPickCard
+          key={key}
+          option={o}
+          selected={isSelected(key)}
+          role={roleFor(key)}
+          onToggle={() => toggle(o.source, o.name)}
+          onRole={(r) => setRole(key, r)}
+        />
+      );
+    });
+  }
+
   async function submit() {
     if (selected.length === 0 || busy) return;
     setBusy(true);
@@ -269,16 +314,17 @@ export function PanelPicker({
               <input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="optional — e.g. Architecture review"
+                placeholder="optional — named after the panel if left blank"
                 className="field"
               />
             </div>
           )}
 
           <p className="text-[11px] leading-relaxed text-zinc-500">
-            Pick who sits on this panel and give each a role. Every agent answers
-            in the order you pick them, seeing the replies before it — so a
-            critic picked after a builder critiques what the builder just said.
+            Pick who sits at this round-table and give each a role. Every agent
+            answers in the order you pick them, seeing the replies before it —
+            so a critic picked after a builder critiques what the builder just
+            said.
           </p>
 
           <SourceGroup
@@ -287,20 +333,7 @@ export function PanelPicker({
             count={catalog.builtin.length}
             hint="No built-in agents available — is the daemon reachable?"
           >
-            {catalog.builtin.map((name) => {
-              const key = participantKey("builtin", name);
-              return (
-                <AgentPickCard
-                  key={key}
-                  source="builtin"
-                  name={name}
-                  selected={isSelected(key)}
-                  role={roleFor(key)}
-                  onToggle={() => toggle("builtin", name)}
-                  onRole={(r) => setRole(key, r)}
-                />
-              );
-            })}
+            {cards(catalog.builtin)}
           </SourceGroup>
 
           <SourceGroup
@@ -309,44 +342,16 @@ export function PanelPicker({
             count={catalog.dynamic.length}
             hint="No agents of your own yet — create one in “Set up agents”; its persona and model carry into every thread it joins."
           >
-            {catalog.dynamic.map((a) => {
-              const key = participantKey("dynamic", a.name);
-              return (
-                <AgentPickCard
-                  key={key}
-                  source="dynamic"
-                  name={a.name}
-                  description={a.description}
-                  selected={isSelected(key)}
-                  role={roleFor(key)}
-                  onToggle={() => toggle("dynamic", a.name)}
-                  onRole={(r) => setRole(key, r)}
-                />
-              );
-            })}
+            {cards(catalog.dynamic)}
           </SourceGroup>
 
           <SourceGroup
             source="remote"
             icon={<Globe size={13} />}
             count={catalog.remotes.length}
-            hint="No remote agents connected — register one in “Set up agents” to bring an agent running elsewhere onto the panel."
+            hint="No remote agents connected — register one in “Set up agents” to bring an agent running on another computer onto the panel."
           >
-            {catalog.remotes.map((r) => {
-              const key = participantKey("remote", r.name);
-              return (
-                <AgentPickCard
-                  key={key}
-                  source="remote"
-                  name={r.name}
-                  description={r.kind}
-                  selected={isSelected(key)}
-                  role={roleFor(key)}
-                  onToggle={() => toggle("remote", r.name)}
-                  onRole={(role) => setRole(key, role)}
-                />
-              );
-            })}
+            {cards(catalog.remotes)}
           </SourceGroup>
         </div>
 
