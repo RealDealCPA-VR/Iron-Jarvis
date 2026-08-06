@@ -36,6 +36,7 @@ to the prep or the escalate branch here must land in the stream copy too
 
 from __future__ import annotations
 
+import logging
 import re as _re
 
 from fastapi import HTTPException
@@ -46,6 +47,8 @@ from typing import Any
 from ..core.db import session_scope
 from ..core.fs_policy import fs_read_ok
 from ..core.models import AgentState, AgentType
+
+log = logging.getLogger(__name__)
 
 #: Armed-tools cap for one chat turn (the "+" menu). A saved thread setup
 #: honors the same cap, so a stored setup can never arm more than a live turn.
@@ -71,6 +74,81 @@ _MAX_CONNECTORS = 6
 _MAX_CONNECTOR_TOOLS = 24
 #: Char budget for the toggled-memory grounding block.
 _CONNECTOR_MEM_CHARS = 1500
+
+#: A retrieval query below this many fabric tokens is too thin to recall on —
+#: short follow-ups ("and Q2?", "yes do that") accrete earlier user messages
+#: until they clear it (see _compose_recall_query).
+_RECALL_QUERY_MIN_TOKENS = 6
+#: Cap on how many user messages the composed recall query may span.
+_RECALL_QUERY_MAX_MESSAGES = 3
+#: Chars kept per PREPENDED (earlier) user message. The LAST user message is
+#: never clipped — a long last message must stay byte-identical to the
+#: pre-v1.141.0 query — but an accreted earlier message can be a 12k-char
+#: paste, which would balloon every embedder/lexical call keyed off the
+#: composed query. 500 chars comfortably clears the 6-token threshold.
+_RECALL_QUERY_PREPEND_CHARS = 500
+
+
+def _compose_recall_query(messages) -> str:
+    """The ONE retrieval query for this chat turn (v1.141.0, Pair X).
+
+    Shared by every grounding consumer — project knowledge, the memory
+    fabric, and toggled connector memory. (Attachment RAG deliberately keeps
+    the raw last user message: its job is relevance WITHIN the attached file
+    this turn, not conversation-level recall.)
+
+    THE RULE (deterministic, pinned by tests): start from the LAST user
+    message; while the composed query has fewer than
+    ``_RECALL_QUERY_MIN_TOKENS`` (6) fabric tokens (``memory.fabric._tokens``
+    — lowercased ``[a-z0-9]{2,}`` words, deduplicated), prepend the previous
+    user message (clipped to ``_RECALL_QUERY_PREPEND_CHARS`` (500) chars so a
+    pasted wall of text can't balloon the query), up to
+    ``_RECALL_QUERY_MAX_MESSAGES`` (3) user messages
+    total, joined with ``" \\n "`` (oldest first). A message already >= 6
+    tokens is used unchanged — identical to the pre-v1.141.0 behaviour for
+    normal-length messages. Empty/whitespace-only history composes to ``""``
+    (callers already skip grounding on a blank query).
+    """
+    from ..memory.fabric import _tokens
+
+    users = [(m.content or "") for m in messages if m.role == "user"]
+    if not users:
+        return ""
+    parts = [users[-1]]
+    idx = len(users) - 2
+    while (
+        len(_tokens(" \n ".join(parts))) < _RECALL_QUERY_MIN_TOKENS
+        and idx >= 0
+        and len(parts) < _RECALL_QUERY_MAX_MESSAGES
+    ):
+        parts.insert(0, users[idx][:_RECALL_QUERY_PREPEND_CHARS])
+        idx -= 1
+    return " \n ".join(parts)
+
+
+def _resolve_persona(store, builtins, want: str, default: str) -> str:
+    """Persona resolution with the configured DEFAULT persona (Pair Z's
+    ``config.default_persona`` — consulted only when the turn carries no
+    explicit persona).
+
+    Passes ``default=`` through ``resolve_prompt`` so the default inherits the
+    FULL precedence chain: a user's saved override of the default's slug wins
+    over the raw builtin (the exact quirk Pair Z's store change fixed — the
+    ``default=`` kwarg HAS landed in personas/store.py and is the path taken).
+    The TypeError fallback is kept as a cross-pair regression guard: this
+    helper runs OUTSIDE any try in both chat lanes, so if the kwarg ever
+    vanished the fallback keeps turns alive instead of 500ing every chat.
+    Precedence is identical either way (Z implements the kwarg as
+    ``want = want or default`` on the first line).
+    """
+    from ..personas import resolve_prompt
+
+    want = (want or "").strip()
+    default = str(default or "").strip()
+    try:
+        return resolve_prompt(store, builtins, want, default=default)
+    except TypeError:  # Pair Z's kwarg not landed yet — identical precedence
+        return resolve_prompt(store, builtins, want or default)
 
 
 def _resolve_connectors(d, body) -> tuple[list[str], list[str]]:
@@ -511,12 +589,27 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     if not body.messages:
         raise HTTPException(status_code=400, detail="messages is required")
 
+    # ONE retrieval query for the whole turn (v1.141.0): project knowledge,
+    # the memory fabric, and toggled connector memory all key off this —
+    # composed so short follow-ups inherit the conversation's subject (rule
+    # documented + pinned on _compose_recall_query). Attachment RAG keeps
+    # the raw last user message for within-file relevance.
+    # MIRROR NOTE (lock-step): routes/chat.py POST /chat/stream carries this
+    # same line — edit both or neither.
+    recall_query = _compose_recall_query(body.messages)
+
     # Persona: a user override/creation wins, then a built-in, then the value
-    # is treated as free-text instructions (used verbatim).
-    from ..personas import PersonaStore, resolve_prompt
+    # is treated as free-text instructions (used verbatim). With NO explicit
+    # persona the configured default applies (Pair Z's config.default_persona
+    # — getattr because the field lands with Z; "" = the old behaviour).
+    # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
+    from ..personas import PersonaStore
 
     want = (body.persona or "").strip()
-    persona = resolve_prompt(PersonaStore(platform.engine), personas, want)
+    persona = _resolve_persona(
+        PersonaStore(platform.engine), personas, want,
+        getattr(platform.config, "default_persona", ""),
+    )
     system = persona + (
         "\n\n# Environment\n"
         f"- You run locally on the user's machine; their home directory is {Path.home()}.\n"
@@ -552,19 +645,51 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
             block += f"\n\nInstructions (follow these):\n{instructions[:2000]}"
         if resolved_proj.brief:
             block += f"\n\nAbout this project: {resolved_proj.brief[:1500]}"
-        # Knowledge keyed off THIS turn's question (the last user message);
-        # ground() retrieves the relevant items. Never let it break a turn.
-        query = next(
-            (m.content or "" for m in reversed(body.messages) if m.role == "user"),
-            "",
-        )
+        # PROJECT PARITY (v1.141.0 — spec'd in Pair Y's brief, implemented
+        # here because chat_turn is Pair X's file): the ROOT line + recent-
+        # activity recap agent sessions have always had (the exact
+        # agents/runtime.py _project_context formats), so chat sees the same
+        # context spine. MIRROR NOTE (lock-step): stream copy in routes/chat.py.
+        if (resolved_proj.root or "").strip():
+            block += f"\n\nProject folder: {resolved_proj.root.strip()}"
+        # Knowledge keyed off the turn's composed recall query (short
+        # follow-ups inherit the conversation's subject — see
+        # _compose_recall_query); ground() retrieves the relevant items.
+        # Never let it break a turn.
         try:
             from ..projects.knowledge import ground
 
-            knowledge = ground(d.platform, pid, query)
+            knowledge = ground(d.platform, pid, recall_query)
             if knowledge:
                 block += f"\n\nProject knowledge (reference):\n{knowledge}"
         except Exception:  # noqa: BLE001 — retrieval must never break a chat turn
+            pass
+        # Recent activity: the last 5 sessions in this project, in the exact
+        # line format the agent runtime injects. Best-effort — never breaks.
+        try:
+            from sqlmodel import select as _select
+
+            from ..core.models import Session as _Session
+
+            with session_scope(d.platform.engine) as db:
+                _siblings = list(
+                    db.exec(
+                        _select(_Session)
+                        .where(_Session.project_id == pid)
+                        .order_by(_Session.created_at.desc())  # type: ignore[attr-defined]
+                        .limit(5)
+                    )
+                )
+            _recent = [
+                f"- [{s.status.value}] {s.task[:80]}: {(s.summary or '(no summary)')[:160]}"
+                for s in _siblings
+            ]
+            if _recent:
+                block += (
+                    "\n\nRecent activity in this project (newest first):\n"
+                    + "\n".join(_recent)
+                )
+        except Exception:  # noqa: BLE001 — the recap must never break a turn
             pass
         system += block
 
@@ -578,39 +703,56 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         except Exception:  # noqa: BLE001 — never block a chat turn
             pass
 
+    # AWARENESS INDEX (v1.141.0): a compact "what I can remember" map — LTM
+    # bases, memory-graph layers, project-bound bases, recent note titles.
+    # Pair Y builds memory/index_block; the injection lives HERE because
+    # chat_turn is Pair X's file this wave. Import-guarded + callable-checked
+    # so this module is green in either landing order; the block itself never
+    # raises and returns "" when there is nothing to say.
+    # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
+    try:
+        from ..memory.index_block import memory_index_block as _memory_index_block
+    except ImportError:  # Pair Y's module not landed yet
+        _memory_index_block = None
+    if callable(_memory_index_block):
+        try:
+            _idx = _memory_index_block(d.platform, project_id=pid)
+            if _idx:
+                system += "\n\n" + _idx.strip("\n")
+        except Exception:  # noqa: BLE001 — awareness must never break a turn
+            pass
+
     # MEMORY FABRIC: fold in the most relevant snippets from every store
     # (files, notes, memory graph, lessons, past sessions — project
     # knowledge is already injected above when a project is set) so a plain
     # chat turn is grounded in what the user knows, without arming a tool.
+    # Keyed off the turn's composed recall query (X.3) — short follow-ups
+    # inherit the conversation's subject instead of recalling on noise.
     fabric = getattr(d.platform, "fabric", None)
-    if fabric is not None:
-        last_user = next(
-            (m.content or "" for m in reversed(body.messages) if m.role == "user"),
-            "",
-        )
-        if last_user.strip():
-            try:
-                grounding = fabric.ground(
-                    last_user,
-                    project_id=pid,
-                    sources=["files", "notes", "memory", "lessons", "sessions"],
-                )
-                if grounding:
-                    system += grounding
-            except Exception:  # noqa: BLE001 — retrieval must never break a turn
-                pass
+    if fabric is not None and recall_query.strip():
+        try:
+            grounding = fabric.ground(
+                recall_query,
+                project_id=pid,
+                sources=["files", "notes", "memory", "lessons", "sessions"],
+            )
+            if grounding:
+                system += grounding
+        except Exception:  # noqa: BLE001 — grounding must never BREAK a turn,
+            # but never fail silently either: a bare ``pass`` here swallowed a
+            # day-one TypeError (ground() had no ``sources`` kwarg) and chat
+            # shipped ungrounded for its entire life. Log with traceback; the
+            # turn continues ungrounded.
+            log.exception("chat memory-fabric grounding failed (turn continues)")
 
     # Connector toggles (the "+" menu): a toggled MEMORY connector grounds
     # this turn with its own top hits, injected directly — it must reliably
     # reach the model, not compete in blended fabric ranking. A toggled MCP
-    # connector's tool group merges into the armed set below.
+    # connector's tool group merges into the armed set below. Same composed
+    # recall query as the fabric (X.3).
     conn_tools, conn_memory = _resolve_connectors(d, body)
     if conn_memory:
-        _cm_query = next(
-            (m.content or "" for m in reversed(body.messages) if m.role == "user"),
-            "",
-        )
-        cm_block = _connector_memory_block(d, conn_memory, _cm_query)
+        cm_block = _connector_memory_block(d, conn_memory, recall_query)
         if cm_block:
             system += cm_block
 

@@ -214,6 +214,21 @@ class AgentRuntime:
                 system_prompt = learning.apply_to_prompt(system_prompt)
             except Exception:  # never block a run on the learning layer
                 pass
+        # MEMORY AWARENESS (v1.141.0): every agent type sees a compact index
+        # of WHAT memory exists (bases + graph size + recent note TITLES —
+        # never content) so it reaches for `recall` instead of assuming
+        # ignorance. All types get it — unlike the roster below, it is cheap
+        # (local reads only, no network/embedder) and short (≤ ~700 chars).
+        # Same precedent as skills + learning: bounded, best-effort, never
+        # blocks a run.
+        try:
+            from ..memory.index_block import memory_index_block
+
+            _mem_index = memory_index_block(self.p, project_id=session.project_id)
+            if _mem_index:
+                system_prompt += "\n\n" + _mem_index
+        except Exception:  # noqa: BLE001 — awareness must never break a run
+            pass
         # CAPABILITY ROSTER (v1.139.0): ONLY the agent types that make
         # delegation choices see the roster — the supervisor picks `delegate`
         # targets, the planner assigns work to agents; a builder/reviewer run

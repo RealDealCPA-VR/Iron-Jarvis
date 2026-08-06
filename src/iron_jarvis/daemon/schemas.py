@@ -74,7 +74,8 @@ class ChatBody(BaseModel):
     provider: str = ""
     model: str = ""
     #: A builtin persona name (see /chat/personas) or FREE TEXT used verbatim
-    #: as the persona ("" = the default assistant).
+    #: as the persona ("" = the configured ``default_persona`` setting, which
+    #: itself defaults to the built-in assistant).
     persona: str = ""
     #: Workspace/absolute paths of uploaded files to ground this turn on.
     attachments: list[str] = []
@@ -85,7 +86,8 @@ class ChatBody(BaseModel):
     tools: list[str] = []
     #: Ground THIS turn in a SPECIFIC project (instructions + knowledge + brief)
     #: — an in-project conversation, independent of the globally-active project.
-    #: "" = fall back to the active project (unchanged behavior).
+    #: "" = NO project grounding at all: the main chat is project-agnostic and
+    #: the globally-active project never leaks in (it has never fallen back).
     project_id: str = ""
     #: The chat's WORKSPACE folder (absolute). When set + allowed, armed file
     #: tools run there so created/edited files land in the folder the user is
@@ -208,6 +210,9 @@ class RepairBody(BaseModel):
 _SETTINGS_KEYS = [
     "default_provider",
     "default_model",
+    # Persona slug or free text used whenever a chat turn carries no explicit
+    # persona (desktop chat, stream, phone) — same contract as ChatBody.persona.
+    "default_persona",
     # Never substitute an explicitly-picked provider (see config.strict_model_pin).
     "strict_model_pin",
     # Auto model routing — the classifier + optional tier overrides. "auto" as

@@ -1355,6 +1355,10 @@ export default function ChatPage() {
   // The persona selected before "+ New persona" — restored if the new-persona
   // editor is closed without saving.
   const prevPersonaRef = useRef("assistant");
+  // True once ANY persona selection happened (explicit pick, saved restore, or
+  // an opened thread's own persona) — the async server-default seed below must
+  // never clobber a choice that landed while its fetch was in flight.
+  const personaTouchedRef = useRef(false);
   // Clears the "Saved" flash; held in a ref so it can be cancelled on unmount.
   const personaSavedTimerRef = useRef<number | null>(null);
   useEffect(
@@ -1421,13 +1425,20 @@ export default function ChatPage() {
   }, [projectId]);
 
   // Restore the saved persona choice + workspace (after mount, so SSR markup
-  // matches the first client render).
+  // matches the first client render). When NO persona has ever been saved
+  // here, seed the state from the server's default_persona setting instead of
+  // the hardcoded "assistant" — the browser used to send that hardcoded value
+  // with every turn (persona is sent whenever non-empty), which MASKED any
+  // configured server default. Best-effort: on any failure "assistant" stands.
   useEffect(() => {
+    let cancelled = false;
+    let saved: string | null = null;
     try {
-      const saved = window.localStorage.getItem(PERSONA_KEY);
+      saved = window.localStorage.getItem(PERSONA_KEY);
       if (saved) {
         setPersona(saved);
         prevPersonaRef.current = saved;
+        personaTouchedRef.current = true;
       }
       const wd = window.localStorage.getItem(WORKSPACE_KEY);
       if (wd) setWorkspaceDir(wd);
@@ -1437,6 +1448,25 @@ export default function ChatPage() {
     } catch {
       /* ignore */
     }
+    if (!saved) {
+      get<{ settings: { default_persona?: string } }>("/settings")
+        .then((d) => {
+          const dp = (d.settings?.default_persona || "").trim();
+          // Seed only — never over an explicit pick / restored thread persona
+          // that landed while this fetch was in flight, and never persisted to
+          // localStorage (only the user's own choices are, via choosePersona).
+          if (!cancelled && dp && !personaTouchedRef.current) {
+            setPersona(dp);
+            prevPersonaRef.current = dp;
+          }
+        })
+        .catch(() => {
+          /* keep "assistant" */
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Load the project list, then restore the selection: a /chat?project= deep
@@ -1514,6 +1544,7 @@ export default function ChatPage() {
   function choosePersona(value: string) {
     setPersona(value);
     prevPersonaRef.current = value;
+    personaTouchedRef.current = true;
     try {
       window.localStorage.setItem(PERSONA_KEY, value);
     } catch {
@@ -1529,6 +1560,7 @@ export default function ChatPage() {
   function selectPersonaLocal(value: string) {
     setPersona(value);
     prevPersonaRef.current = value;
+    personaTouchedRef.current = true;
   }
 
   // ------------------------------------------------------------------ personas

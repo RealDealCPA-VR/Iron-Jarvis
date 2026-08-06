@@ -616,7 +616,13 @@ class InboundPoller:
         # dependency direction stays visible + deferred here).
         from ..daemon.schemas import ChatBody
 
-        body = ChatBody(messages=history, auto_tools=True)
+        # PROJECT REACH (v1.141.0): a comm thread the user tagged into a
+        # project from the dashboard carries that project into every phone
+        # turn — the same context spine desktop chat gets. "" = untagged
+        # (unchanged behavior). Best-effort: a weird thread row costs the
+        # tag, never the turn.
+        project_id = str(getattr(thread, "project_id", "") or "")
+        body = ChatBody(messages=history, auto_tools=True, project_id=project_id)
         try:
             result = await self.chat_turn(self.platform, self.personas, body)
         except HTTPException as exc:
@@ -673,8 +679,11 @@ class InboundPoller:
             _spawn_kwargs["provider"] = esc_provider
         if esc_model:
             _spawn_kwargs["model"] = esc_model
+        # The escalated session inherits the thread's project tag (the same
+        # kwarg the dashboard passes when escalating desktop chat), so the
+        # run gets the project's brief/knowledge/recent-activity spine.
         session = await self.orchestrator.create_session(
-            task, agent_type, **_spawn_kwargs
+            task, agent_type, project_id=project_id or None, **_spawn_kwargs
         )
         await self._publish(
             EventType.COMM_RECEIVED,

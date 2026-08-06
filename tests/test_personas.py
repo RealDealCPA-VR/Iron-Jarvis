@@ -103,6 +103,50 @@ def test_resolve_prompt_precedence(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# (4b) resolve_prompt(default=...): an EMPTY want takes the configured default
+#      at the TOP of the chain — full precedence, not the raw-builtin shortcut.
+# --------------------------------------------------------------------------- #
+def test_resolve_prompt_default_kwarg(tmp_path):
+    client = _client(tmp_path)
+    store = PersonaStore(client.app.state.platform.engine)
+    builtins = {
+        "assistant": {"prompt": "A", "description": ""},
+        "developer": {"prompt": "builtin dev", "description": ""},
+    }
+
+    # Empty want + a builtin-slug default → that builtin's prompt.
+    assert resolve_prompt(store, builtins, "", default="developer") == "builtin dev"
+    # A user OVERRIDE of the default slug wins over the raw built-in — the fix
+    # for the old empty-want path that jumped straight to the raw builtin.
+    store.upsert("developer", title="My Dev", description="d", prompt="You are MY dev.")
+    assert resolve_prompt(store, builtins, "", default="developer") == "You are MY dev."
+    # ...including an override of "assistant" itself when it is the default.
+    store.upsert("assistant", title="Mine", description="", prompt="MY assistant.")
+    assert resolve_prompt(store, builtins, "", default="assistant") == "MY assistant."
+    # A free-text default applies verbatim (same contract as ChatBody.persona).
+    assert (
+        resolve_prompt(store, builtins, "", default="You are a pirate.")
+        == "You are a pirate."
+    )
+    # An explicit want ALWAYS beats the default...
+    assert resolve_prompt(store, builtins, "developer", default="You are a pirate.") == "You are MY dev."
+    # ...including an explicit FREE-TEXT want (verbatim, never the default)...
+    assert (
+        resolve_prompt(store, builtins, "act like a poet", default="developer")
+        == "act like a poet"
+    )
+    # ...and a default naming a CUSTOM (user-created, non-builtin) persona
+    # resolves to that persona's prompt.
+    store.upsert("tax-ninja", title="Tax Ninja", description="", prompt="NINJA prompt.")
+    assert resolve_prompt(store, builtins, "", default="tax-ninja") == "NINJA prompt."
+    # ...and whitespace-only want/default are both treated as empty.
+    store.delete("assistant")
+    assert resolve_prompt(store, builtins, "   ", default="  ") == "A"
+    # No default given → exactly today's behaviour (assistant builtin fallback).
+    assert resolve_prompt(store, builtins, "") == "A"
+
+
+# --------------------------------------------------------------------------- #
 # (5) POST creates a NEW persona (slug from title), listed as non-builtin.
 # --------------------------------------------------------------------------- #
 def test_post_creates_persona(tmp_path):

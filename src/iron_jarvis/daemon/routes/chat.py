@@ -7,6 +7,7 @@ reached through ``d`` (see the deps object built in create_app).
 from __future__ import annotations
 
 import json
+import logging
 import re as _re
 
 from fastapi import FastAPI, HTTPException, Request
@@ -42,15 +43,19 @@ from ..chat_turn import (
     _WORKFLOW_DRAFT_SPEC,
     _WORKFLOW_DRAFT_TOOL,
     _attachment_budgets,
+    _compose_recall_query,
     _connector_memory_block,
     _creation_honesty_note,
     _persist_chat_usage,
     _resolve_armed_tools,
     _resolve_connectors,
+    _resolve_persona,
     _sanitize_draft,
     _validated_escalate_agent,
     run_chat_turn,
 )
+
+log = logging.getLogger(__name__)
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -824,12 +829,25 @@ def register(app: FastAPI, d) -> None:
         # ------------------------------------------------------------------ #
         # PREP — verbatim from chat_complete (kept in lock-step deliberately).
         # ------------------------------------------------------------------ #
-        # Persona: a user override/creation wins, then a built-in, then the value
-        # is treated as free-text instructions (used verbatim).
-        from ...personas import resolve_prompt
+        # ONE retrieval query for the whole turn (v1.141.0): project knowledge,
+        # the memory fabric, and toggled connector memory all key off this —
+        # composed so short follow-ups inherit the conversation's subject (rule
+        # documented + pinned on _compose_recall_query). Attachment RAG keeps
+        # the raw last user message for within-file relevance.
+        # MIRROR NOTE (lock-step): same line in chat_turn.run_chat_turn —
+        # edit both or neither.
+        recall_query = _compose_recall_query(body.messages)
 
+        # Persona: a user override/creation wins, then a built-in, then the value
+        # is treated as free-text instructions (used verbatim). With NO explicit
+        # persona the configured default applies (Pair Z's config.default_persona
+        # — getattr because the field lands with Z; "" = the old behaviour).
+        # MIRROR NOTE (lock-step): same call in chat_turn.run_chat_turn.
         want = (body.persona or "").strip()
-        persona = resolve_prompt(_persona_store(), d._PERSONAS, want)
+        persona = _resolve_persona(
+            _persona_store(), d._PERSONAS, want,
+            getattr(d.platform.config, "default_persona", ""),
+        )
         system = persona + (
             "\n\n# Environment\n"
             f"- You run locally on the user's machine; their home directory is {Path.home()}.\n"
@@ -861,17 +879,47 @@ def register(app: FastAPI, d) -> None:
                 block += f"\n\nInstructions (follow these):\n{instructions[:2000]}"
             if resolved_proj.brief:
                 block += f"\n\nAbout this project: {resolved_proj.brief[:1500]}"
-            query = next(
-                (m.content or "" for m in reversed(body.messages) if m.role == "user"),
-                "",
-            )
+            # PROJECT PARITY (v1.141.0): root line + recent-activity recap,
+            # the agents/runtime.py _project_context formats. MIRROR NOTE
+            # (lock-step): same block in chat_turn.run_chat_turn — edit both
+            # or neither.
+            if (resolved_proj.root or "").strip():
+                block += f"\n\nProject folder: {resolved_proj.root.strip()}"
+            # Knowledge keyed off the turn's composed recall query (X.3).
             try:
                 from ...projects.knowledge import ground
 
-                knowledge = ground(d.platform, pid, query)
+                knowledge = ground(d.platform, pid, recall_query)
                 if knowledge:
                     block += f"\n\nProject knowledge (reference):\n{knowledge}"
             except Exception:  # noqa: BLE001 — retrieval must never break a turn
+                pass
+            # Recent activity: the last 5 sessions in this project, in the
+            # exact line format the agent runtime injects. Best-effort.
+            try:
+                from sqlmodel import select as _select
+
+                from ...core.models import Session as _Session
+
+                with session_scope(d.platform.engine) as db:
+                    _siblings = list(
+                        db.exec(
+                            _select(_Session)
+                            .where(_Session.project_id == pid)
+                            .order_by(_Session.created_at.desc())  # type: ignore[attr-defined]
+                            .limit(5)
+                        )
+                    )
+                _recent = [
+                    f"- [{s.status.value}] {s.task[:80]}: {(s.summary or '(no summary)')[:160]}"
+                    for s in _siblings
+                ]
+                if _recent:
+                    block += (
+                        "\n\nRecent activity in this project (newest first):\n"
+                        + "\n".join(_recent)
+                    )
+            except Exception:  # noqa: BLE001 — the recap must never break a turn
                 pass
             system += block
 
@@ -882,33 +930,48 @@ def register(app: FastAPI, d) -> None:
             except Exception:  # noqa: BLE001 — never block a chat turn
                 pass
 
+        # AWARENESS INDEX (v1.141.0): Pair Y's memory_index_block, injected
+        # after lessons. Import-guarded + callable-checked for landing order.
+        # MIRROR NOTE (lock-step): same block in chat_turn.run_chat_turn —
+        # edit both or neither.
+        try:
+            from ...memory.index_block import memory_index_block as _memory_index_block
+        except ImportError:  # Pair Y's module not landed yet
+            _memory_index_block = None
+        if callable(_memory_index_block):
+            try:
+                _idx = _memory_index_block(d.platform, project_id=pid)
+                if _idx:
+                    system += "\n\n" + _idx.strip("\n")
+            except Exception:  # noqa: BLE001 — awareness must never break a turn
+                pass
+
+        # MEMORY FABRIC (mirrors chat_complete): keyed off the composed
+        # recall query; grounding failures LOG (never silently pass, never
+        # break the turn) — a bare ``pass`` here swallowed the day-one
+        # ``sources=`` TypeError. MIRROR NOTE (lock-step): same block in
+        # chat_turn.run_chat_turn — edit both or neither.
         fabric = getattr(d.platform, "fabric", None)
-        if fabric is not None:
-            last_user = next(
-                (m.content or "" for m in reversed(body.messages) if m.role == "user"),
-                "",
-            )
-            if last_user.strip():
-                try:
-                    grounding = fabric.ground(
-                        last_user,
-                        project_id=pid,
-                        sources=["files", "notes", "memory", "lessons", "sessions"],
-                    )
-                    if grounding:
-                        system += grounding
-                except Exception:  # noqa: BLE001 — retrieval must never break a turn
-                    pass
+        if fabric is not None and recall_query.strip():
+            try:
+                grounding = fabric.ground(
+                    recall_query,
+                    project_id=pid,
+                    sources=["files", "notes", "memory", "lessons", "sessions"],
+                )
+                if grounding:
+                    system += grounding
+            except Exception:  # noqa: BLE001 — never break a turn, never silent
+                log.exception(
+                    "chat memory-fabric grounding failed (turn continues)"
+                )
 
         # Connector toggles (mirrors chat_complete): memory hits injected
-        # directly; MCP tool groups merge into the armed set below.
+        # directly; MCP tool groups merge into the armed set below. Same
+        # composed recall query as the fabric (X.3).
         conn_tools, conn_memory = _resolve_connectors(d, body)
         if conn_memory:
-            _cm_query = next(
-                (m.content or "" for m in reversed(body.messages) if m.role == "user"),
-                "",
-            )
-            cm_block = _connector_memory_block(d, conn_memory, _cm_query)
+            cm_block = _connector_memory_block(d, conn_memory, recall_query)
             if cm_block:
                 system += cm_block
 

@@ -102,6 +102,16 @@ const FIELDS: FieldDef[] = [
     hint: "Model id used by default for new sessions.",
   },
   {
+    // Rendered as a <select>; its options are injected at render time from a
+    // best-effort GET /chat/personas (falls back to just "assistant"). FieldRow
+    // keeps an unknown saved value — e.g. a free-text persona — selectable.
+    key: "default_persona",
+    label: "Default persona",
+    type: "select",
+    section: "models",
+    hint: "Used whenever a chat doesn't pick one — including from your phone.",
+  },
+  {
     key: "strict_model_pin",
     label: "Strict model pin",
     type: "boolean",
@@ -587,6 +597,26 @@ export default function SettingsPage() {
 
   const offline = loadError && loadError.status === 0;
 
+  // Persona names for the default_persona dropdown — best-effort: if the fetch
+  // fails the field still renders with "assistant" (and FieldRow's allOpts
+  // keeps whatever value is currently saved selectable regardless).
+  const [personaOptions, setPersonaOptions] = useState<string[]>(["assistant"]);
+  useEffect(() => {
+    let cancelled = false;
+    get<{ personas: { name: string }[] }>("/chat/personas")
+      .then((d) => {
+        if (cancelled) return;
+        const names = (d.personas ?? []).map((p) => p.name).filter(Boolean);
+        if (names.length > 0) setPersonaOptions(names);
+      })
+      .catch(() => {
+        /* keep the fallback */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Providers the daemon reports as available right now (from /health). The
   // FieldRow <select> itself keeps the currently-saved value selectable even
   // if it isn't in this list, so an existing choice is never silently lost.
@@ -723,7 +753,9 @@ export default function SettingsPage() {
                             def={
                               f.key === "default_provider"
                                 ? { ...f, options: providerOptions }
-                                : f
+                                : f.key === "default_persona"
+                                  ? { ...f, options: personaOptions }
+                                  : f
                             }
                             value={form[f.key]}
                             onChange={(v) => update(f.key, v)}

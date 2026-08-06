@@ -101,12 +101,23 @@ def merged(store: PersonaStore, builtins: dict[str, dict[str, str]]) -> list[dic
 
 
 def resolve_prompt(
-    store: PersonaStore, builtins: dict[str, dict[str, str]], want: str
+    store: PersonaStore,
+    builtins: dict[str, dict[str, str]],
+    want: str,
+    *,
+    default: str = "",
 ) -> str:
     """The system prompt for a persona ``want``: a user override/creation wins,
     then a built-in, then the value is treated as free-text instructions (the
-    long-standing behaviour), falling back to the default assistant prompt."""
-    want = (want or "").strip()
+    long-standing behaviour), falling back to the default assistant prompt.
+
+    ``default`` (the configured ``default_persona``) substitutes for an EMPTY
+    ``want`` at the top of the chain, so it inherits the full precedence: a
+    user's override of the default slug wins over the raw built-in (the old
+    empty-want path jumped straight to the raw builtin "assistant"), and a
+    free-text default applies verbatim. An explicit ``want`` always beats it.
+    """
+    want = (want or "").strip() or (default or "").strip()
     row = store.get(want) if want else None
     if row is not None and row.prompt.strip():
         return row.prompt

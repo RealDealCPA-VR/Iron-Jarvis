@@ -180,13 +180,23 @@ class MemoryFabric:
         k: int = 4,
         *,
         project_id: str | None = None,
+        sources: "list[str] | None" = None,
         char_budget: int = 1200,
     ) -> str:
         """A compact, prompt-ready block of the most relevant memory, or ``""``
         when nothing relevant surfaces. Safe to concatenate onto any system
-        prompt — bounded by ``char_budget`` and never raises."""
+        prompt — bounded by ``char_budget`` and never raises.
+
+        ``sources`` (v1.141.0) forwards to :meth:`recall`'s store filter; None
+        keeps the long-standing behaviour (every store). Chat passes an explicit
+        list here — that call site used to TypeError on this kwarg (swallowed
+        silently), which is why the parameter is now part of the signature and
+        the pinning test in tests/test_chat_memory_grounding.py exists.
+        """
         try:
-            hits = self.recall(query, k=k, project_id=project_id, min_score=0.05)
+            hits = self.recall(
+                query, k=k, project_id=project_id, sources=sources, min_score=0.05
+            )
         except Exception:  # noqa: BLE001 — grounding must never break a run
             return ""
         if not hits:

@@ -63,6 +63,14 @@ class CommThreadStore:
         # read-modify-write (poller thread vs. route thread).
         self._lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Last-seen project binding per identity (v1.141.0), refreshed on
+        # every resolve. When the dashboard deletes a project-tagged comm
+        # thread, the healed re-mint would otherwise silently drop the
+        # project — this cache lets the fresh thread keep it. BEST-EFFORT by
+        # design: in-memory only (a restart between the delete and the next
+        # message loses it — the old thread row is gone, there is nowhere
+        # durable to read it back from), and deliberately NOT a schema change.
+        self._last_project: dict[tuple[str, str], str | None] = {}
 
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Hand over the daemon loop so sync-thread appends can still publish."""
@@ -77,8 +85,14 @@ class CommThreadStore:
         Reuses the bound thread when it exists; if the thread row was deleted
         from the dashboard, a fresh one is minted and the identity re-bound
         (the phone must never lose its line to Iron Jarvis over a tidy-up).
+        The heal KEEPS the project binding when recoverable (v1.141.0): every
+        resolve caches the bound thread's ``project_id`` per identity, and a
+        re-mint copies the last-seen value onto the fresh thread — so deleting
+        a project-tagged phone thread doesn't silently drop the project from
+        the conversation. Best-effort (in-memory; see ``_last_project``).
         """
         sender_id = str(sender_id)
+        key = (channel, sender_id)
         with self._lock, session_scope(self.engine) as db:
             identity = db.exec(
                 select(CommIdentityRecord).where(
@@ -97,11 +111,18 @@ class CommThreadStore:
                     # the bare sender id when this call didn't carry one.
                     label = display or identity.display_name or sender_id
                     thread = self._new_thread(channel, label)
+                    # Heal keeps the project: the deleted row's own project_id
+                    # is unrecoverable (the row is gone), so the fresh thread
+                    # carries the last binding this identity was seen with.
+                    thread.project_id = self._last_project.get(key)
                     identity.thread_id = thread.id
                     db.add(thread)
                     db.add(identity)
                 db.commit()
                 db.refresh(thread)
+                # Refresh the cache with the CURRENT truth (also when the user
+                # just un-tagged the thread — never re-apply a stale project).
+                self._last_project[key] = thread.project_id
                 return thread
             thread = self._new_thread(channel, display or sender_id)
             identity = CommIdentityRecord(
@@ -114,6 +135,7 @@ class CommThreadStore:
             db.add(identity)
             db.commit()
             db.refresh(thread)
+            self._last_project[key] = thread.project_id
             return thread
 
     @staticmethod
@@ -128,8 +150,13 @@ class CommThreadStore:
     def retire(self, channel: str, sender_id: str) -> bool:
         """``/new``: unbind the identity so the next message mints a fresh
         thread. The old thread SURVIVES (still listed on the desktop) — only
-        the binding is deleted. Returns True when a binding existed."""
+        the binding is deleted. Returns True when a binding existed. The
+        cached project binding is dropped too: "/new" is a DELIBERATE fresh
+        start, so a later heal must not resurrect the retired thread's
+        project (only a dashboard delete of a live thread heals-with-project).
+        """
         sender_id = str(sender_id)
+        self._last_project.pop((channel, str(sender_id)), None)
         with self._lock, session_scope(self.engine) as db:
             identity = db.exec(
                 select(CommIdentityRecord).where(

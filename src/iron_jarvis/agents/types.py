@@ -133,6 +133,10 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
         ),
         tools=[
             "read_file", "list_files", "grep", "read_document", "extract_pdf",
+            # Federated memory recall (v1.141.0): a reviewer that cannot check
+            # what the user/projects already know reviews blind against
+            # established facts. Read-only.
+            "recall",
             "memory_search", "skill_search", "recall_lessons",
         ] + _COLLAB_TOOLS,
     ),
@@ -145,6 +149,10 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
         ),
         tools=[
             "delegate", "read_file", "list_files", "read_document", "recall_lessons",
+            # Federated memory recall (v1.141.0): the supervisor used to
+            # delegate BLIND — it could not check what was already known
+            # before splitting work. Read-only.
+            "recall",
             "list_agents", "spawn_agent", "notify",
         ] + _COLLAB_TOOLS + _EXTERNAL_TOOLS,
     ),

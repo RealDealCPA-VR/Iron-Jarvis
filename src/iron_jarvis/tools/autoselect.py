@@ -13,10 +13,11 @@ model, while the honest ``tools_used`` footer only ever reports what RAN.
 
 Safety: candidates come exclusively from :data:`AUTO_SAFE_TOOLS` — read/write
 file + document tools (fs-policy-confined to the chat workspace), read-only
-web retrieval, and local image tools. NEVER shell, edit_file, computeruse,
-MCP (``mcp__*``), or paid generative media (``pixio_*``): those stay behind
-the explicit "+" arming, which is the interactive consent the permission
-engine's session grant is built on.
+web retrieval, local image tools, and memory recall/notes (read-only searches
+plus append-only note writes). NEVER shell, edit_file, computeruse, MCP
+(``mcp__*``), or paid generative media (``pixio_*``): those stay behind the
+explicit "+" arming, which is the interactive consent the permission engine's
+session grant is built on.
 """
 
 from __future__ import annotations
@@ -66,6 +67,18 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         # explicit "+" arming (see the module docstring's safety rule).
         "code_search",
         "code_load",
+        # Memory (v1.141.0): read-only recall + append-only note writes. Chat
+        # was push-only (grounding decided what the model saw); these give it
+        # PULL: search every store on demand, save a note, record a
+        # preference. Nothing here deletes or edits existing memory — appends
+        # are strictly additive. Undo: markdown-dir stores (brain/Obsidian)
+        # revert cleanly; an append to an external store (Notion/cloud) is
+        # journaled reversible=False — an honest cannot-undo, still additive
+        # (see ltm/tools.py LTMAppendTool.capture_undo).
+        "recall",
+        "ltm_search",
+        "ltm_append",
+        "remember_preference",
     }
 )
 
@@ -232,6 +245,21 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             re.IGNORECASE,
         ),
         {"redact_scan": 10, "redact_pii": 9, "read_document": 5, "file_search": 4},
+    ),
+    # --- memory: recall + note-taking (v1.141.0) --------------------------
+    # Intent words for remembering/recalling. The bare word "memory" (as in
+    # "memory usage of the process" — a diagnostics question, not a recall
+    # request) deliberately does NOT fire; the memory-noun branch requires a
+    # possessive ("your/my/our memory") because that phrasing is about what
+    # the assistant/user knows, never about RAM. remember/recall/note(s)/
+    # "what do we know" carry the rest of the intent.
+    (
+        re.compile(
+            r"\b(remember|recall|notes?|what do (?:we|you) know|"
+            r"(?:your|my|our) memor(?:y|ies))\b",
+            re.IGNORECASE,
+        ),
+        {"recall": 8, "ltm_append": 5},
     ),
     # --- images -----------------------------------------------------------
     (

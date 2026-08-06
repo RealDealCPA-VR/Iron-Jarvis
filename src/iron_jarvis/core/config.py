@@ -172,6 +172,11 @@ class Config(BaseModel):
     home: Path
     default_provider: str = "mock"
     default_model: str = "claude-opus-4-8"
+    # Default persona for conversational turns — a persona slug or FREE TEXT,
+    # the same contract as ChatBody.persona. Consulted whenever a turn carries
+    # no explicit persona (desktop chat, stream, phone); an explicit pick, a
+    # thread's own persona, and user overrides of this slug all still win.
+    default_persona: str = "assistant"
     max_agent_steps: int = 12
     permissions: dict[str, str] = Field(default_factory=default_permissions)
     sandbox: dict[str, Any] = Field(default_factory=default_sandbox_policy)
