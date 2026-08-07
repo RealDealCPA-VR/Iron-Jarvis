@@ -1329,14 +1329,58 @@ export default function ChatPage() {
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [modelSub, setModelSub] = useState<string | null>(null);
+  /**
+   * Providers for the composer's model menu, LOCAL FIRST (v1.148.0).
+   *
+   * The menu used to be whatever order the daemon happened to return, with no
+   * indication of where anything ran — a 14B on your own box and a metered
+   * frontier model read identically. Order is now: your own hardware, then
+   * flat-rate subscription CLIs, then metered APIs, then anything currently
+   * offline; within local, smallest model first, matching how the router now
+   * escalates. `kind` comes from the daemon (one definition, shared with
+   * /health), so the label can never disagree with the routing.
+   */
   const modelProviders = useMemo(() => {
-    const seen = new Map<string, { id: string; label: string }>();
+    const seen = new Map<
+      string,
+      { id: string; label: string; kind: string; available: boolean; size: number }
+    >();
     for (const m of models) {
-      if (!seen.has(m.provider))
-        seen.set(m.provider, { id: m.provider, label: m.name || m.provider });
+      const kind = m.kind ?? "api";
+      const size = typeof m.size_b === "number" ? m.size_b : Number.POSITIVE_INFINITY;
+      const prev = seen.get(m.provider);
+      if (!prev) {
+        seen.set(m.provider, {
+          id: m.provider,
+          label: m.name || m.provider,
+          kind,
+          available: m.available !== false,
+          size,
+        });
+      } else {
+        // A provider is "available" if ANY of its models is, and sorts by its
+        // SMALLEST model — the rung the router would reach for first.
+        prev.available = prev.available || m.available !== false;
+        prev.size = Math.min(prev.size, size);
+      }
     }
-    return [...seen.values()];
+    const RANK: Record<string, number> = { local: 0, cli: 1, api: 2 };
+    return [...seen.values()].sort((a, b) => {
+      if (a.available !== b.available) return a.available ? -1 : 1; // offline last
+      const ra = RANK[a.kind] ?? 3;
+      const rb = RANK[b.kind] ?? 3;
+      if (ra !== rb) return ra - rb;
+      if (a.size !== b.size) return a.size - b.size; // smallest local rung first
+      return a.label.localeCompare(b.label);
+    });
   }, [models]);
+
+  /** Badge for a provider row: where it runs, in one word. */
+  const KIND_BADGE: Record<string, { text: string; cls: string }> = {
+    local: { text: "local", cls: "text-emerald-400/80" },
+    cli: { text: "included", cls: "text-sky-400/80" },
+    api: { text: "metered", cls: "text-zinc-500" },
+  };
   const modelLabel = useMemo(() => {
     if (!choice) return "default model";
     const { model } = splitChoice(choice);
@@ -1430,9 +1474,13 @@ export default function ChatPage() {
     let cancelled = false;
     get<{ models: ModelOption[] }>("/models")
       .then((d) => {
-        // Only offer models the user can ACTUALLY run (provider connected);
-        // tolerate older daemons that don't send the flag.
-        if (!cancelled) setModels(d.models.filter((m) => m.available !== false));
+        // v1.148.0: keep the ones that AREN'T connected too. They used to be
+        // filtered out entirely, which answered "why isn't my model in the
+        // list?" with silence; they now sort last, are badged "offline", and
+        // are not selectable — labelled beats hidden, and a dead option the
+        // user can't click is not the "silently fails" trap the filter existed
+        // to prevent.
+        if (!cancelled) setModels(d.models);
       })
       .catch(() => {
         /* picker just stays on the server default */
@@ -5463,14 +5511,32 @@ export default function ChatPage() {
                             onClick={() =>
                               setModelSub(modelSub === p.id ? null : p.id)
                             }
+                            disabled={!p.available}
+                            title={
+                              p.available
+                                ? undefined
+                                : `${p.label} isn't connected — set it up on Connections`
+                            }
                             aria-expanded={modelSub === p.id}
-                            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] ${
+                            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent ${
                               splitChoice(choice).provider === p.id
                                 ? "text-accent-soft"
                                 : "text-zinc-300"
                             }`}
                           >
                             <span className="min-w-0 truncate">{p.label}</span>
+                            {/* Where it runs — the whole point of the reorder:
+                                a list you can act on without knowing which of
+                                your providers costs money. */}
+                            <span
+                              className={`shrink-0 text-[10px] ${
+                                (KIND_BADGE[p.kind] ?? KIND_BADGE.api).cls
+                              }`}
+                            >
+                              {p.available
+                                ? (KIND_BADGE[p.kind] ?? KIND_BADGE.api).text
+                                : "offline"}
+                            </span>
                             <ChevronRight
                               size={12}
                               className="ml-auto shrink-0 text-zinc-500"

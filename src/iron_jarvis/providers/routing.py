@@ -167,6 +167,7 @@ def cheapest(connected: Iterable[Any]) -> "tuple[str, str] | None":
 def derive_tiers(
     connected: Iterable[Any],
     latency: Callable[[str, str], "float | None"] | None = None,
+    local_first: bool = False,
 ) -> dict[str, tuple[str, str]]:
     """A light/standard/heavy mapping over the connected models: light = cheapest,
     heavy = most capable, standard = something in between (falling back to the
@@ -176,10 +177,43 @@ def derive_tiers(
     key after cost rank, so among several equally-cheap models the faster-
     observed one is chosen for its tier. With ``latency=None`` (the default) the
     ordering is byte-for-byte as before — existing callers/tests are unaffected.
+
+    LOCAL-FIRST (v1.148.0, opt-in via ``config.prefer_local_when_capable``):
+    when local models are connected, ALL THREE tiers are drawn from them,
+    ordered by parameter size — the 14B takes light, the 120B takes heavy. The
+    request never starts at a cloud model.
+
+    Cloud is then reached only by ESCALATION, which is what the brief asked for:
+    a capability the local model lacks (the router's tools/vision reroute), a
+    failure (its cross-provider failover), or a context window that cannot hold
+    the turn (v1.146.0 reports it). Escalation is deliberately NOT "the task
+    looked hard" — that judgement is what the tiers already encode, and paying
+    for a cloud model because a heuristic felt uncertain is the behaviour a
+    local-first user turned this on to avoid. With no local model connected this
+    falls through to the ordinary mapping.
     """
     reals = _real(connected)
     if not reals:
         return {}
+    if local_first:
+        from .local import is_local_provider, model_size_b
+
+        locals_only = [pm for pm in reals if is_local_provider(pm[0])]
+        if locals_only:
+            # Smallest first; an unstated size sorts last rather than being
+            # guessed at (see providers.local.model_size_b).
+            ordered = sorted(
+                locals_only,
+                key=lambda pm: (
+                    model_size_b(pm[1]) is None,
+                    model_size_b(pm[1]) or 0.0,
+                    pm[1],
+                ),
+            )
+            light = ordered[0]
+            heavy = ordered[-1]
+            standard = ordered[len(ordered) // 2] if len(ordered) > 2 else heavy
+            return {"light": light, "standard": standard, "heavy": heavy}
 
     def sort_key(pm: tuple[str, str]) -> tuple[float, float]:
         rank = float(model_rank(*pm))

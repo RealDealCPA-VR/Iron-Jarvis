@@ -415,6 +415,13 @@ export interface ModelOption {
   name?: string;
   /** Where the entry came from ("endpoint", "cli", …) — display hints only. */
   source?: string;
+  /** WHERE IT RUNS (v1.148.0): "local" = the user's own hardware, "cli" = a
+   *  flat-rate subscription CLI, "api" = a metered hosted API. Same
+   *  classification /health serves, from one definition on the daemon. */
+  kind?: "local" | "cli" | "api";
+  /** Parameter count in billions, parsed from the model id — orders a local
+   *  fleet smallest-first. Absent when the id doesn't state one. */
+  size_b?: number | null;
 }
 
 /* ---- Projects (context spine) -------------------------------------------- */

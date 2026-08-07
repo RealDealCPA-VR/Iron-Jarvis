@@ -361,20 +361,47 @@ def build_platform(
     # before this closure is ever invoked (at request time), so the reference is
     # safe. When the flag is off the closure returns None and routing is unchanged.
     def _local_oracle(task_class: str | None) -> tuple[str, str] | None:
+        """Prefer the SMALLEST local model that has demonstrably done this class
+        of work well (§6 phase-1, generalized in v1.148.0).
+
+        THE BUG THIS FIXES: every path here was hardwired to Ollama — the
+        ``ollama_base_url`` gate, the provider name, and the model. A user whose
+        hardware is a fleet node (``fleet-custom``), an LM Studio/vLLM endpoint
+        (``custom``), or OpenCode got ``None`` on every call, so
+        ``prefer_local_when_capable`` could not fire for them no matter what they
+        set. That is most local-fleet users, and it is exactly the group the
+        setting exists for.
+
+        Now: walk the local ladder smallest-first (``providers.local``) and take
+        the first rung that clears the quality bar for this task class. Smallest
+        first is the point — "the smallest model likely to complete the task" —
+        and the bar is still evidence, not optimism: a model with fewer than
+        ``local_quality_min_samples`` evaluated sessions returns None from
+        ``local_quality`` and is skipped, so a fresh install changes nothing
+        until the evidence exists.
+        """
         if not getattr(config, "prefer_local_when_capable", False):
-            return None
-        if not getattr(config, "ollama_base_url", None):
             return None
         bar = float(getattr(config, "local_quality_bar", 0.75))
         min_samples = int(getattr(config, "local_quality_min_samples", 3))
-        quality = observability.local_quality(
-            "ollama",
-            task_class=task_class,
-            min_samples=min_samples,
-            model=config.ollama_model,  # judge the model that will actually serve
-        )
-        if quality is not None and quality >= bar:
-            return ("ollama", config.ollama_model)
+        try:
+            from .providers.local import local_ladder
+
+            rungs = local_ladder(providers, config)
+        except Exception:  # noqa: BLE001 — routing must never break on this
+            return None
+        for rung in rungs:
+            quality = observability.local_quality(
+                rung["provider"],
+                task_class=task_class,
+                min_samples=min_samples,
+                # Judge the model that will ACTUALLY serve, not the provider in
+                # aggregate: one endpoint can serve a 14B and a 120B, and their
+                # track records are not interchangeable.
+                model=rung["model"] or None,
+            )
+            if quality is not None and quality >= bar:
+                return (rung["provider"], rung["model"])
         return None
 
     async def _auto_route(system, messages, tools, task_class):
@@ -394,7 +421,15 @@ def build_platform(
         # routing_tiers_json override still takes precedence over the derived map.
         tiers = _routing.parse_tiers_json(
             getattr(config, "routing_tiers_json", "") or ""
-        ) or _routing.derive_tiers(connected, latency=_routing.LATENCY.ewma)
+        ) or _routing.derive_tiers(
+            connected,
+            latency=_routing.LATENCY.ewma,
+            # v1.148.0: with local-first on, every tier is drawn from the user's
+            # own hardware and cloud is reached only by escalation. A manual
+            # routing_tiers_json override above still wins — an explicit map is
+            # a stronger statement than a preference.
+            local_first=bool(getattr(config, "prefer_local_when_capable", False)),
+        )
         if not tiers:
             return None
         classifier = _routing.parse_pm(getattr(config, "routing_model", "") or "")

@@ -268,6 +268,18 @@ _SETTINGS_KEYS = [
     # Step-aware routing (v1.135.0): role -> "provider:model" overrides for
     # plan/synthesize/extract/judge/vision one-shots inside multi-step runs.
     "model_roles",
+    # LOCAL-FIRST ROUTING (v1.148.0). These four shipped in Config but were
+    # absent HERE, so the only way to turn local-first on was to hand-edit
+    # config.toml — which is not a feature, it is a feature nobody can reach.
+    # `routing_local_ladder` is a LIST and is deliberately included: unlike
+    # fleet_nodes/mcp_servers (managed by their own routes), this one has no
+    # other editor, so the settings round-trip is its only home.
+    "prefer_local_when_capable",
+    "local_quality_bar",
+    "local_quality_min_samples",
+    "routing_local_ladder",
+    # Short-horizon decomposition for local models (v1.132.0) — same story.
+    "decompose_local_tasks",
     # OpenCode store override for the Usage merge (dir or .db path).
     "opencode_data_dir",
     # Voice speech-to-text — an optional DEDICATED whisper endpoint + model, so a

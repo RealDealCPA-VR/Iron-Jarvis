@@ -17,9 +17,15 @@ from __future__ import annotations
 
 from typing import Any
 
-#: Providers whose tokens ran on hardware the user owns, so they cost nothing.
-LOCAL_PROVIDERS = frozenset({"ollama", "custom"})
-LOCAL_PROVIDER_PREFIXES = ("fleet-",)
+# Providers whose tokens ran on hardware the user owns, so they cost nothing.
+#
+# v1.148.0: re-exported from ``providers.local``, which is now the ONE
+# definition — this module and ``providers.manager.health()`` had drifted into
+# two different answers (see that module's docstring). Both names are kept as
+# re-exports so existing importers are unaffected.
+from ..providers.local import LOCAL_PREFIXES as LOCAL_PROVIDER_PREFIXES  # noqa: F401
+from ..providers.local import LOCAL_PROVIDERS  # noqa: F401
+from ..providers.local import is_local_provider as _is_local_name
 
 #: Hosted vendors. Used ONLY to disqualify an ``opencode/<id>`` row from being
 #: counted as local — see :func:`is_local_provider`.
@@ -48,7 +54,7 @@ def is_local_provider(provider: str) -> bool:
     that is what a self-hosted runner looks like.
     """
     p = (provider or "").strip().lower()
-    if p in LOCAL_PROVIDERS or p.startswith(LOCAL_PROVIDER_PREFIXES):
+    if _is_local_name(p):
         return True
     if p.startswith("opencode/"):
         return p[len("opencode/"):].split(":", 1)[0] not in HOSTED_VENDORS

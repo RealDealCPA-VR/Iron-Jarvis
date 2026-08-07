@@ -18,6 +18,7 @@ from .adapters.base import LLMAdapter
 from .adapters.google import GoogleAdapter
 from .adapters.mock import MockLLMAdapter
 from .adapters.openai import OpenAIAdapter
+from .local import is_local_provider
 from .vault import BrowserVault
 
 CredentialResolver = Callable[[str], "str | None"]
@@ -455,16 +456,21 @@ class ProviderManager:
             {
                 "provider": name,
                 "available": self.available(name),
+                # v1.148.0: "local" comes from providers/local.is_local_provider
+                # — ONE definition, shared with the router's local-first ladder
+                # and the usage rollup. This list used to be inline here and
+                # included grok-cli, which is a client for xAI's HOSTED API:
+                # the picker showed it under "runs on your hardware" while every
+                # token left the building.
                 "class": (
                     "api"
                     if name in API_PROVIDERS
                     else "local"
-                    if name in ("ollama", "custom", "grok-cli", "opencode-cli")
-                    or name.startswith("fleet-")
+                    if is_local_provider(name)
                     # Subscription CLIs are their own thing — labelling them
                     # "mock" read like they weren't real (v1.124.0).
                     else "cli"
-                    if name in ("claude-cli", "codex-cli")
+                    if name in ("claude-cli", "codex-cli", "grok-cli")
                     else "mock"
                 ),
             }

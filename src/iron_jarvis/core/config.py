@@ -338,6 +338,11 @@ class Config(BaseModel):
     # Ollama model is configured AND eval/observability shows it has met the
     # quality bar for a task class, the router prefers it for that class. With the
     # flag off (default) routing is byte-for-byte unchanged and fully offline-safe.
+    #: The escalation ladder for local-first routing (v1.148.0): an ORDERED list
+    #: of "provider:model" rungs, smallest/cheapest first (e.g. a 14B, then a
+    #: 32B, then a 120B). Empty = derive it from the connected local models by
+    #: parameter size. A rung whose machine is off is skipped, not an error.
+    routing_local_ladder: list[str] = Field(default_factory=list)
     prefer_local_when_capable: bool = False
     local_quality_bar: float = 0.75  # avg completion a local model must clear
     local_quality_min_samples: int = 3  # evaluated sessions needed before trusting

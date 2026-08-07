@@ -164,6 +164,38 @@ const FIELDS: FieldDef[] = [
     placeholder: "qwen3-coder",
     hint: "Default model id for that custom endpoint.",
   },
+  // --- Local-first routing (v1.148.0) --------------------------------------
+  // These four shipped in v1.89–v1.132 and had NO control anywhere: the only
+  // way to turn local-first on was to hand-edit config.toml.
+  {
+    key: "prefer_local_when_capable",
+    label: "Prefer my own hardware",
+    type: "boolean",
+    section: "local",
+    hint:
+      "Route work to your own machines first, and reach for a cloud model only when a local one can't do it — it lacks a needed capability, it fails, or the conversation outgrows its context window. A model is only preferred once it has actually done that kind of work well (see the two settings below), so this changes nothing until there's evidence.",
+  },
+  {
+    key: "local_quality_bar",
+    label: "Quality bar for local models",
+    type: "number",
+    section: "local",
+    hint: "0–1. Average score a local model must average on a kind of work before it's preferred for it. 0.75 is a sensible default.",
+  },
+  {
+    key: "local_quality_min_samples",
+    label: "Evidence needed first",
+    type: "number",
+    section: "local",
+    hint: "How many scored sessions a local model needs before that average is trusted at all. Below this it's never preferred.",
+  },
+  {
+    key: "decompose_local_tasks",
+    label: "Break big tasks into steps for local models",
+    type: "boolean",
+    section: "local",
+    hint: "A smaller local model loses the thread over a long single run, so a multi-step task is split into plan → do → check. Native tool-callers and simple tasks are unaffected.",
+  },
   {
     key: "voice_transcribe_base_url",
     label: "Voice: speech-to-text endpoint",

@@ -143,6 +143,24 @@ def selectable_models(d) -> list[dict[str, Any]]:
             )
     except Exception:  # noqa: BLE001 — detection must never break the picker
         pass
+    # WHERE DOES THIS RUN? (v1.148.0) Every picker had to guess, and none of
+    # them did — so a local 14B and a metered frontier model looked identical
+    # in the list. `kind` is the same classification /health serves
+    # ("local" | "cli" | "api"), from the one definition in providers.local, and
+    # `size_b` is the parameter count parsed out of the id so a local fleet can
+    # be ordered smallest-first the way the router now orders it.
+    from ...providers.local import is_local_provider, model_size_b
+
+    for m in models:
+        prov = str(m.get("provider") or "")
+        m["kind"] = (
+            "local"
+            if is_local_provider(prov)
+            else "cli"
+            if prov in ("claude-cli", "codex-cli", "grok-cli")
+            else "api"
+        )
+        m["size_b"] = model_size_b(str(m.get("model") or ""))
     return models
 
 
