@@ -72,6 +72,15 @@ def default_permissions() -> dict[str, str]:
         "history_search": "allow",
         "ltm_search": "allow",
         "ltm_append": "allow",
+        # Memory housekeeping (v1.143.0): FILE a suggest-only cleanup proposal.
+        # It writes NOTHING — it queues a row the user must approve before a
+        # single note changes — so it sits strictly below ltm_append, which the
+        # same session already holds and which really does write a file.
+        # Declared here for the fail-closed reason above: with no entry the
+        # engine resolves "ask", and an "ask" with no resolver is a DENY in the
+        # headless daemon, so the scheduled steward could never file anything
+        # and the review queue would stay empty with nobody seeing an error.
+        "memory_propose": "allow",
         "list_agents": "allow",
         "create_agent": "ask",
         "spawn_agent": "ask",
@@ -223,6 +232,14 @@ class Config(BaseModel):
     # suggest-don't-act is the product thesis; flipping this is the user
     # consciously trading review for speed.
     skill_learning_auto_approve: bool = False
+    # MEMORY STEWARD (v1.143.0) — the periodic curation review. ON by default
+    # because it costs nothing until a schedule fires it: the steward is a
+    # window + a prompt, never a background loop. What it does when it DOES
+    # run is asymmetric on purpose — notes are appended (undoable on markdown
+    # bases), while every change or removal of an existing note is only ever
+    # QUEUED for the user's approval on the Memory page. OFF stops the
+    # windowing entirely, so a scheduled fire skips without spawning a session.
+    memory_steward_enabled: bool = True
     # Bounded rolling window (was 0 = keep-forever). The persisted event log grows
     # with every session/tool/autonomous tick and is the root of the unbounded
     # EventRecord table that made /metrics, memory-recall, integrity_check and

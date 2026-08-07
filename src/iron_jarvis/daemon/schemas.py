@@ -282,6 +282,9 @@ _SETTINGS_KEYS = [
     # Also settable from the Skills page via PATCH /skills/learning/settings.
     "skill_learning_enabled",
     "skill_learning_auto_approve",
+    # v1.143.0: the periodic memory-curation review (additions are written,
+    # every change/removal is queued for approval — see Config).
+    "memory_steward_enabled",
 ]
 
 

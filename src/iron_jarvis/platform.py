@@ -75,6 +75,7 @@ from .search import SearchIndex
 from .search.tools import history_search_tools
 from .scheduling import Scheduler
 from .scheduling import models as _sched_models  # noqa: F401
+from .templates import MEMORY_REVIEW_SCHEDULE
 from .reflex import models as _reflex_models  # noqa: F401  (registers ReflexRule)
 from .personas import models as _persona_models  # noqa: F401  (registers PersonaRecord)
 from .sentinels import SentinelService, sentinel_tools
@@ -120,6 +121,11 @@ from .computeruse import models as _cu_models  # noqa: F401
 
 # Terminals (multi-session PTY manager for the dashboard).
 from .terminals import TerminalManager
+
+
+#: Module logger for the wiring itself. ``build_platform`` keeps a LOCAL ``log``
+#: bound to the event-bus logger, so anything that is not an event uses this one.
+_log = get_logger("platform")
 
 
 @dataclass
@@ -198,6 +204,12 @@ class Platform:
     #: LOCAL FLEET registry (the user's own inference machines). Seeded from the
     #: two config endpoint slots, so it is populated with zero setup.
     fleet: "object | None" = None
+    #: The memory steward (v1.143.0) — ONE shared instance, so the weekly review
+    #: schedule (``_dispatch_scheduled``) and the Memory page's review card window
+    #: the same history and write the same run ledger instead of each building a
+    #: private steward. Optional so bare-platform unit tests still construct; every
+    #: reader treats ``None`` as "this build has no curation" rather than failing.
+    memory_steward: "object | None" = None
 
 
 def build_platform(
@@ -654,6 +666,21 @@ def build_platform(
     for tool in ltm_tools(ltm):
         registry.register(tool)
 
+    # Memory housekeeping (v1.143.0): the ONE way an agent can FILE a
+    # suggest-only cleanup proposal. Registered here, right after ltm_tools,
+    # because it is the SUGGEST half of the same pair — ltm_append adds memory
+    # directly (append-only, undoable), memory_propose queues everything that
+    # would change or remove a note the user already has. Without this
+    # registration the steward's whole review queue is unreachable from an
+    # agent session and can only ever be filled by a test.
+    from .memory.proposal_tools import memory_proposal_tools
+    from .memory.proposals import MemoryProposalStore
+
+    for tool in memory_proposal_tools(
+        MemoryProposalStore(engine, ltm=ltm, home=config.home)
+    ):
+        registry.register(tool)
+
     # The ``recall`` tool is registered further down, once the learning engine
     # exists — it federates EVERY store through the Memory Fabric, not just
     # files + long-term memory (see the MemoryFabric build after LearningEngine).
@@ -817,6 +844,20 @@ def build_platform(
     for tool in blackboard_tools(platform.blackboard):
         platform.registry.register(tool)
 
+    # Memory curation (v1.143.0): ONE shared steward, attached here because the
+    # scheduled-fire dispatcher below asks it for the window each weekly review
+    # covers. Construction touches no database (every method resolves the engine
+    # at call time), so this can neither slow nor wedge a boot — and it is still
+    # guarded, because a platform that failed to assemble over an optional
+    # curation feature would be a far worse bug than a missing review card.
+    try:
+        from .memory.steward import MemorySteward
+
+        platform.memory_steward = MemorySteward(platform)
+    except Exception:  # noqa: BLE001 - the card degrades; the daemon does not
+        _log.warning("the memory steward is unavailable in this build", exc_info=True)
+        platform.memory_steward = None
+
     # Scheduled fires (v1.119.0): a fire runs an agent TASK (the primary kind),
     # a saved workflow, or emits an event — then records how it went on the row
     # and delivers the result to the user's destinations. The recording is what
@@ -858,12 +899,119 @@ def build_platform(
         except Exception:  # noqa: BLE001
             pass
 
+    # -- the weekly memory review (v1.143.0) --------------------------------
+    # The memory-review schedule is the ONE task schedule whose prompt must not
+    # be the durable text stored on the row. A static prompt re-reads history
+    # with no cursor, so every week's fire offers the same conversations and the
+    # session re-writes the same notes; the steward's whole point is the window.
+    # So this fire asks the steward to PLAN it, and closes the bookkeeping loop
+    # afterwards. Everything below is best-effort by construction: a steward
+    # failure returns None and the fire falls back to the stored prompt exactly
+    # as before — the scheduler thread never sees an exception from here (the
+    # v1.119 ``_run_scheduled`` discipline).
+    def _is_memory_review(task, payload: dict) -> bool:
+        """Is THIS fire the memory-review schedule?
+
+        By NAME (the scheduler's unique key, and the same key the review card's
+        "installed" check and ``_reconcile_unrecorded_reviews``' origin filter
+        use), never by matching the task TEXT: a user who edits one word of the
+        prompt must not silently lose their windowed reviews, and an unrelated
+        schedule that happens to quote the template must not start moving the
+        review cursor. ``template``/``template_id`` in the payload is honoured
+        too, so a renamed schedule can still declare what it is.
+        """
+        try:
+            wanted = {
+                str(MEMORY_REVIEW_SCHEDULE["name"]).strip().lower(),
+                str(MEMORY_REVIEW_SCHEDULE["id"]).strip().lower(),
+            }
+            if str(getattr(task, "name", "") or "").strip().lower() in wanted:
+                return True
+            declared = payload.get("template") or payload.get("template_id") or ""
+            return str(declared).strip().lower() in wanted
+        except Exception:  # noqa: BLE001 - an unreadable row is just "not it"
+            return False
+
+    def _memory_review_plan(task, payload: dict) -> "dict | None":
+        """The steward's windowed plan for this fire, or None to fire as usual.
+
+        None means "this is not a memory review, or the steward could not plan
+        one" — both of which must leave the pre-v1.143 behaviour untouched. When
+        the steward degrades, the fire still runs on the stored prompt and
+        ``routes/memory_review.py::_reconcile_unrecorded_reviews`` still makes
+        the run visible on the card; only the WINDOW is lost, and it is lost
+        loudly in the log rather than silently.
+        """
+        if not _is_memory_review(task, payload):
+            return None
+        steward = getattr(platform, "memory_steward", None)
+        planner = getattr(steward, "plan", None)
+        if not callable(planner):
+            return None
+        try:
+            plan = planner()
+        except Exception:  # noqa: BLE001 - a plan failure must not skip the fire
+            _log.warning("the memory steward could not plan this review", exc_info=True)
+            return None
+        if not isinstance(plan, dict):
+            return None
+        return {**plan, "steward": steward}
+
+    def _record_memory_review(
+        review: "dict | None", session_id: str, ok: bool, outcome: str
+    ) -> None:
+        """Close the steward's loop for a scheduled review. NEVER raises.
+
+        The counts are READ off the session's own ledgers with the SAME helpers
+        the manual lane uses (``memory/steward.py``), so a review recorded here
+        and one recorded by ``POST /memory/review/run`` can never report
+        different numbers for the same work. ``record_run`` advances the review
+        cursor only when ``ok`` — that rule is structural, not repeated here.
+        """
+        if not review:
+            return
+        recorder = getattr(review.get("steward"), "record_run", None)
+        if not callable(recorder):
+            return
+        try:
+            from .memory.steward import count_notes_added, count_proposals_raised
+
+            recorder(
+                ok=bool(ok),
+                cursor=str(review.get("cursor") or ""),
+                since=str(review.get("since") or ""),
+                conversations=int(review.get("conversations") or 0),
+                docs=int(review.get("docs") or 0),
+                notes_added=count_notes_added(engine, session_id),
+                proposals_raised=count_proposals_raised(engine, session_id),
+                outcome=str(outcome or "")[:400],
+                session_id=session_id,
+                refs=list(review.get("refs") or []),
+            )
+        except Exception:  # noqa: BLE001 - bookkeeping must not fail the fire
+            _log.warning("could not record the scheduled memory review", exc_info=True)
+
     async def _dispatch_scheduled(task, payload: dict, fired: dict) -> str:
         """Run one fire; returns the human detail. ``fired['session_id']`` is
         set as soon as a task-kind session exists so a mid-run failure still
         records WHICH session to look at."""
         if task.kind == "task":
             prompt = str(payload.get("task") or "").strip()
+            review = _memory_review_plan(task, payload)
+            if review is not None:
+                if review.get("empty"):
+                    # The steward's own rule: an EMPTY window must NOT fire a
+                    # session. Asking a model to curate nothing is how memory
+                    # fills with invented facts, so the week is skipped and the
+                    # row records why — no session, no run, no cursor move.
+                    # A switched-OFF steward lands here too, and must not be
+                    # reported as "nothing new": the user turned curation off,
+                    # and firing the stored prompt would review anyway.
+                    if review.get("enabled") is False:
+                        return "memory review is switched off, so nothing ran"
+                    reason = str(review.get("reason") or "").strip()
+                    return "nothing new to review" + (f" — {reason}" if reason else "")
+                prompt = str(review.get("task") or "").strip() or prompt
             if not prompt:
                 raise ValueError("scheduled task has no 'task' text")
             if platform.orchestrator is None:
@@ -878,13 +1026,26 @@ def build_platform(
                 origin=f"schedule:{task.name}",
             )
             fired["session_id"] = session.id
-            done = await platform.orchestrator.run_session(session.id)
+            try:
+                done = await platform.orchestrator.run_session(session.id)
+            except Exception as exc:  # noqa: BLE001 - recorded, then re-raised
+                # A review that died mid-run is a FAILED run, not an absent one:
+                # the card must show it, and a failed run structurally cannot
+                # advance the cursor. The schedule's own error path is unchanged.
+                _record_memory_review(
+                    review, session.id, False, f"{type(exc).__name__}: {exc}"
+                )
+                raise
             status = getattr(done.status, "value", str(done.status))
+            summary = (done.summary or "").strip()
+            _record_memory_review(
+                review, session.id, status == "completed", summary or f"session {status}"
+            )
             if status != "completed":
                 raise RuntimeError(
                     f"session ended {status}: {(done.summary or 'no summary')[:200]}"
                 )
-            return (done.summary or "").strip() or "session completed"
+            return summary or "session completed"
         if task.kind == "workflow":
             result = _run_scheduled_workflow(payload)
             if inspect.isawaitable(result):

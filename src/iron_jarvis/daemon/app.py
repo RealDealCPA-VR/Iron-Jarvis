@@ -1986,6 +1986,19 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     from . import routes as _routes
 
+    # Memory housekeeping (v1.143.0): the SUGGEST-ONLY proposal store the review
+    # card and the steward file into. Built once here so every request shares an
+    # instance (and the table is ensured at boot, not on first click); the route
+    # module builds its own if this field is ever missing.
+    try:
+        from ..memory.proposals import MemoryProposalStore as _MemoryProposalStore
+
+        _memory_proposals = _MemoryProposalStore(
+            platform.engine, ltm=platform.ltm, home=platform.config.home
+        )
+    except Exception:  # noqa: BLE001 — a review card must never block boot
+        _memory_proposals = None
+
     d = SimpleNamespace(
         platform=platform,
         orchestrator=orchestrator,
@@ -2024,6 +2037,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # History search (v1.142.0): the ONE shared index (built in
         # build_platform, capability probe already warmed).
         search_index=getattr(platform, "search_index", None),
+        # Memory housekeeping (v1.143.0): the shared suggest-only proposal store.
+        memory_proposals=_memory_proposals,
     )
     # search FIRST: nothing else claims a /search prefix today, and registering
     # ahead of every other module makes it impossible for a future
@@ -2037,6 +2052,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
     _routes.voice.register(app, d)
     _routes.sessions.register(app, d)
     _routes.documents.register(app, d)
+    # memory_review BEFORE learning: learning.py owns GET /memory/{layer}/{key},
+    # and a literal path registered after a same-prefix catch-all is exactly the
+    # shape that once swallowed /skills/learning. Pinned by a test.
+    _routes.memory_review.register(app, d)
     _routes.learning.register(app, d)
     _routes.computeruse.register(app, d)
     _routes.terminals.register(app, d)

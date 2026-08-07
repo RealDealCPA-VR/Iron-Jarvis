@@ -21,6 +21,19 @@ _KNOWLEDGE_TOOLS = [
     "memory_write",
     "skill_search",
     "skill_load",
+    # v1.142.0 shipped `history_search` into the registry, the permission table
+    # and chat's auto-select — but NOT into any agent definition, so no agent
+    # SESSION could ever call it (runtime.py advertises exactly
+    # ``registry.specs(agent_def.tools)``). The memory steward's own prompt
+    # tells the session to "pull more of it with history_search", which made the
+    # gap load-bearing: the curation agent was being asked for a tool it did not
+    # hold. Read-only, permission "allow".
+    "history_search",
+    # v1.143.0: the SUGGEST half of memory curation. Writes nothing — it queues
+    # a cleanup the user must approve — and it is the only way an agent can ever
+    # ask for a note to be deleted, rewritten or merged. Deliberately NOT in
+    # AUTO_SAFE_TOOLS: chat should not be filing housekeeping mid-conversation.
+    "memory_propose",
 ]
 # Self-service: agents can search drives, write long-term memory, and create
 # their own schedules / webhooks / workflows (the last appears on the user's

@@ -20,6 +20,7 @@ from . import (  # noqa: F401
     fsbrowse,
     knowledge,
     learning,
+    memory_review,
     projects,
     reflex,
     routing,

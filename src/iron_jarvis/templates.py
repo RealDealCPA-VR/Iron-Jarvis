@@ -337,6 +337,64 @@ STARTER_CATALOG: list[dict] = [
 ]
 
 
+# --- Schedule templates (v1.143.0) -------------------------------------------
+# STARTER_CATALOG above is the *prompt* library (one-click tasks). This is the
+# *schedule* library: ready-made recurring jobs the user can install with one
+# click. Both are OPT-IN — nothing here is ever created on boot. ``seed_starters``
+# deliberately does not look at this list, and no caller creates a schedule from
+# it without an explicit user action (the Memory page's "Schedule weekly review"
+# button POSTs /schedules with this exact payload).
+
+#: The words a memory-review fire hands to a real agent session. The steward's
+#: ``build_task`` composes a sharper, window-aware version of this at run time;
+#: this is the durable, self-contained phrasing a schedule can carry on its own.
+#: Note the second half: ADDING memory is free, REVISING it is suggest-only.
+MEMORY_REVIEW_TASK = (
+    "Review my recent conversations and tidy my long-term memory.\n\n"
+    "1. Read what I've discussed since the last review and write any durable "
+    "facts, decisions, and preferences into my memory as notes (use ltm_append "
+    "— adding is always safe, I can undo any note).\n"
+    "2. Then look over the notes themselves and PROPOSE housekeeping by calling "
+    "`memory_propose` once per suggestion, using these four kinds: duplicate "
+    "(two notes saying the same thing), stale (a note the facts have moved "
+    "past), contradiction (two notes that disagree), merge (several notes that "
+    "should be one).\n\n"
+    "Never delete or rewrite an existing note yourself — file every such change "
+    "with `memory_propose` for me to approve on the Memory page, with a "
+    "one-line reason and the exact text you'd keep. Writing the suggestion in "
+    "your summary instead of calling the tool means I never see it. Finish with "
+    "a short summary of what you added and what you're proposing."
+)
+
+#: The one schedule template this release ships. ``name`` is the scheduler's
+#: unique key, so it doubles as the "is it already installed?" check.
+MEMORY_REVIEW_SCHEDULE: dict = {
+    "id": "memory-review-weekly",
+    "label": "Memory review — weekly",
+    "name": "memory-review-weekly",
+    "kind": "task",
+    # Monday 9am — the same slot the Schedules page offers as "Weekly Mon 9am".
+    "cron": "0 9 * * 1",
+    "task": MEMORY_REVIEW_TASK,
+    "description": (
+        "Once a week, an agent reads your recent conversations, saves what's "
+        "worth remembering, and suggests memory cleanups for you to approve."
+    ),
+}
+
+#: Browsable schedule templates. OPT-IN: adding one is always a user click.
+SCHEDULE_TEMPLATES: list[dict] = [MEMORY_REVIEW_SCHEDULE]
+
+
+def schedule_template(template_id: str) -> dict | None:
+    """One schedule template by id (or by its scheduler ``name``), else None."""
+    wanted = (template_id or "").strip()
+    for entry in SCHEDULE_TEMPLATES:
+        if wanted in (entry["id"], entry["name"]):
+            return entry
+    return None
+
+
 # --- Requirement detection (v1.128.0) ----------------------------------------
 # "This template needs a connection you don't have yet" — said BEFORE the run
 # fails, with a link to the exact page that fixes it. Checks are deliberately
