@@ -307,6 +307,20 @@ class Orchestrator:
             except Exception:  # noqa: BLE001
                 log.exception("skill-learning observe failed for session %s", session.id)
 
+        # History search (v1.142.0): index this finished run's task + summary +
+        # result so it is findable the moment it lands, instead of waiting for
+        # the periodic backfill. Owns its own transaction (no db= — the session
+        # row was already committed by ``_save``), upserts by session id, and is
+        # internally never-raising; the guard matches the steps above.
+        try:
+            from ..core.db import search_index
+
+            index = search_index(self.p.engine)
+            if index is not None:
+                index.sync_session(session)
+        except Exception:  # noqa: BLE001
+            log.exception("history-search sync failed for session %s", session.id)
+
     async def _finalize_failed(self, session: Session, error: Exception) -> None:
         """Mark a crashed run FAILED, persist, emit SESSION_COMPLETED(ok=False), GC
         its worktree — so an unexpected exception never leaves a zombie ACTIVE
@@ -527,6 +541,38 @@ class Orchestrator:
                 log.exception("worktree cleanup failed while deleting %s", session_id)
         self._reviews.pop(session_id, None)
         with session_scope(self.p.engine) as db:
+            # History search (v1.142.0): the session's own doc, and any doc
+            # pointing at one of its runs, go with it — in THIS transaction.
+            # Both delete routes (`DELETE /sessions/{id}` and the Kanban bulk
+            # `POST /sessions/clear`) funnel through here, so wiring it at this
+            # one point covers both; a doc left behind is a search result that
+            # opens onto a session the app no longer has.
+            #
+            # It runs FIRST, before a single row is marked for deletion, and that
+            # ORDER IS LOAD-BEARING: ``SearchIndex`` holds its own lock across
+            # its statements, so a transaction that already owns SQLite's single
+            # writer and THEN waits on that lock inverts against a thread holding
+            # the lock and waiting on the writer — a real deadlock that resolves
+            # only when ``busy_timeout`` (30s) fires, whereupon the failed flush
+            # leaves this session unusable and ``db.commit()`` below raises
+            # ``PendingRollbackError``. Measured at 66s and two LOST writes before
+            # the seams were reordered. Take the index lock while still a reader.
+            run_ids: list[str] = [
+                r for r in db.exec(
+                    select(AgentRun.id).where(AgentRun.session_id == session_id)
+                ).all()
+                if r
+            ]
+            try:
+                from ..core.db import search_index
+
+                index = search_index(self.p.engine)
+                if index is not None:
+                    # One bulk, chunked statement — never a query per id.
+                    index.drop_refs([session_id, *run_ids], db=db)
+            except Exception:  # noqa: BLE001 — a delete must always complete
+                log.warning("history-search drop failed for session %s", session_id,
+                            exc_info=True)
             obj = db.get(Session, session_id)
             if obj is not None:
                 db.delete(obj)

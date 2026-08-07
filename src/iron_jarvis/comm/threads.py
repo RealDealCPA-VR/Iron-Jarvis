@@ -28,13 +28,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import threading
 from typing import Any
 
 from sqlalchemy import Engine
 from sqlmodel import select
 
-from ..core.db import session_scope
+from ..core.db import CONVERSATION_WRITE_LOCK, session_scope
 from ..core.events import EventType
 from ..core.ids import utcnow
 from ..core.logging import get_logger
@@ -61,7 +60,16 @@ class CommThreadStore:
         # Serializes find-or-create (uniqueness of (channel, sender_id) has no
         # DB constraint — see CommIdentityRecord) AND the messages_json
         # read-modify-write (poller thread vs. route thread).
-        self._lock = threading.Lock()
+        #
+        # v1.142.0: this is now the SHARED conversation lock, not a per-store
+        # one. Since ``append`` also rewrites this thread's history-search docs,
+        # a private lock here plus a private lock in the chat route plus a
+        # private lock in ``agents/threads.py`` deadlock against SQLite's single
+        # writer via ``SearchIndex``' own lock — measured 66s and two lost
+        # writes. ``core.db.CONVERSATION_WRITE_LOCK`` carries the analysis; note
+        # it is process-wide, so it also (harmlessly) serializes find-or-create
+        # across stores.
+        self._lock = CONVERSATION_WRITE_LOCK
         self._loop: asyncio.AbstractEventLoop | None = None
         # Last-seen project binding per identity (v1.141.0), refreshed on
         # every resolve. When the dashboard deletes a project-tagged comm
@@ -180,8 +188,19 @@ class CommThreadStore:
         ``ValueError`` on a vanished thread (callers ``resolve`` first, so
         this is a bug/race worth hearing about — silently dropping a phone
         message would be worse). Publishes CHAT_THREAD_UPDATED best-effort.
+
+        v1.142.0: every entry carries an ``at`` (ISO, server clock — the daemon
+        IS the writer here, so there is no client time to defer to), and the
+        thread is re-indexed for history search inside this same session, under
+        this same lock, BEFORE the commit — so a phone conversation is as
+        searchable as a desktop one, and the transcript can never commit
+        without its docs.
         """
-        entry = {"role": role, "content": str(content or "")[:_MAX_CONTENT]}
+        entry = {
+            "role": role,
+            "content": str(content or "")[:_MAX_CONTENT],
+            "at": utcnow().isoformat(),
+        }
         with self._lock, session_scope(self.engine) as db:
             r = db.get(ChatThreadRecord, thread_id)
             if r is None:
@@ -197,10 +216,38 @@ class CommThreadStore:
             r.messages_json = json.dumps(msgs)
             r.updated_at = utcnow()
             db.add(r)
+            self._index_thread(db, r, msgs)
             db.commit()
             count = len(msgs)
         self._publish_updated(thread_id, count)
         return count
+
+    def _index_thread(self, db: Any, record: ChatThreadRecord, msgs: list) -> None:
+        """Re-index this comm thread for history search, in the CALLER's
+        session (``db=``) so the docs commit with the transcript.
+
+        Delete-all-then-insert, so an append is just "the thread is now this" —
+        no incremental bookkeeping to get wrong, and the same 200-message
+        horizon the row itself keeps. Never raises: a broken index must never
+        cost the user an inbound phone message.
+        """
+        try:
+            from ..core.db import search_index  # lazy: keeps the import graph flat
+
+            index = search_index(self.engine)
+            if index is None:
+                return
+            index.sync_thread(
+                record.id,
+                "comm",
+                record.title or "",
+                record.project_id or "",
+                msgs,
+                db=db,
+            )
+        except Exception:  # noqa: BLE001 — an append must never fail on search
+            log.warning("history-search sync failed for comm thread %s",
+                        getattr(record, "id", "?"), exc_info=True)
 
     def _publish_updated(self, thread_id: str, messages: int) -> None:
         """Best-effort CHAT_THREAD_UPDATED — never raises, works from the

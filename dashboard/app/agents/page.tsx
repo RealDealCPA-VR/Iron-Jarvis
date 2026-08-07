@@ -115,8 +115,49 @@ export default function AgentsPage() {
       : polled;
   const threadsReady = threadsData !== null || threadsError !== null;
 
+  /**
+   * `/agents?thread=<id>` opens THAT round-table (v1.142.0).
+   *
+   * The palette's "In your conversations" lane sends round-table hits here.
+   * Without this the page just auto-selected the newest thread, so clicking a
+   * search result for one conversation silently opened a DIFFERENT one — the
+   * worst kind of wrong, because nothing on screen says so.
+   *
+   * Read off window.location, not useSearchParams: /agents is a static route
+   * and useSearchParams would force it behind a Suspense boundary (the same
+   * reason app/reflex, app/schedules and app/terminals read params this way).
+   * An id that no longer exists is not special-cased: RoundTable already
+   * renders a missing thread honestly, which is the whole point — showing a
+   * DIFFERENT thread is the failure, showing "gone" is an answer.
+   *
+   * The ref is a three-state handshake with the auto-select below, because
+   * both are mount effects and "whichever setState lands second wins" is not
+   * a design: `undefined` = the URL has not been read yet, a string = a deep
+   * link is claiming the selection, `null` = nobody is, carry on as before.
+   */
+  const deepLinkRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    let wanted: string | null = null;
+    try {
+      wanted = new URLSearchParams(window.location.search).get("thread");
+    } catch {
+      /* a malformed query string is no deep link, not a broken page */
+    }
+    deepLinkRef.current = wanted;
+    if (wanted) setSelectedId(wanted);
+  }, []);
+
   // Auto-select the most recent thread so the star of the page is never blank.
   useEffect(() => {
+    if (deepLinkRef.current === undefined) return; // the URL gets first refusal
+    if (deepLinkRef.current) {
+      // A deep link owns THIS pass — without the skip, an already-loaded rail
+      // lets both effects fire in the same commit and the newest thread wins.
+      // Consumed once, so deleting the deep-linked thread later hands the
+      // choice straight back to the auto-select.
+      deepLinkRef.current = null;
+      return;
+    }
     if (selectedId === null && threads.length > 0) setSelectedId(threads[0].id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threads.length, selectedId]);

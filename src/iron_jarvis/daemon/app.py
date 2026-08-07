@@ -229,6 +229,153 @@ def _unique_workflow_name(store, base: str, explicit: bool) -> str:
     return f"{name}-{n}"
 
 
+#: History-search backfill loop tuning. Module-level (and injectable) so the
+#: loop is testable without a 60-second wait.
+_FTS_INITIAL_DELAY = 60.0
+_FTS_IDLE_DELAY = 3600.0
+_FTS_BATCH = 200
+#: Breath between chunks so a 50k-message history can't monopolise the loop.
+_FTS_CHUNK_PAUSE = 0.05
+
+
+def _backfill_index(platform) -> "Any | None":
+    """The ``SearchIndex`` the BACKFILL LOOP writes through — the SHARED one,
+    ``core.db.search_index(engine)`` (exposed as ``platform.search_index``),
+    exactly like the ``history_search`` tool, ``GET /search/history``, the memory
+    fabric, and all five write seams.
+
+    HISTORY, because this was briefly the one exception and the reason matters.
+    ``SearchIndex`` used to take its internal ``RLock`` on EVERY write, including
+    the ones where it opens its own transaction — so the backfill's order was
+    **index lock → SQLite writer**, while a write seam (already inside its own
+    ``session_scope``) could be **SQLite writer → index lock**. On one shared
+    instance that is an ABBA cycle broken only by SQLite's 30s ``busy_timeout``,
+    and it was MEASURED at chat saves p50 33.0 s with 70% of the backfill's docs
+    lost to "database is locked". The stopgap was to hand this loop a second
+    instance on the same engine, which dodged the cycle by having no shared lock
+    to invert — at the cost of the lock meaning nothing between the two writers.
+
+    v1.142.0 fixed the cause instead (``search/index.py`` DECISION 4): the lock
+    is now taken ONLY on the ``db=`` path, and a self-owned write opens its
+    transaction with ``BEGIN IMMEDIATE`` so it holds SQLite's writer slot across
+    its whole read-modify-write and holds no Python lock at all. Nothing can
+    invert, and the index write is MORE atomic than the lock ever made it. Same
+    bench after the fix: chat saves p50 **1.6 ms** / p95 **3.7 ms**, zero lost
+    writes on either side, with the backfill hammering the SAME instance
+    (``tests/test_search_index.py::test_a_backfill_sized_write_cannot_stall_a_chat_save``).
+
+    So the loop is back on the shared instance, which is what makes the index's
+    ``db=`` lock real again: two instances are two locks, i.e. no lock at all.
+    """
+    index = getattr(platform, "search_index", None)
+    if index is None:
+        return None
+    try:
+        index.available()  # warm the probe off the first chunk (usually already warm)
+    except Exception:  # noqa: BLE001 — never let this cost the daemon a boot
+        log.warning("history-search backfill index probe failed", exc_info=True)
+    return index
+
+
+async def _fts_backfill_loop(
+    index,
+    loop_health: "dict[str, dict[str, Any]]",
+    *,
+    initial_delay: float = _FTS_INITIAL_DELAY,
+    idle_delay: float = _FTS_IDLE_DELAY,
+    batch: int = _FTS_BATCH,
+    pause: float = _FTS_CHUNK_PAUSE,
+) -> None:
+    """Index the history that existed BEFORE history search shipped.
+
+    Live sync (Pair S2) only ever sees writes from now on; without this loop a
+    user's first search of a two-year-old install would find their newest thread
+    and nothing else. Shape mirrors ``_auto_backup_loop``: sleep first (never
+    compete with boot), do the work in ``asyncio.to_thread`` (``backfill`` is
+    synchronous SQLite), never let one failure kill the daemon, re-raise
+    ``CancelledError`` so shutdown is clean.
+
+    Chunked and resumable: each pass feeds the previous pass's keyset cursor
+    back in until ``done``, then the loop IDLES for ``idle_delay`` and re-checks
+    from ``cursor=None``. The re-check is cheap because ``backfill`` skips
+    already-indexed threads, and it is what makes the POISON-CHUNK path safe: a
+    chunk that fails PARKS itself (``done: True, error: True``) instead of
+    hot-looping, and the hourly restart-from-scratch is the retry — a chunk that
+    fails forever costs one bounded pass an hour, not a spinning core.
+
+    ``loop_health["fts_backfill"]`` (surfaced at ``GET /diagnostics`` as
+    ``background_loops``) carries ``ok`` / ``done`` / cumulative ``indexed`` /
+    ``scanned`` plus timestamps, so a stuck or parked backfill is VISIBLE
+    instead of buried in the log.
+
+    ``ok`` is per-SWEEP, not per-pass, and that distinction is the whole value
+    of the field. ``backfill`` reports a failed PHASE by skipping to the next
+    one (``error: True``) and then finishes the remaining phases normally — so a
+    per-pass ``ok`` would be overwritten by the very next pass, and a run that
+    silently gave up on every chat thread after a bad page would report
+    ``ok: True`` at ``/diagnostics`` while the user's chat history was missing
+    from search. The flag therefore latches for the sweep and clears only when
+    the next sweep starts, which is exactly the window a human reading
+    ``/diagnostics`` is asking about.
+    """
+    from ..core.ids import utcnow
+
+    if index is None:  # pragma: no cover — always built by build_platform
+        return
+    await asyncio.sleep(initial_delay)
+    cursor: "str | None" = None
+    indexed_total = 0
+    scanned_total = 0
+    sweep_error: "str | None" = None
+    while True:
+        try:
+            result = await asyncio.to_thread(index.backfill, batch, cursor)
+            indexed_total += int(result.get("indexed") or 0)
+            scanned_total += int(result.get("scanned") or 0)
+            done = bool(result.get("done"))
+            cursor = result.get("cursor")
+            if result.get("error"):
+                sweep_error = "backfill chunk failed; retrying next sweep"
+            health: dict[str, Any] = {
+                "ok": sweep_error is None,
+                "done": done,
+                "indexed": indexed_total,
+                "scanned": scanned_total,
+                "last_pass_at": utcnow().isoformat(),
+            }
+            if sweep_error:
+                health["last_error"] = sweep_error
+            else:
+                health["last_success_at"] = health["last_pass_at"]
+            loop_health["fts_backfill"] = health
+            if done:
+                if indexed_total:
+                    log.info("history-search backfill indexed %d doc(s)", indexed_total)
+                # Idle, then re-check from the top for anything still unindexed
+                # (a parked chunk, or history written while the index was off).
+                # The health dict just published KEEPS the sweep's verdict for
+                # the whole idle window; only the NEXT sweep starts clean.
+                cursor = None
+                sweep_error = None
+                await asyncio.sleep(idle_delay)
+            else:
+                await asyncio.sleep(pause)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — never kill the daemon
+            log.exception("history-search backfill pass failed")
+            loop_health["fts_backfill"] = {
+                "ok": False,
+                "done": False,
+                "indexed": indexed_total,
+                "scanned": scanned_total,
+                "last_error": f"{type(exc).__name__}: {exc}"[:300],
+                "at": utcnow().isoformat(),
+            }
+            cursor = None
+            await asyncio.sleep(idle_delay)
+
+
 def create_app(project_root: str | None = None) -> FastAPI:
     # Headless mode: no human can answer an "ask", so wire a resolver that
     # auto-approves only low-risk orchestration (delegate) and keeps dangerous
@@ -512,6 +659,20 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     await asyncio.sleep(interval)
 
             backup_task = asyncio.create_task(_auto_backup_loop())
+
+        # History-search backfill (v1.142.0): index the conversations that
+        # already existed before this feature shipped. See _fts_backfill_loop
+        # for the chunking / parked-chunk contract, and _backfill_index for the
+        # lock-order history behind sharing ONE index with the write seams.
+        # Disable with
+        # IRONJARVIS_FTS_BACKFILL=off (the index still serves whatever live
+        # sync has written — search just won't reach back in time).
+        fts_task = None
+        if (os.environ.get("IRONJARVIS_FTS_BACKFILL", "on").strip().lower()
+                not in {"0", "false", "no", "off"}):
+            fts_task = asyncio.create_task(
+                _fts_backfill_loop(_backfill_index(platform), loop_health)
+            )
 
         # Lesson compaction — keeps "what I've learned" DISTILLED instead of a
         # pile of session-summary echoes. Deterministic dedup runs daily for
@@ -831,6 +992,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 compact_task.cancel()
             if backup_task is not None:
                 backup_task.cancel()
+            if fts_task is not None:
+                fts_task.cancel()
             try:
                 platform.scheduler.shutdown()
             except Exception:  # pragma: no cover
@@ -1858,7 +2021,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # it); the sampler is daemon-owned because it needs the event loop.
         fleet=platform.fleet,
         fleet_sampler=fleet_sampler,
+        # History search (v1.142.0): the ONE shared index (built in
+        # build_platform, capability probe already warmed).
+        search_index=getattr(platform, "search_index", None),
     )
+    # search FIRST: nothing else claims a /search prefix today, and registering
+    # ahead of every other module makes it impossible for a future
+    # ``GET /search/{...}`` catch-all to shadow ``/search/history`` (the
+    # /skills/learning lesson below). Pair S4 detects a 404 to switch its
+    # palette lane off — see routes/search.py's degradation contract.
+    _routes.search.register(app, d)
     _routes.chat.register(app, d)
     _routes.projects.register(app, d)
     _routes.fsbrowse.register(app, d)

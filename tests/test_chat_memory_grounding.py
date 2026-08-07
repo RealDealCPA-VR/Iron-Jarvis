@@ -158,7 +158,9 @@ def test_chat_passes_sources_and_composed_query_to_ground(tmp_path, monkeypatch)
         )
         assert r.status_code == 200
         # Project knowledge rides separately, so "knowledge" is excluded here.
-        assert got["sources"] == ["files", "notes", "memory", "lessons", "sessions"]
+        assert got["sources"] == [
+            "files", "notes", "memory", "lessons", "sessions", "chats",
+        ]
         assert got["query"] == _QUESTION            # >= 6 tokens: unchanged
         assert "pinned: wiring" in seen["system"]   # the returned block lands
 
@@ -569,7 +571,7 @@ def test_stream_mirror_carries_every_new_prep_site():
     stream_src = (_SRC / "daemon" / "routes" / "chat.py").read_text(encoding="utf-8")
     for needle in (
         "_compose_recall_query(body.messages)",
-        'sources=["files", "notes", "memory", "lessons", "sessions"]',
+        'sources=["files", "notes", "memory", "lessons", "sessions", "chats"]',
         "memory_index_block",
         "_resolve_persona(",
         "Recent activity in this project (newest first):",

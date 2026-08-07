@@ -24,7 +24,7 @@ from ..schemas import (
     PersonaCreateBody,
     PersonaSaveBody,
 )
-from ...core.db import session_scope
+from ...core.db import CONVERSATION_WRITE_LOCK, session_scope
 from ...core.fs_policy import fs_read_ok
 from ...core.models import AgentState
 
@@ -56,6 +56,23 @@ from ..chat_turn import (
 )
 
 log = logging.getLogger(__name__)
+
+#: Serializes the whole read-modify-write of a thread row in
+#: ``PUT``/``DELETE /chat/threads/{id}``. Route handlers are re-entered per
+#: request across the threadpool, so this has to be process-wide, not per-object.
+#:
+#: This route never had a lock — it rewrote the whole message array and, since
+#: v1.142.0, ALSO rewrites that thread's search docs. Two autosaves for the same
+#: thread landing together could interleave row write and index write and leave
+#: the index describing a transcript the row no longer holds. Held around the
+#: session, so the row and its docs are written under one owner.
+#:
+#: It is the SHARED conversation lock, not a private one: comm threads and round
+#: tables write the same index, and three separate locks around three
+#: transactions that all take ``SearchIndex``' internal lock deadlock against
+#: SQLite's single writer. See ``core.db.CONVERSATION_WRITE_LOCK`` for the
+#: measurement (66s and two lost writes) that collapsed them into one.
+_THREAD_SAVE_LOCK = CONVERSATION_WRITE_LOCK
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
@@ -331,7 +348,23 @@ def register(app: FastAPI, d) -> None:
         ``messages`` write here would clobber that copy → 409. Title /
         persona / project_id / setup edits stay allowed (send the body
         WITHOUT a ``messages`` key). Creation ('new') is unaffected — owner
-        defaults to "user". DELETE stays allowed for any thread."""
+        defaults to "user". DELETE stays allowed for any thread.
+
+        v1.142.0 adds two server-side responsibilities, both invisible to the
+        client (which round-trips unknown message fields verbatim, so no
+        dashboard change was needed):
+
+        * every message without an ``at`` is STAMPED with the save time — the
+          long-standing shape carried no timestamp at all, which made
+          "what did we say in March" unanswerable. Existing ``at`` values are
+          never overwritten, so a client that starts sending real per-message
+          times immediately wins;
+        * the thread is re-indexed for history search inside THIS transaction
+          (``db=``), so the transcript and its search docs commit or roll back
+          together. The sync is delete-all-then-insert, which is what makes it
+          safe for a route that rewrites the whole array on every autosave.
+        """
+        from ...core.db import search_index
         from ...core.ids import utcnow as _now
         from ...core.models import ChatThreadRecord
 
@@ -339,7 +372,7 @@ def register(app: FastAPI, d) -> None:
         raw_setup = body.get("setup")
         if "setup" in body and raw_setup is not None and not isinstance(raw_setup, dict):
             raise HTTPException(status_code=400, detail="setup must be an object")
-        with session_scope(d.platform.engine) as db:
+        with _THREAD_SAVE_LOCK, session_scope(d.platform.engine) as db:
             r = None if thread_id == "new" else db.get(ChatThreadRecord, thread_id)
             # getattr-read (defaults "user") so the guard works even before
             # the additive owner column lands — no import-order coupling.
@@ -378,23 +411,89 @@ def register(app: FastAPI, d) -> None:
             # explicit null clears it (same contract as project_id above).
             if "setup" in body:
                 r.setup_json = _clean_setup(raw_setup)
+            kept: list = []
             if not daemon_owned:
-                r.messages_json = json.dumps(msgs[-200:])
+                kept = list(msgs[-200:])
+                # Server-side `at`: stamp only what has none. The client passes
+                # unknown fields straight back, so a stamp written here survives
+                # every later autosave untouched — ONCE the client has seen it.
+                # KNOWN LIMITATION (pinned by
+                # tests/test_search_sync.py::test_a_live_thread_restamps_until_it_is_reopened):
+                # a message typed in the CURRENT session lives in the dashboard's
+                # in-memory array with no `at`, so each autosave re-stamps it.
+                # The stored time therefore means "this thread's last activity"
+                # until the thread is reopened, at which point it freezes.
+                # Monotonic and bounded, and the fix is one line of dashboard —
+                # stamp at compose time client-side; the guard below already
+                # yields to any client-supplied value.
+                stamp = _now().isoformat()
+                for m in kept:
+                    if isinstance(m, dict) and not m.get("at"):
+                        m["at"] = stamp
+                r.messages_json = json.dumps(kept)
+            else:
+                # Metadata-only edit on a daemon-owned thread (a rename, a
+                # project (un)tag). The transcript is the comm store's, but the
+                # docs carry the title + project_id, so re-index from the
+                # STORED copy or the index would keep serving the old label /
+                # leak into the wrong project filter.
+                try:
+                    stored = json.loads(r.messages_json or "[]")
+                    kept = stored if isinstance(stored, list) else []
+                except Exception:  # noqa: BLE001 — a corrupt blob just skips
+                    kept = []
             r.updated_at = _now()
             db.add(r)
+            # NOTE: deliberately NO ``db.flush()`` here. There is no foreign key
+            # from a doc back to the thread (``r.id`` is generated in Python), so
+            # the flush bought nothing — and it took SQLite's single writer
+            # BEFORE the index lock, which is the wrong order: see
+            # ``core.db.CONVERSATION_WRITE_LOCK``. The autoflush inside
+            # ``sync_thread`` writes the row anyway, just on the safe side of the
+            # lock.
+            # HISTORY SEARCH: same transaction, same lock — never raises
+            # (SearchIndex logs and returns 0), guarded anyway so an index
+            # regression can never cost the user a saved conversation.
+            try:
+                index = search_index(d.platform.engine)
+                if index is not None:
+                    index.sync_thread(
+                        r.id,
+                        "comm" if daemon_owned else "chat",
+                        r.title or "",
+                        r.project_id or "",
+                        kept,
+                        db=db,
+                    )
+            except Exception:  # noqa: BLE001 — a save must never fail on search
+                log.warning("history-search sync failed for thread %s", r.id,
+                            exc_info=True)
             db.commit()
             db.refresh(r)
         return {"id": r.id, "title": r.title, "project_id": r.project_id}
 
     @app.delete("/chat/threads/{thread_id}")
     def delete_chat_thread(thread_id: str) -> dict[str, Any]:
+        """Delete a thread AND its history-search docs, in one transaction.
+
+        The index has no foreign key back to the thread row (deliberately — see
+        ``search/index.py``), so a delete that skipped this would leave the
+        transcript searchable forever: "delete" has to mean deleted."""
+        from ...core.db import search_index
         from ...core.models import ChatThreadRecord
 
-        with session_scope(d.platform.engine) as db:
+        with _THREAD_SAVE_LOCK, session_scope(d.platform.engine) as db:
             r = db.get(ChatThreadRecord, thread_id)
             if r is None:
                 raise HTTPException(status_code=404, detail="no such thread")
             db.delete(r)
+            try:
+                index = search_index(d.platform.engine)
+                if index is not None:
+                    index.drop_thread(thread_id, db=db)
+            except Exception:  # noqa: BLE001 — a delete must always complete
+                log.warning("history-search drop failed for thread %s", thread_id,
+                            exc_info=True)
             db.commit()
         return {"deleted": thread_id}
 
@@ -957,7 +1056,7 @@ def register(app: FastAPI, d) -> None:
                 grounding = fabric.ground(
                     recall_query,
                     project_id=pid,
-                    sources=["files", "notes", "memory", "lessons", "sessions"],
+                    sources=["files", "notes", "memory", "lessons", "sessions", "chats"],
                 )
                 if grounding:
                     system += grounding

@@ -723,9 +723,10 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
             pass
 
     # MEMORY FABRIC: fold in the most relevant snippets from every store
-    # (files, notes, memory graph, lessons, past sessions — project
-    # knowledge is already injected above when a project is set) so a plain
-    # chat turn is grounded in what the user knows, without arming a tool.
+    # (files, notes, memory graph, lessons, past sessions, and — v1.142.0 —
+    # past CONVERSATIONS via the history index; project knowledge is already
+    # injected above when a project is set) so a plain chat turn is grounded
+    # in what the user knows, without arming a tool.
     # Keyed off the turn's composed recall query (X.3) — short follow-ups
     # inherit the conversation's subject instead of recalling on noise.
     fabric = getattr(d.platform, "fabric", None)
@@ -734,7 +735,7 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
             grounding = fabric.ground(
                 recall_query,
                 project_id=pid,
-                sources=["files", "notes", "memory", "lessons", "sessions"],
+                sources=["files", "notes", "memory", "lessons", "sessions", "chats"],
             )
             if grounding:
                 system += grounding

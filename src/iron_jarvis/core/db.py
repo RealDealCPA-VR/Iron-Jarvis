@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -83,10 +84,159 @@ def _ensure_indexes(engine: Engine) -> None:
                 pass
 
 
+#: The FTS5 virtual table behind history search (``src/iron_jarvis/search/``).
+#: Deliberately created with RAW DDL and deliberately NOT a SQLModel
+#: ``table=True`` model: ``_reconcile_additive_columns`` walks
+#: ``SQLModel.metadata.tables`` and would try to ``ALTER`` a *virtual* table on
+#: every boot. Leaving it unmapped is what keeps the reconciler away from it.
+#: Own-content (not ``content='...'`` external-content) so a delete is a plain
+#: ``DELETE ... WHERE rowid IN (...)`` that no other subsystem's bulk delete can
+#: corrupt — see ``search/index.py``'s module docstring for the full rationale.
+_FTS_TABLE = "searchdoc_fts"
+_FTS_DDL = (
+    f"CREATE VIRTUAL TABLE IF NOT EXISTS {_FTS_TABLE} "
+    "USING fts5(text, tokenize='porter unicode61')"
+)
+
+
+def _register_search_models() -> None:
+    """Put ``searchdocrecord`` into ``SQLModel.metadata`` BEFORE ``create_all``
+    and ``_reconcile_additive_columns`` run.
+
+    Nothing else imports ``search.models`` at daemon boot, so without this the
+    doc table is absent from the metadata while the reconciler walks it — and a
+    future ADDITIVE column on :class:`~iron_jarvis.search.models.SearchDocRecord`
+    would then never self-heal on an existing ``.ironjarvis`` DB. Creating the
+    table later (in :func:`_ensure_fts`) does not help: ``checkfirst=True`` sees
+    a table that already exists and adds nothing. The failure is SILENT — index
+    writes swallow their exceptions, so history search would just quietly index
+    nothing forever. Pinned by
+    ``tests/test_search_index.py::test_search_doc_table_is_registered_before_the_reconciler``.
+    """
+    try:
+        from ..search import models as _search_models  # noqa: F401
+    except Exception:  # noqa: BLE001 — search is additive; never brick boot
+        logger.warning("history-search models unavailable", exc_info=True)
+
+
+def _ensure_fts(engine: Engine) -> None:
+    """Create the history-search substrate if missing (idempotent, every boot).
+
+    Two halves, both best-effort:
+
+    1. ``searchdocrecord`` — the ordinary mapped row table. Belt-and-braces:
+       :func:`_register_search_models` already imported the module so
+       ``create_all`` built it, but the explicit ``create(checkfirst=True)``
+       covers a DB where that step was skipped, so the substrate is never one
+       missing import away from silently not existing.
+    2. ``searchdoc_fts`` — the FTS5 virtual table (see ``_FTS_DDL``). A SQLite
+       build WITHOUT FTS5 raises here; that is expected and swallowed, and
+       ``SearchIndex.available()`` then degrades search to a LIKE scan with an
+       honest ``mode: "basic"`` rather than 500ing.
+
+    Same bare-``try`` discipline as ``_ensure_indexes``: a missing table must
+    never brick boot.
+    """
+    try:
+        from ..search.models import SearchDocRecord  # registers the mapped table
+
+        SearchDocRecord.__table__.create(bind=engine, checkfirst=True)
+    except Exception:  # noqa: BLE001 — search is additive; never brick boot
+        logger.warning("history-search doc table unavailable", exc_info=True)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(_FTS_DDL))
+    except Exception:  # noqa: BLE001 — no FTS5 in this SQLite build
+        logger.warning("FTS5 unavailable; history search will use the LIKE fallback")
+
+
+#: Where the shared :class:`~iron_jarvis.search.SearchIndex` is parked: ON THE
+#: ENGINE OBJECT itself, not in a module-level map.
+#:
+#: A ``WeakKeyDictionary[Engine, SearchIndex]`` was tried first and is a TRAP
+#: here: ``SearchIndex`` holds ``self.engine``, so the dictionary's (strong)
+#: value keeps its own (weak) key alive and the entry can never expire —
+#: measured: 5 of 5 engines still reachable after every external reference was
+#: dropped and ``gc.collect()`` ran twice. That immortalizes every engine ever
+#: built, with its connection pool and open SQLite file handles, across a
+#: 2000-test suite that mints one per daemon. Hanging the index off the engine
+#: makes the lifetimes exactly identical with no global state at all.
+#: Pinned by ``tests/test_search_sync.py::test_the_index_cache_does_not_pin_engines``.
+_SEARCH_INDEX_ATTR = "_ironjarvis_search_index"
+_SEARCH_INDEX_LOCK = threading.Lock()
+
+#: ONE lock for every conversation write — ``PUT``/``DELETE /chat/threads/{id}``,
+#: ``CommThreadStore.append`` and ``AgentThreads._append``.
+#:
+#: These were three independent locks until v1.142.0, which was fine while each
+#: seam only touched its own row. It stopped being fine the moment all three also
+#: wrote the shared history index: ``SearchIndex`` holds an internal lock across
+#: its statements, so seam A (already holding SQLite's single writer) waiting for
+#: the index lock, while seam B holds the index lock and waits for the writer, is
+#: a genuine deadlock. It resolves only when ``busy_timeout`` fires 30s later —
+#: and the failed flush then leaves B's Session unusable, so B's ``commit()``
+#: raises ``PendingRollbackError`` and the user's message is GONE. Measured on
+#: 12 concurrent writers: 30ms / 0 errors before the index, 66s / 2 LOST WRITES
+#: with three locks, 30ms / 0 errors with one.
+#:
+#: Serializing all three costs nothing real — SQLite admits ONE writer anyway, and
+#: a global chat lock measured FASTER than lock-free (8 concurrent PUTs to 8
+#: threads: 59ms vs 153ms wall) because it replaces busy-wait retries with a
+#: clean queue. RLock so a seam may nest (a route that appends and then saves).
+#: Pinned by ``tests/test_search_sync.py::test_the_three_write_locks_never_deadlock_each_other``.
+CONVERSATION_WRITE_LOCK = threading.RLock()
+
+#: Ids read per keyset page when ``prune_events`` expires history-search docs.
+#: Bounded on purpose — a boot prune over a large backlog must stay O(page),
+#: not O(backlog). Small enough that a test can page it, big enough that a real
+#: prune issues a handful of statements.
+_PRUNE_ID_PAGE = 1000
+
+
+def search_index(engine: Engine) -> Any:
+    """The shared history-search index for *engine* — or ``None`` if the search
+    package can't be imported at all.
+
+    Lives HERE rather than in ``search/`` because the five write seams that need
+    it span four packages (``daemon/routes``, ``comm``, ``agents``, and this
+    module) and all of them already import ``core.db``; a per-call
+    ``SearchIndex(engine)`` would instead re-run the FTS5 capability probe on
+    every chat autosave, every phone message, and every round entry. The import
+    is deliberately LAZY (function-local): ``search.index`` imports
+    ``session_scope`` from this module, so a module-level import would close the
+    cycle.
+
+    Never raises — a caller that gets ``None`` simply skips indexing, exactly
+    like every other seam guard.
+    """
+    try:
+        index = getattr(engine, _SEARCH_INDEX_ATTR, None)
+        if index is not None:
+            return index
+        with _SEARCH_INDEX_LOCK:
+            index = getattr(engine, _SEARCH_INDEX_ATTR, None)
+            if index is None:
+                from ..search import SearchIndex  # lazy: breaks the import cycle
+
+                index = SearchIndex(engine)
+                try:
+                    setattr(engine, _SEARCH_INDEX_ATTR, index)
+                except Exception:  # noqa: BLE001 — a slotted/mock engine
+                    # Un-cacheable engine (a test double with __slots__): still
+                    # hand back a working index, just an unshared one.
+                    logger.debug("engine will not hold the search index", exc_info=True)
+            return index
+    except Exception:  # noqa: BLE001 — search is additive; never break a caller
+        logger.warning("history-search index unavailable for this engine", exc_info=True)
+        return None
+
+
 def init_db(engine: Engine) -> None:
+    _register_search_models()  # MUST precede create_all + the reconciler
     SQLModel.metadata.create_all(engine)
     _reconcile_additive_columns(engine)
     _ensure_indexes(engine)
+    _ensure_fts(engine)
     run_migrations(engine)
 
 
@@ -257,7 +407,18 @@ def prune_events(engine: Engine, older_than_days: int, vacuum: bool = False) -> 
     Previously only EventRecord was pruned, so the tool-invocation ledger + run
     rows grew UNBOUNDED and the audit trail went internally inconsistent (a tool
     entry whose backing event had aged out). TX-01 prunes all four on the same
-    cutoff so the timeline stays consistent and bounded."""
+    cutoff so the timeline stays consistent and bounded.
+
+    HISTORY SEARCH (v1.142.0): the bulk ``sa_delete`` below bypasses ORM events,
+    so nothing downstream can notice a run disappearing. The expiring AgentRun
+    ids are therefore read FIRST — in BOUNDED keyset pages of
+    :data:`_PRUNE_ID_PAGE`, never one big list, or this function would hand back
+    the very O(rows) memory the bulk DELETE below exists to avoid — and handed
+    to ``SearchIndex.drop_refs`` inside this same transaction, so the rows and
+    their index docs expire together or not at all. Note what is NOT pruned:
+    ``Session`` rows survive a prune, so their ``session`` docs are left alone
+    deliberately — dropping them would blind recall to runs the app still
+    lists."""
     from datetime import timedelta
     from pathlib import Path
 
@@ -284,6 +445,35 @@ def prune_events(engine: Engine, older_than_days: int, vacuum: bool = False) -> 
             ).all()
             if r
         ]
+        # Drop the history-search docs for the expiring runs BEFORE the bulk
+        # delete removes the rows we read them from — the index keys its docs by
+        # ``ref``, and a deleted run whose docs survive is an orphan no later
+        # read could ever detect. Read in bounded keyset pages so a 33k-row
+        # backlog costs one page of ids, not the backlog. db= → the doc deletes
+        # join THIS transaction and commit (or roll back) with the deletes below.
+        index = search_index(engine)
+        if index is not None:
+            try:
+                last_id = ""
+                while True:
+                    page = [
+                        r for r in db.exec(
+                            select(AgentRun.id)
+                            .where(AgentRun.created_at < cutoff)
+                            .where(AgentRun.id > last_id)
+                            .order_by(AgentRun.id)  # type: ignore[arg-type]
+                            .limit(_PRUNE_ID_PAGE)
+                        ).all()
+                        if r
+                    ]
+                    if not page:
+                        break
+                    index.drop_refs(page, db=db)
+                    last_id = page[-1]
+                    if len(page) < _PRUNE_ID_PAGE:
+                        break
+            except Exception:  # noqa: BLE001 — a prune must always finish
+                logger.warning("history-search prune skipped", exc_info=True)
         # Bulk DELETE in the engine (returns rowcount) rather than materializing every
         # expired row as an ORM object and deleting one-by-one — the boot prune over a
         # large backlog was O(rows) memory + ~1.3s/33k rows.

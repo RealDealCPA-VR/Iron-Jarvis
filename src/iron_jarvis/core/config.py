@@ -65,6 +65,11 @@ def default_permissions() -> dict[str, str]:
         "notify": "ask",
         "file_search": "allow",
         "recall": "allow",  # semantic recall across indexed roots + long-term memory
+        # Ranked read-only search over the user's OWN past conversations — same
+        # read-only tier as recall/ltm_search. Without an entry here the engine
+        # is fail-closed ("ask"), and an "ask" with no resolver is a DENY in the
+        # headless daemon: agents and scheduled runs could never search history.
+        "history_search": "allow",
         "ltm_search": "allow",
         "ltm_append": "allow",
         "list_agents": "allow",

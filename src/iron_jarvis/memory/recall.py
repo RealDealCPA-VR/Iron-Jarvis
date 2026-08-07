@@ -4,8 +4,9 @@
 :class:`~iron_jarvis.memory.fabric.MemoryFabric`, which federates EVERY memory
 store — indexed file roots, long-term memory (brain/Obsidian/Notion), the
 layered memory graph, a project's attached knowledge, self-correction lessons,
-and past sessions — and returns ranked, de-duplicated snippets. One tool, one
-call, the whole of what Iron Jarvis knows.
+past sessions, and (v1.142.0) past CONVERSATIONS via the FTS5 history index —
+and returns ranked, de-duplicated snippets. One tool, one call, the whole of
+what Iron Jarvis knows.
 """
 
 from __future__ import annotations
@@ -25,7 +26,8 @@ class RecallTool(Tool):
         "Recall anything Iron Jarvis knows, ranked by MEANING (not just "
         "substring), across ALL memory at once: indexed file roots, long-term "
         "memory (brain / Obsidian / Notion), the memory graph, the current "
-        "project's attached knowledge, lessons learned, and past sessions. "
+        "project's attached knowledge, lessons learned, past sessions, and past "
+        "CONVERSATIONS (desktop chat, phone messages, and agent round tables). "
         "Returns ranked snippets tagged with their source. Use this whenever you "
         "need context, prior work, notes, or what happened before — broader and "
         "smarter than a grep. Stays within configured roots; never reads "
@@ -44,7 +46,10 @@ class RecallTool(Tool):
             "sources": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Optional filter: any of files/notes/memory/knowledge/lessons/sessions.",
+                "description": (
+                    "Optional filter: any of files/notes/memory/knowledge/"
+                    "lessons/sessions/chats ('chats' = past conversations)."
+                ),
             },
         },
         "required": ["query"],

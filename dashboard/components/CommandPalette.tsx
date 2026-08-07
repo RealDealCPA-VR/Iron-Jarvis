@@ -21,11 +21,15 @@ import {
   Bot,
   FolderKanban,
   CalendarClock,
+  Phone,
+  Users,
+  Boxes,
   type LucideIcon,
 } from "lucide-react";
 import { NAV_ENTRIES } from "@/lib/nav";
 import { scorePalette, type PaletteItem } from "@/lib/palette";
 import { get } from "@/lib/api";
+import { normalizeIso } from "@/lib/format";
 
 /**
  * THE FRONT DOOR (v1.111.0).
@@ -38,6 +42,11 @@ import { get } from "@/lib/api";
  * deep links reach mid-page capabilities, and the live daemon supplies skills,
  * threads and projects. Ranking lives in lib/palette.ts so it can be unit
  * tested instead of eyeballed.
+ *
+ * v1.142.0 adds the one thing a client-side matcher can never do: search what
+ * was SAID. "In your conversations" is a live lane over the daemon's full-text
+ * index — it ranks itself, it merges below the name matches, and on a daemon
+ * that has no such index it simply isn't there.
  */
 
 /** A palette item plus the two things the pure scorer has no business knowing:
@@ -46,6 +55,13 @@ interface PaletteRow extends PaletteItem {
   icon: LucideIcon;
   /** When set, run this instead of navigating to href (e.g. open the switcher). */
   run?: () => void;
+  /** History lane only: the matching line, already split into plain and
+   *  highlighted runs. Rendered as TEXT NODES — see splitSnippet. */
+  parts?: SnippetPart[];
+  /** History lane only: when the conversation happened ("3d ago" / "Mar 12"). */
+  when?: string;
+  /** History lane only: a truer badge than the generic kind ("Phone", "Session"). */
+  badge?: string;
 }
 
 /** Row badge text — small, so a result never leaves you guessing what it IS. */
@@ -55,6 +71,9 @@ const KIND_LABEL: Record<PaletteItem["kind"], string> = {
   skill: "Skill",
   project: "Project",
   thread: "Thread",
+  // History rows carry their own, more specific badge (see HISTORY_KINDS); this
+  // is only the fallback that keeps the map total.
+  history: "Conversation",
 };
 
 // ── Pages ────────────────────────────────────────────────────────────────────
@@ -281,6 +300,238 @@ const RESULT_LIMIT = 9;
 /** Recent chats on the empty screen — a taste, not the whole history. */
 const EMPTY_THREADS = 5;
 
+// ── "In your conversations" (v1.142.0) ───────────────────────────────────────
+// THE NEED: "that chat from March about the S-corp election". Everything above
+// this line matches TITLES — the twenty newest threads, by name. What the user
+// actually remembers is something SAID inside a conversation, which no title
+// search can reach and which no amount of ranking on the client can invent.
+// GET /search/history is the daemon's full-text index over every past chat,
+// message thread, round-table and session; this lane is its only UI.
+//
+// It is deliberately NOT part of scorePalette's input. That matcher ANDs
+// substrings over labels, aliases and blurbs — feeding it rows the index
+// already ranked by relevance would re-rank them by a rule that cannot see the
+// message text, and would drop most of them outright.
+
+/** Section label above the lane. */
+const HISTORY_HEADER = "In your conversations";
+/** Rows RENDERED: enough to recognise the conversation you meant, few enough
+ *  that the ask row and the title matches above stay on screen. */
+const HISTORY_LIMIT = 5;
+/** Rows ASKED FOR — deliberately wider than the five that are shown.
+ *
+ * The index answers per MESSAGE, not per conversation (search/index.py's MATCH
+ * has no GROUP BY), so one chatty thread can legitimately own every row of a
+ * five-row answer. Collapsed to one row per conversation below, that is a lane
+ * showing ONE result for a query with dozens of matching conversations — the
+ * exact failure this feature exists to fix. Asking for a wider window costs a
+ * local SQLite index nothing (its own ceiling is 200) and is the only way five
+ * DISTINCT conversations can survive the collapse. */
+const HISTORY_FETCH = 20;
+/** Below three characters the index returns noise, and every keystroke would
+ *  cost a round trip for it. */
+const HISTORY_MIN_CHARS = 3;
+/** Long enough that a typed word costs one request, not six; short enough that
+ *  the lane lands while you are still reading the rows above it. */
+const HISTORY_DEBOUNCE_MS = 180;
+/** A snippet is one line of a result row, not a paragraph. */
+const SNIPPET_MAX = 150;
+
+/** GET /search/history?q&limit → `{hits, mode, count}`. Every field is optional
+ *  here on purpose: this is untrusted-shaped data from an endpoint that may be
+ *  older, newer, or absent, and a missing field must cost one row, not the box. */
+interface HistoryHit {
+  kind?: string;
+  ref?: string;
+  thread_id?: string;
+  title?: string;
+  /** FTS5 snippet(): the matching text with `[…]` markers around the terms. */
+  snippet?: string;
+  role?: string;
+  at?: string | null;
+  project_id?: string;
+  score?: number;
+  seq?: number;
+}
+interface HistoryResponse {
+  hits?: HistoryHit[];
+  mode?: string;
+  count?: number;
+}
+
+/** One run of snippet text: `hit` marks the part the index matched. */
+interface SnippetPart {
+  text: string;
+  hit: boolean;
+}
+
+/** What each indexed kind IS, in the user's words. "Round-table" and "Session"
+ *  are the app's own nouns; a kind we don't know about is dropped rather than
+ *  rendered as a mystery row. */
+const HISTORY_KINDS: Record<string, { badge: string; icon: LucideIcon }> = {
+  chat: { badge: "Chat", icon: MessageSquare },
+  comm: { badge: "Phone", icon: Phone },
+  round: { badge: "Round-table", icon: Users },
+  session: { badge: "Session", icon: Boxes },
+};
+
+/** Where Enter goes. Chat AND messaging threads both open through the chat
+ *  page's `?thread=` param (GET /chat/threads/{id} serves both — a messaging
+ *  thread simply comes back owned by the daemon), which is the exact shape the
+ *  live thread rows above already use. Sessions are a real route. The
+ *  round-table had no per-thread URL, so `/agents?thread=` was a link that
+ *  landed on the page and then auto-selected the NEWEST thread — a result that
+ *  opens a different conversation than the one you clicked, and says nothing
+ *  about it. app/agents/page.tsx now honours the param, so every kind here
+ *  opens the conversation the row is actually about. */
+function historyHref(kind: string, ref: string): string {
+  const id = encodeURIComponent(ref);
+  if (kind === "session") return `/sessions/${id}`;
+  if (kind === "round") return `/agents?thread=${id}`;
+  return `/chat?thread=${id}`;
+}
+
+/**
+ * Split an FTS5 snippet into plain and matched runs.
+ *
+ * The snippet is USER AND MODEL TEXT — whatever was typed into a chat months
+ * ago — so it is rendered as React text nodes and never as HTML. This function
+ * exists precisely so that no dangerouslySetInnerHTML is needed to show which
+ * words matched: the `[markers]` become structure here, at parse time.
+ *
+ * Every hostile shape degrades to plain text instead of throwing: an unclosed
+ * `[`, a stray `]`, `[]`, nesting, and a snippet that is nothing but brackets.
+ * A user who genuinely typed square brackets gets them highlighted — a cosmetic
+ * false positive, and the only alternative would be trusting a marker scheme
+ * the text itself can forge.
+ */
+function splitSnippet(raw: string | undefined): SnippetPart[] {
+  const text = (raw || "").replace(/\s+/g, " ").trim();
+  if (!text) return [];
+  const parts: SnippetPart[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const open = text.indexOf("[", i);
+    if (open < 0) break;
+    const close = text.indexOf("]", open + 1);
+    if (close < 0) break; // unclosed marker: the remainder is plain text
+    const inner = text.slice(open + 1, close);
+    if (!inner) {
+      // "[]" marks nothing. Keep it literal so the two characters don't vanish.
+      parts.push({ text: text.slice(i, close + 1), hit: false });
+      i = close + 1;
+      continue;
+    }
+    if (open > i) parts.push({ text: text.slice(i, open), hit: false });
+    parts.push({ text: inner, hit: true });
+    i = close + 1;
+  }
+  if (i < text.length) parts.push({ text: text.slice(i), hit: false });
+  return clampParts(parts);
+}
+
+/**
+ * Trim the PARSED runs to SNIPPET_MAX visible characters.
+ *
+ * Clipping the raw string first (the obvious order) was wrong twice over: the
+ * `[]` markers spent the character budget the reader never sees, and a cut that
+ * landed mid-marker left a bare `[` in the visible text and silently dropped
+ * the highlight it opened — "…before the [el…" instead of "…before the el…".
+ * Both were reproducible on ordinary snippets, because FTS5 puts a marker pair
+ * around every matched term and there are usually several.
+ */
+function clampParts(parts: SnippetPart[]): SnippetPart[] {
+  let total = 0;
+  for (const part of parts) total += part.text.length;
+  if (total <= SNIPPET_MAX) return parts;
+  const out: SnippetPart[] = [];
+  let used = 0;
+  for (const part of parts) {
+    const room = SNIPPET_MAX - 1 - used; // -1 leaves space for the ellipsis
+    if (room <= 0) break;
+    if (part.text.length <= room) {
+      out.push(part);
+      used += part.text.length;
+      continue;
+    }
+    // The cut falls inside this run. Keep what fits — a truncated highlight is
+    // still a highlight — and never split a surrogate pair, which would render
+    // the last emoji as a replacement glyph.
+    const cut = part.text.slice(0, room);
+    const safe = /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
+    if (safe) out.push({ text: safe, hit: part.hit });
+    break;
+  }
+  // The ellipsis is narration, not content: always its own plain run so it can
+  // never end up inside a <mark>.
+  out.push({ text: "…", hit: false });
+  return out;
+}
+
+/** "3d ago" while it is still recent, "Mar 12" once it isn't — because past a
+ *  week nobody thinks "142 days ago", they think "that one from March", which
+ *  is the whole reason this lane exists. normalizeIso first: the daemon writes
+ *  naive UTC, which a browser would otherwise read as local time (and a future
+ *  timestamp would print as a negative age). */
+function historyWhen(iso: string | null | undefined): string | undefined {
+  if (!iso) return undefined;
+  const d = new Date(normalizeIso(iso));
+  if (Number.isNaN(d.getTime())) return undefined;
+  const mins = Math.floor((Date.now() - d.getTime()) / 60000);
+  if (mins < 1) return "just now"; // covers clock skew (a negative age) too
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
+}
+
+/** Hits → rows, dropping anything unrenderable and collapsing repeats.
+ *  ONE ROW PER CONVERSATION: the index can legitimately return three messages
+ *  from the same thread, and three rows with the same title stacked on top of
+ *  each other read as a bug. The first is kept — it is the best-scoring one. */
+function historyRows(hits: HistoryHit[] | undefined): PaletteRow[] {
+  const rows: PaletteRow[] = [];
+  const seen = new Set<string>();
+  // Not `hits ?? []`: a body that answers with something other than a list
+  // (an older shape, a proxy's error page) must be no lane, not a throw.
+  if (!Array.isArray(hits)) return rows;
+  for (const hit of hits) {
+    const kind = String(hit?.kind || "");
+    const meta = HISTORY_KINDS[kind];
+    const ref = String(hit?.ref || hit?.thread_id || "").trim();
+    if (!meta || !ref) continue;
+    const href = historyHref(kind, ref);
+    if (seen.has(href)) continue;
+    seen.add(href);
+    rows.push({
+      id: `history:${href}`,
+      kind: "history",
+      label: String(hit?.title || "").trim() || "(untitled)",
+      href,
+      icon: meta.icon,
+      badge: meta.badge,
+      parts: splitSnippet(hit?.snippet),
+      when: historyWhen(hit?.at),
+    });
+    if (rows.length >= HISTORY_LIMIT) break;
+  }
+  return rows;
+}
+
+/** lib/api's `get` forwards any extra init fields straight into fetch (see
+ *  `api`'s `...rest`), so an AbortSignal rides along fine — its published opts
+ *  type just doesn't advertise the field. Narrowed here rather than widened in
+ *  lib/api.ts, which this lane does not own. */
+type AbortableGet = <T>(path: string, opts: { signal: AbortSignal }) => Promise<T>;
+const getAbortable = get as unknown as AbortableGet;
+
 export function CommandPalette() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -293,6 +544,19 @@ export function CommandPalette() {
   const [skillItems, setSkillItems] = useState<PaletteRow[]>([]);
   const [threadItems, setThreadItems] = useState<PaletteRow[]>([]);
   const [projectItems, setProjectItems] = useState<PaletteRow[]>([]);
+
+  // The "In your conversations" lane. Unlike the three catalogues above, this
+  // one is fetched PER QUERY (see the effect below), never once.
+  const [historyItems, setHistoryItems] = useState<PaletteRow[]>([]);
+  /** Bumped by every query change. A response whose generation is stale is
+   *  DROPPED, not merged: two requests in flight can settle out of order, and
+   *  the older one landing last would paint the previous query's results under
+   *  the current query's rows. */
+  const historyGenRef = useRef(0);
+  /** A 404 means an older daemon with no index at all. Asking again on every
+   *  keystroke for the rest of the session would be pure noise, so the lane
+   *  switches itself off — silently, which is the entire degrade story. */
+  const historyOffRef = useRef(false);
 
   /**
    * ONE GATE PER SOURCE, not one shared flag.
@@ -423,6 +687,84 @@ export function CommandPalette() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  /**
+   * The one asynchronous lane: full-text search over past conversations.
+   *
+   * Three guards, each for a failure this pattern has in it:
+   *  - DEBOUNCE. The daemon is asked once the typing pauses, not six times
+   *    across "s-corp".
+   *  - ABORT. The moment the query changes, the outstanding request is torn
+   *    down instead of being left to finish work nobody will read.
+   *  - GENERATION. Abort is best-effort (a response already in the pipe still
+   *    resolves), so the answer is checked against the query counter before it
+   *    is allowed anywhere near the visible rows. Belt AND braces, because
+   *    "late response overwrites the newer one" is invisible in testing and
+   *    infuriating in use.
+   *
+   * Results are held while the NEXT query is in flight rather than being
+   * cleared per keystroke: blanking the lane on every character makes rows
+   * appear and disappear under the arrow keys, and a hit list that lags one
+   * word behind for 180ms is strictly calmer than one that strobes. They are
+   * cleared outright the moment the query is too short to search — including
+   * when it is emptied, and when the palette closes.
+   */
+  useEffect(() => {
+    // Every run orphans whatever the previous one might still be waiting on.
+    const gen = ++historyGenRef.current;
+    const needle = open ? query.trim() : "";
+    if (!needle || needle.length < HISTORY_MIN_CHARS || historyOffRef.current) {
+      // Identity-stable when it is already empty: no lane, no re-render, no
+      // chance of nudging the highlight for a list that did not change.
+      setHistoryItems((prev) => (prev.length ? [] : prev));
+      return;
+    }
+    let ctrl: AbortController | null = null;
+    const timer = setTimeout(() => {
+      ctrl = new AbortController();
+      getAbortable<HistoryResponse>(
+        `/search/history?q=${encodeURIComponent(needle)}&limit=${HISTORY_FETCH}`,
+        { signal: ctrl.signal },
+      )
+        .then((d) => {
+          if (gen !== historyGenRef.current) return; // a newer query won
+          setHistoryItems(historyRows(d?.hits));
+        })
+        .catch((err: unknown) => {
+          // Duck-typed rather than instanceof ApiError so this stays honest
+          // under any api client that reports a status.
+          //
+          // WHICH FAILURES TURN THE LANE OFF, and why only these two: 404 is a
+          // daemon with no such route (verified — nothing registers a /search
+          // prefix before v1.142 and there is no catch-all to dress the miss up
+          // as something else, so FastAPI answers a plain 404). 405 is the path
+          // existing for some other method: a different daemon, same verdict.
+          // Neither can start working later in this page's life, so asking
+          // again on every keystroke for the rest of the session is pure noise.
+          // This is the pair app/agents/page.tsx already reads as "this daemon
+          // doesn't have that feature".
+          //
+          // Everything else stays retryable ON PURPOSE. status 0 is offline or
+          // an abort (lib/api reports both that way); 500 is a daemon that fell
+          // over or is still booting; 401/403 is a token the user is about to
+          // fix. Latching on any of those would cost the user the lane for the
+          // rest of the session over something that resolves itself in seconds.
+          const status = (err as { status?: number } | null)?.status;
+          if (status === 404 || status === 405) {
+            historyOffRef.current = true;
+          }
+          // Best effort, always: an offline daemon, a 500, a syntax the index
+          // hated, an abort — every one of them is an empty lane and no error
+          // UI. Navigation must never be worse for having offered search.
+          if (gen !== historyGenRef.current) return;
+          setHistoryItems((prev) => (prev.length ? [] : prev));
+        });
+    }, HISTORY_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+      ctrl?.abort();
+    };
+  }, [open, query]);
+
   const allItems = useMemo(
     () => [...PAGE_ITEMS, ...DEEP_LINK_ITEMS, ...ACTION_ITEMS, ...skillItems, ...threadItems, ...projectItems],
     [skillItems, threadItems, projectItems],
@@ -438,33 +780,44 @@ export function CommandPalette() {
 
   const q = query.trim();
 
-  /** The flat, selectable list. Headers below are decoration; the keyboard
-   *  model never has to know about them. */
-  const rows = useMemo<PaletteRow[]>(() => {
+  /** The flat, selectable list plus the headers that label its segments.
+   *  Computed TOGETHER because a header is addressed by row index: worked out
+   *  in a second memo, the index would be a copy of this one's arithmetic, and
+   *  the day the lane order changes only one of the two would follow.
+   *  Headers are decoration; the keyboard model never has to know about them. */
+  const { rows, headers } = useMemo<{
+    rows: PaletteRow[];
+    headers: Record<number, string>;
+  }>(() => {
     if (!q) {
       // EMPTY QUERY = the "what can I even do here" screen. The five actions
       // teach the verbs; the recent chats are the single most likely thing a
-      // returning user came back for.
-      return [...ACTION_ITEMS, ...threadItems.slice(0, EMPTY_THREADS)];
+      // returning user came back for. No conversation lane here: there is no
+      // query to search for, and a lane that appears with nothing in it is a
+      // worse answer than no lane.
+      const h: Record<number, string> = { 0: "Do something" };
+      if (threadItems.length) h[ACTION_ITEMS.length] = "Recent chats";
+      return { rows: [...ACTION_ITEMS, ...threadItems.slice(0, EMPTY_THREADS)], headers: h };
     }
     const scored = scorePalette(q, allItems, RESULT_LIMIT);
     const matched = scored
       .map((s) => byId.get(s.id))
       .filter((r): r is PaletteRow => Boolean(r));
+    // The conversation lane sits BELOW everything the client could match by
+    // name and ABOVE the ask row. Below, because a page or a thread TITLE the
+    // user named outright is a more certain answer than a phrase buried in a
+    // months-old message. Above, because the ask row is the end of the road.
+    // A conversation already offered above by title is not offered twice.
+    const above = new Set(matched.map((r) => r.href).filter(Boolean));
+    const lane = historyItems.filter((r) => !above.has(r.href));
+    const h: Record<number, string> = {};
+    if (lane.length) h[matched.length] = HISTORY_HEADER;
     // THE ROW THAT MAKES SEARCH NEVER A DEAD END. Appended for every non-empty
     // query, matches or not: "no results" is where a search tells you to go
     // away, and the one thing this app can always do with a sentence is answer
     // it. Always last so it never steals the top slot from a real destination.
-    return [...matched, askRow(q)];
-  }, [q, allItems, byId, threadItems]);
-
-  /** Index → section header rendered ABOVE that row (empty screen only). */
-  const headers = useMemo<Record<number, string>>(() => {
-    if (q) return {};
-    const h: Record<number, string> = { 0: "Do something" };
-    if (threadItems.length) h[ACTION_ITEMS.length] = "Recent chats";
-    return h;
-  }, [q, threadItems.length]);
+    return { rows: [...matched, ...lane, askRow(q)], headers: h };
+  }, [q, allItems, byId, threadItems, historyItems]);
 
   // Clamp rather than trust: live results can arrive after the user has already
   // arrowed down, and an out-of-range index would silently Enter into nothing.
@@ -605,13 +958,35 @@ export function CommandPalette() {
                       <Icon size={16} aria-hidden="true" className={on ? "text-accent" : "text-zinc-500"} />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate font-medium">{row.label}</span>
-                        {row.blurb && (
+                        {row.parts?.length ? (
+                          // The matching line, as TEXT NODES. The markers the
+                          // index puts around matched terms became structure at
+                          // parse time (splitSnippet) precisely so that months-old
+                          // user and model text is never handed to an HTML sink.
+                          <span className="block truncate text-[11px] text-zinc-500">
+                            {row.parts.map((part, p) =>
+                              part.hit ? (
+                                <mark
+                                  key={p}
+                                  className="rounded bg-accent/20 px-0.5 text-accent-soft"
+                                >
+                                  {part.text}
+                                </mark>
+                              ) : (
+                                <span key={p}>{part.text}</span>
+                              ),
+                            )}
+                          </span>
+                        ) : row.blurb ? (
                           <span className="block truncate text-[11px] text-zinc-500">{row.blurb}</span>
-                        )}
+                        ) : null}
                       </span>
+                      {row.when && (
+                        <span className="shrink-0 text-[10px] text-zinc-600">{row.when}</span>
+                      )}
                       {!isAsk && (
                         <span className="shrink-0 text-[10px] uppercase tracking-wide text-zinc-600">
-                          {KIND_LABEL[row.kind]}
+                          {row.badge ?? KIND_LABEL[row.kind]}
                         </span>
                       )}
                       {on && <CornerDownLeft size={13} aria-hidden="true" className="text-accent-soft/70" />}
@@ -646,10 +1021,17 @@ function askRow(query: string): PaletteRow {
 
 /** "Jul 27" / "Jul 27, 2025" — enough to recognise a conversation, short enough
  *  to sit on one line. An unparseable date degrades to nothing rather than to
- *  the string "Invalid Date". */
+ *  the string "Invalid Date".
+ *
+ *  normalizeIso for the same reason historyWhen needs it: SQLite hands the
+ *  daemon back NAIVE datetimes, so `updated_at` arrives without a zone and a
+ *  browser reads it as local time — hours out, and near midnight a whole day
+ *  out. That was already wrong on its own; with the conversation lane below
+ *  dating the same thread correctly, one box would print two different days
+ *  for one conversation. */
 function threadWhen(iso: string | undefined): string | undefined {
   if (!iso) return undefined;
-  const d = new Date(iso);
+  const d = new Date(normalizeIso(iso));
   if (Number.isNaN(d.getTime())) return undefined;
   const sameYear = d.getFullYear() === new Date().getFullYear();
   return d.toLocaleDateString(undefined, {

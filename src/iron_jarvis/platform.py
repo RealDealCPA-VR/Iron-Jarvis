@@ -19,7 +19,8 @@ from sqlalchemy import Engine
 
 from .core.config import Config, load_config
 from .codelab.store import CodeArtifactStore
-from .core.db import open_db, persist_event, session_scope
+from .core.db import open_db, persist_event, search_index as shared_search_index
+from .core.db import session_scope
 from .core.events import EventBus
 from .core.streams import StreamHub
 from .core.fs_policy import register_protected_root
@@ -70,6 +71,8 @@ from .ltm import sources as _ltm_sources  # noqa: F401  (registers LTMSourceReco
 from .memory.embeddings import build_embedder
 from .memory.fabric import MemoryFabric
 from .memory.recall import recall_tools
+from .search import SearchIndex
+from .search.tools import history_search_tools
 from .scheduling import Scheduler
 from .scheduling import models as _sched_models  # noqa: F401
 from .reflex import models as _reflex_models  # noqa: F401  (registers ReflexRule)
@@ -167,6 +170,20 @@ class Platform:
     #: notes, memory graph, project knowledge, lessons, sessions). Powers the
     #: ``recall`` tool and the auto-grounding folded into chat + agent runs.
     fabric: "MemoryFabric | None" = None
+    #: FTS5 history search (v1.142.0) — ONE ranked index over every conversation
+    #: (chat threads, messaging threads, round-tables, agent sessions). Built
+    #: once here and shared: the capability probe is cached and the writes are
+    #: serialized by the index's own lock, so every consumer (the
+    #: ``history_search`` tool, ``GET /search/history``, the memory fabric, the
+    #: daemon's backfill loop) must use THIS instance, never its own.
+    #:
+    #: CANONICAL ACCESSOR: ``core.db.search_index(engine)``. This attribute is
+    #: the same object — ``build_platform`` obtains it from that accessor rather
+    #: than constructing one — so the write seams (which reach it through
+    #: ``core.db``, without a platform in scope) and everything holding a
+    #: platform share ONE lock. Never write ``SearchIndex(engine)`` outside
+    #: ``core.db.search_index``.
+    search_index: "SearchIndex | None" = None
     #: The Reflex Loop's durable rule store (signal→action bindings). The
     #: executing ReflexRouter is built by the daemon (it needs the orchestrator).
     reflex: "object | None" = None
@@ -710,6 +727,33 @@ def build_platform(
     for tool in recall_tools(fabric):
         registry.register(tool)
 
+    # History search (v1.142.0): the FTS5 index over every conversation. ONE
+    # instance per ENGINE for the whole process, obtained from the CANONICAL
+    # accessor ``core.db.search_index`` — never ``SearchIndex(engine)`` here.
+    #
+    # That accessor is not a stylistic preference, it is the only thing that
+    # makes the index's internal write lock mean anything. The five write seams
+    # (chat save/delete, comm append, round append, orchestrator post-run,
+    # prune_events) and the memory fabric all reach the index through
+    # ``core.db.search_index(engine)``; a second instance built here would carry
+    # its OWN ``threading.RLock``, so the daemon's backfill loop and a chat
+    # autosave could each believe they were serialized while actually racing —
+    # two half-open delete-then-insert transactions on the same thread's docs,
+    # resolved by SQLite's busy_timeout and a silently dropped index write.
+    # One instance, one lock, one capability probe. Pinned by
+    # ``tests/test_history_search.py::test_one_shared_index_serves_tool_route_and_seams``.
+    #
+    # available() is called RIGHT HERE, at build time, on purpose: the first
+    # call is the probe (a query, and on a fresh DB a CREATE VIRTUAL TABLE), and
+    # the first caller would otherwise pay for it — possibly from inside another
+    # subsystem's open write transaction (Pair S2 syncs inside its own
+    # session_scope). Warming it here keeps the probe off every hot path.
+    search_index: "SearchIndex | None" = shared_search_index(engine)
+    if search_index is not None:
+        search_index.available()
+        for tool in history_search_tools(search_index):
+            registry.register(tool)
+
     # MCP auto-approve: a server the user explicitly marked trusted lets the
     # headless daemon run its tools without an interactive prompt, so autonomous
     # agents (and the Reflex Loop) can actually USE it — not just chat, which
@@ -760,6 +804,7 @@ def build_platform(
         fleet=fleet_registry,
         embedder=embedder,
         fabric=fabric,
+        search_index=search_index,
     )
 
     # Phase 6: the delegate tool needs the assembled platform.

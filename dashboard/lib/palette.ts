@@ -11,7 +11,13 @@
  */
 export interface PaletteItem {
   id: string;
-  kind: "page" | "action" | "skill" | "project" | "thread";
+  /** "history" (v1.142.0) is a hit from the daemon's full-text index over past
+   *  conversations. It is named here because the palette's row type is shared,
+   *  NOT because it is ranked here: history rows are fetched already ranked by
+   *  the index and are merged into the list as their own segment. They are
+   *  never passed to scorePalette — its AND-substring matcher knows nothing
+   *  about message bodies and would simply throw the whole lane away. */
+  kind: "page" | "action" | "skill" | "project" | "thread" | "history";
   label: string;
   blurb?: string;
   /** What the user might CALL it, when that isn't what we named it. */
@@ -31,6 +37,10 @@ const KIND_RANK: Record<PaletteItem["kind"], number> = {
   skill: 2,
   project: 3,
   thread: 4,
+  // Unreachable in practice (nothing hands a history item to scorePalette) but
+  // the map is total by type, and a rank is cheaper than a lie: if one ever
+  // does arrive, it sorts last rather than tying with a page.
+  history: 5,
 };
 
 // The gaps are wide (not 4/3/2/1) so that a strong hit on ONE word of a

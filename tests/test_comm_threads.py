@@ -11,6 +11,7 @@ import asyncio
 import json
 import sqlite3
 import threading
+from datetime import datetime
 
 import pytest
 from sqlalchemy import text
@@ -149,10 +150,15 @@ def test_append_persists_and_returns_count(store, engine):
         r = db.get(ChatThreadRecord, t.id)
         msgs = json.loads(r.messages_json)
         assert r.updated_at is not None
-    assert msgs == [
-        {"role": "user", "content": "hello"},
-        {"role": "assistant", "content": "hi there"},
+    # role/content are the long-standing contract; v1.142.0 adds a server-side
+    # ``at`` stamp (the daemon IS the writer here) so a phone message can be
+    # found by date. Assert the pair explicitly, then the stamp separately.
+    assert [(m["role"], m["content"]) for m in msgs] == [
+        ("user", "hello"),
+        ("assistant", "hi there"),
     ]
+    for m in msgs:
+        assert datetime.fromisoformat(m["at"]).tzinfo is not None
 
 
 def test_append_missing_thread_raises(store):

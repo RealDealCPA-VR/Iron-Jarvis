@@ -8,6 +8,10 @@ Iron Jarvis accumulates knowledge in *seven* places, each with its own index:
 4. **knowledge** — a project's attached files + pasted notes (vector, scoped)
 5. **lessons**   — self-correction lessons learned from feedback/reflection
 6. **sessions**  — what past agent runs were about + how they turned out
+7. **chats**     — the CONVERSATIONS themselves (v1.142.0): desktop chat
+   threads, phone/comm threads, and Agents-page round tables, ranked by the
+   FTS5 history index. Until now the single largest store of what the user
+   actually told Iron Jarvis was the one store recall could not reach.
 
 Before the Fabric, an agent had to know WHICH store to ask and call a different
 tool for each. :class:`MemoryFabric` federates them behind a single
@@ -17,9 +21,37 @@ sessions, tasks, and projects all get the same "remember everything" reflex.
 
 Design rules: every store is queried behind its own ``try`` (a broken connector
 never breaks recall), vector stores contribute a real cosine score while the
-non-embedded stores (notes/lessons/sessions) get a cheap lexical relevance, and
-at most ONE query embedding is computed per call (project knowledge reuses stored
+non-embedded stores (notes/lessons) get a cheap lexical relevance, and at most
+ONE query embedding is computed per call (project knowledge reuses stored
 vectors). Everything is bounded and offline-safe.
+
+Where the SearchIndex fits (v1.142.0)
+-------------------------------------
+``chats`` and ``sessions`` are served by
+:class:`~iron_jarvis.search.SearchIndex`: real ranking (BM25 + porter stemming,
+so "elections" finds "election") instead of counting overlapping words over a
+400-row scan. Its scores already arrive normalized into ``[0.35, 0.95]`` for a
+conjunctive hit — and DELIBERATELY below that floor (but always ``> 0``) for one
+the index only found by widening a spoken sentence into an ``OR`` of its content
+words, so a partial match cannot outrank a real one. Either way the score is
+inside the ``[0,1]`` band every other store ranks in, so hits from all seven
+stores stay comparable when :meth:`MemoryFabric.recall` sorts across them.
+
+``sessions`` keeps its ORIGINAL lexical scan as a live fallback, used whenever
+the index answers with nothing — not only when FTS5 is missing. That is a
+deliberate widening of the spec: history is indexed lazily by a background
+backfill, so on any existing install (and in any test that seeds a ``Session``
+row directly) the index is legitimately empty while the rows are right there.
+Falling back on an empty answer is what stops the upgrade from making recall
+temporarily FORGET past runs. ``chats`` has no such fallback because it never
+had a scan to fall back to — an unindexed conversation is simply not yet
+findable, which is honest rather than wrong.
+
+One consequence had to be engineered around: BM25 scores land in a tight HIGH
+band, so several conversations about the same topic all outrank a genuine cosine
+hit and sweep a small ``k``. :meth:`MemoryFabric._seat` therefore holds ``chats``
+to one slot in :data:`_CHAT_SLOT_SHARE` whenever other stores are in play, and
+tops the remainder back up when they aren't.
 """
 
 from __future__ import annotations
@@ -34,13 +66,52 @@ from ..core.fs_policy import fs_path_allowed, is_protected_path
 
 #: The store keys a caller may filter on (``sources=``). Order here is also the
 #: tie-break/diversity order when scores are equal.
-FABRIC_SOURCES = ("files", "notes", "memory", "knowledge", "lessons", "sessions")
+FABRIC_SOURCES = (
+    "files", "notes", "memory", "knowledge", "lessons", "sessions", "chats",
+)
 
 #: Rows scanned for the lexical stores — bounded so a huge history stays fast.
 _MAX_SESSION_SCAN = 400
 _MAX_LESSON_SCAN = 300
 #: Chars kept per hit snippet.
 _SNIPPET_CHARS = 280
+
+#: The history-index kinds that ARE conversations (``session`` is the other
+#: kind the index holds, and it has its own fabric source).
+_CHAT_KINDS = ("chat", "comm", "round")
+
+#: How many index rows ``chats`` pulls per requested hit. One thread usually
+#: matches on several messages, and ``_dedupe`` keeps only the best per thread —
+#: so ask for a surplus, or a single chatty thread eats the whole budget.
+_CHAT_OVERSCAN = 5
+
+#: One ``chats`` hit per this many result slots in a MIXED recall (see
+#: :meth:`MemoryFabric._seat`).
+#:
+#: Why a cap exists at all: BM25 scores arrive normalized into a TIGHT high band
+#: (``[0.35, 0.95]``, 5% decay per rank), so N threads that all mention the topic
+#: land at 0.95 / 0.92 / 0.90 / 0.87 — above almost any real cosine hit.
+#: Measured on ``ground()``'s ``k=4`` with one seeded memory fact, one lesson and
+#: one past run: before the ``chats`` source the block carried
+#: ``sessions(1.00) + memory(0.78) + lessons(0.53)``; after it, three
+#: near-identical conversations displaced BOTH the fact and the lesson. Recall
+#: that answers "here are four copies of the chat you already remember" instead
+#: of "here is the number you wrote down" is worse, not better.
+#:
+#: The cap only bites when other stores actually have something to say — unused
+#: slots are topped up from the held-back chat hits, so a pure conversation
+#: query still fills ``k``.
+_CHAT_SLOT_SHARE = 3
+
+#: WIDENING LIVES IN THE INDEX NOW (v1.142.0). The ``OR``-of-content-words
+#: retry, its two-content-word floor, its prefix-tolerant overlap count and its
+#: 0.7 damping were prototyped HERE — where they only ever helped automatic
+#: recall — and have since moved into :meth:`SearchIndex.search`'s tier ladder
+#: (``search/index.py``, DECISION 3, tier 4), which is the one place EVERY
+#: consumer goes through: this fabric, the ``history_search`` tool, and the
+#: Ctrl+K palette. The knobs and the stopword list have exactly one definition,
+#: ``iron_jarvis.search.index.LOOSE_PENALTY`` / ``LOOSE_MIN_OVERLAP`` /
+#: ``STEM_CHARS`` / ``ASK_WORDS``; nothing here duplicates them.
 
 
 @dataclass
@@ -116,6 +187,7 @@ class MemoryFabric:
         learning: Any = None,
         embedder: Any = None,
         engine: Any = None,
+        search: Any = None,
     ) -> None:
         self.filesearch = filesearch
         self.ltm = ltm
@@ -123,6 +195,7 @@ class MemoryFabric:
         self.learning = learning
         self.embedder = embedder
         self.engine = engine
+        self._search = search
 
     @classmethod
     def from_platform(cls, platform: Any) -> "MemoryFabric":
@@ -133,7 +206,33 @@ class MemoryFabric:
             learning=getattr(platform, "learning", None),
             embedder=getattr(platform, "embedder", None),
             engine=getattr(platform, "engine", None),
+            # Honours the platform-wired index when one exists; otherwise the
+            # engine-shared instance is resolved lazily in ``_index``. The
+            # attribute is ``search_index`` (matching ``core.db.search_index``,
+            # the canonical accessor) — reading ``platform.search`` here silently
+            # never matched, so the fabric always took the lazy path.
+            search=getattr(platform, "search_index", None),
         )
+
+    def _index(self) -> Any:
+        """The shared :class:`SearchIndex` for this fabric's engine, or None.
+
+        Resolved lazily (and cached) rather than at construction so a bare
+        ``MemoryFabric()`` — used by tests and by any partially-wired setup —
+        stays free to build. Never raises.
+        """
+        if self._search is not None:
+            return self._search
+        engine = self.engine
+        if engine is None:
+            return None
+        try:
+            from ..core.db import search_index  # lazy: keeps the import graph flat
+
+            self._search = search_index(engine)
+        except Exception:  # noqa: BLE001 — no index is a degraded mode, not a fault
+            return None
+        return self._search
 
     # -- public API ---------------------------------------------------------
     def recall(
@@ -168,11 +267,13 @@ class MemoryFabric:
         if "lessons" in wanted:
             hits += self._lessons(per_source, qtokens)
         if "sessions" in wanted:
-            hits += self._sessions(per_source, qtokens)
+            hits += self._sessions(query, per_source, qtokens)
+        if "chats" in wanted:
+            hits += self._chats(query, per_source)
 
         hits = [h for h in hits if h.score > min_score]
         hits.sort(key=lambda h: h.score, reverse=True)
-        return self._dedupe(hits)[: max(0, k)]
+        return self._seat(self._dedupe(hits), max(0, k), wanted)
 
     def ground(
         self,
@@ -415,7 +516,107 @@ class MemoryFabric:
         out.sort(key=lambda h: h.score, reverse=True)
         return out[:k]
 
-    def _sessions(self, k: int, qtokens: set[str]) -> list[FabricHit]:
+    def _sessions(self, query: str, k: int, qtokens: set[str]) -> list[FabricHit]:
+        """Past agent runs, ranked.
+
+        Index first (real BM25 ranking + stemming), the historical lexical scan
+        second — see the module docstring for why "second" means "whenever the
+        index answers with nothing", not only "when FTS5 is missing". The
+        FabricHit contract is IDENTICAL on both paths: ``source="sessions"``,
+        ``ref`` = the bare ``Session.id``, a title, a snippet, a ``[0,1]``
+        score, and ``status`` in ``extra``.
+        """
+        indexed = self._sessions_indexed(query, k)
+        if indexed:
+            return indexed
+        return self._sessions_lexical(k, qtokens)
+
+    def _sessions_indexed(self, query: str, k: int) -> list[FabricHit]:
+        """Session hits from the history index, enriched with live status.
+
+        A hit whose ``Session`` row has since disappeared is DROPPED rather
+        than returned statusless: recall's job is to point at things that still
+        exist, and a dead deep link reads as a bug, not as memory.
+        """
+        index = self._index()
+        engine = self.engine
+        if index is None or engine is None:
+            return []
+        raw = self._index_search(index, query, ["session"], max(k, 4))
+        if not raw:
+            return []
+        status = self._session_status([h.ref for h in raw])
+        out: list[FabricHit] = []
+        for h in raw:
+            if h.ref not in status:
+                continue
+            out.append(
+                FabricHit(
+                    source="sessions",
+                    ref=h.ref,
+                    title=h.title,
+                    snippet=_clip(h.snippet),
+                    score=float(h.score),
+                    extra={"status": status[h.ref]},
+                )
+            )
+        return out[:k]
+
+    @staticmethod
+    def _index_search(index: Any, query: str, kinds: list[str], limit: int) -> list:
+        """One call into the history index — the widening now lives THERE.
+
+        This method used to carry a second, fabric-only widening retry (strict
+        query, then an ``OR`` of the content words, damped by the measured
+        overlap). That fixed automatic recall and nothing else: the
+        ``history_search`` tool and the Ctrl+K palette call
+        :meth:`SearchIndex.search` directly and still exhibited the measured
+        2-hits-in-7-phrasings behaviour, so a user typing "find that
+        conversation from March about the S-corp election" as a SENTENCE got
+        nothing. The retry is now tier 4 of the index's own tier ladder
+        (``search/index.py``, DECISION 3) with identical semantics — two-content-
+        word floor, prefix-tolerant overlap, ``overlap_fraction × 0.7`` damping —
+        so every consumer inherits it and there is one implementation to reason
+        about instead of two that can drift.
+
+        Kept as a seam (rather than inlined at both call sites) because it is
+        also the guard: ``index.search`` never raises, but a hand-rolled test
+        double might, and recall must degrade to "no hits", never to an
+        exception.
+        """
+        try:
+            return index.search(query, kinds=kinds, limit=limit) or []
+        except Exception:  # noqa: BLE001 — index reads never raise, guard anyway
+            return []
+
+    def _session_status(self, ids: list[str]) -> dict[str, str]:
+        """``{session_id: status}`` for the ids that still exist. ``{}`` on any
+        failure — which makes :meth:`_sessions_indexed` yield nothing and the
+        lexical path take over, rather than emitting a contract-breaking hit."""
+        from ..core.models import Session  # local import: avoids cycles
+
+        wanted = [i for i in ids if i]
+        if not wanted or self.engine is None:
+            return {}
+        try:
+            from sqlmodel import select
+
+            with session_scope(self.engine) as db:
+                rows = list(
+                    db.exec(select(Session).where(Session.id.in_(wanted)))  # type: ignore[attr-defined]
+                )
+        except Exception:  # noqa: BLE001
+            return {}
+        return {
+            r.id: (getattr(getattr(r, "status", None), "value", None)
+                   or str(getattr(r, "status", "")))
+            for r in rows
+        }
+
+    def _sessions_lexical(self, k: int, qtokens: set[str]) -> list[FabricHit]:
+        """The pre-v1.142.0 path, kept alive verbatim: a bounded newest-first
+        scan scored by overlapping query terms. Serves un-backfilled history and
+        any SQLite build without FTS5."""
         from ..core.models import Session  # local import: avoids cycles
 
         engine = self.engine
@@ -458,7 +659,95 @@ class MemoryFabric:
         out.sort(key=lambda h: h.score, reverse=True)
         return out[:k]
 
+    def _chats(self, query: str, k: int) -> list[FabricHit]:
+        """The conversations themselves — desktop chat, phone/comm, and round
+        tables — from the history index.
+
+        ONE hit per thread: a thread that matches on eight messages should
+        contribute its best passage, not eight near-identical entries, so the
+        index is over-fetched and collapsed by ``ref`` here (``_dedupe`` would
+        collapse them later anyway, but only after they had crowded out every
+        other store's hits).
+
+        NOT project-filtered on purpose. Every global store (notes, memory,
+        lessons, sessions) searches everything the user has; ``knowledge`` is
+        the one deliberately project-scoped source. Scoping conversations too
+        would make a project chat unable to recall the conversation where the
+        user explained what they wanted. The owning project rides along in
+        ``extra`` so a caller can still tell.
+        """
+        index = self._index()
+        if index is None:
+            return []
+        raw = self._index_search(
+            index, query, list(_CHAT_KINDS), max(k, 4) * _CHAT_OVERSCAN
+        )
+        out: list[FabricHit] = []
+        seen: set[str] = set()
+        for h in raw:
+            ref = h.ref or h.thread_id
+            if not ref or ref in seen:
+                continue
+            seen.add(ref)
+            out.append(
+                FabricHit(
+                    source="chats",
+                    ref=ref,
+                    title=h.title,
+                    snippet=_clip(h.snippet),
+                    score=float(h.score),
+                    extra={
+                        "kind": h.kind,
+                        "role": h.role,
+                        "seq": h.seq,
+                        "at": h.at.isoformat() if h.at else "",
+                        "project_id": h.project_id,
+                    },
+                )
+            )
+            if len(out) >= k:
+                break
+        return out
+
     # -- helpers ------------------------------------------------------------
+    @staticmethod
+    def _seat(hits: list[FabricHit], k: int, wanted: set[str]) -> list[FabricHit]:
+        """Take the top *k* of an already-ranked, de-duplicated list, holding
+        ``chats`` to at most one slot in :data:`_CHAT_SLOT_SHARE`.
+
+        Pure score order is the right rule for stores whose scores mean the same
+        thing. ``chats`` is the exception: its BM25 band is both HIGH and TIGHT,
+        so a handful of conversations about the topic sweep every slot and evict
+        the facts (see :data:`_CHAT_SLOT_SHARE` for the measurement). The cap is
+        a floor on diversity, never a ceiling on results:
+
+        * it is skipped entirely when the caller asked for ONE source (``recall(
+          sources=["chats"])`` must return k conversations, not one);
+        * held-back chat hits TOP UP any slots the other stores left empty, so a
+          question only the conversations can answer still fills ``k``.
+        """
+        if k <= 0:
+            return []
+        if "chats" not in wanted or len(wanted) <= 1:
+            return hits[:k]
+        cap = max(1, k // _CHAT_SLOT_SHARE)
+        out: list[FabricHit] = []
+        held: list[FabricHit] = []
+        seated = 0
+        for h in hits:
+            if len(out) >= k:
+                break
+            if h.source == "chats":
+                if seated >= cap:
+                    held.append(h)
+                    continue
+                seated += 1
+            out.append(h)
+        if len(out) < k and held:
+            out += held[: k - len(out)]
+            out.sort(key=lambda h: h.score, reverse=True)
+        return out[:k]
+
     @staticmethod
     def _dedupe(hits: list[FabricHit]) -> list[FabricHit]:
         seen_ref: set[tuple[str, str]] = set()
@@ -484,4 +773,5 @@ _SOURCE_LABEL = {
     "knowledge": "project",
     "lessons": "lesson",
     "sessions": "past run",
+    "chats": "conversation",
 }

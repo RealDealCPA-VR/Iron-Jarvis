@@ -13,8 +13,9 @@ model, while the honest ``tools_used`` footer only ever reports what RAN.
 
 Safety: candidates come exclusively from :data:`AUTO_SAFE_TOOLS` — read/write
 file + document tools (fs-policy-confined to the chat workspace), read-only
-web retrieval, local image tools, and memory recall/notes (read-only searches
-plus append-only note writes). NEVER shell, edit_file, computeruse, MCP
+web retrieval, local image tools, memory recall/notes, and past-conversation
+search (read-only searches plus append-only note writes). NEVER shell,
+edit_file, computeruse, MCP
 (``mcp__*``), or paid generative media (``pixio_*``): those stay behind the
 explicit "+" arming, which is the interactive consent the permission engine's
 session grant is built on.
@@ -79,6 +80,10 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         "ltm_search",
         "ltm_append",
         "remember_preference",
+        # History search (v1.142.0): READ-ONLY ranked search over the user's own
+        # past conversations. Same tier as recall — it only reads what was
+        # already said in this app, writes nothing, and leaves the machine never.
+        "history_search",
     }
 )
 
@@ -260,6 +265,36 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             re.IGNORECASE,
         ),
         {"recall": 8, "ltm_append": 5},
+    ),
+    # --- past conversations (v1.142.0) ------------------------------------
+    # "what did we decide about X", "find the thread where we discussed Y",
+    # "when did we talk about Z" — a question about THIS APP'S OWN history,
+    # which is exactly what history_search reads. THREE alternatives:
+    #
+    # 1. an asking verb AND a conversation noun within 30 chars. Deliberately
+    #    narrow — "search the web", "find the file", "search my documents for
+    #    the S-corp election" and "search my notes for X" carry no conversation
+    #    noun and must NOT fire (pinned by negative tests; the last two are the
+    #    adversarial pair, since they differ from a real hit by ONE word).
+    # 2. ``<wh-word> did we`` — "WHAT did we decide about the S-corp election",
+    #    "when did we settle on the 15th", "why did we drop that client", "how
+    #    did we handle this last year". This is the form the tool's own
+    #    description leads with, and enumerating verbs missed it: the first cut
+    #    listed discuss/talk/say, so "what did we DECIDE about X" — the spec's
+    #    headline example — armed nothing at all. Interrogative + "did we" is
+    #    past-tense by construction and cannot be about a file or a web page,
+    #    so it is high-precision without a verb list to keep chasing.
+    # 3. the same verb group after "we", for phrasings that skip the wh-word
+    #    ("find where we agreed on the fee").
+    (
+        re.compile(
+            r"\b(?:find|search|which|what)\b.{0,30}"
+            r"\b(?:conversations?|chats?|threads?|"
+            r"we\s+(?:discuss|talk|say|said|decid|agree|settl|conclud|chose))"
+            r"|\b(?:what|when|which|where|why|how) did we\b",
+            re.IGNORECASE,
+        ),
+        {"history_search": 8},
     ),
     # --- images -----------------------------------------------------------
     (

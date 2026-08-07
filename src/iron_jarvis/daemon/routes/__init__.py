@@ -23,6 +23,7 @@ from . import (  # noqa: F401
     projects,
     reflex,
     routing,
+    search,
     sessions,
     settings,
     skill_learning,

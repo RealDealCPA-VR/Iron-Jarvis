@@ -25,13 +25,12 @@ from __future__ import annotations
 
 import json
 import re
-import threading
 from datetime import datetime
 from typing import Any
 
 from sqlmodel import Field, SQLModel, select
 
-from ..core.db import session_scope
+from ..core.db import CONVERSATION_WRITE_LOCK, session_scope
 from ..core.events import EventType
 from ..core.ids import new_id, utcnow
 from ..core.logging import get_logger
@@ -68,7 +67,13 @@ _MENTION_RE = re.compile(
 #: lock would guard nothing — this is what keeps two simultaneous ``/say``
 #: rounds on one thread appending whole entries instead of interleaving a
 #: corrupt JSON blob (same pattern as ``comm/threads.py``'s store lock).
-_APPEND_LOCK = threading.Lock()
+#:
+#: v1.142.0: it IS that store's lock now. A round append also rewrites this
+#: thread's history-search docs, and three separate locks around three
+#: transactions that each take ``SearchIndex``' internal lock deadlock against
+#: SQLite's single writer (66s, two lost writes, measured). See
+#: ``core.db.CONVERSATION_WRITE_LOCK``.
+_APPEND_LOCK = CONVERSATION_WRITE_LOCK
 
 
 class AgentThreadRecord(SQLModel, table=True):
@@ -158,11 +163,22 @@ class AgentThreads:
             return db.get(AgentThreadRecord, thread_id)
 
     def delete(self, thread_id: str) -> bool:
+        """Delete a round table and its history-search docs together — the same
+        "delete means deleted" rule ``DELETE /chat/threads/{id}`` follows."""
         with session_scope(self.engine) as db:
             rec = db.get(AgentThreadRecord, thread_id)
             if rec is None:
                 return False
             db.delete(rec)
+            try:
+                from ..core.db import search_index
+
+                index = search_index(self.engine)
+                if index is not None:
+                    index.drop_thread(thread_id, db=db)
+            except Exception:  # noqa: BLE001 — a delete must always complete
+                log.warning("history-search drop failed for agent thread %s",
+                            thread_id, exc_info=True)
             db.commit()
         return True
 
@@ -188,6 +204,11 @@ class AgentThreads:
         round unfold, and two concurrent rounds on the same thread interleave
         whole entries instead of corrupting the blob. Returns 0 when the
         thread vanished mid-round (deleted underneath us — nothing to keep).
+
+        v1.142.0: also re-indexes the thread for history search inside this
+        same session and lock (before the commit), so what a panel of agents
+        worked out is findable later. Round entries already carry ``at`` and
+        use ``who``/``content``, all of which ``sync_thread`` reads leniently.
         """
         with _APPEND_LOCK, session_scope(self.engine) as db:
             rec = db.get(AgentThreadRecord, thread_id)
@@ -199,8 +220,27 @@ class AgentThreads:
             rec.messages_json = json.dumps(msgs)
             rec.updated_at = utcnow()
             db.add(rec)
+            self._index_thread(db, rec, msgs)
             db.commit()
             return len(msgs)
+
+    def _index_thread(self, db: Any, rec: AgentThreadRecord, msgs: list) -> None:
+        """History-search sync for a round table, in the caller's transaction.
+
+        Rounds have no project binding (the Agents page is global), hence the
+        empty ``project_id``. Never raises — an index failure must not sink a
+        round that already cost real provider calls.
+        """
+        try:
+            from ..core.db import search_index  # lazy: keeps the import graph flat
+
+            index = search_index(self.engine)
+            if index is None:
+                return
+            index.sync_thread(rec.id, "round", rec.title or "", "", msgs, db=db)
+        except Exception:  # noqa: BLE001 — a round must never fail on search
+            log.warning("history-search sync failed for agent thread %s",
+                        getattr(rec, "id", "?"), exc_info=True)
 
     # -- the speaking round ---------------------------------------------------
 

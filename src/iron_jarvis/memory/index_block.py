@@ -14,6 +14,8 @@ system prompt:
   (``Project.memory_sources``, read via the fabric's own accessor);
 * up to a handful of recent note TITLES (title-only — never content) from
   the bound bases (all local bases when unbound);
+* the size of the searchable conversation history (v1.142.0) — omitted when
+  the index is empty or FTS5 is unavailable;
 * a closing pointer at the ``recall`` tool.
 
 House pattern (mirrors :mod:`..agents.roster`): read-only composition over
@@ -49,6 +51,11 @@ _BASES_LINE_CHARS = 185
 _GRAPH_LINE_CHARS = 90
 _PROJECT_LINE_CHARS = 110
 _TITLES_LINE_CHARS = 200
+#: The hard block budget the worst case above was engineered against, now
+#: ENFORCED rather than merely arithmetic — the history line (v1.142.0) is the
+#: one line that yields when the budget is already spent (see
+#: :func:`memory_index_block`). Every pre-existing line keeps its exact clamp.
+_MAX_BLOCK_CHARS = 700
 #: Caps inside the variable lines.
 _MAX_BASES_LISTED = 8
 _TITLE_CHARS = 40
@@ -201,6 +208,69 @@ def _graph_line(platform: Any) -> str:
         return ""
 
 
+#: Index-size cache (v1.142.0), the same discipline ``_scan_cache`` exists for.
+#: ``SearchIndex.stats()`` is a full ``COUNT(*)`` + ``COUNT(DISTINCT ...)`` over
+#: ``searchdocrecord`` — free at 500 docs, tens of ms once a daily driver's
+#: history is six figures — and this block is composed on EVERY chat and agent
+#: turn. One entry per index (keyed by its engine, so two platforms in one test
+#: run never share), living ``_SCAN_TTL_SECONDS``. A count up to a minute stale
+#: is harmless here: the line is PROSE the model reads for "history exists and
+#: is searchable", never a figure anything computes with.
+#:
+#: With ONE exception, and it is the folder-scan lesson applied: an EMPTY index
+#: is never cached. Every other staleness only moves the number (9,412 vs
+#: 9,417 — nobody can tell), but 0 → 1 moves the line's EXISTENCE, and it is
+#: exactly the transition a brand-new install makes on the user's very first
+#: exchange. Caching it would spend that first minute telling the model it has
+#: no searchable history seconds after the user gave it some. The re-read is
+#: free precisely because the table is empty — the expensive ``COUNT`` this
+#: cache exists for is the one over a six-figure history, which by definition
+#: is not this case.
+_history_cache: "dict[str, tuple[float, str]]" = {}
+
+
+def _history_line(platform: Any) -> str:
+    """"- Past conversations: <n> indexed …" — the ONE line that tells the model
+    its own history is searchable (v1.142.0).
+
+    Honest by the same rule as the base counts: the number comes from
+    ``SearchIndex.stats()`` (which never raises), and the line is OMITTED when
+    the index holds nothing or FTS5 is unavailable — an inventory entry for an
+    index that can't answer is worse than silence, because it would invite the
+    model to promise a search it cannot run. TTL-cached — except for a healthy
+    EMPTY index, which is re-read every turn so a fresh install notices its very
+    first conversation immediately; see ``_history_cache``."""
+    try:
+        index = getattr(platform, "search_index", None)
+        if index is None:
+            return ""
+        key = str(getattr(index, "engine", "") or id(index))
+        now = time.monotonic()
+        hit = _history_cache.get(key)
+        if hit is not None and now - hit[0] <= _SCAN_TTL_SECONDS:
+            return hit[1]
+        stats = index.stats() or {}
+        docs = int(stats.get("docs") or 0)
+        available = bool(stats.get("available"))
+        line = (
+            f"- Past conversations: {docs} indexed (search with history_search)."
+            if available and docs > 0
+            else ""
+        )
+        if docs == 0 and available:
+            # Healthy but empty: don't cache — see ``_history_cache``. A stale
+            # NUMBER is invisible; a stale "there is no history" is a lie the
+            # moment the first conversation lands.
+            _history_cache.pop(key, None)
+            return line
+        if key not in _history_cache and len(_history_cache) >= _SCAN_CACHE_MAX:
+            _history_cache.pop(next(iter(_history_cache)), None)
+        _history_cache[key] = (now, line)
+        return line
+    except Exception:  # noqa: BLE001 — one line never takes the block down
+        return ""
+
+
 def _project_bases(platform: Any, project_id: "str | None") -> "list[str] | None":
     """The project's bound base names via the fabric's OWN accessor (never a
     re-implementation). ``None`` = unbound/unknown (search-everything)."""
@@ -293,10 +363,20 @@ def memory_index_block(
             lines.append(
                 _clamp("- Recent notes: " + "; ".join(titles), _TITLES_LINE_CHARS)
             )
+        history = _history_line(platform)
         # "" when nothing: a project-binding note with no visible bases, graph
-        # rows, or titles would be an index of nothing — say nothing instead.
-        if not (bases or graph or titles):
+        # rows, titles, or indexed history would be an index of nothing — say
+        # nothing instead.
+        if not (bases or graph or titles or history):
             return ""
-        return "\n".join([_HEADER, *lines, _CLOSING])
+        block = "\n".join([_HEADER, *lines, _CLOSING])
+        # The history line is LAST in priority as well as position: it joins
+        # only if the block still fits the budget the other lines' clamps were
+        # engineered around. That keeps ≤700 an invariant instead of leaving it
+        # one worst-case-everything turn away from being false.
+        if history and len(block) + 1 + len(history) <= _MAX_BLOCK_CHARS:
+            lines.append(history)
+            block = "\n".join([_HEADER, *lines, _CLOSING])
+        return block
     except Exception:  # noqa: BLE001 — awareness must never take a caller down
         return ""
