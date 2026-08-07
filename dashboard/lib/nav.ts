@@ -29,6 +29,8 @@ import {
   LifeBuoy,
   BarChart3,
   LayoutTemplate,
+  UserRound,
+  GraduationCap,
   type LucideIcon,
 } from "lucide-react";
 
@@ -232,6 +234,57 @@ export const NAV: NavSectionDef[] = [
   {
     label: "Knowledge",
     items: [
+      // "You" sits at the head of Knowledge because everything under it is what
+      // Iron Jarvis knows, and this is the part that is about the PERSON. It is
+      // an ESSENTIAL href (Sidebar.tsx): a page that decides how every answer
+      // is written must not be Advanced-only — that mistake is on record from
+      // v1.101.0, where "it's in the sidebar" turned out to mean "in the
+      // sidebar for me, not for the user".
+      {
+        href: "/you",
+        label: "You",
+        icon: UserRound,
+        // People do not search for "profile" — they describe the symptom
+        // ("too wordy") or the need ("answer in english", "dyslexia").
+        aliases: [
+          "profile",
+          "my profile",
+          "about me",
+          "tone",
+          "writing style",
+          "answer in english",
+          "language",
+          "response length",
+          "too wordy",
+          "shorter answers",
+          "dyslexia",
+          "accessibility",
+          "reading level",
+          "personality",
+          "how it talks to me",
+        ],
+        blurb:
+          "Who you are, how you want answers written, and which language — applied to every model.",
+      },
+      {
+        href: "/train",
+        label: "Train on me",
+        icon: GraduationCap,
+        // Nobody types "onboarding". They type what they want to hand over.
+        aliases: [
+          "train jarvis on me",
+          "learn my style",
+          "writing samples",
+          "my voice",
+          "import my notes",
+          "teach it about me",
+          "onboarding",
+          "wiki",
+          "knowledge base setup",
+        ],
+        blurb:
+          "One on-ramp for your writing, notes, wiki, and past conversations — every doorway in one place.",
+      },
       // ONE memory surface (working / lessons / long-term live inside as scopes).
       {
         href: "/memory",

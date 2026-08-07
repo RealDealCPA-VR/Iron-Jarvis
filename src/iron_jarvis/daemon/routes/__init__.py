@@ -21,6 +21,7 @@ from . import (  # noqa: F401
     knowledge,
     learning,
     memory_review,
+    profile,
     projects,
     reflex,
     routing,

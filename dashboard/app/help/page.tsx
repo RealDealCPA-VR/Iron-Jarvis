@@ -24,6 +24,7 @@ import {
   KeyRound,
   ShieldCheck,
   BookOpen,
+  UserRound,
   type LucideIcon,
 } from "lucide-react";
 import { Card } from "@/components/ui";
@@ -38,6 +39,12 @@ interface Subsystem {
 }
 
 const SUBSYSTEMS: Subsystem[] = [
+  {
+    href: "/you",
+    title: "You",
+    icon: UserRound,
+    desc: "Who you are, how you want answers written, and which language — carried into every model, in chat and in agent runs alike.",
+  },
   {
     href: "/sessions",
     title: "Sessions",

@@ -431,10 +431,25 @@ class AgentThreads:
         adapter = d.platform.providers.get(provider, model)
         from ..providers.adapters.base import LLMMessage
 
+        # USER PROFILE (v1.144.0), "how" ONLY. A panel is worth reading because
+        # the panelists differ, so they must NOT be told to write in the user's
+        # voice or to adopt one another's character — but the user's language
+        # and accessibility needs are not per-panelist preferences. See
+        # profile.block.render's ``include`` docstring.
+        system = self._system_for(p, others, base_prompt)
+        try:
+            from ..profile import profile_block
+
+            _prefs = profile_block(d.platform, include=("how",))
+            if _prefs:
+                system += "\n\n" + _prefs
+        except Exception:  # noqa: BLE001 — never break a round
+            pass
+
         resp, _p, _m = await d._one_shot_complete(
             provider,
             adapter,
-            system=self._system_for(p, others, base_prompt),
+            system=system,
             messages=[LLMMessage(role="user", content=transcript or "(no messages yet)")],
         )
         text = (resp.text or "").strip()

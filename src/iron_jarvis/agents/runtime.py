@@ -214,6 +214,24 @@ class AgentRuntime:
                 system_prompt = learning.apply_to_prompt(system_prompt)
             except Exception:  # never block a run on the learning layer
                 pass
+        # THE IDENTITY SPINE (v1.144.0) — the fix for "it communicates
+        # differently depending on which model/surface answered". Until now the
+        # persona + the user's preferences reached CHAT ONLY: an agent run
+        # started from agent_def.system_prompt (the ROLE) and knew nothing about
+        # who it was writing for or how they read. Both sections land here, in
+        # the same order and with the same text chat uses, so the user reads one
+        # Iron Jarvis whether a 14B local model or a cloud model took the work.
+        # Bounded + never-raising, exactly like the injections below it.
+        try:
+            from ..personas.voice import voice_section
+            from ..profile import profile_block
+
+            system_prompt += voice_section(self.p)
+            _profile = profile_block(self.p)
+            if _profile:
+                system_prompt += "\n\n" + _profile
+        except Exception:  # noqa: BLE001 — identity must never break a run
+            pass
         # MEMORY AWARENESS (v1.141.0): every agent type sees a compact index
         # of WHAT memory exists (bases + graph size + recent note TITLES —
         # never content) so it reaches for `recall` instead of assuming

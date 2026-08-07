@@ -53,6 +53,8 @@ export type SSEEvent =
       /** The turn proposed a reusable workflow instead of prose (v1.120.0). */
       workflow_draft?: WorkflowDraft | null;
       usage?: { input_tokens?: number; output_tokens?: number };
+      /** Context-window accounting for this turn (v1.146.0). */
+      context?: ContextUsage | null;
     }
   | { type: "error"; detail: string; status?: number; offline?: boolean };
 
@@ -85,6 +87,22 @@ export interface ChatStreamResult {
   escalateAgent?: string | null;
   /** The turn proposed a reusable workflow — render it as a draft card. */
   workflowDraft?: WorkflowDraft | null;
+  /** How much of the model's context window this turn used (v1.146.0). */
+  context?: ContextUsage | null;
+}
+
+/** What one turn cost against the answering model's window (v1.146.0). The
+ *  daemon computes it — the client only renders it, so the number the user
+ *  sees is the number the planner actually budgeted against. */
+export interface ContextUsage {
+  window: number;
+  used: number;
+  headroom: number;
+  dropped: number;
+  tools_trimmed: number;
+  clipped: boolean;
+  recap: boolean;
+  suggest_larger: boolean;
 }
 
 // -------------------------------------------------------------- frame decoding
@@ -144,6 +162,8 @@ export function sseEventFrom(
         ev.workflow_draft = data.workflow_draft as WorkflowDraft;
       if (data.usage && typeof data.usage === "object")
         ev.usage = data.usage as { input_tokens?: number; output_tokens?: number };
+      if (data.context && typeof data.context === "object")
+        ev.context = data.context as ContextUsage;
       return ev;
     }
     case "error": {
@@ -412,6 +432,7 @@ export function useChatStream(): UseChatStream {
                 escalateReason: ev.escalate_reason,
                 escalateAgent: ev.escalate_agent,
                 workflowDraft: ev.workflow_draft,
+                context: ev.context,
               };
               break;
             case "error":

@@ -9,7 +9,7 @@ runs the PACKAGED desktop app daily — treat every change as production.
 | Process | What | Port | Source |
 |---|---|---|---|
 | Daemon | FastAPI, all state + agents + tools | 127.0.0.1:8787 | `src/iron_jarvis/` |
-| Dashboard | Next.js 15 (39 routes), arc-reactor-cyan aesthetic | 127.0.0.1:8788 | `dashboard/` |
+| Dashboard | Next.js 15 (42 routes), arc-reactor-cyan aesthetic | 127.0.0.1:8788 | `dashboard/` |
 | Desktop | Electron: spawns both, tray, updates, Spotlight | — | `desktop/main.js` |
 
 Packaged layout: PyInstaller-frozen daemon (`packaging/ironjarvis.spec`) +
@@ -23,9 +23,9 @@ bearer token: `%APPDATA%/Iron Jarvis/token.txt` — every daemon request needs
 ## Commands
 
 ```bash
-# Backend tests (~1280, offline, ~4min). ALWAYS run before shipping.
+# Backend tests (~3100, offline, ~10min). ALWAYS run before shipping.
 uv run pytest -q --no-header
-# Dashboard build (must show "Generating static pages (40/40)")
+# Dashboard build (must show "Generating static pages (42/42)")
 cd dashboard && pnpm build
 # Syntax-check desktop changes
 cd desktop && node --check main.js
@@ -54,6 +54,22 @@ cd dashboard && pnpm dev           # dashboard
 
 ## Hard rules (each one was learned the expensive way)
 
+- **The identity spine reaches EVERY prompt seam** (v1.144.0). `profile/`
+  renders the user's profile and `personas/voice.py` the assistant's voice;
+  both are appended in `daemon/chat_turn.py`, the `/chat/stream` mirror in
+  `routes/chat.py`, `agents/runtime.py`, and `agents/threads.py` (the round
+  table takes `include=("how",)` only — panelists must stay distinct). A NEW
+  surface that talks to the user adds its injection in the same change:
+  `tests/test_profile_v1144.py::test_profile_reaches_every_prompt_seam` drives
+  all of them end-to-end, and each seam is mutation-proven. "Chat has it,
+  agents don't" is the exact bug that wave existed to fix.
+- **History is BUDGETED, never sliced** (v1.146.0). Both chat lanes call
+  `_plan_context` → `context.plan_history`, which fits the transcript to the
+  answering model's window (`_context_window`: pin → probe → default) and
+  reports what it dropped. Do not reintroduce a fixed `messages[-N:]`, and if
+  you add to the system prompt, add it BEFORE the planner runs or its cost is
+  invisible to the budget.
+- **The identity spine reaches EVERY prompt seam** (v1.144.0). `profile/`
 - **Frozen-build verification**: anything touching native deps or subprocess
   spawning MUST be verified in the packaged daemon, not just source. The
   terminals feature shipped dead once because PyInstaller dropped
@@ -104,6 +120,13 @@ cd dashboard && pnpm dev           # dashboard
   factories), router (routing/failover), adapters/. `terminals/` — manager
   (+ restart-survival snapshot), session (scrollback), ai_clis (Launch
   detection), shells, backend (ConPTY/pipe/Fake).
+- `context/` — `budget.plan_history`: the per-turn history planner (pure,
+  offline, deterministic recap). Consumed by both chat lanes only.
+- `profile/` — the user profile (ONE row): `models` (record), `store`
+  (read-never-writes, partial save), `presets` (vocabularies; unknown key =
+  free text), `language` (pure script-level leakage detector), `block`
+  (the one renderer, bounded + never raises). `personas/builtins.py` holds the
+  built-in catalog (importable — `app.py` still exposes it as `d._PERSONAS`).
 - `skills/` — recursive discovery incl. `~/.claude/skills`, `~/.claude/plugins`,
   `~/.codex/skills` (`framework.py::external_skill_roots`); registry
   repopulates IN PLACE; skills inject into prompts (provider-agnostic), the

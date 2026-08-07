@@ -110,7 +110,12 @@ import { slashTokenAt, spliceToken } from "@/lib/slash";
 import { useEvents } from "@/lib/useEvents";
 import { useDictation } from "@/lib/useDictation";
 import { useTTS } from "@/lib/useTTS";
-import { useChatStream, StreamError, type ToolCard } from "@/lib/useChatStream";
+import {
+  useChatStream,
+  StreamError,
+  type ToolCard,
+  type ContextUsage,
+} from "@/lib/useChatStream";
 import { useRunStream } from "@/lib/useRunStream";
 import { appendDictation } from "@/components/VoiceInput";
 import { Card, Empty, ErrorNote, LoaderInline, OfflineHint } from "@/components/ui";
@@ -205,6 +210,50 @@ interface ChatResponse {
   escalate_agent?: string | null;
   /** The turn proposed a reusable workflow instead of prose (v1.120.0). */
   workflow_draft?: WorkflowDraft | null;
+  /** What the turn cost against the answering model's context window
+   *  (v1.146.0) — drives the composer's headroom meter. */
+  context?: ContextUsage | null;
+}
+
+/**
+ * Composer context gauge (v1.146.0).
+ *
+ * Shows nothing below HALF the window — a gauge that is always on is chrome,
+ * and the number only becomes actionable as it approaches the edge. Turns amber
+ * at 75% and rose once the daemon actually had to drop earlier turns, which is
+ * the moment the user would otherwise conclude the assistant "forgot".
+ */
+function ContextMeter({ usage }: { usage: ContextUsage | null }) {
+  if (!usage || !usage.window) return null;
+  const pct = Math.min(100, Math.round((usage.used / usage.window) * 100));
+  const trimmed = usage.dropped > 0 || usage.clipped;
+  if (pct < 50 && !trimmed) return null;
+  const tone = trimmed
+    ? "text-rose-400/90"
+    : pct >= 75
+      ? "text-amber-400/90"
+      : "text-zinc-500";
+  const k = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+  return (
+    <span
+      className={`hidden items-center gap-1 text-[11px] sm:inline-flex ${tone}`}
+      title={
+        trimmed
+          ? `${usage.dropped} earlier message(s) were summarized to fit this model's ${k(
+              usage.window,
+            )}-token window. A larger-context model would keep them.`
+          : `About ${k(usage.used)} of this model's ${k(usage.window)}-token context window is in use.`
+      }
+    >
+      <span className="relative inline-block h-1 w-8 overflow-hidden rounded-full bg-white/10">
+        <span
+          className="absolute inset-y-0 left-0 rounded-full bg-current"
+          style={{ width: `${pct}%` }}
+        />
+      </span>
+      {pct}%
+    </span>
+  );
 }
 
 /** Human phrase for a roster agent name (v1.139.0), used by the hand-off
@@ -1274,6 +1323,10 @@ export default function ChatPage() {
   // The minimalist bottom-right model switcher: name + chevron, no box;
   // opens a provider list whose ▸ flyouts hold that provider's models.
   const modelPopRef = useRef<HTMLDivElement>(null);
+  // Context-window accounting from the LAST turn (v1.146.0). Server-computed;
+  // the composer only renders it, so the meter can never disagree with what the
+  // planner actually budgeted. Cleared with the conversation.
+  const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [modelSub, setModelSub] = useState<string | null>(null);
   const modelProviders = useMemo(() => {
@@ -2962,8 +3015,10 @@ export default function ChatPage() {
           escalateReason,
           escalateAgent,
           workflowDraft,
+          context: ctxUsage,
         } = await stream.run(body, (_delta, full) => feedTTS(full, false));
         if (chatGenRef.current !== gen) return; // torn down mid-stream
+        if (ctxUsage) setContextUsage(ctxUsage);
         // One tick so the final tool_call frame's state flush lands before the
         // cards are read for source extraction (this resolve microtask can
         // outrun React's batched setTools render).
@@ -3082,6 +3137,7 @@ export default function ChatPage() {
       // --- Fallback: the direct /chat POST (only when /chat/stream is absent) ---
       const res = await post<ChatResponse>("/chat", body);
       if (chatGenRef.current !== gen) return; // "New chat" happened mid-flight
+      if (res.context) setContextUsage(res.context);
       const toolsUsed = (res.tools_used ?? []).filter((t) => Boolean(t));
       const reply = (res.reply ?? "").trim() || "(no response)";
       const viaPost = servedByOther(res.provider);
@@ -5360,6 +5416,11 @@ export default function ChatPage() {
                 >
                   <Share2 size={12} />
                 </button>
+                {/* Context headroom (v1.146.0). Deliberately quiet until it
+                    matters: nobody needs a gauge at 12% of a 200k window, and
+                    a permanent meter is the kind of chrome that gets ignored
+                    exactly when it starts mattering. */}
+                <ContextMeter usage={contextUsage} />
                 <div ref={modelPopRef} className="relative">
                   <button
                     type="button"

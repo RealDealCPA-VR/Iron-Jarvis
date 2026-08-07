@@ -46,7 +46,11 @@ from ..chat_turn import (
     _compose_recall_query,
     _connector_memory_block,
     _creation_honesty_note,
+    _enforce_language,
+    _last_user_text,
     _persist_chat_usage,
+    _plan_context,
+    _profile_section,
     _resolve_armed_tools,
     _resolve_connectors,
     _resolve_persona,
@@ -961,6 +965,9 @@ def register(app: FastAPI, d) -> None:
             "Friday…\", \"whenever a client sends…\"), call workflow_draft so "
             "they get a saveable workflow card instead of prose steps."
         )
+        # USER PROFILE (v1.144.0) — the lock-step copy of chat_turn's injection.
+        # MIRROR NOTE: edit both or neither.
+        system += _profile_section(d.platform)
         pid = (body.project_id or "").strip() or None
         resolved_proj = None
         if pid:
@@ -1169,10 +1176,14 @@ def register(app: FastAPI, d) -> None:
         except Exception:  # noqa: BLE001 — the roster must never break a turn
             pass
 
-        msgs: list[LLMMessage] = []
-        for m in body.messages[-30:]:
-            role = m.role if m.role in ("user", "assistant") else "user"
-            msgs.append(LLMMessage(role=role, content=(m.content or "")[:12000]))
+        # CONTEXT PROTECTION (v1.146.0) — the lock-step copy of chat_turn's.
+        # MIRROR NOTE: edit both or neither.
+        plan = _plan_context(d, body, system, provider_choice, model_choice)
+        if plan.recap:
+            system += "\n\n" + plan.recap
+        msgs: list[LLMMessage] = [
+            LLMMessage(role=m["role"], content=m["content"]) for m in plan.messages
+        ]
         if images and msgs:
             for m in reversed(msgs):
                 if m.role == "user":
@@ -1495,6 +1506,30 @@ def register(app: FastAPI, d) -> None:
                 yield _sse("error", {"detail": str(exc)})
                 return
 
+            # LANGUAGE GUARD (v1.144.0) — the lock-step copy of chat_turn's, and
+            # like it, run BEFORE the ledger so a rewrite is billed.
+            #
+            # STREAM-SPECIFIC NOTE: the leaked text has already been streamed to
+            # the client token by token, so the correction lands in the `done`
+            # frame instead — which useChatStream treats as AUTHORITATIVE
+            # ("done.reply is authoritative; fall back to the accumulated text"),
+            # so the finished bubble and the saved thread both carry the
+            # corrected reply. The user may see the wrong-language text flicker
+            # during generation; that is honest (it IS what the model produced)
+            # and needs no client change. MIRROR NOTE (lock-step): chat_turn.
+            reply_text, lang_note, _l_in, _l_out, _l_n = await _enforce_language(
+                d.platform,
+                text=reply_text or "",
+                user_text=_last_user_text(body.messages),
+                system=system,
+                messages=msgs,
+                provider=provider_choice,
+                model=model_choice,
+            )
+            usage_in += _l_in
+            usage_out += _l_out
+            completions += _l_n
+
             # USAGE LEDGER — persist the run row exactly as chat_complete does so a
             # streamed turn counts the same on the Usage page.
             _persist_chat_usage(
@@ -1525,6 +1560,11 @@ def register(app: FastAPI, d) -> None:
                     reply += f"\n\n_Note: {names} could not run (permission denied)._"
                 if stopped_note:
                     reply += f"\n\n_Note: {stopped_note}._"
+                if lang_note:
+                    reply += f"\n\n_Note: {lang_note}._"
+                _ctx_note = plan.note()
+                if _ctx_note:
+                    reply += f"\n\n_Note: {_ctx_note}._"
                 reply += _creation_honesty_note(body, armed, tools_used)
             if text_only_pick and (body.tools or []):
                 reply += (
@@ -1546,6 +1586,9 @@ def register(app: FastAPI, d) -> None:
                 "escalate_agent": escalate_agent,
                 "workflow_draft": workflow_draft,
                 "usage": {"input_tokens": usage_in, "output_tokens": usage_out},
+                # v1.146.0 — same shape POST /chat returns, so the composer's
+                # headroom meter works on both lanes.
+                "context": plan.as_dict(),
             })
 
         return StreamingResponse(

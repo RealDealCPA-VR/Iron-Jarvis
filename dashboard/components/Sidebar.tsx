@@ -35,6 +35,8 @@ const ESSENTIAL_HREFS = new Set<string>([
   // session detail (which carries session-scoped time-travel + undo). The
   // global Activity surface stays reachable via ⌘K.
   "/creative", // Creative — see what Iron Jarvis makes
+  "/you", // You — the profile every prompt carries (never Advanced-only)
+  "/train", // Train on me — the on-ramp for everything above; useless if hidden
   "/memory", // Memory (the one unified surface)
   "/connections", // Connections
   "/settings", // Settings

@@ -151,6 +151,149 @@ def _resolve_persona(store, builtins, want: str, default: str) -> str:
         return resolve_prompt(store, builtins, want or default)
 
 
+def _plan_context(d, body, system: str, provider: str, model: str):
+    """Budget this turn's history against the answering model's window.
+
+    Shared by both chat lanes so they can never disagree about what fits. The
+    window comes from the SAME resolver the attachment budgets use
+    (``_context_window``: a config pin, then a probe, then None) — one source
+    of truth for "how big is this model", or the two halves would eventually
+    make contradictory decisions about the same turn.
+
+    Never raises: a planner failure falls back to the historical fixed slice,
+    because a turn that runs with too much history is recoverable and a turn
+    that 500s is not.
+    """
+    from ..context import plan_history
+
+    try:
+        return plan_history(
+            list(body.messages or []),
+            window=_context_window(d, provider, model),
+            system_text=system,
+        )
+    except Exception:  # noqa: BLE001 — degrade to the pre-v1.146.0 behaviour
+        log.warning("context planning failed; using the fixed slice", exc_info=True)
+        from ..context.budget import HistoryPlan
+
+        return HistoryPlan(
+            messages=[
+                {
+                    "role": m.role if m.role in ("user", "assistant") else "user",
+                    "content": (m.content or "")[:12000],
+                }
+                for m in list(body.messages or [])[-30:]
+            ]
+        )
+
+
+def _profile_section(platform) -> str:
+    """The user-profile block as a prompt SECTION ("" or ``"\\n\\n" + block``).
+
+    Every seam appends this the same way, so the join rule lives here once
+    instead of being re-derived (and eventually re-derived WRONG) at four call
+    sites. Never raises — ``profile_block`` already swallows its own failures;
+    the guard here covers the package being absent entirely.
+    """
+    try:
+        from ..profile import profile_block
+    except ImportError:  # pragma: no cover — package always ships
+        return ""
+    block = profile_block(platform)
+    return f"\n\n{block}" if block else ""
+
+
+def _last_user_text(messages) -> str:
+    """The latest user message's text — the false-positive guard for the
+    language check (a question ASKED in Chinese may be answered in Chinese)."""
+    for m in reversed(list(messages or [])):
+        role = getattr(m, "role", None) or (m.get("role") if isinstance(m, dict) else "")
+        content = getattr(m, "content", None) or (
+            m.get("content") if isinstance(m, dict) else ""
+        )
+        if role == "user" and content:
+            return str(content)
+    return ""
+
+
+async def _enforce_language(
+    platform,
+    *,
+    text: str,
+    user_text: str,
+    system: str,
+    messages,
+    provider: str,
+    model: str,
+) -> tuple[str, str, int, int, int]:
+    """Guard the reply's language. Returns
+    ``(text, note, usage_in, usage_out, completions)``.
+
+    ONE corrective completion, never a loop:
+
+    * no configured language, enforcement off, or no leakage → the text comes
+      back untouched and nothing is billed (the overwhelmingly common path —
+      this costs a regex over the reply);
+    * leakage → re-ask the SAME model (same system, same history) to rewrite its
+      own reply in the chosen language, WITHOUT tools (a rewrite must not run
+      side effects a second time);
+    * the rewrite is clean → use it, with an honest note that it was rewritten;
+    * the rewrite ALSO leaks → keep the ORIGINAL and say so. A second wrong
+      answer is not an improvement, and silently shipping the model's second
+      attempt would hide that the setting is not achievable on this model.
+
+    The usage counters ride back to the caller so a correction is billed on the
+    Usage page like every other completion — an invisible extra call is exactly
+    the kind of thing that makes token spend impossible to explain.
+    """
+    from ..profile import profile_language
+    from ..profile.language import (
+        NOTE_CORRECTED,
+        NOTE_FAILED,
+        detect_leak,
+        label,
+        rewrite_instruction,
+    )
+
+    code, enforce = profile_language(platform)
+    if not code or not enforce:
+        return (text, "", 0, 0, 0)
+    if detect_leak(text, code, user_text) is None:
+        return (text, "", 0, 0, 0)
+
+    from ..providers.adapters.base import LLMMessage
+
+    retry_msgs = list(messages or []) + [
+        LLMMessage(role="assistant", content=text),
+        LLMMessage(role="user", content=rewrite_instruction(code)),
+    ]
+    try:
+        route = await platform.router.complete(
+            provider=provider or None,
+            model=model or None,
+            system=system,
+            messages=retry_msgs,
+            # EMPTY LIST, never None: a rewrite must not re-run tools, and the
+            # adapters build their tool payload with `for t in tools` — None
+            # would TypeError inside the provider on the very path this feature
+            # exists for. (Found in review; a fake-router test cannot catch it,
+            # which is why the regression test drives the REAL router.)
+            tools=[],
+            task_class="chat",
+        )
+    except Exception:  # noqa: BLE001 — a failed rewrite must not fail the turn
+        log.warning("language rewrite failed (original reply kept)", exc_info=True)
+        return (text, NOTE_FAILED.format(name=label(code)), 0, 0, 0)
+
+    usage = route.response.usage or {}
+    u_in = int(usage.get("input_tokens", 0) or 0)
+    u_out = int(usage.get("output_tokens", 0) or 0)
+    rewritten = (route.response.text or "").strip()
+    if rewritten and detect_leak(rewritten, code, user_text) is None:
+        return (rewritten, NOTE_CORRECTED.format(name=label(code)), u_in, u_out, 1)
+    return (text, NOTE_FAILED.format(name=label(code)), u_in, u_out, 1)
+
+
 def _resolve_connectors(d, body) -> tuple[list[str], list[str]]:
     """Split the turn's toggled connectors into (mcp_tool_names, memory_sources).
 
@@ -495,7 +638,24 @@ def _context_window(d, provider: str, model: str) -> "int | None":
     ``config.model_context_windows`` pin wins ("provider::model" > "model" >
     "provider" — the reliable source for custom/tailnet endpoints that don't
     advertise their window), then a fleet probe's ``context_length`` when one
-    was recorded. None = unknown → conservative fixed budgets."""
+    was recorded. None = unknown → conservative fixed budgets.
+
+    EMPTY provider/model mean "the turn did not pick one", which is the COMMON
+    case — the composer only sends a provider when the user overrides it. Until
+    v1.146.0 that fell straight through to None, so ``model_context_windows``
+    silently did nothing on the default route: the pin only applied to turns
+    where the user had also picked the model by hand, which is not what a
+    setting called "known context windows" promises. Falling back to the
+    configured defaults fixes the planner AND ``_attachment_budgets`` (its other
+    caller) in one place. An "auto" route is still a guess — but a guess from
+    the user's own default beats assuming nothing is known.
+    """
+    provider = (provider or "").strip() or str(
+        getattr(d.platform.config, "default_provider", "") or ""
+    )
+    model = (model or "").strip() or str(
+        getattr(d.platform.config, "default_model", "") or ""
+    )
     cfg = getattr(d.platform.config, "model_context_windows", None) or {}
     for key in (f"{provider}::{model}", model, provider):
         if key and key in cfg:
@@ -624,6 +784,14 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         "Friday…\", \"whenever a client sends…\"), call workflow_draft so "
         "they get a saveable workflow card instead of prose steps."
     )
+    # USER PROFILE (v1.144.0): who this person is + how they want to be
+    # answered + their voice. Injected HIGH — right after the persona, before
+    # any retrieved content — because it governs HOW everything below is
+    # written. The identical injection lands at every other seam (the stream
+    # copy, agents/runtime, the round table); a profile that only reached chat
+    # is the bug this wave exists to fix.
+    # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
+    system += _profile_section(platform)
     # A project only applies INSIDE the Projects module: the in-project chat
     # sends an explicit project_id and grounds in that project's
     # instructions + brief + knowledge. The MAIN chat sends none and stays
@@ -856,11 +1024,20 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 — the roster must never break a turn
         pass
 
-    # Full multi-turn history (bounded), images ride on the LAST user turn.
-    msgs: list[LLMMessage] = []
-    for m in body.messages[-30:]:
-        role = m.role if m.role in ("user", "assistant") else "user"
-        msgs.append(LLMMessage(role=role, content=(m.content or "")[:12000]))
+    # CONTEXT PROTECTION (v1.146.0): the history is budgeted against the WINDOW
+    # of the model that will answer, not sliced at a fixed 30 messages. The
+    # system prompt is finished by this point — profile, project, awareness,
+    # grounding, roster — so its true cost is known and can be reserved for.
+    # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
+    plan = _plan_context(d, body, system, provider_choice, model_choice)
+    if plan.recap:
+        # The recap rides in the SYSTEM prompt, not as a fake user turn: it is
+        # a note about the conversation, and injecting it as a message would
+        # put words in the user's mouth that they never typed.
+        system += "\n\n" + plan.recap
+    msgs: list[LLMMessage] = [
+        LLMMessage(role=m["role"], content=m["content"]) for m in plan.messages
+    ]
     if images and msgs:
         for m in reversed(msgs):
             if m.role == "user":
@@ -1159,6 +1336,24 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                 usage_in=usage_in, usage_out=usage_out,
             )
         raise HTTPException(status_code=502, detail=str(exc))
+    # LANGUAGE GUARD (v1.144.0) — runs BEFORE the ledger below so a corrective
+    # completion is billed like any other. Operates on the MODEL's text, not on
+    # the assembled reply: our own honesty notes are written in English by
+    # construction and must never trigger (or be eaten by) a rewrite.
+    # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
+    model_text = route.response.text or ""
+    model_text, lang_note, _l_in, _l_out, _l_n = await _enforce_language(
+        d.platform,
+        text=model_text,
+        user_text=_last_user_text(body.messages),
+        system=system,
+        messages=msgs,
+        provider=provider_choice,
+        model=model_choice,
+    )
+    usage_in += _l_in
+    usage_out += _l_out
+    completions += _l_n
     # USAGE LEDGER: direct chat turns must count like agent runs, or the
     # Usage page under-reports the user's main surface. Persist a run row
     # (session_id "chat") with the adapters' reported token usage.
@@ -1171,7 +1366,7 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     # with output, synthesize a short summary from the last result rather
     # than the bare "(no reply)" placeholder (which reads like the turn did
     # nothing). Denied armed tools get an honest footer note.
-    reply = route.response.text or ""
+    reply = model_text
     if workflow_draft is not None:
         # A draft exit SUCCEEDED by proposing — the card is the reply. No
         # "(no reply)" placeholder (the client captions the card), and no
@@ -1192,6 +1387,13 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
             reply += f"\n\n_Note: {names} could not run (permission denied)._"
         if stopped_note:
             reply += f"\n\n_Note: {stopped_note}._"
+        if lang_note:
+            reply += f"\n\n_Note: {lang_note}._"
+        # CONTEXT (v1.146.0): if earlier turns stopped being visible, say so.
+        # Staying silent is how a user concludes the assistant "forgot".
+        _ctx_note = plan.note()
+        if _ctx_note:
+            reply += f"\n\n_Note: {_ctx_note}._"
         reply += _creation_honesty_note(body, armed, tools_used)
         if text_only_pick and (body.tools or []):
             reply += (
@@ -1223,4 +1425,7 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         # applies exactly as before.
         "escalate_agent": escalate_agent,
         "workflow_draft": workflow_draft,
+        # v1.146.0 — what this turn cost against the model's window, so the
+        # composer can show headroom BEFORE the next message overflows it.
+        "context": plan.as_dict(),
     }

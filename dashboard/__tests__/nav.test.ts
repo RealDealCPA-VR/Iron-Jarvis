@@ -103,6 +103,17 @@ describe("nav catalogue — the friction phrases resolve", () => {
     // "what version am I on" / "is there an update"
     ["version", "/updates"],
     ["update", "/updates"],
+    // v1.144.0 — the feedback that started this wave was phrased as symptoms,
+    // never as "profile": people ask for shorter answers, for English, or for
+    // a dyslexia-friendly shape. All three must land on /you.
+    ["shorter answers", "/you"],
+    ["answer in english", "/you"],
+    ["dyslexia", "/you"],
+    ["about me", "/you"],
+    // v1.145.0 — the on-ramp, asked for in the words people actually use.
+    ["writing samples", "/train"],
+    ["learn my style", "/train"],
+    ["import my notes", "/train"],
   ])("%o finds %s", (query, href) => {
     expect(hrefsFor(query)).toContain(href);
   });
@@ -177,7 +188,12 @@ const RAIL: ReadonlyArray<readonly [string, readonly string[]]> = [
       "/self-dev",
     ],
   ],
-  ["Knowledge", ["/memory", "/documents", "/filesearch", "/skills", "/artifacts"]],
+  // v1.144.0: "You" leads Knowledge — the profile injected into every prompt.
+  // v1.145.0: "Train on me" follows it — the on-ramp that fills everything else.
+  [
+    "Knowledge",
+    ["/you", "/train", "/memory", "/documents", "/filesearch", "/skills", "/artifacts"],
+  ],
   ["Connections", ["/connections", "/fleet", "/secrets", "/channels"]],
   ["System", ["/usage", "/updates", "/settings", "/help"]],
 ];

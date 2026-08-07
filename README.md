@@ -47,6 +47,9 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 | | |
 |---|---|
 | 🧠 **Multi-agent orchestration** | Supervisor → subagents, isolated context, summarized results |
+| 🙋 **One Iron Jarvis, however you reach it** | a **You** page holds who you are, how you want answers written (length, reading level, formatting, tone, an **accessibility mode** for dyslexic reading), and which language they come back in — injected into **every** model, in chat, on your phone, and inside agent runs. Switching from a 14B local model to a cloud one changes what it can do, not how it talks to you |
+| 🖋️ **Train it on you** | paste things you've written and it describes **how you write** — style only, never what the samples were about — then proposes a voice card you edit before it is saved. Nothing is fine-tuned: your notes, wiki, past conversations, and folders stay on your machine and become retrieval context |
+| 📐 **Context it can't overflow** | every turn is budgeted against the answering model's real context window — stale tool output trimmed first, older turns condensed into a labelled recap, the newest question never sacrificed — and the composer shows the headroom before you hit it |
 | 🔒 **Fail-closed permissions** | allow / ask / deny on every tool; `shell` stays locked down |
 | 🌳 **Git-native sessions** | branch → work → diff → **you approve** → merge (no auto-merge) |
 | 🧩 **n8n-style workflows** | drag step-nodes, wire them, run the graph — agents can build them too |

@@ -191,6 +191,37 @@ class SettingsBody(BaseModel):
     values: dict[str, Any]
 
 
+class ProfileBody(BaseModel):
+    """PUT /profile — a PARTIAL update of the user profile (v1.144.0).
+
+    Same ``{"values": {...}}`` envelope as SettingsBody on purpose: both are
+    "write some of the user's preferences", and one shape means the dashboard's
+    save helpers, the error handling, and the mental model are shared. Keys the
+    store doesn't know are ignored rather than 400ing, so an older client can
+    never blank a field a newer one added (see ``profile.store.save``)."""
+
+    values: dict[str, Any]
+
+
+class ProfileAccessibilityBody(BaseModel):
+    """POST /profile/accessibility — turn a mode on (``""`` turns it off)."""
+
+    mode: str = ""
+
+
+class WritingSampleBody(BaseModel):
+    """POST /profile/samples — one piece of the user's own writing (v1.145.0).
+
+    Either ``text`` (pasted) or ``content_b64`` + ``filename`` (a document,
+    converted through the same ``document_to_markdown`` path /ltm/ingest-document
+    uses — one converter, not two)."""
+
+    label: str = ""
+    text: str = ""
+    filename: str = ""
+    content_b64: str = ""
+
+
 class TranscribeBody(BaseModel):
     """Server-side dictation fallback (the packaged desktop app has no Web
     Speech engine): a short audio clip, base64-encoded — same wire pattern as

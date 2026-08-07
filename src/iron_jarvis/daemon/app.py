@@ -27,6 +27,7 @@ from ..core.config import persist_config_values
 from ..core.db import session_scope
 from ..core.logging import get_logger
 from ..core.models import AgentType
+from ..personas.builtins import BUILTIN_PERSONAS
 from ..platform import build_platform
 from ..tools.permissions import headless_ask_resolver
 
@@ -1134,49 +1135,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     # --- Chat (direct conversation — frontier-chat parity) -----------------
 
-    _PERSONAS: dict[str, dict[str, str]] = {
-        "assistant": {
-            "description": "Sharp, friendly general assistant (default)",
-            "prompt": (
-                "You are Iron Jarvis, the user's personal AI running on their own "
-                "machine. Answer directly and conversationally — helpful, sharp, "
-                "warm, concise but complete. Use markdown when it helps."
-            ),
-        },
-        "developer": {
-            "description": "Senior software engineer — code, debugging, architecture",
-            "prompt": (
-                "You are a pragmatic senior software engineer. Give working code, "
-                "concrete diagnoses, and honest trade-offs. Prefer minimal examples "
-                "over prose; call out pitfalls."
-            ),
-        },
-        "accountant": {
-            "description": "CPA-grade accounting, tax, and business analysis",
-            "prompt": (
-                "You are a meticulous CPA and business advisor. Be precise with "
-                "numbers, cite the relevant rules/forms when applicable, show your "
-                "work, and flag anything requiring professional judgment. Never "
-                "invent figures."
-            ),
-        },
-        "writer": {
-            "description": "Editor and wordsmith — drafts, tone, clarity",
-            "prompt": (
-                "You are a skilled editor and writer. Produce clean, natural prose "
-                "matched to the requested tone and audience; offer sharper "
-                "alternatives when the user's draft can be improved."
-            ),
-        },
-        "researcher": {
-            "description": "Structured analysis — thorough, sourced, balanced",
-            "prompt": (
-                "You are a careful researcher. Structure answers, distinguish fact "
-                "from inference, state confidence levels, and note what you'd need "
-                "to verify. Never present speculation as fact."
-            ),
-        },
-    }
+    # The built-in catalog now lives in personas/builtins.py (v1.144.0) so the
+    # agent runtime + round table can resolve the user's default persona too —
+    # a dict local to this factory was reachable only from HTTP routes. Same
+    # object, same `d._PERSONAS` exposure: nothing downstream changes.
+    _PERSONAS: dict[str, dict[str, str]] = BUILTIN_PERSONAS
 
     # The inbound poller's full-chat turns resolve personas from the SAME
     # builtin defaults POST /chat uses (constructed above, before this dict
@@ -2056,6 +2019,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # and a literal path registered after a same-prefix catch-all is exactly the
     # shape that once swallowed /skills/learning. Pinned by a test.
     _routes.memory_review.register(app, d)
+    _routes.profile.register(app, d)
     _routes.learning.register(app, d)
     _routes.computeruse.register(app, d)
     _routes.terminals.register(app, d)

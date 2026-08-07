@@ -119,6 +119,28 @@ def _register_search_models() -> None:
         logger.warning("history-search models unavailable", exc_info=True)
 
 
+def _register_profile_models() -> None:
+    """Put ``userprofilerecord`` into ``SQLModel.metadata`` BEFORE ``create_all``
+    and ``_reconcile_additive_columns`` run — same reason as
+    :func:`_register_search_models`.
+
+    The profile is read by the prompt seams through ``ProfileStore``, which is
+    imported LAZILY inside those seams (they must not pay for the package on a
+    turn that has no profile). So at boot nothing has imported
+    ``profile.models`` yet, the table would be missing from the metadata while
+    the reconciler walks it, and a future additive column on
+    :class:`~iron_jarvis.profile.models.UserProfileRecord` would never self-heal
+    on an existing ``.ironjarvis`` DB — silently, since every seam swallows its
+    own errors. v1.145.0 adds exactly such a column (the voice card's
+    provenance), so this is load-bearing, not defensive. Pinned by
+    ``tests/test_profile_v1144.py::test_profile_table_is_registered_before_the_reconciler``.
+    """
+    try:
+        from ..profile import models as _profile_models  # noqa: F401
+    except Exception:  # noqa: BLE001 — the profile is additive; never brick boot
+        logger.warning("user-profile models unavailable", exc_info=True)
+
+
 def _ensure_fts(engine: Engine) -> None:
     """Create the history-search substrate if missing (idempotent, every boot).
 
@@ -233,6 +255,7 @@ def search_index(engine: Engine) -> Any:
 
 def init_db(engine: Engine) -> None:
     _register_search_models()  # MUST precede create_all + the reconciler
+    _register_profile_models()  # ...and so must this one (same failure mode)
     SQLModel.metadata.create_all(engine)
     _reconcile_additive_columns(engine)
     _ensure_indexes(engine)

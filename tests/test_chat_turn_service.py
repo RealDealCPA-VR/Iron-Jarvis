@@ -44,9 +44,20 @@ def _text_route(text: str, usage: dict | None = None) -> RouteResult:
 # --- history passthrough ------------------------------------------------------
 
 
-def test_history_passthrough_and_last_30_cap(tmp_path, monkeypatch):
+def test_history_passthrough_and_cap(tmp_path, monkeypatch):
     """The client owns the history; the turn forwards it VERBATIM to the model,
-    capped at the last 30 messages, roles preserved (unknown roles -> user)."""
+    roles preserved (unknown roles -> user), bounded by what the answering
+    model can actually hold.
+
+    CONTRACT CHANGE (v1.146.0): the bound used to be a flat ``messages[-30:]``
+    — a count standing in for a size, which silently forgot turn 31 on a 200k
+    model and still overflowed an 8k one. It is now
+    ``context.budget.plan_history``: a token budget against the resolved
+    window, with ``MAX_MESSAGES`` (60) as a pathological-replay guard. So 35
+    short messages now arrive INTACT where they used to be cut to 30, and the
+    small-window trimming this replaced it with is pinned in
+    tests/test_context_budget_v1146.py.
+    """
     client = _client(tmp_path)
     platform = client.app.state.platform
     seen = {}
@@ -68,14 +79,16 @@ def test_history_passthrough_and_last_30_cap(tmp_path, monkeypatch):
     r = client.post("/chat", json={"messages": history})
     assert r.status_code == 200
     got = seen["messages"]
-    assert len(got) == 30                      # last-30 cap
-    assert got[0].content == "msg-5"           # 35 sent, first 5 dropped
+    assert len(got) == 35                      # short turns all fit the window
+    assert got[0].content == "msg-0"           # ...so nothing was dropped
     assert got[-1].content == "the live question"
     assert got[-1].role == "user"
-    assert got[0].role == "assistant"          # msg-5 (odd index) was assistant
-    assert got[1].role == "user" and got[1].content == "msg-6"
+    assert got[0].role == "user"               # msg-0 (even index) was the user
+    assert got[1].role == "assistant" and got[1].content == "msg-1"
     assert seen["task_class"] == "chat"
+    # Nothing was cut, so the reply carries no context note.
     assert r.json()["reply"] == "ok"
+    assert r.json()["context"]["dropped"] == 0
 
 
 # --- skill invocation ---------------------------------------------------------
@@ -380,10 +393,13 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
     # v1.139.0 (capability roster): the response dict grew EXACTLY ONE key —
     # "escalate_agent" (the validated roster target; None = caller default).
     # This is the one deliberate, pinned contract change of that arc.
+    # v1.146.0 (context protection): one more — "context", what the turn cost
+    # against the answering model's window. Additive; the composer's headroom
+    # meter is its only consumer, and the SSE done frame carries the same shape.
     assert set(body.keys()) == {
         "reply", "provider", "model", "attached", "images", "skill",
         "tools_used", "documents", "auto_armed", "escalate",
-        "escalate_reason", "escalate_agent", "workflow_draft",
+        "escalate_reason", "escalate_agent", "workflow_draft", "context",
     }
     assert body["reply"] == "hello"
     assert body["provider"] == "mock" and body["model"] == "mock"
@@ -394,6 +410,7 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
     assert body["escalate"] is False and body["escalate_reason"] == ""
     assert body["escalate_agent"] is None
     assert body["workflow_draft"] is None
+    assert body["context"]["dropped"] == 0 and body["context"]["window"] > 0
 
 
 def test_empty_messages_is_a_400(tmp_path):
