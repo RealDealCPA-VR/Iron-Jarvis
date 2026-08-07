@@ -101,16 +101,39 @@ def _kind_of(conn: Any) -> str:
 #: Folder-scan cache (v1.141.0 review). The naive version globbed + statted
 #: every note on EVERY turn (chat and agents both inject): measured ~81ms per
 #: call for a 2000-note vault and ~600ms for 10k notes on Windows. Entries are
-#: keyed by (folder path, recursive) and live ``_SCAN_TTL_SECONDS`` — but a
-#: change to the folder's own mtime busts the entry immediately, so a note
-#: appended this turn (append writes a top-level file, which bumps the folder
-#: mtime) is visible on the very next turn; only subfolder churn in a
-#: recursive vault waits out the TTL. Values carry (path, mtime) pairs so
-#: recent-title ordering never re-stats the world either. Plain dict on
-#: purpose: worst concurrent-access case is a redundant re-scan.
+#: keyed by (folder path, recursive) and live ``_SCAN_TTL_SECONDS``. Values
+#: carry (path, mtime) pairs so recent-title ordering never re-stats the world
+#: either. Plain dict on purpose: worst concurrent-access case is a redundant
+#: re-scan.
+#:
+#: TWO ways an entry is busted before the TTL:
+#:
+#: 1. the folder's own mtime moved — covers edits made OUTSIDE the app (you in
+#:    Obsidian, a sync client), and
+#: 2. **our own append count moved** (v1.146.1). This second check exists
+#:    because the first one silently does NOT cover our own writes on Windows:
+#:    NTFS directory timestamps come off the ~15.6ms system-clock tick and are
+#:    updated lazily, so two appends inside one tick leave ``st_mtime``
+#:    byte-identical and the cache served the PRE-append scan — "remember
+#:    this", then asking about it, showed the old note count and titles for up
+#:    to the full 60s TTL. Measured 9 red in 24 runs of the regression test.
+#:    ``ltm.manager.append_epoch()`` moves because we WROTE, which no timestamp
+#:    granularity can defeat. Cost: one int compare per turn, no extra I/O.
 _SCAN_TTL_SECONDS = 60.0
 _SCAN_CACHE_MAX = 32
-_scan_cache: "dict[tuple[str, bool], tuple[float, float, list[tuple[Any, float]]]]" = {}
+#: key -> (cached_at, dir_mtime, entries, append_epoch)
+_scan_cache: "dict[tuple[str, bool], tuple[float, float, list[tuple[Any, float]], int]]" = {}
+
+
+def _append_epoch() -> int:
+    """The LTM append counter, or 0 when unavailable — a constant simply leaves
+    the cache behaving exactly as it did before this check existed."""
+    try:
+        from ..ltm.manager import append_epoch
+
+        return append_epoch()
+    except Exception:  # noqa: BLE001 — awareness must never break a turn
+        return 0
 
 
 def _local_notes(conn: Any) -> "list[tuple[Any, float]] | None":
@@ -131,11 +154,13 @@ def _local_notes(conn: Any) -> "list[tuple[Any, float]] | None":
             dir_mtime = float(conn.dir.stat().st_mtime)
         except Exception:  # noqa: BLE001 — folder unstattable: scan uncached
             dir_mtime = -1.0
+        epoch = _append_epoch()
         hit = _scan_cache.get(key)
         if (
             hit is not None
             and time.monotonic() - hit[0] <= _SCAN_TTL_SECONDS
             and hit[1] == dir_mtime >= 0.0
+            and hit[3] == epoch  # we have not appended since this was cached
         ):
             return hit[2]
         entries: list[tuple[Any, float]] = []
@@ -147,7 +172,7 @@ def _local_notes(conn: Any) -> "list[tuple[Any, float]] | None":
             entries.append((path, mtime))
         if key not in _scan_cache and len(_scan_cache) >= _SCAN_CACHE_MAX:
             _scan_cache.pop(next(iter(_scan_cache)), None)
-        _scan_cache[key] = (time.monotonic(), dir_mtime, entries)
+        _scan_cache[key] = (time.monotonic(), dir_mtime, entries, epoch)
         return entries
     except Exception:  # noqa: BLE001
         return None

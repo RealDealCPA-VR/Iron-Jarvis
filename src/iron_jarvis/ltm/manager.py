@@ -11,6 +11,34 @@ from typing import Any
 
 from .base import LTMConnector
 
+#: Bumped on every successful append (v1.146.1). Read by
+#: ``memory.index_block._local_notes`` to invalidate its folder-scan cache.
+#:
+#: WHY A COUNTER AND NOT THE FOLDER'S mtime (which is what the cache used to
+#: rely on): appending writes a file, and a new file was assumed to move the
+#: directory's mtime, making the note visible on the very next turn. On NTFS it
+#: does not reliably — Windows stamps timestamps off the system clock (~15.6ms
+#: tick) and updates directory metadata lazily, so two appends inside one tick
+#: produce a byte-identical ``st_mtime``. The cache then read "nothing changed"
+#: and served the pre-append scan: "remember this" followed by a question about
+#: it showed the OLD note count and titles for up to the 60s TTL. Measured 9
+#: failures in 24 runs of the regression test on Windows.
+#:
+#: The counter moves because WE WROTE, which no filesystem timestamp
+#: granularity can defeat. It is process-local and deliberately global: an
+#: append is rare next to a turn, so busting every base's cached scan costs one
+#: redundant glob, and per-source bookkeeping is not worth it. Writes made
+#: OUTSIDE the app (editing the vault in Obsidian, a sync client) do not bump
+#: it and keep falling back to mtime + TTL exactly as before — the cache now
+#: busts when the mtime moved OR when we appended.
+_APPEND_EPOCH = 0
+
+
+def append_epoch() -> int:
+    """How many appends this process has made. Only ever compared for equality
+    — callers cache it alongside a scan and re-scan when it has moved."""
+    return _APPEND_EPOCH
+
 
 class LongTermMemory:
     """Front door to all registered long-term-memory connectors."""
@@ -58,7 +86,15 @@ class LongTermMemory:
         conn = self._connectors.get(source)
         if conn is None:
             raise ValueError(f"unknown LTM source '{source}'")
-        return conn.append(title, content)
+        ref = conn.append(title, content)
+        # AFTER the write succeeded — a failed append changed nothing, and
+        # bumping anyway would throw away a valid cached scan for free. This is
+        # the ONLY place in the tree that calls a connector's append (verified
+        # by grep), so every path — routes, tools, the CLI, the importers —
+        # rides it. See :data:`_APPEND_EPOCH` for why this exists.
+        global _APPEND_EPOCH
+        _APPEND_EPOCH += 1
+        return ref
 
     # -- internals --------------------------------------------------------
     def _merge_search(self, query: str, k: int) -> list[dict[str, Any]]:

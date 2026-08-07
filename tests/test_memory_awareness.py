@@ -19,6 +19,7 @@ Covers:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -315,15 +316,94 @@ def test_scan_cache_avoids_reglobbing_within_ttl(platform, monkeypatch):
 
 
 def test_scan_cache_sees_a_new_append_immediately(platform):
+    """"remember this", then asking on the next turn, must show the fresh count
+    and title — never the pre-append scan."""
     platform.ltm.append("First Note", "x", source="brain")
     assert "brain (markdown, 1 note)" in memory_index_block(platform)
-    # Appending writes a top-level file -> the FOLDER mtime moves -> the cache
-    # entry is busted without waiting out the TTL. "remember this" then asking
-    # on the next turn must show the fresh count + title.
     platform.ltm.append("Second Note", "y", source="brain")
     block = memory_index_block(platform)
     assert "brain (markdown, 2 notes)" in block
     assert "second-note" in _titles_line(block)
+
+
+def test_a_new_append_is_seen_even_when_the_folder_mtime_NEVER_MOVES(
+    platform, monkeypatch
+):
+    """The deterministic version of the test above — and the reason v1.146.1
+    exists.
+
+    The cache used to bust its entry by comparing the FOLDER's mtime, on the
+    assumption that writing a file moves it. On NTFS that is unreliable:
+    timestamps come off the ~15.6ms system-clock tick and directory metadata is
+    updated lazily, so two appends inside one tick leave ``st_mtime``
+    byte-identical and the cache serves the pre-append scan. That made the test
+    above fail ~37% of the time on Windows (measured 9/24 on v1.143.0) and, in
+    the product, made a just-saved note invisible to "what I can remember" for
+    up to the full 60s TTL.
+
+    Freezing the mtime turns that 37% into 100%: this test fails every time on
+    the old mtime-only check and passes every time on the append-epoch check.
+    """
+    import os
+
+    conn = _brain_conn(platform)
+    conn.dir.mkdir(parents=True, exist_ok=True)  # before the freeze
+    real_stat = Path.stat
+
+    def frozen_stat(self, *a, **kw):
+        st = real_stat(self, *a, **kw)
+        if self != conn.dir:  # the FOLDER only; note files keep real mtimes
+            return st
+        # A REAL stat_result with one field substituted — a stand-in object
+        # would break every other consumer (exists(), is_dir(), mkdir()).
+        return os.stat_result(
+            (
+                st.st_mode, st.st_ino, st.st_dev, st.st_nlink, st.st_uid,
+                st.st_gid, st.st_size, int(st.st_atime), 1_000_000,
+                int(st.st_ctime),
+            )
+        )
+
+    monkeypatch.setattr(Path, "stat", frozen_stat)
+
+    platform.ltm.append("First Note", "x", source="brain")
+    assert "brain (markdown, 1 note)" in memory_index_block(platform)
+    platform.ltm.append("Second Note", "y", source="brain")
+    block = memory_index_block(platform)
+    assert "brain (markdown, 2 notes)" in block, "the stale pre-append scan was served"
+    assert "second-note" in _titles_line(block)
+
+
+def test_the_append_epoch_does_not_bust_the_cache_on_a_plain_turn(platform, monkeypatch):
+    """The other half: the fix must not quietly disable the cache. With no
+    append between turns the epoch is unchanged, so the glob still runs once."""
+    platform.ltm.append("Cached Note", "x", source="brain")
+    conn = _brain_conn(platform)
+    calls = {"n": 0}
+    real_files = conn._files
+
+    def counting():
+        calls["n"] += 1
+        return real_files()
+
+    monkeypatch.setattr(conn, "_files", counting)
+    memory_index_block(platform)
+    memory_index_block(platform)
+    memory_index_block(platform)
+    assert calls["n"] == 1
+
+
+def test_an_unavailable_append_epoch_leaves_the_cache_as_it_was(platform, monkeypatch):
+    """A constant epoch degrades to the pre-v1.146.1 behaviour rather than
+    breaking a turn — the same never-raise discipline as every other injection."""
+    monkeypatch.setattr(
+        index_block_mod,
+        "_append_epoch",
+        lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    platform.ltm.append("Some Note", "x", source="brain")
+    # _append_epoch itself swallows; this pins the CALLER surviving a raiser too.
+    assert isinstance(memory_index_block(platform), str)
 
 
 def test_scan_cache_expires_after_ttl(platform, monkeypatch):
@@ -331,11 +411,12 @@ def test_scan_cache_expires_after_ttl(platform, monkeypatch):
     memory_index_block(platform)
     assert index_block_mod._scan_cache
     # Age every entry past the TTL (folder mtime unchanged) -> full re-scan.
-    for key, (stamp, dmt, entries) in list(index_block_mod._scan_cache.items()):
+    for key, (stamp, dmt, entries, epoch) in list(index_block_mod._scan_cache.items()):
         index_block_mod._scan_cache[key] = (
             stamp - index_block_mod._SCAN_TTL_SECONDS - 1,
             dmt,
             entries,
+            epoch,
         )
     conn = _brain_conn(platform)
     calls = {"n": 0}
