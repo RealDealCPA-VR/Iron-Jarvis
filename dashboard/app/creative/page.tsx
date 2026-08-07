@@ -1492,6 +1492,10 @@ const STUDIO_KEY = "ironjarvis.creative.studio";
 const STUDIO_BASELINE_CAP = 1000;
 /** Quiet window after the last tail change / new file before a turn reads as "done". */
 const STUDIO_IDLE_MS = 8000;
+/** After this long still booting, say so plainly and point at the terminal.
+ *  Well under the 45s safety net, so a genuinely stuck launch is called out
+ *  while there is still time to look at what the CLI is printing. */
+const BOOT_SLOW_SECONDS = 12;
 
 /** A live studio session, persisted so a page unmount doesn't lose the terminal. */
 interface StudioSession {
@@ -2457,9 +2461,17 @@ function StudioView({
     // dead terminal/engine, an in-flight send, or the intake panel disables input.
     const inputDisabled = !alive || gone || sending || engineExited || intakeOpen;
     const awaitingAutomode = booting && session.awaitsAutomode && !automode;
+    // A COUNTED wait (v1.147.0). The boot gate can legitimately take a while,
+    // and the old static "Starting opencode…" made a working wait read as a
+    // frozen page — the report was "it stalls out, sometimes I refresh". A
+    // ticking number is the difference between "hung" and "waiting", and past
+    // BOOT_SLOW_MS we say so plainly and point at the terminal, where the CLI's
+    // own output (an install prompt, a login, an error) is visible.
+    const bootSeconds = session ? Math.max(0, Math.round((nowTick - session.startedAt) / 1000)) : 0;
+    const bootSlow = booting && bootSeconds >= BOOT_SLOW_SECONDS;
     const bootStatus = awaitingAutomode
-      ? "Engaging auto mode…"
-      : `Starting ${session.cliLabel}…`;
+      ? `Engaging auto mode… ${bootSeconds}s`
+      : `Starting ${session.cliLabel}… ${bootSeconds}s`;
     // The daemon's phase is authoritative (idle/done = genuinely waiting, not just
     // "no bytes for 8s"); the idle timer is only a fallback for older daemons.
     // Only the LAST turn can ever be "working"; earlier turns are always resolved.
@@ -2615,6 +2627,16 @@ function StudioView({
                       <span>
                         {statusLine || bootStatus}
                         {booting ? " — type your brief now; it sends the moment the engine is ready." : ""}
+                        {bootSlow && (
+                          <>
+                            {" "}
+                            <span className="text-amber-400/90">
+                              Taking longer than usual — open the terminal below to
+                              see what {session.cliLabel} is doing (it may be
+                              installing, asking to log in, or failing to start).
+                            </span>
+                          </>
+                        )}
                       </span>
                     </div>
                   ) : (

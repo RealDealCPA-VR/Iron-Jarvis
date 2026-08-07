@@ -106,6 +106,79 @@ _WORKING_MARKER = "esc to interrupt"
 _PROMPT_AT_END_RE = re.compile(r"(?:^|\n)(?:PS [^\n]*|[A-Za-z]:\\[^\n]*)>\s*$")
 
 
+#: ConPTY/xterm sequence a program emits when it takes over the ALTERNATE
+#: SCREEN BUFFER. This is the one unambiguous "a full-screen TUI is now
+#: running" signal available, and it is what the text heuristics below are
+#: approximating: shells do not switch buffers, so it cannot false-positive on
+#: a shell that is merely echoing. Matched against the RAW scrollback (ANSI
+#: intact) — ``output_tail()`` strips exactly this class of sequence.
+_ALT_SCREEN_RE = re.compile(rb"\x1b\[\?(?:1049|1047|47)h")
+
+#: Minimum characters a CLI must have painted AFTER its echoed launch command
+#: before volume alone counts as readiness.
+_READY_BODY_CHARS = 80
+
+
+def studio_ready(full: str, *, raw: bytes | None = None, command: str = "") -> bool:
+    """Has the launched CLI actually come up and started listening?
+
+    The gate matters because a brief typed before the CLI is listening lands in
+    the SHELL and runs as a command. Any ONE of these is enough:
+
+    1. a Claude permission-mode banner, or a known TUI marker;
+    2. **the alternate screen buffer was entered** (:data:`_ALT_SCREEN_RE`) —
+       added v1.147.0, and the only signal here that cannot be faked by a shell;
+    3. volume: enough text painted AFTER the echoed launch command, containing
+       at least one NEWLINE, with no shell prompt at the end.
+
+    TWO BUGS FIXED IN RULE 3 (v1.147.0), both found from a real captured tail:
+
+    * it used ``full.splitlines()[2:]`` — "drop the banner and the echoed
+      command" — which assumes the CLI's output arrives as LINES. A full-screen
+      TUI paints with cursor addressing, and PowerShell's PSReadLine repaints
+      the prompt line IN PLACE, so a real capture was a single 158-char line:
+      ``splitlines()[2:]`` was ``[]``, the body was ``""``, and readiness could
+      never trip at all. The composer then waited out the frontend's 45s
+      safety-net timer on every launch. Now the body is whatever follows the
+      echoed command, measured by length.
+    * measuring that repaint noise by length ALONE would be worse than the bug:
+      PSReadLine's predictive completions painted 130 characters while the
+      shell was still at its prompt, so a pure character count would have
+      declared readiness and sent the user's first brief to the SHELL. Hence
+      the newline requirement — a repaint never emits one, a program that has
+      actually printed something always does.
+
+    ``command`` is the launch line the studio typed; when known, the body is
+    taken after its FIRST occurrence (it repeats across repaints).
+    """
+    low = full.lower()
+    if latest_claude_mode(full) or any(
+        m in low for m in ("? for shortcuts", "shift+tab", _WORKING_MARKER)
+    ):
+        return True
+    if raw and _ALT_SCREEN_RE.search(raw):
+        return True
+    body = ""
+    cmd = (command or "").strip()
+    if cmd and cmd in full:
+        body = full.split(cmd, 1)[1]
+    else:
+        # No command recorded (an older session): fall back to dropping the
+        # first line only — never index past the end of a short capture.
+        parts = full.strip().splitlines()
+        body = "\n".join(parts[1:]) if len(parts) > 1 else ""
+    return (
+        len(body.strip()) >= _READY_BODY_CHARS
+        # NOT ``body.strip()``: stripping removes the very newlines that prove a
+        # line break happened. The pairing is "enough content" AND "a line was
+        # actually emitted" — shell repaints satisfy the first, never the second.
+        and "\n" in body
+        # Volume is not readiness when the shell prompt is the LAST thing
+        # painted — that is a CLI that errored or quit, not a TUI waiting.
+        and not _PROMPT_AT_END_RE.search(full[-300:].rstrip())
+    )
+
+
 def derive_phase(
     full: str, *, ready: bool, output_age: float | None = None
 ) -> tuple[str, str | None]:
@@ -725,6 +798,10 @@ def register(app: FastAPI, d) -> None:
             # studio_say adds a "your PIXIO_API_KEY is set" line to the first
             # brief so the CLI's skills use it instead of asking for a key.
             setattr(session, "_studio_pixio_env", True)
+        # Remember the launch line: /tail's readiness rule measures what the CLI
+        # painted AFTER its own echoed command, and the command repeats across
+        # PSReadLine repaints — so the text is needed, not a line index.
+        setattr(session, "_studio_command", command)
         # Type the launch into the shell ("\r" = Enter, same as a keystroke).
         session.write(command + "\r")
         # Claude's auto mode is engaged like a human does it: Shift+Tab cycles
@@ -844,26 +921,17 @@ def register(app: FastAPI, d) -> None:
         chars = max(200, min(int(chars), 32_000))
         full = session.output_tail()
         mode = latest_claude_mode(full)
-        low = full.lower()
-        # "The CLI has booted and is ready to accept a brief." A blind boot timer
-        # let the first brief land in a not-yet-listening shell (→ dropped); the
-        # UI gates on this instead. Claude paints "? for shortcuts" / an
-        # "esc to interrupt" hint; any CLI that has printed a screenful BEYOND
-        # the shell banner + echoed launch command is up. STICKY once true —
-        # boot hints scroll out of the tail window, readiness doesn't regress.
-        body_after_launch = "\n".join(full.strip().splitlines()[2:])
-        if (
-            bool(mode)
-            or "? for shortcuts" in low
-            or "shift+tab" in low
-            or "esc to interrupt" in low
-            or (
-                len(body_after_launch.strip()) >= 80
-                # Volume alone isn't readiness when the shell prompt is the
-                # LAST thing painted — that's a CLI that errored/quit, not a
-                # TUI waiting for input (derive_phase reports it as exited).
-                and not _PROMPT_AT_END_RE.search(full[-300:].rstrip())
-            )
+        # "The CLI has booted and is ready to accept a brief" — see
+        # :func:`studio_ready` for every signal and why each one is there.
+        # STICKY once true: boot hints scroll out of the tail window, readiness
+        # does not regress. The RAW scrollback is passed so the alternate-screen
+        # check can see the escape sequence ``output_tail()`` strips.
+        try:
+            raw = session.scrollback_bytes()
+        except Exception:  # noqa: BLE001 — the text signals still apply
+            raw = None
+        if studio_ready(
+            full, raw=raw, command=str(getattr(session, "_studio_command", "") or "")
         ):
             setattr(session, "_studio_ready", True)
         ready = bool(getattr(session, "_studio_ready", False))
