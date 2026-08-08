@@ -81,6 +81,12 @@ class AgentThreadRecord(SQLModel, table=True):
 
     id: str = Field(default_factory=lambda: new_id("athr"), primary_key=True)
     title: str = ""
+    #: The CHAT thread that started this panel (v1.150.0), when it began with an
+    #: ``@mention`` in chat rather than on the Agents page. One panel per chat
+    #: thread, so mentioning a new agent mid-conversation ADDS them to the same
+    #: room instead of opening a second one where they cannot see what was
+    #: already said. Empty = created on the Agents page. Additive column.
+    chat_thread_id: str = Field(default="", index=True)
     #: JSON list of participants:
     #: {key, source, name, role, provider?, model?} — ``key`` is
     #: "<source>:<name>" and unique within the thread.
@@ -90,6 +96,24 @@ class AgentThreadRecord(SQLModel, table=True):
     messages_json: str = "[]"
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+
+
+def parse_mentions(text: str) -> list[str]:
+    """The ``@names`` in *text*, lowercased, in order, deduplicated.
+
+    Public because the CHAT lane needs the same answer the round does: chat
+    resolves mentions against the ROSTER to decide who joins the panel, then
+    ``run_round`` matches them against the panel's participants to decide who
+    speaks. Two regexes would be two definitions of "is that a mention", and
+    they would disagree on exactly the awkward inputs this one is careful
+    about (``email@example.com``, ``@builder.``, ``@"Two Words"``).
+    """
+    out: list[str] = []
+    for quoted, bare in _MENTION_RE.findall(text or ""):
+        token = (quoted if quoted else bare.rstrip("._-")).strip().lower()
+        if token and token not in out:
+            out.append(token)
+    return out
 
 
 def participant_key(source: str, name: str) -> str:
@@ -151,6 +175,60 @@ class AgentThreads:
             db.commit()
             db.refresh(rec)
         return rec
+
+    def for_chat(self, chat_thread_id: str, title: str = "") -> AgentThreadRecord:
+        """The panel bound to a chat thread — created on first use (v1.150.0).
+
+        Get-or-create, because "chat with several agents at once" means the room
+        persists: turn 3's ``@builder`` must be able to see what ``@critic`` said
+        in turn 2, which only works if it is the same thread.
+        """
+        chat_thread_id = (chat_thread_id or "").strip()
+        with session_scope(self.engine) as db:
+            if chat_thread_id:
+                found = db.exec(
+                    select(AgentThreadRecord).where(
+                        AgentThreadRecord.chat_thread_id == chat_thread_id
+                    )
+                ).first()
+                if found is not None:
+                    return AgentThreadRecord(**found.model_dump())
+        rec = AgentThreadRecord(
+            title=(title or "").strip() or "Panel from chat",
+            participants_json="[]",
+            chat_thread_id=chat_thread_id,
+        )
+        with session_scope(self.engine) as db:
+            db.add(rec)
+            db.commit()
+            db.refresh(rec)
+        return AgentThreadRecord(**rec.model_dump())
+
+    def add_participants(
+        self, thread_id: str, participants: list[dict[str, str]]
+    ) -> AgentThreadRecord | None:
+        """Add agents that are not already in the panel; existing ones keep the
+        role they joined with. Returns the updated record, or None if unknown.
+
+        Under the shared conversation lock like every other participants/messages
+        write — two mentions landing together must not clobber each other's
+        additions (the read-modify-write is the whole risk here).
+        """
+        with _APPEND_LOCK:
+            with session_scope(self.engine) as db:
+                rec = db.get(AgentThreadRecord, thread_id)
+                if rec is None:
+                    return None
+                current = json.loads(rec.participants_json or "[]")
+                have = {p.get("key") for p in current}
+                added = [p for p in participants if p.get("key") not in have]
+                if added:
+                    rec.participants_json = json.dumps(current + added)
+                    rec.updated_at = utcnow()
+                    db.add(rec)
+                    db.commit()
+                    db.refresh(rec)
+                return AgentThreadRecord(**rec.model_dump())
 
     def list(self) -> list[AgentThreadRecord]:
         with session_scope(self.engine) as db:

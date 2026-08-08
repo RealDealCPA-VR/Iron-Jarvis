@@ -22,6 +22,27 @@ export interface SlashToken {
 
 const TOKEN = /(^|\s)\/([^\s/]*)$/;
 
+/** The same rule for any trigger character (v1.150.0 — "@" for agents).
+ *
+ * Generalised rather than copied: "/" and "@" want IDENTICAL behaviour (open
+ * only at a word boundary, no second trigger inside the token, caret-clamped),
+ * and two regexes would be two definitions that drift on exactly the awkward
+ * inputs — `and/or`, `C:/Users`, `email@example.com` — each was written to
+ * reject. `slashTokenAt` stays as-is so nothing that already calls it changes.
+ */
+export function tokenAt(
+  text: string,
+  caret: number,
+  trigger: string,
+): SlashToken | null {
+  const esc = trigger.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`(^|\\s)${esc}([^\\s${esc}]*)$`);
+  const pos = Math.max(0, Math.min(caret, text.length));
+  const m = re.exec(text.slice(0, pos));
+  if (!m) return null;
+  return { start: m.index + m[1].length, end: pos, query: m[2].toLowerCase() };
+}
+
 /**
  * The "/" token *text*'s caret is sitting in, or null.
  *

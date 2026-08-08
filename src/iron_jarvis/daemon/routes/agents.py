@@ -198,6 +198,118 @@ def register(app: FastAPI, d) -> None:
                 continue
         return {"roster": roster}
 
+    # --- @mention in chat (v1.150.0) --------------------------------------
+
+    def _roster_to_participant(entry) -> dict[str, str]:
+        """A roster entry as a THREAD participant.
+
+        The two vocabularies differ by design and have to be bridged in exactly
+        one place: the roster names things ``builder`` / ``custom:<slug>`` /
+        ``remote:<name>`` (what a delegating model reads), while a thread stores
+        ``{source, name}`` with source ``builtin|dynamic|remote``.
+        """
+        kind = str(getattr(entry, "kind", "") or "")
+        name = str(getattr(entry, "name", "") or "")
+        source = {"builtin": "builtin", "dynamic": "dynamic", "remote": "remote"}.get(
+            kind, "builtin"
+        )
+        bare = name.split(":", 1)[1] if ":" in name else name
+        return {"source": source, "name": bare, "role": "participant"}
+
+    @app.get("/agents/mentionable")
+    def agents_mentionable() -> dict[str, Any]:
+        """Everyone reachable with ``@`` from chat — the picker's catalog.
+
+        Built from the SAME roster the delegation prompt reads, so what you can
+        mention and what a model can hand work to never drift apart. Offline
+        remotes are INCLUDED and flagged rather than hidden: "my agent isn't in
+        the list" is a worse failure than "my agent is listed as offline".
+        """
+        from ...agents.roster import build_roster
+
+        try:
+            entries = build_roster(d.platform)
+        except Exception:  # noqa: BLE001 — an empty picker beats a 500
+            entries = []
+        out = []
+        for e in entries:
+            try:
+                p = _roster_to_participant(e)
+                out.append(
+                    {
+                        "mention": p["name"],       # what the user types after @
+                        "name": e.name,             # the roster's own id
+                        "kind": e.kind,
+                        "source": p["source"],
+                        "description": e.description,
+                        "healthy": bool(e.healthy),
+                        "delegable": bool(e.delegable),
+                    }
+                )
+            except Exception:  # noqa: BLE001
+                continue
+        return {"agents": out}
+
+    @app.post("/chat/panel")
+    async def chat_panel(body: dict) -> dict[str, Any]:
+        """Run one panel round for an @-mentioned chat message (v1.150.0).
+
+        The whole feature is a CONNECTION, not new machinery: chat resolves the
+        mentions against the roster, the mentioned agents join the panel bound to
+        this chat thread, and ``run_round`` — which has directed rounds,
+        sequential turn-taking, honest per-agent errors and live persistence
+        already — does the work. Because the panel IS an ordinary agent thread,
+        the conversation appears on the Agents page with no extra plumbing, which
+        is the point: the inter-agent transcript lives where agents live.
+        """
+        from ...agents.roster import resolve_target
+        from ...agents.threads import AgentThreads, clean_participants, parse_mentions
+
+        message = str(body.get("message") or "").strip()
+        if not message:
+            raise HTTPException(status_code=400, detail="message is required")
+        chat_thread_id = str(body.get("chat_thread_id") or "").strip()
+
+        mentions = parse_mentions(message)
+        if not mentions:
+            raise HTTPException(
+                status_code=400, detail="no @mentions in this message"
+            )
+        resolved: list[dict[str, str]] = []
+        unknown: list[str] = []
+        for token in mentions:
+            entry = resolve_target(d.platform, token)
+            if entry is None:
+                # Named somebody who isn't reachable. Reported, never silently
+                # dropped — a mention that quietly does nothing is how a user
+                # concludes the feature is broken.
+                unknown.append(token)
+                continue
+            resolved.append(_roster_to_participant(entry))
+        if not resolved:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no agent matched {', '.join('@' + u for u in unknown)}",
+            )
+
+        threads = AgentThreads(d.platform.engine)
+        rec = threads.for_chat(chat_thread_id, title=message[:60])
+        try:
+            threads.add_participants(rec.id, clean_participants(resolved))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        try:
+            round_out = await threads.run_round(rec.id, message, d)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="panel thread vanished")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {
+            "thread_id": rec.id,
+            "unknown_mentions": unknown,
+            **round_out,
+        }
+
     # --- Remote agents (run elsewhere) ------------------------------------
     # Registered BEFORE the /agents/{name} routes below so the literal
     # /agents/remote path is never swallowed by the {name} param match.

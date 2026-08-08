@@ -107,7 +107,28 @@ import { RunResultCard, type RunResult } from "@/components/chat/RunResultCard";
 import type { WorkflowDraft } from "@/lib/types";
 import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
 import { timeAgo } from "@/lib/format";
-import { slashTokenAt, spliceToken } from "@/lib/slash";
+import { slashTokenAt, tokenAt, spliceToken } from "@/lib/slash";
+
+/** An agent reachable with "@" from chat (GET /agents/mentionable). */
+interface MentionableAgent {
+  mention: string;
+  name: string;
+  kind: "builtin" | "dynamic" | "remote" | string;
+  source: string;
+  description: string;
+  healthy: boolean;
+  delegable: boolean;
+}
+
+/** One agent's turn in a panel round (POST /chat/panel). */
+interface PanelEntry {
+  who: string;
+  role?: string;
+  source?: string;
+  content: string;
+  error?: boolean;
+  at?: string;
+}
 import { useEvents } from "@/lib/useEvents";
 import { useDictation } from "@/lib/useDictation";
 import { useTTS } from "@/lib/useTTS";
@@ -176,6 +197,14 @@ interface ChatMessage {
    *  created/changed, tools run, errors, and what can still be reverted.
    *  Distinct from `content`, which is the model's own account of the work. */
   runResult?: RunResult;
+  /** This reply came from an @-mentioned AGENT in a panel round (v1.150.0):
+   *  the participant key ("builtin:builder", "remote:hermes"). Rendered with
+   *  the agent's name so a three-way conversation is readable. */
+  panelWho?: string;
+  /** The agent thread the panel lives in — the "open in Agents" link. */
+  panelThreadId?: string;
+  /** That agent failed this round; its content is an honest error, not a reply. */
+  panelError?: boolean;
 }
 
 /** What POST /chat expects. */
@@ -218,6 +247,12 @@ interface ChatResponse {
   /** What the turn cost against the answering model's context window
    *  (v1.146.0) — drives the composer's headroom meter. */
   context?: ContextUsage | null;
+}
+
+/** A participant key ("builtin:builder", "remote:hermes-mac-mini") as the name
+ *  the user typed after "@" — the source prefix is plumbing, not identity. */
+function agentDisplayName(key: string): string {
+  return key.includes(":") ? key.slice(key.indexOf(":") + 1) : key;
 }
 
 /** Human wording for a run phase (v1.149.0). An unknown phase falls through to
@@ -1079,6 +1114,9 @@ export default function ChatPage() {
   const [activeSkill, setActiveSkill] = useState("");
   const [skillIndex, setSkillIndex] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
+  // "@" agent picker (v1.150.0): the catalog + whether Esc closed the dropdown.
+  const [mentionable, setMentionable] = useState<MentionableAgent[] | null>(null);
+  const [atDismissed, setAtDismissed] = useState(false);
   // Caret offset in the composer. The picker keys off the "/" token AT THE
   // CARET (v1.105.0), not the start of the message, so it needs to know where
   // the cursor is — mid-sentence "/" is the whole point of that change.
@@ -2431,6 +2469,36 @@ export default function ChatPage() {
     return filtered;
   }, [slashActive, slashQuery, skills]);
 
+  // "@" AGENT PICKER (v1.150.0) — the same token rule as "/", so a mention can
+  // be reached for mid-sentence and an email address never opens a dropdown.
+  const atToken = useMemo(
+    () => (busy || atDismissed ? null : tokenAt(input, caret, "@")),
+    [input, caret, busy, atDismissed],
+  );
+  const atActive = atToken !== null;
+  const atQuery = atToken?.query ?? "";
+  const agentMatches = useMemo(() => {
+    if (!atActive) return [] as MentionableAgent[];
+    const list = mentionable ?? [];
+    if (!atQuery) return list;
+    return list.filter(
+      (a) =>
+        a.mention.toLowerCase().includes(atQuery) ||
+        (a.description || "").toLowerCase().includes(atQuery),
+    );
+  }, [atActive, atQuery, mentionable]);
+
+  /** Mentions in the composer that resolve to a REAL agent — the send path
+   *  routes to the panel only when at least one does, so "@ 9am" or an email
+   *  address never diverts a normal message. */
+  const liveMentions = useMemo(() => {
+    const known = new Set((mentionable ?? []).map((a) => a.mention.toLowerCase()));
+    const found = input.match(/(?<![A-Za-z0-9._-])@([A-Za-z0-9][A-Za-z0-9._-]*)/g) ?? [];
+    return found
+      .map((t) => t.slice(1).replace(/[._-]+$/, "").toLowerCase())
+      .filter((t) => known.has(t));
+  }, [input, mentionable]);
+
   const toolMatches = useMemo(() => {
     const list = toolCatalog ?? [];
     const q = toolQuery.trim().toLowerCase();
@@ -2466,6 +2534,24 @@ export default function ChatPage() {
       return next;
     });
   }
+
+  // The mentionable-agent catalog. Fetched ONCE up front rather than lazily on
+  // the first "@", because `liveMentions` needs it to decide whether a typed
+  // mention is real — a message sent before the catalog arrived would silently
+  // route to normal chat instead of the panel.
+  useEffect(() => {
+    let cancelled = false;
+    get<{ agents: MentionableAgent[] }>("/agents/mentionable")
+      .then((d) => {
+        if (!cancelled) setMentionable(d.agents ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setMentionable([]); // "@" just types a literal "@"
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   /** Lazily fetch the skill catalog (the "+" Skills flyout + the "/" picker). */
   function ensureSkills() {
@@ -3601,10 +3687,75 @@ export default function ChatPage() {
       void sendComm(message);
       return;
     }
+    // @MENTION (v1.150.0): naming agents routes the turn to THEM, not to Iron
+    // Jarvis — "@builder @critic draft this" asks those two, in order, each
+    // seeing the previous one's answer. Only fires when a mention resolves to a
+    // real agent, so "@ 9am" or an email address is an ordinary message.
+    if (liveMentions.length > 0) {
+      void sendPanel(message);
+      return;
+    }
     // One entry point (v1.108.0). Every message starts as fast chat; the turn
     // escalates itself when it needs the full agent (see completeChat), so the
     // user never routes their own request.
     void sendChat(message);
+  }
+
+  /**
+   * Send an @-mentioned message to the agent panel (v1.150.0).
+   *
+   * The panel is an ordinary agent thread bound to this chat thread, so the
+   * inter-agent conversation shows up on the Agents page for free — and turn 3
+   * can mention someone new who then sees what was already said.
+   */
+  async function sendPanel(message: string) {
+    setChatBusy(true);
+    const history: ChatMessage[] = [
+      ...messagesRef.current,
+      { role: "user", content: message },
+    ];
+    setMessages(history);
+    try {
+      const res = await post<{
+        thread_id: string;
+        entries: PanelEntry[];
+        spoke: string[];
+        skipped: string[];
+        unknown_mentions: string[];
+      }>("/chat/panel", {
+        message,
+        ...(threadId ? { chat_thread_id: threadId } : {}),
+      });
+      // The user's own turn is already in `history`; keep only the agents'.
+      const replies = (res.entries ?? []).filter((e) => e.who && e.who !== "user");
+      const full: ChatMessage[] = [
+        ...history,
+        ...replies.map((e) => ({
+          role: "assistant" as const,
+          content: e.content || "(no reply)",
+          panelWho: e.who,
+          panelThreadId: res.thread_id,
+          ...(e.error ? { panelError: true } : {}),
+        })),
+      ];
+      setMessages(full);
+      queueSave(full);
+      if (res.unknown_mentions?.length) {
+        setError(
+          `No agent matched ${res.unknown_mentions
+            .map((u) => "@" + u)
+            .join(", ")} — check the Agents page.`,
+        );
+      }
+    } catch (e) {
+      const err = e instanceof ApiError ? e : new ApiError(String(e), 0);
+      setError(err.status === 0 ? "Daemon offline — the panel didn't run." : err.message);
+      setInput(message); // never lose the typed message
+      setMessages(messagesRef.current.slice(0, -1));
+    } finally {
+      setChatBusy(false);
+      sendingRef.current = false;
+    }
   }
 
   // Stop the in-flight turn and keep whatever streamed so far as the answer.
@@ -4540,6 +4691,42 @@ export default function ChatPage() {
                             <WorkflowDraftCard draft={m.workflowDraft} events={events} />
                           </div>
                         );
+                      // v1.150.0: a panel reply is attributed. Without a name on
+                      // it, a three-way conversation is an unreadable wall of
+                      // anonymous assistant bubbles.
+                      if (m.panelWho)
+                        return (
+                          <div key={i} className="group/msg space-y-1">
+                            <div className="ml-11 flex items-center gap-2">
+                              <span
+                                className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                                  m.panelError
+                                    ? "border-rose-500/30 bg-rose-500/[0.06] text-rose-300"
+                                    : "border-accent/25 bg-accent/[0.06] text-accent-soft"
+                                }`}
+                              >
+                                <Bot size={11} />
+                                {agentDisplayName(m.panelWho)}
+                              </span>
+                              {m.panelError && (
+                                <span className="text-[11px] text-rose-400/80">
+                                  couldn&apos;t answer
+                                </span>
+                              )}
+                              {m.panelThreadId && (
+                                <Link
+                                  href={`/agents?thread=${m.panelThreadId}`}
+                                  className="ml-auto mr-1 text-[11px] text-zinc-500 transition-colors hover:text-accent-soft"
+                                >
+                                  open in Agents →
+                                </Link>
+                              )}
+                            </div>
+                            <Bubble role="assistant">
+                              <MemoMarkdown content={m.content} />
+                            </Bubble>
+                          </div>
+                        );
                       // v1.149.0: an agent turn shows the LEDGER's account under
                       // the model's own — files it really wrote, tools that
                       // really ran, errors, and what can still be reverted.
@@ -4927,6 +5114,66 @@ export default function ChatPage() {
               {/* Composer */}
               <div className="relative flex items-end gap-2 border-t hairline p-3">
                 {/* "/" skill picker — floats above the composer */}
+                {/* "@" AGENT PICKER (v1.150.0). Same shape as the "/" picker
+                    below — one affordance grammar for both. */}
+                {atActive && !slashActive && (
+                  <div className="absolute bottom-full left-3 right-3 z-20 mb-2 overflow-hidden rounded-xl border border-white/10 bg-zinc-900 shadow-lg shadow-black/40">
+                    {mentionable === null ? (
+                      <p className="px-3 py-2.5 text-xs text-zinc-500">Loading agents…</p>
+                    ) : agentMatches.length === 0 ? (
+                      <p className="px-3 py-2.5 text-xs text-zinc-500">
+                        no matching agent — add one on the Agents page
+                      </p>
+                    ) : (
+                      <div
+                        role="listbox"
+                        aria-label="Agents"
+                        className="max-h-72 overflow-y-auto p-1"
+                      >
+                        <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                          {agentMatches.length} agent{agentMatches.length === 1 ? "" : "s"}
+                          {atQuery ? " matching" : ""} — they answer instead of Iron Jarvis
+                        </div>
+                        {agentMatches.map((a) => (
+                          <button
+                            key={a.name}
+                            type="button"
+                            role="option"
+                            aria-selected={false}
+                            onClick={() => {
+                              setInput(
+                                (prev) => spliceToken(prev, atToken) + `@${a.mention} `,
+                              );
+                              setAtDismissed(false);
+                              inputRef.current?.focus();
+                            }}
+                            title={a.description}
+                            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-zinc-300 transition-colors hover:bg-accent/[0.12] hover:text-accent-soft"
+                          >
+                            <Bot size={12} className="shrink-0 text-accent-soft/70" />
+                            <span className="shrink-0 font-mono text-[12px]">
+                              {a.mention}
+                            </span>
+                            {/* Where it runs + whether it can actually take work.
+                                An offline remote is LISTED, not hidden — "my
+                                agent isn't in the list" is the worse failure. */}
+                            <span className="shrink-0 text-[10px] text-zinc-600">
+                              {a.kind === "remote" ? "remote" : a.kind === "dynamic" ? "custom" : "built-in"}
+                            </span>
+                            {!a.healthy && (
+                              <span className="shrink-0 text-[10px] text-amber-400/80">
+                                offline
+                              </span>
+                            )}
+                            <span className="truncate text-[11px] text-zinc-500">
+                              {a.description}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {slashActive && (
                   <div className="absolute bottom-full left-3 right-3 z-20 mb-2 overflow-hidden rounded-xl border border-white/10 bg-zinc-900 shadow-lg shadow-black/40">
                     {skills === null ? (
