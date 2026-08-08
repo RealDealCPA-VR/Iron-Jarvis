@@ -60,6 +60,8 @@ import { ProviderDowngradeBanner } from "@/components/ProviderDowngradeBanner";
 import { OnboardingWelcome } from "@/components/OnboardingWelcome";
 import { MoodOrb } from "@/components/MoodOrb";
 import { PageShell, Reveal } from "@/components/motion";
+import { AppGrid } from "@/components/overview/AppGrid";
+import { HealthCard } from "@/components/overview/HealthCard";
 import { pct, num, timeAgo, clockTime, shortId } from "@/lib/format";
 
 type Diagnostics = {
@@ -649,6 +651,21 @@ export default function OverviewPage() {
         <ProviderDowngradeBanner />
       </Reveal>
 
+      {/* THE DESKTOP (v1.151.0). Every module as an app icon, most-used first
+          until you arrange them yourself. Directly under the title bar (which
+          is untouched) because "where do I go" is the first question this page
+          is asked, and it used to be answered only by the collapsed rail. */}
+      <Reveal>
+        <AppGrid />
+      </Reveal>
+
+      {/* One card, four numbers (v1.151.0) — was four separate Stat tiles,
+          which gave "avg latency" the same visual weight as a whole module.
+          Shown in both modes now: run quality is not an advanced concern. */}
+      <Reveal>
+        <HealthCard metrics={m ?? null} loading={metrics.loading} />
+      </Reveal>
+
       {/* First-run welcome + getting-started checklist */}
       <Reveal>
         <OnboardingWelcome />
@@ -951,36 +968,6 @@ export default function OverviewPage() {
               })}
             </div>
           </CollapsibleCard>
-        </Reveal>
-      )}
-
-      {/* Metric cards (Advanced) */}
-      {advanced && (
-        <Reveal>
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            <Stat
-              label="Sessions evaluated"
-              icon={<Activity size={16} />}
-              accent
-              value={m ? m.sessions_evaluated : metrics.loading ? <Skeleton className="h-8 w-12" /> : "—"}
-            />
-            <Stat
-              label="Avg completion"
-              icon={<Gauge size={16} />}
-              value={m ? pct(m.avg_completion) : metrics.loading ? <Skeleton className="h-8 w-16" /> : "—"}
-            />
-            <Stat
-              label="Tool success"
-              icon={<Wrench size={16} />}
-              value={m ? pct(m.avg_tool_success_rate) : metrics.loading ? <Skeleton className="h-8 w-16" /> : "—"}
-            />
-            <Stat
-              label="Avg latency"
-              icon={<Timer size={16} />}
-              value={m ? `${num(m.avg_latency_s)}s` : metrics.loading ? <Skeleton className="h-8 w-16" /> : "—"}
-              sub={m ? `${m.total_tool_invocations} tool calls · ${m.event_count} events` : undefined}
-            />
-          </div>
         </Reveal>
       )}
 

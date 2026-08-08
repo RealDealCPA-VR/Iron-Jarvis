@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
+import { recordOpen } from "@/lib/appTiles";
 import { useDaemon } from "@/lib/daemon";
 import { NAV, type NavEntry as NavItem, type NavSectionDef as NavSection } from "@/lib/nav";
 
@@ -168,7 +169,13 @@ function NavLinks({
               <Link
                 key={item.href}
                 href={item.href}
-                onClick={onNavigate}
+                // v1.151.0: count opens LOCALLY so the Overview's app grid can
+                // lead with what this person actually uses. Never leaves the
+                // machine — it is a localStorage tally, not telemetry.
+                onClick={() => {
+                  recordOpen(item.href);
+                  onNavigate?.();
+                }}
                 title={collapsed ? item.label : undefined}
                 className={`group relative flex items-center rounded-xl py-2.5 text-sm transition-colors ${
                   collapsed ? "justify-center px-0" : "gap-3 px-3"

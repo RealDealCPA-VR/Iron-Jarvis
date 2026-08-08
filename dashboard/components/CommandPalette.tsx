@@ -30,6 +30,7 @@ import { NAV_ENTRIES } from "@/lib/nav";
 import { scorePalette, type PaletteItem } from "@/lib/palette";
 import { get } from "@/lib/api";
 import { normalizeIso } from "@/lib/format";
+import { recordOpen } from "@/lib/appTiles";
 
 /**
  * THE FRONT DOOR (v1.111.0).
@@ -842,7 +843,13 @@ export function CommandPalette() {
       row.run();
       return;
     }
-    if (row.href) router.push(row.href);
+    // Search is how a lot of navigation actually happens here, so it counts
+    // toward "most used" too — counting only the rail would rank the grid by
+    // half the story (v1.151.0).
+    if (row.href) {
+      recordOpen(row.href);
+      router.push(row.href);
+    }
   }
 
   return (
