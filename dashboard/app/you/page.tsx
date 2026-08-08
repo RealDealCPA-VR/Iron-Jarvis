@@ -138,7 +138,7 @@ function PresetSelect({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1.5 w-full rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[13px] text-zinc-200 outline-none transition-colors focus:border-accent/40"
+        className="field mt-1.5 py-1.5 text-[13px]"
       >
         <option value="">No preference</option>
         {options.map((o) => (
@@ -176,7 +176,7 @@ function TextArea({
         rows={rows}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1.5 w-full resize-y rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-2 text-[13px] leading-relaxed text-zinc-200 outline-none transition-colors placeholder:text-zinc-600 focus:border-accent/40"
+        className="field mt-1.5 resize-y text-[13px] leading-relaxed"
       />
     </label>
   );
@@ -395,7 +395,7 @@ export default function YouPage() {
               <select
                 value={draft.language}
                 onChange={(e) => set("language", e.target.value)}
-                className="mt-1.5 w-full rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[13px] text-zinc-200 outline-none transition-colors focus:border-accent/40"
+                className="field mt-1.5 py-1.5 text-[13px]"
               >
                 <option value="">Whatever I write in</option>
                 {(opts?.language ?? []).map((l) => (

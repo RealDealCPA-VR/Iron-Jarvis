@@ -245,14 +245,14 @@ export default function TrainPage() {
               value={label}
               onChange={(e) => setLabel(e.target.value)}
               placeholder="What is this? (client email, blog post…)"
-              className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[13px] text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-accent/40"
+              className="field py-1.5 text-[13px]"
             />
             <textarea
               value={text}
               onChange={(e) => setText(e.target.value)}
               rows={5}
               placeholder="Paste something you wrote…"
-              className="w-full resize-y rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-2 text-[13px] leading-relaxed text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-accent/40"
+              className="field resize-y text-[13px] leading-relaxed"
             />
             <div className="flex flex-wrap items-center gap-2">
               <button

@@ -317,6 +317,33 @@ table {
     box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.18);
   }
 
+  /*
+   * NATIVE <select> POPUPS (v1.148.1 — reported: "the drop downs in the You
+   * module have light letters on a light drop-down in dark mode").
+   *
+   * The closed control is ours to style; the OPEN list is painted by the
+   * browser, and Chrome composites it against WHITE using the select's own
+   * background-color. Every translucent background in this design system
+   * therefore collapses in the popup: `bg-white/[0.03]` becomes near-white
+   * behind our light `text-zinc-100`, and even `.field`'s `--ink-900 / 0.65`
+   * washes out. `color-scheme` alone does not save it — that governs the
+   * scrollbar and the widget frame, not a background we set ourselves.
+   *
+   * So the popup gets an OPAQUE, theme-driven surface. Scoped to `select` (the
+   * only element with a browser-painted list) so no other control loses its
+   * glass, and driven by the same --ink/--zinc variables the light Marks
+   * already invert, so Daylight and Liquid Glass get a light popup with dark
+   * text for free.
+   */
+  select {
+    background-color: rgb(var(--ink-900));
+  }
+  select option,
+  select optgroup {
+    background-color: rgb(var(--ink-900));
+    color: rgb(var(--zinc-100));
+  }
+
   /* Primary accent button — glass sheen over the glow. */
   .btn-accent {
     @apply inline-flex items-center justify-center gap-2 rounded-xl bg-accent px-4 py-2
