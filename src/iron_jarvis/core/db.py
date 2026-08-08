@@ -141,6 +141,52 @@ def _register_profile_models() -> None:
         logger.warning("user-profile models unavailable", exc_info=True)
 
 
+#: Modules whose SQLModel tables are created LAZILY — by a store's ``__init__``
+#: calling ``__table__.create(checkfirst=True)`` when a route first constructs
+#: it — rather than by ``create_all`` at boot.
+#:
+#: Every one of them is a silent-migration bug waiting to happen, and v1.151.2
+#: is the third time this has bitten. The shape is always the same:
+#:
+#: * a FRESH database works, because the lazy ``create`` builds the table with
+#:   whatever columns the model currently has — so tests, which mint a new DB
+#:   per case, are green;
+#: * an EXISTING database does not, because ``checkfirst=True`` sees the table
+#:   and adds nothing, while ``_reconcile_additive_columns`` never had a chance
+#:   to ALTER it — it walks ``SQLModel.metadata.tables``, and nothing had
+#:   imported the module at boot, so the table simply was not there to walk.
+#:
+#: The user's daemon hit this on ``agentthreadrecord.chat_thread_id`` (v1.150.0):
+#: "no such column" on every @mention, while the whole suite passed.
+#:
+#: Importing the module here puts its table in the metadata BEFORE create_all
+#: and the reconciler run. Pinned generally by
+#: ``tests/test_lazy_table_migrations.py`` — which asserts that no table in a
+#: freshly-built DB is missing from the metadata, so a FOURTH one cannot
+#: reintroduce this quietly.
+#: ``agents.remote`` is here even though ``platform.py`` happens to import it at
+#: module load: relying on that is relying on an UNRELATED module's import list
+#: never changing. This module is the one that has to reconcile these tables, so
+#: it takes responsibility for registering them.
+_LATE_MODEL_MODULES = (
+    "..agents.threads",       # AgentThreadRecord — the panel/round-table store
+    "..agents.remote",        # RemoteAgentRecord
+    "..memory.proposals",     # MemoryProposalRecord — the steward's queue
+    "..workflows.store",      # WorkflowPinRecord
+)
+
+
+def _register_late_models() -> None:
+    """Import the lazily-created tables so the reconciler can see them."""
+    import importlib
+
+    for mod in _LATE_MODEL_MODULES:
+        try:
+            importlib.import_module(mod, package=__package__)
+        except Exception:  # noqa: BLE001 — never brick boot over a table import
+            logger.warning("late model %s unavailable", mod, exc_info=True)
+
+
 def _ensure_fts(engine: Engine) -> None:
     """Create the history-search substrate if missing (idempotent, every boot).
 
@@ -256,6 +302,7 @@ def search_index(engine: Engine) -> Any:
 def init_db(engine: Engine) -> None:
     _register_search_models()  # MUST precede create_all + the reconciler
     _register_profile_models()  # ...and so must this one (same failure mode)
+    _register_late_models()  # ...and every lazily-created table (v1.151.2)
     SQLModel.metadata.create_all(engine)
     _reconcile_additive_columns(engine)
     _ensure_indexes(engine)
