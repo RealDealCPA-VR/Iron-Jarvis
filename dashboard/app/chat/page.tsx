@@ -103,6 +103,7 @@ import remarkGfm from "remark-gfm";
 import { get, post, put, del, ApiError, API_BASE, ijToken } from "@/lib/api";
 import { CommThreadBanner } from "@/components/chat/CommThreadBanner";
 import { WorkflowDraftCard } from "@/components/chat/WorkflowDraftCard";
+import { RunResultCard, type RunResult } from "@/components/chat/RunResultCard";
 import type { WorkflowDraft } from "@/lib/types";
 import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
 import { timeAgo } from "@/lib/format";
@@ -171,6 +172,10 @@ interface ChatMessage {
   /** The agent session that produced this reply — the "Keep this as a
    *  workflow?" chip's hook (v1.120.0). */
   fromSession?: string;
+  /** What that session ACTUALLY did, from the tool ledger (v1.149.0) — files
+   *  created/changed, tools run, errors, and what can still be reverted.
+   *  Distinct from `content`, which is the model's own account of the work. */
+  runResult?: RunResult;
 }
 
 /** What POST /chat expects. */
@@ -214,6 +219,16 @@ interface ChatResponse {
    *  (v1.146.0) — drives the composer's headroom meter. */
   context?: ContextUsage | null;
 }
+
+/** Human wording for a run phase (v1.149.0). An unknown phase falls through to
+ *  its raw name rather than a generic label — a new phase the daemon adds
+ *  should read oddly, not silently look like every other one. */
+const PHASE_LABEL: Record<string, string> = {
+  planning: "Planning the work…",
+  running: "Working…",
+  verifying: "Checking its work…",
+  assembling: "Writing up the result…",
+};
 
 /**
  * Composer context gauge (v1.146.0).
@@ -2729,9 +2744,20 @@ export default function ChatPage() {
           ? summary || "(no response)"
           : summary ||
             `The agent stopped before finishing (${status}). Please try again.`;
+      // WHAT ACTUALLY HAPPENED (v1.149.0). The message above is the model's own
+      // account of the work; this is the LEDGER's. Fetched best-effort — a
+      // result card is never worth losing the reply over — and attached to the
+      // message so it survives a reload with the thread.
+      let runResult: RunResult | undefined;
+      try {
+        const r = await get<RunResult>(`/sessions/${id}/result`);
+        if (r?.found) runResult = r;
+      } catch {
+        /* no card; the reply still lands */
+      }
       const full: ChatMessage[] = [
         ...messagesRef.current,
-        { role: "assistant", content, fromSession: id },
+        { role: "assistant", content, fromSession: id, ...(runResult ? { runResult } : {}) },
       ];
       setMessages(full);
       tts.speak(content); // no-op unless voice replies are on
@@ -4514,6 +4540,27 @@ export default function ChatPage() {
                             <WorkflowDraftCard draft={m.workflowDraft} events={events} />
                           </div>
                         );
+                      // v1.149.0: an agent turn shows the LEDGER's account under
+                      // the model's own — files it really wrote, tools that
+                      // really ran, errors, and what can still be reverted.
+                      if (m.runResult)
+                        return (
+                          <div key={i} className="group/msg space-y-2">
+                            {m.content && (
+                              <Bubble role="assistant">
+                                <MemoMarkdown content={m.content} />
+                              </Bubble>
+                            )}
+                            <RunResultCard
+                              result={m.runResult}
+                              onRetry={() => {
+                                const task = m.runResult?.task || "";
+                                if (task) setInput(task);
+                                inputRef.current?.focus();
+                              }}
+                            />
+                          </div>
+                        );
                       if (m.escalated)
                         return (
                           <div key={i} className="group/msg">
@@ -4638,8 +4685,19 @@ export default function ChatPage() {
                         <div className="flex flex-col gap-1.5" aria-live="polite" aria-busy="true">
                           <span className="inline-flex items-center gap-2 text-zinc-300">
                             <Loader2 size={14} className="animate-spin text-accent-soft" />
-                            {progress[0] ?? "Thinking…"}
+                            {/* v1.149.0: the run's OWN phase, straight from the
+                                daemon, in place of a generic "Thinking…". A run
+                                that is planning now says so — it used to be
+                                indistinguishable from one that was stuck. */}
+                            {runStream.phase
+                              ? PHASE_LABEL[runStream.phase.phase] ?? runStream.phase.phase
+                              : (progress[0] ?? "Thinking…")}
                           </span>
+                          {runStream.phase?.detail && (
+                            <span className="ml-[22px] text-xs text-zinc-500">
+                              {runStream.phase.detail}
+                            </span>
+                          )}
                           {runStream.text && <StreamingText content={runStream.text} />}
                           {runStream.tools.length > 0 && (
                             <ToolCardList cards={runStream.tools} />

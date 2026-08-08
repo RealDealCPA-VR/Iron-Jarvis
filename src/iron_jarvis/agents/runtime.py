@@ -337,6 +337,12 @@ class AgentRuntime:
                 sink=sink,
             )
         if final_text is None:
+            # The FLAT loop has no planning stage, so it says so plainly rather
+            # than leaving the client on a phase-less spinner (v1.149.0). Every
+            # run now reports a phase; a surface that shows one is never left
+            # guessing which lane it got.
+            if sink:
+                sink.phase("running", "working the task")
             finished, final_text = await self.perceive_act(
                 run,
                 session,

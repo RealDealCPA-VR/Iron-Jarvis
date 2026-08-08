@@ -283,3 +283,62 @@ def register(app: FastAPI, d) -> None:
             "tool": tool_name,
             "output": result_output,
         }
+
+    @app.post("/sessions/{session_id}/revert")
+    async def revert_session(session_id: str) -> dict[str, Any]:
+        """Undo everything THIS session did that still has a usable inverse
+        (v1.149.0) — the "Revert" on a failed task's card.
+
+        NEWEST FIRST, which is the only order that composes: three edits to one
+        file replay backwards to the original, where oldest-first would restore
+        the first pre-image and then immediately re-apply the second edit's.
+
+        It calls ``undo_action`` per action rather than reimplementing the
+        revert. That handler owns the delicate parts — the since-changed hash
+        guard, the permission + fs-policy replay, marking the journal consumed,
+        and writing the undo INTO the ledger as its own auditable row — and a
+        second copy of that logic is the kind of thing that drifts and then
+        silently clobbers newer work.
+
+        Partial results are the norm and are reported honestly: an action whose
+        target changed since is REFUSED (409) and listed in ``skipped`` with the
+        reason, while the rest still revert. Never all-or-nothing — a file that
+        cannot be safely restored must not block restoring the four that can.
+        """
+        engine = d.platform.engine
+        with session_scope(engine) as db:
+            if db.get(Session, session_id) is None:
+                raise HTTPException(status_code=404, detail="session not found")
+            rows = db.exec(
+                select(UndoJournal, ToolInvocation)
+                .where(UndoJournal.action_id == ToolInvocation.id)
+                .where(ToolInvocation.session_id == session_id)
+                .where(UndoJournal.reversible == True)  # noqa: E712
+                .where(ToolInvocation.undone_at == None)  # noqa: E711
+                .order_by(ToolInvocation.created_at.desc())  # type: ignore[attr-defined]
+            ).all()
+            candidates = [
+                inv.id
+                for journal, inv in rows
+                if (inv.reversibility or "").lower() != Reversibility.IRREVERSIBLE.value
+            ]
+
+        reverted: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        for action_id in candidates:
+            try:
+                out = await undo_action(action_id)
+                reverted.append({"action_id": action_id, "tool": out.get("tool", "")})
+            except HTTPException as exc:
+                skipped.append({"action_id": action_id, "reason": str(exc.detail)})
+            except Exception as exc:  # noqa: BLE001 — one bad action, not the batch
+                logger.warning(
+                    "revert %s: action %s failed", session_id, action_id, exc_info=True
+                )
+                skipped.append({"action_id": action_id, "reason": str(exc)})
+        return {
+            "session_id": session_id,
+            "reverted": reverted,
+            "skipped": skipped,
+            "considered": len(candidates),
+        }

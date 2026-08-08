@@ -122,6 +122,21 @@ class RunSink:
     def step_end(self, step: int) -> None:
         self._emit("round", {"round": step})
 
+    def phase(self, name: str, detail: str = "") -> None:
+        """Where the run is in its own lifecycle (v1.149.0).
+
+        ``planning`` | ``running`` | ``verifying`` | ``assembling``. The client
+        showed one undifferentiated spinner from the moment a session started
+        until it finished, which is why a run that was genuinely planning read
+        as a run that was doing nothing. These are emitted by the runtime and
+        the decomposition pipeline, which already knew the answer and had no way
+        to say it.
+
+        ``detail`` is short human text ("step 2 of 4: read the ledger").
+        """
+        if name:
+            self._emit("phase", {"phase": name, "detail": detail})
+
     def reset(self, reason: str = "") -> None:
         """Tell the client to discard partial text (e.g. a pre-first-token
         failover swapped providers)."""

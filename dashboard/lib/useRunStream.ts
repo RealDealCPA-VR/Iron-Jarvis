@@ -13,11 +13,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { sseUrl } from "./api";
 import { sseEventFrom, upsertTool, type ToolCard } from "./useChatStream";
 
+/** Where a run is in its own lifecycle (v1.149.0), straight from the daemon. */
+export interface RunPhase {
+  phase: "planning" | "running" | "verifying" | "assembling" | string;
+  detail: string;
+}
+
 export interface UseRunStream {
   /** Accumulated agent text so far for the active session. */
   text: string;
   /** Live tool cards for the active session, keyed by call id. */
   tools: ToolCard[];
+  /** The run's current phase, or null before the first phase frame. The daemon
+   *  is authoritative — the client never infers a phase from silence, which is
+   *  what made a planning run look like a stuck one. */
+  phase: RunPhase | null;
   /** True while an EventSource is open for a session. */
   active: boolean;
   /** Open the live stream for a session id (tears down any prior stream). */
@@ -42,6 +52,7 @@ function frameFrom(event: string, raw: string): ReturnType<typeof sseEventFrom> 
 export function useRunStream(): UseRunStream {
   const [text, setText] = useState("");
   const [tools, setTools] = useState<ToolCard[]>([]);
+  const [phase, setPhase] = useState<RunPhase | null>(null);
   const [active, setActive] = useState(false);
   const esRef = useRef<EventSource | null>(null);
   const accRef = useRef("");
@@ -68,6 +79,7 @@ export function useRunStream(): UseRunStream {
       accRef.current = "";
       setText("");
       setTools([]);
+      setPhase(null);
       setActive(true);
 
       let es: EventSource;
@@ -90,6 +102,21 @@ export function useRunStream(): UseRunStream {
         const ev = frameFrom("tool_call", (e as MessageEvent).data);
         if (ev?.type === "tool_call") setTools((prev) => upsertTool(prev, ev));
       });
+      // v1.149.0 — the run says what it is doing. Decoded here rather than via
+      // sseEventFrom: that decoder is SHARED with the chat lane, which has no
+      // phases, and widening its union for one consumer would make every chat
+      // switch carry a case it can never hit.
+      es.addEventListener("phase", (e) => {
+        try {
+          const d = JSON.parse((e as MessageEvent).data) as Record<string, unknown>;
+          const name = typeof d.phase === "string" ? d.phase : "";
+          if (name) {
+            setPhase({ phase: name, detail: typeof d.detail === "string" ? d.detail : "" });
+          }
+        } catch {
+          /* a malformed frame just leaves the previous phase showing */
+        }
+      });
       es.addEventListener("done", () => {
         stop();
       });
@@ -105,5 +132,5 @@ export function useRunStream(): UseRunStream {
   // Close the stream if the component unmounts mid-run.
   useEffect(() => () => closeSource(), [closeSource]);
 
-  return { text, tools, active, start, stop };
+  return { text, tools, phase, active, start, stop };
 }

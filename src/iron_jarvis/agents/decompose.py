@@ -511,6 +511,12 @@ async def execute_plan(
             {"run_id": run.id, "index": index, "goal": step.goal},
             session_id=session.id,
         )
+        # v1.149.0: the same fact, said to the ONE browser watching this run —
+        # "step 2 of 4: read the ledger" instead of an anonymous spinner.
+        if sink is not None:
+            sink.phase(
+                "running", f"step {index + 1} of {len(plan)}: {step.goal[:80]}"
+            )
         # The step's hinted tool subset is honored only when EVERY hinted name
         # is in the agent's own set (a subset can narrow, never widen) and it
         # resolves to at least one real spec; otherwise the full set applies.
@@ -549,6 +555,8 @@ async def execute_plan(
             output = text if finished else (
                 "(step stopped: mini-loop budget reached before a final answer)"
             )
+            if sink is not None:
+                sink.phase("verifying", f"checking step {index + 1}")
             ok, reason, method = await verify_step(
                 runtime, run, session, workspace, step, output, llm=judge_llm
             )
@@ -686,6 +694,13 @@ async def run_decomposed(
         cfg, provs, "synthesize",
         fallback_provider=session.provider, fallback_model=session.model,
     )
+    # PHASES (v1.149.0): this pipeline always knew whether it was planning or
+    # executing — the client had no way to hear it, so a run that was genuinely
+    # thinking showed the same spinner as a run that was stuck. The plan.* EVENTS
+    # below are unchanged (the Activity feed consumes them); these frames go to
+    # the ONE browser watching this session.
+    if sink is not None:
+        sink.phase("planning", "working out the steps")
     plan = await plan_task(runtime, run, session, agent_def, llm=plan_llm)
     if plan is None:
         return None
@@ -694,6 +709,11 @@ async def run_decomposed(
         {"run_id": run.id, "steps": [s.goal for s in plan]},
         session_id=session.id,
     )
+    if sink is not None:
+        sink.phase(
+            "running",
+            f"{len(plan)} step{'s' if len(plan) != 1 else ''} planned",
+        )
     results = await execute_plan(
         runtime,
         run,
@@ -706,4 +726,6 @@ async def run_decomposed(
         sink=sink,
         judge_llm=judge_llm,
     )
+    if sink is not None:
+        sink.phase("assembling", "writing up what happened")
     return await assemble(runtime, run, session, results, llm=synth_llm)

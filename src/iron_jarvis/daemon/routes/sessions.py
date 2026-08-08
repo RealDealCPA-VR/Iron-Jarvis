@@ -199,6 +199,22 @@ def register(app: FastAPI, d) -> None:
             "transcript": d.orchestrator.transcript(session_id),
         }
 
+    @app.get("/sessions/{session_id}/result")
+    def get_session_result(session_id: str) -> dict[str, Any]:
+        """What this session ACTUALLY did — derived from the tool ledger and the
+        undo journal, never from the model's closing paragraph (v1.149.0).
+
+        See ``agents/outcome.py``: files created/changed come from journaled
+        mutations, so a reply that claims a file it never wrote disagrees with
+        this endpoint, and the disagreement is the point.
+        """
+        from ...agents.outcome import session_result
+
+        result = session_result(d.platform.engine, session_id)
+        if not result.get("found"):
+            raise HTTPException(status_code=404, detail="session not found")
+        return result
+
     @app.get("/sessions/{session_id}/stream")
     async def stream_session(session_id: str, request: Request):
         """Live SSE feed for a running session (FX-01).
