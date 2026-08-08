@@ -214,3 +214,43 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         return JSONResponse({"detail": "missing or invalid token"}, status_code=401)
+
+
+class ErrorEnvelopeMiddleware(BaseHTTPMiddleware):
+    """Turn an unhandled exception into a JSON 500 *inside* the CORS layer.
+
+    THE BUG THIS FIXES (v1.151.3), which cost two rounds of the wrong
+    diagnosis: FastAPI's ``@app.exception_handler(Exception)`` is served by
+    Starlette's ``ServerErrorMiddleware``, which is the OUTERMOST middleware —
+    outside ``CORSMiddleware``. So a 500 went back to the browser with NO
+    ``access-control-allow-origin`` header. The browser then refuses to let the
+    page read the response at all, ``fetch`` rejects, and ``lib/api.ts`` maps
+    that to ``ApiError(status=0)`` — which every page renders as "daemon
+    offline".
+
+    The result: EVERY unhandled server error in the whole app told the user
+    their daemon was down. Measured directly — a 200 carries the CORS header, a
+    500 carries none. It sent the reporter of the @mention failure looking at
+    connectivity while the daemon was up and 500ing on a missing column.
+
+    Being ordinary middleware, this sits INSIDE the CORS layer (it is added
+    FIRST, and ``add_middleware`` stacks outermost-last), so the response it
+    produces gets decorated on the way out and the browser can read the real
+    detail. ``ServerErrorMiddleware`` stays as the backstop for anything raised
+    outside the middleware chain.
+    """
+
+    async def dispatch(self, request: Request, call_next):  # noqa: ANN001
+        try:
+            return await call_next(request)
+        except Exception as exc:  # noqa: BLE001 — this IS the catch-all
+            # Same shape app.py's handler produces, so clients see one contract.
+            import logging
+
+            logging.getLogger("iron_jarvis.daemon").exception(
+                "unhandled error on %s %s", request.method, request.url.path
+            )
+            return JSONResponse(
+                status_code=500,
+                content={"detail": f"internal error: {type(exc).__name__}: {exc}"},
+            )

@@ -1019,7 +1019,19 @@ def create_app(project_root: str | None = None) -> FastAPI:
     app = FastAPI(title="Iron Jarvis", version=__version__, lifespan=lifespan)
     # Optional bearer-token auth (env IRONJARVIS_TOKEN) — required for a public
     # deployment; no-op locally.
-    from .auth import BodyLimitMiddleware, HostOriginGuardMiddleware, TokenAuthMiddleware
+    from .auth import (
+        BodyLimitMiddleware,
+        ErrorEnvelopeMiddleware,
+        HostOriginGuardMiddleware,
+        TokenAuthMiddleware,
+    )
+
+    # FIRST = innermost (add_middleware stacks outermost-last), so the JSON 500
+    # it produces passes back OUT through CORSMiddleware and gets its headers.
+    # Without this, an unhandled error is served by ServerErrorMiddleware —
+    # outside CORS — and the browser cannot read it, so every 500 in the app
+    # surfaced to the user as "daemon offline". See the class docstring.
+    app.add_middleware(ErrorEnvelopeMiddleware)
 
     app.add_middleware(TokenAuthMiddleware)  # inner: token check
     # CORS: default to loopback dashboard origins ONLY (never wildcard, since the
