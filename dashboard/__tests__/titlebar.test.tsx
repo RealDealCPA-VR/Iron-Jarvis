@@ -145,12 +145,24 @@ describe("TitleBar — page label (longest-prefix over NAV_ENTRIES)", () => {
   });
 
   it("renders no label for a route with no nav entry", () => {
-    // /projects has no NAV_ENTRIES row (Projects lives inside Chat), so the bar
-    // stays silent rather than guessing — acceptable and deliberate.
-    const { container } = renderAt("/projects/abc123");
+    // This used to assert on /projects, with the note "Projects lives inside
+    // Chat". That was true when Projects was reachable only through the chat
+    // panel — but the page also existed at /projects with no rail row, no
+    // search entry and no tile, so v1.151.1 put it in the catalogue (see
+    // lib/nav.ts). The BEHAVIOUR under test is unchanged and still worth
+    // pinning; it just needs a route that is genuinely unmapped.
+    const { container } = renderAt("/not-a-real-page/abc123");
     expect(screen.queryByText("Chat")).not.toBeInTheDocument();
     // Brand only — no separator, no label.
     expect(container.textContent).not.toContain("/");
+  });
+
+  it("labels a project's detail route from its catalogue entry", () => {
+    // Longest-prefix matching means /projects/<id> now reads "Projects" —
+    // which is the point of adding it: a deep route inside a module should say
+    // which module you are in.
+    renderAt("/projects/abc123");
+    expect(screen.getByText("Projects")).toBeInTheDocument();
   });
 });
 

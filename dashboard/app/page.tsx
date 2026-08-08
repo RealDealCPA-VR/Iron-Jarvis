@@ -24,10 +24,7 @@ import {
   LayoutGrid,
   Play,
   BookMarked,
-  MessageSquare,
-  SquareTerminal,
   FolderKanban,
-  Images,
   Cpu,
   HardDrive,
   Zap,
@@ -128,20 +125,6 @@ const FIRST_WIN_TASKS: {
     task: "Draft a polite follow-up email to a client who hasn't replied",
     icon: <Mail size={18} />,
   },
-];
-
-/** Interactive shortcuts into the four hero surfaces + Creative. Real hrefs. */
-const QUICK_ACTIONS: {
-  href: string;
-  title: string;
-  desc: string;
-  icon: ReactNode;
-}[] = [
-  { href: "/chat", title: "New chat", desc: "Talk to Iron Jarvis", icon: <MessageSquare size={18} /> },
-  { href: "/sessions", title: "New session", desc: "Run an agent task", icon: <Boxes size={18} /> },
-  { href: "/projects", title: "Open a project", desc: "Your context spine", icon: <FolderKanban size={18} /> },
-  { href: "/creative", title: "Creative", desc: "Images, video, audio", icon: <Images size={18} /> },
-  { href: "/terminals", title: "Build", desc: "Terminals & AI CLIs", icon: <SquareTerminal size={18} /> },
 ];
 
 /** Event types that describe an agent starting or finishing a run. */
@@ -651,6 +634,23 @@ export default function OverviewPage() {
         <ProviderDowngradeBanner />
       </Reveal>
 
+      {/* THE VISUAL — arc-reactor hero, the highlight of the page. */}
+      <Reveal>
+        <ReactorHero
+          statusLine={statusLine}
+          connected={connected}
+          version={health.data?.version}
+          activeProject={activeProject}
+          model={
+            health.data ? `${health.data.default_provider}/${health.data.default_model}` : undefined
+          }
+          runningCount={runningCount}
+          freeDisk={freeDisk}
+          failures={failures}
+          diskLoading={reliability.loading}
+        />
+      </Reveal>
+
       {/* THE DESKTOP (v1.151.0). Every module as an app icon, most-used first
           until you arrange them yourself. Directly under the title bar (which
           is untouched) because "where do I go" is the first question this page
@@ -669,49 +669,6 @@ export default function OverviewPage() {
       {/* First-run welcome + getting-started checklist */}
       <Reveal>
         <OnboardingWelcome />
-      </Reveal>
-
-      {/* THE VISUAL — arc-reactor hero, the highlight of the page. */}
-      <Reveal>
-        <ReactorHero
-          statusLine={statusLine}
-          connected={connected}
-          version={health.data?.version}
-          activeProject={activeProject}
-          model={
-            health.data ? `${health.data.default_provider}/${health.data.default_model}` : undefined
-          }
-          runningCount={runningCount}
-          freeDisk={freeDisk}
-          failures={failures}
-          diskLoading={reliability.loading}
-        />
-      </Reveal>
-
-      {/* INTERACTIVE quick actions into the hero surfaces (kept visible). */}
-      <Reveal>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-          {QUICK_ACTIONS.map((a) => (
-            <Link
-              key={a.href}
-              href={a.href}
-              className="group relative flex items-center gap-3 overflow-hidden rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4 transition-all duration-300 hover:-translate-y-0.5 hover:border-accent/30 hover:bg-accent/[0.04] hover:shadow-card-hover"
-            >
-              <span className="pointer-events-none absolute -right-6 -top-8 h-20 w-20 rounded-full bg-accent/10 opacity-0 blur-2xl transition-opacity duration-300 group-hover:opacity-100" />
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-accent/20 bg-accent/[0.08] text-accent-soft">
-                {a.icon}
-              </span>
-              <span className="min-w-0">
-                <span className="block truncate text-sm font-semibold text-zinc-100">{a.title}</span>
-                <span className="block truncate text-xs text-zinc-500">{a.desc}</span>
-              </span>
-              <ArrowRight
-                size={14}
-                className="ml-auto shrink-0 text-zinc-600 transition-all group-hover:translate-x-0.5 group-hover:text-accent-soft"
-              />
-            </Link>
-          ))}
-        </div>
       </Reveal>
 
       {/* First-win: one click → a real result. */}
@@ -920,11 +877,13 @@ export default function OverviewPage() {
         </CollapsibleCard>
       </Reveal>
 
-      {/* Your apps — one-click tiles from saved templates (omitted when none). */}
+      {/* Saved tasks — one-click runs from saved templates (omitted when none).
+          Renamed from "Your apps" in v1.151.1: the tile grid above is now the
+          apps, and two things called that on one page is a coin toss. */}
       {templateList.length > 0 && (
         <Reveal>
           <CollapsibleCard
-            title="Your apps"
+            title="Saved tasks"
             icon={<LayoutGrid size={15} />}
             storageKey="ij_ov_apps"
             summary={<CountPill>{templateList.length}</CountPill>}

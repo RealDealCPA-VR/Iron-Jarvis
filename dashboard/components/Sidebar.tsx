@@ -31,6 +31,7 @@ const ESSENTIAL_HREFS = new Set<string>([
   "/", // Overview
   "/chat", // Chat (hero — carries the whole Projects module)
   "/terminals", // Build (hero)
+  "/projects", // Projects (hero — the context spine; Advanced-only would hide it)
   // Sessions + Activity are Advanced-only: Overview's "Recent sessions" /
   // "While you were away" cards cover the everyday need and deep-link into
   // session detail (which carries session-scoped time-travel + undo). The

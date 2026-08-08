@@ -31,6 +31,7 @@ import {
   LayoutTemplate,
   UserRound,
   GraduationCap,
+  FolderKanban,
   type LucideIcon,
 } from "lucide-react";
 
@@ -98,6 +99,31 @@ export const NAV: NavSectionDef[] = [
         // Nobody types "Build" when they want a shell — they type "terminal".
         aliases: ["terminal", "shell", "command line", "console", "code", "cli"],
         blurb: "Live terminals on a free-form canvas, opened in any project folder.",
+      },
+      {
+        // v1.151.1: Projects was MISSING from this catalogue entirely — no rail
+        // row, no search entry, no tile — while the comment above this array
+        // calls it one of the three hero surfaces and CLAUDE.md calls it the
+        // product's context spine. Its only route in was a shortcut card on the
+        // Overview, so removing that card (redundant with the new tile grid)
+        // made a real page unreachable and surfaced the older gap.
+        href: "/projects",
+        label: "Projects",
+        icon: FolderKanban,
+        // People ask for the THING they are working on, not for "projects".
+        aliases: [
+          "project",
+          "context",
+          "workspace",
+          "client",
+          "matter",
+          "case",
+          "folder",
+          "board",
+          "kanban",
+        ],
+        blurb:
+          "The context spine: a brief, instructions, a real folder and knowledge that every chat, task and run inside it inherits.",
       },
       {
         href: "/sessions",

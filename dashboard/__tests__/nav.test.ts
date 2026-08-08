@@ -110,6 +110,11 @@ describe("nav catalogue — the friction phrases resolve", () => {
     ["answer in english", "/you"],
     ["dyslexia", "/you"],
     ["about me", "/you"],
+    // The context spine has to be findable by the words people use for the
+    // thing they are working on.
+    ["project", "/projects"],
+    ["client", "/projects"],
+    ["kanban", "/projects"],
     // v1.145.0 — the on-ramp, asked for in the words people actually use.
     ["writing samples", "/train"],
     ["learn my style", "/train"],
@@ -171,7 +176,10 @@ describe("nav catalogue — shape invariants", () => {
  * Changing the rail on purpose is fine. Change this list in the same commit.
  */
 const RAIL: ReadonlyArray<readonly [string, readonly string[]]> = [
-  ["Work", ["/", "/chat", "/terminals", "/sessions", "/activity", "/creative"]],
+  // v1.151.1: /projects joins the catalogue — it is named a hero surface in
+  // nav.ts's own header comment and is the product's context spine, yet it had
+  // no rail row, no search entry and no tile until now.
+  ["Work", ["/", "/chat", "/terminals", "/projects", "/sessions", "/activity", "/creative"]],
   [
     "Automate",
     [
