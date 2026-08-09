@@ -78,6 +78,12 @@ def headless_ask_resolver(
     def _resolve(tool_name: str, _args: dict) -> bool:
         return tool_name in allowed
 
+    # NOBODY IS ASKED HERE (v1.154.2). Marked so :meth:`PermissionEngine.
+    # authorize` can say what actually happened: this resolver decides from a
+    # fixed allowlist, and reporting its refusals as "rejected by user" told
+    # users they had declined something they were never shown. This is the only
+    # resolver the app installs, so that message was ALWAYS false.
+    _resolve.interactive = False  # type: ignore[attr-defined]
     return _resolve
 
 
@@ -168,6 +174,21 @@ class PermissionEngine:
                 False, mode, "requires approval; no resolver in headless mode"
             )
         granted = bool(self._ask_resolver(tool_name, args))
+        if granted:
+            interactive = getattr(self._ask_resolver, "interactive", True)
+            return PermissionDecision(
+                True, mode, "approved by user" if interactive else "auto-approved"
+            )
+        # A refusal must never be attributed to someone who was never asked.
+        # The daemon's resolver is a fixed allowlist with no human attached, so
+        # saying "rejected by user" invented a decision the user did not make —
+        # and left them looking for a prompt that had never appeared.
+        if getattr(self._ask_resolver, "interactive", True):
+            return PermissionDecision(False, mode, "rejected by user")
         return PermissionDecision(
-            granted, mode, "approved by user" if granted else "rejected by user"
+            False,
+            mode,
+            f"{tool_name} needs approval and nothing here could ask — grant it "
+            f"for one task with allow_tools when starting a session, or set "
+            f"permissions.{tool_name} to allow in Settings",
         )

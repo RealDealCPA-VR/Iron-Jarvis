@@ -834,6 +834,13 @@ def build_platform(
         def ask_resolver(name: str, args: dict, _b=_base_ask) -> bool:  # type: ignore[misc]
             return True if name == "mcp_call" else _b(name, args)
 
+        # Carry the wrapped resolver's `interactive` marker across (v1.154.2).
+        # Without this, turning MCP auto-approve on silently replaced the
+        # headless resolver with an unmarked wrapper, and every refusal went
+        # back to claiming the USER rejected it — the exact false message that
+        # release exists to remove, resurrected by an unrelated setting.
+        ask_resolver.interactive = getattr(_base_ask, "interactive", True)  # type: ignore[attr-defined]
+
     permissions = PermissionEngine(config.permissions, ask_resolver=ask_resolver)
 
     platform = Platform(
