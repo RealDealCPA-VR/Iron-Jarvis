@@ -308,14 +308,14 @@ export function OfflineHint({ detail }: { detail?: string }) {
     <div
       role="status"
       aria-live="polite"
-      className="flex items-start gap-3 rounded-2xl border border-amber-500/25 bg-amber-500/[0.07] px-4 py-3.5"
+      className="notice-warn flex items-start gap-3 rounded-2xl border px-4 py-3.5"
     >
-      <ServerCrash size={18} className="mt-0.5 shrink-0 text-amber-300" aria-hidden="true" />
-      <div className="text-sm text-amber-100/90">
-        <div className="font-semibold text-amber-200">Daemon offline or unreachable.</div>
-        <div className="mt-1 text-amber-100/60">
+      <ServerCrash size={18} className="notice-warn-icon mt-0.5 shrink-0" aria-hidden="true" />
+      <div className="text-sm">
+        <div className="notice-warn-title font-semibold">Daemon offline or unreachable.</div>
+        <div className="notice-warn-body mt-1">
           Start it with{" "}
-          <code className="rounded bg-black/40 px-1.5 py-0.5 font-mono text-xs text-amber-100/90">
+          <code className="notice-warn-code rounded px-1.5 py-0.5 font-mono text-xs">
             uv run ironjarvis serve --port 8787 --root .
           </code>
           {detail ? ` — ${detail}` : null}

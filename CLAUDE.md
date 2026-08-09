@@ -96,6 +96,19 @@ cd dashboard && pnpm dev           # dashboard
   stale tool output → whole blocks (oldest first) → the task itself, clipped.
   The task is `messages[0]` and is never dropped; dropped work is summarized
   into the SYSTEM prompt, never injected as fake assistant turns.
+- **NOTHING BLOCKING RUNS ON THE EVENT LOOP** (v1.153.1). The daemon is ONE
+  asyncio loop, so a synchronous filesystem walk, a big file read, or any
+  CPU-bound work inside a tool freezes every request in the app — and it does
+  not look like a freeze. It looks like "Daemon offline": the dashboard's fetch
+  times out, `lib/api.ts` maps a dead fetch to status 0, Retry issues another
+  request onto the same blocked loop, and no threads load. That was a real
+  four-hour outage on the user's install, diagnosed as 84% CPU with the
+  MainThread parked in `pathlib.is_file` under `ListFilesTool.execute`. Any
+  tool touching the filesystem or CPU goes through `asyncio.to_thread` (as
+  `ShellTool` always did) AND is bounded — `tools/builtins._walk_files` caps
+  entries, enforces a deadline, and prunes heavy dirs with `os.walk` (`rglob`
+  cannot prune). Truncation is always REPORTED: a silently short listing reads
+  as complete and the model then says a file does not exist.
 - **Frozen-build verification**: anything touching native deps or subprocess
   spawning MUST be verified in the packaged daemon, not just source. The
   terminals feature shipped dead once because PyInstaller dropped

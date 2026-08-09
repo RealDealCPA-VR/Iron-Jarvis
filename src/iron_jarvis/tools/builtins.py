@@ -26,6 +26,82 @@ def _text_sha(content: str) -> str:
     return sha256_bytes(content.encode("utf-8"))
 
 
+# --------------------------------------------------------------------------- #
+# Bounded workspace walking (v1.153.1)
+#
+# `list_files` and `grep` each did `base.rglob("*")` — an UNBOUNDED recursive
+# walk — INLINE on the daemon's single event loop. Pointed at a large folder,
+# one call wedged the entire daemon: it kept listening on 8787 but answered
+# nothing, so every request hung, the dashboard reported "Daemon offline", retry
+# hung identically, and no threads would load. Observed live at 84% CPU with the
+# MainThread parked in `pathlib.is_file` under `ListFilesTool.execute`.
+#
+# ShellTool three definitions below already carried the rule in a comment ("the
+# tool runs on the daemon's single event loop — inline it would freeze ALL
+# requests"); these two were simply never brought in line with it.
+#
+# Two independent defects, so two independent fixes: the walk is now BOUNDED
+# (caps + a deadline + pruned heavy directories), and it is OFFLOADED to a
+# thread so even a pathological tree can only ever slow down its own request.
+# --------------------------------------------------------------------------- #
+
+#: Directories never worth walking for a listing or a text search, and the usual
+#: reason a workspace walk explodes.
+_SKIP_DIRS = frozenset({
+    ".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv",
+    ".next", ".turbo", "dist", "build", ".mypy_cache", ".pytest_cache",
+    ".ruff_cache", ".gradle", "target", ".idea", ".vscode", "site-packages",
+})
+
+#: Hard ceilings. Every one of them is REPORTED when hit — a listing silently
+#: truncated is worse than a slow one, because the model treats what it got as
+#: the whole picture and confidently concludes a file does not exist.
+_MAX_WALK_ENTRIES = 5000
+_MAX_GREP_FILES = 2000
+_MAX_GREP_HITS = 500
+_MAX_GREP_FILE_BYTES = 2_000_000
+_WALK_DEADLINE_S = 10.0
+
+
+def _is_under(path: Path, root: Path) -> bool:
+    """True when *path* really sits under *root*.
+
+    ``relative_to`` raises for anything outside, and a walk that followed a
+    junction could hand us such a path — a raised ValueError inside the listing
+    comprehension would surface as a tool crash rather than a skipped entry.
+    """
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _walk_files(base: Path, *, limit: int, deadline_s: float = _WALK_DEADLINE_S):
+    """Yield files under *base*, pruned and bounded.
+
+    Returns ``(paths, truncated_reason)``. Uses ``os.walk`` rather than
+    ``rglob`` because only ``os.walk`` can PRUNE — dropping ``node_modules``
+    after descending into it is the expensive half of the problem.
+    """
+    import os
+    import time
+
+    started = time.monotonic()
+    out: list[Path] = []
+    truncated = ""
+    for root, dirs, files in os.walk(base, followlinks=False):
+        dirs[:] = [dd for dd in dirs if dd not in _SKIP_DIRS and not dd.startswith(".")]
+        for fn in files:
+            out.append(Path(root) / fn)
+            if len(out) >= limit:
+                return out, f"stopped at {limit} files"
+        if time.monotonic() - started > deadline_s:
+            truncated = f"stopped after {deadline_s:.0f}s"
+            break
+    return out, truncated
+
+
 #: Office formats that are not plain text. ``read_file`` DELEGATES these to the
 #: document extractor rather than failing: the user's expectation is simply
 #: "the app reads my documents", and making that depend on the model picking
@@ -235,15 +311,38 @@ class ListFilesTool(Tool):
     }
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        import asyncio
+
         base = safe_path(ctx.workspace, args.get("path", "."))
         if not base.exists():
             return ToolResult(ok=False, error="no such directory")
-        entries = sorted(
-            str(p.relative_to(ctx.workspace.resolve())).replace("\\", "/")
-            for p in base.rglob("*")
-            if p.is_file()
+
+        def _list():
+            root = ctx.workspace.resolve()
+            paths, truncated = _walk_files(base, limit=_MAX_WALK_ENTRIES)
+            names = sorted(
+                str(p.relative_to(root)).replace("\\", "/")
+                for p in paths
+                if _is_under(p, root)
+            )
+            return names, truncated
+
+        # Offloaded for the same reason ShellTool is: this runs on the daemon's
+        # single event loop, and inline it freezes every other request.
+        entries, truncated = await asyncio.to_thread(_list)
+        out = "\n".join(entries)
+        if truncated:
+            # Said OUT LOUD. A silently-truncated listing reads as complete, and
+            # the model then reports that a file is not there.
+            out += (
+                f"\n\n[listing truncated — {truncated}. This is NOT the whole "
+                f"directory; narrow `path` to see the rest.]"
+            )
+        return ToolResult(
+            ok=True,
+            output=out,
+            data={"count": len(entries), "truncated": bool(truncated)},
         )
-        return ToolResult(ok=True, output="\n".join(entries), data={"count": len(entries)})
 
 
 class GrepTool(Tool):
@@ -257,22 +356,56 @@ class GrepTool(Tool):
     }
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        import asyncio
+
         base = safe_path(ctx.workspace, args.get("path", "."))
         try:
             rx = re.compile(args["pattern"])
         except re.error as exc:
             return ToolResult(ok=False, error=f"bad regex: {exc}")
-        hits: list[str] = []
-        files = [base] if base.is_file() else [p for p in base.rglob("*") if p.is_file()]
-        for fp in files:
-            try:
-                for i, line in enumerate(fp.read_text(encoding="utf-8").splitlines(), 1):
-                    if rx.search(line):
-                        rel = str(fp.relative_to(ctx.workspace.resolve())).replace("\\", "/")
-                        hits.append(f"{rel}:{i}: {line.strip()}")
-            except (UnicodeDecodeError, OSError):
-                continue
-        return ToolResult(ok=True, output="\n".join(hits), data={"matches": len(hits)})
+        def _search():
+            import time
+
+            root = ctx.workspace.resolve()
+            started = time.monotonic()
+            hits: list[str] = []
+            if base.is_file():
+                files, truncated = [base], ""
+            else:
+                files, truncated = _walk_files(base, limit=_MAX_GREP_FILES)
+            for fp in files:
+                if time.monotonic() - started > _WALK_DEADLINE_S:
+                    truncated = truncated or f"stopped after {_WALK_DEADLINE_S:.0f}s"
+                    break
+                try:
+                    # Skip anything too big to be worth scanning line-by-line;
+                    # reading a 300MB log into memory on this path is what turns
+                    # a slow search into an unresponsive app.
+                    if fp.stat().st_size > _MAX_GREP_FILE_BYTES:
+                        continue
+                    for i, line in enumerate(
+                        fp.read_text(encoding="utf-8").splitlines(), 1
+                    ):
+                        if rx.search(line):
+                            rel = str(fp.relative_to(root)).replace("\\", "/")
+                            hits.append(f"{rel}:{i}: {line.strip()}")
+                            if len(hits) >= _MAX_GREP_HITS:
+                                return hits, f"stopped at {_MAX_GREP_HITS} matches"
+                except (UnicodeDecodeError, OSError, ValueError):
+                    continue
+            return hits, truncated
+
+        # Offloaded: unlike the old inline version, a pathological tree can now
+        # only ever slow down THIS request instead of the whole daemon.
+        hits, truncated = await asyncio.to_thread(_search)
+        out = "\n".join(hits)
+        if truncated:
+            out += f"\n\n[search truncated — {truncated}. Narrow `path` or the pattern.]"
+        return ToolResult(
+            ok=True,
+            output=out,
+            data={"matches": len(hits), "truncated": bool(truncated)},
+        )
 
 
 class ShellTool(Tool):
