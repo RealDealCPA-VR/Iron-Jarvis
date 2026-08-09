@@ -323,13 +323,18 @@ class WriteDocumentTool(Tool):
                 )
             else:
                 qa_line = "\nqa lint: clean"
+        # Absolute, for the same reason redact_pii reports absolutely: a
+        # workspace-relative name IS a bare filename whenever the output lands
+        # in the workspace root, and the model relays it to the user verbatim.
+        _abs = str(target.resolve())
         return ToolResult(
             ok=True,
-            output=f"wrote {size} bytes to {rel}"
+            output=f"wrote {size} bytes to {_abs}"
             + ("".join(f"\nwarning: {w}" for w in warns))
             + qa_line,
             data={
                 "path": rel,
+                "abs_path": _abs,
                 "bytes": size,
                 **({"warnings": warns} if warns else {}),
                 **({"lint": lint} if lint is not None else {}),
@@ -486,10 +491,11 @@ class ConvertDocumentTool(Tool):
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
         rel = str(out.relative_to(Path(ctx.workspace).resolve())).replace("\\", "/")
         size = out.stat().st_size
+        _abs = str(out.resolve())
         return ToolResult(
             ok=True,
-            output=f"converted {source.name} -> {rel} ({size} bytes)",
-            data={"source": str(source), "path": rel, "bytes": size},
+            output=f"converted {source.name} -> {_abs} ({size} bytes)",
+            data={"source": str(source), "path": rel, "abs_path": _abs, "bytes": size},
         )
 
 
@@ -747,15 +753,30 @@ class RedactPiiTool(Tool):
             if counts
             else "no PII found (output is an identical copy)"
         )
+        # REPORT THE ABSOLUTE PATH (v1.153.2). This said `rel` — a
+        # WORKSPACE-relative path — and for a source outside the workspace (an
+        # upload, the common case) the copy lands in the workspace ROOT, so
+        # `rel` was a bare filename. Read back by the model that becomes
+        # "saved as X.redacted.pdf", the user looks next to the original, finds
+        # nothing, and concludes the tool lied about writing a file. It did
+        # write it; it just never said where. The ledger has this exact pair
+        # two seconds apart: redact_pii ok=1 "-> X.redacted.pdf", then
+        # read_document ok=0 "no such file: <uploads>/X.redacted.pdf".
+        abs_path = str(target.resolve())
         return ToolResult(
             ok=True,
             output=(
-                f"redacted {total} PII item(s) [{summary}] -> {rel} (style: {style})"
+                f"redacted {total} PII item(s) [{summary}] (style: {style})\n"
+                f"Saved to: {abs_path}"
                 + (f"\nNote: {note}" if note else "")
                 + "\nThe original file was not modified."
             ),
             data={
+                # `path` stays workspace-relative: chat_turn resolves the chat
+                # preview as `tool_ws / path`, and the agent-side undo journal
+                # is keyed on the relative form too.
                 "path": rel,
+                "abs_path": abs_path,
                 "source": str(source),
                 "style": style,
                 "counts": counts,

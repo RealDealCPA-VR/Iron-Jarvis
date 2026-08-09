@@ -753,8 +753,78 @@ _ADVICE_RX = _re.compile(
     _re.IGNORECASE,
 )
 _FILE_WRITING_TOOLS = frozenset(
-    {"write_document", "write_file", "excel_edit", "excel_apply_spec"}
+    {
+        "write_document",
+        "write_file",
+        "excel_edit",
+        "excel_apply_spec",
+        # v1.153.2: these three WRITE FILES and were missing, so a real
+        # redaction or conversion counted as "nothing was written" — the
+        # honesty note would have contradicted a turn that did the work.
+        "redact_pii",
+        "convert_document",
+        "batch_documents",
+    }
 )
+
+#: An assertive claim that a file now EXISTS, followed by a filename. Used to
+#: check the reply against the tool ledger — see :func:`_claimed_write_note`.
+_FILE_CLAIM_RX = _re.compile(
+    r"(?:saved|wrote|written|created|generated|exported|produced|redacted|"
+    r"placed|stored|output)\b[^.\n]{0,90}?"
+    r"([\w.$~()\[\]-]+\.(?:pdf|docx|doc|xlsx|xls|pptx|ppt|csv|txt|md|json|"
+    r"html|rtf|odt|png|jpg|jpeg|zip))",
+    _re.IGNORECASE,
+)
+
+#: Words that turn a claim into an offer or a denial ("I can save it to x.pdf",
+#: "no file was created"). Checked in the run-up to the claim verb.
+_CLAIM_NEGATION_RX = _re.compile(
+    r"\b(?:not|never|no|nothing|none|cannot|can't|can|could|couldn't|didn't|"
+    r"don't|won't|"
+    r"will|would|should|shall|may|might|unable|if|once|when|after|to)\b"
+    r"[^.\n]{0,24}$",
+    _re.IGNORECASE,
+)
+
+
+def _claimed_write_note(reply: str, tools_used: list[str]) -> str:
+    """'' unless the REPLY claims a file exists that no tool actually wrote.
+
+    The sibling note above keys off the USER's phrasing, which is why it stayed
+    silent on the report that prompted this: "redact this K-1" matches no
+    create-a-file pattern, so a reply announcing a saved output path was never
+    checked. The ledger showed only ``redact_scan`` — which writes nothing —
+    and the user went looking for a file that had never existed.
+
+    So this checks the CLAIM instead of the intent, against what actually ran.
+    Same principle as ``agents/outcome`` and the v1.153.0 compaction verifier:
+    the record decides, never the prose.
+
+    Deliberately conservative. It fires only on an assertive past-tense claim
+    naming a real-looking filename, and never when a document-writing tool ran
+    this turn — a false accusation on a turn that DID write the file would be
+    its own trust failure.
+    """
+    if not reply or set(tools_used) & _FILE_WRITING_TOOLS:
+        return ""
+    named: list[str] = []
+    for m in _FILE_CLAIM_RX.finditer(reply):
+        lead = reply[max(0, m.start() - 40) : m.start()]
+        if _CLAIM_NEGATION_RX.search(lead):
+            continue  # an offer or a denial, not a claim
+        name = m.group(1)
+        if name not in named:
+            named.append(name)
+    if not named:
+        return ""
+    shown = ", ".join(f"`{n}`" for n in named[:3])
+    return (
+        f"\n\n_Note: nothing was written to disk this turn. The reply mentions "
+        f"{shown}, but no document-writing tool ran — so that file does not "
+        f"exist. Ask again and arm a document tool (the “+” menu, or keep "
+        f"Auto-tools on)._"
+    )
 
 
 def _creation_honesty_note(body, armed: list[str], tools_used: list[str]) -> str:
@@ -1553,6 +1623,11 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         if _ctx_note:
             reply += f"\n\n_Note: {_ctx_note}._"
         reply += _creation_honesty_note(body, armed, tools_used)
+        # v1.153.2: and check the reply's own CLAIMS against the
+        # ledger — the note above keys off the user's phrasing and
+        # so missed a reply announcing a saved file after only a
+        # scan had run. MIRROR NOTE (lock-step): both lanes.
+        reply += _claimed_write_note(reply, tools_used)
         if text_only_pick and (body.tools or []):
             reply += (
                 f"\n\n_Note: {provider_choice} can't run tools — this "

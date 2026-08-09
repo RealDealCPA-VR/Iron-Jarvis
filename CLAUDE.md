@@ -120,6 +120,19 @@ cd dashboard && pnpm dev           # dashboard
   `.status` off the nested endpoint's top level silently yields undefined —
   this exact bug shipped twice (chat spinner-forever, Spotlight notification
   never firing). When in doubt, curl the endpoint.
+- **A tool that writes a file says WHERE, absolutely** (v1.153.2), and a reply
+  that CLAIMS a file is checked against the ledger. Two halves of one live
+  report ("it told me it saved the file; the path it gave has no file"):
+  (a) `redact_pii`/`write_document`/`convert_document` reported a
+  WORKSPACE-RELATIVE path, which is a bare filename whenever the output lands
+  in the workspace root — the model relays it and the user looks next to the
+  source. They now report the absolute path and carry `abs_path` in `data`.
+  (b) `_creation_honesty_note` keys off the USER's phrasing, so "redact this
+  K-1" matched nothing and a reply announcing a saved file went unchecked —
+  the ledger showed only `redact_scan`, which writes nothing.
+  `_claimed_write_note` now judges the reply's own claim against what actually
+  ran, in BOTH chat lanes. Note the destinations differ by lane: chat's tool
+  workspace is `home/uploads`, an agent session's is its own session dir.
 - **Never let a real-provider failure return mock output.** The router
   (`providers/router.py`) raises for a failed real provider; mock fallback is
   ONLY for the offline/mock-default path. Fabricated "Done. Wrote RESULT.md"

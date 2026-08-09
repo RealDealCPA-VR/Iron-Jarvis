@@ -71,8 +71,22 @@ def test_chat_stream_yields_token_and_done(tmp_path):
     done = next(d for e, d in frames if e == "done")
     # The mock word-chunks its reply into several deltas...
     assert len(tokens) > 1
-    # ...and the aggregate the client would render equals the done reply.
-    assert "".join(tokens) == done["reply"]
+    # ...and the aggregate the client rendered is a PREFIX of the done reply.
+    #
+    # Not equality: the daemon may APPEND honesty notes after the model has
+    # finished streaming (v1.146.0's context note, v1.153.0's compaction note,
+    # v1.153.2's claimed-a-file-that-was-never-written note). Those are the
+    # daemon's words, not the model's, so they were never streamed as tokens —
+    # which is exactly why `done.reply` is the authoritative one the client
+    # re-renders. The mock's canned text is "Done. Wrote RESULT.md…" with no
+    # tool call behind it, so it trips the claim check every time.
+    streamed = "".join(tokens)
+    assert done["reply"].startswith(streamed)
+    tail = done["reply"][len(streamed) :].strip()
+    assert tail == "" or tail.startswith("_Note:"), (
+        f"anything appended after the streamed text must be an explicit "
+        f"daemon note, got: {tail[:120]!r}"
+    )
     assert done["provider"] == "mock"
     assert set(done) >= {"reply", "provider", "model", "tools_used", "denied_tools", "usage"}
 

@@ -10,6 +10,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Check,
+  Copy,
   Download,
   ExternalLink,
   FileText,
@@ -107,6 +109,7 @@ export function DocPreview({
   path: string;
   onClose: () => void;
 }) {
+  const [copied, setCopied] = useState(false);
   const [data, setData] = useState<PreviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -242,6 +245,32 @@ export function DocPreview({
               <ExternalLink size={12} />
             )}
             Open in {appLabelFor(path)}
+          </button>
+          {/* Download + copy-path (v1.153.2). Previewing a file you cannot
+              take away is half an answer, and "where exactly is it?" was the
+              question that surfaced this: a path you can copy beats a path you
+              have to transcribe from a sentence. */}
+          <a
+            href={fileUrl}
+            download={name}
+            title={`Download ${name}`}
+            aria-label={`Download ${name}`}
+            className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
+          >
+            <Download size={13} />
+          </a>
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard?.writeText(path);
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1400);
+            }}
+            title={`Copy the full path\n${path}`}
+            aria-label="Copy the full file path"
+            className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
+          >
+            {copied ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
           </button>
           <button
             type="button"

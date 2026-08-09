@@ -46,6 +46,7 @@ from ..chat_turn import (
     _attachment_budgets,
     _compose_recall_query,
     _connector_memory_block,
+    _claimed_write_note,
     _creation_honesty_note,
     _enforce_language,
     _last_user_text,
@@ -1666,6 +1667,11 @@ def register(app: FastAPI, d) -> None:
                 if _ctx_note:
                     reply += f"\n\n_Note: {_ctx_note}._"
                 reply += _creation_honesty_note(body, armed, tools_used)
+                # v1.153.2: and check the reply's own CLAIMS against the
+                # ledger — the note above keys off the user's phrasing and
+                # so missed a reply announcing a saved file after only a
+                # scan had run. MIRROR NOTE (lock-step): both lanes.
+                reply += _claimed_write_note(reply, tools_used)
             if text_only_pick and (body.tools or []):
                 reply += (
                     f"\n\n_Note: {provider_choice} can't run tools — this "

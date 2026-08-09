@@ -59,27 +59,29 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  Download,
   ExternalLink,
   FileText,
   FolderKanban,
   FolderOpen,
   FolderPen,
+  GitBranch,
   Globe,
   History,
   Loader2,
   MessageSquare,
   Mic,
   MicOff,
+  MoreHorizontal,
   PanelRight,
   PanelRightClose,
   PanelRightOpen,
   Paperclip,
-  MoreHorizontal,
   Pencil,
   Pin,
   PinOff,
-  Plus,
   PlugZap,
+  Plus,
   RefreshCw,
   RotateCcw,
   Save,
@@ -94,9 +96,8 @@ import {
   Volume2,
   VolumeX,
   Wrench,
-  Zap,
   X,
-  GitBranch,
+  Zap,
 } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -6135,6 +6136,58 @@ export default function ChatPage() {
                     <KnowledgePanel projectId={activeProject.id} />
                   </div>
                 ) : (
+                <>
+                {/* FILES IN THIS CHAT (v1.153.2). Every file this conversation
+                    made or was given, reachable without a project and without
+                    hunting through the composer's chip row. Reported problem:
+                    a redacted document was announced, the user asked where it
+                    was, and had nowhere in the app to go and look. */}
+                {threadDocs.length > 0 && (
+                  <div className="shrink-0 rounded-xl border border-white/[0.06] bg-ink-850/60 p-2">
+                    <div className="flex items-center gap-2 px-1 pb-1.5">
+                      <FileText size={12} className="shrink-0 text-accent-soft/80" />
+                      <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                        Files in this chat
+                      </span>
+                      <span className="ml-auto text-[10px] text-zinc-600">
+                        {threadDocs.length}
+                      </span>
+                    </div>
+                    <div className="flex max-h-44 flex-col gap-0.5 overflow-y-auto">
+                      {threadDocs.map((doc) => {
+                        const dn = doc.split(/[\\/]/).pop() || doc;
+                        const tok = ijToken();
+                        const href = `${API_BASE}/documents/file?path=${encodeURIComponent(
+                          doc,
+                        )}${tok ? `&token=${encodeURIComponent(tok)}` : ""}`;
+                        return (
+                          <div
+                            key={`railfile-${doc}`}
+                            className="group flex items-center gap-1.5 rounded-lg px-1.5 py-1 transition-colors hover:bg-white/[0.05]"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => openDocPreview(doc)}
+                              title={doc}
+                              className="min-w-0 flex-1 truncate text-left text-[11.5px] text-zinc-300 transition-colors hover:text-accent-soft"
+                            >
+                              {dn}
+                            </button>
+                            <a
+                              href={href}
+                              download={dn}
+                              title={`Download ${dn}`}
+                              aria-label={`Download ${dn}`}
+                              className="grid h-5 w-5 shrink-0 place-items-center rounded text-zinc-600 transition-colors hover:bg-white/[0.08] hover:text-accent-soft"
+                            >
+                              <Download size={12} />
+                            </a>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
                 <div className="min-h-0 flex-1">
                 {workspaceDir && !pickingFolder ? (
                   <div className="flex h-full flex-col gap-2">
@@ -6203,6 +6256,7 @@ export default function ChatPage() {
                   />
                 )}
                 </div>
+                </>
                 )}
               </div>
             </aside>
