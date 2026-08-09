@@ -42,6 +42,11 @@ export interface RunResult {
   tools_failed: { tool: string; count: number }[];
   files_created: string[];
   files_changed: string[];
+  /** The same files as ABSOLUTE paths (v1.155.0) — the lists above are
+   *  workspace-relative, which reads well in the card but cannot be opened or
+   *  downloaded. An agent session's workspace is a folder no user would guess,
+   *  so this is what the preview rail and the download link use. */
+  documents?: string[];
   files_created_total?: number;
   files_changed_total?: number;
   errors: { tool: string; error: string }[];

@@ -2914,6 +2914,14 @@ export default function ChatPage() {
         { role: "assistant", content, fromSession: id, ...(runResult ? { runResult } : {}) },
       ];
       setMessages(full);
+      // A file an AGENT made deserves the same right-rail preview a chat turn's
+      // file gets (v1.155.0). It never appeared before: `documents` was only
+      // ever collected in the chat lane, so an escalated run — which is how
+      // redaction and most real file work actually happens — produced a file
+      // the user was told about in prose and had nowhere to click. The preview
+      // also WINS the rail over the project panel, which is the point: a file
+      // just created should not be hidden behind whatever the project shows.
+      if (runResult?.documents?.length) showDocPreview(runResult.documents);
       tts.speak(content); // no-op unless voice replies are on
       queueSave(full); // agent turns are conversations worth keeping too
       awaitingIdRef.current = null;

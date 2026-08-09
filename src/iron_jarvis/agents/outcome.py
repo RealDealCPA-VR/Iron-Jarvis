@@ -189,6 +189,16 @@ def session_result(engine, session_id: str) -> dict[str, Any]:
             out["files_changed_total"] = len(changed)
             out["files_created"] = created[:_LIST_CAP]
             out["files_changed"] = changed[:_LIST_CAP]
+            # ABSOLUTE paths for the same files (v1.155.0), under the key the
+            # chat preview already consumes. The lists above are
+            # workspace-relative because that is what reads well in a report,
+            # but a client cannot open or download a relative path — and an
+            # agent session's workspace is a folder no user would guess. Same
+            # rule as the tools themselves since v1.153.2: say WHERE, in full.
+            out["documents"] = [
+                str((Path(workspace) / p).resolve())
+                for p in (created + changed)[:_LIST_CAP]
+            ] if workspace else []
             out["errors"] = errors
             out["revertable"] = revertable
             out["reverted"] = already_reverted
