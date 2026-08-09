@@ -63,13 +63,21 @@ cd dashboard && pnpm dev           # dashboard
   `tests/test_profile_v1144.py::test_profile_reaches_every_prompt_seam` drives
   all of them end-to-end, and each seam is mutation-proven. "Chat has it,
   agents don't" is the exact bug that wave existed to fix.
-- **History is BUDGETED, never sliced** (v1.146.0). Both chat lanes call
-  `_plan_context` → `context.plan_history`, which fits the transcript to the
-  answering model's window (`_context_window`: pin → probe → default) and
-  reports what it dropped. Do not reintroduce a fixed `messages[-N:]`, and if
-  you add to the system prompt, add it BEFORE the planner runs or its cost is
-  invisible to the budget.
-- **The identity spine reaches EVERY prompt seam** (v1.144.0). `profile/`
+- **History is BUDGETED, never sliced** (chat v1.146.0, agents v1.152.0). Both
+  chat lanes call `_plan_context` → `context.plan_history`; the perceive→act
+  loop calls `context.agent_window.plan_agent_transcript` once per step. Both
+  fit the transcript to the answering model's window (`_context_window`: pin →
+  probe → default) and report what they dropped. Do not reintroduce a fixed
+  `messages[-N:]`, and if you add to the system prompt, add it BEFORE the
+  planner runs or its cost is invisible to the budget.
+- **An assistant turn and its `role="tool"` results are ONE unit** (v1.152.0).
+  Any code that trims, slices, or replays an agent transcript must move them
+  together — a `tool_use` without its `tool_result` makes strict providers
+  reject the ENTIRE conversation, so a context fix that splits them is worse
+  than the overflow it prevents. `plan_agent_transcript` sacrifices in order:
+  stale tool output → whole blocks (oldest first) → the task itself, clipped.
+  The task is `messages[0]` and is never dropped; dropped work is summarized
+  into the SYSTEM prompt, never injected as fake assistant turns.
 - **Frozen-build verification**: anything touching native deps or subprocess
   spawning MUST be verified in the packaged daemon, not just source. The
   terminals feature shipped dead once because PyInstaller dropped
@@ -120,8 +128,12 @@ cd dashboard && pnpm dev           # dashboard
   factories), router (routing/failover), adapters/. `terminals/` — manager
   (+ restart-survival snapshot), session (scrollback), ai_clis (Launch
   detection), shells, backend (ConPTY/pipe/Fake).
-- `context/` — `budget.plan_history`: the per-turn history planner (pure,
-  offline, deterministic recap). Consumed by both chat lanes only.
+- `context/` — `budget.plan_history`: the per-turn CHAT history planner (pure,
+  offline, deterministic recap), consumed by both chat lanes.
+  `agent_window.plan_agent_transcript`: the same job for an agent RUN, and a
+  separate module because it protects the oldest message (the task) instead of
+  the newest, and because tool pairs are indivisible. Shares `budget.py`'s
+  token estimator and reserves so both lanes count tokens identically.
 - `profile/` — the user profile (ONE row): `models` (record), `store`
   (read-never-writes, partial save), `presets` (vocabularies; unknown key =
   free text), `language` (pure script-level leakage detector), `block`

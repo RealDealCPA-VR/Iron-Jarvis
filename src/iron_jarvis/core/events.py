@@ -61,6 +61,12 @@ class EventType:
     PROVIDER_FAILED = "provider.failed"
     PROVIDER_FAILOVER = "provider.failover"
     PROVIDER_DOWNGRADED = "provider.downgraded"
+    #: An agent run did not fit the answering model's context window and had to
+    #: give something up (v1.152.0). Persisted, not just streamed: a run that
+    #: quietly worked from a truncated task and then reported success is the
+    #: exact failure "honest errors beat fabricated output" exists to prevent,
+    #: and the person reading the session afterwards needs to see it.
+    CONTEXT_TRIMMED = "context.trimmed"
     # Auto routing (§6): the routing model classified a request into a tier and
     # sent it to a specific model. Carries {tier, provider, model, classifier}.
     PROVIDER_ROUTED = "provider.routed"

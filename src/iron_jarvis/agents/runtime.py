@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from ..core.db import session_scope
 from ..core.events import EventType
@@ -42,6 +43,7 @@ def is_direct_workspace(config, workspace_path: str | Path | None) -> bool:
     except (OSError, ValueError):  # unresolvable path -> the safe default
         return False
     return ws != managed and managed not in ws.parents
+
 
 #: Cap on tool output fed into the MODEL CONTEXT (the full output still lands in the
 #: DB transcript). Without it, a large read/shell/grep result is re-sent on every
@@ -400,7 +402,76 @@ class AgentRuntime:
         ``run.steps`` ACCUMULATES across calls, so a decomposed run's rounds
         all count on the one AgentRun record."""
         workspace = Path(session.workspace_path)
+        # One persisted context.trimmed event per run, not one per step: a
+        # 12-step run over budget would otherwise bury the timeline in twelve
+        # identical notices.
+        trim_reported = False
         for _ in range(max_steps):
+            # CONTEXT BUDGET (v1.152.0). The transcript grows by an assistant
+            # turn plus every tool result on every step, and until now nothing
+            # counted the tokens: the only guards were a 16k-char cap per tool
+            # result and the step ceiling, which on a 32k local model is tens of
+            # thousands of tokens before the system prompt is even added. Chat
+            # got this in v1.146.0; this is where context actually gets big.
+            #
+            # `step_messages` / `step_system` are what THIS call sends; the loop
+            # keeps appending to the real `messages` list, so the run's own
+            # history (and the DB transcript) is never rewritten by trimming.
+            step_messages, step_system = messages, system_prompt
+            try:
+                from ..context.agent_window import plan_agent_transcript
+                from ..daemon.chat_turn import _context_window
+
+                _plan = plan_agent_transcript(
+                    messages,
+                    window=_context_window(
+                        SimpleNamespace(platform=self.p),
+                        session.provider,
+                        session.model,
+                    ),
+                    system_text=system_prompt,
+                )
+                step_messages = _plan.messages
+                if _plan.recap:
+                    # The recap goes in the SYSTEM prompt, not the transcript —
+                    # injecting it as a turn would put words in the model's own
+                    # mouth that it never said.
+                    step_system = f"{system_prompt}\n\n{_plan.recap}"
+                if _plan.changed:
+                    if _plan.clipped_task:
+                        # Say this plainly: the agent is now working from a
+                        # TRUNCATED goal, which is a result the user must be
+                        # able to distrust. This model is too small for the job.
+                        note = (
+                            "the task is larger than this model's context "
+                            "window and had to be cut — use a bigger model"
+                        )
+                    elif _plan.dropped_blocks:
+                        note = (
+                            f"trimmed context to fit ({_plan.dropped_blocks} "
+                            f"earlier step(s) condensed)"
+                        )
+                    else:
+                        note = "trimmed older tool output to fit"
+                    if sink:  # live, for whoever is watching the run now
+                        sink.phase("running", note)
+                    if not trim_reported:  # persisted, for whoever reads it later
+                        trim_reported = True
+                        await self.p.event_bus.publish(
+                            EventType.CONTEXT_TRIMMED,
+                            {
+                                "run_id": run.id,
+                                "window": _plan.window,
+                                "dropped_blocks": _plan.dropped_blocks,
+                                "tools_trimmed": _plan.tools_trimmed,
+                                "clipped_task": _plan.clipped_task,
+                                "detail": note,
+                            },
+                            session_id=session.id,
+                        )
+            except Exception:  # noqa: BLE001 — a budgeting fault must never
+                # break a run; the untrimmed transcript is what shipped before.
+                step_messages, step_system = messages, system_prompt
             # FX-01: consume the router as a TOKEN STREAM. Text deltas are pushed to
             # the SSE sink the moment they arrive; the terminal ``final`` frame
             # carries the SAME aggregate LLMResponse (+ resolved provider/model) that
@@ -410,8 +481,8 @@ class AgentRuntime:
             async for ev in self._route_stream(
                 provider=session.provider,
                 model=session.model,
-                system=system_prompt,
-                messages=messages,
+                system=step_system,
+                messages=step_messages,
                 tools=tool_specs,
                 session_id=session.id,
                 # Task class for the (opt-in) self-tuning router: the agent type.
@@ -447,7 +518,9 @@ class AgentRuntime:
                         "model": run.model,
                         "input_tokens": step_in,
                         "output_tokens": step_out,
-                        "cost_usd": cost_for(run.provider, run.model, step_in, step_out),
+                        "cost_usd": cost_for(
+                            run.provider, run.model, step_in, step_out
+                        ),
                         "task_class": agent_def.type.value,
                     },
                     session_id=session.id,
@@ -472,6 +545,7 @@ class AgentRuntime:
                 event_bus=self.p.event_bus,
                 engine=self.p.engine,
             )
+
             # Run the turn's tool calls as a TEAM: gather them concurrently so
             # multiple delegate/blackboard calls execute at once. registry.invoke
             # opens its own session_scope per call (no shared Session across the
@@ -529,7 +603,10 @@ class AgentRuntime:
                     # — this aligns the runtime with them.
                     tool = self.p.registry.get(tc.name)
                     if getattr(tool, "returns_untrusted_content", False):
-                        from ..computeruse.safety import detect_injection, wrap_untrusted
+                        from ..computeruse.safety import (
+                            detect_injection,
+                            wrap_untrusted,
+                        )
 
                         inj = detect_injection(content)
                         content = wrap_untrusted(
@@ -547,7 +624,11 @@ class AgentRuntime:
                     sink.tool_finished(
                         tc.id,
                         tc.name,
-                        ok=(result.ok if not isinstance(result, BaseException) else False),
+                        ok=(
+                            result.ok
+                            if not isinstance(result, BaseException)
+                            else False
+                        ),
                         preview=str(content)[:500],
                     )
                 messages.append(

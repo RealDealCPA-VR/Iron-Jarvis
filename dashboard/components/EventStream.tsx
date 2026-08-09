@@ -29,6 +29,10 @@ const TYPE_COLOR: Record<string, string> = {
   "schedule.fired": "text-indigo-300",
   // A computer-use run reached a terminal status (completed/failed/blocked).
   "computeruse.run_finished": "text-fuchsia-300",
+  // A run did not fit the model's context window (v1.152.0). Amber, not red:
+  // trimming stale tool output is routine; the payload's `clipped_task` is the
+  // part that means the answer may be built on an incomplete goal.
+  "context.trimmed": "text-amber-300",
 };
 
 export function EventStream() {
