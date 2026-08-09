@@ -300,6 +300,12 @@ class Config(BaseModel):
     #: fleet models receive whole documents inline while small ones get
     #: retrieval instead of overflow. Empty = conservative defaults.
     model_context_windows: dict[str, int] = Field(default_factory=dict)
+    #: Context COMPACTION (v1.153.0). ``{"enabled": bool, "suggest_at": float,
+    #: "auto_at": float}`` as fractions of the window. Empty = the defaults:
+    #: tell the user at 0.70 and let them choose, compact without asking at
+    #: 0.92. A ceiling at or below the signal is corrected at read time, since
+    #: it would otherwise compact the instant the offer appeared.
+    context_compaction: dict[str, float | bool] = Field(default_factory=dict)
     fleet_sampling_enabled: bool = True  # background telemetry loop (30s idle)
     fleet_sampling_seconds: int = 30  # idle cadence; a watched page samples at 2s
     #: "provider:model" the local-vs-cloud savings estimate is priced against —

@@ -151,7 +151,155 @@ def _resolve_persona(store, builtins, want: str, default: str) -> str:
         return resolve_prompt(store, builtins, want or default)
 
 
-def _plan_context(d, body, system: str, provider: str, model: str):
+def _compaction_store(platform):
+    """The compaction cache, built once per platform and kept on it.
+
+    Attached lazily rather than in the platform constructor because it is a
+    derived cache: an install that never crosses the threshold never pays for
+    the table, and dropping every row costs nothing but a recomputation.
+    """
+    store = getattr(platform, "_compaction_store_obj", None)
+    if store is None:
+        from ..context.store import CompactionStore
+
+        store = CompactionStore(platform.engine)
+        platform._compaction_store_obj = store
+    return store
+
+
+def _compaction_thresholds(d) -> tuple[float, float]:
+    """(suggest_at, auto_at) — user-tunable, clamped to a sane order."""
+    from ..context import compaction as _C
+
+    suggest, auto = _C.SUGGEST_AT, _C.AUTO_AT
+    try:
+        # Settings land as ATTRIBUTES on config (the same shape
+        # ``model_context_windows`` uses), not in a settings dict.
+        cfg = getattr(d.platform.config, "context_compaction", None) or {}
+        suggest = float(cfg.get("suggest_at", suggest))
+        auto = float(cfg.get("auto_at", auto))
+    except Exception:  # noqa: BLE001 — a bad setting must not break a turn
+        return _C.SUGGEST_AT, _C.AUTO_AT
+    suggest = min(max(suggest, 0.05), 0.99)
+    auto = min(max(auto, 0.10), 1.50)
+    if auto <= suggest:  # a ceiling below the signal would compact instantly
+        auto = min(1.50, suggest + 0.05)
+    return suggest, auto
+
+
+def _compaction_enabled(d) -> bool:
+    try:
+        cfg = getattr(d.platform.config, "context_compaction", None) or {}
+        return bool(cfg.get("enabled", True))
+    except Exception:  # noqa: BLE001
+        return True
+
+
+async def _apply_compaction(d, body, system: str, provider: str, model: str):
+    """Fill-level report, and the compaction that follows from it.
+
+    Returns ``(system, messages, report)``. The report is what the CLIENT reads
+    to draw the fill gauge and — at ``level == "suggest"`` — to offer the user
+    the choice, which is the whole shape of this feature: tell them at 70% and
+    let them decide, act alone only at the ceiling.
+
+    Ordering is load-bearing. Pressure is measured on the RAW history against
+    the FINISHED system prompt, because a summary that later joins that prompt
+    changes both sides of the ratio; then any existing summary is applied; then
+    the report is recomputed so the gauge reflects what will actually be sent.
+    """
+    from ..context import compaction as _C
+    from ..context.budget import estimate_tokens
+
+    msgs = list(body.messages or [])
+    window = _context_window(d, provider, model) or _C_DEFAULT_WINDOW()
+
+    def _measure(sys_text: str, items) -> tuple[int, float]:
+        raw = estimate_tokens(sys_text) + sum(
+            estimate_tokens(getattr(m, "content", "") or "") + 4 for m in items
+        )
+        return raw, _C.pressure(raw, window)
+
+    suggest_at, auto_at = _compaction_thresholds(d)
+    raw, ratio = _measure(system, msgs)
+    report = {
+        "window": window,
+        "tokens": raw,
+        "percent": round(ratio * 100),
+        "level": _C.level(ratio, suggest_at=suggest_at, auto_at=auto_at),
+        "suggest_at": round(suggest_at * 100),
+        "auto_at": round(auto_at * 100),
+        "compacted": False,
+    }
+    if not _compaction_enabled(d):
+        # The REAL fill level still goes out. Turning compaction off disables
+        # the remedy, not the gauge — a user who switched it off still needs to
+        # see a window at 95%, and reporting "ok" there would be a lie told by
+        # a setting that was never about reporting.
+        report["disabled"] = True
+        return system, msgs, report
+
+    # Nothing to cover: compaction only ever eats the older prefix, and the
+    # newest KEEP_RECENT turns are never paraphrased out from under the model.
+    if len(msgs) <= _C.KEEP_RECENT + _C.MIN_COVERED:
+        return system, msgs, report
+
+    covered = msgs[: len(msgs) - _C.KEEP_RECENT]
+    pairs = [
+        (getattr(m, "role", "user") or "user", getattr(m, "content", "") or "")
+        for m in covered
+    ]
+    key = _C.prefix_key([f"{r}\x1e{t}" for r, t in pairs])
+    store = _compaction_store(d.platform)
+    rec = store.get(key)
+
+    # No cached summary and the ceiling is here: compact NOW, without asking.
+    # There is no one to ask mid-turn, and the alternative is a turn that
+    # silently drops the beginning of the conversation.
+    if rec is None and report["level"] == "auto":
+        complete = None
+        try:
+            complete = d._compaction_complete(provider, model)
+        except Exception:  # noqa: BLE001 — no real model -> keep the recap
+            complete = None
+        if complete is not None:
+            out = await _C.compact_messages(pairs, complete=complete, trigger="auto")
+            if out.ok:
+                rec = store.put(
+                    key,
+                    summary=out.summary,
+                    covers=len(covered),
+                    stripped=out.stripped,
+                    trigger="auto",
+                    provider=out.provider,
+                    model=out.model,
+                )
+
+    if rec is not None and rec.summary.strip():
+        system = f"{system}\n\n{rec.summary}"
+        msgs = msgs[rec.covers :]
+        raw, ratio = _measure(system, msgs)
+        report.update(
+            {
+                "tokens": raw,
+                "percent": round(ratio * 100),
+                "level": _C.level(ratio, suggest_at=suggest_at, auto_at=auto_at),
+                "compacted": True,
+                "covers": rec.covers,
+                "stripped": rec.stripped,
+                "trigger": rec.trigger,
+            }
+        )
+    return system, msgs, report
+
+
+def _C_DEFAULT_WINDOW() -> int:
+    from ..context.budget import DEFAULT_WINDOW
+
+    return DEFAULT_WINDOW
+
+
+def _plan_context(d, body, system: str, provider: str, model: str, messages=None):
     """Budget this turn's history against the answering model's window.
 
     Shared by both chat lanes so they can never disagree about what fits. The
@@ -166,9 +314,10 @@ def _plan_context(d, body, system: str, provider: str, model: str):
     """
     from ..context import plan_history
 
+    items = list(body.messages or []) if messages is None else list(messages)
     try:
         return plan_history(
-            list(body.messages or []),
+            items,
             window=_context_window(d, provider, model),
             system_text=system,
         )
@@ -182,7 +331,7 @@ def _plan_context(d, body, system: str, provider: str, model: str):
                     "role": m.role if m.role in ("user", "assistant") else "user",
                     "content": (m.content or "")[:12000],
                 }
-                for m in list(body.messages or [])[-30:]
+                for m in items[-30:]
             ]
         )
 
@@ -1029,7 +1178,16 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     # system prompt is finished by this point — profile, project, awareness,
     # grounding, roster — so its true cost is known and can be reserved for.
     # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
-    plan = _plan_context(d, body, system, provider_choice, model_choice)
+    # COMPACTION (v1.153.0) runs BEFORE the budget planner: a summary it applies
+    # joins the system prompt and shortens the history, both of which the planner
+    # then has to price. Signals at 70% and lets the user choose; acts alone only
+    # at the ceiling. MIRROR NOTE (lock-step): stream copy in routes/chat.py.
+    system, _ctx_messages, context_report = await _apply_compaction(
+        d, body, system, provider_choice, model_choice
+    )
+    plan = _plan_context(
+        d, body, system, provider_choice, model_choice, messages=_ctx_messages
+    )
     if plan.recap:
         # The recap rides in the SYSTEM prompt, not as a fake user turn: it is
         # a note about the conversation, and injecting it as a message would
@@ -1427,5 +1585,8 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         "workflow_draft": workflow_draft,
         # v1.146.0 — what this turn cost against the model's window, so the
         # composer can show headroom BEFORE the next message overflows it.
-        "context": plan.as_dict(),
+        # v1.153.0 EXTENDS THE SAME KEY rather than adding a rival one: fill
+        # level, thresholds, and whether a compaction was applied. Every
+        # v1.146.0 field keeps its meaning, so existing clients are untouched.
+        "context": {**plan.as_dict(), **context_report},
     }

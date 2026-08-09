@@ -105,6 +105,25 @@ class ChatBody(BaseModel):
     connectors: list[str] = []
 
 
+class ChatCompactBody(BaseModel):
+    """Compact this conversation NOW because the user chose to (v1.153.0).
+
+    The same message list a turn would post. The daemon covers everything but
+    the most recent ``KEEP_RECENT`` messages, has a model write a structured
+    summary, verifies every checkable claim against the transcript and the
+    execution ledger, and caches the result against a hash of exactly what it
+    covers — so the next ordinary turn picks it up with no further calls and no
+    thread id needed.
+
+    This is the 70% path. Past the auto threshold the same thing happens inside
+    the turn without asking, because by then there is no headroom left to ask in.
+    """
+
+    messages: list[ChatMessageBody]
+    provider: str = ""
+    model: str = ""
+
+
 class ChatRememberBody(BaseModel):
     """Commit a saved chat thread to long-term memory. ``mode`` distill = a
     faithful one-shot LLM distillation of what is worth remembering (falls
@@ -265,6 +284,7 @@ _SETTINGS_KEYS = [
     # — scales attachment budgets for local endpoints that don't advertise
     # theirs (a 128k fleet model gets whole documents inline; 8k gets RAG).
     "model_context_windows",
+    "context_compaction",
     # Step-aware routing (v1.135.0): role -> "provider:model" overrides for
     # plan/synthesize/extract/judge/vision one-shots inside multi-step runs.
     "model_roles",

@@ -33,6 +33,9 @@ const TYPE_COLOR: Record<string, string> = {
   // trimming stale tool output is routine; the payload's `clipped_task` is the
   // part that means the answer may be built on an incomplete goal.
   "context.trimmed": "text-amber-300",
+  // A run replaced its older steps with a verified model-written summary
+  // (v1.153.0) — a heavier change to what the model believes than trimming.
+  "context.compacted": "text-amber-300",
 };
 
 export function EventStream() {

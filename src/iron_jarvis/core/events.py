@@ -67,6 +67,11 @@ class EventType:
     #: exact failure "honest errors beat fabricated output" exists to prevent,
     #: and the person reading the session afterwards needs to see it.
     CONTEXT_TRIMMED = "context.trimmed"
+    #: A run replaced its older steps with a VERIFIED model-written summary
+    #: (v1.153.0). Distinct from ``context.trimmed``: trimming drops content and
+    #: leaves a deterministic receipt, compaction substitutes a paraphrase — a
+    #: heavier change to what the model believes, so it gets its own record.
+    CONTEXT_COMPACTED = "context.compacted"
     # Auto routing (§6): the routing model classified a request into a tier and
     # sent it to a specific model. Carries {tier, provider, model, classifier}.
     PROVIDER_ROUTED = "provider.routed"

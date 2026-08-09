@@ -103,6 +103,27 @@ export interface ContextUsage {
   clipped: boolean;
   recap: boolean;
   suggest_larger: boolean;
+  /* --- compaction (v1.153.0) ------------------------------------------- */
+  /** How full the window is against RAW demand — what the conversation would
+   *  need with nothing dropped. Can exceed 100; `used` cannot, because a
+   *  planned transcript always fits by construction. */
+  percent?: number;
+  /** "ok" | "suggest" (offer the user the choice) | "auto" (already acted). */
+  level?: "ok" | "suggest" | "auto";
+  /** The thresholds in force, as percentages, so the UI never hardcodes them. */
+  suggest_at?: number;
+  auto_at?: number;
+  /** A verified summary is standing in for the older messages. */
+  compacted?: boolean;
+  /** How many leading messages that summary replaces. */
+  covers?: number;
+  /** Lines the ledger/transcript check removed from the model's draft. */
+  stripped?: number;
+  /** "manual" (the user chose) | "auto" (the ceiling). */
+  trigger?: string;
+  /** Compaction is switched off. The fill level above is still real — the
+   *  setting governs the remedy, not the reporting. */
+  disabled?: boolean;
 }
 
 // -------------------------------------------------------------- frame decoding

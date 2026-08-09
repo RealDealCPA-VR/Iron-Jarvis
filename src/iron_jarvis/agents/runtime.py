@@ -51,9 +51,152 @@ def is_direct_workspace(config, workspace_path: str | Path | None) -> bool:
 _MAX_TOOL_CONTEXT_CHARS = 16000
 
 
+def _effective(messages, system_prompt: str, summary: str, covers: int):
+    """Apply an existing compaction WITHOUT touching the caller's list.
+
+    ``messages[0]`` (the task) always rides at the front verbatim; *covers*
+    counts messages after it that the summary has absorbed. Returns
+    ``(messages, system)`` for this step only — the loop keeps appending to the
+    real list, which stays the run's full history and what gets persisted.
+    """
+    if not summary or covers <= 0 or not messages:
+        return messages, system_prompt
+    head, tail = messages[:1], messages[1 + covers :]
+    return [*head, *tail], f"{system_prompt}\n\n{summary}"
+
+
 class AgentRuntime:
     def __init__(self, platform) -> None:
         self.p = platform
+
+    async def _maybe_compact(
+        self,
+        session,
+        *,
+        messages,
+        system_prompt: str,
+        summary: str,
+        covers: int,
+        futile: bool,
+        window,
+        sink,
+    ):
+        """Compact this run's older steps when the window is nearly full.
+
+        Returns the (possibly unchanged) ``(summary, covers)``. Auto-only and
+        never asks: there is no human attached to a running agent, and the
+        alternative at this fill level is a step that silently loses the
+        beginning of the run.
+
+        The summary is checked against this session's EXECUTION LEDGER before it
+        is allowed anywhere near the prompt — ``outcome.session_result`` derives
+        what the run actually did from ``ToolInvocation`` + ``UndoJournal``, so a
+        model claiming a file it never wrote has that claim removed rather than
+        fed back to itself as history.
+
+        Every failure path returns the input unchanged: no real model, nothing
+        big enough to cover, a provider error, or a summary that survived
+        verification empty. The deterministic recap then handles overflow
+        exactly as it did in v1.152.0.
+        """
+        from ..context import compaction as _C
+
+        if futile:
+            return summary, covers, futile
+        try:
+            from ..daemon.chat_turn import _compaction_enabled, _compaction_thresholds
+            from ..context.budget import estimate_tokens
+
+            deps = SimpleNamespace(platform=self.p)
+            if not _compaction_enabled(deps):
+                return summary, covers, futile
+            _suggest, auto_at = _compaction_thresholds(deps)
+
+            eff_messages, eff_system = _effective(
+                messages, system_prompt, summary, covers
+            )
+            raw = estimate_tokens(eff_system) + sum(
+                estimate_tokens(getattr(m, "content", "") or "") + 4
+                for m in eff_messages
+            )
+            if _C.pressure(raw, int(window or 0)) < auto_at:
+                return summary, covers, futile
+
+            pairs, new_covers = _C.agent_coverage(messages, covered=covers)
+            if not pairs or new_covers <= covers:
+                return summary, covers, futile
+
+            complete = self.p_compaction_complete()
+            if complete is None:
+                return summary, covers, futile
+
+            paths, tools = _C.ledger_facts(self.p.engine, session.id)
+            out = await _C.compact_messages(
+                pairs,
+                complete=complete,
+                ledger_paths=paths,
+                ledger_tools=tools,
+                trigger="auto",
+                # The summary being REPLACED rides along: coverage always starts
+                # from the beginning, so without this the new summary would
+                # silently drop everything the old one said.
+                prior=summary,
+            )
+            if not out.ok:
+                return summary, covers, futile
+
+            # FUTILITY GUARD. When the task alone dominates the window, covering
+            # every step still leaves pressure above the ceiling — and the next
+            # few steps would each buy another useless model call. Measure the
+            # result; if it did not get us under, take this one and stop trying.
+            # The planner's trim-and-clip path then handles the overflow, which
+            # is honest about what it is doing.
+            after_messages, after_system = _effective(
+                messages, system_prompt, out.summary, new_covers
+            )
+            after_raw = estimate_tokens(after_system) + sum(
+                estimate_tokens(getattr(m, "content", "") or "") + 4
+                for m in after_messages
+            )
+            futile = _C.pressure(after_raw, int(window or 0)) >= auto_at
+
+            if sink:
+                sink.phase(
+                    "running",
+                    f"compacted {new_covers - covers} earlier message(s) to fit "
+                    f"the context window",
+                )
+            await self.p.event_bus.publish(
+                EventType.CONTEXT_COMPACTED,
+                {
+                    "run_id": getattr(session, "id", ""),
+                    "covers": new_covers,
+                    "stripped": out.stripped,
+                    "trigger": "auto",
+                    "provider": out.provider,
+                    "model": out.model,
+                },
+                session_id=session.id,
+            )
+            return out.summary, new_covers, futile
+        except Exception:  # noqa: BLE001 — compaction is an optimisation; a
+            # failure must leave the run exactly as it was.
+            return summary, covers, futile
+
+    def p_compaction_complete(self):
+        """The one-shot completion callable, or None when only the mock exists.
+
+        The daemon builds it (``d._compaction_complete``); the runtime reaches
+        it through the platform so a bare ``AgentRuntime`` in a unit test simply
+        gets None and skips compaction.
+        """
+        factory = getattr(self.p, "_compaction_complete", None)
+        if factory is None:
+            return None
+        try:
+            return factory()
+        except Exception:  # noqa: BLE001
+            return None
 
     def _save(self, run: AgentRun) -> None:
         with session_scope(self.p.engine) as db:
@@ -406,6 +549,12 @@ class AgentRuntime:
         # 12-step run over budget would otherwise bury the timeline in twelve
         # identical notices.
         trim_reported = False
+        # COMPACTION STATE (v1.153.0). An agent loop has no one to ask mid-run,
+        # so unlike chat it never offers the choice — it compacts on its own at
+        # the ceiling and reports it. `_cpt_covers` counts messages consumed
+        # AFTER index 0: the task is never covered, because a run whose goal
+        # survives only as a paraphrase can drift off what it was asked to do.
+        _cpt_summary, _cpt_covers, _cpt_futile = "", 0, False
         for _ in range(max_steps):
             # CONTEXT BUDGET (v1.152.0). The transcript grows by an assistant
             # turn plus every tool result on every step, and until now nothing
@@ -422,21 +571,42 @@ class AgentRuntime:
                 from ..context.agent_window import plan_agent_transcript
                 from ..daemon.chat_turn import _context_window
 
-                _plan = plan_agent_transcript(
-                    messages,
-                    window=_context_window(
-                        SimpleNamespace(platform=self.p),
-                        session.provider,
-                        session.model,
-                    ),
-                    system_text=system_prompt,
+                _win = _context_window(
+                    SimpleNamespace(platform=self.p),
+                    session.provider,
+                    session.model,
                 )
-                step_messages = _plan.messages
+                # COMPACTION (v1.153.0) runs BEFORE the budget planner: a summary
+                # it produces joins the system prompt and shortens the history,
+                # both of which the planner then has to price. Everything below
+                # works on EFFECTIVE values — the real `messages` list is the
+                # run's own history and what gets persisted, and is never
+                # rewritten.
+                _cpt_summary, _cpt_covers, _cpt_futile = await self._maybe_compact(
+                    session,
+                    messages=messages,
+                    system_prompt=system_prompt,
+                    summary=_cpt_summary,
+                    covers=_cpt_covers,
+                    futile=_cpt_futile,
+                    window=_win,
+                    sink=sink,
+                )
+                _eff_messages, _eff_system = _effective(
+                    messages, system_prompt, _cpt_summary, _cpt_covers
+                )
+
+                _plan = plan_agent_transcript(
+                    _eff_messages,
+                    window=_win,
+                    system_text=_eff_system,
+                )
+                step_messages, step_system = _plan.messages, _eff_system
                 if _plan.recap:
                     # The recap goes in the SYSTEM prompt, not the transcript —
                     # injecting it as a turn would put words in the model's own
                     # mouth that it never said.
-                    step_system = f"{system_prompt}\n\n{_plan.recap}"
+                    step_system = f"{_eff_system}\n\n{_plan.recap}"
                 if _plan.changed:
                     if _plan.clipped_task:
                         # Say this plainly: the agent is now working from a

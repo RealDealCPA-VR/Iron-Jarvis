@@ -70,6 +70,24 @@ cd dashboard && pnpm dev           # dashboard
   probe → default) and report what they dropped. Do not reintroduce a fixed
   `messages[-N:]`, and if you add to the system prompt, add it BEFORE the
   planner runs or its cost is invisible to the budget.
+- **Compaction is MODEL-written and LEDGER-checked** (v1.153.0). `context/
+  compaction.py` lets a model write a real structured summary of the older
+  conversation, then removes every line carrying a claim the record will not
+  support: file paths must appear in the transcript or in
+  `agents/outcome.session_result` (derived from `ToolInvocation` +
+  `UndoJournal`), and quoted spans must appear verbatim. A summary that
+  survives verification empty is NOT shown — the deterministic recap keeps the
+  job. Same honest-mock rule as skill distill: no real model ⇒ no summary,
+  because this text is injected into the system prompt of every later turn and
+  read back as authoritative. The two lanes differ by who is present: chat
+  SIGNALS at `SUGGEST_AT` (0.70) and lets the user choose via
+  `POST /chat/compact`, and only acts alone at `AUTO_AT` (~0.92); an agent run
+  has nobody to ask, so it compacts itself at the ceiling and emits
+  `context.compacted`. Pressure is measured on RAW demand (`raw_tokens`), never
+  on the planned transcript — that fits by construction and so can never report
+  the 70% the whole feature keys off. Coverage always restarts from the
+  beginning and feeds the previous summary back in as `prior`; covering only
+  the new blocks would silently discard everything the first summary said.
 - **An assistant turn and its `role="tool"` results are ONE unit** (v1.152.0).
   Any code that trims, slices, or replays an agent transcript must move them
   together — a `tool_use` without its `tool_result` makes strict providers
@@ -134,6 +152,13 @@ cd dashboard && pnpm dev           # dashboard
   separate module because it protects the oldest message (the task) instead of
   the newest, and because tool pairs are indivisible. Shares `budget.py`'s
   token estimator and reserves so both lanes count tokens identically.
+  `compaction.py` is the layer above both: thresholds, the structured prompt,
+  and the verification pass that makes a model-written summary admissible.
+  `store.py` caches one summary per covered prefix, CONTENT-ADDRESSED (a chat
+  turn carries no thread id, an unsaved thread has none, and a forked thread
+  should inherit its parent's summary for free) — and it is registered in
+  `core.db._LATE_MODEL_MODULES`, without which its lazily-created table lands
+  on fresh test DBs and on no real install (the v1.151.2 lesson).
 - `profile/` — the user profile (ONE row): `models` (record), `store`
   (read-never-writes, partial save), `presets` (vocabularies; unknown key =
   free text), `language` (pure script-level leakage detector), `block`

@@ -142,6 +142,14 @@ class HistoryPlan:
     #: True when even the newest turn had to be cut — the caller should offer a
     #: larger-context model.
     suggest_larger: bool = False
+    #: Tokens the UNTRIMMED conversation would need (system included).
+    #:
+    #: The number the v1.153.0 compaction thresholds key off, and it exists
+    #: because ``used_tokens`` cannot answer the question: a planned transcript
+    #: is <= the window BY CONSTRUCTION, so ``used_tokens/window`` saturates at
+    #: 1.0 and can never report the 70%-full signal — still less the 130% that
+    #: says a conversation has outgrown its model.
+    raw_tokens: int = 0
 
     @property
     def headroom(self) -> int:
@@ -260,6 +268,11 @@ def plan_history(
     budget = win - system_tokens - reserve
 
     plan = HistoryPlan(window=win, history_budget=max(0, budget))
+    # Raw demand, measured BEFORE any cap or trim: what this conversation would
+    # cost if nothing were given up.
+    plan.raw_tokens = system_tokens + sum(
+        estimate_tokens(_content_of(m)) + 4 for m in messages
+    )
     if not messages:
         plan.used_tokens = system_tokens
         return plan

@@ -1501,6 +1501,52 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         return _complete
 
+    def _compaction_complete(provider: str = "", model: str = ""):
+        """The ``complete`` callable context COMPACTION rides (v1.153.0), or
+        ``None`` when only the offline mock is available.
+
+        Same honest-mock rule as ``_skill_distill_complete`` and for a sharper
+        reason: a compaction summary is injected into the SYSTEM prompt of every
+        later turn, so mock prose would not merely be useless, it would be read
+        back as an authoritative account of the conversation. With no real model
+        the caller keeps the deterministic recap, which is exactly what shipped
+        before this feature existed.
+
+        Returns ``async (system, user) -> (text, provider, model)`` so the
+        record can attribute the summary to the model that actually wrote it —
+        including after a cross-provider failover.
+        """
+        from ..providers.adapters.mock import MockLLMAdapter
+
+        prov = (provider or "").strip() or platform.config.default_provider
+        mdl = (model or "").strip() or platform.config.default_model
+        try:
+            adapter = platform.providers.get(prov, mdl)
+        except Exception:  # noqa: BLE001 — fall through to failover
+            adapter = None
+        if adapter is None or isinstance(adapter, MockLLMAdapter):
+            adapter, prov = _failover_adapter("mock")
+        if adapter is None:
+            return None
+
+        from ..providers.adapters.base import LLMMessage
+
+        async def _complete(system: str, user: str):
+            resp, used_provider, used_model = await _one_shot_complete(
+                prov,
+                adapter,
+                system=system,
+                messages=[LLMMessage(role="user", content=user)],
+            )
+            return (resp.text or ""), (used_provider or prov), (used_model or mdl)
+
+        return _complete
+
+    # The agent runtime compacts its own transcript mid-run and cannot reach
+    # the deps object, so the factory is published on the PLATFORM. A bare
+    # AgentRuntime in a unit test finds nothing here and skips compaction.
+    platform._compaction_complete = _compaction_complete
+
     def _publish_skill_proposal(record) -> None:
         """``on_proposal`` callback: publish ``skill.proposal_created`` so the
         dashboard event feed + Notifications routing can deliver it.
@@ -1997,6 +2043,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
         _failover_adapter=_failover_adapter,
         _one_shot_complete=_one_shot_complete,
         _skill_distill_complete=_skill_distill_complete,
+        _compaction_complete=_compaction_complete,
         _build_workflow=_build_workflow,
         _goal_view=_goal_view,
         _proposal_view=_proposal_view,

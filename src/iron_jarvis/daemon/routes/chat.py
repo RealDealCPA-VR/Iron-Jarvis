@@ -18,6 +18,7 @@ from typing import Any
 
 from ..schemas import (
     ChatBody,
+    ChatCompactBody,
     ChatCrystallizeBody,
     ChatRememberBody,
     ChatShareBody,
@@ -49,6 +50,7 @@ from ..chat_turn import (
     _enforce_language,
     _last_user_text,
     _persist_chat_usage,
+    _apply_compaction,
     _plan_context,
     _profile_section,
     _resolve_armed_tools,
@@ -898,6 +900,99 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="no such persona")
         return {"deleted": slug, "reverted_to_builtin": slug in d._PERSONAS}
 
+    @app.post("/chat/compact")
+    async def chat_compact(body: ChatCompactBody) -> dict[str, Any]:
+        """Compact this conversation because the USER asked (the 70% offer).
+
+        Returns the summary itself, not just a receipt: the user is agreeing to
+        let a paraphrase stand in for their own words in every later turn, so
+        they get to read what it says. ``stripped_claims`` is the honest half of
+        that — the things the model wrote that the record would not corroborate
+        and which were therefore removed.
+        """
+        from ...context import compaction as _C
+        from ..chat_turn import _compaction_store, _context_window
+
+        msgs = list(body.messages or [])
+        if len(msgs) <= _C.KEEP_RECENT + _C.MIN_COVERED:
+            raise HTTPException(
+                status_code=400,
+                detail="not enough conversation to compact yet",
+            )
+
+        provider = (body.provider or "").strip()
+        model = (body.model or "").strip()
+        covered = msgs[: len(msgs) - _C.KEEP_RECENT]
+        pairs = [
+            (getattr(m, "role", "user") or "user", getattr(m, "content", "") or "")
+            for m in covered
+        ]
+        key = _C.prefix_key([f"{r}\x1e{t}" for r, t in pairs])
+        store = _compaction_store(d.platform)
+
+        cached = store.get(key)
+        if cached is not None and cached.summary.strip():
+            return {
+                "ok": True,
+                "cached": True,
+                "covers": cached.covers,
+                "stripped": cached.stripped,
+                "summary": cached.summary,
+                "provider": cached.provider,
+                "model": cached.model,
+                "trigger": cached.trigger,
+            }
+
+        complete = None
+        try:
+            complete = d._compaction_complete(provider, model)
+        except Exception:  # noqa: BLE001 — classified as "no real model" below
+            complete = None
+        if complete is None:
+            # The honest-mock rule: a fabricated summary would be read back as
+            # an authoritative account of the conversation on every later turn.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "compaction needs a real model — connect a provider, or let "
+                    "the deterministic recap keep handling overflow"
+                ),
+            )
+
+        out = await _C.compact_messages(pairs, complete=complete, trigger="manual")
+        if not out.ok:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "nothing in the summary could be corroborated against the "
+                    "transcript"
+                    if out.stripped
+                    else "the model returned no summary"
+                ),
+            )
+        store.put(
+            key,
+            summary=out.summary,
+            covers=len(covered),
+            stripped=out.stripped,
+            trigger="manual",
+            provider=out.provider,
+            model=out.model,
+        )
+        window = _context_window(d, provider, model)
+        return {
+            "ok": True,
+            "cached": False,
+            "covers": len(covered),
+            "stripped": out.stripped,
+            "stripped_claims": out.stripped_claims,
+            "summary": out.summary,
+            "provider": out.provider,
+            "model": out.model,
+            "trigger": "manual",
+            "window": window,
+        }
+
     @app.post("/chat")
     async def chat_complete(body: ChatBody) -> dict[str, Any]:
         """One conversational turn: full history in -> one reply out.
@@ -1176,9 +1271,14 @@ def register(app: FastAPI, d) -> None:
         except Exception:  # noqa: BLE001 — the roster must never break a turn
             pass
 
-        # CONTEXT PROTECTION (v1.146.0) — the lock-step copy of chat_turn's.
-        # MIRROR NOTE: edit both or neither.
-        plan = _plan_context(d, body, system, provider_choice, model_choice)
+        # CONTEXT PROTECTION (v1.146.0) + COMPACTION (v1.153.0) — the lock-step
+        # copy of chat_turn's. MIRROR NOTE: edit both or neither.
+        system, _ctx_messages, context_report = await _apply_compaction(
+            d, body, system, provider_choice, model_choice
+        )
+        plan = _plan_context(
+            d, body, system, provider_choice, model_choice, messages=_ctx_messages
+        )
         if plan.recap:
             system += "\n\n" + plan.recap
         msgs: list[LLMMessage] = [
@@ -1586,9 +1686,10 @@ def register(app: FastAPI, d) -> None:
                 "escalate_agent": escalate_agent,
                 "workflow_draft": workflow_draft,
                 "usage": {"input_tokens": usage_in, "output_tokens": usage_out},
-                # v1.146.0 — same shape POST /chat returns, so the composer's
-                # headroom meter works on both lanes.
-                "context": plan.as_dict(),
+                # v1.146.0 + v1.153.0 — same shape POST /chat returns, so the
+                # composer's headroom meter and the compaction offer behave
+                # identically on both lanes.
+                "context": {**plan.as_dict(), **context_report},
             })
 
         return StreamingResponse(

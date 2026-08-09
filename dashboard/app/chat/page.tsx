@@ -275,9 +275,13 @@ const PHASE_LABEL: Record<string, string> = {
  */
 function ContextMeter({ usage }: { usage: ContextUsage | null }) {
   if (!usage || !usage.window) return null;
-  const pct = Math.min(100, Math.round((usage.used / usage.window) * 100));
+  // v1.153.0: prefer the daemon's RAW fill (what the conversation would need
+  // untrimmed) over `used`, which is <= the window by construction and so
+  // always reads comfortable at exactly the moment it stops being comfortable.
+  const raw = usage.percent ?? Math.round((usage.used / usage.window) * 100);
+  const pct = Math.min(100, raw);
   const trimmed = usage.dropped > 0 || usage.clipped;
-  if (pct < 50 && !trimmed) return null;
+  if (pct < 50 && !trimmed && !usage.compacted) return null;
   const tone = trimmed
     ? "text-rose-400/90"
     : pct >= 75
@@ -303,6 +307,63 @@ function ContextMeter({ usage }: { usage: ContextUsage | null }) {
       </span>
       {pct}%
     </span>
+  );
+}
+
+/**
+ * The compaction offer (v1.153.0).
+ *
+ * Appears in the SUGGEST band — the daemon has noticed the window filling up
+ * and has deliberately done nothing about it yet. The user gets first refusal;
+ * only past the auto threshold does the daemon compact on its own, because by
+ * then there is no headroom left in which to ask.
+ *
+ * Dismissal is per-band, not permanent: saying "not now" at 72% should not
+ * silence the offer at 88%.
+ */
+function CompactionOffer({
+  usage,
+  busy,
+  onCompact,
+  onDismiss,
+}: {
+  usage: ContextUsage | null;
+  busy: boolean;
+  onCompact: () => void;
+  onDismiss: () => void;
+}) {
+  // `disabled` means the user turned compaction off: the gauge still reports
+  // the true fill level, but there is no offer to make.
+  if (!usage || usage.level !== "suggest" || usage.disabled) return null;
+  const pct = usage.percent ?? 0;
+  const auto = usage.auto_at ?? 92;
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-amber-400/25 bg-amber-400/5 px-3 py-2 text-[12px] text-amber-200/90">
+      <span>
+        This conversation is using about <strong>{pct}%</strong> of this model&apos;s
+        context window. Summarizing the earlier part keeps the thread going —
+        the full transcript is kept either way.
+      </span>
+      <span className="ml-auto flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onCompact}
+          disabled={busy}
+          className="rounded-md border border-amber-400/40 px-2 py-1 font-medium text-amber-100 transition-colors hover:bg-amber-400/15 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {busy ? "Summarizing…" : "Compact now"}
+        </button>
+        <button
+          type="button"
+          onClick={onDismiss}
+          disabled={busy}
+          className="text-amber-200/60 transition-colors hover:text-amber-100"
+          title={`If you do nothing, this happens automatically around ${auto}%.`}
+        >
+          Not now
+        </button>
+      </span>
+    </div>
   );
 }
 
@@ -1380,6 +1441,12 @@ export default function ChatPage() {
   // the composer only renders it, so the meter can never disagree with what the
   // planner actually budgeted. Cleared with the conversation.
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
+  // Compaction (v1.153.0). `compactDismissedAt` remembers the fill level the
+  // user waved away, so "not now" at 72% stays quiet until the conversation
+  // grows meaningfully — and does NOT silence the offer again at 88%.
+  const [compactBusy, setCompactBusy] = useState(false);
+  const [compactNote, setCompactNote] = useState<string | null>(null);
+  const [compactDismissedAt, setCompactDismissedAt] = useState<number | null>(null);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [modelSub, setModelSub] = useState<string | null>(null);
   /**
@@ -2978,6 +3045,50 @@ export default function ChatPage() {
     dictation.processing,
     dictation.error,
   ]);
+
+  // ---------------------------------------------------------------- compaction
+
+  /** Compact this conversation because the USER chose to (the suggest band).
+   *
+   *  Nothing about the thread changes here: the daemon stores the verified
+   *  summary against a hash of exactly the messages it covers, and the NEXT
+   *  ordinary turn picks it up with no further model call. So there is nothing
+   *  to merge into local state — only the gauge to refresh.
+   */
+  async function compactNow() {
+    if (compactBusy) return;
+    setCompactBusy(true);
+    try {
+      const res = await post<{ covers: number; stripped: number }>("/chat/compact", {
+        messages: messages.map(({ role, content }) => ({ role, content })),
+        ...(splitChoice(choice).provider
+          ? { provider: splitChoice(choice).provider }
+          : {}),
+        ...(splitChoice(choice).model ? { model: splitChoice(choice).model } : {}),
+      });
+      setContextUsage((u) =>
+        u ? { ...u, level: "ok", compacted: true, covers: res.covers } : u,
+      );
+      // Report the STRIPPED count out loud when there is one. It is the honest
+      // half of a model-written summary: those are things the model asserted
+      // that the transcript and the execution ledger would not corroborate.
+      setCompactNote(
+        res.stripped > 0
+          ? `Summarized ${res.covers} earlier messages — ${res.stripped} unverifiable claim${
+              res.stripped === 1 ? "" : "s"
+            } dropped.`
+          : `Summarized ${res.covers} earlier messages.`,
+      );
+    } catch (e) {
+      setError(
+        e instanceof ApiError && e.message
+          ? e.message
+          : "Could not summarize this conversation.",
+      );
+    } finally {
+      setCompactBusy(false);
+    }
+  }
 
   // ------------------------------------------------------------------- sending
 
@@ -4924,6 +5035,11 @@ export default function ChatPage() {
                       <ErrorNote>{error}</ErrorNote>
                     </div>
                   )}
+                  {compactNote && (
+                    <div className="min-w-0 flex-1 text-[12px] text-zinc-400">
+                      {compactNote}
+                    </div>
+                  )}
                   {failedTurn && !busy && (
                     <button
                       type="button"
@@ -4935,6 +5051,22 @@ export default function ChatPage() {
                     </button>
                   )}
                 </div>
+              )}
+
+              {/* The compaction offer (v1.153.0). Sits directly above the
+                  composer because it is about the message the user is about to
+                  send. Suppressed once dismissed until the conversation grows
+                  another ~8 points — the daemon keeps reporting `suggest`
+                  every turn, and re-asking on each one would train the user to
+                  ignore it well before the automatic threshold arrives. */}
+              {(compactDismissedAt === null ||
+                (contextUsage?.percent ?? 0) >= compactDismissedAt + 8) && (
+                <CompactionOffer
+                  usage={contextUsage}
+                  busy={compactBusy}
+                  onCompact={compactNow}
+                  onDismiss={() => setCompactDismissedAt(contextUsage?.percent ?? 0)}
+                />
               )}
 
               {/* Chips queued for the next message — active skill + armed tools

@@ -62,6 +62,10 @@ class TranscriptPlan:
     window: int = 0
     #: The task itself had to be clipped: this model is too small for this job.
     clipped_task: bool = False
+    #: Tokens the UNTRIMMED transcript would need (system included) — the
+    #: number compaction thresholds key off. ``used_tokens`` cannot serve: it is
+    #: <= the window by construction and so saturates at 100%.
+    raw_tokens: int = 0
 
     @property
     def changed(self) -> bool:
@@ -151,6 +155,7 @@ def plan_agent_transcript(
 
     blocks = blocks_of(list(messages))
     total = sum(_block_tokens(b) for b in blocks)
+    plan.raw_tokens = system_tokens + total
     if total <= budget:
         plan.messages = list(messages)
         plan.used_tokens = system_tokens + total

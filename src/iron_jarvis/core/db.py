@@ -173,6 +173,7 @@ _LATE_MODEL_MODULES = (
     "..agents.remote",        # RemoteAgentRecord
     "..memory.proposals",     # MemoryProposalRecord — the steward's queue
     "..workflows.store",      # WorkflowPinRecord
+    "..context.store",        # CompactionRecord — the compaction cache
 )
 
 
