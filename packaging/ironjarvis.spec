@@ -122,6 +122,15 @@ for pkg in ("paramiko", "bcrypt", "nacl"):
 for pkg in ("pypdf", "docx", "openpyxl", "pptx", "fpdf", "PIL"):
     _collect(pkg)
 
+# pikepdf (v1.154.0) — TRUE in-place PDF redaction. A NATIVE wheel (it wraps
+# qpdf), so collect_all is required to pull the extension module and its
+# bundled shared libraries; the CLAUDE.md rule about native deps needing spec
+# entries is exactly what the terminals feature shipped dead for once. Its
+# absence is survivable — documents/redact falls back to the rebuild path and
+# says so — but a silently missing pikepdf would turn every packaged redaction
+# back into the reflowed output this release exists to replace.
+_collect("pikepdf")
+
 # --- markitdown: structure-preserving PDF/office -> Markdown -----------------
 # Lazily imported inside iron_jarvis.documents.pdf_markdown (only when a PDF is
 # ingested into memory), so the daemon still BOOTS without any of these. But

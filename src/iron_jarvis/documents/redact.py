@@ -1,4 +1,4 @@
-"""PII detection + format-preserving redaction (the ``redact_pii`` tool).
+r"""PII detection + format-preserving redaction (the ``redact_pii`` tool).
 
 Detection is DETERMINISTIC — regex patterns for structured identifiers (SSN,
 ITIN, EIN, email, phone, credit card with a Luhn check, context-gated bank
@@ -7,13 +7,22 @@ numbers and dates of birth, street addresses, IPs) plus caller-supplied
 employers). No LLM in the loop here: what gets redacted is exactly what the
 rules + terms say, auditable from the tool call itself.
 
+Detection runs PER LINE (v1.154.0). The separators in these patterns include
+``\s``, which matches a newline, so a value ending one line and a number
+starting the next were welded into a match: on a real tax return six of seven
+"phone" hits were that, and ownership percentages were being blacked out. A PII
+value never spans a line break, so scoping detection costs nothing.
+
 Redaction PRESERVES the document: docx/xlsx/pptx are rewritten in place
 (styles, tables, headers/footers intact — only matched characters change),
-plain-text formats are string-rewritten, and PDFs are REBUILT from extracted
-text (pypdf cannot edit page content; a cosmetic black box over live text
-would be a fake redaction, so the honest fallback is a clean rebuild whose
-PII is truly gone — the tool result says so). The source file is NEVER
-touched; output always lands in a new file.
+plain-text formats are string-rewritten, and PDFs are edited IN PLACE by
+``pdf_redact`` (pikepdf rewrites the content stream so the glyphs are really
+deleted, pdfplumber supplies the geometry for true black boxes, and the written
+file is re-read to PROVE the values are gone). A PDF whose fonts cannot be
+matched, or whose output cannot be verified, falls back to the old rebuild from
+extracted text — layout approximate, PII genuinely gone — and the note says
+which path produced the file. The source is NEVER touched; output always lands
+in a new file.
 
 Styles: ``black`` = same-length █ blocks (layout preserved), ``label`` =
 ``[SSN]``-style category tags, ``remove`` = deleted outright.
@@ -59,6 +68,14 @@ _PATTERNS: dict[str, re.Pattern[str]] = {
         r"Court|Ct|Circle|Cir|Way|Place|Pl|Terrace|Ter|Highway|Hwy|Parkway|"
         r"Pkwy|Trail|Trl|Loop)\.?\b"
         r"(?:\s*,?\s*(?:#|Apt\.?|Suite|Ste\.?|Unit)\s*\w+)?",
+        # CASE-INSENSITIVE (v1.154.0). Without this the street suffixes only
+        # matched mixed case, and TAX DOCUMENTS ARE UPPERCASE: "5059 ALAMANDA
+        # DR" on a real K-1 was not detected, so a client's home address stayed
+        # in a file the user believed was redacted. The trade is a few more
+        # candidates ("12 St" in prose), and it is the right way round — this
+        # tool is confirm-first, so a false positive costs one glance while a
+        # miss leaks a home address.
+        re.IGNORECASE,
     ),
     "ip": re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
 }
@@ -119,6 +136,19 @@ def _categorize_term(term: str) -> str:
     return "custom"
 
 
+def _iter_lines(text: str):
+    """Yield ``(offset, line)`` for each line, offsets into the ORIGINAL text.
+
+    Used to scope pattern detection to a single line — see the note in
+    :func:`find_pii_spans`. Keeps the caller's span coordinates absolute, so
+    nothing downstream has to know detection was chunked.
+    """
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        yield offset, line
+        offset += len(line)
+
+
 def find_pii_spans(
     text: str,
     *,
@@ -144,17 +174,29 @@ def find_pii_spans(
                 raw.append((m.start(), m.end(), cat))
     else:
         wanted = set(categories) if categories else set(_PATTERNS) | {"custom"}
-        for cat, rx in _PATTERNS.items():
-            if cat not in wanted:
-                continue
-            for m in rx.finditer(text):
-                start, end = (m.span(1) if m.groups() and m.group(1) else m.span())
-                value = text[start:end]
-                if cat == "credit_card" and not _luhn_ok(value):
+        # PER LINE, never across a line break (v1.154.0). The separators in
+        # these patterns include ``\s``, which matches a NEWLINE, so a value
+        # ending one line and a number starting the next were being welded into
+        # a match. On the tax return that prompted this, SIX of seven "phone"
+        # hits were that: '1096\n100.0000' and '416\n100.0000' are ownership
+        # percentages, and the redactor was blacking out real financial figures
+        # while the user had no way to see why. A PII value never spans a line
+        # break in a real document, so scoping detection to one line costs
+        # nothing and removes the whole class of false positive.
+        for line_start, line in _iter_lines(text):
+            for cat, rx in _PATTERNS.items():
+                if cat not in wanted:
                     continue
-                if cat == "ip" and any(int(p) > 255 for p in re.findall(r"\d+", value)):
-                    continue
-                raw.append((start, end, cat))
+                for m in rx.finditer(line):
+                    start, end = (m.span(1) if m.groups() and m.group(1) else m.span())
+                    value = line[start:end]
+                    if cat == "credit_card" and not _luhn_ok(value):
+                        continue
+                    if cat == "ip" and any(
+                        int(p) > 255 for p in re.findall(r"\d+", value)
+                    ):
+                        continue
+                    raw.append((line_start + start, line_start + end, cat))
         if "custom" in wanted:
             for term in extra_terms or []:
                 t = (term or "").strip()
@@ -417,20 +459,56 @@ def _redact_pptx(src: Path, dst: Path, spans_for) -> dict[str, int]:
 
 
 def _redact_pdf(src: Path, dst: Path, spans_for) -> tuple[dict[str, int], str]:
-    """pypdf cannot edit page content, and painting a black box OVER live text
-    is a fake redaction (the text stays extractable). Honest fallback: extract
-    the text, redact it, and REBUILD a clean PDF — the PII is truly gone, the
-    layout is approximate, and the note says exactly that."""
+    """Redact a PDF IN PLACE when we can prove it worked; rebuild when we can't.
+
+    The in-place path (``pdf_redact``, v1.154.0) keeps the real page — form
+    rules, page size, fonts — and deletes the PII glyphs from the content
+    stream, then RE-READS the written file to prove the values are gone. The
+    rebuild below is what shipped before and stays as the fallback, because
+    "truly gone, layout approximate" still beats "looks right, still leaks".
+
+    The order matters and is the whole point: try to keep the document, but
+    never keep it at the cost of the guarantee.
+    """
     from .readers import extract_text
     from .writers import write_document
 
     text = extract_text(src)
-    masked, counts = _apply_spans(text, spans_for(text))
+    spans = spans_for(text)
+    masked, counts = _apply_spans(text, spans)
+
+    # The exact strings the caller's rules matched — the same values the
+    # in-place path must remove and then fail to find.
+    values = sorted({text[s:e] for s, e, _cat, _repl in spans if e > s}, key=len, reverse=True)
+    if values:
+        try:
+            from .pdf_redact import RedactionUnverified, UnsupportedPdf, redact_pdf
+
+            replacements = {text[s:e]: repl for s, e, _cat, repl in spans if e > s}
+            redact_pdf(
+                src,
+                dst,
+                values=values,
+                replacement=lambda v: replacements.get(v, " " * len(v)),
+            )
+            return counts, (
+                "redacted in place — the original pages, form lines and fonts "
+                "are untouched, and the removed text is verified gone from the "
+                "output (not merely covered)."
+            )
+        except (UnsupportedPdf, RedactionUnverified, ImportError) as exc:
+            reason = str(exc)
+        except Exception as exc:  # noqa: BLE001 — any surprise falls back too
+            reason = f"{type(exc).__name__}: {exc}"
+    else:
+        reason = ""
+
     write_document(dst, masked, kind="pdf")
     note = (
-        "PDF rebuilt from extracted text (in-place PDF editing isn't available; "
-        "a cosmetic black box would leave the PII extractable). Content is truly "
-        "removed; layout is approximate."
+        "PDF REBUILT from extracted text — the content is truly removed but the "
+        "layout is approximate (page size, form lines and fonts are not "
+        "preserved)."
+        + (f" In-place redaction was not usable here: {reason}" if reason else "")
     )
     return counts, note
 

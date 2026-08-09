@@ -120,6 +120,21 @@ cd dashboard && pnpm dev           # dashboard
   `.status` off the nested endpoint's top level silently yields undefined —
   this exact bug shipped twice (chat spinner-forever, Spotlight notification
   never firing). When in doubt, curl the endpoint.
+- **PDF redaction edits the page; it never regenerates it** (v1.154.0).
+  `documents/pdf_redact.py`: pikepdf (MPL-2.0) rewrites the content stream so
+  the glyphs are genuinely deleted, pdfplumber supplies word geometry for true
+  black boxes, and the written file is RE-READ to prove the values are gone —
+  `RedactionUnverified` deletes the output rather than hand back a PDF that
+  looks redacted and still carries the SSN. Only then does the old rebuild
+  (`write_document` from extracted text) run, and the note says which path
+  produced the file. Do not "simplify" this by trusting the transform: matching
+  text in content streams is heuristic (values split across operators, odd
+  encodings), and the verification is the only thing making it safe. pikepdf is
+  a NATIVE wheel and has a `packaging/ironjarvis.spec` entry. Detection also
+  runs PER LINE and the address pattern is case-insensitive — both were live
+  defects: `\s` separators welded numbers across line breaks (6 of 7 "phone"
+  hits on a real return were ownership percentages), and uppercase tax-document
+  addresses were never matched at all.
 - **A tool that writes a file says WHERE, absolutely** (v1.153.2), and a reply
   that CLAIMS a file is checked against the ledger. Two halves of one live
   report ("it told me it saved the file; the path it gave has no file"):
