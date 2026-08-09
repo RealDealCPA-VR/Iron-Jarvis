@@ -96,7 +96,11 @@ def _walk_files(base: Path, *, limit: int, deadline_s: float = _WALK_DEADLINE_S)
             out.append(Path(root) / fn)
             if len(out) >= limit:
                 return out, f"stopped at {limit} files"
-        if time.monotonic() - started > deadline_s:
+        # `>=`, not `>`: on Windows time.monotonic() has ~15ms granularity, so a
+        # small tree can finish inside a single tick with elapsed == 0.0 exactly.
+        # With `>` a deadline of 0 then meant "no deadline", which is the
+        # opposite of what it says. At or past the deadline, stop.
+        if time.monotonic() - started >= deadline_s:
             truncated = f"stopped after {deadline_s:.0f}s"
             break
     return out, truncated

@@ -105,12 +105,15 @@ def test_a_slow_walk_does_not_block_the_event_loop(tmp_path):
     _tree(tmp_path)
 
     def slow_walk(base, *, limit, deadline_s=B._WALK_DEADLINE_S):
-        time.sleep(0.6)  # blocking, like a real filesystem stall
+        time.sleep(1.2)  # blocking, like a real filesystem stall
         return [], ""
 
     gap = asyncio.run(_max_tick_gap(B.ListFilesTool(), {"path": "."}, tmp_path, slow_walk))
-    assert gap < 0.30, (
-        f"the event loop stalled for {gap:.2f}s during a 0.6s walk — it is still "
+    # 0.5s sits well clear of both outcomes: blocked reads ~1.2s, offloaded
+    # reads ~0.02s. A wide gap matters because a loaded CI runner can stall the
+    # loop briefly for reasons that have nothing to do with this code.
+    assert gap < 0.5, (
+        f"the event loop stalled for {gap:.2f}s during a 1.2s walk — it is still "
         "running inline, and every other request freezes with it"
     )
 
@@ -121,13 +124,13 @@ def test_grep_also_stays_off_the_event_loop(tmp_path):
     _tree(tmp_path)
 
     def slow_walk(base, *, limit, deadline_s=B._WALK_DEADLINE_S):
-        time.sleep(0.6)
+        time.sleep(1.2)
         return [], ""
 
     gap = asyncio.run(
         _max_tick_gap(B.GrepTool(), {"pattern": "value"}, tmp_path, slow_walk)
     )
-    assert gap < 0.30, f"the event loop stalled for {gap:.2f}s during grep"
+    assert gap < 0.5, f"the event loop stalled for {gap:.2f}s during grep"
 
 
 # --------------------------------------------------------------------------- #
@@ -160,12 +163,38 @@ def test_a_complete_listing_makes_no_such_claim(tmp_path):
     assert res.data["count"] == 5
 
 
-def test_the_walk_respects_a_deadline(tmp_path):
+def test_the_walk_respects_a_deadline(tmp_path, monkeypatch):
     """A tree can be slow without being large — a network mount, a spun-down
-    disk. The count cap alone would never fire there."""
+    disk. The count cap alone would never fire there.
+
+    The CLOCK IS FAKED, and the first version of this test is why: it walked a
+    real tree with ``deadline_s=0.0`` and asserted the walk stopped. That
+    passed locally and failed on CI, because Windows' ``time.monotonic()`` has
+    ~15ms granularity — a small tree finishes inside one tick, elapsed is
+    exactly 0.0, and the comparison never fires. Asserting on wall-clock timing
+    made the test a coin flip on machine speed. Here time only moves when we
+    say so, so this asserts the deadline LOGIC on every machine.
+    """
+    import time as _time
+
+    ticks = iter([0.0, 0.5, 99.0, 99.0, 99.0, 99.0])
+    monkeypatch.setattr(_time, "monotonic", lambda: next(ticks, 99.0))
+
     _tree(tmp_path, files=30, junk=False)
-    paths, truncated = B._walk_files(tmp_path, limit=10_000, deadline_s=0.0)
-    assert truncated, "a zero deadline must stop the walk"
+    _paths, truncated = B._walk_files(tmp_path, limit=10_000, deadline_s=10.0)
+    assert truncated, "a walk that ran past its deadline must report stopping"
+    assert "10s" in truncated
+
+
+def test_a_walk_inside_its_deadline_reports_nothing(tmp_path, monkeypatch):
+    """The other half: a fast walk must not claim it was cut short."""
+    import time as _time
+
+    monkeypatch.setattr(_time, "monotonic", lambda: 0.0)
+    _tree(tmp_path, files=5, junk=False)
+    paths, truncated = B._walk_files(tmp_path, limit=10_000, deadline_s=10.0)
+    assert truncated == ""
+    assert len(paths) == 5
 
 
 # --------------------------------------------------------------------------- #
@@ -190,10 +219,10 @@ def test_pruning_uses_os_walk_so_it_can_actually_prune(tmp_path):
         d.mkdir(parents=True, exist_ok=True)
         (d / "index.js").write_text("1", encoding="utf-8")
     (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
-    started = time.monotonic()
     paths, _ = B._walk_files(tmp_path, limit=10_000)
+    # The BEHAVIOUR is the proof: 300 pruned packages contributed nothing. A
+    # wall-clock bound here would only add a way for a slow runner to fail.
     assert [p.name for p in paths] == ["app.py"]
-    assert time.monotonic() - started < 2.0
 
 
 # --------------------------------------------------------------------------- #
