@@ -73,6 +73,42 @@ PROTOCOL (owned by the parent — do not change unilaterally)
     the worker, because a single garbled line must not cost the user the
     namespace they have been building all session.
 
+WHY WRITES ARE CONFINED AND READS ARE NOT (`install_confinement`)
+    Every other file tool in this app routes through `core/fs_policy.py`; this
+    process routed through nothing, and the gap was measurable — `read_file`
+    refused the app's own Fernet key while a REPL cell printed it, and a cell
+    writing to an absolute path outside the workspace succeeded while
+    `created_paths` reported nothing, because that diff only ever scans INSIDE
+    the workspace. A file written somewhere nobody is told about is worse than
+    a file written somewhere untidy.
+
+    The policy is deliberately ASYMMETRIC, because it follows how the tool is
+    used. READS stay broad: the documents this app exists to work on live all
+    over the user's disk, and a REPL that cannot open them is a worse tool than
+    no REPL. WRITES pin to the roots the parent hands over (the session
+    workspace — which is the grounded project's folder when there is one — plus
+    a private scratch dir standing in for the system temp root, which would
+    otherwise expose every other program's temp files), so output lands where
+    the app is already watching for it and can hand it back with an absolute
+    path. Protected roots (the secrets/key dirs)
+    are refused in BOTH directions, matching `fs_policy.fs_read_ok` exactly.
+
+    Enforcement is a `sys.addaudithook`, installed before any user code runs.
+    Audit hooks cannot be removed once added, and the roots are read out of the
+    environment ONCE at install time into a closure, so unsetting the variable
+    afterwards changes nothing. Subprocess spawning and `ctypes` are refused
+    outright — not as new policy, but because each is a direct way around the
+    rule above (a child process inherits none of this, and FFI reaches the
+    filesystem without raising a single audit event); refusing them also closes
+    the one lifecycle hole this worker had, where a grandchild outlived the
+    kill that ended its parent cell.
+
+    BE HONEST ABOUT WHAT THIS IS. It is a guardrail against a careless or
+    confused model, not a sandbox: an audit hook lives inside the interpreter
+    it polices. Code written to defeat it has options. A boundary that holds
+    against hostile input needs OS-level isolation (a separate low-privilege
+    account, or a container), which is a different piece of work.
+
 `SystemExit` and `KeyboardInterrupt` raised BY USER CODE are caught and
 reported like any other failure, and the session keeps its namespace. `exit()`
 is how a model ends a script it pasted into a cell; letting it through killed
@@ -384,6 +420,281 @@ def _isolate_protocol_streams() -> tuple[IO[str] | None, IO[str] | None]:
     return source, sink
 
 
+# --------------------------------------------------------------------------- #
+# Filesystem confinement. See the module docstring for the reasoning.
+# --------------------------------------------------------------------------- #
+
+#: How the parent hands this child its policy. Environment rather than argv so
+#: the values never appear in a process listing, and rather than the protocol
+#: because the hook must be armed before the first request is read. The parent
+#: imports these names (`repl/session.py`) so the two sides cannot drift.
+ENV_WRITE_ROOTS = "IRONJARVIS_REPL_WRITE_ROOTS"
+ENV_READ_ROOTS = "IRONJARVIS_REPL_READ_ROOTS"
+ENV_DENY_ROOTS = "IRONJARVIS_REPL_DENY_ROOTS"
+
+#: Audit events that create, modify, move or delete something at a path. Each
+#: entry maps the event name to the indices of its path-bearing arguments —
+#: `os.rename` has two, and BOTH ends matter (renaming a workspace file onto
+#: `C:/Windows/...` is a write to `C:/Windows/...`).
+_WRITE_EVENTS: dict[str, tuple[int, ...]] = {
+    "os.mkdir": (0,),
+    "os.rmdir": (0,),
+    "os.remove": (0,),          # also raised by os.unlink
+    "os.rename": (0, 1),        # also raised by os.replace
+    "os.link": (0, 1),
+    "os.symlink": (0, 1),
+    "os.truncate": (0,),
+    "os.chmod": (0,),
+    "os.chown": (0,),
+    "os.utime": (0,),
+    "shutil.copyfile": (1,),
+    "shutil.copymode": (1,),
+    "shutil.copystat": (1,),
+    "shutil.move": (1,),
+    "shutil.rmtree": (0,),
+    "shutil.unpack_archive": (1,),
+}
+
+#: Read-ish events worth checking against the protected roots. `open` is
+#: handled separately because only it can be either direction.
+_READ_EVENTS: dict[str, tuple[int, ...]] = {
+    "os.listdir": (0,),
+    "os.scandir": (0,),
+}
+
+#: Spawning a process escapes every rule above, because the child inherits the
+#: OS's permissions and none of this hook.
+_SPAWN_EVENTS = frozenset({
+    "subprocess.Popen", "os.system", "os.exec", "os.posix_spawn", "os.spawn",
+})
+
+#: FFI reaches the filesystem through the C library, raising no audit event at
+#: all, so leaving it open would make the write rule advisory.
+_FFI_EVENTS = frozenset({"ctypes.dlopen", "ctypes.dlsym", "ctypes.dlsym/handle"})
+
+#: Key files refused BY NAME, independent of directory containment — the same
+#: belt-and-braces layer `core/fs_policy._PROTECTED_NAME_PREFIXES` carries, and
+#: for the same reason: it also covers the `.bak`/`.new`/`.tmp` siblings a
+#: rotation leaves behind, which no root list will name.
+_PROTECTED_NAMES = (".secrets.key", ".vault.key")
+
+#: `open` flags that mean "this may modify the file".
+_WRITE_FLAGS = (
+    os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
+    | getattr(os, "O_EXCL", 0)
+)
+
+_WRITE_BLOCKED = (
+    "iron-jarvis repl: BLOCKED — writing outside this session's folder.\n"
+    "  tried to write : {target}\n"
+    "  allowed folder : {roots}\n"
+    "Write it inside the allowed folder and the app reports the file back with "
+    "its absolute path, so the user gets a preview and a download. To work "
+    "somewhere else, that folder has to be selected as the project (or the "
+    "chat's workspace folder) first — the REPL cannot choose it for itself."
+)
+
+_PROTECTED_BLOCKED = (
+    "iron-jarvis repl: BLOCKED — {target} is inside a protected secrets/key "
+    "directory, which is never readable or writable by any tool in this app "
+    "(the same rule `read_file` enforces). There is no way around this from "
+    "here, and nothing in there is needed to answer a user's question."
+)
+
+_SPAWN_BLOCKED = (
+    "iron-jarvis repl: BLOCKED — starting a subprocess from the REPL. A child "
+    "process inherits none of this session's folder confinement and can outlive "
+    "the timeout that ends a cell. Use the `shell` tool instead: it is approved "
+    "separately, its output is captured, and it is covered by the undo journal."
+)
+
+_FFI_BLOCKED = (
+    "iron-jarvis repl: BLOCKED — loading a native library (ctypes/FFI). Native "
+    "calls reach the filesystem without passing this session's folder check, so "
+    "allowing them would make that check meaningless. Do this in pure Python, "
+    "or use the `shell` tool."
+)
+
+
+def _canonical(path: str) -> str:
+    """Absolute, symlink-resolved, case-normalised — comparable to a root.
+
+    Mirrors `core/fs_policy._canonical`: Windows device and extended-length
+    prefixes are stripped FIRST, because `\\\\?\\C:\\x` resolves with an anchor of
+    `\\\\?\\C:\\` and so compares unequal to a normal root while `open()` honours
+    it identically — a containment check that misses is a bypass. `realpath`
+    rather than `Path.resolve` because it is defined for paths that do not exist
+    yet, which is every file a cell is about to create, and because it resolves
+    Windows JUNCTIONS as well as symlinks.
+    """
+    if os.name == "nt":
+        text = path.replace("/", "\\")
+        low = text.lower()
+        if low.startswith("\\\\?\\unc\\"):
+            text = "\\\\" + text[len("\\\\?\\UNC\\"):]
+        elif low.startswith("\\\\?\\") or low.startswith("\\\\.\\"):
+            text = text[4:]
+        path = text
+    return os.path.normcase(os.path.realpath(os.path.abspath(path)))
+
+
+def _within(target: str, root: str) -> bool:
+    """Containment, on already-canonical strings."""
+    return target == root or target.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def _as_path(value: Any) -> str | None:
+    """Coerce an audit argument to a path string, or None when it is not one.
+
+    Audit events hand over whatever the caller passed: `str`, `bytes`, a
+    `PathLike`, or an integer file descriptor (`os.truncate(fd, n)`). A
+    descriptor names no path we can check, and guessing would be worse than
+    admitting it — see `_check_path`'s handling of None.
+    """
+    if value is None or isinstance(value, (int, bool)):
+        return None
+    if isinstance(value, bytes):
+        try:
+            return os.fsdecode(value)
+        except Exception:
+            return None
+    if isinstance(value, str):
+        return value
+    try:
+        return os.fspath(value)  # type: ignore[arg-type]
+    except Exception:
+        return None
+
+
+def _install_audit_hook(
+    write_roots: tuple[str, ...],
+    read_roots: tuple[str, ...],
+    deny_roots: tuple[str, ...],
+    shown: str = "",
+) -> None:
+    """Arm the hook. The roots are closed over, so the environment stops mattering.
+
+    ``shown`` is the writable roots AS THE PARENT SPELLED THEM, used only in
+    refusal messages. The comparison roots are ``normcase``-folded, which on
+    Windows lowercases the whole path — quoting that back at a model hands it a
+    path spelling that does not match anything else it has seen in the
+    conversation, in the one message whose entire job is to say where to write.
+    """
+    shown = shown or " ; ".join(write_roots)
+
+    def refuse(message: str) -> None:
+        raise PermissionError(message)
+
+    def check(target: str | None, *, writing: bool) -> None:
+        if target is None:
+            return
+        if os.path.basename(target.replace("\\", "/")).startswith(_PROTECTED_NAMES):
+            # Checked on the RAW name, before any resolution, so a path that
+            # `realpath` mangles (see `_canonical`) cannot slip past on a
+            # spelling trick — the key file is refused by what it is called.
+            refuse(_PROTECTED_BLOCKED.format(target=target))
+        try:
+            canonical = _canonical(target)
+        except Exception:
+            # An unresolvable path is refused when it would be a write and
+            # allowed when it would be a read: fail-closed on the side that
+            # changes the disk, fail-open on the side that only looks.
+            if writing:
+                refuse(_WRITE_BLOCKED.format(target=target, roots=shown))
+            return
+        for root in deny_roots:
+            if _within(canonical, root):
+                refuse(_PROTECTED_BLOCKED.format(target=target))
+        if writing:
+            if write_roots and not any(_within(canonical, r) for r in write_roots):
+                refuse(_WRITE_BLOCKED.format(target=target, roots=shown))
+        elif read_roots and not any(_within(canonical, r) for r in read_roots):
+            refuse(
+                f"iron-jarvis repl: BLOCKED — reading {target} is outside "
+                f"IRONJARVIS_FS_ALLOWLIST ({' ; '.join(read_roots)})."
+            )
+
+    def hook(event: str, args: tuple[Any, ...]) -> None:
+        # Ordered by frequency: `open` dominates, everything else is rare, and
+        # this function runs on EVERY audited operation in the interpreter.
+        if event == "open":
+            path = _as_path(args[0]) if args else None
+            mode = args[1] if len(args) > 1 else None
+            flags = args[2] if len(args) > 2 else None
+            writing = False
+            if isinstance(mode, str) and mode:
+                writing = any(c in mode for c in "wxa+")
+            elif isinstance(flags, int):
+                writing = bool(flags & _WRITE_FLAGS)
+            check(path, writing=writing)
+            return
+        if event in _WRITE_EVENTS:
+            for index in _WRITE_EVENTS[event]:
+                if index < len(args):
+                    check(_as_path(args[index]), writing=True)
+            return
+        if event in _READ_EVENTS:
+            for index in _READ_EVENTS[event]:
+                if index < len(args):
+                    check(_as_path(args[index]), writing=False)
+            return
+        if event in _SPAWN_EVENTS:
+            refuse(_SPAWN_BLOCKED)
+        elif event in _FFI_EVENTS:
+            refuse(_FFI_BLOCKED)
+
+    sys.addaudithook(hook)
+
+
+def _roots_from_env(name: str) -> tuple[str, ...]:
+    raw = os.environ.get(name, "")
+    roots: list[str] = []
+    for part in raw.split(os.pathsep):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            roots.append(_canonical(part))
+        except Exception:  # pragma: no cover - unresolvable root, skip it
+            continue
+    return tuple(dict.fromkeys(roots))
+
+
+def install_confinement() -> bool:
+    """Install the filesystem guardrail from the environment. Returns whether.
+
+    A worker started with no roots configured (a bare `python -m
+    iron_jarvis.repl.worker`, or a test) is left completely unrestricted rather
+    than being given some invented default — a guardrail that guesses its own
+    boundary is one nobody can reason about.
+    """
+    write_roots = _roots_from_env(ENV_WRITE_ROOTS)
+    read_roots = _roots_from_env(ENV_READ_ROOTS)
+    deny_roots = _roots_from_env(ENV_DENY_ROOTS)
+    if not (write_roots or read_roots or deny_roots):
+        return False
+    # Import ctypes BEFORE arming the hook. On Windows `ctypes/__init__.py`
+    # evaluates `windll.kernel32.GetLastError` at import time, so a blanket FFI
+    # refusal does not merely stop a cell loading a DLL — it makes `import
+    # ctypes` itself raise, and with it every library that imports ctypes
+    # anywhere in its own import graph. Loading it here means user code finds it
+    # already in `sys.modules`, while loading any FURTHER native library is
+    # still refused. Honest residual: `windll.kernel32` is cached by that import
+    # and stays reachable, so this raises the bar rather than closing the door —
+    # which is all an in-process hook can ever claim (see the module docstring).
+    try:
+        import ctypes  # noqa: F401  (side effect is the point)
+    except Exception:  # pragma: no cover - no ctypes in this build
+        pass
+    shown = " ; ".join(
+        part.strip()
+        for part in os.environ.get(ENV_WRITE_ROOTS, "").split(os.pathsep)
+        if part.strip()
+    )
+    _install_audit_hook(write_roots, read_roots, deny_roots, shown)
+    return True
+
+
 def _safe_repr(value: Any) -> str:
     """`repr(value)`, but a broken `__repr__` degrades instead of exploding.
 
@@ -657,6 +968,10 @@ def main(argv: list[str] | None = None) -> int:
     # path (no real descriptors) `serve` keeps using sys.stdin/sys.stdout, which
     # is the old, exposed behaviour — running is better than refusing to start.
     source, sink = _isolate_protocol_streams()
+    # AFTER isolation (which legitimately opens devnull and moves descriptors)
+    # and BEFORE `serve` reads its first request, so no cell can ever run in an
+    # unguarded interpreter. Once added, an audit hook cannot be removed.
+    install_confinement()
     return serve(stdin=source, stdout=sink)
 
 

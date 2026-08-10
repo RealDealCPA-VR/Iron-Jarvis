@@ -39,8 +39,10 @@ import json
 import math
 import os
 import queue
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -49,8 +51,11 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from . import worker
+
 __all__ = [
     "DEFAULT_TIMEOUT_S",
+    "confinement_env",
     "IDLE_TTL_S",
     "MAX_SESSIONS",
     "ReplRegistry",
@@ -92,6 +97,41 @@ _RESTART_NOTE = (
     "ran in a FRESH namespace: variables, imports and open files from earlier runs "
     "are gone."
 )
+
+
+def confinement_env(workspace: Path, scratch: Path | None = None) -> dict[str, str]:
+    """The child's filesystem policy, as environment variables.
+
+    Computed HERE rather than in the worker because the policy itself lives in
+    ``core/fs_policy`` and the worker is deliberately stdlib-only (it is spawned
+    from a frozen binary and must not drag the app's import graph in). The
+    parent reads the policy; the child only enforces it.
+
+    * writes → the session workspace (the grounded project's folder whenever
+      chat resolved one), plus a PRIVATE scratch dir. Libraries write through
+      ``tempfile`` constantly and a REPL that cannot would fail in ways that
+      read as library bugs — but allowing the whole system temp root would hand
+      over every other program's temp files too, so the child gets its own
+      directory and ``TMPDIR``/``TEMP``/``TMP`` are pointed at it.
+    * reads  → unrestricted unless ``IRONJARVIS_FS_ALLOWLIST`` is set, matching
+      ``fs_path_allowed`` exactly. The user's documents live all over the disk.
+    * denied → the protected secrets/key roots, both directions, matching
+      ``fs_read_ok``. Measured before this existed: ``read_file`` refused the
+      Fernet key and a REPL cell printed it.
+    """
+    from ..core.fs_policy import allowlist_roots, protected_roots
+
+    writable = [str(Path(workspace).resolve())]
+    env: dict[str, str] = {}
+    if scratch is not None:
+        writable.append(str(scratch))
+        # Redirect the stdlib's own idea of temp, or `tempfile` would keep
+        # handing out paths in the system root that confinement then refuses.
+        env["TMPDIR"] = env["TEMP"] = env["TMP"] = str(scratch)
+    env[worker.ENV_WRITE_ROOTS] = os.pathsep.join(writable)
+    env[worker.ENV_DENY_ROOTS] = os.pathsep.join(str(p) for p in protected_roots())
+    env[worker.ENV_READ_ROOTS] = os.pathsep.join(str(p) for p in allowlist_roots())
+    return {k: v for k, v in env.items() if v}
 
 
 def worker_command() -> list[str]:
@@ -153,6 +193,9 @@ class ReplSession:
         self._out: queue.Queue[str | None] | None = None
         self._stderr_tail: deque[str] = deque(maxlen=_STDERR_TAIL_LINES)
         self._spawned_once = False
+        #: Private temp dir for the current child, created by :meth:`_spawn` and
+        #: removed by :meth:`_kill` — see :func:`confinement_env`.
+        self._scratch: Path | None = None
         # Set when a child dies or is killed; consumed by the next execute()
         # to stamp `restarted` on the payload it returns.
         self._state_lost = False
@@ -209,6 +252,14 @@ class ReplSession:
         env = dict(os.environ)
         env["PYTHONUNBUFFERED"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
+        # NOT for correctness — `importlib` swallows a refused `.pyc` write and
+        # imports fine either way (mutation-checked, so the comment cannot drift
+        # back into claiming otherwise). It is for tidiness, which is the whole
+        # point of confinement: the workspace IS writable, so without this every
+        # import from the user's project folder drops a `__pycache__` into it.
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        self._scratch = Path(tempfile.mkdtemp(prefix="ij-repl-"))
+        env.update(confinement_env(self.workspace, self._scratch))
         kwargs: dict[str, Any] = {}
         if sys.platform == "win32":
             # Never flash a console window out of the packaged desktop app.
@@ -274,6 +325,10 @@ class ReplSession:
         """Terminate, then kill, then reap. BLOCKING — worker thread only."""
         proc, self._proc, self._out = self._proc, None, None
         if proc is None:
+            # No child, but `_spawn` may still have created a scratch dir before
+            # `Popen` raised — cleaning up only on the happy path leaks a
+            # directory per failed spawn.
+            self._discard_scratch()
             return
         try:
             if proc.poll() is None:
@@ -294,6 +349,16 @@ class ReplSession:
                     stream.close()
             except Exception:  # pragma: no cover
                 pass
+        # The scratch dir belongs to the child that just died. Removed AFTER the
+        # kill, never before: deleting it out from under a live interpreter is
+        # how a cell fails with a bewildering "temp file vanished".
+        self._discard_scratch()
+
+    def _discard_scratch(self) -> None:
+        """Remove this child's private temp dir, if it has one. Never raises."""
+        scratch, self._scratch = self._scratch, None
+        if scratch is not None:
+            shutil.rmtree(scratch, ignore_errors=True)
 
     def _stderr_note(self) -> str:
         tail = [line for line in self._stderr_tail if line.strip()]
@@ -499,8 +564,37 @@ class ReplSession:
         self._state_lost = self._spawned_once
 
 
+def namespace_key(session_id: str, workspace: str | os.PathLike[str]) -> str:
+    """The registry key: one namespace per (session, FOLDER) pair.
+
+    Keying on ``session_id`` alone was wrong in a way confinement turned from
+    untidy into blocking. Chat runs every turn under the literal session id
+    ``"chat"`` (``daemon/chat_turn.py``), while its tool workspace follows the
+    grounded project — so the FIRST chat turn fixed the namespace's folder and
+    every later one reused it. Before v1.160.0 that meant a cell's relative
+    writes silently landed in the previous project's folder; now the workspace
+    is also the write root, so they would be refused outright, naming a folder
+    the user had already navigated away from.
+
+    Including the folder also gives the property worth having on its own: work
+    in a project comes back to the same namespace, and two projects never see
+    each other's variables. The idle sweeper and ``MAX_SESSIONS`` still bound
+    the total, so the cost of the extra keys is reclaimed automatically.
+    """
+    try:
+        folder = os.path.normcase(os.path.realpath(os.fspath(workspace)))
+    except Exception:  # pragma: no cover - unresolvable, key on the raw text
+        folder = os.path.normcase(str(workspace))
+    return f"{session_id}@{folder}"
+
+
 class ReplRegistry:
-    """``session_id -> ReplSession``, with a session cap and an idle sweeper."""
+    """``(session, folder) -> ReplSession``, with a cap and an idle sweeper.
+
+    The public surface still speaks in SESSION IDS — callers outside this
+    module have no reason to know about the composite key — so ``dispose`` and
+    ``get`` take a session id and cover every folder that session has used.
+    """
 
     def __init__(
         self,
@@ -519,14 +613,23 @@ class ReplRegistry:
         return len(self._sessions)
 
     def __contains__(self, session_id: object) -> bool:
-        return session_id in self._sessions
+        return any(s.session_id == session_id for s in self._sessions.values())
 
     @property
     def session_ids(self) -> list[str]:
-        return list(self._sessions)
+        return list(dict.fromkeys(s.session_id for s in self._sessions.values()))
 
     def get(self, session_id: str) -> ReplSession | None:
-        return self._sessions.get(session_id)
+        """The most recently used namespace for *session_id*, across folders.
+
+        Best effort by design: a session that has worked in two projects has
+        two namespaces, and there is no single right answer. Callers that need
+        a specific one go through :meth:`execute`, which knows the folder.
+        """
+        candidates = [s for s in self._sessions.values() if s.session_id == session_id]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda s: s.last_used)
 
     def describe(self) -> list[dict[str, Any]]:
         now = time.monotonic()
@@ -546,8 +649,9 @@ class ReplRegistry:
         self, session_id: str, workspace: str | os.PathLike[str]
     ) -> tuple[ReplSession | None, str]:
         """Return (session, error). Exactly one of the two is meaningful."""
+        key = namespace_key(session_id, workspace)
         async with self._lock:
-            existing = self._sessions.get(session_id)
+            existing = self._sessions.get(key)
             if existing is not None:
                 return existing, ""
             if len(self._sessions) >= self.max_sessions:
@@ -561,7 +665,7 @@ class ReplRegistry:
                     f"machine ends up unusable."
                 )
             session = ReplSession(session_id, workspace, command=self._command)
-            self._sessions[session_id] = session
+            self._sessions[key] = session
             return session, ""
 
     async def execute(
@@ -591,15 +695,21 @@ class ReplRegistry:
     async def _sweep_locked(self) -> list[str]:
         now = time.monotonic()
         stale = [
-            sid
-            for sid, s in self._sessions.items()
+            key
+            for key, s in self._sessions.items()
             if s.idle_for(now) > self.idle_ttl_s
         ]
-        for sid in stale:
-            session = self._sessions.pop(sid, None)
+        # Reported as SESSION IDS, never as the internal composite key: every
+        # other method on this class speaks session ids, and a caller that
+        # logged `chat@c:\users\...` would be leaking a folder path into a
+        # place that has only ever carried an id.
+        disposed: list[str] = []
+        for key in stale:
+            session = self._sessions.pop(key, None)
             if session is not None:
+                disposed.append(session.session_id)
                 await session.dispose()
-        return stale
+        return list(dict.fromkeys(disposed))
 
     async def sweep(self) -> list[str]:
         """Dispose sessions idle beyond the TTL. Returns the ids disposed."""
@@ -607,13 +717,21 @@ class ReplRegistry:
             return await self._sweep_locked()
 
     async def dispose(self, session_id: str) -> bool:
-        """Kill one session's child. Returns whether it existed."""
+        """Kill EVERY namespace this session owns. Returns whether any existed.
+
+        Every folder, not just the current one: a chat that moved between two
+        projects holds a child for each, and leaving one behind at session end
+        is an interpreter nobody can reach — the exact leak the ``_closed``
+        guard exists to prevent, arriving by a different road.
+        """
         async with self._lock:
-            session = self._sessions.pop(session_id, None)
-        if session is None:
-            return False
-        await session.dispose()
-        return True
+            keys = [
+                k for k, s in self._sessions.items() if s.session_id == session_id
+            ]
+            sessions = [self._sessions.pop(k) for k in keys]
+        for session in sessions:
+            await session.dispose()
+        return bool(sessions)
 
     async def dispose_all(self) -> None:
         """Kill every child. Safe to call at daemon shutdown."""

@@ -109,9 +109,11 @@ class ReplTool(Tool):
         "un-flood your context.\n"
         "Values other tools saved with `_store_as` are ALREADY bound in this "
         "namespace under that name — use them, do not re-fetch.\n"
-        "Files you write are reported back with absolute paths, and a raise "
-        "comes back as the real traceback. Prefer this over run_code whenever "
-        "the result is worth keeping."
+        "Write files into your WORKING DIRECTORY (the user's project when one "
+        "is selected); writes outside it are refused and the refusal names the "
+        "folder. Files you write are reported back with absolute paths, and a "
+        "raise comes back as the real traceback. Prefer this over run_code "
+        "when the result is worth keeping."
     )
     input_schema = {
         "type": "object",

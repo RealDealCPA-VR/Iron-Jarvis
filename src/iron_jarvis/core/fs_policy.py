@@ -99,6 +99,30 @@ def register_protected_root(path: str | Path) -> None:
         pass
 
 
+def protected_roots() -> list[Path]:
+    """The registered protected roots, canonical.
+
+    Exposed because the REPL worker enforces the same rule from INSIDE a child
+    process (it cannot import this module — it is deliberately stdlib-only), so
+    the parent has to hand it the roots. Policy stays here; only enforcement
+    moves. Returning a copy keeps the registry itself append-only via
+    :func:`register_protected_root`.
+    """
+    return sorted(_PROTECTED_ROOTS)
+
+
+def allowlist_roots() -> list[Path]:
+    """Canonical ``IRONJARVIS_FS_ALLOWLIST`` roots; empty means unrestricted."""
+    allow = os.environ.get("IRONJARVIS_FS_ALLOWLIST", "").strip()
+    roots: list[Path] = []
+    for raw in (r.strip() for r in allow.split(",") if r.strip()):
+        try:
+            roots.append(_canonical(raw))
+        except Exception:  # pragma: no cover - defensive
+            continue
+    return roots
+
+
 def is_protected_path(path: str | Path) -> bool:
     """True if *path* resolves inside any registered protected root (or is a key
     file by name), robust to Windows ``\\\\?\\`` device-prefix and case tricks."""

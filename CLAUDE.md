@@ -112,6 +112,29 @@ cd dashboard && pnpm dev           # dashboard
   namespace persists for a whole session, so consent to one call is not consent
   to what accumulates. `_store_as` is advertised only on `VERBOSE_TOOLS` —
   putting it on all ~60 tools would spend more context than the feature saves.
+- **The REPL's writes are CONFINED; its reads are not** (v1.160.0). Every file
+  tool routes through `core/fs_policy`; the `repl` child routed through nothing,
+  and it was measurable — `read_file` refused the app's own Fernet key while a
+  cell printed it, and a cell writing to an absolute path outside the workspace
+  succeeded while `created_paths` said `[]`, because that diff only ever scans
+  INSIDE the workspace. An invisible write is worse than an untidy one.
+  `repl/worker.install_confinement` arms a `sys.addaudithook` before any cell
+  runs; `repl/session.confinement_env` computes the policy from `fs_policy`
+  (the worker is stdlib-only and cannot import it). READS STAY BROAD ON
+  PURPOSE — the user's tax documents live all over the disk and a REPL that
+  cannot open them is a worse tool — so only protected roots and an explicit
+  `IRONJARVIS_FS_ALLOWLIST` restrict reading. WRITES pin to the workspace (the
+  grounded project's folder when chat resolved one) plus a PRIVATE scratch dir:
+  the whole system temp root would expose every other program's temp files, and
+  with no redirect at all `tempfile` probes, fails, and silently falls back to
+  `os.getcwd()` — filling the user's project with `tmpXXXX` files. Subprocess
+  spawning and NEW `ctypes` loads are refused because each walks around the
+  rule; `ctypes` is imported BEFORE the hook is armed, since Windows evaluates
+  `windll.kernel32` at import time and a blanket refusal breaks `import ctypes`
+  itself. `PYTHONDONTWRITEBYTECODE` is set for tidiness, NOT correctness —
+  `importlib` swallows a refused `.pyc` write. Be honest in any doc you write
+  about this: an audit hook inside the interpreter it polices is a guardrail
+  against a careless model, NOT a sandbox against hostile code.
 - **NOTHING BLOCKING RUNS ON THE EVENT LOOP** (v1.153.1). The daemon is ONE
   asyncio loop, so a synchronous filesystem walk, a big file read, or any
   CPU-bound work inside a tool freezes every request in the app — and it does
@@ -212,7 +235,14 @@ cd dashboard && pnpm dev           # dashboard
   so a model is never told its variables survived when they did not.
   `tools/repl_tool.py` is the tool. Do not add a `get()`-first path: the
   registry creates a namespace on demand through `execute`, and a
-  `get()`-first caller fails on the FIRST call of every session.
+  `get()`-first caller fails on the FIRST call of every session. Namespaces
+  are keyed by `namespace_key(session_id, workspace)` — one per (session,
+  FOLDER) pair, because chat runs every turn as session id `"chat"` while its
+  workspace follows the grounded project, so keying on the id alone pinned the
+  write root to whichever project opened first. The registry's PUBLIC surface
+  (`get`/`dispose`/`sweep`/`session_ids`/`in`) still speaks session ids and
+  covers every folder that session used; only the internal dict key is
+  composite.
 - `context/` — `budget.plan_history`: the per-turn CHAT history planner (pure,
   offline, deterministic recap), consumed by both chat lanes.
   `agent_window.plan_agent_transcript`: the same job for an agent RUN, and a
