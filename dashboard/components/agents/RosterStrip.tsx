@@ -7,6 +7,7 @@
 // "87%"). Older daemons don't serve the endpoint, so the whole section simply
 // doesn't exist rather than erroring over a feature the daemon predates.
 
+import { useState } from "react";
 import { MessageCircle, WifiOff } from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { Card } from "@/components/ui";
@@ -90,6 +91,7 @@ export function RosterStrip({
    *  prop (older daemons without thread routes) and no button renders. */
   onTalk?: (kind: AgentSource, name: string) => void;
 } = {}) {
+  const [choice, setChoice] = useState("");
   const { data, error } = useApi<{ roster?: RosterEntry[] }>("/agents/roster");
   const entries = (data?.roster ?? []).filter(
     (e): e is RosterEntry => Boolean(e) && typeof e.name === "string",
@@ -98,85 +100,108 @@ export function RosterStrip({
 
   // The Reveal lives HERE (not at the call site) so a hidden roster leaves no
   // empty wrapper behind to double the page's space-y gap.
+  //
+  // v1.158.0: a PICKER, not a list. One row per agent meant the section grew
+  // with the roster and pushed the actual work down the page; the roster is
+  // reference material you consult, not something you read top to bottom. The
+  // selected agent gets the full detail the rows used to carry — nothing was
+  // dropped, it just stopped all being on screen at once.
+  const selected =
+    entries.find((e) => e.name === choice) ?? entries[0];
+  const offline = selected.kind === "remote" && !selected.healthy;
+  const shown = bareName(selected.name);
+  const kindLabel = SOURCE_LABEL[selected.kind] ?? (selected.kind || "agent");
+  const kindPill = KIND_PILL[selected.kind] ?? KIND_PILL.remote;
+
   return (
     <Reveal>
       <Card pad={false} className="overflow-hidden">
-      <div className="flex items-center justify-between border-b hairline px-4 py-2.5">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-          Roster · {entries.length}
-        </span>
-        <span className="text-[11px] text-zinc-600">
-          who can take delegated work
-        </span>
-      </div>
-      <ul className="divide-y divide-white/[0.04]">
-        {entries.map((e) => {
-          const offline = e.kind === "remote" && !e.healthy;
-          const shown = bareName(e.name);
-          // Same words the rest of the page uses (identity.tsx); a row with
-          // a missing/unknown kind still gets a readable pill, never an
-          // empty chip.
-          const kindLabel = SOURCE_LABEL[e.kind] ?? (e.kind || "agent");
-          const kindPill = KIND_PILL[e.kind] ?? KIND_PILL.remote;
-          return (
-            <li
-              key={e.name}
-              className={`flex items-center gap-2.5 px-4 py-2 ${
-                offline ? "opacity-55" : ""
-              }`}
+        <div className="flex items-center justify-between border-b hairline px-4 py-2.5">
+          <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+            Roster · {entries.length}
+          </span>
+          <span className="text-[11px] text-zinc-600">
+            who can take delegated work
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 px-4 pt-3">
+          <label className="sr-only" htmlFor="roster-pick">
+            Choose an agent
+          </label>
+          <select
+            id="roster-pick"
+            value={selected.name}
+            onChange={(ev) => setChoice(ev.target.value)}
+            className="field min-w-0 flex-1 py-1.5 text-[12.5px]"
+          >
+            {entries.map((e) => (
+              // Provenance and health ride IN the option text: a picker whose
+              // closed state hides whether an agent is a remote — or offline —
+              // is the wrong trade for a tidier page.
+              <option key={e.name} value={e.name}>
+                {bareName(e.name)} — {SOURCE_LABEL[e.kind] ?? e.kind}
+                {e.kind === "remote" && !e.healthy ? " (offline)" : ""}
+                {!e.delegable ? " (chat-only)" : ""}
+              </option>
+            ))}
+          </select>
+          {onTalk && selected.delegable && selected.healthy && (
+            <button
+              type="button"
+              onClick={() => onTalk(selected.kind, shown)}
+              title={`Talk with ${shown} at the round-table`}
+              className="btn-ghost shrink-0 px-2.5 py-1.5 text-[11.5px]"
             >
-              <AgentAvatar
-                agentKey={participantKey(e.kind, shown)}
-                name={shown}
-                size="sm"
-              />
-              <span className="min-w-0 flex-1">
-                <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                  <span
-                    className="truncate text-[13px] font-medium text-zinc-100"
-                    title={e.name}
-                  >
-                    {shown}
-                  </span>
-                  <span
-                    className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${kindPill}`}
-                  >
-                    {kindLabel}
-                  </span>
-                  {offline && (
-                    <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-rose-500/25 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-medium text-rose-300">
-                      <WifiOff size={10} /> offline
-                    </span>
-                  )}
-                  {!e.delegable && (
-                    <span className="shrink-0 text-[10px] text-zinc-600">
-                      (chat-only for now)
-                    </span>
-                  )}
+              <MessageCircle size={12} /> Talk
+            </button>
+          )}
+        </div>
+
+        <div
+          className={`flex items-start gap-2.5 px-4 pb-3.5 pt-2.5 ${
+            offline ? "opacity-55" : ""
+          }`}
+        >
+          <AgentAvatar
+            agentKey={participantKey(selected.kind, shown)}
+            name={shown}
+            size="sm"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span
+                className="truncate text-[13px] font-medium text-zinc-100"
+                title={selected.name}
+              >
+                {shown}
+              </span>
+              <span
+                className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${kindPill}`}
+              >
+                {kindLabel}
+              </span>
+              {offline && (
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-rose-500/25 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-medium text-rose-300">
+                  <WifiOff size={10} /> offline
                 </span>
-                {e.description && (
-                  <span className="mt-0.5 block truncate text-[11px] text-zinc-500">
-                    {e.description}
-                  </span>
-                )}
-              </span>
-              <span className="shrink-0 text-[11px] tabular-nums text-zinc-500">
-                {statsText(e)}
-              </span>
-              {onTalk && e.delegable && e.healthy && (
-                <button
-                  type="button"
-                  onClick={() => onTalk(e.kind, shown)}
-                  title={`Talk with ${shown} at the round-table`}
-                  className="btn-ghost shrink-0 px-2 py-1 text-[11px]"
-                >
-                  <MessageCircle size={12} /> Talk
-                </button>
               )}
-            </li>
-          );
-        })}
-        </ul>
+              {!selected.delegable && (
+                <span className="shrink-0 text-[10px] text-zinc-600">
+                  (chat-only for now)
+                </span>
+              )}
+              <span className="ml-auto shrink-0 text-[11px] tabular-nums text-zinc-500">
+                {statsText(selected)}
+              </span>
+            </div>
+            {selected.description && (
+              <p className="mt-1 text-[11.5px] leading-relaxed text-zinc-500">
+                {selected.description}
+              </p>
+            )}
+          </div>
+        </div>
       </Card>
     </Reveal>
   );

@@ -178,3 +178,29 @@ def test_the_admin_fold_contains_no_reveal_wrappers():
     assert fold.count("<PanelSection") == 7, (
         f"expected all seven sections in the fold, found {fold.count('<PanelSection')}"
     )
+
+
+def test_the_roster_is_a_picker_not_a_list():
+    """v1.158.0: the roster grew with the number of agents — 10 agents meant a
+    604px strip pushing the actual work down the page. It is now a select plus
+    the selected agent's detail (153px on the same roster, measured in a real
+    browser).
+
+    Provenance and health must stay visible in the CLOSED state: a picker that
+    hides whether an agent is a remote, or offline, is the wrong trade for a
+    tidier page.
+    """
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[1]
+        / "dashboard" / "components" / "agents" / "RosterStrip.tsx"
+    ).read_text(encoding="utf-8")
+    assert 'id="roster-pick"' in src, "the roster is not a picker"
+    assert "<option" in src
+    assert "(offline)" in src, "offline health is hidden when the picker is closed"
+    assert "chat-only" in src
+    assert "<li" not in src, "the per-agent list should be gone"
+    # The detail the rows used to carry must still be reachable.
+    for kept in ("statsText(selected)", "AgentAvatar", "selected.description"):
+        assert kept in src, f"the picker dropped {kept}"
