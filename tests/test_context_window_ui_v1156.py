@@ -148,3 +148,33 @@ def test_the_hero_and_tiles_stay_above_it():
     health = src.index("<HealthCard")
     admin = src.index('title="Systems & admin"')
     assert grid < health < admin, "the admin fold must sit below tiles and stats"
+
+
+def test_the_admin_fold_contains_no_reveal_wrappers():
+    """v1.156.1: the fold shipped BLANK and neither the build nor 406 unit
+    tests caught it.
+
+    `Reveal` is driven by VARIANT LABEL — PageShell sets initial="hidden"
+    animate="show" and framer-motion propagates those names down the tree. The
+    collapsible's body sets its OWN object-based initial/animate, which stops
+    label propagation, so every nested Reveal stayed on `hidden`: present in the
+    DOM at opacity 0. The dropdown opened onto nothing.
+
+    Proven in a real browser both ways — with a Reveal restored the section
+    computes to opacity 0, without it 1 — because a passing build proves only
+    that the JSX compiles, not that anything is visible.
+    """
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[1] / "dashboard" / "app" / "page.tsx"
+    ).read_text(encoding="utf-8")
+    start = src.index('<div className="space-y-5">')
+    end = src.index("</CollapsibleCard>", start)
+    fold = src[start:end]
+    assert "<Reveal>" not in fold, (
+        "a Reveal inside the collapsible body renders its children invisible"
+    )
+    assert fold.count("<PanelSection") == 7, (
+        f"expected all seven sections in the fold, found {fold.count('<PanelSection')}"
+    )

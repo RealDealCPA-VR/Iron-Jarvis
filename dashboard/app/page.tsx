@@ -739,7 +739,6 @@ export default function OverviewPage() {
         >
           <div className="space-y-5">
       {/* First-win: one click → a real result. */}
-      <Reveal>
         <PanelSection
           title="Try it now"
           icon={<Rocket size={15} />}
@@ -788,10 +787,8 @@ export default function OverviewPage() {
             })}
           </div>
         </PanelSection>
-      </Reveal>
 
       {/* Ambient operator — the reflexes that act on their own + recent fires. */}
-      <Reveal>
         <PanelSection
           title="Ambient operator"
           icon={<Zap size={15} />}
@@ -847,10 +844,8 @@ export default function OverviewPage() {
             </ul>
           )}
         </PanelSection>
-      </Reveal>
 
       {/* While you were away — live activity + recently finished sessions. */}
-      <Reveal>
         <PanelSection
           title="While you were away"
           icon={<History size={15} />}
@@ -942,14 +937,12 @@ export default function OverviewPage() {
             <Empty icon={<History size={22} />}>Nothing yet — try a task above.</Empty>
           ) : null}
         </PanelSection>
-      </Reveal>
 
       {/* Saved tasks — one-click runs from saved templates (omitted when none).
           Renamed from "Your apps" in v1.151.1: the tile grid above is now the
           apps, and two things called that on one page is a coin toss. */}
       {templateList.length > 0 && (
-        <Reveal>
-          <PanelSection
+            <PanelSection
             title="Saved tasks"
             icon={<LayoutGrid size={15} />}
             storageKey="ij_ov_apps"
@@ -994,10 +987,8 @@ export default function OverviewPage() {
               })}
             </div>
           </PanelSection>
-        </Reveal>
-      )}
+        )}
 
-      <Reveal>
         <div className="grid items-start gap-4 lg:grid-cols-2">
           {/* Connections — compact summary + manage link. */}
           <PanelSection
@@ -1115,12 +1106,10 @@ export default function OverviewPage() {
             )}
           </PanelSection>
         </div>
-      </Reveal>
 
       {/* System health (the /diagnostics self-test) — Advanced */}
       {advanced && (
-        <Reveal>
-          <PanelSection
+            <PanelSection
             title="System health"
             icon={<HeartPulse size={15} />}
             storageKey="ij_ov_health"
@@ -1186,8 +1175,7 @@ export default function OverviewPage() {
               <Empty icon={<HeartPulse size={22} />}>No diagnostics available.</Empty>
             )}
           </PanelSection>
-        </Reveal>
-      )}
+        )}
 
           </div>
         </CollapsibleCard>
