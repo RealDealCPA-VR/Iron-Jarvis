@@ -35,6 +35,16 @@ class ToolResult:
     output: str = ""
     data: dict[str, Any] | None = None
     error: str | None = None
+    #: Files this call CREATED whose names it could not predict (v1.157.0).
+    #:
+    #: ``capture_undo`` runs BEFORE ``execute``, so a tool that learns its
+    #: filenames from the work itself — a remote agent's reply, a batch job —
+    #: has no way to journal them, and anything derived from the journal
+    #: (``agents/outcome``, the run's result card, the preview rail) never
+    #: hears about them. Reporting them here lets the registry journal the
+    #: creations after the fact, through the same path every other file
+    #: mutation takes. Absolute paths.
+    created_paths: list[str] | None = None
 
 
 class Reversibility(str, Enum):

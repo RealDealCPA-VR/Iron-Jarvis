@@ -35,12 +35,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from sqlmodel import Field, SQLModel, select
 
 from ..core.db import session_scope
 from ..core.ids import new_id, utcnow
+from . import remote_files as _remote_files
 from ..tools.base import Tool, ToolContext, ToolResult
 
 if TYPE_CHECKING:  # avoid importing the heavy SQLAlchemy symbol at runtime
@@ -296,7 +298,12 @@ class RemoteAgentRegistry:
                     "result": "",
                     "detail": "remote reply had no choices[0].message.content",
                 }
-            return {"ok": True, "result": content, "detail": "ok"}
+            return {
+                "ok": True,
+                "result": content,
+                "detail": "ok",
+                "files": _remote_files.parse_files(data),
+            }
 
         if record.kind == "openai-responses":
             content = _responses_text(data)
@@ -306,7 +313,12 @@ class RemoteAgentRegistry:
                     "result": "",
                     "detail": "remote reply had no output_text / output[].content[].text",
                 }
-            return {"ok": True, "result": content, "detail": "ok"}
+            return {
+                "ok": True,
+                "result": content,
+                "detail": "ok",
+                "files": _remote_files.parse_files(data),
+            }
 
         # http-task: accept {result} or {output}
         result = None
@@ -320,7 +332,15 @@ class RemoteAgentRegistry:
                 "result": "",
                 "detail": "remote reply had no 'result' or 'output' string field",
             }
-        return {"ok": True, "result": result, "detail": "ok"}
+        return {
+            "ok": True,
+            "result": result,
+            "detail": "ok",
+            # v1.157.0: the reply may carry real files. Parsed here (bounded,
+            # never decoded yet) and turned into bytes by the TOOL, which is
+            # the only place that knows the workspace they may land in.
+            "files": _remote_files.parse_files(data),
+        }
 
     async def test(
         self, record: RemoteAgentRecord, secret_resolver: SecretResolver
@@ -375,16 +395,80 @@ class DelegateRemoteTool(Tool):
             return ToolResult(ok=False, error=f"remote agent '{agent}' is disabled")
         res = await registry.run(record, task, self.platform.secrets.get)
         if res.get("ok"):
+            # FILES the remote sent back (v1.157.0). Written HERE because this
+            # is the only place that knows the workspace they may land in, and
+            # every name goes through safe_path so the workspace stays a hard
+            # boundary for bytes chosen by another machine.
+            saved, notes = await self._save_files(res.get("files") or [], record, ctx)
+            output = res.get("result") or ""
+            if saved:
+                listed = "\n".join(f"- {p}" for p in saved)
+                output += f"\n\nFiles returned by {agent}:\n{listed}"
+            if notes:
+                # Said out loud: "the remote sent 3 files and you got 2" is
+                # exactly the thing a user must not discover later.
+                refused = "\n".join(f"- {n}" for n in notes)
+                output += f"\n\nNot saved:\n{refused}"
             return ToolResult(
                 ok=True,
-                output=res.get("result") or "",
-                data={"agent": agent, "kind": record.kind},
+                output=output,
+                data={
+                    "agent": agent,
+                    "kind": record.kind,
+                    "documents": saved,
+                    "skipped": notes,
+                },
+                created_paths=saved,
             )
         return ToolResult(
             ok=False,
             error=res.get("detail") or "remote agent call failed",
             data={"agent": agent, "kind": record.kind},
         )
+
+
+    async def _save_files(self, entries, record, ctx) -> "tuple[list[str], list[str]]":
+        """Land the remote's files in the workspace. Returns (absolute paths, refusals).
+
+        Never raises: a delegation that produced a good answer must not fail
+        because one attachment was malformed.
+        """
+        if not entries:
+            return [], []
+        import httpx
+
+        from ..tools.base import safe_path
+        from . import remote_files as rf
+
+        async def _fetch(url: str) -> bytes:
+            async with httpx.AsyncClient(timeout=min(record.timeout_s or 120, 60)) as c:
+                r = await c.get(url)
+                r.raise_for_status()
+                blob = r.content
+                if len(blob) > rf.MAX_FILE_BYTES:
+                    raise ValueError("too large")
+                return blob
+
+        try:
+            files, notes = await rf.collect(
+                entries, base_url=record.base_url or "", fetch=_fetch
+            )
+        except Exception as exc:  # noqa: BLE001
+            return [], [f"could not read the reply's files ({type(exc).__name__})"]
+
+        saved: list[str] = []
+        for name, blob in files:
+            try:
+                # safe_path is the second lock: even a name that survived
+                # sanitising cannot resolve outside the workspace.
+                target = rf.unique_path(Path(ctx.workspace), name)
+                checked = safe_path(ctx.workspace, target.name)
+                checked.parent.mkdir(parents=True, exist_ok=True)
+                checked.write_bytes(blob)
+                saved.append(str(checked.resolve()))
+            except Exception as exc:  # noqa: BLE001
+                notes.append(f"{name}: could not be written ({type(exc).__name__})")
+        return saved, notes
 
 
 def register_remote_agent_tool(platform) -> None:

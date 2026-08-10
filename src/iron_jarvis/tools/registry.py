@@ -7,6 +7,7 @@ recorded as a ToolInvocation (§19 responsibilities).
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Iterable
 
 from ..core.db import dumps, session_scope
@@ -14,7 +15,8 @@ from ..core.events import EventType
 from ..core.ids import new_id
 from ..core.models import PermissionMode, ToolInvocation, UndoJournal
 from .base import Reversibility, Tool, ToolContext, ToolResult
-from .permissions import PermissionEngine
+from .permissions import PermissionDecision, PermissionEngine
+from .undo import make_file_descriptor
 from .undo import finalize_post_hash
 
 
@@ -84,14 +86,23 @@ class ToolRegistry:
         perms: PermissionEngine,
         agent_overrides: dict[str, str] | None = None,
         session_allow: "Iterable[str] | None" = None,
+        deny_reason: str = "",
     ) -> ToolResult:
         tool = self._tools.get(name)
         if tool is None:
             return ToolResult(ok=False, error=f"unknown tool '{name}'")
 
-        decision = perms.authorize(
-            tool.perm_key(), args, agent_overrides, session_allow=session_allow
-        )
+        # A caller that already asked a human and was refused passes the answer
+        # in (v1.155.0). It goes through the SAME record-and-publish path as any
+        # other denial, so the execution ledger — which `agents/outcome` derives
+        # what a run did from — never loses a refusal just because the decision
+        # was made upstream.
+        if deny_reason:
+            decision = PermissionDecision(False, PermissionMode.ASK, deny_reason)
+        else:
+            decision = perms.authorize(
+                tool.perm_key(), args, agent_overrides, session_allow=session_allow
+            )
         reversibility = getattr(tool, "reversibility", Reversibility.IRREVERSIBLE)
         rev_value = reversibility.value if isinstance(reversibility, Reversibility) else str(reversibility)
 
@@ -144,6 +155,11 @@ class ToolRegistry:
             # Only journal an inverse for a SUCCESSFUL mutation (a failed write
             # changed nothing, so there is nothing to undo).
             undo=undo_desc if result.ok else None,
+            # Files the tool could not name until it had done the work
+            # (v1.157.0) — see ToolResult.created_paths. Journaled through the
+            # same path as any other creation so agents/outcome, the run's
+            # result card and the preview rail all see them.
+            created_paths=result.created_paths if result.ok else None,
         )
         await ctx.event_bus.publish(
             EventType.TOOL_EXECUTED,
@@ -164,6 +180,7 @@ class ToolRegistry:
         *,
         reversibility: str | None = None,
         undo: "dict[str, Any] | None" = None,
+        created_paths: "list[str] | None" = None,
     ) -> str:
         """Persist the ToolInvocation (+ an UndoJournal row when an inverse was
         captured) and return the invocation id so the caller can tag its event."""
@@ -204,5 +221,38 @@ class ToolRegistry:
                         post_sha256=undo.get("post_sha256"),
                     )
                 )
+            # Post-hoc creations (v1.157.0): one `file_delete` row per file, so
+            # undo removes exactly what was added and outcome.session_result
+            # reports them as created. Best-effort per file — a journal problem
+            # must never turn a successful tool call into a failure.
+            for raw_path in created_paths or []:
+                try:
+                    rel = str(
+                        Path(raw_path).resolve().relative_to(
+                            Path(ctx.workspace).resolve()
+                        )
+                    ).replace("\\", "/")
+                except Exception:  # noqa: BLE001 — outside the workspace: skip
+                    continue
+                try:
+                    desc = make_file_descriptor(
+                        ctx.config.home, kind="file_delete", path=rel, mode="raw"
+                    )
+                    db.add(
+                        UndoJournal(
+                            action_id=inv_id,
+                            session_id=ctx.session_id,
+                            agent_run_id=ctx.agent_run_id,
+                            tool=name,
+                            kind=str(desc.get("kind") or ""),
+                            reversible=True,
+                            pre_ref=desc.get("pre_ref"),
+                            pre_inline=desc.get("pre_inline"),
+                            pre_sha256=desc.get("pre_sha256"),
+                            post_sha256=desc.get("post_sha256"),
+                        )
+                    )
+                except Exception:  # noqa: BLE001
+                    continue
             db.commit()
         return inv_id
