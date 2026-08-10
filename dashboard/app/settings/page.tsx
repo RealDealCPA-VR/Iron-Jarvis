@@ -11,6 +11,7 @@ import {
   Wrench,
   DatabaseBackup,
   Cpu,
+  Gauge,
 } from "lucide-react";
 import { get, put, post, ijToken, setIjToken, ApiError } from "@/lib/api";
 import {
@@ -488,6 +489,216 @@ function CapChip({ label, state }: { label: string; state: boolean | null }) {
  *  so "which of my local models covers which tools" is one click, not a
  *  per-endpoint hunt. Results are also recorded on the endpoints, so routing
  *  and the Connections chips pick them up immediately. */
+/**
+ * Context windows (v1.156.0).
+ *
+ * A model that does not ADVERTISE its window is assumed to have
+ * DEFAULT_WINDOW (32k) — and until now there was nowhere in the app to correct
+ * that. Reported by a user running a 1M-context local model: every turn was
+ * being budgeted at 32k, so history was trimmed roughly 30x earlier than it
+ * needed to be, compaction offered at ~22k instead of ~700k, and attachment
+ * budgets stayed conservative. `model_context_windows` existed in config and
+ * had zero UI.
+ *
+ * The card is deliberately explicit about PROVENANCE: a pinned 32k and an
+ * assumed 32k look identical in every other surface, and the difference is the
+ * whole reason someone comes here.
+ */
+function ContextWindowsCard({
+  defaultProvider,
+  defaultModel,
+}: {
+  defaultProvider: string;
+  defaultModel: string;
+}) {
+  const [pins, setPins] = useState<Record<string, number> | null>(null);
+  const [key, setKey] = useState("");
+  const [tokens, setTokens] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    get<{ settings: Record<string, unknown> }>("/settings")
+      .then((r) => {
+        if (!alive) return;
+        const raw = r.settings?.model_context_windows;
+        setPins(
+          raw && typeof raw === "object" ? (raw as Record<string, number>) : {},
+        );
+      })
+      .catch(() => alive && setPins({}));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /** Most-specific key first — the same order the daemon resolves in. */
+  const activeKey = useMemo(() => {
+    if (!pins) return null;
+    for (const k of [
+      `${defaultProvider}::${defaultModel}`,
+      defaultModel,
+      defaultProvider,
+    ]) {
+      if (k && k in pins) return k;
+    }
+    return null;
+  }, [pins, defaultProvider, defaultModel]);
+
+  async function save(next: Record<string, number>) {
+    setBusy(true);
+    setErr(null);
+    setSaved(null);
+    try {
+      await put("/settings", { values: { model_context_windows: next } });
+      setPins(next);
+      setSaved("Saved — it applies to the next turn.");
+      window.setTimeout(() => setSaved(null), 2500);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function add() {
+    const k = key.trim();
+    const n = Number(tokens.replace(/[_,\s]/g, ""));
+    if (!k) return setErr("Name the model (or provider) this applies to.");
+    if (!Number.isFinite(n) || n < 1000)
+      return setErr("Give the window in TOKENS — e.g. 1000000 for a 1M model.");
+    void save({ ...(pins ?? {}), [k]: Math.round(n) });
+    setKey("");
+    setTokens("");
+  }
+
+  const entries = Object.entries(pins ?? {});
+  const fmt = (n: number) =>
+    n >= 1_000_000
+      ? `${(n / 1_000_000).toFixed(n % 1_000_000 ? 1 : 0)}M`
+      : n >= 1000
+        ? `${Math.round(n / 1000)}k`
+        : String(n);
+
+  return (
+    <Card title="Context windows" icon={<Gauge size={15} />}>
+      <p className="text-[12px] leading-relaxed text-zinc-500">
+        How much the model can actually read. Endpoints that don&apos;t report
+        their window are assumed to be <strong>32k</strong>, which silently
+        trims long conversations far earlier than a big-context model needs.
+        Pin the real number here.
+      </p>
+
+      {/* What the DEFAULT route resolves to — the number that matters most and
+          the one nothing else in the app tells you. */}
+      <div className="mt-3 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2">
+        <div className="flex flex-wrap items-baseline gap-x-2 text-[12px]">
+          <span className="text-zinc-500">Your default route</span>
+          <span className="font-mono text-zinc-300">
+            {defaultProvider || "—"} / {defaultModel || "—"}
+          </span>
+          <span className="ml-auto">
+            {activeKey ? (
+              <span className="text-emerald-300">
+                {fmt(pins?.[activeKey] ?? 0)} pinned
+              </span>
+            ) : (
+              <span className="text-amber-300">32k assumed</span>
+            )}
+          </span>
+        </div>
+        {!activeKey && defaultModel && (
+          <button
+            type="button"
+            onClick={() => {
+              setKey(defaultModel);
+              setTokens("1000000");
+            }}
+            className="mt-1.5 text-[11px] text-accent-soft underline-offset-2 hover:underline"
+          >
+            Set a window for {defaultModel}
+          </button>
+        )}
+      </div>
+
+      {entries.length > 0 && (
+        <div className="mt-3 space-y-1.5">
+          {entries.map(([k, v]) => (
+            <div
+              key={k}
+              className="flex items-center gap-2 rounded-lg border border-white/[0.06] px-2.5 py-1.5"
+            >
+              <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-zinc-300">
+                {k}
+              </span>
+              <span className="shrink-0 text-[11.5px] tabular-nums text-zinc-400">
+                {fmt(v)}
+              </span>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  const next = { ...(pins ?? {}) };
+                  delete next[k];
+                  void save(next);
+                }}
+                aria-label={`Remove the ${k} pin`}
+                className="shrink-0 text-zinc-600 transition-colors hover:text-rose-300 disabled:opacity-50"
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <input
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          placeholder={defaultModel || "model name"}
+          spellCheck={false}
+          className="field min-w-0 flex-1 py-1.5 font-mono text-[12px]"
+        />
+        <input
+          value={tokens}
+          onChange={(e) => setTokens(e.target.value)}
+          placeholder="tokens, e.g. 1000000"
+          inputMode="numeric"
+          className="field w-44 py-1.5 text-[12px]"
+        />
+        <button
+          type="button"
+          onClick={add}
+          disabled={busy}
+          className="btn-accent shrink-0 py-1.5 text-xs"
+        >
+          <Save size={13} /> Pin
+        </button>
+      </div>
+      <p className="mt-1.5 text-[11px] leading-relaxed text-zinc-600">
+        Matched most-specific first: <code>provider::model</code>, then{" "}
+        <code>model</code>, then <code>provider</code>. So{" "}
+        <code>{defaultModel || "fleet"}</code> covers that model on any
+        provider.
+      </p>
+
+      {err && (
+        <div className="mt-3">
+          <ErrorNote>{err}</ErrorNote>
+        </div>
+      )}
+      {saved && (
+        <div className="mt-3">
+          <SuccessNote>{saved}</SuccessNote>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function LocalCapabilitiesCard() {
   const [rows, setRows] = useState<VerifyAllRow[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -868,6 +1079,11 @@ export default function SettingsPage() {
             </Card>
 
             <LocalCapabilitiesCard />
+
+            <ContextWindowsCard
+              defaultProvider={String(form.default_provider ?? "")}
+              defaultModel={String(form.default_model ?? "")}
+            />
           </div>
 
           {/* Sidebar: maintenance + access token */}

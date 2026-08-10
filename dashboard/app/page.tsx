@@ -349,6 +349,53 @@ function ReactorHero({
 }
 
 /* -------------------------------------------------------------------------- */
+/*  PanelSection — a titled block INSIDE the one collapsible admin card.       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * v1.156.0: the seven cards below the tiles each had their own chevron and
+ * their own persisted open/closed state, so the page below the fold was a
+ * column of half-open boxes — "smoother and less chaotic" was the ask. They are
+ * now plain sections inside ONE "Systems & admin" card.
+ *
+ * It accepts `storageKey` and `defaultOpen` and ignores them: those were
+ * per-card persistence that no longer has anything to persist, and taking them
+ * silently keeps the conversion a tag rename instead of seven prop rewrites
+ * that could each go wrong.
+ */
+function PanelSection({
+  title,
+  icon,
+  right,
+  summary,
+  children,
+}: {
+  title: ReactNode;
+  icon?: ReactNode;
+  right?: ReactNode;
+  summary?: ReactNode;
+  storageKey?: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <section className="border-b hairline pb-5 last:border-0 last:pb-0">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          {icon && <span className="shrink-0 text-accent-soft/80">{icon}</span>}
+          <span className="truncate text-[12.5px] font-semibold tracking-wide text-zinc-300">
+            {title}
+          </span>
+          {summary}
+        </div>
+        {right && <div className="flex shrink-0 items-center gap-3">{right}</div>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /*  CollapsibleCard — a card whose body collapses so the hero stays the star.  */
 /* -------------------------------------------------------------------------- */
 
@@ -671,9 +718,29 @@ export default function OverviewPage() {
         <OnboardingWelcome />
       </Reveal>
 
-      {/* First-win: one click → a real result. */}
+      {/* SYSTEMS & ADMIN (v1.156.0) — ONE collapsible instead of seven.
+          Everything below the tiles used to be its own card with its own
+          chevron and its own remembered open/closed state, so the page below
+          the fold was a column of half-open boxes competing with the tiles for
+          attention. The hero, the tiles and the stats card stay exactly where
+          they were; the rest now rests behind a single title that behaves like
+          the cards it replaced. Collapsed by default: this is the part of the
+          page you go looking for, not the part you land on. */}
       <Reveal>
         <CollapsibleCard
+          title="Systems & admin"
+          icon={<Wrench size={15} />}
+          storageKey="ij_ov_admin"
+          summary={
+            <span className="text-xs text-zinc-500">
+              activity, connections, sessions, health
+            </span>
+          }
+        >
+          <div className="space-y-5">
+      {/* First-win: one click → a real result. */}
+      <Reveal>
+        <PanelSection
           title="Try it now"
           icon={<Rocket size={15} />}
           storageKey="ij_ov_tryit"
@@ -720,12 +787,12 @@ export default function OverviewPage() {
               );
             })}
           </div>
-        </CollapsibleCard>
+        </PanelSection>
       </Reveal>
 
       {/* Ambient operator — the reflexes that act on their own + recent fires. */}
       <Reveal>
-        <CollapsibleCard
+        <PanelSection
           title="Ambient operator"
           icon={<Zap size={15} />}
           storageKey="ij_ov_ambient"
@@ -779,12 +846,12 @@ export default function OverviewPage() {
               })}
             </ul>
           )}
-        </CollapsibleCard>
+        </PanelSection>
       </Reveal>
 
       {/* While you were away — live activity + recently finished sessions. */}
       <Reveal>
-        <CollapsibleCard
+        <PanelSection
           title="While you were away"
           icon={<History size={15} />}
           storageKey="ij_ov_away"
@@ -874,7 +941,7 @@ export default function OverviewPage() {
           ) : liveEvents.length === 0 ? (
             <Empty icon={<History size={22} />}>Nothing yet — try a task above.</Empty>
           ) : null}
-        </CollapsibleCard>
+        </PanelSection>
       </Reveal>
 
       {/* Saved tasks — one-click runs from saved templates (omitted when none).
@@ -882,7 +949,7 @@ export default function OverviewPage() {
           apps, and two things called that on one page is a coin toss. */}
       {templateList.length > 0 && (
         <Reveal>
-          <CollapsibleCard
+          <PanelSection
             title="Saved tasks"
             icon={<LayoutGrid size={15} />}
             storageKey="ij_ov_apps"
@@ -926,14 +993,14 @@ export default function OverviewPage() {
                 );
               })}
             </div>
-          </CollapsibleCard>
+          </PanelSection>
         </Reveal>
       )}
 
       <Reveal>
         <div className="grid items-start gap-4 lg:grid-cols-2">
           {/* Connections — compact summary + manage link. */}
-          <CollapsibleCard
+          <PanelSection
             title="Connections"
             icon={<Server size={15} />}
             storageKey="ij_ov_connections"
@@ -995,10 +1062,10 @@ export default function OverviewPage() {
                 No provider data.
               </Empty>
             )}
-          </CollapsibleCard>
+          </PanelSection>
 
           {/* Recent sessions */}
-          <CollapsibleCard
+          <PanelSection
             title="Recent sessions"
             icon={<Boxes size={15} />}
             storageKey="ij_ov_recent"
@@ -1046,14 +1113,14 @@ export default function OverviewPage() {
             ) : (
               <Empty icon={<Boxes size={22} />}>No sessions yet.</Empty>
             )}
-          </CollapsibleCard>
+          </PanelSection>
         </div>
       </Reveal>
 
       {/* System health (the /diagnostics self-test) — Advanced */}
       {advanced && (
         <Reveal>
-          <CollapsibleCard
+          <PanelSection
             title="System health"
             icon={<HeartPulse size={15} />}
             storageKey="ij_ov_health"
@@ -1118,9 +1185,13 @@ export default function OverviewPage() {
             ) : (
               <Empty icon={<HeartPulse size={22} />}>No diagnostics available.</Empty>
             )}
-          </CollapsibleCard>
+          </PanelSection>
         </Reveal>
       )}
+
+          </div>
+        </CollapsibleCard>
+      </Reveal>
 
       {advanced && (
         <Reveal>
