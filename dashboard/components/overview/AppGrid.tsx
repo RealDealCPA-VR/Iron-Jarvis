@@ -23,7 +23,13 @@
  * icon and hover text already correct — see lib/appTiles.ts.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Link from "next/link";
 import {
   DndContext,
@@ -93,11 +99,16 @@ function Tile({
     >
       <Link
         href={tile.href}
-        // A drag must not also navigate: dnd-kit suppresses the click after a
-        // real drag, but a stray click at the end of one still lands here.
-        onClick={(e) => {
-          if (dragging) e.preventDefault();
-        }}
+        // THE ACTUAL FIX (v1.158.1). An <a href> is NATIVELY DRAGGABLE, so
+        // pressing a tile and moving it started the BROWSER's link-drag, which
+        // swallows the pointermove stream dnd-kit needs. Its 6px threshold was
+        // therefore never crossed, onDragStart never fired, nothing suppressed
+        // anything — and releasing near where you started landed an ordinary
+        // click that opened the module. Found by tracing real events
+        // (pointerdown → dragstart → pointerup → click, prevented=false), not
+        // by reading the code: the guard below looked sufficient and was never
+        // reached.
+        draggable={false}
         className="flex flex-col items-center gap-2 rounded-xl px-1 py-2 outline-none transition-transform duration-200 focus-visible:ring-2 focus-visible:ring-accent/40 group-hover/tile:-translate-y-0.5"
       >
         <span
@@ -182,6 +193,46 @@ export function AppGrid() {
   const tiles = useMemo(() => orderedTiles(usage, order), [usage, order]);
   const ids = useMemo(() => tiles.map((t) => t.href), [tiles]);
 
+  // Survives the render that drag-end triggers.
+  const suppressClick = useRef(false);
+
+  // A DRAG MUST NOT ALSO NAVIGATE (v1.158.1).
+  //
+  // On the DOCUMENT, in the capture phase. Three narrower fixes were tried and
+  // measured first, and each failed for its own reason: React's `onClick` on
+  // the tile DOES NOT FIRE after a drop (traced — a plain click fires it every
+  // time, a post-drag click never does, yet Next still routes); guarding on the
+  // `dragging` STATE loses a race, because drag-end sets it false before the
+  // browser dispatches click; and a native listener on the tile's own wrapper
+  // never received the event either. Document capture is the one place the
+  // click provably passes through — the traced chain is
+  // SPAN > A[/chat] > DIV > … > MAIN — and it runs before anything downstream
+  // can act on it.
+  //
+  // Scoped to the grid, so this can never swallow a click anywhere else on the
+  // page, and cleared by the next pointerdown so a deliberate click still opens.
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const swallow = (e: MouseEvent) => {
+      if (!suppressClick.current) return;
+      const grid = gridRef.current;
+      if (!grid || !(e.target instanceof Node) || !grid.contains(e.target)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      suppressClick.current = false;
+    };
+    const rearm = () => {
+      suppressClick.current = false;
+    };
+    document.addEventListener("click", swallow, true);
+    document.addEventListener("pointerdown", rearm, true);
+    return () => {
+      document.removeEventListener("click", swallow, true);
+      document.removeEventListener("pointerdown", rearm, true);
+    };
+  }, []);
+
   const sensors = useSensors(
     // Same 6px intent threshold as the Kanban board — a click opens, only a
     // deliberate drag picks up.
@@ -229,12 +280,16 @@ export function AppGrid() {
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
-        onDragStart={() => setDragging(true)}
+        onDragStart={() => {
+          suppressClick.current = true;
+          setDragging(true);
+        }}
         onDragCancel={() => setDragging(false)}
         onDragEnd={onDragEnd}
       >
         <SortableContext items={ids} strategy={rectSortingStrategy}>
           <div
+            ref={gridRef}
             className="grid grid-cols-4 gap-x-2 gap-y-3 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10"
             // Until localStorage is read the order is the catalogue's; fading
             // in avoids a visible re-sort on every load.

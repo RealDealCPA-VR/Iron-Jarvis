@@ -204,3 +204,36 @@ def test_the_roster_is_a_picker_not_a_list():
     # The detail the rows used to carry must still be reachable.
     for kept in ("statsText(selected)", "AgentAvatar", "selected.description"):
         assert kept in src, f"the picker dropped {kept}"
+
+
+def test_a_drag_on_a_tile_cannot_navigate():
+    """v1.158.1: rearranging a tile opened its module.
+
+    Diagnosed by tracing real pointer events, and the first three fixes were
+    each measured and each WRONG — recorded here because the shape of this bug
+    is not visible in the code:
+
+      * guarding on the `dragging` STATE loses a race (drag-end sets it false
+        before the browser dispatches click);
+      * React's `onClick` on the tile DOES NOT FIRE after a drop at all — a
+        plain click fires it every time — so guarding it guarded nothing;
+      * a native listener on the tile's own wrapper never received the event.
+
+    Document capture is the one place the click provably passes through, scoped
+    to the grid so it can never swallow a click elsewhere. Verified in a real
+    browser across five drag shapes; only an under-threshold nudge navigates,
+    which is a click and should.
+    """
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[1]
+        / "dashboard" / "components" / "overview" / "AppGrid.tsx"
+    ).read_text(encoding="utf-8")
+    assert 'addEventListener("click", swallow, true)' in src, (
+        "the document-capture guard is gone; a drag will open the module again"
+    )
+    assert "grid.contains(e.target)" in src, "the guard must be scoped to the grid"
+    assert "suppressClick.current = true" in src, "nothing arms the guard"
+    # Re-armed by the next press, or the guard eats the following real click.
+    assert 'addEventListener("pointerdown", rearm, true)' in src
