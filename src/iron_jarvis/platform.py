@@ -20,9 +20,16 @@ from sqlalchemy import Engine
 from .core.config import Config, load_config
 from .codelab.store import CodeArtifactStore
 from .core.db import open_db, persist_event, search_index as shared_search_index
+from typing import TYPE_CHECKING
+
 from .core.db import session_scope
 from .core.events import EventBus
 from .core.streams import StreamHub
+
+if TYPE_CHECKING:  # annotation only — the namespace is optional at runtime and
+    # is imported lazily inside build_platform so a platform that cannot start
+    # it still boots (see the ReplRegistry block below).
+    from .repl.session import ReplRegistry
 from .core.fs_policy import register_protected_root
 from .core.logging import get_logger
 from .providers.manager import ProviderManager
@@ -196,6 +203,12 @@ class Platform:
     #: FX-01 ephemeral per-session token/tool stream hub (NOT the event bus — see
     #: core/streams.py). Optional so bare-platform unit tests still construct.
     streams: "StreamHub | None" = None
+    #: Per-session Python namespaces (v1.159.0). Tool results can be bound to
+    #: variables here instead of being pasted into the model's context; the
+    #: `repl` tool then reaches them by name. None on a platform built without
+    #: it — every caller treats the namespace as an optimisation, never a
+    #: precondition.
+    repl: "ReplRegistry | None" = None
     #: The agent orchestrator, attached by the daemon after it builds one
     #: (v1.119.0) — task-kind schedules fire real agent sessions through it.
     #: Optional so bare-platform unit tests still construct; the dispatcher
@@ -520,6 +533,26 @@ def build_platform(
         )
 
     registry.register(RunCodeTool(sink=_code_sink))
+
+    # --- Session namespace (v1.159.0) -------------------------------------
+    # The answer to context flooding, from the other end. Tool output is what
+    # fills a window; `_store_as` puts a result in a VARIABLE and returns a
+    # receipt, and `repl` runs code against those variables in a persistent
+    # subprocess. Registered here beside run_code because they are siblings:
+    # run_code is a DISPOSABLE script (fresh process, nothing survives), this
+    # is a LIVING namespace (state persists across steps of one session).
+    #
+    # Best-effort: a platform that cannot start it keeps working exactly as it
+    # did, minus the optimisation.
+    try:
+        from .repl.session import ReplRegistry
+        from .tools.repl_tool import ReplTool
+
+        repl_registry = ReplRegistry()
+        registry.register(ReplTool(repl_registry))
+        registry.attach_repl(repl_registry)
+    except Exception:  # noqa: BLE001 — never let an optimisation break boot
+        repl_registry = None
 
     # v1.97.0: close the loop — agents can now FIND and REUSE what they already
     # wrote instead of re-deriving it. search/load are read-only ("allow");
@@ -847,6 +880,7 @@ def build_platform(
         config=config,
         event_bus=event_bus,
         streams=streams,
+        repl=repl_registry,
         engine=engine,
         vault=vault,
         providers=providers,

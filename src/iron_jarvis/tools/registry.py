@@ -7,6 +7,8 @@ recorded as a ToolInvocation (§19 responsibilities).
 
 from __future__ import annotations
 
+import copy
+import json
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -18,6 +20,36 @@ from .base import Reversibility, Tool, ToolContext, ToolResult
 from .permissions import PermissionDecision, PermissionEngine
 from .undo import make_file_descriptor
 from .undo import finalize_post_hash
+
+
+#: Tools whose output is routinely LARGE enough to be worth keeping out of the
+#: context window — the only ones that advertise ``_store_as`` (v1.159.0).
+#:
+#: Deliberately a short list rather than every tool. The parameter costs ~30
+#: tokens of schema on every request it appears in, so putting it on all ~60
+#: tools would spend more context than the feature saves — which would be a
+#: peculiar way to build a context-saving feature. These are the ones that
+#: return listings, documents, page text and search results.
+VERBOSE_TOOLS: frozenset[str] = frozenset({
+    "list_files", "grep", "file_search", "code_search",
+    "read_file", "read_document", "extract_pdf", "convert_document",
+    "excel_query", "batch_documents",
+    "web_fetch", "web_search",
+    "ltm_search", "recall", "history_search",
+    "shell", "run_code",
+})
+
+#: What the model is told about it. One line: the `repl` tool's own description
+#: carries the fuller explanation, and repeating it per tool is the cost above.
+_STORE_AS_SCHEMA = {
+    "type": "string",
+    "description": (
+        "Optional variable name. Binds this result into the session's Python "
+        "namespace INSTEAD of returning it, and returns a one-line receipt — "
+        "use the `repl` tool to inspect it (len, slicing, comprehensions). "
+        "Prefer this whenever the result may be large."
+    ),
+}
 
 
 class ToolRegistry:
@@ -76,7 +108,35 @@ class ToolRegistry:
                 or (wild and t.name in self._custom)
                 or (mcp_wild and t.name in self._mcp)
             ]
-        return [t.spec() for t in tools]
+        return [self._spec_with_store_as(t) for t in tools]
+
+    def _spec_with_store_as(self, tool: Tool) -> dict[str, Any]:
+        """A tool's spec, plus ``_store_as`` for the verbose ones.
+
+        Added HERE rather than in each tool's own ``input_schema`` because the
+        parameter is a registry-level convention: the registry is what strips
+        and honours it, and a tool that declared it would be declaring something
+        it never sees.
+
+        DEEP-COPIED FIRST, and that is not a nicety. ``spec()`` hands back a dict
+        that still REFERENCES the tool's class-level ``input_schema``, so
+        injecting in place permanently rewrote the tool's own declared schema for
+        the life of the process — every later caller, and every later test, saw a
+        schema it never declared. Caught by the full suite: a schema-shape test
+        passed alone and failed after anything else had called ``specs()``.
+        """
+        spec = tool.spec()
+        if tool.name not in VERBOSE_TOOLS:
+            return spec
+        try:
+            spec = copy.deepcopy(spec)
+            params = spec.get("parameters") or spec.get("input_schema") or {}
+            props = params.get("properties")
+            if isinstance(props, dict) and "_store_as" not in props:
+                props["_store_as"] = dict(_STORE_AS_SCHEMA)
+        except Exception:  # noqa: BLE001 — a spec we cannot extend still works
+            return tool.spec()
+        return spec
 
     async def invoke(
         self,
@@ -91,6 +151,26 @@ class ToolRegistry:
         tool = self._tools.get(name)
         if tool is None:
             return ToolResult(ok=False, error=f"unknown tool '{name}'")
+
+        # `_store_as` (v1.159.0): put the RESULT IN A VARIABLE instead of in the
+        # context window.
+        #
+        # This is the whole point of the session namespace. Tool output is what
+        # floods a model's context, and this app spent three releases attacking
+        # that from the wrong end — a 16k-char cap per result, stale-output
+        # trimming, a token budget, then model-written compaction. All of them
+        # decide what to THROW AWAY. `_store_as` decides what never has to
+        # arrive: `list_files(path=".", _store_as="files")` returns a one-line
+        # receipt, the 5,000 entries live on as `files` in the session's Python
+        # namespace, and the model reaches them with len(), a slice, or a
+        # comprehension through the `repl` tool.
+        #
+        # Stripped from `args` BEFORE the tool sees it: every tool validates its
+        # own schema and an unexpected key is not the tool's problem to handle.
+        store_as = ""
+        if isinstance(args, dict) and args.get("_store_as"):
+            args = dict(args)
+            store_as = str(args.pop("_store_as") or "").strip()
 
         # A caller that already asked a human and was refused passes the answer
         # in (v1.155.0). It goes through the SAME record-and-publish path as any
@@ -167,7 +247,96 @@ class ToolRegistry:
              "invocation_id": inv_id, "reversibility": rev_value},
             session_id=ctx.session_id,
         )
+
+        # Hand the payload to the namespace and return a RECEIPT. Only on
+        # success: storing an error message as a variable would be a lie the
+        # model then reasons from. A namespace that is unavailable degrades to
+        # the ordinary result — the feature is an optimisation, never a
+        # precondition.
+        if store_as and result.ok:
+            result = await self._store_result(store_as, result, ctx)
         return result
+
+    async def _store_result(
+        self, name: str, result: ToolResult, ctx: ToolContext
+    ) -> ToolResult:
+        """Bind ``result`` to ``name`` in this session's namespace.
+
+        The receipt states the TYPE and SIZE of what was stored, because a model
+        that cannot see the value needs to know what it is holding before it can
+        write code against it. It also names the variable back, so the next
+        `repl` call has something concrete to reach for.
+        """
+        registry = getattr(self, "_repl", None)
+        if registry is None:
+            return result
+        if not name.isidentifier() or name.startswith("__"):
+            return ToolResult(
+                ok=True,
+                output=(
+                    f"{result.output}\n\n[not stored: `{name}` is not a usable "
+                    f"Python variable name]"
+                ),
+                data=result.data,
+                created_paths=result.created_paths,
+            )
+        payload: Any = result.data if result.data not in (None, {}) else result.output
+        try:
+            # Bound by EXECUTING a binding, over the namespace's own public
+            # `execute` — the session module owns the pipe protocol and this
+            # does not reach around it.
+            #
+            # The value travels as a JSON string embedded as a Python string
+            # LITERAL, so nothing in a tool result can be interpreted as code:
+            # json.dumps produces text, repr() makes it an inert literal, and
+            # json.loads on the far side turns it back into data. A payload that
+            # will not serialise degrades to its str() rather than failing the
+            # tool call.
+            try:
+                encoded = json.dumps(payload, default=str)
+            except (TypeError, ValueError):
+                encoded = json.dumps(str(payload))
+            # The receipt is computed INSIDE the namespace and printed, so the
+            # size it reports is the size of the object that actually landed —
+            # not something this side guessed about a value it then shipped.
+            code = (
+                "import json as __ij_json\n"
+                f"{name} = __ij_json.loads({encoded!r})\n"
+                f"__ij_v = {name}\n"
+                "print('stored as `%s` (%s%s) — reach it in the repl tool; "
+                "nothing else was returned.' % ("
+                f"{name!r}, type(__ij_v).__name__, "
+                "(', %d items' % len(__ij_v)) if hasattr(__ij_v, '__len__') else ''))\n"
+                "del __ij_v\n"
+            )
+            reply = await registry.execute(
+                ctx.session_id, code, workspace=str(ctx.workspace)
+            )
+            if not reply.get("ok"):
+                raise RuntimeError(reply.get("error") or "namespace refused the value")
+            summary = (reply.get("stdout") or "").strip() or (
+                f"stored as `{name}`"
+            )
+        except Exception as exc:  # noqa: BLE001 — never fail a good tool call
+            return ToolResult(
+                ok=True,
+                output=(
+                    f"{result.output}\n\n[could not store as `{name}`: "
+                    f"{type(exc).__name__} — the full result is above]"
+                ),
+                data=result.data,
+                created_paths=result.created_paths,
+            )
+        return ToolResult(
+            ok=True,
+            output=summary,
+            data={"stored_as": name, "kind": type(payload).__name__},
+            created_paths=result.created_paths,
+        )
+
+    def attach_repl(self, registry: Any) -> None:
+        """Wire the session-namespace registry in (called once by platform)."""
+        self._repl = registry
 
     def _record(
         self,

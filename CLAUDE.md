@@ -96,6 +96,22 @@ cd dashboard && pnpm dev           # dashboard
   stale tool output → whole blocks (oldest first) → the task itself, clipped.
   The task is `messages[0]` and is never dropped; dropped work is summarized
   into the SYSTEM prompt, never injected as fake assistant turns.
+- **Keep big results OUT of the context, don't trim them after** (v1.159.0).
+  `repl/` is a per-session persistent Python namespace (a subprocess speaking
+  newline-JSON, spawned by re-executing the app itself via the hidden
+  `repl-worker` subcommand — `run_code` uses `shutil.which("python")` and so
+  cannot run Python at all on a packaged install). Any tool call may carry
+  `_store_as="name"`: `registry.invoke` strips it, binds the result into that
+  session's namespace and returns a ONE-LINE RECEIPT, and the `repl` tool then
+  reaches the value by name. A 5,000-entry listing becomes `len(files)` and a
+  slice. This is the counterpart to the budget (v1.152.0) and compaction
+  (v1.153.0): those decide what to throw away once a payload has arrived, this
+  decides what never has to arrive. The value crosses as a JSON string LITERAL,
+  never interpolated as code — a tool result must not be executable. `repl` is
+  on the DENY FLOOR and defaults to `ask`: it runs model-written code AND the
+  namespace persists for a whole session, so consent to one call is not consent
+  to what accumulates. `_store_as` is advertised only on `VERBOSE_TOOLS` —
+  putting it on all ~60 tools would spend more context than the feature saves.
 - **NOTHING BLOCKING RUNS ON THE EVENT LOOP** (v1.153.1). The daemon is ONE
   asyncio loop, so a synchronous filesystem walk, a big file read, or any
   CPU-bound work inside a tool freezes every request in the app — and it does
@@ -187,6 +203,16 @@ cd dashboard && pnpm dev           # dashboard
   factories), router (routing/failover), adapters/. `terminals/` — manager
   (+ restart-survival snapshot), session (scrollback), ai_clis (Launch
   detection), shells, backend (ConPTY/pipe/Fake).
+- `repl/` — the session NAMESPACE (v1.159.0). `worker.py` is the child:
+  stdlib-only (it is spawned from a frozen binary), newline-JSON on
+  stdin/stdout, one persistent globals dict, output capped and truncation
+  reported. `session.py` is the parent: one child per session, every
+  blocking step through `asyncio.to_thread`, a reader thread so a deadline
+  can actually be honoured, kill-on-timeout, and an honest `restarted` flag
+  so a model is never told its variables survived when they did not.
+  `tools/repl_tool.py` is the tool. Do not add a `get()`-first path: the
+  registry creates a namespace on demand through `execute`, and a
+  `get()`-first caller fails on the FIRST call of every session.
 - `context/` — `budget.plan_history`: the per-turn CHAT history planner (pure,
   offline, deterministic recap), consumed by both chat lanes.
   `agent_window.plan_agent_transcript`: the same job for an agent RUN, and a

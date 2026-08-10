@@ -92,6 +92,27 @@ def _source_repo_root() -> "Path | None":
     return None
 
 
+@app.command("repl-worker", hidden=True)
+def repl_worker() -> None:
+    """Run the session-namespace worker on stdin/stdout (v1.159.0, internal).
+
+    NOT for humans — the daemon spawns ITSELF with this subcommand to get a
+    persistent Python namespace per session, and that indirection is the whole
+    point. ``run_code`` resolves an interpreter with ``shutil.which("python")``,
+    so on a packaged install with no Python on PATH it simply cannot run Python
+    at all. A frozen build has no interpreter to find, but it does have
+    ``sys.executable`` — itself — and every CLI subcommand is reachable from
+    the exe. Re-executing ourselves therefore works identically frozen and in
+    development, with nothing to install.
+
+    Hidden because it is a protocol endpoint, not a command: it speaks
+    newline-delimited JSON and would only ever confuse someone reading --help.
+    """
+    from ..repl.worker import main as _worker_main
+
+    _worker_main()
+
+
 @app.command()
 def init(path: str = typer.Argument(".", help="Project root to initialize.")) -> None:
     """Create .ironjarvis/ and a starter config for a project."""

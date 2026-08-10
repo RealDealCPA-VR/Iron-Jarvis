@@ -37,6 +37,11 @@ def default_permissions() -> dict[str, str]:
         "grep": "allow",
         "search_codebase": "deny",  # no tool yet — fail-closed (use grep/file_search)
         "shell": "ask",
+        # The session namespace (v1.159.0). Same gate as shell and for a
+        # stronger reason: it runs model-written code AND keeps the
+        # namespace alive for the whole session, so consent to one call
+        # is not consent to what accumulates. Also on the deny floor.
+        "repl": "ask",
         "git_status": "deny",  # no agent git tool yet — fail-closed
         "git_diff": "deny",
         "git_commit": "ask",

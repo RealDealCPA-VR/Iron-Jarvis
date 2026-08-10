@@ -48,7 +48,13 @@ SAFE_HEADLESS_TOOLS: frozenset[str] = frozenset({"delegate", "spawn_agent"})
 # from silently arming the host shell for an unattended headless spawn. Granting
 # one of these for a single task must go through ``session_allow`` instead.
 DENY_FLOOR_TOOLS: frozenset[str] = frozenset(
-    {"shell", "browser_use", "web_action", "mcp_call"}
+    # `repl` joined in v1.159.0: it executes arbitrary model-written code
+    # with a namespace that PERSISTS across a whole session, which is
+    # strictly more reach than `shell` (each shell call starts clean).
+    # Fail-closed at `ask` was already the default for an unknown tool,
+    # but without the floor an agent definition could raise it to allow
+    # and hand an unattended headless run a live interpreter.
+    {"shell", "browser_use", "web_action", "mcp_call", "repl"}
 )
 
 # READ-ONLY web retrieval — classified allow-by-default, same tier as the other
