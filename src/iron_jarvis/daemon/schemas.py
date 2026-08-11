@@ -1022,6 +1022,30 @@ class RemoteAgentCreate(BaseModel):
     timeout_s: int = 120
 
 
+class RemoteAgentPatch(BaseModel):
+    """Fix a registered remote agent WITHOUT re-entering everything (§11/§12).
+
+    Every field is optional and ``None`` means "leave it alone" — the point of a
+    PATCH here rather than reusing the create body. The bearer token cannot be
+    prefilled by any UI (it is stored encrypted and never returned), so a form
+    that posted the full record would send an empty token and wipe a working
+    credential. Omitting ``token`` keeps the stored one; ``clear_token`` removes
+    it deliberately.
+
+    ``name`` is absent on purpose: it is the identity panels and threads refer
+    to (``participantKey("remote", name)``), so renaming would orphan those
+    references silently. Deleting and re-adding is the honest way to rename.
+    """
+
+    base_url: str | None = None
+    kind: str | None = None
+    model: str | None = None
+    token: str | None = None  # a new credential; omit to keep the existing one
+    clear_token: bool = False  # explicit removal, so it can never be accidental
+    enabled: bool | None = None
+    timeout_s: int | None = None
+
+
 class RemoteAgentRun(BaseModel):
     task: str
 

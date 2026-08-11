@@ -188,6 +188,45 @@ class RemoteAgentRegistry:
             db.expunge(row)
             return row
 
+    def update(
+        self,
+        name: str,
+        **fields: Any,
+    ) -> "RemoteAgentRecord | None":
+        """PARTIAL update — only the fields passed are touched. None if absent.
+
+        Separate from :meth:`upsert` because upsert assigns EVERY column, which
+        is right for "register this agent" and wrong for "fix one thing". In
+        particular ``row.secret_name = secret_name`` runs unconditionally there,
+        so an edit that re-posted the form without re-typing the bearer token —
+        which the UI cannot prefill, because the token is stored encrypted and
+        never returned — would silently DROP the credential and leave a remote
+        that had worked a moment ago failing to authenticate. That is worse than
+        the "start from scratch" it was meant to save.
+
+        Callers pass only what changed; ``secret_name`` is therefore omitted to
+        keep the existing credential, and passed as ``None`` to clear it.
+        """
+        allowed = {
+            "base_url", "kind", "secret_name", "model", "enabled", "timeout_s",
+        }
+        unknown = set(fields) - allowed
+        if unknown:  # a typo'd key would silently no-op — refuse instead
+            raise ValueError(f"unknown remote-agent field(s): {sorted(unknown)}")
+        with session_scope(self.engine) as db:
+            row = db.exec(
+                select(RemoteAgentRecord).where(RemoteAgentRecord.name == name)
+            ).first()
+            if row is None:
+                return None
+            for key, value in fields.items():
+                setattr(row, key, value)
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+            db.expunge(row)
+            return row
+
     def remove(self, name: str) -> bool:
         """Delete a remote agent by name; True if a row was removed."""
         with session_scope(self.engine) as db:

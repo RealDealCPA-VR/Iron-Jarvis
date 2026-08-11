@@ -112,6 +112,22 @@ cd dashboard && pnpm dev           # dashboard
   namespace persists for a whole session, so consent to one call is not consent
   to what accumulates. `_store_as` is advertised only on `VERBOSE_TOOLS` —
   putting it on all ~60 tools would spend more context than the feature saves.
+- **A remote agent is EDITABLE, and an edit must never eat its credential**
+  (v1.164.0). The row offered only Test and Delete, so one wrong character in a
+  base URL meant re-entering the record. `PATCH /agents/remote/{name}` +
+  `RemoteAgentRegistry.update` do a PARTIAL update. Do NOT "simplify" this back
+  into a re-POST of the create body: `upsert` assigns EVERY column including
+  `row.secret_name`, and the bearer token is stored encrypted and NEVER returned
+  so no UI can prefill it — a re-post therefore sends an empty token and
+  silently drops a working credential the user cannot retype, which is worse
+  than the retyping it was meant to save. The token has THREE intents and
+  conflating any two loses a secret: send one to replace, send NOTHING to keep,
+  set `clear_token` to remove. An empty string is "I didn't type one", never
+  "delete it" — mutation-proven, and the flag alone is not enough to assert
+  (treating `""` as a new token leaves `has_credential` true while overwriting
+  the vault entry with an empty string, so tests check the VALUE). `name` is
+  deliberately immutable: panels and threads refer to a remote by name
+  (`participantKey("remote", name)`), so renaming would orphan them silently.
 - **A draft the user will SEND is fenced, boxed, and copied as RICH TEXT**
   (v1.161.0). `DRAFT_BLOCK` in `daemon/chat_turn.py` tells the model to wrap an
   email/message it drafts for the user in a ```email fence with a `Subject:`

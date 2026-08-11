@@ -1440,9 +1440,19 @@ def test_a_backfill_sized_write_cannot_stall_a_chat_save(engine, index):
     * after — p50 **2.0 ms**, p95 **34.1 ms**, max **112 ms**, 75 saves in
       0.2 s wall, zero writes lost on either side.
 
-    The thresholds below are ~6x looser than the measurement and ~1000x tighter
-    than the pathology: they cannot flake, and they cannot pass while the
-    inversion exists.
+    THE THRESHOLD IS RELATIVE, and that is a correction (v1.164.0). It used to
+    be an absolute ``p95 < 200ms``, justified as "~6x looser than the
+    measurement and ~1000x tighter than the pathology: they cannot flake". It
+    flaked — CI measured p95 211ms on a shared runner and failed the build,
+    while the pathology it guards is 165 SECONDS. An absolute millisecond bar
+    measures the HARDWARE as much as the code, and this bench's own numbers
+    (0.2s wall for 75 saves) came from a fast desktop.
+
+    So the same saver loop runs TWICE: once alone, once against the backfiller.
+    The invariant is that the backfill does not stall a save, which is a
+    statement about the RATIO — and the ratio has enormous discriminating power
+    here, because the pathology is ~80,000x, not 6x. A slow runner moves both
+    numbers together and the test stays honest.
     """
     import statistics
     import threading
@@ -1475,7 +1485,7 @@ def test_a_backfill_sized_write_cannot_stall_a_chat_save(engine, index):
         except BaseException as exc:  # noqa: BLE001
             errors.append(exc)
 
-    def saver(tag: str):
+    def saver(tag: str, into: list[float]):
         """Exactly the shape ``PUT /chat/threads/{id}`` issues."""
         try:
             for i in range(per_saver):
@@ -1492,35 +1502,72 @@ def test_a_backfill_sized_write_cannot_stall_a_chat_save(engine, index):
                         db=db,
                     )
                     db.commit()
-                latencies.append((time.perf_counter() - t0) * 1000.0)
+                into.append((time.perf_counter() - t0) * 1000.0)
         except BaseException as exc:  # noqa: BLE001
             errors.append(exc)
 
+    def run_savers(prefix: str, into: list[float]) -> None:
+        threads = [
+            threading.Thread(target=saver, args=(f"{prefix}{n}", into))
+            for n in range(savers)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=300)
+        assert not any(t.is_alive() for t in threads), "a writer never finished"
+
+    # BASELINE: the identical loop with no backfiller, so the comparison below
+    # is against THIS machine rather than against the desktop this was written
+    # on. Runs first so a cold index/page cache penalises the baseline, never
+    # the contended run — that direction can only make the test stricter.
+    baseline: list[float] = []
+    run_savers("base", baseline)
+    assert not errors, errors
+    assert len(baseline) == per_saver * savers
+
     bf = threading.Thread(target=backfiller, daemon=True)
-    workers = [threading.Thread(target=saver, args=(str(n),)) for n in range(savers)]
     bf.start()
-    for t in workers:
-        t.start()
-    for t in workers:
-        t.join(timeout=300)
+    run_savers("hot", latencies)
     stop.set()
     bf.join(timeout=300)
 
     assert not errors, errors
-    assert not any(t.is_alive() for t in [bf, *workers]), "a writer never finished"
+    assert not bf.is_alive(), "the backfill writer never finished"
     assert len(latencies) == per_saver * savers
 
+    def pct(values: list[float], q: float) -> float:
+        ordered = sorted(values)
+        return ordered[int(q * (len(ordered) - 1))]
+
+    base_p95 = pct(baseline, 0.95)
     ordered = sorted(latencies)
     p50 = statistics.median(ordered)
     p95 = ordered[int(0.95 * (len(ordered) - 1))]
-    detail = f"p50={p50:.1f}ms p95={p95:.1f}ms max={ordered[-1]:.1f}ms"
-    assert p95 < 200.0, f"chat saves are stalling behind the backfill: {detail}"
-    assert ordered[-1] < 2000.0, f"a chat save starved on the index lock: {detail}"
+    detail = (
+        f"contended p50={p50:.1f}ms p95={p95:.1f}ms max={ordered[-1]:.1f}ms; "
+        f"alone p95={base_p95:.1f}ms max={max(baseline):.1f}ms"
+    )
+    # A floor of 200ms so a machine where an uncontended save is sub-millisecond
+    # cannot make the ratio absurdly strict; above that it scales with the box.
+    # The pathology was ~80,000x, so 50x cannot pass while the inversion exists
+    # and cannot fail because a CI runner is busy.
+    limit = max(200.0, base_p95 * 50.0)
+    assert p95 < limit, (
+        f"chat saves are stalling behind the backfill (limit {limit:.0f}ms): {detail}"
+    )
+    assert ordered[-1] < max(2000.0, max(baseline) * 100.0), (
+        f"a chat save starved on the index lock: {detail}"
+    )
 
     # Neither side lost a write: every save is searchable, and no self-owned
     # write returned 0 (which is how SearchIndex reports a swallowed failure).
     assert written and 0 not in written, "the backfill-shaped writer lost documents"
-    assert len(index.search("live save body", limit=MAX_LIMIT)) == per_saver * savers
+    # BOTH runs' saves are searchable — the baseline pass adds its own set, and
+    # counting only one would hide a write lost in the other.
+    assert (
+        len(index.search("live save body", limit=MAX_LIMIT)) == 2 * per_saver * savers
+    )
 
 
 # -- backfill: a poison ROW must not cost the rest of its PHASE --------------

@@ -21,6 +21,7 @@ from ..schemas import (
     McpSettingsPatch,
     McpSuggestBody,
     RemoteAgentCreate,
+    RemoteAgentPatch,
     RemoteAgentRun,
     SkillApplyBody,
     SkillCreate,
@@ -363,6 +364,68 @@ def register(app: FastAPI, d) -> None:
             timeout_s=int(body.timeout_s or 120),
         )
         return _remote_view(rec)
+
+    @app.patch("/agents/remote/{name}")
+    def edit_remote_agent(name: str, body: RemoteAgentPatch) -> dict[str, Any]:
+        """Fix one thing about a registered remote agent (v1.164.0).
+
+        Before this the only options were Test and Delete, so a mistyped base
+        URL meant deleting and re-entering the whole record — including a
+        bearer token the user may no longer have to hand.
+
+        Deliberately NOT a re-POST of the create body: that path assigns every
+        column, and the UI cannot prefill the token (stored encrypted, never
+        returned), so an edit would send an empty token and silently drop a
+        working credential. Here an omitted ``token`` keeps the stored one and
+        only ``clear_token`` removes it.
+        """
+        from ...agents.remote import KINDS
+
+        reg = _remote_reg()
+        rec = reg.get(name)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="no such remote agent")
+
+        fields: dict[str, Any] = {}
+        if body.base_url is not None:
+            base_url = body.base_url.strip()
+            if not base_url:
+                raise HTTPException(status_code=400, detail="base_url cannot be empty")
+            fields["base_url"] = base_url
+        if body.kind is not None:
+            if body.kind not in KINDS:
+                raise HTTPException(
+                    status_code=400, detail=f"kind must be one of {', '.join(KINDS)}"
+                )
+            fields["kind"] = body.kind
+        if body.model is not None:
+            fields["model"] = body.model.strip() or None
+        if body.enabled is not None:
+            fields["enabled"] = bool(body.enabled)
+        if body.timeout_s is not None:
+            fields["timeout_s"] = max(1, int(body.timeout_s))
+
+        # CREDENTIAL: three distinct intents, and conflating any two of them
+        # loses a secret the user cannot retype.
+        if body.clear_token:
+            if rec.secret_name:
+                try:
+                    d.platform.secrets.delete(rec.secret_name)
+                except Exception:  # noqa: BLE001 — an absent secret is fine
+                    pass
+            fields["secret_name"] = None
+        elif (body.token or "").strip():
+            secret_name = "remote_agent_" + name
+            d.platform.secrets.set(secret_name, body.token.strip(), kind="token")
+            fields["secret_name"] = secret_name
+        # else: untouched. This is the whole reason the endpoint exists.
+
+        if not fields:
+            return _remote_view(rec)  # nothing asked for; not an error
+        updated = reg.update(name, **fields)
+        if updated is None:  # raced with a delete
+            raise HTTPException(status_code=404, detail="no such remote agent")
+        return _remote_view(updated)
 
     @app.delete("/agents/remote/{name}")
     def delete_remote_agent(name: str) -> dict[str, Any]:

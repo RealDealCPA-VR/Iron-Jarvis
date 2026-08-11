@@ -275,10 +275,168 @@ function YourAgentsSection({
 
 /* ---------------------------------------------------------- remote agents --- */
 
+/**
+ * Edit an already-connected remote agent (v1.164.0).
+ *
+ * Exists because the row only offered Test and Delete, so one mistyped
+ * character in a base URL meant re-entering the whole record — including a
+ * bearer token the user may not still have.
+ *
+ * THE SECRET BOX IS EMPTY AND STAYS EMPTY. The token is stored encrypted and
+ * never returned, so it CANNOT be prefilled; leaving the field alone keeps
+ * whatever is stored, and removing a credential takes the explicit checkbox.
+ * (The backend enforces the same three-way split — an empty box is "I didn't
+ * type one", never "delete it".)
+ *
+ * The NAME is shown read-only: panels and threads refer to a remote by name, so
+ * renaming here would orphan those references without saying so.
+ */
+function RemoteEditForm({
+  agent,
+  onDone,
+  onCancel,
+}: {
+  agent: RemoteAgentInfo;
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const [baseUrl, setBaseUrl] = useState(agent.base_url);
+  const [kind, setKind] = useState<RemoteKind>((agent.kind as RemoteKind) || "http-task");
+  const [model, setModel] = useState(agent.model || "");
+  const [secret, setSecret] = useState("");
+  const [clearToken, setClearToken] = useState(false);
+  const [enabled, setEnabled] = useState(agent.enabled !== false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    if (!baseUrl.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const body: Record<string, unknown> = {
+        base_url: baseUrl.trim(),
+        kind,
+        model: OPENAI_KINDS.includes(kind) ? model.trim() : "",
+        enabled,
+      };
+      // Only ever SEND a token when one was typed — an absent field is what
+      // tells the daemon to keep the stored credential.
+      if (clearToken) body.clear_token = true;
+      else if (secret.trim()) body.token = secret.trim();
+      await patch(`/agents/remote/${encodeURIComponent(agent.name)}`, body);
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form
+      onSubmit={save}
+      data-testid={`remote-edit-${agent.name}`}
+      className="mt-2 space-y-2.5 rounded-lg border border-accent/20 bg-accent/[0.03] p-2.5"
+    >
+      <div className="grid grid-cols-2 gap-2">
+        <div className="flex items-center gap-1.5 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1.5 text-xs text-zinc-500">
+          <span className="truncate" title="A remote's name is how panels and threads refer to it — delete and re-add to rename.">
+            {agent.name}
+          </span>
+        </div>
+        <select
+          value={kind}
+          onChange={(e) => setKind(e.target.value as RemoteKind)}
+          aria-label="Remote kind"
+          className="field text-xs"
+        >
+          <option value="http-task">http-task (task API)</option>
+          <option value="openai-chat">openai-chat (chat/completions)</option>
+          <option value="openai-responses">openai-responses (Responses API)</option>
+        </select>
+      </div>
+      <input
+        value={baseUrl}
+        onChange={(e) => setBaseUrl(e.target.value)}
+        placeholder="base URL"
+        aria-label="Base URL"
+        autoComplete="off"
+        className="field font-mono text-xs"
+      />
+      {OPENAI_KINDS.includes(kind) && (
+        <input
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          placeholder="model — gpt-4o-mini / llama3"
+          aria-label="Model"
+          autoComplete="off"
+          className="field font-mono text-xs"
+        />
+      )}
+      <input
+        type="password"
+        value={secret}
+        onChange={(e) => setSecret(e.target.value)}
+        disabled={clearToken}
+        placeholder={
+          agent.has_credential
+            ? "secret — leave blank to keep the current one"
+            : "secret (optional)"
+        }
+        aria-label="Bearer secret"
+        autoComplete="off"
+        className="field font-mono text-xs disabled:opacity-40"
+      />
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+        <label className="inline-flex items-center gap-1.5 text-[11px] text-zinc-400">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+            className="accent-cyan-400"
+          />
+          enabled
+        </label>
+        {agent.has_credential && (
+          <label className="inline-flex items-center gap-1.5 text-[11px] text-zinc-400">
+            <input
+              type="checkbox"
+              checked={clearToken}
+              onChange={(e) => setClearToken(e.target.checked)}
+              className="accent-rose-400"
+            />
+            remove the stored secret
+          </label>
+        )}
+        <span className="ml-auto flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg border border-white/10 px-2 py-1 text-[11px] text-zinc-400 transition-colors hover:text-zinc-200"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={busy || !baseUrl.trim()}
+            className="btn-accent px-2.5 py-1 text-[11px]"
+          >
+            {busy ? <LoaderInline label="Saving…" /> : "Save"}
+          </button>
+        </span>
+      </div>
+      {error && <ErrorNote>{error}</ErrorNote>}
+    </form>
+  );
+}
+
 function RemoteRow({ agent, onChanged }: { agent: RemoteAgentInfo; onChanged: () => void }) {
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<{ ok: boolean; detail: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
 
   async function runTest() {
     setTesting(true);
@@ -336,6 +494,15 @@ function RemoteRow({ agent, onChanged }: { agent: RemoteAgentInfo; onChanged: ()
           >
             {testing ? <LoaderInline label="…" /> : <><CheckCircle2 size={12} /> Test</>}
           </button>
+          <button
+            type="button"
+            onClick={() => setEditing((v) => !v)}
+            aria-expanded={editing}
+            title={`Fix "${agent.name}" without re-entering it`}
+            className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
+          >
+            <Pencil size={12} /> Edit
+          </button>
           <ConfirmButton
             onConfirm={remove}
             label="Delete"
@@ -343,6 +510,17 @@ function RemoteRow({ agent, onChanged }: { agent: RemoteAgentInfo; onChanged: ()
           />
         </span>
       </div>
+      {editing && (
+        <RemoteEditForm
+          agent={agent}
+          onDone={() => {
+            setEditing(false);
+            setTest(null); // a stale "Reachable." would describe the OLD config
+            onChanged();
+          }}
+          onCancel={() => setEditing(false)}
+        />
+      )}
       <div className="mt-1 overflow-x-auto pl-7">
         <code className="whitespace-pre font-mono text-[10px] text-zinc-500">
           {agent.base_url}
