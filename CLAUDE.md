@@ -112,6 +112,32 @@ cd dashboard && pnpm dev           # dashboard
   namespace persists for a whole session, so consent to one call is not consent
   to what accumulates. `_store_as` is advertised only on `VERBOSE_TOOLS` —
   putting it on all ~60 tools would spend more context than the feature saves.
+- **Every chat reply is ACCOUNTABLE where the user is standing** (v1.165.0).
+  Three honesty mechanisms existed and ALL THREE missed the mock-answer
+  incident: the downgrade event fired (ledger had it), the banner rendered on
+  the Overview only, and the "answered by X" chip suppressed itself on the
+  default route (it compared against the EXPLICIT pick). The fix is
+  server-side truth: `RouteResult` carries `requested` (`""` = no explicit
+  pick — the default's name is NOT echoed, or "picked X" and "default is X"
+  become indistinguishable) and `reason`
+  (explicit/default/failover/prompted-tools/auto-tier/local-oracle/mock), with
+  `reason=="mock"` iff `provider=="mock"` (`_disclosed_reason` — applied at
+  EVERY terminal site in BOTH `complete()` and `stream()`, a lock-step pair).
+  Both chat lanes emit `route:{requested,provider,model,reason}`; error paths
+  emit NO route (a half-built route is an authoritative-looking lie).
+  `documents` now also merges `result.created_paths` from every SUCCESSFUL
+  tool (failed tools' paths are excluded to match the undo-ledger convention;
+  RELATIVE paths are dropped, not resolved — resolving a lying tool's path
+  against a guessed base could disclose the wrong file). The dashboard renders
+  this as the TurnReceipt under each reply (mock/failover/mismatch warnings
+  amber and visible WITHOUT expanding; "prompted-tools"/"auto-tier"/
+  "local-oracle" stay quiet — user-configured automation is not substitution),
+  the ArtifactsRail (per-conversation files: preview/download/copy/dismiss),
+  and the PreflightNote above the composer (the active provider is
+  known-unreachable BEFORE the user types; watches the explicit pick, else the
+  DEFAULT — silent for "auto" and on first-poll-failure). The legacy
+  viaProvider chip and "used:" footer render ONLY for pre-v1.165.0 messages
+  (`!m.route`) — showing both would say everything twice.
 - **A remote agent is EDITABLE, and an edit must never eat its credential**
   (v1.164.0). The row offered only Test and Delete, so one wrong character in a
   base URL meant re-entering the record. `PATCH /agents/remote/{name}` +

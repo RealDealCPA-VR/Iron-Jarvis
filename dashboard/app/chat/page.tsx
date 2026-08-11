@@ -106,6 +106,10 @@ import { CommThreadBanner } from "@/components/chat/CommThreadBanner";
 import { WorkflowDraftCard } from "@/components/chat/WorkflowDraftCard";
 import { RunResultCard, type RunResult } from "@/components/chat/RunResultCard";
 import { DraftCard, draftFromFence } from "@/components/chat/DraftCard";
+import { TurnReceipt, type TurnRoute } from "@/components/chat/TurnReceipt";
+import { ArtifactsRail } from "@/components/chat/ArtifactsRail";
+import { PreflightNote } from "@/components/chat/PreflightNote";
+import { useProviderHealth } from "@/lib/useProviderHealth";
 import type { WorkflowDraft } from "@/lib/types";
 import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
 import { timeAgo } from "@/lib/format";
@@ -184,8 +188,21 @@ interface ChatMessage {
   sources?: ChatSource[];
   /** The provider that ACTUALLY answered when it differs from the one the
    *  user explicitly picked (capability reroute / failover) — an honesty chip
-   *  so a local-model turn silently served by a CLI is never invisible. */
+   *  so a local-model turn silently served by a CLI is never invisible.
+   *  LEGACY (pre-v1.165.0): kept for messages persisted before `route`
+   *  existed; when `route` is present the TurnReceipt supersedes this chip. */
   viaProvider?: string;
+  /** SERVER-side route disclosure (v1.165.0): who was asked (""=default
+   *  route), who actually answered, and why. The old viaProvider chip compared
+   *  against the EXPLICIT pick only, so a downgraded default-route turn — the
+   *  mock's "Done. Wrote RESULT.md" incident — surfaced nothing. */
+  route?: TurnRoute;
+  /** Armed tools the engine refused this turn (assistant messages) — a silent
+   *  denial reads as the model ignoring the user, so the receipt shows it. */
+  deniedTools?: string[];
+  /** ABSOLUTE paths of files this turn created/edited — per-message so the
+   *  receipt can say which TURN made which file (threadDocs is the rollup). */
+  documents?: string[];
   /** This assistant reply was cut off mid-stream (Stop, or a committed failure)
    *  — shown with a subtle marker so a partial answer never looks complete. */
   interrupted?: boolean;
@@ -233,6 +250,10 @@ interface ChatResponse {
   reply: string;
   provider?: string;
   model?: string;
+  /** Server-side route disclosure (v1.165.0) — see ChatMessage.route. */
+  route?: TurnRoute;
+  /** Armed tools the engine refused this turn. */
+  denied_tools?: string[];
   images?: string[];
   skill?: string;
   tools_used?: string[];
@@ -1126,6 +1147,9 @@ export default function ChatPage() {
   } | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [choice, setChoice] = useState(""); // "" => server default model
+  // Live per-provider availability (v1.165.0) — drives the preflight note
+  // above the composer. 5s default keeps it in step with the topbar switcher.
+  const health = useProviderHealth();
   const [personas, setPersonas] = useState<PersonaOption[]>(DEFAULT_PERSONAS);
   const [persona, setPersona] = useState("assistant");
   // PERSONA EDITOR: a collapsible panel that edits the SELECTED persona (or a
@@ -3304,6 +3328,8 @@ export default function ChatPage() {
         const {
           reply,
           tools_used,
+          deniedTools,
+          route,
           provider: servedBy,
           documents: madeDocs,
           escalate,
@@ -3325,6 +3351,14 @@ export default function ChatPage() {
         const sources = extractWebSources(streamToolsRef.current);
         const finalReply = (reply ?? "").trim() || "(no response)";
         const via = servedByOther(servedBy);
+        // Accountability fields (v1.165.0): stored PER MESSAGE so the receipt
+        // under each reply keeps telling the truth after restarts, not just on
+        // the turn it streamed in.
+        const receipt = {
+          ...(route ? { route } : {}),
+          ...(deniedTools?.length ? { deniedTools } : {}),
+          ...(madeDocs?.length ? { documents: madeDocs } : {}),
+        };
         const full: ChatMessage[] = [
           ...history,
           {
@@ -3333,6 +3367,7 @@ export default function ChatPage() {
             ...(toolsUsed.length ? { toolsUsed } : {}),
             ...(sources.length ? { sources } : {}),
             ...(via ? { viaProvider: via } : {}),
+            ...receipt,
           },
         ];
         // The turn crystallized into a workflow proposal (v1.120.0): commit
@@ -3351,6 +3386,7 @@ export default function ChatPage() {
               ...(toolsUsed.length ? { toolsUsed } : {}),
               ...(sources.length ? { sources } : {}),
               ...(via ? { viaProvider: via } : {}),
+              ...receipt,
             },
           ];
           setMessages(done);
@@ -3436,6 +3472,14 @@ export default function ChatPage() {
       const toolsUsed = (res.tools_used ?? []).filter((t) => Boolean(t));
       const reply = (res.reply ?? "").trim() || "(no response)";
       const viaPost = servedByOther(res.provider);
+      // Accountability fields (v1.165.0) — the POST lane's copy of the stream
+      // lane's `receipt`. MIRROR NOTE: keep in step with the stream path above.
+      const deniedPost = (res.denied_tools ?? []).filter(Boolean);
+      const receiptPost = {
+        ...(res.route ? { route: res.route } : {}),
+        ...(deniedPost.length ? { deniedTools: deniedPost } : {}),
+        ...(res.documents?.length ? { documents: res.documents } : {}),
+      };
       const full: ChatMessage[] = [
         ...history,
         {
@@ -3443,6 +3487,7 @@ export default function ChatPage() {
           content: reply,
           ...(toolsUsed.length ? { toolsUsed } : {}),
           ...(viaPost ? { viaProvider: viaPost } : {}),
+          ...receiptPost,
         },
       ];
       if (res.workflow_draft) {
@@ -4917,7 +4962,22 @@ export default function ChatPage() {
                           {/* Honesty chip: the reply came from a DIFFERENT
                               provider than the one the user picked (capability
                               reroute / failover) — never silent. */}
-                          {m.viaProvider && (
+                          {/* TURN RECEIPT (v1.165.0): server-side accountability
+                              — who answered and why, tools run/denied, files.
+                              Supersedes the legacy viaProvider chip below
+                              whenever the message carries a route. */}
+                          {m.route && (
+                            <div className="ml-11">
+                              <TurnReceipt
+                                route={m.route}
+                                toolsUsed={m.toolsUsed}
+                                deniedTools={m.deniedTools}
+                                documents={m.documents}
+                                onOpenDocument={openDocPreview}
+                              />
+                            </div>
+                          )}
+                          {!m.route && m.viaProvider && (
                             <div
                               className="ml-11 mt-1 inline-flex items-center gap-1.5 rounded-full border border-amber-400/25 bg-amber-400/[0.08] px-2 py-0.5 text-[11px] text-amber-200/90"
                               title={`Your selected model couldn't take this turn (it may not support tools, or it errored), so the router used ${m.viaProvider} instead. Verify the endpoint's tool support in Connections to keep turns local.`}
@@ -4926,8 +4986,11 @@ export default function ChatPage() {
                               answered by {m.viaProvider}
                             </div>
                           )}
-                          {/* Tools the reply's tool loop actually ran */}
-                          {m.toolsUsed && m.toolsUsed.length > 0 && (
+                          {/* Tools the reply's tool loop actually ran — LEGACY
+                              line for pre-v1.165.0 messages; the TurnReceipt
+                              carries the same fact (plus denials) when a route
+                              is present, so showing both would say it twice. */}
+                          {!m.route && m.toolsUsed && m.toolsUsed.length > 0 && (
                             <div className="ml-11 mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-zinc-500">
                               <Wrench size={10} className="shrink-0 text-accent-soft/70" />
                               <span className="truncate">
@@ -5076,6 +5139,23 @@ export default function ChatPage() {
                   )}
                 </div>
               )}
+
+              {/* PREFLIGHT (v1.165.0): the active model is known-unreachable
+                  BEFORE the user types a paragraph into it. The app always had
+                  this fact (/health) and used to reveal it only after the turn
+                  failed. Watches the EXPLICIT pick when there is one, else the
+                  DEFAULT provider — the default is exactly where the mock
+                  incident happened. "auto" resolves per-turn, so it is never
+                  warned about (absent from the map → undefined → silent). */}
+              <PreflightNote
+                provider={splitChoice(choice).provider || health.defaultProvider}
+                available={
+                  health.byProvider[
+                    splitChoice(choice).provider || health.defaultProvider
+                  ]
+                }
+                stale={health.stale}
+              />
 
               {/* The compaction offer (v1.153.0). Sits directly above the
                   composer because it is about the message the user is about to
@@ -6160,55 +6240,28 @@ export default function ChatPage() {
                   </div>
                 ) : (
                 <>
-                {/* FILES IN THIS CHAT (v1.153.2). Every file this conversation
-                    made or was given, reachable without a project and without
-                    hunting through the composer's chip row. Reported problem:
-                    a redacted document was announced, the user asked where it
-                    was, and had nowhere in the app to go and look. */}
+                {/* FILES IN THIS CHAT (v1.153.2 → ArtifactsRail v1.165.0).
+                    Every file this conversation made or was given, reachable
+                    without a project. Reported problem: a redacted document was
+                    announced and the user had nowhere in the app to look. Now a
+                    shared component with file-type icons, copy-path, download
+                    AND per-item dismiss (the inline block had no dismiss here);
+                    since v1.165.0 the backend also reports created_paths from
+                    EVERY tool, so repl-made files land here too, not only the
+                    document tools' output. */}
                 {threadDocs.length > 0 && (
-                  <div className="shrink-0 rounded-xl border border-white/[0.06] bg-ink-850/60 p-2">
-                    <div className="flex items-center gap-2 px-1 pb-1.5">
-                      <FileText size={12} className="shrink-0 text-accent-soft/80" />
-                      <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-                        Files in this chat
-                      </span>
-                      <span className="ml-auto text-[10px] text-zinc-600">
-                        {threadDocs.length}
-                      </span>
-                    </div>
-                    <div className="flex max-h-44 flex-col gap-0.5 overflow-y-auto">
-                      {threadDocs.map((doc) => {
-                        const dn = doc.split(/[\\/]/).pop() || doc;
+                  <div className="shrink-0">
+                    <ArtifactsRail
+                      items={threadDocs.map((p) => ({ path: p }))}
+                      onPreview={openDocPreview}
+                      onDismiss={dismissThreadDoc}
+                      downloadHref={(p) => {
                         const tok = ijToken();
-                        const href = `${API_BASE}/documents/file?path=${encodeURIComponent(
-                          doc,
+                        return `${API_BASE}/documents/file?path=${encodeURIComponent(
+                          p,
                         )}${tok ? `&token=${encodeURIComponent(tok)}` : ""}`;
-                        return (
-                          <div
-                            key={`railfile-${doc}`}
-                            className="group flex items-center gap-1.5 rounded-lg px-1.5 py-1 transition-colors hover:bg-white/[0.05]"
-                          >
-                            <button
-                              type="button"
-                              onClick={() => openDocPreview(doc)}
-                              title={doc}
-                              className="min-w-0 flex-1 truncate text-left text-[11.5px] text-zinc-300 transition-colors hover:text-accent-soft"
-                            >
-                              {dn}
-                            </button>
-                            <a
-                              href={href}
-                              download={dn}
-                              title={`Download ${dn}`}
-                              aria-label={`Download ${dn}`}
-                              className="grid h-5 w-5 shrink-0 place-items-center rounded text-zinc-600 transition-colors hover:bg-white/[0.08] hover:text-accent-soft"
-                            >
-                              <Download size={12} />
-                            </a>
-                          </div>
-                        );
-                      })}
-                    </div>
+                      }}
+                    />
                   </div>
                 )}
                 <div className="min-h-0 flex-1">

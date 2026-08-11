@@ -1557,6 +1557,29 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                                     made_docs.append(_abs)
                             except Exception:  # noqa: BLE001
                                 pass
+                    # EVERY file a turn creates is disclosed, not just the
+                    # document tools' (v1.165.0): ToolResult.created_paths
+                    # carries ABSOLUTE paths for files a tool could not name
+                    # up front (the repl tool's workspace diff, batch jobs).
+                    # Without this merge a repl-written file never reached
+                    # `documents`, so the preview rail heard nothing about it.
+                    # Merged in call order, deduped against the doc-tool
+                    # entries above. ABSOLUTE paths only: the contract says
+                    # absolute (tools/base.py), and a third-party tool's
+                    # relative name is an unverifiable claim — resolving it
+                    # against a guessed base could disclose the WRONG file,
+                    # which is worse than not disclosing it. MIRROR NOTE
+                    # (lock-step): the stream loop in routes/chat.py carries
+                    # this same merge — edit both or neither.
+                    for _cp in getattr(result, "created_paths", None) or []:
+                        _cp = str(_cp)
+                        try:
+                            if not Path(_cp).is_absolute():
+                                continue
+                        except (OSError, ValueError):
+                            continue
+                        if _cp not in made_docs:
+                            made_docs.append(_cp)
                     # FENCE externally-sourced tool output before the model
                     # sees it — a planted file / web page / memory / PDF can't
                     # inject instructions (the same guard the agent runtime
@@ -1664,6 +1687,24 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         "reply": reply,
         "provider": route.provider,
         "model": route.model,
+        # ROUTE DISCLOSURE (v1.165.0) — server-side truth of WHO answered and
+        # WHY. The dashboard's "answered by X" chip computed this client-side
+        # against the EXPLICIT pick only, so on the default route (chat sends
+        # no provider) it was silent — the exact gap that let an unreachable
+        # default's turn read as a normal answer. Top-level provider/model
+        # stay untouched for existing clients; this OBJECT is the additive
+        # surface. `requested` is "" on the default route; `reason` is one of
+        # explicit/default/failover/prompted-tools/auto-tier/local-oracle/
+        # mock — and a mock answer ALWAYS says "mock" (see RouteResult).
+        # getattr-guarded: fakes in older tests return bare 3-field results.
+        # MIRROR NOTE (lock-step): the stream done-frame in routes/chat.py
+        # carries the identical object — edit both or neither.
+        "route": {
+            "requested": getattr(route, "requested", ""),
+            "provider": route.provider,
+            "model": route.model,
+            "reason": getattr(route, "reason", ""),
+        },
         "attached": len(body.attachments or []),
         "images": len(images),
         "skill": (body.skill or "").strip() or None,

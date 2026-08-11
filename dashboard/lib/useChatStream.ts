@@ -40,6 +40,11 @@ export type SSEEvent =
       reply: string;
       provider?: string;
       model?: string;
+      /** SERVER-side route disclosure (v1.165.0): who was asked, who actually
+       *  answered, and why. The client used to infer this by comparing against
+       *  the user's EXPLICIT pick, so a downgraded default-route turn (the
+       *  mock's "Done. Wrote RESULT.md" incident) surfaced nothing. */
+      route?: { requested?: string; provider: string; model?: string; reason?: string };
       tools_used?: string[];
       denied_tools?: string[];
       /** ABSOLUTE paths of documents this turn created/edited (preview). */
@@ -74,6 +79,14 @@ export interface ToolCard {
 export interface ChatStreamResult {
   reply: string;
   tools_used?: string[];
+  /** Armed tools the engine refused this turn. Decoded from the frame since
+   *  v1.148.0 but DROPPED here until v1.165.0 — the page could never show a
+   *  denial, which is how a silently-blocked tool stays invisible. */
+  deniedTools?: string[];
+  /** Server-side route disclosure (v1.165.0) — see the done-frame field. */
+  route?: { requested?: string; provider: string; model?: string; reason?: string };
+  /** Token usage for the turn (was decoded and dropped, like denied_tools). */
+  usage?: { input_tokens?: number; output_tokens?: number };
   provider?: string;
   model?: string;
   /** ABSOLUTE paths of documents this turn created/edited (preview panel). */
@@ -169,6 +182,12 @@ export function sseEventFrom(
       };
       if (typeof data.provider === "string") ev.provider = data.provider;
       if (typeof data.model === "string") ev.model = data.model;
+      if (
+        data.route &&
+        typeof data.route === "object" &&
+        typeof (data.route as { provider?: unknown }).provider === "string"
+      )
+        ev.route = data.route as Extract<SSEEvent, { type: "done" }>["route"];
       if (Array.isArray(data.tools_used)) ev.tools_used = data.tools_used as string[];
       if (Array.isArray(data.denied_tools))
         ev.denied_tools = data.denied_tools as string[];
@@ -446,6 +465,9 @@ export function useChatStream(): UseChatStream {
               done = {
                 reply: ev.reply || acc,
                 tools_used: ev.tools_used,
+                deniedTools: ev.denied_tools,
+                route: ev.route,
+                usage: ev.usage,
                 provider: ev.provider ?? provider,
                 model: ev.model ?? model,
                 documents: ev.documents,

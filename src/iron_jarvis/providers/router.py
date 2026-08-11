@@ -230,11 +230,54 @@ def wrap_prompted_tools(adapter: LLMAdapter) -> LLMAdapter:
     return PromptedToolsAdapter(adapter)
 
 
+def _disclosed_reason(reason: str, serving_provider: str) -> str:
+    """The route reason a caller may DISCLOSE to the user (v1.165.0).
+
+    The resolver's reason, with ONE override: an answer served by the offline
+    mock is always labelled ``"mock"``. On a fresh install the default provider
+    IS the mock, so its resolver reason is ``"default"`` — the majority case —
+    and a scripted answer that hides inside the majority case is exactly how
+    "Done. Wrote RESULT.md" read as finished work. The mock never gets to be
+    ordinary."""
+    return "mock" if serving_provider == "mock" else reason
+
+
 class RouteResult:
-    def __init__(self, response: LLMResponse, provider: str, model: str) -> None:
+    """What answered — and, since v1.165.0, WHY.
+
+    ``provider``/``model`` are the adapter that ACTUALLY served the request
+    (post-failover, post-wrap). The two optional fields carry the route story
+    so a chat reply can disclose it server-side (the dashboard's "answered by
+    X" chip used to compute this client-side against the EXPLICIT pick only,
+    which is silent on the default route — the exact gap that let a mock
+    answer pass without a signal):
+
+    * ``requested`` — the provider the caller EXPLICITLY asked for, ``""``
+      when the caller took the default route (chat sends no provider, so ""
+      is chat's normal value; the default's name is already in ``provider``).
+    * ``reason``    — how the serving adapter was chosen. One of:
+      ``"explicit"`` / ``"default"`` / ``"failover"`` / ``"prompted-tools"``
+      / ``"auto-tier"`` / ``"local-oracle"`` / ``"mock"`` — the same strings
+      ``provider.routed`` has always carried, threaded onto the result
+      instead of recomputed. ``"mock"`` always wins when the mock served
+      (see :func:`_disclosed_reason`).
+
+    Both fields default (``""`` / ``"default"``) so every pre-existing
+    3-positional constructor call — including test stubs — keeps working."""
+
+    def __init__(
+        self,
+        response: LLMResponse,
+        provider: str,
+        model: str,
+        requested: str = "",
+        reason: str = "default",
+    ) -> None:
         self.response = response
         self.provider = provider
         self.model = model
+        self.requested = requested
+        self.reason = reason
 
 
 class ModelRouter:
@@ -676,7 +719,17 @@ class ModelRouter:
                 adapter, system=system, messages=messages, tools=tools, deadline=deadline
             )
             self.health.record_success(adapter.provider)
-            return RouteResult(response, adapter.provider, adapter.model)
+            # ROUTE DISCLOSURE (v1.165.0): thread the SAME requested/reason the
+            # provider.routed event carries onto the result, so the chat lanes
+            # can disclose them without re-deriving routing truth client-side.
+            # MIRROR NOTE (lock-step): stream() carries the identical
+            # disclosure on its terminal `final` frame via _enrich_final —
+            # edit both or neither.
+            return RouteResult(
+                response, adapter.provider, adapter.model,
+                requested=provider or "",
+                reason=_disclosed_reason(reason, adapter.provider),
+            )
         except Exception as exc:
             transient = is_transient_error(exc)
             self.health.record_failure(adapter.provider)
@@ -727,7 +780,18 @@ class ModelRouter:
                             {"from": adapter.provider, "to": alt.provider, "reason": "provider down"},
                             session_id=session_id,
                         )
-                        return RouteResult(response, alt.provider, alt.model)
+                        # A failover answered — disclose it as such (v1.165.0).
+                        # Through _disclosed_reason like EVERY terminal site:
+                        # stream()'s _enrich_final applies the mock-wins rule
+                        # unconditionally, so this lane must too or the
+                        # "reason=='mock' iff provider=='mock'" invariant holds
+                        # in one lane only. MIRROR NOTE (lock-step): stream()
+                        # fallback (A).
+                        return RouteResult(
+                            response, alt.provider, alt.model,
+                            requested=provider or "",
+                            reason=_disclosed_reason("failover", alt.provider),
+                        )
                     except Exception as dexc:  # noqa: BLE001 — the default failed too
                         self.health.record_failure(alt.provider)
                         tried_ids.add(id(alt))
@@ -767,7 +831,15 @@ class ModelRouter:
                             {"from": adapter.provider, "to": alt.provider, "reason": "rate limited"},
                             session_id=session_id,
                         )
-                        return RouteResult(response, alt.provider, alt.model)
+                        # Sideways failover answered — disclose it (v1.165.0).
+                        # Through _disclosed_reason for the same lock-step
+                        # reason as fallback (A) above. MIRROR NOTE
+                        # (lock-step): stream() fallback (B).
+                        return RouteResult(
+                            response, alt.provider, alt.model,
+                            requested=provider or "",
+                            reason=_disclosed_reason("failover", alt.provider),
+                        )
                     except Exception:  # noqa: BLE001 — try the next candidate
                         self.health.record_failure(alt.provider)
                         tried_ids.add(id(alt))
@@ -791,7 +863,12 @@ class ModelRouter:
             response = await fallback.complete(
                 system=system, messages=messages, tools=tools
             )
-            return RouteResult(response, fallback.provider, fallback.model)
+            # The mock answered after the chosen mock failed — still "mock"
+            # (v1.165.0). MIRROR NOTE (lock-step): stream()'s mock tail.
+            return RouteResult(
+                response, fallback.provider, fallback.model,
+                requested=provider or "", reason="mock",
+            )
 
     # -- streaming execution helpers (FX-01) -------------------------------
     async def _stream_one(
@@ -857,13 +934,29 @@ class ModelRouter:
             pass
 
     @staticmethod
-    def _enrich_final(frame: dict[str, Any], adapter: LLMAdapter) -> dict[str, Any]:
+    def _enrich_final(
+        frame: dict[str, Any],
+        adapter: LLMAdapter,
+        requested: str = "",
+        reason: str = "default",
+    ) -> dict[str, Any]:
         """Tag the terminal ``final`` frame with the provider+model that ACTUALLY
         served it (which may differ from the primary after a failover) so a
-        streaming consumer gets the same routing truth ``RouteResult`` carries.
+        streaming consumer gets the same routing truth ``RouteResult`` carries —
+        since v1.165.0 that INCLUDES the route story (``requested``/``reason``,
+        same semantics and same "mock always wins" rule as ``RouteResult``), so
+        the stream lane can disclose WHO answered and WHY exactly like the
+        non-stream lane. MIRROR NOTE (lock-step): complete() carries the
+        identical disclosure on its RouteResult returns — edit both or neither.
         Every other frame passes through untouched."""
         if isinstance(frame, dict) and frame.get("type") == "final":
-            return {**frame, "provider": adapter.provider, "model": adapter.model}
+            return {
+                **frame,
+                "provider": adapter.provider,
+                "model": adapter.model,
+                "requested": requested,
+                "reason": _disclosed_reason(reason, adapter.provider),
+            }
         return frame
 
     async def stream(
@@ -980,7 +1073,9 @@ class ModelRouter:
                 deadline=deadline, retry=True,
             ):
                 committed = True
-                yield self._enrich_final(frame, adapter)
+                # Route disclosure rides the final frame (v1.165.0) — the
+                # stream twin of complete()'s RouteResult fields.
+                yield self._enrich_final(frame, adapter, provider or "", reason)
             self._record_stream_latency(adapter, t0)
             self.health.record_success(adapter.provider)
             return
@@ -1030,7 +1125,9 @@ class ModelRouter:
                         deadline=deadline, retry=False,
                     ):
                         committed = True
-                        yield self._enrich_final(frame, alt)
+                        # A failover answered — disclose it as such (v1.165.0).
+                        # MIRROR NOTE (lock-step): complete() fallback (A).
+                        yield self._enrich_final(frame, alt, provider or "", "failover")
                     self._record_stream_latency(alt, t0)
                     self.health.record_success(alt.provider)
                     await self.event_bus.publish(
@@ -1074,7 +1171,9 @@ class ModelRouter:
                         deadline=deadline, retry=False,
                     ):
                         committed = True
-                        yield self._enrich_final(frame, alt)
+                        # Sideways failover answered — disclose it (v1.165.0).
+                        # MIRROR NOTE (lock-step): complete() fallback (B).
+                        yield self._enrich_final(frame, alt, provider or "", "failover")
                     self._record_stream_latency(alt, t0)
                     self.health.record_success(alt.provider)
                     await self.event_bus.publish(
@@ -1107,7 +1206,9 @@ class ModelRouter:
         async for frame in fallback.stream(
             system=system, messages=messages, tools=tools
         ):
-            yield self._enrich_final(frame, fallback)
+            # The mock answered after the chosen mock failed — still "mock"
+            # (v1.165.0). MIRROR NOTE (lock-step): complete()'s mock tail.
+            yield self._enrich_final(frame, fallback, provider or "", "mock")
 
     # TODO(followup): a daily budget/cost ledger, response caching, and hard
     # context-window-fit filtering are deferred — none belongs solely in the

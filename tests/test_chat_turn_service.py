@@ -396,10 +396,15 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
     # v1.146.0 (context protection): one more — "context", what the turn cost
     # against the answering model's window. Additive; the composer's headroom
     # meter is its only consumer, and the SSE done frame carries the same shape.
+    # v1.165.0 (route disclosure): one more — "route", the server-side truth of
+    # WHO answered and WHY ({requested, provider, model, reason}); top-level
+    # provider/model are untouched. Same object in the SSE done frame; the
+    # semantics are pinned by tests/test_route_disclosure_v1165.py.
     assert set(body.keys()) == {
         "reply", "provider", "model", "attached", "images", "skill",
         "tools_used", "documents", "auto_armed", "escalate",
         "escalate_reason", "escalate_agent", "workflow_draft", "context",
+        "route",
     }
     assert body["reply"] == "hello"
     assert body["provider"] == "mock" and body["model"] == "mock"

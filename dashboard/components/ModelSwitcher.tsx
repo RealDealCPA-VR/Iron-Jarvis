@@ -146,6 +146,12 @@ export function ModelSwitcher() {
 
   const h = health.data;
   const models = useMemo(() => modelsData.data?.models ?? [], [modelsData.data]);
+  // Availability comes from the component's OWN 5s /health poll above — do NOT
+  // also mount lib/useProviderHealth here: that would add a second poller of
+  // the same endpoint in the same component. The hook exists for surfaces that
+  // don't already poll /health (e.g. the chat composer's PreflightNote); its
+  // default interval matches this component's 5s so the two can't visibly
+  // disagree for more than about one tick.
   const avail = useMemo(() => {
     const m = new Map<string, boolean>();
     for (const p of h?.providers ?? []) m.set(p.provider, p.available);
@@ -172,6 +178,14 @@ export function ModelSwitcher() {
 
   // Auto is ON when the active provider is the "auto" sentinel.
   const autoOn = activeProvider === "auto";
+
+  // PREFLIGHT: is the CURRENTLY-SELECTED provider known-unreachable? Strictly
+  // `=== false` — a provider /health doesn't list (e.g. the "auto" sentinel, or
+  // before the poll lands) is unknown, not offline, and must not raise a false
+  // alarm. Drives the amber dot on the trigger so the user is warned while
+  // choosing, before a turn fails.
+  const selectedOffline =
+    !autoOn && !!activeProvider && avail.get(activeProvider) === false;
 
   // Lazy /routing view: fetched while Auto is ON (so the topbar button can name
   // the routing model) or while the panel is open (for the chooser / tiers).
@@ -307,6 +321,15 @@ export function ModelSwitcher() {
           <span className="hidden max-w-[150px] truncate font-mono text-[11px] sm:inline">
             {activeModel}
           </span>
+        )}
+        {selectedOffline && (
+          <span
+            data-testid="ij-model-offline-dot"
+            role="img"
+            aria-label={`${activeProvider} is offline`}
+            title={`${activeProvider} isn't reachable right now — turns will fail until it's back`}
+            className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.7)]"
+          />
         )}
         <ChevronDown size={12} className="text-zinc-500" />
       </button>
@@ -552,20 +575,34 @@ export function ModelSwitcher() {
                 return (
                   <button
                     key={key}
-                    onClick={() => ok && choose(m)}
-                    disabled={!ok || busy === key}
+                    // Offline entries stay SELECTABLE on purpose (preflight,
+                    // not a trap): the user may want to keep a briefly-down
+                    // endpoint as their default. They are marked (dim, struck,
+                    // "(offline)") and the trigger's amber dot warns while it
+                    // stays selected.
+                    onClick={() => choose(m)}
+                    disabled={busy === key}
+                    title={
+                      ok
+                        ? undefined
+                        : `${m.name || m.provider} is offline — you can still select it, but turns will fail until it's back`
+                    }
                     className={`flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors ${
-                      ok ? "hover:bg-white/[0.06]" : "cursor-not-allowed opacity-40"
+                      ok ? "hover:bg-white/[0.06]" : "opacity-40 hover:bg-white/[0.06] hover:opacity-70"
                     } ${active ? "bg-accent/[0.1]" : ""}`}
                   >
                     <span className="min-w-0">
-                      <span className="block truncate font-mono text-[11px] text-zinc-200">
+                      <span
+                        className={`block truncate font-mono text-[11px] ${
+                          ok ? "text-zinc-200" : "text-zinc-500 line-through"
+                        }`}
+                      >
                         {m.model}
                       </span>
-                      <span className="text-[10px] text-zinc-500">
+                      <span className={`text-[10px] ${ok ? "text-zinc-500" : "text-amber-400/80"}`}>
                         {/* Friendly endpoint label over a raw "fleet-x7f2" id. */}
                         {m.name || m.provider}
-                        {!ok && " · not connected"}
+                        {!ok && " (offline)"}
                       </span>
                     </span>
                     {active && <Check size={13} className="text-accent-soft" />}

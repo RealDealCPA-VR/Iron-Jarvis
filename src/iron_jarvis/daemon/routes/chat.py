@@ -113,6 +113,11 @@ async def _router_frames(router, **kwargs):
         "response": route.response,
         "provider": route.provider,
         "model": route.model,
+        # Route disclosure (v1.165.0) survives the degraded single-chunk
+        # path too — same fields ModelRouter.stream's final frame carries.
+        # getattr-guarded: a stream-less fake router may return bare results.
+        "requested": getattr(route, "requested", ""),
+        "reason": getattr(route, "reason", ""),
     }
 
 
@@ -1432,6 +1437,11 @@ def register(app: FastAPI, d) -> None:
             reply_text = ""
             route_provider = provider_choice or ""
             route_model = model_choice or ""
+            # ROUTE DISCLOSURE (v1.165.0): filled from the router's final
+            # frame each round; `requested` seeds from the explicit pick ("" =
+            # default route) so even an errored turn reports what was asked.
+            route_requested = provider_choice or ""
+            route_reason = ""
             try:
                 for _round in range(_MAX_TOOL_ROUNDS):
                     if await request.is_disconnected():
@@ -1475,6 +1485,14 @@ def register(app: FastAPI, d) -> None:
                             final_resp = frame.get("response")
                             route_provider = frame.get("provider") or route_provider
                             route_model = frame.get("model") or route_model
+                            # Route disclosure off the final frame (v1.165.0).
+                            # `requested` is legitimately "" on the default
+                            # route, so test MEMBERSHIP, not truthiness — an
+                            # `or` here would silently keep the seed value and
+                            # mask a router that reports differently.
+                            if "requested" in frame:
+                                route_requested = str(frame.get("requested") or "")
+                            route_reason = str(frame.get("reason") or route_reason)
                     if final_resp is None:
                         # The stream ended without an aggregate — honest error, not
                         # a fabricated reply. Completed rounds still get counted.
@@ -1578,6 +1596,28 @@ def register(app: FastAPI, d) -> None:
                                             made_docs.append(_abs)
                                     except Exception:  # noqa: BLE001
                                         pass
+                            # EVERY file a turn creates is disclosed, not just
+                            # the document tools' (v1.165.0): merge the
+                            # ABSOLUTE ToolResult.created_paths (repl's
+                            # workspace diff, batch jobs) so a repl-written
+                            # file reaches `documents` here too. Call order
+                            # kept, deduped against the doc-tool entries.
+                            # ABSOLUTE paths only — the contract says absolute
+                            # (tools/base.py); a relative name from a lying
+                            # tool is an unverifiable claim and resolving it
+                            # against a guessed base could disclose the WRONG
+                            # file. MIRROR NOTE (lock-step): chat_turn.py's
+                            # tool loop carries this same merge — edit both
+                            # or neither.
+                            for _cp in getattr(result, "created_paths", None) or []:
+                                _cp = str(_cp)
+                                try:
+                                    if not Path(_cp).is_absolute():
+                                        continue
+                                except (OSError, ValueError):
+                                    continue
+                                if _cp not in made_docs:
+                                    made_docs.append(_cp)
                             # FENCE externally-sourced output before the model (and
                             # the client) sees it — the same guard chat_complete +
                             # the agent runtime apply to returns_untrusted_content.
@@ -1687,6 +1727,19 @@ def register(app: FastAPI, d) -> None:
                 "reply": reply,
                 "provider": route_provider,
                 "model": route_model,
+                # ROUTE DISCLOSURE (v1.165.0) — the identical object POST
+                # /chat returns: server-side truth of WHO answered and WHY,
+                # because the client-side "answered by X" chip is silent on
+                # the default route. Top-level provider/model stay untouched
+                # for existing clients. MIRROR NOTE (lock-step): the
+                # non-stream response dict in chat_turn.py carries the same
+                # object — edit both or neither.
+                "route": {
+                    "requested": route_requested,
+                    "provider": route_provider,
+                    "model": route_model,
+                    "reason": route_reason,
+                },
                 "tools_used": tools_used,
                 "denied_tools": denied_tools,
                 "auto_armed": auto_armed,
