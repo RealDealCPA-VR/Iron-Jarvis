@@ -105,6 +105,12 @@ import { get, post, put, del, ApiError, API_BASE, ijToken } from "@/lib/api";
 import { CommThreadBanner } from "@/components/chat/CommThreadBanner";
 import { WorkflowDraftCard } from "@/components/chat/WorkflowDraftCard";
 import { RunResultCard, type RunResult } from "@/components/chat/RunResultCard";
+import {
+  DRAFT_LANGS,
+  DraftCard,
+  fenceLang,
+  splitSubject,
+} from "@/components/chat/DraftCard";
 import type { WorkflowDraft } from "@/lib/types";
 import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
 import { timeAgo } from "@/lib/format";
@@ -825,9 +831,22 @@ function CopyIconButton({
 // the pre's styling; standalone inline code gets the accent pill).
 const PreContext = createContext(false);
 
-/** Fenced code block: dark panel + hover copy button. */
+/** Fenced code block: dark panel + hover copy button — unless the fence is a
+ *  draft, which becomes a boxed, rich-copyable card instead. */
 function MarkdownPre({ children }: { children?: ReactNode }) {
   const text = nodeText(children).replace(/\n$/, "");
+  if (DRAFT_LANGS.has(fenceLang(children))) {
+    // The fence's CONTENT is markdown, not code: the model writes **bold** and
+    // bullet lists in a draft, and a fence stops the outer pass from parsing
+    // them. Parsing here is what makes the copied HTML carry real formatting
+    // instead of literal asterisks.
+    const { subject, body } = splitSubject(text);
+    return (
+      <DraftCard subject={subject} text={body}>
+        <Markdown content={body} />
+      </DraftCard>
+    );
+  }
   return (
     <div className="group/code relative my-2">
       <CopyIconButton

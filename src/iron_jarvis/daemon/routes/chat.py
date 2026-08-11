@@ -47,6 +47,7 @@ from ..chat_turn import (
     _compose_recall_query,
     _connector_memory_block,
     _claimed_write_note,
+    DRAFT_BLOCK,
     _creation_honesty_note,
     _enforce_language,
     _last_user_text,
@@ -1064,6 +1065,11 @@ def register(app: FastAPI, d) -> None:
         # USER PROFILE (v1.144.0) — the lock-step copy of chat_turn's injection.
         # MIRROR NOTE: edit both or neither.
         system += _profile_section(d.platform)
+        # DRAFT FENCE (v1.161.0) — lock-step copy of chat_turn's injection. This
+        # is the STREAMING lane, which is the one a user actually watches write
+        # an email; if the instruction reached only the non-streaming lane the
+        # feature would look broken exactly where it is most used.
+        system += DRAFT_BLOCK
         pid = (body.project_id or "").strip() or None
         resolved_proj = None
         if pid:

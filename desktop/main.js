@@ -1218,6 +1218,18 @@ function installSpotlightIpc() {
     }
     return true;
   });
+  // Rich copy (v1.161.0): BOTH flavours in one write, which is what makes a
+  // drafted email keep its bold, lists and links when pasted into Outlook or
+  // Gmail. Two separate writeText/writeHTML calls would not do — the second
+  // clears the first, leaving whichever ran last and losing the other. The
+  // plain text is not optional: a composer that cannot take HTML (or a paste
+  // into a plain-text field) falls back to it, and without it that paste is
+  // empty. Throws are reported, never swallowed, so the renderer can say
+  // "Copied as text" instead of claiming a rich copy that did not happen.
+  ipcMain.handle("clipboard:writeHtml", (_e, html, text) => {
+    clipboard.write({ text: String(text ?? ""), html: String(html ?? "") });
+    return true;
+  });
   // Theme-aware window controls (v1.112.0). The native min/max/close strip is
   // painted by WINDOWS from titleBarOverlay colors frozen at window creation —
   // it cannot see CSS, so a light theme (Mark 8) left a black button strip on

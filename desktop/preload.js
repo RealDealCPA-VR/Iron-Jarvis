@@ -56,6 +56,10 @@ contextBridge.exposeInMainWorld("ironjarvis", {
   // paste/copy inside Electron (navigator.clipboard can be permission-gated).
   clipboardReadText: () => ipcRenderer.invoke("clipboard:read"),
   clipboardWriteText: (text) => ipcRenderer.invoke("clipboard:write", String(text ?? "")),
+  // Rich copy: html + plain in ONE write, so a pasted draft keeps its
+  // formatting. Consumed by components/chat/DraftCard.tsx.
+  clipboardWriteHtml: (html, text) =>
+    ipcRenderer.invoke("clipboard:writeHtml", String(html ?? ""), String(text ?? "")),
   // Theme-aware window controls: the dashboard pushes its resolved theme
   // colors so the native min/max/close strip matches the chosen Mark
   // (titleBarOverlay is frozen at window creation otherwise — v1.112.0).

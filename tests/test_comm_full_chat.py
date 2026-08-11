@@ -610,10 +610,13 @@ def test_desktop_send_escalate_acks_and_backgrounds_session(tmp_path):
         orch = client.app.state.orchestrator
         assert any(s.id == data["session_id"] for s in orch.list_sessions())
         # … and the SUMMARY arrives on the thread from the background task.
+        # Same race as the failure-path test below: the thread is appended
+        # BEFORE the send is awaited, so waiting only on the thread can assert
+        # `ch.sent` a step too early. Wait for both.
         deadline = time.time() + 10
         while time.time() < deadline:
             msgs = store.history_body(t.id)
-            if len(msgs) >= 3:
+            if len(msgs) >= 3 and len(ch.sent) >= 2:
                 break
             time.sleep(0.05)
         assert len(msgs) >= 3
@@ -648,11 +651,17 @@ def test_desktop_send_escalate_failure_delivers_honest_error(tmp_path):
         r = client.post(f"/comm/threads/{t.id}/send", json={"text": "build it"})
 
         assert r.status_code == 200 and r.json()["escalate"] is True
+        # WAIT FOR THE CHANNEL, not just the thread. `_finish` in routes/comm.py
+        # appends to the thread and only THEN awaits `send_chunked`, so a loop
+        # that exits on `len(msgs) >= 3` can assert on `ch.sent` before the send
+        # has run. Under a full-suite load that window is wide enough to lose:
+        # this failed once in ~3700 tests and passed alone every time, which is
+        # exactly how a latent test race presents.
         deadline = time.time() + 10
         msgs: list[dict[str, str]] = []
         while time.time() < deadline:
             msgs = store.history_body(t.id)
-            if len(msgs) >= 3:
+            if len(msgs) >= 3 and any("agent runtime melted" in s for s in ch.sent):
                 break
             time.sleep(0.05)
         # user, ack, honest error — appended by the background task.

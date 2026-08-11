@@ -9,7 +9,7 @@ runs the PACKAGED desktop app daily — treat every change as production.
 | Process | What | Port | Source |
 |---|---|---|---|
 | Daemon | FastAPI, all state + agents + tools | 127.0.0.1:8787 | `src/iron_jarvis/` |
-| Dashboard | Next.js 15 (42 routes), arc-reactor-cyan aesthetic | 127.0.0.1:8788 | `dashboard/` |
+| Dashboard | Next.js 15 (43 routes), arc-reactor-cyan aesthetic | 127.0.0.1:8788 | `dashboard/` |
 | Desktop | Electron: spawns both, tray, updates, Spotlight | — | `desktop/main.js` |
 
 Packaged layout: PyInstaller-frozen daemon (`packaging/ironjarvis.spec`) +
@@ -25,7 +25,7 @@ bearer token: `%APPDATA%/Iron Jarvis/token.txt` — every daemon request needs
 ```bash
 # Backend tests (~3100, offline, ~10min). ALWAYS run before shipping.
 uv run pytest -q --no-header
-# Dashboard build (must show "Generating static pages (42/42)")
+# Dashboard build (must show "Generating static pages (43/43)")
 cd dashboard && pnpm build
 # Syntax-check desktop changes
 cd desktop && node --check main.js
@@ -112,6 +112,25 @@ cd dashboard && pnpm dev           # dashboard
   namespace persists for a whole session, so consent to one call is not consent
   to what accumulates. `_store_as` is advertised only on `VERBOSE_TOOLS` —
   putting it on all ~60 tools would spend more context than the feature saves.
+- **A draft the user will SEND is fenced, boxed, and copied as RICH TEXT**
+  (v1.161.0). `DRAFT_BLOCK` in `daemon/chat_turn.py` tells the model to wrap an
+  email/message it drafts for the user in a ```email fence with a `Subject:`
+  first line; `components/chat/DraftCard.tsx` renders that fence as a compact
+  card whose Copy writes `text/html` AND `text/plain` in one go, so pasting
+  into Outlook/Gmail keeps bold, lists and links instead of arriving as literal
+  asterisks. The HTML is read off the RENDERED DOM (`cleanHtml`) rather than
+  generated a second time — two renderers drift, and reading the node the user
+  is looking at makes a mismatch impossible — with `class`/`style` stripped so
+  the app's dark theme never lands in a composer. THIS IS A THREE-PARTY
+  AGREEMENT and every party fails SILENTLY: the instruction must reach BOTH
+  chat lanes (the streaming mirror in `routes/chat.py` is the one users watch),
+  and `DRAFT_LANGS` must keep naming the same word as `DRAFT_BLOCK` or the
+  model emits a fence nobody renders. `tests/test_draft_card_v1161.py` asserts
+  both. A degraded copy SAYS SO ("Copied as text"): the desktop bridge
+  (`clipboard:writeHtml`, one `clipboard.write` carrying both flavours — two
+  calls clobber each other) is preferred because `navigator.clipboard` can be
+  permission-gated in Electron, and claiming a rich copy that did not happen is
+  a lie about the only thing the card does.
 - **The REPL's writes are CONFINED; its reads are not** (v1.160.0). Every file
   tool routes through `core/fs_policy`; the `repl` child routed through nothing,
   and it was measurable — `read_file` refused the app's own Fernet key while a

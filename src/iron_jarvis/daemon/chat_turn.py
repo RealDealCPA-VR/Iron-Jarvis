@@ -336,6 +336,30 @@ def _plan_context(d, body, system: str, provider: str, model: str, messages=None
         )
 
 
+#: Tells the model how to mark a draft the USER will send (v1.161.0).
+#:
+#: The dashboard renders a ```email fence as a card with one-press copy that
+#: puts `text/html` on the clipboard, so a pasted draft keeps its bold, lists
+#: and links instead of arriving as literal asterisks. None of that renders if
+#: the model never emits the fence, which is why this instruction exists — and
+#: why `DRAFT_LANGS` in dashboard/app/chat/page.tsx must keep accepting exactly
+#: the words named here.
+#:
+#: Charged on EVERY chat request, so it stays four sentences. The last one is
+#: load-bearing: without it the fence gets used for anything email-shaped,
+#: including messages the assistant is describing rather than drafting, and a
+#: card offering to copy something the user is not sending is noise.
+DRAFT_BLOCK = (
+    "\n\n# Drafts the user will send\n"
+    "Put any email or message you draft FOR THE USER TO SEND inside a fenced "
+    "```email block, with `Subject: ...` as its first line when it is an email. "
+    "That block renders as a card with one-press copy that keeps formatting "
+    "when pasted into a mail client. Use markdown inside the fence and keep "
+    "your own commentary outside it. Never use this fence for anything the "
+    "user is not going to send."
+)
+
+
 def _profile_section(platform) -> str:
     """The user-profile block as a prompt SECTION ("" or ``"\\n\\n" + block``).
 
@@ -1011,6 +1035,9 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     # is the bug this wave exists to fix.
     # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
     system += _profile_section(platform)
+    # MIRROR NOTE (lock-step): stream copy in routes/chat.py. Added here, before
+    # the budget planner runs, so its cost is priced like every other section.
+    system += DRAFT_BLOCK
     # A project only applies INSIDE the Projects module: the in-project chat
     # sends an explicit project_id and grounds in that project's
     # instructions + brief + knowledge. The MAIN chat sends none and stays
