@@ -121,7 +121,20 @@ cd dashboard && pnpm dev           # dashboard
   asterisks. The HTML is read off the RENDERED DOM (`cleanHtml`) rather than
   generated a second time — two renderers drift, and reading the node the user
   is looking at makes a mismatch impossible — with `class`/`style` stripped so
-  the app's dark theme never lands in a composer. THIS IS A THREE-PARTY
+  the app's dark theme never lands in a composer. **STRIPPING ALONE IS NOT
+  ENOUGH (v1.163.0):** semantic HTML pastes into Outlook FLAT, because Outlook
+  renders through WORD's engine and Word gives a bare `<p>` a ZERO margin — the
+  blank lines a browser shows come from the browser's own default stylesheet,
+  which never crosses a clipboard (measured under a zero-margin reset: 0px
+  paragraph gap before, 13px after). So the strip is FOLLOWED by `EMAIL_STYLES`
+  — inline margins in POINTS, Word's unit — while colour/font stay out so the
+  text adopts the composer's theme. `hardenLineBreaks` fixes the other half: a
+  single newline is a SPACE in markdown, so a signature block pasted as one
+  line. Both live behind `draftFromFence`, which `chat/page.tsx` and the tests
+  BOTH call — they used to hold separate copies of that sequence, and a
+  mutation deleting the real call site left every frontend test green, so the
+  CALL SITE is asserted from Python (`tests/test_draft_spacing_v1163.py`).
+  THIS IS A THREE-PARTY
   AGREEMENT and every party fails SILENTLY: the instruction must reach BOTH
   chat lanes (the streaming mirror in `routes/chat.py` is the one users watch),
   and `DRAFT_LANGS` must keep naming the same word as `DRAFT_BLOCK` or the

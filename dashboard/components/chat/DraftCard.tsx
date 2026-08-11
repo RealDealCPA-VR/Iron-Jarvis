@@ -17,12 +17,23 @@
  * and the paste stops matching the screen. Reading `innerHTML` off the node the
  * user is looking at makes that class of bug impossible.
  *
- * CLASS AND STYLE ATTRIBUTES ARE STRIPPED on the way out. The card renders in
- * the app's dark theme (`text-zinc-100`, accent borders); pasting those into an
- * email would either mean nothing (Tailwind classes don't travel) or, worse,
- * carry light-on-white text into the composer. What survives is semantic —
- * `<p>`, `<strong>`, `<ul>`, `<a href>` — which inherits the composer's own
- * styling and is exactly what a hand-written email looks like.
+ * THE APP'S PRESENTATION IS STRIPPED AND THE DESTINATION'S IS SUPPLIED. The
+ * card renders in the app's dark theme (`text-zinc-100`, accent borders), and
+ * pasting that into an email would either mean nothing (Tailwind classes don't
+ * travel) or carry light-on-white text into the composer — so `class` and
+ * `style` come off.
+ *
+ * Stripping ALONE was shipped in v1.161.0 and was not enough: the result was
+ * semantically perfect and visually flat. Outlook renders through WORD's
+ * engine, which gives a bare `<p>` a ZERO margin — the blank lines you see in a
+ * browser come from the BROWSER's default stylesheet, and a stylesheet never
+ * crosses a clipboard. The user pasted a draft and had to put the spacing back
+ * by hand. So the strip is followed by `EMAIL_STYLES`: inline margins, in
+ * POINTS, which is the one form Word honours. Colour and font are still left
+ * out on purpose, so the text adopts the composer's own theme.
+ *
+ * `hardenLineBreaks` closes the other half: a single newline is a SPACE in
+ * markdown, which is right for prose and wrong for a signature block.
  *
  * DEGRADED COPIES SAY SO. Not every surface can write two flavours: an older
  * browser, a locked-down webview, or a clipboard permission refusal leaves only
@@ -74,6 +85,41 @@ export function fenceLang(children: ReactNode): string {
 /** Attributes that must never reach the clipboard — see the module docstring. */
 const STRIPPED_ATTRS = ["class", "style", "data-testid"];
 
+/**
+ * Inline spacing applied to the CLIPBOARD copy, per tag (v1.163.0).
+ *
+ * WHY THE STRIPPED VERSION WASN'T ENOUGH. Removing every `class` and `style`
+ * left semantically perfect HTML — `<p>`, `<ul>`, `<strong>` — that pasted into
+ * Outlook with the paragraphs run together, so the spacing had to be redone by
+ * hand. Outlook renders through WORD's engine, and Word gives a bare `<p>` a
+ * ZERO margin; the blank lines you see in a browser come from the browser's own
+ * default stylesheet, which never crosses the clipboard. Semantic structure and
+ * VISIBLE structure are not the same thing once the receiving app supplies the
+ * defaults.
+ *
+ * So presentation is not stripped and then abandoned — it is stripped and then
+ * REPLACED with the one form Outlook honours: inline styles, in POINTS (Word's
+ * unit). Colour and font are still left out on purpose so the text adopts the
+ * composer's own theme instead of arriving as light-grey-on-white.
+ *
+ * The visible card is untouched: this is applied to a CLONE.
+ */
+const EMAIL_STYLES: Record<string, string> = {
+  P: "margin:0 0 10pt 0;",
+  UL: "margin:0 0 10pt 0; padding-left:24pt;",
+  OL: "margin:0 0 10pt 0; padding-left:24pt;",
+  LI: "margin:0 0 4pt 0;",
+  BLOCKQUOTE: "margin:0 0 10pt 12pt; padding-left:9pt; border-left:1.5pt solid #cccccc;",
+  H1: "margin:0 0 8pt 0; font-size:14pt; font-weight:bold;",
+  H2: "margin:0 0 8pt 0; font-size:13pt; font-weight:bold;",
+  H3: "margin:0 0 6pt 0; font-size:12pt; font-weight:bold;",
+  PRE: "margin:0 0 10pt 0; font-family:Consolas,monospace; white-space:pre-wrap;",
+  TABLE: "border-collapse:collapse; margin:0 0 10pt 0;",
+  TH: "border:0.75pt solid #999999; padding:4pt 6pt; text-align:left;",
+  TD: "border:0.75pt solid #999999; padding:4pt 6pt;",
+  HR: "margin:0 0 10pt 0;",
+};
+
 type Bridge = {
   clipboardWriteHtml?: (html: string, text: string) => Promise<unknown>;
   clipboardWriteText?: (text: string) => Promise<unknown>;
@@ -96,9 +142,50 @@ export function cleanHtml(node: HTMLElement): string {
     for (const attr of STRIPPED_ATTRS) el.removeAttribute(attr);
     // Buttons and other affordances can be rendered inside the body by future
     // markdown overrides; they are chrome, never content.
-    if (el !== clone && el.tagName === "BUTTON") el.remove();
+    if (el !== clone && el.tagName === "BUTTON") {
+      el.remove();
+      continue;
+    }
+    // Re-apply the ONE kind of presentation the destination honours. Without
+    // this a paste into Outlook loses every paragraph break — see EMAIL_STYLES.
+    const style = el === clone ? undefined : EMAIL_STYLES[el.tagName];
+    if (style) el.setAttribute("style", style);
   }
   return clone.innerHTML.trim();
+}
+
+/**
+ * Turn SOFT line breaks into hard ones before the body is parsed (v1.163.0).
+ *
+ * Markdown collapses a single newline into a space, which is right for prose
+ * and wrong for the two places an email actually uses one: a signature block
+ * and an address. "Best,\nValentino" rendered — and therefore PASTED — as
+ * "Best, Valentino" on one line, which is the other half of the spacing the
+ * user had to redo by hand.
+ *
+ * Done by appending markdown's two-space hard break rather than adding a
+ * remark plugin: it keeps the dependency list still, and it applies ONLY to
+ * draft bodies, so ordinary chat prose keeps standard markdown behaviour.
+ *
+ * Blank lines are left alone (they already separate paragraphs), and fenced
+ * code is skipped — inside a fence a newline is already literal, and padding
+ * those lines would corrupt the very content being quoted.
+ */
+export function hardenLineBreaks(markdown: string): string {
+  const lines = markdown.split("\n");
+  let fenced = false;
+  return lines
+    .map((line, i) => {
+      if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
+      if (fenced) return line;
+      const next = lines[i + 1];
+      if (next === undefined || !next.trim() || !line.trim()) return line;
+      // A line already ending in a hard break, or one that opens a block that
+      // owns its own line handling, is left as it is.
+      if (/\s{2,}$/.test(line) || /^\s*(#{1,6}\s|>|\||\s*$)/.test(next)) return line;
+      return line + "  ";
+    })
+    .join("\n");
 }
 
 /** Whether both clipboard flavours are reachable in this environment. */
@@ -149,6 +236,29 @@ export async function copyRich(html: string, text: string): Promise<"rich" | "pl
   return "plain";
 }
 
+/**
+ * Everything the chat renderer needs to turn a fence into a card, or `null`
+ * when the fence is ordinary code.
+ *
+ * EXISTS BECAUSE THE WIRING KEPT BEING THE UNTESTED PART. The decision (is this
+ * a draft?), the subject split and the line-break hardening used to live inline
+ * in `chat/page.tsx`, with the test file holding its own copy of the same
+ * sequence — so a mutation that deleted the real call site left every test
+ * green. One function, used by both, closes that: a step dropped here fails
+ * loudly instead of silently rendering a worse card.
+ */
+export function draftFromFence(
+  children: ReactNode,
+  rawText: string,
+): { subject?: string; text: string; markdown: string } | null {
+  if (!DRAFT_LANGS.has(fenceLang(children))) return null;
+  const { subject, body } = splitSubject(rawText);
+  //: `text` is the plain-text flavour (what a plain paste gets); `markdown` is
+  //: what gets RENDERED, with soft newlines hardened so a signature block does
+  //: not collapse onto one line.
+  return { subject, text: body, markdown: hardenLineBreaks(body) };
+}
+
 export function DraftCard({
   subject,
   text,
@@ -186,7 +296,9 @@ export function DraftCard({
     // The subject travels WITH the body: it is the first thing the user needs
     // in the composer, and a copy that silently drops it means retyping the one
     // line the assistant was asked to write.
-    const heading = subject ? `<p><strong>Subject:</strong> ${escapeHtml(subject)}</p>` : "";
+    const heading = subject
+      ? `<p style="${EMAIL_STYLES.P}"><strong>Subject:</strong> ${escapeHtml(subject)}</p>`
+      : "";
     const html = `${heading}${node ? cleanHtml(node) : `<p>${escapeHtml(text)}</p>`}`;
     const plain = subject ? `Subject: ${subject}\n\n${text}` : text;
     try {

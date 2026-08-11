@@ -25,7 +25,9 @@ import {
   DraftCard,
   cleanHtml,
   copyRich,
+  draftFromFence,
   fenceLang,
+  hardenLineBreaks,
   splitSubject,
 } from "@/components/chat/DraftCard";
 
@@ -118,19 +120,33 @@ describe("the real markdown chain", () => {
    * it — the fence would quietly render as a grey code block. So this drives
    * the ACTUAL parser, wired the way chat/page.tsx wires it.
    */
+  // Uses draftFromFence — the SAME function chat/page.tsx calls. An earlier
+  // version of this helper reimplemented the sequence, so a mutation deleting
+  // the real call site left every test green: the classic wiring blind spot.
   function Pre({ children }: { children?: ReactNode }) {
-    if (!DRAFT_LANGS.has(fenceLang(children))) return <pre>{children}</pre>;
     const raw = String(
       (Children.toArray(children)[0] as { props?: { children?: unknown } })?.props
         ?.children ?? "",
     ).replace(/\n$/, "");
-    const { subject, body } = splitSubject(raw);
+    const draft = draftFromFence(children, raw);
+    if (!draft) return <pre>{children}</pre>;
     return (
-      <DraftCard subject={subject} text={body}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
+      <DraftCard subject={draft.subject} text={draft.text}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{draft.markdown}</ReactMarkdown>
       </DraftCard>
     );
   }
+
+  it("hardens line breaks on the way into the card", () => {
+    // The step whose absence nothing caught before: a signature block inside a
+    // real ```email fence must survive as separate lines.
+    render(
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: Pre }}>
+        {"```email\nSubject: S\n\nHi,\n\nBest,\nValentino\nRealDealCPA\n```"}
+      </ReactMarkdown>,
+    );
+    expect(screen.getByTestId("draft-body").querySelectorAll("br").length).toBe(2);
+  });
 
   it("turns a ```email fence into a card, subject lifted and body formatted", () => {
     render(
@@ -157,6 +173,94 @@ describe("the real markdown chain", () => {
   });
 });
 
+describe("spacing survives the paste (v1.163.0)", () => {
+  /**
+   * REPORTED: "everything was easily copied and pasted but the formatting did
+   * not persist in outlook and i needed to reapply the spacing".
+   *
+   * The v1.161.0 output was semantically perfect and visually flat. Outlook
+   * renders through WORD's engine, which gives a bare `<p>` a ZERO margin — the
+   * blank lines a browser shows come from the browser's own default stylesheet,
+   * and that never crosses the clipboard. Measured under a zero-margin reset:
+   * paragraph gap was 0px before, 13px after.
+   *
+   * So the fix is not "strip presentation", it is "strip the APP's presentation
+   * and supply the DESTINATION's". Colour and font stay out so the text adopts
+   * the composer's theme.
+   */
+  it("gives every block element an inline margin, in points", () => {
+    const node = document.createElement("div");
+    node.innerHTML = "<p>One</p><p>Two</p><ul><li>a</li></ul>";
+    const html = cleanHtml(node);
+    // Word measures in points; px margins are unreliable in that engine.
+    expect(html).toMatch(/<p style="[^"]*margin:0 0 10pt/);
+    expect(html).toMatch(/<ul style="[^"]*margin:0 0 10pt/);
+    expect(html).toMatch(/<li style="[^"]*margin:0 0 4pt/);
+  });
+
+  it("indents lists explicitly, because Word supplies no default padding", () => {
+    const node = document.createElement("div");
+    node.innerHTML = "<ul><li>a</li></ul><ol><li>b</li></ol>";
+    const html = cleanHtml(node);
+    expect(html).toMatch(/<ul style="[^"]*padding-left:24pt/);
+    expect(html).toMatch(/<ol style="[^"]*padding-left:24pt/);
+  });
+
+  it("still drops the app's own classes and colours", () => {
+    // The whole point of stripping: a dark-theme colour pasted into a white
+    // composer is unreadable, and Tailwind classes mean nothing there.
+    const node = document.createElement("div");
+    node.innerHTML = '<p class="text-zinc-100" style="color:#fff">Hi</p>';
+    const html = cleanHtml(node);
+    expect(html).not.toContain("text-zinc-100");
+    expect(html).not.toContain("#fff");
+    expect(html).not.toContain("color:");
+  });
+
+  it("gives tables visible borders", () => {
+    const node = document.createElement("div");
+    node.innerHTML = "<table><tr><th>h</th><td>d</td></tr></table>";
+    const html = cleanHtml(node);
+    expect(html).toContain("border-collapse:collapse");
+    expect(html).toMatch(/<t[hd] style="[^"]*border:/);
+  });
+});
+
+describe("hardenLineBreaks (v1.163.0)", () => {
+  /** A single newline is a SPACE in markdown. That is right for prose and wrong
+   *  for the two things an email always has: a signature block and an address.
+   *  "Best,\nValentino" pasted as "Best, Valentino" on one line. */
+  it("turns a soft newline into a hard break", () => {
+    expect(hardenLineBreaks("Best,\nValentino")).toBe("Best,  \nValentino");
+  });
+
+  it("leaves paragraph breaks alone", () => {
+    // A blank line already separates paragraphs; padding it would be noise.
+    expect(hardenLineBreaks("One\n\nTwo")).toBe("One\n\nTwo");
+  });
+
+  it("does not touch fenced code", () => {
+    const src = "text\n\n```\na\nb\n```";
+    expect(hardenLineBreaks(src)).toBe(src);
+  });
+
+  it("is idempotent — an existing hard break is not padded again", () => {
+    const once = hardenLineBreaks("a\nb");
+    expect(hardenLineBreaks(once)).toBe(once);
+  });
+
+  it("keeps a signature block on separate lines end to end", () => {
+    render(
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+        {hardenLineBreaks("Best,\nValentino\nRealDealCPA")}
+      </ReactMarkdown>,
+    );
+    // Two <br> for three lines. Without this the paste reads "Best, Valentino
+    // RealDealCPA" as one run-on line.
+    expect(document.querySelectorAll("br").length).toBe(2);
+  });
+});
+
 describe("cleanHtml", () => {
   it("keeps the semantic tags and drops the app's presentation", () => {
     const node = document.createElement("div");
@@ -166,7 +270,10 @@ describe("cleanHtml", () => {
       '<a href="https://example.com" class="text-accent-soft">link</a>';
     const html = cleanHtml(node);
     expect(html).toContain("<strong>Dana</strong>");
-    expect(html).toContain("<li>One</li>");
+    // The list item survives as a list item. It now carries an inline margin
+    // (v1.163.0) so Word shows it as a list, hence matching the tag rather than
+    // an exact attribute-free string.
+    expect(html).toMatch(/<li[^>]*>One<\/li>/);
     expect(html).toContain('href="https://example.com"');
     // Dark-theme classes would either mean nothing in a composer or paste
     // white-on-white text.

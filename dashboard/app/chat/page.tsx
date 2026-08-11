@@ -105,12 +105,7 @@ import { get, post, put, del, ApiError, API_BASE, ijToken } from "@/lib/api";
 import { CommThreadBanner } from "@/components/chat/CommThreadBanner";
 import { WorkflowDraftCard } from "@/components/chat/WorkflowDraftCard";
 import { RunResultCard, type RunResult } from "@/components/chat/RunResultCard";
-import {
-  DRAFT_LANGS,
-  DraftCard,
-  fenceLang,
-  splitSubject,
-} from "@/components/chat/DraftCard";
+import { DraftCard, draftFromFence } from "@/components/chat/DraftCard";
 import type { WorkflowDraft } from "@/lib/types";
 import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
 import { timeAgo } from "@/lib/format";
@@ -835,15 +830,16 @@ const PreContext = createContext(false);
  *  draft, which becomes a boxed, rich-copyable card instead. */
 function MarkdownPre({ children }: { children?: ReactNode }) {
   const text = nodeText(children).replace(/\n$/, "");
-  if (DRAFT_LANGS.has(fenceLang(children))) {
-    // The fence's CONTENT is markdown, not code: the model writes **bold** and
-    // bullet lists in a draft, and a fence stops the outer pass from parsing
-    // them. Parsing here is what makes the copied HTML carry real formatting
-    // instead of literal asterisks.
-    const { subject, body } = splitSubject(text);
+  // The fence's CONTENT is markdown, not code: the model writes **bold** and
+  // bullet lists in a draft, and a fence stops the outer pass from parsing
+  // them. Parsing it here is what makes the copied HTML carry real formatting
+  // instead of literal asterisks. All of the decision-making lives in
+  // draftFromFence so this call site and the tests share one implementation.
+  const draft = draftFromFence(children, text);
+  if (draft) {
     return (
-      <DraftCard subject={subject} text={body}>
-        <Markdown content={body} />
+      <DraftCard subject={draft.subject} text={draft.text}>
+        <Markdown content={draft.markdown} />
       </DraftCard>
     );
   }
