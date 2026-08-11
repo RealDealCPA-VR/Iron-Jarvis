@@ -99,14 +99,36 @@ async def test_mock_requested_still_runs_mock():
 
 
 @pytest.mark.asyncio
-async def test_unavailable_provider_still_downgrades_to_mock_prerun():
-    # Availability downgrade (not connected) is a PRE-RUN decision and keeps the
-    # mock path (with the PROVIDER_DOWNGRADED signal) — that's not fabrication
-    # of a failed real call.
+async def test_unavailable_provider_is_refused_not_downgraded_to_mock():
+    """An unconnected provider is an ERROR now, not a mock answer (v1.162.0).
+
+    This test previously asserted the opposite, on the reasoning that an
+    availability downgrade is a PRE-RUN decision and therefore "not fabrication
+    of a failed real call". That distinction is invisible from the outside and
+    it cost a real user a real hour: with a local fleet endpoint down, chat
+    returned the mock's scripted "Done. Wrote RESULT.md summarizing the task."
+    and read as completed work. The mock also EMITS a `write_file` call, so with
+    a document tool armed the fabrication reaches the disk.
+
+    A mock the user actually chose still runs — see
+    `test_mock_requested_still_runs_mock`. Only a REAL provider that isn't
+    connected refuses.
+    """
     mgr = _Manager({"mock": _Mock(), "xai": _Boom("xai")}, available={"mock"})
     router = ModelRouter(mgr, default_provider="mock", event_bus=EventBus())
-    res = await router.complete(provider="xai", system="", messages=_msgs(), tools=[])
-    assert res.provider == "mock"
+    with pytest.raises(Exception, match="isn't connected"):
+        await router.complete(provider="xai", system="", messages=_msgs(), tools=[])
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_DEFAULT_is_refused_too():
+    """The route chat actually uses. Chat sends no provider, so this went down
+    the default path — the one branch that still fell through to the mock, and
+    exactly how the fabricated reply reached the user."""
+    mgr = _Manager({"mock": _Mock(), "fleet-custom": _Boom("fleet-custom")}, available={"mock"})
+    router = ModelRouter(mgr, default_provider="fleet-custom", event_bus=EventBus())
+    with pytest.raises(Exception, match="fleet-custom isn't connected"):
+        await router.complete(system="", messages=_msgs(), tools=[])
 
 
 class _RateLimited(LLMAdapter):

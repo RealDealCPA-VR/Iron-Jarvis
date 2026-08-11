@@ -206,10 +206,25 @@ cd dashboard && pnpm dev           # dashboard
   `_claimed_write_note` now judges the reply's own claim against what actually
   ran, in BOTH chat lanes. Note the destinations differ by lane: chat's tool
   workspace is `home/uploads`, an agent session's is its own session dir.
-- **Never let a real-provider failure return mock output.** The router
-  (`providers/router.py`) raises for a failed real provider; mock fallback is
-  ONLY for the offline/mock-default path. Fabricated "Done. Wrote RESULT.md"
-  answers destroy trust instantly.
+- **Never let a real-provider failure return mock output**, and since v1.162.0
+  that includes a provider that is merely NOT CONNECTED. The router
+  (`providers/router.py`) raises for a failed real provider; mock is ONLY for
+  the offline/mock-default path (`wanted == "mock"` — a fresh install ships
+  `default_provider = "mock"`, so first-run and the whole offline suite are
+  untouched). The old code refused only an EXPLICIT pick under the strict pin
+  and let the DEFAULT route fall through to mock — and chat sends no provider,
+  so every chat turn took that branch. A user whose local fleet endpoint went
+  down got the mock's scripted "Done. Wrote RESULT.md summarizing the task."
+  and read it as finished work; the mock also EMITS a `write_file` call, so
+  with a document tool armed the fabrication reaches DISK. `complete()` and
+  `stream()` now both publish `provider.downgraded` (`used: "none"` — the
+  banner still points at Connections) and then RAISE `_unavailable_error`,
+  which names the provider. No automatic substitute even when other providers
+  are connected: this box holds client tax documents, and moving a chat from a
+  local endpoint to a cloud API is the user's privacy decision, not a routing
+  fallback (asked and confirmed 2026-08-11). Mid-call failures were already
+  guarded by `if wanted != "mock": raise` in both lanes — the gap was the
+  PRE-RUN availability check only.
 - **OpenAI ChatGPT-account backend retires model ids** (gpt-5-codex, gpt-5.1*,
   codex-mini-latest are all dead). The adapter
   (`providers/adapters/openai.py`) keeps a fallback ladder

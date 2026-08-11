@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from iron_jarvis.core.events import EventBus, EventType
@@ -243,15 +245,25 @@ def test_auto_on_unavailable_target_falls_back_to_real():
     assert res.provider != "mock"
 
 
-def test_auto_on_no_real_downgrades_to_mock():
-    # 10.
+def test_auto_with_nothing_real_connected_refuses_instead_of_mocking():
+    """10. Auto picks among REAL providers; with none connected there is nothing
+    to pick, and answering anyway is fabrication (v1.162.0).
+
+    This asserted `res.provider == "mock"` until a user with a downed endpoint
+    received the mock's scripted "Done. Wrote RESULT.md summarizing the task."
+    and read it as completed work. The banner event stays — it is the user's
+    route to the fix — but the ANSWER is now an honest error.
+
+    Note the contrast with the test above: Auto substituting one REAL provider
+    for another is exactly what selecting Auto asks for, and is unchanged.
+    """
     async def decide(*a):
         return None
 
     bus, events = _bus_with_capture()
     r = ModelRouter(_Mgr(set()), lambda: "auto", bus, auto_route=decide)
-    res = asyncio.run(r.complete(system="s", messages=[], tools=[], task_class=None))
-    assert res.provider == "mock"
+    with pytest.raises(Exception, match="isn't connected"):
+        asyncio.run(r.complete(system="s", messages=[], tools=[], task_class=None))
     assert EventType.PROVIDER_DOWNGRADED in _types(events)
     # No real target was chosen, so no provider.routed either.
     assert EventType.PROVIDER_ROUTED not in _types(events)

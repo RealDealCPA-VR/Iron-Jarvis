@@ -354,6 +354,53 @@ class ModelRouter:
             return self.manager.get("mock"), wanted, True
         return self.manager.get(wanted, model), wanted, False
 
+    def _unavailable_error(self, wanted: str, pinned: bool) -> ProviderError:
+        """The honest refusal for a REAL provider that isn't connected (v1.162.0).
+
+        WHY THIS REPLACED A MOCK ANSWER. The old default route handed the turn to
+        the offline mock, whose scripted reply is "Done. Wrote RESULT.md
+        summarizing the task." A user whose local fleet endpoint was down got
+        exactly that, and it reads as completed work. Worse, that mock does not
+        merely SAY it wrote the file — it emits a real ``write_file`` tool call,
+        so with a document tool armed the fabrication reaches the DISK.
+
+        Only an EXPLICIT pick was refused before, and only under the strict pin;
+        the default route (which is what chat uses — it sends no provider) fell
+        through to the mock. A default is not a weaker preference than an
+        explicit pick, it is the SAME choice made once in Settings.
+
+        Substituting a different provider is deliberately NOT done here: this
+        machine holds client tax documents, and quietly moving a chat from a
+        local endpoint to a cloud API is a privacy decision the user makes, not
+        a fallback the router picks. Explicitly choosing another model in the UI
+        still works exactly as before.
+        """
+        detail = f"{wanted} isn't connected right now, so this turn was not answered."
+        if pinned:
+            detail += " No substitute was tried because strict model pin is on."
+        else:
+            detail += (
+                " No substitute was used on purpose — a stand-in answer would"
+                " look like real work that never happened."
+            )
+        return ProviderError(
+            detail + " Bring that endpoint back up, or pick another model for"
+            " this chat, and retry."
+        )
+
+    async def _publish_not_connected(self, wanted: str, session_id: str | None) -> None:
+        """Banner event for an unconnected provider. Published BEFORE the raise so
+        the dashboard still shows "connect a model" alongside the error."""
+        await self.event_bus.publish(
+            EventType.PROVIDER_DOWNGRADED,
+            {
+                "requested": wanted,
+                "used": "none",
+                "reason": "not connected — connect a model on the Connections page",
+            },
+            session_id=session_id,
+        )
+
     def _first_available_real(self, *, need_tools: bool = False) -> str | None:
         """The strongest connected REAL provider (capability-ordered failover
         list), used as the Auto fallback so a request never drops to mock while a
@@ -554,18 +601,18 @@ class ModelRouter:
         need_vision = _wants_images(messages)
         avail = self._snapshot()
 
-        # STRICT MODEL PIN: an EXPLICITLY named provider must answer or fail
-        # honestly. Applies only to explicit picks — the default/auto routes
-        # keep the full answer-if-anyone-can behavior.
+        # AN UNAVAILABLE REAL PROVIDER IS AN ERROR, NEVER A MOCK ANSWER
+        # (v1.162.0). This used to fire only for an EXPLICIT pick under the
+        # strict pin; the default route fell through to the offline mock and
+        # returned its scripted "Done. Wrote RESULT.md summarizing the task."
+        # See _unavailable_error for why that is worse than it looks.
+        # `downgraded` is set only when a REAL provider was wanted and is not
+        # available, so an intentional mock default (offline demos, the test
+        # suite) is untouched.
         pinned = bool(provider) and provider != "auto" and self._strict_pin()
-        if pinned and downgraded:
-            # _resolve would run mock for an unavailable explicit provider;
-            # under the pin that is a fabricated answer — refuse instead.
-            raise ProviderError(
-                f"{wanted} isn't available right now, and strict model pin is on "
-                "— no substitute was used. Check the endpoint/connection (or turn "
-                "the pin off in Settings) and retry."
-            )
+        if downgraded:
+            await self._publish_not_connected(wanted, session_id)
+            raise self._unavailable_error(wanted, pinned)
 
         # CAPABILITY-AWARE ROUTING. Tools (v1.131.0): a tool-carrying request
         # that resolved to a text-only adapter is WRAPPED in the prompted-tools
@@ -587,18 +634,9 @@ class ModelRouter:
                 adapter = repl
                 reason = "failover"
 
-        if downgraded:
-            # Never silently fake it: tell the user their model isn't connected.
-            await self.event_bus.publish(
-                EventType.PROVIDER_DOWNGRADED,
-                {
-                    "requested": wanted,
-                    "used": "mock",
-                    "reason": "not connected — connect a model on the Connections page",
-                },
-                session_id=session_id,
-            )
-        elif (
+        # (An unconnected provider already raised above; the only mock that
+        # reaches here is one the user actually chose or defaulted to.)
+        if (
             adapter.provider == "mock"
             and provider != "mock"  # only warn about a mock DEFAULT, not an explicit ask
             and (
@@ -877,13 +915,15 @@ class ModelRouter:
         # Before this guard, a pinned-but-unavailable provider STREAMED the
         # offline mock's scripted output (a fabrication hole complete() never
         # had), and a pinned pick with tools was silently swapped away.
+        # Same refusal as complete() (v1.162.0): an unconnected REAL provider is
+        # an error, never the mock's scripted answer. MIRROR NOTE (lock-step):
+        # complete() carries the identical guard — edit both or neither. This
+        # lane matters MORE, not less: it is the one the user watches token by
+        # token, so a fabricated stream reads as a model genuinely working.
         pinned = bool(provider) and provider != "auto" and self._strict_pin()
-        if pinned and downgraded:
-            raise ProviderError(
-                f"{wanted} isn't available right now, and strict model pin is on "
-                "— no substitute was used. Check the endpoint/connection (or turn "
-                "the pin off in Settings) and retry."
-            )
+        if downgraded:
+            await self._publish_not_connected(wanted, session_id)
+            raise self._unavailable_error(wanted, pinned)
 
         # Capability-aware routing — same contract as complete(): a tool
         # request on a text-only adapter is wrapped in the prompted-tools
@@ -899,17 +939,8 @@ class ModelRouter:
                 adapter = repl
                 reason = "failover"
 
-        if downgraded:
-            await self.event_bus.publish(
-                EventType.PROVIDER_DOWNGRADED,
-                {
-                    "requested": wanted,
-                    "used": "mock",
-                    "reason": "not connected — connect a model on the Connections page",
-                },
-                session_id=session_id,
-            )
-        elif (
+        # (An unconnected provider already raised above.)
+        if (
             adapter.provider == "mock"
             and provider != "mock"
             and (
