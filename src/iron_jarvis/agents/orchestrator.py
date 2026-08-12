@@ -385,75 +385,101 @@ class Orchestrator:
             return session
         if session.status in (SessionStatus.COMPLETED, SessionStatus.FAILED):
             return session
+        # Cancel must reach EVERY lane (v1.166.4). Only background (wait:false)
+        # runs were registered via spawn_managed — a schedule-fired session or
+        # any wait:true / directly-awaited lane had no _running entry, so
+        # cancel_session's else-branch marked the row CANCELLED while the agent
+        # kept calling the model and executing tools. Self-register the current
+        # task when nobody else did (never clobber spawn_managed's entry — a
+        # second register would double the slot-free hook and over-promote the
+        # queue), and self-remove in the finally so the handle never outlives
+        # the run: a wait:true HTTP task or a multi-step workflow task lives on
+        # after run_session returns, and a stale entry would both lie to the
+        # concurrency governor and dangle a cancellable handle at a finished run.
+        self_registered = False
+        current = asyncio.current_task()
+        if current is not None and self._running.get(session_id) is None:
+            self.register_running(session_id, current)
+            self_registered = True
         try:
-            if session.agent_type is AgentType.SUPERVISOR:
-                run = await run_supervised(self.p, session)  # §12 delegate to subagents
-            else:
-                # A dynamic (user-authored) agent runs with ITS definition, not the
-                # builtin one its base type maps to — callers pass it explicitly.
-                agent_def = definition or get_agent_definition(session.agent_type)
-                run = await self.runtime.run(session, agent_def)
-
-            session.status = (
-                SessionStatus.COMPLETED
-                if run.state is AgentState.COMPLETED
-                else SessionStatus.FAILED
-            )
-            session.provider, session.model = run.provider, run.model  # what actually ran
-            session.summary = run.result
-            session.input_tokens = run.input_tokens
-            session.output_tokens = run.output_tokens
-            session.finished_at = utcnow()
-            self._save(session)
-            await self.p.event_bus.publish(
-                EventType.SESSION_COMPLETED,
-                {"status": session.status.value, "summary": session.summary},
-                session_id=session.id,
-            )
-        except asyncio.CancelledError:
-            # The user stopped this run (POST /sessions/{id}/cancel). Mark it
-            # CANCELLED (not FAILED), GC any worktree, then propagate so the
-            # background task ends cancelled.
-            await self._finalize_cancelled(session)
-            raise
-        except Exception as exc:  # noqa: BLE001
-            # Any other failure (a provider blow-up that escaped the router, a DB
-            # write error, a supervised-run crash) must NOT strand the session in
-            # ACTIVE forever. Finalize it FAILED + emit SESSION_COMPLETED(ok=False)
-            # so the dashboard stops spinning and the run is recoverable, then
-            # re-raise for the caller/HTTP.
-            await self._finalize_failed(session, exc)
-            raise
-
-        # Close the measurement->learning loop (evaluate + record outcome +
-        # reflect). Runs for delegated/spawned children too, via the same helper.
-        self._post_run_learning(session)
-
-        # Phase 7: if this ran on a git worktree, build a review — never auto-merge.
-        gs = self._git_sessions.get(session.id)
-        if gs is not None:
             try:
-                review = build_review(
-                    gs,
-                    session.id,
-                    summary=session.summary,
-                    tool_history=self.transcript(session.id)["tools"],
+                if session.agent_type is AgentType.SUPERVISOR:
+                    run = await run_supervised(self.p, session)  # §12 delegate to subagents
+                else:
+                    # A dynamic (user-authored) agent runs with ITS definition, not the
+                    # builtin one its base type maps to — callers pass it explicitly.
+                    agent_def = definition or get_agent_definition(session.agent_type)
+                    run = await self.runtime.run(session, agent_def)
+
+                session.status = (
+                    SessionStatus.COMPLETED
+                    if run.state is AgentState.COMPLETED
+                    else SessionStatus.FAILED
                 )
-                self._reviews[session.id] = review
-                self._persist_pending_review(session.id, gs)  # survives restart
+                session.provider, session.model = run.provider, run.model  # what actually ran
+                session.summary = run.result
+                session.input_tokens = run.input_tokens
+                session.output_tokens = run.output_tokens
+                session.finished_at = utcnow()
+                self._save(session)
                 await self.p.event_bus.publish(
-                    EventType.REVIEW_REQUESTED,
-                    {
-                        "branch": review.branch,
-                        "risk": review.risk,
-                        "changed_files": review.changed_files,
-                    },
+                    EventType.SESSION_COMPLETED,
+                    {"status": session.status.value, "summary": session.summary},
                     session_id=session.id,
                 )
-            except Exception:  # noqa: BLE001
-                log.exception("failed to build review for session %s", session.id)
+            except asyncio.CancelledError:
+                # The user stopped this run (POST /sessions/{id}/cancel). Mark it
+                # CANCELLED (not FAILED), GC any worktree, then propagate so the
+                # background task ends cancelled.
+                await self._finalize_cancelled(session)
+                raise
+            except Exception as exc:  # noqa: BLE001
+                # Any other failure (a provider blow-up that escaped the router, a DB
+                # write error, a supervised-run crash) must NOT strand the session in
+                # ACTIVE forever. Finalize it FAILED + emit SESSION_COMPLETED(ok=False)
+                # so the dashboard stops spinning and the run is recoverable, then
+                # re-raise for the caller/HTTP.
+                await self._finalize_failed(session, exc)
+                raise
 
-        return session
+            # Close the measurement->learning loop (evaluate + record outcome +
+            # reflect). Runs for delegated/spawned children too, via the same
+            # helper. Deliberately INSIDE the self-registration window: the
+            # learning/review tail is part of the run (the exact tail whose
+            # slowness raced the v1.166.1 CI fix), so the governed slot and the
+            # cancellable handle release only when run_session truly ends.
+            self._post_run_learning(session)
+
+            # Phase 7: if this ran on a git worktree, build a review — never
+            # auto-merge.
+            gs = self._git_sessions.get(session.id)
+            if gs is not None:
+                try:
+                    review = build_review(
+                        gs,
+                        session.id,
+                        summary=session.summary,
+                        tool_history=self.transcript(session.id)["tools"],
+                    )
+                    self._reviews[session.id] = review
+                    self._persist_pending_review(session.id, gs)  # survives restart
+                    await self.p.event_bus.publish(
+                        EventType.REVIEW_REQUESTED,
+                        {
+                            "branch": review.branch,
+                            "risk": review.risk,
+                            "changed_files": review.changed_files,
+                        },
+                        session_id=session.id,
+                    )
+                except Exception:  # noqa: BLE001
+                    log.exception("failed to build review for session %s", session.id)
+
+            return session
+        finally:
+            if self_registered and self._running.get(session_id) is current:
+                self._running.pop(session_id, None)
+                self._dequeue_next()  # the governed slot frees NOW, not at task end
 
     def _post_run_learning(self, session: Session) -> None:
         """Post-run learning pipeline: score -> record outcome -> reflect.
