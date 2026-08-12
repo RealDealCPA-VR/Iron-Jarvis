@@ -194,6 +194,14 @@ docker compose up        # daemon + dashboard, locally or on any Docker host
 
 ## 📖 Using Iron Jarvis — a practical guide
 
+> **The full documentation set** lives in `docs/`:
+> **[The Handbook](docs/HANDBOOK.md)** (every surface, the trust model,
+> troubleshooting) · **[Recommended Settings](docs/RECOMMENDED-SETTINGS.md)**
+> (a tuned daily-driver profile) · **[Local Models by RAM
+> Tier](docs/LOCAL-MODELS.md)** (what to run at 8/16/32/64/128 GB and how to
+> wire it) · **[The Comprehensive To-Do](docs/TODO.md)** (everything open,
+> consolidated).
+
 ### Update, recover & self-heal 🔄
 
 **Stay current.**
