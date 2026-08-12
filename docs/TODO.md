@@ -1,6 +1,6 @@
 # The Comprehensive To-Do
 
-*Everything known to be open as of v1.167.1 (2026-08-12), consolidated from
+*Everything known to be open as of v1.167.2 (2026-08-12), consolidated from
 the deep-review wow track, deferred backlogs across waves, and known limits.
 The deep review's 11 confirmed bugs are all FIXED (v1.166.2–v1.167.0) — this
 file is what remains.*

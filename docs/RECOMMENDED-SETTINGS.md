@@ -1,6 +1,6 @@
 # Recommended Settings
 
-*Grounded in `core/config.py` as of v1.167.1. Everything here is changeable
+*Grounded in `core/config.py` as of v1.167.2. Everything here is changeable
 on the Settings page (or `config.toml`); the daemon re-arms live settings
 without a restart wherever the page says so.*
 
