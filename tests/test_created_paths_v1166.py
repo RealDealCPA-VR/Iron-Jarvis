@@ -716,3 +716,33 @@ async def test_files_delete_envelope_refuses_escaping_path(ws):
     res = await revert_workspace_file(undo, ctx)
     assert res.ok is False
     assert outside.read_text(encoding="utf-8") == "precious"  # untouched
+
+
+async def test_failed_capture_on_reversible_tool_journals_nothing(
+    tmp_path, monkeypatch
+):
+    """v1.167.0: for a REVERSIBLE tool, `undo is None` at _record means the
+    capture FAILED (disk full, blob-store error). That must degrade to NO undo
+    row — before the gate, the post-hoc branch journaled the overwrite as
+    "file_delete" ("created → unlink on undo") and undoing the overwrite
+    DELETED the user's only remaining copy instead of refusing."""
+    platform, ctx = _platform_ctx(tmp_path, tmp_path / "ws")
+    target = tmp_path / "ws" / "note.txt"
+    target.write_text("ORIGINAL CLIENT DATA", encoding="utf-8")
+
+    async def broken_capture(self, args, c):
+        raise OSError("undo blob store unavailable")
+
+    monkeypatch.setattr(WriteFileTool, "capture_undo", broken_capture)
+    res = await platform.registry.invoke(
+        "write_file", {"path": "note.txt", "content": "NEW"}, ctx, platform.permissions
+    )
+    assert res.ok is True  # the write itself still lands (capture never blocks)
+    assert target.read_text(encoding="utf-8") == "NEW"
+    rows = _journal_rows(platform)
+    assert rows == [], (
+        "a failed capture must journal NOTHING for a reversible tool — "
+        f"got {[(r.kind, r.tool) for r in rows]} (the fabricated-inverse bug)"
+    )
+    invs = _invocation_rows(platform, "write_file")
+    assert len(invs) == 1 and invs[0].ok is True  # the ledger row survived

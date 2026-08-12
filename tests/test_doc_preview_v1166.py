@@ -249,3 +249,56 @@ def test_file_gate_unchanged_with_new_param(tmp_path):
     assert client.get(
         "/documents/file", params={"path": str(tmp_path / "ghost.pdf")}
     ).status_code == 404
+
+
+def test_xlsx_wide_sheet_column_clip_sets_truncated(tmp_path):
+    """v1.167.0: a 40-column ledger must not render as a complete-looking
+    30-column table — the column drop is truncation and must say so."""
+    from openpyxl import Workbook
+
+    p = tmp_path / "wide.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.append([f"col{i}" for i in range(40)])  # 40 cols, 1 row — no row clip
+    wb.save(p)
+    client = TestClient(create_app(str(tmp_path)))
+    r = client.get("/documents/preview", params={"path": str(p)})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["truncated"] is True, "column clip was silent"
+    assert len(body["rows"][0]) == 30
+    assert body.get("total_cols") == 40
+
+
+def test_xlsx_long_cell_clip_sets_truncated(tmp_path):
+    from openpyxl import Workbook
+
+    p = tmp_path / "longcell.xlsx"
+    wb = Workbook()
+    wb.active.append(["x" * 200])  # one cell over the 80-char clip
+    wb.save(p)
+    client = TestClient(create_app(str(tmp_path)))
+    body = client.get("/documents/preview", params={"path": str(p)}).json()
+    assert body["truncated"] is True, "cell clip was silent"
+    assert body["rows"][0][0] == "x" * 80
+
+
+def test_xlsx_small_sheet_stays_untruncated(tmp_path):
+    from openpyxl import Workbook
+
+    p = tmp_path / "small.xlsx"
+    wb = Workbook()
+    wb.active.append(["a", "b"])
+    wb.save(p)
+    client = TestClient(create_app(str(tmp_path)))
+    body = client.get("/documents/preview", params={"path": str(p)}).json()
+    assert body["truncated"] is False  # honesty cuts both ways
+
+
+def test_csv_long_cell_clip_sets_truncated(tmp_path):
+    p = tmp_path / "longcell.csv"
+    p.write_text("short," + "y" * 200 + "\n", encoding="utf-8")
+    client = TestClient(create_app(str(tmp_path)))
+    body = client.get("/documents/preview", params={"path": str(p)}).json()
+    assert body["truncated"] is True, "csv cell clip was silent"
+    assert body["rows"][0][1] == "y" * 80

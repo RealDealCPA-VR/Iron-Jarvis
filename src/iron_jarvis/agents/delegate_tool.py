@@ -13,6 +13,7 @@ supervisor → subagent hierarchy is reconstructable from persistence.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from ..core.db import session_scope
@@ -207,11 +208,35 @@ class DelegateTool(Tool):
             task, agent_type, provider=provider, model=model, project_id=project_id
         )
 
-        run = await AgentRuntime(self.platform).run(
-            child_session,
-            definition or get_agent_definition(child_session.agent_type),
-            parent_id=ctx.agent_run_id,
-        )
+        # The child must ALWAYS settle (v1.167.0). A bare await left the child
+        # session ACTIVE forever when the parent was cancelled mid-delegation
+        # (Stop on a supervisor) or the child's runtime raised (a provider
+        # refusing per the v1.162.0 no-mock rule) — never finalized, never
+        # learned from, lying on the kanban board.
+        try:
+            run = await AgentRuntime(self.platform).run(
+                child_session,
+                definition or get_agent_definition(child_session.agent_type),
+                parent_id=ctx.agent_run_id,
+            )
+        except asyncio.CancelledError:
+            await orch._finalize_cancelled(child_session)
+            raise  # the parent's cancellation keeps propagating
+        except Exception as exc:  # noqa: BLE001
+            await orch._finalize_failed(child_session, exc)
+            return ToolResult(
+                ok=False,
+                output="",
+                error=(
+                    f"delegated agent '{child_session.agent_type.value}' crashed: "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+                data={
+                    "child_session_id": child_session.id,
+                    "agent_type": child_session.agent_type.value,
+                    "state": "failed",
+                },
+            )
 
         # Reflect the run's outcome onto the child session and persist it.
         child_session.status = (

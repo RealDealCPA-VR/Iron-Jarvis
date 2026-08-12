@@ -70,6 +70,13 @@ class Orchestrator:
         # the same launcher and has no row, so "row gone" only means
         # "deleted while queued" for entries that HAD one.
         self._queued: deque[tuple[str, Any, bool]] = deque()
+        # The GOVERNED denominator (v1.167.0): session ids whose runs count
+        # against ``max_concurrent_sessions``. ``_running`` also holds
+        # non-session background work (workflow runs, slack handlers) — gating
+        # the limit on len(_running) let one long workflow starve every agent
+        # session while ZERO sessions ran, the mirror of the surprise the
+        # no-row exemption exists to prevent.
+        self._governed: set[str] = set()
         # Set by shutdown_queue() during daemon teardown: once draining, the
         # slot-free hook must never promote a parked run (lifespan cancels the
         # running tasks, and each cancellation fires _release -> _dequeue_next,
@@ -94,6 +101,7 @@ class Orchestrator:
 
         def _release(t: asyncio.Task, sid: str = session_id) -> None:
             self._running.pop(sid, None)
+            self._governed.discard(sid)  # no-op for ungoverned (no-row) work
             self._dequeue_next()  # a slot just freed — start the next parked run
 
         task.add_done_callback(_release)
@@ -137,7 +145,8 @@ class Orchestrator:
         session = self.get_session(session_id)
         if session is None:  # non-session background work is never governed
             return self._start_managed(session_id, coro)
-        if len(self._running) < limit:
+        if len(self._governed) < limit:  # count SESSIONS, not every bg task
+            self._governed.add(session_id)
             return self._start_managed(session_id, coro)
         if session.status is not SessionStatus.ACTIVE:
             coro.close()  # never park a terminal row (see docstring); honest no-op
@@ -193,8 +202,8 @@ class Orchestrator:
             return
         limit = int(getattr(self.p.config, "max_concurrent_sessions", 0) or 0)
         while self._queued:
-            if limit > 0 and len(self._running) >= limit:
-                return  # every slot still busy
+            if limit > 0 and len(self._governed) >= limit:
+                return  # every governed slot still busy
             session_id, coro, had_row = self._queued.popleft()
             session = self.get_session(session_id)
             if had_row and (
@@ -206,8 +215,10 @@ class Orchestrator:
                 session.status = SessionStatus.ACTIVE
                 self._save(session)
             try:
+                self._governed.add(session_id)  # promoted into a governed slot
                 self._start_managed(session_id, coro)
             except RuntimeError:  # event loop gone (shutdown) — never started
+                self._governed.discard(session_id)
                 coro.close()  # reconcile marks the stranded row on next boot
                 log.warning("could not start queued session %s (no loop)", session_id)
             return  # one dequeue per freed slot
@@ -400,6 +411,10 @@ class Orchestrator:
         current = asyncio.current_task()
         if current is not None and self._running.get(session_id) is None:
             self.register_running(session_id, current)
+            # A wait:true / schedule-fired run is a REAL concurrent session —
+            # it occupies a governed slot too (v1.167.0), so parked background
+            # runs don't over-promote past the limit while it works.
+            self._governed.add(session_id)
             self_registered = True
         try:
             try:
@@ -479,6 +494,7 @@ class Orchestrator:
         finally:
             if self_registered and self._running.get(session_id) is current:
                 self._running.pop(session_id, None)
+                self._governed.discard(session_id)
                 self._dequeue_next()  # the governed slot frees NOW, not at task end
 
     def _post_run_learning(self, session: Session) -> None:

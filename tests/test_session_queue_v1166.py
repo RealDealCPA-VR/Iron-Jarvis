@@ -423,10 +423,15 @@ async def test_second_continue_blocked_while_first_is_queued(platform, orchestra
     done.status = SessionStatus.COMPLETED  # a finished parent, ripe for continue
     orchestrator._save(done)
 
-    # Unrelated work occupies the only slot so the continuation parks.
+    # Another SESSION occupies the only slot so the continuation parks —
+    # a no-row id can't hold a slot anymore (v1.167.0: the governed
+    # denominator counts sessions, not every background task).
     order: list[str] = []
     gate = asyncio.Event()
-    holder = orchestrator.spawn_managed("holder", _gated(order, "holder", gate))
+    holder_session = await orchestrator.create_session("slot holder")
+    holder = orchestrator.spawn_managed(
+        holder_session.id, _gated(order, holder_session.id, gate)
+    )
 
     first = await orchestrator.continue_session(parent.id, "carry on")
     assert first.workspace_path == parent.workspace_path  # shared on purpose
@@ -557,3 +562,40 @@ def test_reconcile_still_marks_stranded_active(platform, orchestrator):
     marked = orchestrator.reconcile_interrupted_sessions()
     assert marked == 1
     assert orchestrator.get_session(s.id).status is SessionStatus.FAILED
+
+
+async def test_non_session_task_does_not_consume_a_governed_slot(
+    platform, orchestrator
+):
+    """v1.167.0: the limit's denominator is GOVERNED SESSIONS, not every
+    background task. Before the fix, a long workflow run held a 'session'
+    slot and new sessions queued while ZERO sessions were running."""
+    _set_limit(platform, 1)
+    order: list[str] = []
+    wf_gate, s_gate, s2_gate = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    # A long-lived NON-session task (workflow-run shape) occupies _running...
+    wf = orchestrator.spawn_managed("workflow-run-7", _gated(order, "wf", wf_gate))
+    assert isinstance(wf, asyncio.Task)
+    # ...and a real session must still START — the workflow is not a session.
+    s = await orchestrator.create_session("must not starve")
+    ts = orchestrator.spawn_managed(s.id, _gated(order, s.id, s_gate))
+    assert isinstance(ts, asyncio.Task), (
+        "a workflow run consumed the only session slot — sessions starved "
+        "behind zero sessions"
+    )
+    assert len(orchestrator._queued) == 0
+    # A SECOND session parks: the one governed slot is genuinely busy.
+    s2 = await orchestrator.create_session("second parks honestly")
+    assert orchestrator.spawn_managed(s2.id, _gated(order, s2.id, s2_gate)) is None
+    assert orchestrator.get_session(s2.id).status is SessionStatus.QUEUED
+    s_gate.set()
+    await ts
+    await _drain(orchestrator)  # slot freed -> s2 promoted (its own gate holds it)
+    t2 = orchestrator._running.get(s2.id)
+    assert t2 is not None, "the parked session was not promoted"
+    s2_gate.set()
+    await t2
+    wf_gate.set()
+    await wf
+    await _drain(orchestrator)
+    assert orchestrator._governed == set()

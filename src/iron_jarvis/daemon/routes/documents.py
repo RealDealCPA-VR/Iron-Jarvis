@@ -128,6 +128,16 @@ def register(app: FastAPI, d) -> None:
                     if i >= 80:
                         truncated = True
                         break
+                    # Column and cell clips are TRUNCATION too (v1.167.0): a
+                    # 40-column ledger shown as a complete-looking 30-column
+                    # table — and the Changes diff then reporting "no changes"
+                    # for an edit in column AK — is the silent-truncation class.
+                    if len(row) > 30:
+                        truncated = True
+                    if any(
+                        v is not None and len(str(v)) > 80 for v in row[:30]
+                    ):
+                        truncated = True
                     rows.append(["" if v is None else str(v)[:80] for v in row[:30]])
                 title = ws.title
                 # Truncation honesty (v1.166.0): the REAL extent, so the client
@@ -170,6 +180,8 @@ def register(app: FastAPI, d) -> None:
                             continue
                         if len(row) > 30:
                             truncated = True
+                        if any(len(str(v)) > 80 for v in row[:30]):
+                            truncated = True  # cell clip is truncation too
                         rows.append([str(v)[:80] for v in row[:30]])
             except (OSError, _csv.Error) as exc:
                 # _csv.Error covers parser failures such as a field over the

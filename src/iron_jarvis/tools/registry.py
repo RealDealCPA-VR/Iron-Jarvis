@@ -448,7 +448,19 @@ class ToolRegistry:
             #     row (pre_inline {"paths": [...]}) instead of N same-key rows.
             # Best-effort — a journal problem must never turn a successful tool
             # call into a failure.
-            if undo is None and created_paths:
+            #
+            # NEVER for a REVERSIBLE tool (v1.167.0): for those, `undo is None`
+            # means the capture FAILED (disk full, blob-store permission error —
+            # exactly the fragile moments), and the registry's contract is that
+            # a failed capture degrades to NO undo. Journaling the write as
+            # "file_delete" ("created → unlink on undo") would fabricate an
+            # inverse: undoing an OVERWRITE would then delete the user's only
+            # remaining copy instead of refusing.
+            if (
+                undo is None
+                and created_paths
+                and reversibility != Reversibility.REVERSIBLE.value
+            ):
                 rels: list[str] = []
                 for raw_path in created_paths:
                     try:

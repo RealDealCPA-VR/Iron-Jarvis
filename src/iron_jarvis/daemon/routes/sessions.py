@@ -43,7 +43,11 @@ def register(app: FastAPI, d) -> None:
         if body.wait:
             session = await d.orchestrator.run_session(session.id)
         else:
-            d._spawn_bg(session.id, d.orchestrator.run_session(session.id))
+            # A parked spawn returns None (v1.167.0): the governor marked the
+            # row QUEUED, so re-read it — serializing the stale in-memory
+            # object here claimed "active" for work that never started.
+            if d._spawn_bg(session.id, d.orchestrator.run_session(session.id)) is None:
+                session = d.orchestrator.get_session(session.id) or session
         return _session_view(session)
 
     @app.post("/sessions/{session_id}/cancel")
@@ -67,7 +71,11 @@ def register(app: FastAPI, d) -> None:
         if wait:
             session = await d.orchestrator.run_session(session.id)
         else:
-            d._spawn_bg(session.id, d.orchestrator.run_session(session.id))
+            # A parked spawn returns None (v1.167.0): the governor marked the
+            # row QUEUED, so re-read it — serializing the stale in-memory
+            # object here claimed "active" for work that never started.
+            if d._spawn_bg(session.id, d.orchestrator.run_session(session.id)) is None:
+                session = d.orchestrator.get_session(session.id) or session
         return _session_view(session)
 
     @app.post("/sessions/{session_id}/continue")
@@ -81,7 +89,11 @@ def register(app: FastAPI, d) -> None:
         if body.wait:
             session = await d.orchestrator.run_session(session.id)
         else:
-            d._spawn_bg(session.id, d.orchestrator.run_session(session.id))
+            # A parked spawn returns None (v1.167.0): the governor marked the
+            # row QUEUED, so re-read it — serializing the stale in-memory
+            # object here claimed "active" for work that never started.
+            if d._spawn_bg(session.id, d.orchestrator.run_session(session.id)) is None:
+                session = d.orchestrator.get_session(session.id) or session
         return _session_view(session)
 
     @app.post("/sessions/clear")

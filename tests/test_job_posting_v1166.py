@@ -423,3 +423,35 @@ def test_team_of_a_real_run_lists_its_own_runs_and_no_children(tmp_path):
         assert team["runs"][0]["state"] == "completed"
         assert team["runs"][0]["agent_type"] == "builder"
         assert team["runs"][0]["parent_id"] is None
+
+
+def test_parked_spawn_response_says_queued_not_active(tmp_path, monkeypatch):
+    """v1.167.0: at the concurrency limit, the wait:false response used to
+    serialize the stale in-memory row — claiming "active" for a session the
+    governor had just parked QUEUED. The response must match the DB."""
+    import asyncio as _asyncio
+
+    with _client(tmp_path) as client:
+        platform = client.app.state.platform
+        object.__setattr__(platform.config, "max_concurrent_sessions", 1)
+        orch = client.app.state.orchestrator
+
+        gate = _asyncio.Event()
+
+        async def gated_run(session_id, definition=None):
+            await gate.wait()
+            return orch.get_session(session_id)
+
+        monkeypatch.setattr(orch, "run_session", gated_run)
+
+        first = client.post(
+            "/sessions", json={"task": "holds the slot", "wait": False}
+        ).json()
+        assert first["status"] == "active"
+        second = client.post(
+            "/sessions", json={"task": "parks honestly", "wait": False}
+        ).json()
+        assert second["status"] == "queued", (
+            f"a parked spawn reported {second['status']!r} — the stale-row lie"
+        )
+        gate.set()

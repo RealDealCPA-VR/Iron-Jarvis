@@ -65,25 +65,48 @@ class ListFolderTool(Tool):
         "required": ["path"],
     }
 
+    #: Bounds for the folder scan (v1.167.0): an unhydrated OneDrive folder or a
+    #: dead network share must neither hang the request nor spin forever. The
+    #: scan runs in a thread (never on the event loop) AND stops at whichever
+    #: bound hits first — and a capped scan SAYS SO (silent truncation reads as
+    #: complete, the v1.153.1 lesson).
+    _SCAN_CAP = 20_000
+    _SCAN_DEADLINE_S = 10.0
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         folder = _resolve_read_path(str(args.get("path", "")), ctx)
         ok, reason = fs_read_ok(str(folder))
         if not ok:
             return ToolResult(ok=False, error=f"read denied: {reason}")
-        if not folder.is_dir():
+        # is_dir() on a network path can block too — everything fs goes off-loop.
+        if not await asyncio.to_thread(folder.is_dir):
             return ToolResult(ok=False, error=f"not a folder: {folder}")
         limit = max(1, min(int(args.get("limit") or 200), 1000))
-        entries: list[tuple[str, bool, int, float]] = []
-        try:
-            for p in folder.iterdir():
-                try:
-                    st = p.stat()
-                    entries.append((p.name, p.is_dir(), st.st_size, st.st_mtime))
-                except OSError:
-                    continue
-        except OSError as exc:
-            return ToolResult(ok=False, error=f"could not list {folder}: {exc}")
-        entries.sort(key=lambda e: e[2], reverse=True)  # biggest first
+
+        def _collect() -> tuple[list[tuple[str, bool, int, float]], bool, str | None]:
+            import time as _time
+
+            deadline = _time.monotonic() + self._SCAN_DEADLINE_S
+            out: list[tuple[str, bool, int, float]] = []
+            capped = False
+            try:
+                for p in folder.iterdir():
+                    if len(out) >= self._SCAN_CAP or _time.monotonic() > deadline:
+                        capped = True
+                        break
+                    try:
+                        st = p.stat()
+                        out.append((p.name, p.is_dir(), st.st_size, st.st_mtime))
+                    except OSError:
+                        continue
+            except OSError as exc:
+                return [], False, str(exc)
+            out.sort(key=lambda e: e[2], reverse=True)  # biggest first
+            return out, capped, None
+
+        entries, capped, err = await asyncio.to_thread(_collect)
+        if err is not None:
+            return ToolResult(ok=False, error=f"could not list {folder}: {err}")
         shown = entries[:limit]
         from datetime import datetime
 
@@ -92,11 +115,20 @@ class ListFolderTool(Tool):
             f"{datetime.fromtimestamp(mtime):%Y-%m-%d %H:%M}"
             for name, is_dir, size, mtime in shown
         ]
-        header = f"{folder} — {len(entries)} entries" + (
+        header = f"{folder} — {len(entries)}{'+' if capped else ''} entries" + (
             f" (showing {len(shown)})" if len(shown) < len(entries) else ""
         )
+        if capped:
+            header += (
+                f" — SCAN CAPPED at {len(entries)} entries/"
+                f"{self._SCAN_DEADLINE_S:.0f}s; the folder holds more"
+            )
         body = header + ("\n" + "\n".join(lines) if lines else "\n(empty)")
-        return ToolResult(ok=True, output=body, data={"path": str(folder), "total": len(entries)})
+        return ToolResult(
+            ok=True,
+            output=body,
+            data={"path": str(folder), "total": len(entries), "scan_capped": capped},
+        )
 
 
 class ReadDocumentTool(Tool):
@@ -254,7 +286,8 @@ class WriteDocumentTool(Tool):
             return None
         if target.is_file():
             try:
-                prior = target.read_bytes()
+                # Off the loop: the pre-image of a big workbook is a real read.
+                prior = await asyncio.to_thread(target.read_bytes)
             except OSError:
                 return None
             return make_file_descriptor(
@@ -284,7 +317,12 @@ class WriteDocumentTool(Tool):
         warns: list[str] = []
         try:
             target = safe_path(ctx.workspace, args["path"])
-            out = write_document(
+            # The render is CPU-bound (docx/xlsx/pdf generation) — off the loop,
+            # exactly as ConvertDocumentTool always did (v1.167.0: a 40k-row
+            # workbook rendered inline froze the whole daemon for ~2s, the
+            # "Daemon offline" class the v1.153.1 hard rule exists to prevent).
+            out = await asyncio.to_thread(
+                write_document,
                 target,
                 args["content"],
                 kind=args.get("kind"),

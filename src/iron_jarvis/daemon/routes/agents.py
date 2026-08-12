@@ -1017,8 +1017,12 @@ def register(app: FastAPI, d) -> None:
             session = await d.orchestrator.run_session(session.id, definition=definition)
         else:
             # Non-blocking spawn: the UI jumps straight to the live session view
-            # (parity with POST /sessions wait:false).
-            d._spawn_bg(
+            # (parity with POST /sessions wait:false). A parked spawn returns
+            # None (v1.167.0) — re-read the row so the response says QUEUED,
+            # not a stale "active" for work that never started.
+            parked = d._spawn_bg(
                 session.id, d.orchestrator.run_session(session.id, definition=definition)
             )
+            if parked is None:
+                session = d.orchestrator.get_session(session.id) or session
         return _session_view(session)
