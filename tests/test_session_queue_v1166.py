@@ -337,6 +337,13 @@ async def test_real_runs_queue_then_complete(platform, orchestrator):
     assert sb.summary  # the queued run really executed and reported a result
     assert sb.finished_at is not None
     assert len(orchestrator._queued) == 0
+    # run_session saves COMPLETED and THEN runs its learning/review tail, so the
+    # row flips before the task ends — on a slow CI runner b's task is still in
+    # _running here. Await the real task handle instead of racing its
+    # done-callback (v1.166.1: this exact race failed the 40953a6 CI run).
+    tb_started = orchestrator._running.get(b.id)
+    if tb_started is not None:
+        await tb_started
     await _drain(orchestrator)
     assert a.id not in orchestrator._running and b.id not in orchestrator._running
 
