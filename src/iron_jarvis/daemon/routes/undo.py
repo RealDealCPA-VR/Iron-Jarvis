@@ -188,8 +188,26 @@ def register(app: FastAPI, d) -> None:
                     status_code=403,
                     detail=f"permission denied: {decision.reason}",
                 )
+            # The workspace the envelope's relative path was captured against
+            # (v1.166.3) beats any reconstruction: chat runs as session id
+            # "chat" with NO Session row (the old fallback guessed
+            # workspaces_dir/chat and every chat undo 409'd or targeted the
+            # wrong tree), and chat's workspace also varies per turn (uploads
+            # vs. the grounded project). Rows from before the stamp fall back
+            # to the historical reconstruction unchanged.
+            env_workspace: str | None = None
+            try:
+                _env = json.loads(desc.get("pre_inline") or "{}")
+                if isinstance(_env, dict):
+                    raw_ws = _env.get("workspace")
+                    if isinstance(raw_ws, str) and raw_ws and Path(raw_ws).is_absolute():
+                        env_workspace = raw_ws
+            except (TypeError, ValueError):
+                pass
             workspace = (
-                Path(workspace_path)
+                Path(env_workspace)
+                if env_workspace
+                else Path(workspace_path)
                 if workspace_path
                 else platform.config.workspaces_dir / session_id
             )

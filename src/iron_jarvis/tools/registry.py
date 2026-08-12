@@ -382,6 +382,27 @@ class ToolRegistry:
         tool = self._tools.get(name)
         safe_args = tool.redact_args(args) if tool is not None else args
         inv_id = new_id("tool")
+
+        def _stamp_workspace(desc: "dict[str, Any]") -> "dict[str, Any]":
+            """Record WHICH workspace the envelope's relative path is against
+            (v1.166.3). POST /undo used to reconstruct the workspace from the
+            Session table — and chat runs every turn as session id "chat",
+            which has no row, so every chat undo resolved against a guessed
+            folder (workspaces_dir/chat) and either 409'd or targeted the
+            wrong tree. Chat's tool workspace also varies per turn (uploads
+            vs. the grounded project), so only capture-time truth can work.
+            Best-effort: an unparseable envelope is left untouched."""
+            try:
+                meta = json.loads(desc.get("pre_inline") or "{}")
+            except (TypeError, ValueError):
+                return desc
+            if not isinstance(meta, dict) or meta.get("workspace"):
+                return desc
+            try:
+                meta["workspace"] = str(Path(ctx.workspace).resolve())
+            except Exception:  # noqa: BLE001 — never fail the recording
+                return desc
+            return {**desc, "pre_inline": json.dumps(meta)}
         record = ToolInvocation(
             id=inv_id,
             session_id=ctx.session_id,
@@ -399,18 +420,19 @@ class ToolRegistry:
                 # The inverse descriptor (from Tool.capture_undo) is a small,
                 # redaction-safe dict; the big pre-image itself is already a blob
                 # ref or a small inline value inside it.
+                stamped = _stamp_workspace(undo)
                 db.add(
                     UndoJournal(
                         action_id=inv_id,
                         session_id=ctx.session_id,
                         agent_run_id=ctx.agent_run_id,
                         tool=name,
-                        kind=str(undo.get("kind") or ""),
-                        reversible=bool(undo.get("reversible", True)),
-                        pre_ref=undo.get("pre_ref"),
-                        pre_inline=undo.get("pre_inline"),
-                        pre_sha256=undo.get("pre_sha256"),
-                        post_sha256=undo.get("post_sha256"),
+                        kind=str(stamped.get("kind") or ""),
+                        reversible=bool(stamped.get("reversible", True)),
+                        pre_ref=stamped.get("pre_ref"),
+                        pre_inline=stamped.get("pre_inline"),
+                        pre_sha256=stamped.get("pre_sha256"),
+                        post_sha256=stamped.get("post_sha256"),
                     )
                 )
             # Post-hoc creations (v1.157.0, reshaped v1.166.0). action_id is the
@@ -457,6 +479,7 @@ class ToolRegistry:
                 except Exception:  # noqa: BLE001
                     desc = None
                 if desc is not None:
+                    desc = _stamp_workspace(desc)
                     db.add(
                         UndoJournal(
                             action_id=inv_id,
