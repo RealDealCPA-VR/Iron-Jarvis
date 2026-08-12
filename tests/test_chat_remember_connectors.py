@@ -357,16 +357,17 @@ def test_thread_setup_persists_connectors(tmp_path):
     # v1.91.0: generated-document paths persist with the thread (the preview
     # chips survive leaving the page + daemon restarts until dismissed).
     assert got["setup"]["documents"] == [r"C:\proj\letter.docx", r"C:\proj\book.xlsx"]
-    # The cap keeps the NEWEST documents.
+    # The cap keeps the NEWEST documents (raised 8 -> 30 in v1.166.0 alongside
+    # the ArtifactsRail's "showing the latest 30" honesty line).
     client.put(
         f"/chat/threads/{tid}",
         json={
             "messages": [{"role": "user", "content": "hi"}],
-            "setup": {"documents": [f"C:\\d\\{i}.docx" for i in range(12)]},
+            "setup": {"documents": [f"C:\\d\\{i}.docx" for i in range(35)]},
         },
     )
     docs = client.get(f"/chat/threads/{tid}").json()["setup"]["documents"]
-    assert len(docs) == 8 and docs[-1] == "C:\\d\\11.docx" and docs[0] == "C:\\d\\4.docx"
+    assert len(docs) == 30 and docs[-1] == "C:\\d\\34.docx" and docs[0] == "C:\\d\\5.docx"
     # Mistyped payloads are dropped, not stored.
     client.put(
         f"/chat/threads/{tid}",

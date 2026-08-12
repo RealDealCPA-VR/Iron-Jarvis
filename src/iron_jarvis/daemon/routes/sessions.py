@@ -36,6 +36,7 @@ def register(app: FastAPI, d) -> None:
                 self_dev=body.self_dev,
                 project_id=body.project_id or None,
                 allow_tools=body.allow_tools or None,
+                origin=body.origin,
             )
         except (PermissionError, RuntimeError) as exc:  # self-dev gating
             raise HTTPException(status_code=400, detail=str(exc))
@@ -214,6 +215,112 @@ def register(app: FastAPI, d) -> None:
         if not result.get("found"):
             raise HTTPException(status_code=404, detail="session not found")
         return result
+
+    @app.get("/sessions/{session_id}/team")
+    def session_team(session_id: str) -> dict[str, Any]:
+        """The delegation tree under one session (v1.166.0).
+
+        Derivation is the honest record, never the model's narrative: this
+        session's AgentRun ids -> child AgentRuns whose ``parent_id`` is one of
+        them -> those runs' sessions, recursed to depth 3 (the delegation cap,
+        which also makes a corrupt parent_id cycle harmless). ``children`` rows
+        are ``_session_view`` shapes plus ``parent_run_id``; ``runs`` carries
+        the parent's AND every discovered child's runs. Read-only. An unknown
+        id is ``found: false`` + empty lists (200) so the polling session page
+        never turns a just-deleted session into an error toast.
+        """
+        from sqlmodel import select
+
+        from ...core.db import session_scope
+        from ...core.models import AgentRun, Session as SessionModel
+
+        with session_scope(d.platform.engine) as db:
+            if db.get(SessionModel, session_id) is None:
+                return {
+                    "found": False,
+                    "session_id": session_id,
+                    "children": [],
+                    "runs": [],
+                }
+
+            runs_out: list[dict[str, Any]] = []
+            seen_runs: set[str] = set()
+            seen_sessions: set[str] = {session_id}
+            children: list[dict[str, Any]] = []
+
+            def _run_row(r: AgentRun) -> dict[str, Any]:
+                return {
+                    "id": r.id,
+                    "session_id": r.session_id,
+                    "parent_id": r.parent_id,
+                    "agent_type": r.agent_type.value,
+                    "state": r.state.value,
+                }
+
+            def _record_run(r: AgentRun) -> None:
+                """Append this run's row to ``runs`` exactly once."""
+                if r.id not in seen_runs:
+                    seen_runs.add(r.id)
+                    runs_out.append(_run_row(r))
+
+            def _collect_runs(session_ids: list[str]) -> list[AgentRun]:
+                """Record (deduped) run rows for these sessions; return ALL of
+                them so their ids become the next parent frontier — a row
+                already recorded via its parent_id link still parents the next
+                depth (the sessions themselves are fresh, so no re-walk)."""
+                if not session_ids:
+                    return []
+                rows = list(
+                    db.exec(
+                        select(AgentRun).where(
+                            AgentRun.session_id.in_(session_ids)  # type: ignore[attr-defined]
+                        )
+                    )
+                )
+                for r in rows:
+                    _record_run(r)
+                return rows
+
+            frontier = _collect_runs([session_id])
+            for _depth in range(3):  # the delegation cap
+                parent_ids = [r.id for r in frontier]
+                if not parent_ids:
+                    break
+                linked = list(
+                    db.exec(
+                        select(AgentRun).where(
+                            AgentRun.parent_id.in_(parent_ids)  # type: ignore[attr-defined, union-attr]
+                        )
+                    )
+                )
+                next_session_ids: list[str] = []
+                for r in linked:
+                    # The linked run ALWAYS lands in ``runs`` — it was
+                    # discovered via parent_id, and this endpoint claims
+                    # ``runs`` carries every discovered child's runs. Before
+                    # this (v1.166.0 fix) a run whose Session row was deleted,
+                    # blank, or already seen vanished from the honest record
+                    # without trace.
+                    _record_run(r)
+                    sid = r.session_id
+                    if not sid or sid in seen_sessions:
+                        continue
+                    seen_sessions.add(sid)
+                    child = db.get(SessionModel, sid)
+                    if child is None:  # run outlived its session — no child row
+                        continue
+                    children.append(
+                        {**_session_view(child), "parent_run_id": r.parent_id}
+                    )
+                    next_session_ids.append(sid)
+                frontier = _collect_runs(next_session_ids)
+
+        return {
+            "found": True,
+            "session_id": session_id,
+            "children": children,
+            "runs": runs_out,
+        }
 
     @app.get("/sessions/{session_id}/stream")
     async def stream_session(session_id: str, request: Request):

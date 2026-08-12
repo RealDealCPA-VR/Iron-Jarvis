@@ -277,8 +277,14 @@ class _PixioTool(Tool):
             )
         blob: bytes = getattr(resp, "content", b"") or b""
         rel = f"pixio/{_safe_name(generation_id)}{_ext_from_url(url)}"
-        dest = ctx.workspace / rel  # workspace-scoped by construction (§17)
+        # Workspace-scoped by construction (§17). resolve() because the
+        # workspace itself may be RELATIVE, and chat drops relative paths from
+        # `created_paths` by design — an unresolved dest would be a silent
+        # non-disclosure. abs_path and created_paths both come from this one
+        # value, so the two reports stay byte-identical.
+        dest = (ctx.workspace / rel).resolve()
         dest.parent.mkdir(parents=True, exist_ok=True)
+        existed = dest.exists()  # created_paths means CREATED, not overwritten
         dest.write_bytes(blob)
         # Durable copy → the Creative gallery (ArtifactStore; fires
         # artifact.generated so the dashboard updates live). The workspace copy
@@ -316,6 +322,12 @@ class _PixioTool(Tool):
                 **({"artifact": artifact_name} if artifact_name else {}),
                 "status": "succeeded",
             },
+            # Created-files contract (v1.166.0): the downloaded media, absolute
+            # (matches abs_path), success-only — the pending/failed returns
+            # never carry it because nothing was written. Only when this call
+            # brought the file into existence (a re-delivery over an existing
+            # file journaled as "created" would let undo unlink it).
+            created_paths=None if existed else [str(dest)],
         )
 
     @staticmethod

@@ -16,13 +16,64 @@ import { ConfirmButton } from "@/components/ui";
 import type { Review, SessionView } from "@/lib/types";
 import {
   LANES,
-  assignLanes,
   dropAction,
   laneFor,
+  type LaneDef,
   type LaneId,
 } from "@/lib/kanban";
 import { KanbanColumn } from "./KanbanColumn";
 import { CardInner, KanbanActionsContext, type KanbanCardActions } from "./SessionCard";
+
+/* ---- Queued lane (v1.166.0, B6) -----------------------------------------
+ * `spawn_managed` parks sessions past the `max_concurrent_sessions` cap with
+ * status "queued" — a state laneFor predates, so without this the board files
+ * a queued session under Active and claims "Running now" about work that has
+ * not started. lib/kanban.ts is coordinator-owned shared glue, so the queued
+ * extension lives here, board-local. The column only appears when occupied:
+ * with an empty queue (the limit-0 default) the board is exactly today's. */
+
+export type BoardLaneId = LaneId | "queued";
+
+export const QUEUED_LANE: LaneDef = {
+  // The cast is deliberate: LaneId is frozen in shared glue; the queued id
+  // only ever flows into droppable ids and record keys, both plain strings.
+  id: "queued" as LaneId,
+  title: "Queued",
+  tone: "violet",
+  hint: "Waiting for a free slot",
+};
+
+/** laneFor, plus the queued state. Review precedence is preserved. */
+export function boardLaneFor(session: SessionView, hasReview: boolean): BoardLaneId {
+  if (!hasReview && session.status.toLowerCase() === "queued") return "queued";
+  return laneFor(session, hasReview);
+}
+
+export function assignBoardLanes(
+  sessions: SessionView[],
+  reviews: Record<string, Review>,
+): Record<BoardLaneId, SessionView[]> {
+  const out: Record<BoardLaneId, SessionView[]> = {
+    queued: [],
+    active: [],
+    review: [],
+    completed: [],
+    failed: [],
+  };
+  for (const s of sessions) out[boardLaneFor(s, !!reviews[s.id])].push(s);
+  return out;
+}
+
+/** Queued column only when occupied — an empty board keeps the familiar 4. */
+export function visibleLanes(lanes: Record<BoardLaneId, SessionView[]>): LaneDef[] {
+  return lanes.queued.length > 0 ? [QUEUED_LANE, ...LANES] : LANES;
+}
+
+/** Narrow a board lane for the shared components (drag semantics only — a drag
+ *  out of Queued triggers no action, so Active's behaviour is the right stand-in). */
+function asLaneId(lane: BoardLaneId): LaneId {
+  return lane === "queued" ? "active" : lane;
+}
 
 export function KanbanBoard({
   sessions,
@@ -52,7 +103,7 @@ export function KanbanBoard({
     [sessions, projectId],
   );
 
-  const lanes = useMemo(() => assignLanes(scoped, reviews), [scoped, reviews]);
+  const lanes = useMemo(() => assignBoardLanes(scoped, reviews), [scoped, reviews]);
   const byId = useMemo(() => {
     const m = new Map<string, SessionView>();
     for (const s of scoped) m.set(s.id, s);
@@ -65,9 +116,10 @@ export function KanbanBoard({
   );
 
   const activeSession = activeId ? byId.get(activeId) ?? null : null;
-  const draggingFrom: LaneId | null = activeSession
-    ? laneFor(activeSession, !!reviews[activeSession.id])
+  const draggingFrom: BoardLaneId | null = activeSession
+    ? boardLaneFor(activeSession, !!reviews[activeSession.id])
     : null;
+  const columns = visibleLanes(lanes);
 
   // Card-level actions (failed-lane retry/dismiss, review-lane add-context) reach
   // the cards via context — KanbanColumn sits between us and them, prop-frozen.
@@ -183,13 +235,17 @@ export function KanbanBoard({
         onDragEnd={onDragEnd}
         onDragCancel={() => setActiveId(null)}
       >
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {LANES.map((lane) => (
+        <div
+          className={`grid grid-cols-1 gap-4 md:grid-cols-2 ${
+            columns.length === 5 ? "xl:grid-cols-5" : "xl:grid-cols-4"
+          }`}
+        >
+          {columns.map((lane) => (
             <KanbanColumn
               key={lane.id}
               lane={lane}
               sessions={lanes[lane.id]}
-              draggingFrom={draggingFrom}
+              draggingFrom={draggingFrom ? asLaneId(draggingFrom) : null}
               busyId={busyId}
               onApprove={(id) => act("approve", id)}
               onReject={(id) => act("reject", id)}
@@ -200,7 +256,7 @@ export function KanbanBoard({
         <DragOverlay dropAnimation={{ duration: 200, easing: "cubic-bezier(0.22,1,0.36,1)" }}>
           {activeSession && draggingFrom ? (
             <div className="w-[270px]">
-              <CardInner session={activeSession} lane={draggingFrom} overlay />
+              <CardInner session={activeSession} lane={asLaneId(draggingFrom)} overlay />
             </div>
           ) : null}
         </DragOverlay>

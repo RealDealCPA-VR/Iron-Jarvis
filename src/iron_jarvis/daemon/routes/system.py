@@ -106,14 +106,48 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/blackboard/{board_id}")
     def blackboard(board_id: str) -> dict[str, Any]:
-        """Read a department's shared blackboard (notes + messages) for the UI."""
+        """Read a department's shared blackboard (notes + messages) for the UI.
+
+        The board is keyed by the ROOT session id, but a TeamTree link lands the
+        user on a CHILD session's page (v1.166.0): when this id has no records
+        of its own, walk the AgentRun ``parent_id`` chain upward (bounded — the
+        delegation depth cap is 3) and serve the root's board instead. The
+        response's ``board_id`` reports the board actually served so the client
+        is never told a child id owns the root's notes."""
+        from sqlmodel import select as _select
+
         from ...blackboard.tools import _to_view
+        from ...core.db import session_scope as _scope
+        from ...core.models import AgentRun as _Run
 
         store = d.platform.blackboard
         if store is None:
             return {"board_id": board_id, "records": []}
         records = store.list(board_id)
-        return {"board_id": board_id, "records": _to_view(records)}
+        resolved = board_id
+        if not records:
+            with _scope(d.platform.engine) as db:
+                current = board_id
+                for _hop in range(4):  # delegation depth cap +1, cycle-proof
+                    runs = list(
+                        db.exec(_select(_Run).where(_Run.session_id == current))
+                    )
+                    parent_run_id = next(
+                        (r.parent_id for r in runs if r.parent_id), None
+                    )
+                    if not parent_run_id:
+                        break
+                    parent_run = db.get(_Run, parent_run_id)
+                    if parent_run is None or not parent_run.session_id:
+                        break
+                    if parent_run.session_id == current:
+                        break
+                    current = parent_run.session_id
+                if current != board_id:
+                    up = store.list(current)
+                    if up:
+                        records, resolved = up, current
+        return {"board_id": resolved, "records": _to_view(records)}
 
     @app.get("/self-dev")
     def self_dev_status() -> dict[str, Any]:

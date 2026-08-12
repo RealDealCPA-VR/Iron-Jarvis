@@ -483,6 +483,7 @@ class ConvertDocumentTool(Tool):
                 ),
             )
         try:
+            existed = target.exists()  # created_paths means CREATED, not overwritten
             content = await asyncio.to_thread(  # CPU-bound parse off the loop
                 _load_for_conversion, source, src_suffix, tgt_suffix
             )
@@ -496,6 +497,10 @@ class ConvertDocumentTool(Tool):
             ok=True,
             output=f"converted {source.name} -> {_abs} ({size} bytes)",
             data={"source": str(source), "path": rel, "abs_path": _abs, "bytes": size},
+            # Created-files contract (v1.166.0): absolute, success-only, and only
+            # when this call brought the file into existence — an overwrite
+            # journaled as "created" would let undo unlink a pre-existing file.
+            created_paths=None if existed else [_abs],
         )
 
 
@@ -888,6 +893,9 @@ class BatchDocumentsTool(Tool):
             except ValueError:  # pragma: no cover - deliverables are ws-confined
                 return p
 
+        # Capture the absolute deliverables BEFORE relativizing for display —
+        # created_paths must be absolute (relative entries are dropped by chat).
+        abs_deliverables = [str(Path(p).resolve()) for p in result["deliverables"]]
         result["deliverables"] = [_rel(p) for p in result["deliverables"]]
         parts = [
             f"{result['processed']} extracted",
@@ -924,7 +932,15 @@ class BatchDocumentsTool(Tool):
             f"failed: {Path(f['file']).name} — {f['error']}"
             for f in result["failed"]
         ]
-        return ToolResult(ok=True, output="\n".join(lines), data=result)
+        return ToolResult(
+            ok=True,
+            output="\n".join(lines),
+            data=result,
+            # v1.166.0: safe again — registry._record now collapses multiple
+            # post-hoc creations into ONE `files_delete` envelope row, so a
+            # multi-deliverable batch no longer IntegrityErrors the ledger.
+            created_paths=abs_deliverables or None,
+        )
 
 
 def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:

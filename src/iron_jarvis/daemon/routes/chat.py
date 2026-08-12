@@ -169,7 +169,7 @@ _REMEMBER_VERBATIM = 8_000
 
 
 #: Generated-document paths remembered per thread (the preview chips).
-_MAX_THREAD_DOCS = 8
+_MAX_THREAD_DOCS = 30
 
 # -- derived documents (threads from BEFORE v1.91.0 recorded none) ----------- #
 _DOC_SUFFIX = r"(?:docx|xlsx|xlsm|pptx|pdf|csv|md|html|txt)"

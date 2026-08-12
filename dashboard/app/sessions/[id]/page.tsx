@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useMemo, useState } from "react";
+import { use, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
+import { useRunStream } from "@/lib/useRunStream";
 import { useTTS } from "@/lib/useTTS";
 import { post, del, API_BASE, ijToken, ApiError } from "@/lib/api";
 import type {
@@ -43,6 +44,8 @@ import {
   LoaderInline,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
+import { TeamTree } from "@/components/sessions/TeamTree";
+import { BlackboardPanel } from "@/components/sessions/BlackboardPanel";
 import { ReviewPanel } from "@/components/ReviewPanel";
 import { TracesPanel } from "@/components/TracesPanel";
 import { SessionFeedback } from "@/components/SessionFeedback";
@@ -50,8 +53,10 @@ import { TimeTravelFeed } from "@/components/TimeTravelFeed";
 import { PageShell, Reveal } from "@/components/motion";
 import { pct, num, clockTime, shortId } from "@/lib/format";
 
-/** Session statuses that represent in-flight work (cancellable). */
-const ACTIVE = new Set(["active", "running", "pending"]);
+/** Session statuses that represent in-flight work (cancellable). "queued"
+ *  (v1.166.0) is parked behind the concurrency cap — not yet running, but
+ *  Stop must work on it (cancel_session dequeues + finalizes honestly). */
+const ACTIVE = new Set(["active", "running", "pending", "queued"]);
 /** Event types that should trigger a live detail/transcript refetch. */
 const REFETCH_EVENTS = new Set([
   "tool.executed",
@@ -86,6 +91,66 @@ export default function SessionDetailPage({
 
   const status = (session?.status ?? "").toLowerCase();
   const isActive = ACTIVE.has(status);
+  // Queued = parked, not running: no token stream exists yet, and the badge
+  // must not read like "Running now".
+  const isQueued = status === "queued";
+
+  /* ---- Live run stream (v1.166.0, B2): tokens + tool activity over SSE ----
+   * `GET /sessions/{id}/stream` via the same hook chat uses for its agent
+   * bubble. Opened ONCE per visit when the session is genuinely running (a
+   * queued session has nothing to stream); the daemon closes the stream on the
+   * terminal frame, at which point we fall back to the existing reload flow so
+   * the transcript/summary cards take over. The once-guard is a ref: when the
+   * stream closes, `runStream.active` flips false while `isActive` is still
+   * true for a beat — restarting on that beat would loop forever. */
+  const runStream = useRunStream();
+  const streamStartedRef = useRef(false);
+  /* The live-token <pre> is height-capped, so without follow-scroll the newest
+   * tokens land below the fold after ~14 lines and the user watches a frozen
+   * top slice for the rest of the run. Mirror chat's pinnedRef pattern: follow
+   * new text only while the reader is at (near) the bottom, so scrolling up to
+   * re-read is never yanked back down. */
+  const liveTextRef = useRef<HTMLPreElement | null>(null);
+  const livePinnedRef = useRef(true);
+  useEffect(() => {
+    const el = liveTextRef.current;
+    if (el && livePinnedRef.current) el.scrollTop = el.scrollHeight;
+  }, [runStream.text]);
+  useEffect(() => {
+    if (isActive && !isQueued && !streamStartedRef.current) {
+      streamStartedRef.current = true;
+      livePinnedRef.current = true; // a fresh stream follows its own output
+      runStream.start(id);
+    }
+    // The cleanup MUST release the guard and stop the stream, or StrictMode's
+    // dev-only mount→cleanup→mount cycle strands the page: the first mount sets
+    // the ref and opens the stream, the simulated unmount runs useRunStream's
+    // cleanup (which closes the socket WITHOUT flipping `active`), and the
+    // remounted effect is then blocked by the still-true ref — `active` stays
+    // true forever over a stream that no longer exists, showing a permanent
+    // "Live run" card. stop() (not just close) keeps `active` truthful. This is
+    // still loop-safe against the restart loop the guard exists for: a
+    // terminal-frame close changes `runStream.active` but none of these deps,
+    // so the effect never re-runs to reopen a finished stream; the
+    // queued→active flip and a remount both re-run it with the ref reset.
+    return () => {
+      streamStartedRef.current = false;
+      runStream.stop();
+    };
+    // start()/stop() are stable useCallbacks; the trigger is the status flip.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive, isQueued, id]);
+  const wasStreamingRef = useRef(false);
+  useEffect(() => {
+    if (wasStreamingRef.current && !runStream.active) {
+      // Stream just ended (terminal frame or transport drop) — refetch so the
+      // finished transcript replaces the live strip.
+      detail.reload();
+      evaluation.reload();
+    }
+    wasStreamingRef.current = runStream.active;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runStream.active]);
 
   /* ---- Voice: speak the assistant's summary aloud (behind a toggle) ------- */
   const tts = useTTS();
@@ -239,7 +304,12 @@ export default function SessionDetailPage({
                     </button>
                   )}
                   {session.provider === "mock" && <MockChip />}
-                  <Badge value={session.status} />
+                  {/* "queued" predates statusTone's table — style it here so it
+                      reads as "parked", not the slate unknown-status grey. */}
+                  <Badge
+                    value={session.status}
+                    tone={isQueued ? "violet" : undefined}
+                  />
                 </span>
               }
             >
@@ -385,6 +455,78 @@ export default function SessionDetailPage({
               )}
             </Card>
           </Reveal>
+
+          {/* Live run stream (v1.166.0, B2): tokens + tool cards as they happen.
+              Only while the SSE stream is open — once the daemon sends the
+              terminal frame, the reload flow above swaps in the real transcript. */}
+          {runStream.active && (
+            <Reveal>
+              <Card
+                title="Live run"
+                icon={<Radio size={15} />}
+                right={
+                  runStream.phase ? (
+                    <span className="text-[11px] capitalize text-accent-soft/80">
+                      {runStream.phase.phase}
+                      {runStream.phase.detail
+                        ? ` — ${runStream.phase.detail}`
+                        : ""}
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-zinc-500">streaming</span>
+                  )
+                }
+              >
+                {runStream.tools.length > 0 && (
+                  <div className="mb-2.5 flex flex-wrap gap-1.5">
+                    {runStream.tools.map((t) => (
+                      <span
+                        key={t.id}
+                        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-mono text-[11px] ${
+                          t.status === "running"
+                            ? "border-accent/30 text-accent-soft"
+                            : t.ok === false
+                              ? "border-rose-500/30 text-rose-300"
+                              : "border-white/10 text-zinc-400"
+                        }`}
+                      >
+                        {t.status === "running" ? (
+                          <LoaderInline label={t.name} />
+                        ) : (
+                          <>{t.ok === false ? `${t.name} — failed` : t.name}</>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {runStream.text ? (
+                  <pre
+                    ref={liveTextRef}
+                    data-testid="live-run-text"
+                    onScroll={(e) => {
+                      const el = e.currentTarget;
+                      // Re-pin only when the reader returns to (near) the
+                      // bottom; anywhere above it, new tokens must not yank.
+                      livePinnedRef.current =
+                        el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+                    }}
+                    className="max-h-56 overflow-y-auto whitespace-pre-wrap rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2.5 font-mono text-xs leading-relaxed text-zinc-300"
+                  >
+                    {runStream.text}
+                  </pre>
+                ) : (
+                  <div className="text-xs text-zinc-500">
+                    Connected — waiting for the first token…
+                  </div>
+                )}
+              </Card>
+            </Reveal>
+          )}
+
+          {/* Team + blackboard (v1.166.0, B3) — both render nothing for a
+              solo session, so most pages are unchanged. */}
+          <TeamTree sessionId={id} active={isActive} />
+          <BlackboardPanel sessionId={id} active={isActive} />
 
           {/* Live activity feed (filtered to this session) */}
           <Reveal>

@@ -1,8 +1,11 @@
 """Agent definitions (§11).
 
 An agent = identity + capabilities + provider + tools + permissions + policies.
-The slice ships a working Builder; the other types (§11) are defined as stubs so
-multi-agent orchestration (§12, Phase 6) can flesh them out.
+Every type below is a WORKING definition consumed by the agent runtime (§13)
+and the multi-agent layer (§12). The coordinator types carry the ``delegate``
+tool (SUPERVISOR always did; PLANNER since v1.166.0), and the delegate path
+refuses any target whose definition itself carries ``delegate`` — see
+``delegate_tool.py``'s generalized anti-fork-bomb rule.
 """
 
 from __future__ import annotations
@@ -133,7 +136,12 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
             "can see and tweak."
         ),
         tools=(
-            _FILE_TOOLS + _KNOWLEDGE_TOOLS + _SELF_SERVICE_TOOLS
+            # v1.166.0: the planner DELEGATES the steps it plans, not just
+            # schedules them. Registered on demand by the runtime (mirrors
+            # run_supervised); carrying `delegate` also makes the planner a
+            # coordinator, so delegate_tool refuses IT as a target (the same
+            # generalized anti-fork-bomb rule that covers the supervisor).
+            ["delegate"] + _FILE_TOOLS + _KNOWLEDGE_TOOLS + _SELF_SERVICE_TOOLS
             + _DOCUMENT_TOOLS + _LEARNING_TOOLS + _COLLAB_TOOLS + _EXTERNAL_TOOLS
         ),
     ),

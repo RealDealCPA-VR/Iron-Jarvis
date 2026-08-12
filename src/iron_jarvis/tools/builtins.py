@@ -244,6 +244,10 @@ class WriteFileTool(Tool):
             ok=True,
             output=f"wrote {len(content)} bytes to {args['path']}",
             data={"path": args["path"], "bytes": len(content)},
+            # v1.166.0: safe again — registry._record skips post-hoc journaling
+            # when capture_undo already owns this invocation's UndoJournal slot,
+            # so created_paths only feeds chat's documents/ArtifactsRail merge.
+            created_paths=[str(path)],
         )
 
 

@@ -74,7 +74,9 @@ def test_legacy_chip_and_tools_line_yield_to_the_receipt():
 # The artifacts rail replaced the inline block WITHOUT losing affordances.
 # --------------------------------------------------------------------------- #
 def test_the_artifacts_rail_covers_every_old_affordance():
-    mount = re.search(r"<ArtifactsRail[\s\S]{0,600}?/>", _PAGE)
+    # Window sized for the v1.166.0 mount (the downloadHref builder grew when
+    # &download=1 and its cross-origin comment moved inline).
+    mount = re.search(r"<ArtifactsRail[\s\S]{0,1400}?/>", _PAGE)
     assert mount, "ArtifactsRail is never rendered"
     body = mount.group(0)
     assert "onPreview={openDocPreview}" in body

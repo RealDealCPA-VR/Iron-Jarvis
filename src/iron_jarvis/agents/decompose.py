@@ -116,8 +116,15 @@ def resolved_tool_mode(platform, provider: str | None, model: str | None) -> str
 def should_decompose(platform, session) -> bool:
     """Engage when (a) ``config.decompose_local_tasks`` is on AND (b) the
     resolved adapter serves tools via the prompted scaffold (a short-horizon
-    local model) AND (c) the task is plausibly multi-step. Anything else keeps
+    local model) AND (c) the task is plausibly multi-step — OR (v1.166.0)
+    when ``config.decompose_all_tasks`` is on AND (c) holds, regardless of
+    the resolved ``tool_use_mode`` (the user opting into plan → execute →
+    verify → assemble on EVERY provider). Both flags at their defaults keep
     the flat loop byte-for-byte unchanged."""
+    if getattr(platform.config, "decompose_all_tasks", False) and is_plausibly_multi_step(
+        session.task
+    ):
+        return True
     if not getattr(platform.config, "decompose_local_tasks", True):
         return False
     if resolved_tool_mode(platform, session.provider, session.model) != "prompted":

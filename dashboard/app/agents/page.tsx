@@ -27,6 +27,7 @@ import {
 } from "@/components/agents/identity";
 import { SetupCard, type DynamicAgentFull } from "@/components/agents/SetupCard";
 import { RosterStrip, type RosterEntry } from "@/components/agents/RosterStrip";
+import { JobPostCard, type JobAssign } from "@/components/agents/JobPostCard";
 import {
   PanelPicker,
   type PickerCatalog,
@@ -107,6 +108,10 @@ export default function AgentsPage() {
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const tableRef = useRef<HTMLDivElement>(null);
   const talkBusyRef = useRef(false);
+  // The job-post card (v1.166.0): the roster's "Give work" preselects a
+  // target there and scrolls the card into view.
+  const jobRef = useRef<HTMLDivElement>(null);
+  const [assign, setAssign] = useState<JobAssign | null>(null);
 
   const polled = (threadsData?.threads ?? []).filter((t) => !hidden.has(t.id));
   const threads =
@@ -236,6 +241,14 @@ export default function AgentsPage() {
     }
   }
 
+  /** The roster's Give-work button: preselect this agent in the job-post card
+   *  and bring the card into view. The nonce keeps a repeat click on the same
+   *  agent a distinct assign, so it still re-selects after a manual change. */
+  function assignWork(kind: AgentSource, name: string) {
+    setAssign({ kind, name, nonce: Date.now() });
+    jobRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   // --- the participant picker's catalog ------------------------------------
   // Roster-fed when available: descriptions + live health, offline remotes
   // shown but disabled. Roster names arrive as "builder" / "custom:<slug>" /
@@ -301,6 +314,15 @@ export default function AgentsPage() {
         </Reveal>
       )}
 
+      {/* Give work (v1.166.0) — post a job to the Team (a supervisor session
+          that plans & delegates) or straight to one delegable roster agent.
+          Dispatched sessions carry origin "job:agents" and list in the card. */}
+      <Reveal>
+        <div ref={jobRef}>
+          <JobPostCard roster={rosterEntries} assign={assign} />
+        </div>
+      </Reveal>
+
       {/* Setup — collapsed by default; the round-table below is the star. */}
       <Reveal>
         <SetupCard
@@ -317,7 +339,10 @@ export default function AgentsPage() {
           daemons that predate GET /agents/roster (it carries its own Reveal,
           so hiding leaves no empty gap). The Talk button needs the thread
           routes, so it's only offered when they exist. */}
-      <RosterStrip onTalk={threadsMissing ? undefined : talkWith} />
+      <RosterStrip
+        onTalk={threadsMissing ? undefined : talkWith}
+        onAssign={assignWork}
+      />
 
       {tableError && (
         <Reveal>

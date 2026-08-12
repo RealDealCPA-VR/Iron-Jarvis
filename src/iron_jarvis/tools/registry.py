@@ -390,23 +390,50 @@ class ToolRegistry:
                         post_sha256=undo.get("post_sha256"),
                     )
                 )
-            # Post-hoc creations (v1.157.0): one `file_delete` row per file, so
-            # undo removes exactly what was added and outcome.session_result
-            # reports them as created. Best-effort per file — a journal problem
-            # must never turn a successful tool call into a failure.
-            for raw_path in created_paths or []:
-                try:
-                    rel = str(
-                        Path(raw_path).resolve().relative_to(
-                            Path(ctx.workspace).resolve()
+            # Post-hoc creations (v1.157.0, reshaped v1.166.0). action_id is the
+            # table's PRIMARY KEY (== the ToolInvocation id), so this invocation
+            # owns AT MOST ONE journal row:
+            #   - a capture_undo descriptor (`undo`) already holds the slot and is
+            #     strictly better information (it saw the pre-image), so when one
+            #     exists the created_paths are NOT journaled again — the old
+            #     unconditional loop made every reversible tool with created_paths
+            #     IntegrityError, rolling back the ToolInvocation + event while
+            #     the file stayed on disk (an invisible write).
+            #   - multiple created paths collapse into ONE `files_delete` envelope
+            #     row (pre_inline {"paths": [...]}) instead of N same-key rows.
+            # Best-effort — a journal problem must never turn a successful tool
+            # call into a failure.
+            if undo is None and created_paths:
+                rels: list[str] = []
+                for raw_path in created_paths:
+                    try:
+                        rels.append(
+                            str(
+                                Path(raw_path).resolve().relative_to(
+                                    Path(ctx.workspace).resolve()
+                                )
+                            ).replace("\\", "/")
                         )
-                    ).replace("\\", "/")
-                except Exception:  # noqa: BLE001 — outside the workspace: skip
-                    continue
+                    except Exception:  # noqa: BLE001 — outside the workspace: skip
+                        continue
+                desc = None
                 try:
-                    desc = make_file_descriptor(
-                        ctx.config.home, kind="file_delete", path=rel, mode="raw"
-                    )
+                    if len(rels) == 1:
+                        desc = make_file_descriptor(
+                            ctx.config.home, kind="file_delete", path=rels[0], mode="raw"
+                        )
+                    elif rels:
+                        desc = {
+                            "kind": "files_delete",
+                            "reversible": True,
+                            "pre_ref": None,
+                            "pre_inline": dumps({"paths": rels, "mode": "raw"}),
+                            "pre_sha256": None,
+                            "post_sha256": None,
+                        }
+                except Exception:  # noqa: BLE001
+                    desc = None
+                if desc is not None:
                     db.add(
                         UndoJournal(
                             action_id=inv_id,
@@ -421,7 +448,5 @@ class ToolRegistry:
                             post_sha256=desc.get("post_sha256"),
                         )
                     )
-                except Exception:  # noqa: BLE001
-                    continue
             db.commit()
         return inv_id

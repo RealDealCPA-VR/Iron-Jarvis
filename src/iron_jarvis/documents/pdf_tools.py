@@ -265,6 +265,9 @@ class PdfArrangeTool(Tool):
                 f"{len(in_entries)} input PDF(s) — originals untouched"
             ),
             data={"path": rel, "pages": pages, "inputs": in_entries},
+            # v1.166.0: safe again — registry._record skips post-hoc journaling
+            # when capture_undo already owns this invocation's UndoJournal slot.
+            created_paths=[str(target.resolve())],
         )
 
 
@@ -514,7 +517,13 @@ class PdfSplitTool(Tool):
             "(page counts verified by re-opening; original untouched):"
         ] + [f"- {o['path']} — {o['pages']} page(s)" for o in shown]
         return ToolResult(
-            ok=True, output="\n".join(lines), data={"outputs": shown}
+            ok=True,
+            output="\n".join(lines),
+            data={"outputs": shown},
+            # v1.166.0: safe again — registry._record skips post-hoc journaling
+            # under a capture_undo, and collapses multi-path creations into one
+            # `files_delete` envelope row when there is no capture.
+            created_paths=[str(Path(o["path"]).resolve()) for o in outputs],
         )
 
 

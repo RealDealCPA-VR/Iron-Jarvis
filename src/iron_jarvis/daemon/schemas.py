@@ -6,9 +6,33 @@ routes/ domain modules.
 
 from __future__ import annotations
 
+import re
+
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+#: What an ``origin`` tag may look like (v1.166.0): the TX-01 provenance values
+#: ("job:agents", "schedule:<name>", "self_dev", …) all fit, and nothing that
+#: could smuggle markup/control characters into the audit timeline does.
+_ORIGIN_RE = re.compile(r"[A-Za-z0-9:_\-. ]{1,64}")
+
+
+def _clean_origin(value: str | None) -> str | None:
+    r"""Normalize an ``origin`` tag: strip; blank -> None (unattributed);
+    anything outside ``[A-Za-z0-9:_\-. ]`` or over 64 chars is a 422, never
+    silently truncated/laundered."""
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    if not _ORIGIN_RE.fullmatch(value):
+        raise ValueError(
+            "origin must be 1-64 characters of letters, digits, spaces, "
+            "or ':' '_' '-' '.'"
+        )
+    return value
 
 
 class SessionCreate(BaseModel):
@@ -25,6 +49,15 @@ class SessionCreate(BaseModel):
     # Per-session bundled tool grant (perm_keys) the user approved up front —
     # "ask" tools in this list run without re-prompting for THIS session only.
     allow_tools: list[str] = []
+    # TX-01 provenance the CALLER asserts ("job:agents", …). None/blank =
+    # unattributed; validated (see _clean_origin) so the audit timeline stays
+    # clean.
+    origin: str | None = None
+
+    @field_validator("origin")
+    @classmethod
+    def _validate_origin(cls, v: str | None) -> str | None:
+        return _clean_origin(v)
 
 
 class DocEnhanceBody(BaseModel):
@@ -979,6 +1012,19 @@ class SpawnBody(BaseModel):
     # wait=false returns immediately (run continues in the background) so the
     # UI can jump to the live session view instead of blocking on the run.
     wait: bool = True
+    # Parity with SessionCreate (v1.166.0) so the Agents-page job poster can
+    # dispatch a dynamic agent exactly like POST /sessions. An explicit
+    # ``provider``/``model`` wins over the dynamic record's pinned pair.
+    provider: str | None = None
+    model: str | None = None
+    project_id: str = ""
+    allow_tools: list[str] = []
+    origin: str | None = None
+
+    @field_validator("origin")
+    @classmethod
+    def _validate_origin(cls, v: str | None) -> str | None:
+        return _clean_origin(v)
 
 
 class UpdateBody(BaseModel):

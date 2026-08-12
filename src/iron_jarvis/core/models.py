@@ -42,6 +42,11 @@ class AgentState(str, enum.Enum):
 
 class SessionStatus(str, enum.Enum):
     ACTIVE = "active"
+    #: Parked by the concurrency governor (v1.166.0): created but not yet
+    #: started because every ``max_concurrent_sessions`` slot was busy. The
+    #: orchestrator holds its UN-started coroutine FIFO and promotes it to
+    #: ACTIVE when a slot frees.
+    QUEUED = "queued"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"

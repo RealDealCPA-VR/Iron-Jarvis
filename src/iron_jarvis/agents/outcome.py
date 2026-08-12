@@ -38,6 +38,8 @@ from ..tools.base import Reversibility
 #: Journal kinds that describe a FILE mutation, and what each one means the
 #: tool did. (The inverse is the mirror image: to undo a creation you delete.)
 _CREATED_KIND = "file_delete"
+#: Multi-file creation envelope (v1.166.0): one row, pre_inline {"paths": [...]}.
+_CREATED_MANY_KIND = "files_delete"
 _CHANGED_KIND = "file_restore"
 
 #: Cap on each list in the payload. A migration touching 4,000 files must not
@@ -55,6 +57,18 @@ def _envelope_path(journal: UndoJournal) -> str:
     except (TypeError, ValueError):
         return ""
     return str(meta.get("path") or "")
+
+
+def _envelope_paths(journal: UndoJournal) -> list[str]:
+    """All target paths in a multi-file ``files_delete`` envelope."""
+    try:
+        meta = json.loads(journal.pre_inline or "{}")
+    except (TypeError, ValueError):
+        return []
+    paths = meta.get("paths")
+    if not isinstance(paths, list):
+        return []
+    return [str(p) for p in paths if p]
 
 
 def _rel(path: str, workspace: str) -> str:
@@ -166,6 +180,12 @@ def session_result(engine, session_id: str) -> dict[str, Any]:
                     != Reversibility.IRREVERSIBLE.value
                 ):
                     revertable += 1
+                if journal.kind == _CREATED_MANY_KIND:
+                    for p in _envelope_paths(journal):
+                        rp = _rel(p, workspace)
+                        if rp and rp not in created:
+                            created.append(rp)
+                    continue
                 path = _rel(_envelope_path(journal), workspace)
                 if not path:
                     continue

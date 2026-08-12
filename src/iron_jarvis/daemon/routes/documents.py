@@ -25,6 +25,14 @@ from ..schemas import (
 from ...core.db import session_scope
 from ...core.fs_policy import fs_read_ok
 
+#: Suffixes the preview panel renders as pixels (v1.166.0). The preview
+#: endpoint returns a POINTER only — the client loads the bytes via
+#: /documents/file, which serves these inline so an <img>/iframe can show them.
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+#: What may render inline in the browser; everything else downloads
+#: (xlsx/docx can't render in an iframe anyway).
+_INLINE_SUFFIXES = {".pdf", *_IMAGE_SUFFIXES}
+
 #: Suffix → the app a native open will land in (user-facing button label).
 _APP_LABEL = {
     ".docx": "Word", ".doc": "Word",
@@ -122,15 +130,56 @@ def register(app: FastAPI, d) -> None:
                         break
                     rows.append(["" if v is None else str(v)[:80] for v in row[:30]])
                 title = ws.title
+                # Truncation honesty (v1.166.0): the REAL extent, so the client
+                # can say "first 80 of N rows" instead of implying completeness.
+                total_rows = ws.max_row
+                total_cols = ws.max_column
                 wb.close()
             except Exception as exc:  # noqa: BLE001
                 raise HTTPException(
                     status_code=422, detail=f"could not read workbook: {exc}"
                 )
-            return {**base, "kind": "sheet", "sheets": names, "sheet": title,
-                    "rows": rows, "truncated": truncated}
+            out = {**base, "kind": "sheet", "sheets": names, "sheet": title,
+                   "rows": rows, "truncated": truncated}
+            if total_rows is not None:  # read-only mode may lack dimensions
+                out["total_rows"] = int(total_rows)
+            if total_cols is not None:
+                out["total_cols"] = int(total_cols)
+            return out
         if suffix == ".pdf":
             return {**base, "kind": "pdf"}
+        if suffix in _IMAGE_SUFFIXES:
+            # A pointer only — no bytes in the JSON. The client loads the
+            # pixels via /documents/file (served inline for image suffixes).
+            return {**base, "kind": "image"}
+        if suffix in (".csv", ".tsv"):
+            import csv as _csv
+
+            delim = "\t" if suffix == ".tsv" else ","
+            rows = []
+            truncated = False
+            total_rows = 0
+            total_cols = 0
+            try:
+                with p.open("r", encoding="utf-8", errors="replace", newline="") as fh:
+                    for row in _csv.reader(fh, delimiter=delim):
+                        total_rows += 1  # real count — full iteration is cheap
+                        total_cols = max(total_cols, len(row))
+                        if len(rows) >= 80:
+                            truncated = True
+                            continue
+                        if len(row) > 30:
+                            truncated = True
+                        rows.append([str(v)[:80] for v in row[:30]])
+            except (OSError, _csv.Error) as exc:
+                # _csv.Error covers parser failures such as a field over the
+                # process-wide csv.field_size_limit (~128KB) — a realistic CSV
+                # export with a blob cell. Do NOT raise the limit: it is
+                # process-global state shared with every other csv consumer.
+                raise HTTPException(status_code=422, detail=f"could not read: {exc}")
+            return {**base, "kind": "sheet", "sheets": ["CSV"], "sheet": "CSV",
+                    "rows": rows, "truncated": truncated,
+                    "total_rows": total_rows, "total_cols": total_cols}
         if suffix == ".docx":
             # WORD-FAITHFUL preview: semantic docx→HTML (headings, bold/italic,
             # lists, real tables) rendered by the client on a white page in a
@@ -143,7 +192,8 @@ def register(app: FastAPI, d) -> None:
                     html = mammoth.convert_to_html(fh).value or ""
                 if html.strip():
                     return {**base, "kind": "html", "html": html[:400_000],
-                            "truncated": len(html) > 400_000}
+                            "truncated": len(html) > 400_000,
+                            "total_chars": len(html)}
             except Exception:  # noqa: BLE001 — fall through to markdown/text
                 pass
             try:
@@ -152,7 +202,8 @@ def register(app: FastAPI, d) -> None:
                 md = document_to_markdown(p)
                 if md.strip():
                     return {**base, "kind": "markdown", "content": md[:40_000],
-                            "truncated": len(md) > 40_000}
+                            "truncated": len(md) > 40_000,
+                            "total_chars": len(md)}
             except Exception:  # noqa: BLE001
                 pass
         from ...documents.readers import extract_text
@@ -163,20 +214,34 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=422, detail=f"could not read: {exc}")
         kind = "markdown" if suffix in (".md", ".markdown") else "text"
         return {**base, "kind": kind, "content": text[:20_000],
-                "truncated": len(text) > 20_000}
+                "truncated": len(text) > 20_000, "total_chars": len(text)}
 
     @app.get("/documents/file")
-    def document_file(path: str):
+    def document_file(path: str, download: bool = False):
         """Raw file bytes (auth rides the header or ?token= like other embeds)
-        — powers the preview panel's PDF iframe."""
+        — powers the preview panel's PDF iframe and image tags. PDFs and
+        images serve INLINE so the browser renders them; ``?download=1``
+        forces a save-as, and everything else is attachment always (an xlsx
+        can't render in an iframe anyway)."""
+        import mimetypes
+
         from fastapi.responses import FileResponse
 
         p = _preview_path(path)
-        media = (
-            "application/pdf" if p.suffix.lower() == ".pdf"
-            else "application/octet-stream"
+        suffix = p.suffix.lower()
+        if suffix == ".pdf":
+            media = "application/pdf"
+        elif suffix in _IMAGE_SUFFIXES:
+            guessed, _enc = mimetypes.guess_type(p.name)
+            media = guessed or "application/octet-stream"
+        else:
+            media = "application/octet-stream"
+        disposition = (
+            "inline" if not download and suffix in _INLINE_SUFFIXES
+            else "attachment"
         )
-        return FileResponse(str(p), media_type=media, filename=p.name)
+        return FileResponse(str(p), media_type=media, filename=p.name,
+                            content_disposition_type=disposition)
 
     @app.post("/documents/open")
     def document_open(body: DocumentOpenBody) -> dict[str, Any]:

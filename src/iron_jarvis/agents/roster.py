@@ -14,9 +14,14 @@ Pure, read-only composition over EXISTING data (no new tables, no scoring):
 
 DELEGABILITY (verified capability, never aspiration):
 
-* **builtin** — delegable iff not SUPERVISOR (anti-fork-bomb rule).
-* **dynamic** — delegable=True: a REAL spawn path exists and is already
-  exercised in production. Call path (Pair S consumes this):
+* **builtin** — delegable iff its definition does not itself carry the
+  ``delegate`` tool (supervisor AND, since v1.166.0, planner — the
+  generalized anti-fork-bomb rule; mirrors delegate_tool).
+* **dynamic** — delegable unless its stored tool list carries ``delegate``
+  or its base type is the supervisor (delegate_tool would refuse either —
+  offering them would be aspiration, not capability). Otherwise a REAL spawn
+  path exists and is already exercised in production. Call path (Pair S
+  consumes this):
   ``SpawnAgentTool.execute`` (``agents/agent_tools.py``) does
   ``platform.agents_registry.definition(name)`` →
   ``Orchestrator(platform).create_session(task, definition.type, ...)`` →
@@ -61,10 +66,10 @@ source simply contributes nothing.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
-from ..core.models import AgentType
 from .types import _DEFINITIONS
 
 #: One-line strengths for the builtin types, distilled from each
@@ -176,16 +181,19 @@ def _stats_by_type(platform) -> dict[str, dict]:
 
 def _builtin_entries(stats_by_type: dict[str, dict]) -> list[RosterEntry]:
     entries = []
-    for agent_type in _DEFINITIONS:
+    for agent_type, definition in _DEFINITIONS.items():
         name = agent_type.value
         entries.append(
             RosterEntry(
                 name=name,
                 kind="builtin",
                 description=_BUILTIN_STRENGTHS.get(name, "general-purpose agent"),
-                # Anti-fork-bomb: a supervisor must never delegate to another
-                # supervisor (mirrors delegate_tool's standing rule).
-                delegable=agent_type is not AgentType.SUPERVISOR,
+                # Anti-fork-bomb, generalized (v1.166.0): an agent whose
+                # definition carries `delegate` can itself delegate — the
+                # supervisor AND the planner — so offering it as a delegation
+                # target invites coordinator-to-coordinator fan-out (mirrors
+                # delegate_tool's standing rule).
+                delegable="delegate" not in (definition.tools or []),
                 healthy=True,
                 stats=stats_by_type.get(name),
             )
@@ -207,10 +215,21 @@ def _dynamic_entries(platform) -> list[RosterEntry]:
             name = str(getattr(record, "name", "") or "")
             if not name:
                 continue
+            base = _one_line(getattr(record, "base_type", "")) or "builder"
             description = _one_line(getattr(record, "description", ""))
             if not description:
-                base = _one_line(getattr(record, "base_type", "")) or "builder"
                 description = f"custom agent (base {base})"
+            # Anti-fork-bomb, generalized (v1.166.0): a dynamic agent whose
+            # stored tool list carries `delegate`, or whose base type is the
+            # supervisor, would be REFUSED at delegation time — listing it as
+            # delegable would be aspiration, not verified capability.
+            try:
+                tools = json.loads(getattr(record, "tools_json", "") or "[]")
+            except (TypeError, ValueError):
+                tools = []
+            coordinator = (
+                isinstance(tools, list) and "delegate" in tools
+            ) or base.casefold() == "supervisor"
             entries.append(
                 RosterEntry(
                     name=f"custom:{name}",
@@ -218,7 +237,7 @@ def _dynamic_entries(platform) -> list[RosterEntry]:
                     description=description,
                     # Verified spawn path — see the module docstring
                     # (SpawnAgentTool / POST /agents/{name}/spawn).
-                    delegable=True,
+                    delegable=not coordinator,
                     healthy=True,
                     stats=None,  # outcomes accrue to the BASE type — honest None
                 )
@@ -341,13 +360,20 @@ def _norm(name: str) -> str:
     return text.casefold()
 
 
-def resolve_target(platform, name) -> RosterEntry | None:
+def resolve_target(
+    platform, name, *, require_delegable: bool = True
+) -> RosterEntry | None:
     """Resolve a (model- or user-supplied) target name to a roster entry.
 
     Case-insensitive, trims whitespace (including around a ``custom:`` /
     ``remote:`` colon), and accepts the bare slug for prefixed entries.
     Returns ``None`` for unknown, offline, or non-delegable targets — the
     caller keeps its default in that case.
+
+    ``require_delegable=False`` (v1.166.0) is for CONVERSATION surfaces (the
+    ``@mention`` panel): a coordinator like planner/supervisor cannot take
+    delegated WORK (fork-bomb rule) but can absolutely be talked to — the
+    mentionable catalog lists them, so the panel must resolve them too.
     """
     query = _norm(name)
     if not query:
@@ -364,6 +390,8 @@ def resolve_target(platform, name) -> RosterEntry | None:
             if sep and slug.strip().casefold() == query:
                 found = entry
                 break
-    if found is None or not found.delegable or not found.healthy:
+    if found is None or not found.healthy:
+        return None
+    if require_delegable and not found.delegable:
         return None
     return found

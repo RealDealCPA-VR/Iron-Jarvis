@@ -215,6 +215,36 @@ async def revert_workspace_file(
     mode = meta.get("mode", "raw")
     kind = undo.get("kind")
     home = ctx.config.home
+
+    if kind == "files_delete":
+        # Multi-file creation envelope (v1.166.0): unlink every path we created.
+        # No pre-image was captured (these are post-hoc creations), so there is
+        # nothing to restore — a path already gone is reported, not an error.
+        paths = meta.get("paths")
+        if not isinstance(paths, list) or not paths:
+            return ToolResult(ok=False, error="undo: no target paths recorded")
+        removed: list[str] = []
+        missing: list[str] = []
+        for p in paths:
+            try:
+                target = safe_path(ctx.workspace, str(p))
+            except Exception as exc:  # path escaped the workspace
+                return ToolResult(ok=False, error=f"undo: unsafe path: {exc}")
+            try:
+                if target.exists():
+                    target.unlink()
+                    removed.append(str(p))
+                else:
+                    missing.append(str(p))
+            except OSError as exc:
+                return ToolResult(
+                    ok=False, error=f"undo: could not remove {p}: {exc}"
+                )
+        note = f"undo: removed {len(removed)} created file(s)"
+        if missing:
+            note += f" ({len(missing)} already gone)"
+        return ToolResult(ok=True, output=note)
+
     if not rel:
         return ToolResult(ok=False, error="undo: no target path recorded")
     try:

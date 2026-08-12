@@ -29,6 +29,10 @@ class EventType:
     """Canonical event names (§31)."""
 
     SESSION_CREATED = "session.created"
+    # Concurrency governor (v1.166.0): the run was parked FIFO because every
+    # ``max_concurrent_sessions`` slot was busy. {task, position} — position is
+    # the 1-based place in the queue at park time. Tagged session_id.
+    SESSION_QUEUED = "session.queued"
     SESSION_COMPLETED = "session.completed"
     AGENT_STARTED = "agent.started"
     AGENT_STATE_CHANGED = "agent.state_changed"

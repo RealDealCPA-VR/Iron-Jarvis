@@ -303,12 +303,18 @@ class ImageConvertTool(_ImageTool):
                 out.save(target, format=fmt, **save_kwargs)
 
         # Pillow decode/encode is CPU-bound — keep it off the event loop.
+        existed = target.exists()  # created_paths means CREATED, not overwritten
         await asyncio.to_thread(_convert)
         size = target.stat().st_size
         return ToolResult(
             ok=True,
             output=f"converted {raw_source} -> {raw_target} ({fmt}, {size} bytes)",
             data={"source": raw_source, "target": raw_target, "format": fmt, "bytes": size},
+            # Created-files contract (v1.166.0): absolute (safe_path resolves),
+            # success-only, and only for files this call brought into existence —
+            # an overwrite journaled as "created" would let undo unlink a file
+            # the user had before this call.
+            created_paths=None if existed else [str(target)],
         )
 
 
@@ -390,6 +396,7 @@ class ImageResizeTool(_ImageTool):
                 out.save(target, format=fmt, **save_kwargs)
                 return original[0], original[1], out.width, out.height
 
+        existed = target.exists()  # in-place resize (the default) overwrites source
         old_w, old_h, new_w, new_h = await asyncio.to_thread(_resize)
         return ToolResult(
             ok=True,
@@ -402,6 +409,12 @@ class ImageResizeTool(_ImageTool):
                 "original_width": old_w,
                 "original_height": old_h,
             },
+            # Created-files contract (v1.166.0): success-only, and only for files
+            # this call brought into existence. The in-place default overwrites
+            # the SOURCE — journaling that as "created" would let undo unlink the
+            # user's original image. resolve() because in the overwrite case
+            # `target` is the caller's raw path, not safe_path-normalized.
+            created_paths=None if existed else [str(target.resolve())],
         )
 
 

@@ -279,7 +279,10 @@ def register(app: FastAPI, d) -> None:
         resolved: list[dict[str, str]] = []
         unknown: list[str] = []
         for token in mentions:
-            entry = resolve_target(d.platform, token)
+            # Conversation, not delegation: a mention of a coordinator
+            # (planner/supervisor) joins the panel even though delegated WORK
+            # to it is refused (v1.166.0 — planner carries `delegate` now).
+            entry = resolve_target(d.platform, token, require_delegable=False)
             if entry is None:
                 # Named somebody who isn't reachable. Reported, never silently
                 # dropped — a mention that quietly does nothing is how a user
@@ -966,10 +969,8 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/agents/{name}/spawn")
     async def spawn_agent_ep(name: str, body: SpawnBody) -> dict[str, Any]:
-        from ...agents.runtime import AgentRuntime
         from ...agents.types import get_agent_definition
-        from ...core.ids import utcnow
-        from ...core.models import AgentState, AgentType, SessionStatus
+        from ...core.models import AgentType
 
         definition = d.platform.agents_registry.definition(name)
         rec = d.platform.agents_registry.get(name)
@@ -978,26 +979,46 @@ def register(app: FastAPI, d) -> None:
                 definition = get_agent_definition(AgentType(name))
             except ValueError:
                 raise HTTPException(status_code=404, detail="unknown agent")
-        provider = rec.provider if (rec and rec.provider) else None
-        session = await d.orchestrator.create_session(
-            body.task, definition.type, provider=provider
-        )
-
-        async def _run_spawned() -> None:
-            run = await AgentRuntime(d.platform).run(session, definition)
-            session.status = (
-                SessionStatus.COMPLETED
-                if run.state is AgentState.COMPLETED
-                else SessionStatus.FAILED
+        elif definition.type is AgentType.SUPERVISOR:
+            # Honest refusal, not silent substitution (v1.166.0): run_session
+            # reroutes SUPERVISOR-typed sessions to the builtin run_supervised,
+            # which cannot honor this record's custom system prompt — spawning
+            # would silently discard a user-authored prompt. Unreachable via
+            # POST /agents today (base_type is hardcoded "builder"), but a
+            # directly registered record must not slip through the seam.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"dynamic agent '{name}' is based on 'supervisor': the "
+                    "builtin supervisor would run and silently discard the "
+                    "record's custom system prompt. Re-create it with a "
+                    "non-supervisor base type, or POST /sessions with "
+                    "agent_type 'supervisor' to use the builtin."
+                ),
             )
-            session.summary = run.result
-            session.finished_at = utcnow()
-            d.orchestrator._save(session)
-
+        # Parity with POST /sessions (v1.166.0): an explicit body.provider/model
+        # wins; the dynamic record's pinned pair is the fallback.
+        provider = body.provider or (rec.provider if (rec and rec.provider) else None)
+        model = body.model or (rec.model if (rec and rec.model) else None)
+        session = await d.orchestrator.create_session(
+            body.task,
+            definition.type,
+            provider=provider,
+            model=model,
+            project_id=body.project_id or None,
+            allow_tools=body.allow_tools or None,
+            origin=body.origin,
+        )
+        # Run through the orchestrator (with the dynamic definition override) so
+        # a crashed run is finalized FAILED instead of stranded ACTIVE, and
+        # post-run learning + git review fire for spawned agents too — the old
+        # hand-rolled inline runner here had none of that (v1.166.0).
         if body.wait:
-            await _run_spawned()
+            session = await d.orchestrator.run_session(session.id, definition=definition)
         else:
             # Non-blocking spawn: the UI jumps straight to the live session view
             # (parity with POST /sessions wait:false).
-            d._spawn_bg(session.id, _run_spawned())
+            d._spawn_bg(
+                session.id, d.orchestrator.run_session(session.id, definition=definition)
+            )
         return _session_view(session)

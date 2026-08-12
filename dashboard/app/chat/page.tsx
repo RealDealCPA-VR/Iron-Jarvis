@@ -61,7 +61,6 @@ import {
   Copy,
   Download,
   ExternalLink,
-  FileText,
   FolderKanban,
   FolderOpen,
   FolderPen,
@@ -570,9 +569,10 @@ const TOOL_LIST_CAP = 100;
 // (an MCP connector arms its whole tool group server-side, additive to the
 // 6-tool cap above; a memory connector grounds the turn with its top hits).
 const MAX_CONNECTORS = 6;
-// Generated-document paths remembered per thread (the persistent preview
-// chips) — newest survive the cap, matching the daemon's setup validation.
-const MAX_THREAD_DOCS = 8;
+// Document paths remembered per thread (the Artifacts rail: files this
+// conversation made or was given) — newest survive the cap, matching the
+// daemon's setup validation (_MAX_THREAD_DOCS, raised 8 → 30 in v1.166.0).
+const MAX_THREAD_DOCS = 30;
 // Resizable side rail (preview/workspace column): width bounds + persistence.
 const RAIL_W_KEY = "ij_chat_rail_w";
 const RAIL_MIN_W = 280;
@@ -1572,6 +1572,13 @@ export default function ChatPage() {
   // and event watchers, where `messages` from the closure could be stale).
   const messagesRef = useRef<ChatMessage[]>(messages);
   messagesRef.current = messages;
+  // Latest thread-doc list (v1.166.0). A turn's async closure spans awaits, so
+  // by completion its captured `threadDocs` is stale — a second merge in the
+  // same turn (attachments up front, made-docs at the end) would silently drop
+  // the first. Every merge below reads AND writes this ref synchronously; the
+  // render assignment keeps it in step with every other setThreadDocs site.
+  const threadDocsRef = useRef<string[]>(threadDocs);
+  threadDocsRef.current = threadDocs;
   // Latest stream tool cards, readable after `stream.run` settles (the closure's
   // `stream.tools` is frozen at send time; this ref tracks re-renders) — source
   // extraction reads it once per turn.
@@ -2169,7 +2176,10 @@ export default function ChatPage() {
     return {
       tools: selectedTools.slice(0, MAX_TOOLS),
       connectors: selectedConnectors.slice(0, MAX_CONNECTORS),
-      documents: threadDocs.slice(-MAX_THREAD_DOCS),
+      // Via the ref, not the closure: queueSave runs at turn COMPLETION inside
+      // the send's stale closure, and the docs merged during the turn
+      // (attachments, made files) must ride that save (v1.166.0).
+      documents: threadDocsRef.current.slice(-MAX_THREAD_DOCS),
       skill: activeSkill,
       workspace_dir: workspaceDir ?? "",
       provider: provider ?? "",
@@ -3227,20 +3237,36 @@ export default function ChatPage() {
     });
   }
 
-  /** A turn created/edited documents: preview the last one in the right rail
-   *  (opening the rail if it was collapsed) and REMEMBER them on the thread —
-   *  the chips persist (and survive restarts) until deliberately dismissed. */
+  /** Merge files into the thread's remembered list WITHOUT opening a preview
+   *  (v1.166.0). The rail lists what the conversation "made or was given" —
+   *  an uploaded attachment is "given" and deserves a row the same as a
+   *  generated file. Reads/writes threadDocsRef so two merges inside one
+   *  turn's stale closure can never drop each other's paths. */
+  function rememberThreadDocs(paths: string[]) {
+    const docs = paths.filter(Boolean);
+    if (docs.length === 0) return;
+    const merged = [
+      ...threadDocsRef.current.filter((p) => !docs.includes(p)),
+      ...docs,
+    ].slice(-MAX_THREAD_DOCS);
+    threadDocsRef.current = merged;
+    setThreadDocs(merged);
+    queueSaveDocs(merged);
+  }
+
+  /** A turn created/edited documents: REMEMBER them on the thread (the rail
+   *  persists and survives restarts until deliberately dismissed) and open the
+   *  right rail. ONE file auto-opens its preview, as this panel always has;
+   *  SEVERAL open the rail's file list instead (v1.166.0) — auto-opening the
+   *  last write would bury the other N−1 behind it. "Don't auto-OPEN" must
+   *  not become "tear DOWN": a preview the user already has on screen (e.g.
+   *  the file they're watching gets edited alongside a log write) stays put. */
   function showDocPreview(paths?: string[]) {
     const docs = (paths ?? []).filter(Boolean);
     const last = docs.at(-1);
     if (!last) return;
-    const merged = [
-      ...threadDocs.filter((p) => !docs.includes(p)),
-      ...docs,
-    ].slice(-MAX_THREAD_DOCS);
-    setThreadDocs(merged);
-    queueSaveDocs(merged);
-    setPreviewPath(last);
+    rememberThreadDocs(docs);
+    setPreviewPath((cur) => (docs.length > 1 ? cur : last));
     setWorkspaceOpenPersisted(true);
   }
 
@@ -3289,7 +3315,8 @@ export default function ChatPage() {
   /** Deliberately dismiss a remembered document (the chip's ×): forget it on
    *  the thread and close its panel if it is the one showing. */
   function dismissThreadDoc(path: string) {
-    const next = threadDocs.filter((p) => p !== path);
+    const next = threadDocsRef.current.filter((p) => p !== path);
+    threadDocsRef.current = next;
     setThreadDocs(next);
     setPreviewPath((cur) => (cur === path ? null : cur));
     queueSaveDocs(next);
@@ -3321,6 +3348,11 @@ export default function ChatPage() {
     setFailedTurn(null); // a fresh attempt — retire any prior failure
     setChatBusy(true);
     ttsStreamStartedRef.current = false; // new turn — feedTTS will reset the counter
+    // Files the user GAVE this turn join the rail up front (v1.166.0): "made
+    // or was given" — an upload the user has to re-find on disk defeats the
+    // rail, and the file is uploaded and in the committed bubble even if the
+    // completion later fails. Persists via the same setup save made-docs use.
+    if (atts.length) rememberThreadDocs(atts.map((a) => a.path));
     const body = buildChatBody(history, atts);
     try {
       // --- Attempt token streaming (live deltas + tool cards + voice) ---
@@ -3776,6 +3808,10 @@ export default function ChatPage() {
             },
           ],
     );
+    // Files given to an AGENT turn land on the rail too (v1.166.0) — same
+    // "made or was given" rule as chat mode. Escalations skip it: their
+    // attachments were already merged by the chat lane that escalated.
+    if (!esc && atts.length) rememberThreadDocs(atts.map((a) => a.path));
     // Mark where "this turn" begins in the event stream BEFORE kicking off work.
     sinceRef.current = eventsRef.current[0]?.id ?? null;
     try {
@@ -5180,7 +5216,6 @@ export default function ChatPage() {
                   indistinguishable from one that failed. Armed tools/connectors
                   stay chat-only because those are chat-loop mechanics. */}
               {(attachments.length > 0 ||
-                threadDocs.length > 0 ||
                 activeSkill !== "" ||
                 selectedTools.length > 0 ||
                 selectedConnectors.length > 0) && (
@@ -5243,43 +5278,11 @@ export default function ChatPage() {
                         </button>
                       </span>
                     ))}
-                  {/* Generated documents: persistent preview chips — click
-                      reopens the panel; × deliberately forgets the document. */}
-                  {threadDocs.map((doc) => {
-                    const docName = doc.split(/[\\/]/).pop() || doc;
-                    return (
-                      <span
-                        key={`doc-${doc}`}
-                        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] text-zinc-300 ${
-                          previewPath === doc
-                            ? "border-accent/50 bg-accent/[0.12]"
-                            : "border-accent/25 bg-accent/[0.06]"
-                        }`}
-                      >
-                        <FileText size={11} className="shrink-0 text-accent-soft" />
-                        <button
-                          type="button"
-                          onClick={() => openDocPreview(doc)}
-                          title={`Preview ${docName} beside the chat`}
-                          className="max-w-[14rem] truncate transition-colors hover:text-accent-soft"
-                        >
-                          {docName}
-                        </button>
-                        <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-zinc-600">
-                          preview
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => dismissThreadDoc(doc)}
-                          aria-label={`Dismiss the ${docName} preview`}
-                          title="Dismiss — forget this document's preview chip"
-                          className="text-zinc-500 transition-colors hover:text-rose-300"
-                        >
-                          <X size={11} />
-                        </button>
-                      </span>
-                    );
-                  })}
+                  {/* Thread documents used to render duplicate chips here too
+                      (v1.91.0) — gone in v1.166.0: the ArtifactsRail and each
+                      turn's receipt are THE lists, and saying it twice made
+                      the composer row crowd out the send box at the new
+                      30-doc cap. */}
                   {attachments.map((a, i) => (
                     <span
                       key={`${a.path}-${i}`}
@@ -6255,11 +6258,17 @@ export default function ChatPage() {
                       items={threadDocs.map((p) => ({ path: p }))}
                       onPreview={openDocPreview}
                       onDismiss={dismissThreadDoc}
+                      cap={MAX_THREAD_DOCS}
                       downloadHref={(p) => {
                         const tok = ijToken();
+                        // &download=1 forces Content-Disposition: attachment
+                        // (v1.166.0) — pdf/images serve INLINE by default now,
+                        // and the anchor's own `download` attribute is ignored
+                        // cross-origin (:8788 → :8787), so the server flag is
+                        // the only thing that makes this a real download.
                         return `${API_BASE}/documents/file?path=${encodeURIComponent(
                           p,
-                        )}${tok ? `&token=${encodeURIComponent(tok)}` : ""}`;
+                        )}${tok ? `&token=${encodeURIComponent(tok)}` : ""}&download=1`;
                       }}
                     />
                   </div>

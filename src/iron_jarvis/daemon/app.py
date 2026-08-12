@@ -977,6 +977,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
             yield
         finally:
             _live_rearm.clear()  # daemon going down — no more live re-arms
+            # Stop the session-queue governor FIRST (v1.166.0): cancelling a
+            # running session below fires its slot-free hook, which would
+            # otherwise promote a parked run and start a brand-new agent run
+            # mid-shutdown. shutdown_queue() drains + closes parked coroutines.
+            try:
+                orchestrator.shutdown_queue()
+            except Exception:  # noqa: BLE001 — shutdown never raises
+                pass
             try:
                 await fleet_sampler.stop()  # cancel cleanly, no pending-task warnings
             except Exception:  # noqa: BLE001 — shutdown never raises
@@ -1105,21 +1113,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # Background session tasks are registered on the orchestrator keyed by
     # session_id (a strong ref preventing premature GC, and the handle the
     # cancel endpoint uses). Exceptions are surfaced (logged), not swallowed.
-    def _spawn_bg(session_id: str, coro) -> asyncio.Task:
-        task = asyncio.create_task(coro)
-        orchestrator.register_running(session_id, task)
-
-        def _done(t: asyncio.Task) -> None:
-            orchestrator._running.pop(session_id, None)
-            try:
-                t.result()
-            except asyncio.CancelledError:  # pragma: no cover - expected on cancel
-                pass
-            except Exception:  # noqa: BLE001
-                log.exception("background session %s failed", session_id)
-
-        task.add_done_callback(_done)
-        return task
+    # v1.166.0: routed through the orchestrator's concurrency governor —
+    # under `max_concurrent_sessions` (0 = unlimited, the default) this is
+    # byte-identical to the old create_task+register; at the limit the run is
+    # parked FIFO and the session marked QUEUED. Returns None when parked.
+    def _spawn_bg(session_id: str, coro) -> "asyncio.Task | None":
+        return orchestrator.spawn_managed(session_id, coro)
 
     # The Reflex Router launches its long-running actions through the daemon's
     # background task launcher (now that it exists), so a webhook POST returns

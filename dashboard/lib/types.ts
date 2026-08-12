@@ -43,6 +43,8 @@ export interface SessionView {
   summary: string;
   input_tokens?: number;
   output_tokens?: number;
+  /** Who dispatched this session (e.g. "job:agents", "schedule:<name>"). */
+  origin?: string | null;
   created_at: string;
   finished_at: string | null;
 }

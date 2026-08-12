@@ -92,7 +92,9 @@ def test_builtins_always_present_and_supervisor_not_delegable():
         assert e.kind == "builtin"
         assert e.healthy is True
         assert e.description  # every builtin carries a strength line
-        assert e.delegable is (name != "supervisor")
+        # v1.166.0: PLANNER carries `delegate` too, so both coordinator types
+        # are non-delegable (delegating TO a delegator is the fork-bomb path).
+        assert e.delegable is (name not in ("supervisor", "planner"))
 
 
 def test_empty_sources_yield_builtins_only():
@@ -227,7 +229,7 @@ def test_block_shape_health_filtering_and_offline_note():
     assert "remote:mini" in lines[-1]
 
 
-def test_block_compact_at_fourteen_entries():
+def test_block_compact_at_thirteen_entries():
     long = "a genuinely verbose description of what this agent does " * 2
     p = _platform(
         dynamic=[_dyn(f"agent-number-{i}", long) for i in range(5)],
@@ -237,7 +239,9 @@ def test_block_compact_at_fourteen_entries():
     )
     block = roster_block(p)
     bullets = [line for line in block.splitlines() if line.startswith("- ")]
-    assert len(bullets) == 14  # 7 delegable builtins + 5 dynamic + 2 healthy remotes
+    # 6 delegable builtins (planner became a delegator in v1.166.0, so it left
+    # the delegable list alongside supervisor) + 5 dynamic + 2 healthy remotes.
+    assert len(bullets) == 13
     assert len(block) <= 1200
     assert "offline:" in block
 

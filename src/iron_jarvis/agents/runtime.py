@@ -341,6 +341,16 @@ class AgentRuntime:
         except (ValueError, TypeError):
             session_allow = set()
         messages: list[LLMMessage] = [LLMMessage(role="user", content=session.task)]
+        # ON-DEMAND `delegate` wiring (v1.166.0): the planner now carries the
+        # delegate tool too, and only `run_supervised` used to register it — a
+        # delegate-carrying definition driven straight through this runtime
+        # would otherwise advertise a tool the registry cannot serve. Same
+        # construction as supervisor.py; lazy import to avoid an
+        # agents-package cycle at module load.
+        if "delegate" in agent_def.tools and self.p.registry.get("delegate") is None:
+            from .delegate_tool import DelegateTool
+
+            self.p.registry.register(DelegateTool(self.p))
         tool_specs = self.p.registry.specs(agent_def.tools)
 
         system_prompt = agent_def.system_prompt

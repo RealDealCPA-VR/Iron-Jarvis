@@ -8,7 +8,7 @@
 // doesn't exist rather than erroring over a feature the daemon predates.
 
 import { useState } from "react";
-import { MessageCircle, WifiOff } from "lucide-react";
+import { Briefcase, MessageCircle, WifiOff } from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { Card } from "@/components/ui";
 import { Reveal } from "@/components/motion";
@@ -85,11 +85,16 @@ function statsText(e: RosterEntry): string {
  */
 export function RosterStrip({
   onTalk,
+  onAssign,
 }: {
   /** The Talk button: open (or start) a 1:1 thread with this agent at the
    *  round-table. Only offered for delegable + healthy entries; omit the
    *  prop (older daemons without thread routes) and no button renders. */
   onTalk?: (kind: AgentSource, name: string) => void;
+  /** The Give-work button (v1.166.0): preselect this agent in the job-post
+   *  card. Same delegable + healthy gate as Talk — a non-delegable entry
+   *  (supervisor) stays chat-only, and an offline remote can't take work. */
+  onAssign?: (kind: AgentSource, name: string) => void;
 } = {}) {
   const [choice, setChoice] = useState("");
   const { data, error } = useApi<{ roster?: RosterEntry[] }>("/agents/roster");
@@ -154,6 +159,16 @@ export function RosterStrip({
               className="btn-ghost shrink-0 px-2.5 py-1.5 text-[11.5px]"
             >
               <MessageCircle size={12} /> Talk
+            </button>
+          )}
+          {onAssign && selected.delegable && selected.healthy && (
+            <button
+              type="button"
+              onClick={() => onAssign(selected.kind, shown)}
+              title={`Give ${shown} a job via the job-post card`}
+              className="btn-ghost shrink-0 px-2.5 py-1.5 text-[11.5px]"
+            >
+              <Briefcase size={12} /> Give work
             </button>
           )}
         </div>

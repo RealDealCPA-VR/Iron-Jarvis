@@ -75,6 +75,14 @@ export interface ArtifactsRailProps {
    * would silently fail to remove anything. Absent → no button.
    */
   onDismiss?: (path: string) => void;
+  /**
+   * The caller's retention cap (v1.166.0: threadDocs keeps the newest 30).
+   * When the DEDUPED row count reaches it, a quiet footer says the list shows
+   * only the latest N — without it a capped list reads as the complete
+   * history, which is exactly the silent-truncation lie this repo bans.
+   * Absent or 0 → no footer ever (rendering identical to the pre-cap rail).
+   */
+  cap?: number;
 }
 
 /**
@@ -200,6 +208,7 @@ export function ArtifactsRail({
   onClose,
   downloadHref,
   onDismiss,
+  cap,
 }: ArtifactsRailProps) {
   // Defensive dedupe (first occurrence wins — items arrive newest-first) so a
   // coordinator that concatenates per-turn lists still shows each file once.
@@ -379,6 +388,12 @@ export function ArtifactsRail({
           );
         })}
       </ul>
+
+      {cap !== undefined && cap > 0 && rows.length >= cap && (
+        <p className="shrink-0 px-2.5 pb-2 text-[10.5px] text-zinc-600">
+          Showing the latest {cap} files — older ones rolled off this list.
+        </p>
+      )}
 
       {error && (
         <p className="shrink-0 px-2.5 pb-2 text-[11px] text-rose-300/90">{error}</p>

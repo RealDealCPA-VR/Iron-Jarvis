@@ -1,6 +1,7 @@
 """Delegate tool (§12 Multi-Agent Orchestration).
 
-The Supervisor uses this tool to hand a subtask to a freshly-spawned subagent.
+A coordinator (the Supervisor, and since v1.166.0 the Planner) uses this tool
+to hand a subtask to a freshly-spawned subagent.
 Each delegation gets its *own* session with an isolated, disposable workspace
 (§15) and runs the agent runtime to completion. The subagent operates
 independently, never contacts the user, and returns only a SUMMARIZED result
@@ -19,9 +20,10 @@ from ..core.ids import utcnow
 from ..core.models import AgentRun, AgentState, AgentType, SessionStatus
 from ..tools.base import Tool, ToolContext, ToolResult
 
-#: Hardest cap on the supervisor→subagent delegation chain. Combined with
-#: "no delegating to a SUPERVISOR" (only supervisors carry the delegate tool, so a
-#: specialist child can't recurse), this bounds a prompt-injected fork-bomb.
+#: Hardest cap on the coordinator→subagent delegation chain. Combined with
+#: "no delegating to any target whose definition itself carries the delegate
+#: tool" (supervisor AND planner — so a specialist child can't recurse), this
+#: bounds a prompt-injected fork-bomb.
 _MAX_DELEGATION_DEPTH = 3
 
 
@@ -32,7 +34,7 @@ class DelegateTool(Tool):
         "its own isolated workspace and returns a summarized result. Use one "
         "delegate call per subtask. Args: agent_type — a name from the 'Who "
         "can take this work' roster when one is shown: builtin specialists "
-        "('builder', 'researcher', 'reviewer', 'planner'), a listed "
+        "('builder', 'researcher', 'reviewer'), a listed "
         "'custom:<name>' agent, or a listed 'remote:<name>' agent; defaults "
         "to 'builder' — and task (the self-contained instruction for the "
         "subagent)."
@@ -104,7 +106,7 @@ class DelegateTool(Tool):
                 error=f"'{raw_type}' is not delegable right now (unknown, "
                 "offline, or chat-only) — pick a name from the 'Who can take "
                 "this work' roster, or a builtin specialist "
-                "(builder/researcher/reviewer/planner)",
+                "(builder/researcher/reviewer)",
             )
 
         if entry is not None and entry.kind == "remote":
@@ -145,21 +147,40 @@ class DelegateTool(Tool):
         else:
             _name = entry.name if entry is not None else raw_type
             try:
-                agent_type = AgentType(_name)
+                # Case-insensitive on purpose: models capitalize role names
+                # ("Planner", "SUPERVISOR") constantly, and AgentType values
+                # are lowercase — without the fold, a capitalized coordinator
+                # name would raise here and be silently coerced to BUILDER,
+                # dodging the honest refusal below.
+                agent_type = AgentType(_name.strip().lower())
             except ValueError:
                 agent_type = AgentType.BUILDER
 
-        # Anti-fork-bomb: never delegate to another SUPERVISOR (only supervisors
-        # carry the delegate tool, so a specialist child can't recurse), and cap the
-        # chain depth. A prompt-injected 'delegate this to a supervisor' loop would
-        # otherwise fan out exponentially into real LLM sessions. A dynamic agent
-        # BASED on the supervisor type counts as a supervisor here.
+        # Anti-fork-bomb, GENERALIZED (v1.166.0): never delegate to a target
+        # whose definition itself carries the `delegate` tool — the SUPERVISOR
+        # always did, the PLANNER carries it now, and a dynamic agent listing
+        # `delegate` counts the same way. A coordinator delegating to another
+        # coordinator is exactly the prompt-injected loop that would fan out
+        # exponentially into real LLM sessions; the depth cap below bounds the
+        # rest. A dynamic agent BASED on the supervisor type still counts as a
+        # supervisor even when its stored tool list is empty.
         if agent_type is AgentType.SUPERVISOR:
             return ToolResult(
                 ok=False,
                 output="",
                 error="cannot delegate to a 'supervisor' — delegate to a specialist "
-                "agent (builder/researcher/reviewer/planner) instead",
+                "agent (builder/researcher/reviewer) instead",
+            )
+        target_def = definition or get_agent_definition(agent_type)
+        if "delegate" in (target_def.tools or []):
+            label = entry.name if entry is not None else agent_type.value
+            return ToolResult(
+                ok=False,
+                output="",
+                error=f"cannot delegate to '{label}' — it can delegate work "
+                "itself, and coordinator-to-coordinator delegation could fan "
+                "out without bound; delegate to a specialist agent "
+                "(builder/researcher/reviewer) instead",
             )
         if self._delegation_depth(ctx.agent_run_id) >= _MAX_DELEGATION_DEPTH:
             return ToolResult(

@@ -14,6 +14,7 @@ import {
   Copy,
   Download,
   ExternalLink,
+  FileDiff,
   FileText,
   FolderOpen,
   Loader2,
@@ -33,8 +34,8 @@ interface SavePlace {
   path: string;
 }
 
-interface PreviewData {
-  kind: "sheet" | "pdf" | "html" | "markdown" | "text";
+export interface PreviewData {
+  kind: "sheet" | "pdf" | "html" | "markdown" | "text" | "image";
   name: string;
   path: string;
   suffix: string;
@@ -45,6 +46,11 @@ interface PreviewData {
   /** Word-faithful docx→HTML (rendered on a page inside a SANDBOXED frame). */
   html?: string;
   truncated?: boolean;
+  /** Truncation honesty (v1.166.0): the REAL extent of the file, so a clipped
+   *  preview can say "first 80 of 4,112 rows" instead of looking complete. */
+  total_rows?: number;
+  total_cols?: number;
+  total_chars?: number;
 }
 
 /** Word-like page styling for the docx HTML preview. Rendered inside a fully
@@ -102,6 +108,90 @@ export function appLabelFor(path: string): string {
   return APP_LABEL[suffix] ?? "default app";
 }
 
+// --- "Changes since you last previewed" (v1.166.0, A7) -----------------------
+// A tool rewrites report.md while its preview sits open; Refresh shows the new
+// text and the old one is simply GONE — the user cannot tell what the model
+// changed. So the panel keeps an in-memory snapshot of the last payload it
+// showed (per path, per sheet for workbooks) and, when a re-preview differs,
+// offers a line diff. In-memory ONLY, module-level so closing and reopening
+// the panel still counts as "last previewed"; a page reload forgets, by design
+// — this is a courtesy view, not a version store.
+
+/** One line of the diff view. `same` lines are kept for reading context. */
+export interface DiffLine {
+  kind: "same" | "added" | "removed";
+  text: string;
+}
+
+/** Serialize a preview payload into comparable lines: text/markdown split on
+ *  newlines, sheets one TAB-joined line per row (cell edits then read as a
+ *  changed line). Kinds with no stable text form (pdf/html/image) return null
+ *  — no snapshot, no diff, no false "unchanged" claim. */
+export function snapshotLines(d: PreviewData): string[] | null {
+  if (d.kind === "sheet") return (d.rows ?? []).map((r) => r.join("\t"));
+  if (d.kind === "text" || d.kind === "markdown")
+    return (d.content ?? "").split("\n");
+  return null;
+}
+
+/** Classic LCS line diff: unchanged lines interleaved with removed (prev-only)
+ *  and added (next-only) lines, in document order. Previews are capped
+ *  server-side (80 rows / 20k chars), so the quadratic table stays tiny; past
+ *  the guard it degrades to remove-all/add-all — coarser, never wrong. */
+export function diffLines(prev: string[], next: string[]): DiffLine[] {
+  const MAX = 1500;
+  if (prev.length > MAX || next.length > MAX) {
+    return [
+      ...prev.map((text) => ({ kind: "removed" as const, text })),
+      ...next.map((text) => ({ kind: "added" as const, text })),
+    ];
+  }
+  const m = prev.length;
+  const n = next.length;
+  // lcs[i][j] = LCS length of prev[i:] vs next[j:]
+  const lcs: Uint32Array[] = Array.from(
+    { length: m + 1 },
+    () => new Uint32Array(n + 1),
+  );
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      lcs[i][j] =
+        prev[i] === next[j]
+          ? lcs[i + 1][j + 1] + 1
+          : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+    }
+  }
+  const out: DiffLine[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < m && j < n) {
+    if (prev[i] === next[j]) {
+      out.push({ kind: "same", text: prev[i] });
+      i++;
+      j++;
+    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+      out.push({ kind: "removed", text: prev[i] });
+      i++;
+    } else {
+      out.push({ kind: "added", text: next[j] });
+      j++;
+    }
+  }
+  while (i < m) out.push({ kind: "removed", text: prev[i++] });
+  while (j < n) out.push({ kind: "added", text: next[j++] });
+  return out;
+}
+
+/** Last-viewed payloads, keyed by path (+ sheet name for workbooks — switching
+ *  tabs is not a "change"). Module scope on purpose; see the block comment. */
+const lastViewedLines = new Map<string, string[]>();
+
+function snapshotKey(path: string, d: PreviewData): string {
+  // NUL separator — legal in neither a file path nor a sheet name, so
+  // "C:\a b" + "" can never collide with "C:\a" + "b".
+  return `${path}\u0000${d.kind === "sheet" ? (d.sheet ?? "") : ""}`;
+}
+
 export function DocPreview({
   path,
   onClose,
@@ -121,6 +211,11 @@ export function DocPreview({
   const [savedNote, setSavedNote] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [pickFolder, setPickFolder] = useState(false);
+  const [imgError, setImgError] = useState(false);
+  // The last-viewed lines this payload DIFFERS from (null = no change to show)
+  // and whether the diff view is the one on screen. See the module block above.
+  const [changedFrom, setChangedFrom] = useState<string[] | null>(null);
+  const [showChanges, setShowChanges] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -167,6 +262,10 @@ export function DocPreview({
     async (wantSheet: string) => {
       setLoading(true);
       setError(null);
+      // A fresh load is a fresh attempt for the <img> too: without this,
+      // one transient failure (the agent still writing the PNG) left Refresh
+      // refetching the JSON while the panel stayed stuck on the error text.
+      setImgError(false);
       try {
         const q = wantSheet ? `&sheet=${encodeURIComponent(wantSheet)}` : "";
         const d = await get<PreviewData>(
@@ -174,6 +273,26 @@ export function DocPreview({
         );
         setData(d);
         setSheet(d.sheet ?? "");
+        // Snapshot bookkeeping (v1.166.0): compare against the last payload
+        // this panel SHOWED for the same path(+sheet), then that comparison
+        // base becomes component state and the store moves to the new payload
+        // — "since you last previewed" always means the previous viewing.
+        const lines = snapshotLines(d);
+        if (lines) {
+          const key = snapshotKey(path, d);
+          const prior = lastViewedLines.get(key);
+          setChangedFrom(
+            prior &&
+              (prior.length !== lines.length ||
+                prior.some((l, idx) => l !== lines[idx]))
+              ? prior
+              : null,
+          );
+          lastViewedLines.set(key, lines);
+        } else {
+          setChangedFrom(null);
+        }
+        setShowChanges(false); // a fresh payload always lands on the current view
       } catch (e) {
         setError(e instanceof ApiError ? e.message : String(e));
         setData(null);
@@ -188,6 +307,7 @@ export function DocPreview({
   useEffect(() => {
     setSheet("");
     setOpenNote(null);
+    setImgError(false);
     void load("");
   }, [path, load]);
 
@@ -222,6 +342,14 @@ export function DocPreview({
         : "",
     [data],
   );
+  // The diff on demand: last-viewed lines vs the payload on screen (v1.166.0).
+  const diff = useMemo(
+    () =>
+      showChanges && changedFrom && data
+        ? diffLines(changedFrom, snapshotLines(data) ?? [])
+        : null,
+    [showChanges, changedFrom, data],
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
@@ -251,7 +379,10 @@ export function DocPreview({
               question that surfaced this: a path you can copy beats a path you
               have to transcribe from a sentence. */}
           <a
-            href={fileUrl}
+            // &download=1 forces Content-Disposition: attachment (v1.166.0) —
+            // pdf/images now render INLINE by default so the iframe/<img>
+            // previews work, and this anchor must stay a real download.
+            href={`${fileUrl}&download=1`}
             download={name}
             title={`Download ${name}`}
             aria-label={`Download ${name}`}
@@ -334,6 +465,27 @@ export function DocPreview({
       {openNote && (
         <p className="shrink-0 px-1 text-[11px] text-emerald-300/90">{openNote}</p>
       )}
+      {/* The file changed between viewings (v1.166.0): offer the diff. The row
+          only exists when a re-preview genuinely differed from the snapshot —
+          an always-present toggle would mostly show "no changes". */}
+      {changedFrom && !loading && data && (
+        <div className="flex shrink-0 items-center gap-2 px-1">
+          <button
+            type="button"
+            onClick={() => setShowChanges((v) => !v)}
+            className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] transition-colors ${
+              showChanges
+                ? "border-accent/40 bg-accent/[0.1] text-accent-soft"
+                : "border-white/[0.08] text-zinc-300 hover:bg-white/[0.06]"
+            }`}
+          >
+            <FileDiff size={11} /> {showChanges ? "Current" : "Changes"}
+          </button>
+          <span className="text-[10.5px] text-zinc-500">
+            this file changed since you last previewed it
+          </span>
+        </div>
+      )}
       {error && <ErrorNote>{error}</ErrorNote>}
       <FilePickerModal
         open={pickFolder}
@@ -349,7 +501,69 @@ export function DocPreview({
           <div className="p-3">
             <LoaderInline label="Loading preview…" />
           </div>
-        ) : !data ? null : data.kind === "pdf" ? (
+        ) : !data ? null : diff ? (
+          // The line diff, "since you last previewed": green added, red
+          // removed, unchanged lines dimmed for reading context.
+          <div className="p-3">
+            <p className="pb-2 text-[10.5px] text-zinc-500">
+              Changes since you last previewed — added lines green, removed red.
+              {data.truncated &&
+                // The diff compares CLIPPED payloads (the server sends only
+                // the first 80 rows / 20k chars) — say so, or an edit past
+                // the window silently reads as "no change".
+                ` Compared over the clipped preview only — changes past the first ${
+                  data.kind === "sheet"
+                    ? `${(data.rows ?? []).length} rows`
+                    : `${(data.content ?? "").length.toLocaleString()} characters`
+                } are not shown.`}
+            </p>
+            <div className="whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed">
+              {diff.map((l, i) => (
+                <div
+                  key={i}
+                  data-testid={`diff-${l.kind}`}
+                  className={
+                    l.kind === "added"
+                      ? "bg-emerald-500/[0.08] text-emerald-300"
+                      : l.kind === "removed"
+                        ? "bg-rose-500/[0.08] text-rose-300/90"
+                        : "text-zinc-500"
+                  }
+                >
+                  {(l.kind === "added" ? "+ " : l.kind === "removed" ? "− " : "  ") +
+                    l.text}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : data.kind === "image" ? (
+          // Pixels straight off GET /documents/file (inline since v1.166.0) on
+          // a checkered backdrop so transparency reads as transparency.
+          <div
+            className="grid h-full place-items-center overflow-auto bg-[#3b3e44] p-3"
+            style={{
+              backgroundImage:
+                "linear-gradient(45deg, rgba(255,255,255,0.05) 25%, transparent 25%, transparent 75%, rgba(255,255,255,0.05) 75%), linear-gradient(45deg, rgba(255,255,255,0.05) 25%, transparent 25%, transparent 75%, rgba(255,255,255,0.05) 75%)",
+              backgroundSize: "16px 16px",
+              backgroundPosition: "0 0, 8px 8px",
+            }}
+          >
+            {imgError ? (
+              <p className="max-w-[24rem] text-center text-[11.5px] text-zinc-400">
+                Couldn&apos;t load this image — it may have moved or been
+                deleted. Try Download or Open in {appLabelFor(path)}.
+              </p>
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={fileUrl}
+                alt={name}
+                onError={() => setImgError(true)}
+                className="max-h-full max-w-full rounded-md object-contain"
+              />
+            )}
+          </div>
+        ) : data.kind === "pdf" ? (
           <iframe
             src={fileUrl}
             title={`Preview of ${name}`}
@@ -357,12 +571,21 @@ export function DocPreview({
           />
         ) : data.kind === "html" ? (
           // Word-faithful page — sandbox="" blocks scripts/forms/navigation.
-          <iframe
-            sandbox=""
-            srcDoc={docSrcDoc}
-            title={`Preview of ${name}`}
-            className="h-full w-full border-0"
-          />
+          <div className="flex h-full min-h-0 flex-col">
+            <iframe
+              sandbox=""
+              srcDoc={docSrcDoc}
+              title={`Preview of ${name}`}
+              className="min-h-0 w-full flex-1 border-0"
+            />
+            {data.truncated && (
+              <p className="shrink-0 py-1 text-center text-[10.5px] text-zinc-400">
+                {typeof data.total_chars === "number"
+                  ? `Preview clipped — ${data.total_chars.toLocaleString()} characters total; open the file for everything.`
+                  : "Preview clipped — open the file for everything."}
+              </p>
+            )}
+          </div>
         ) : data.kind === "markdown" ? (
           <div className="h-full overflow-auto bg-[#50545a] px-3">
             <div className={MD_PAGE_CLASS}>
@@ -372,7 +595,9 @@ export function DocPreview({
             </div>
             {data.truncated && (
               <p className="pb-3 text-center text-[10.5px] text-zinc-300">
-                Preview clipped — open the file for everything.
+                {typeof data.total_chars === "number"
+                  ? `Preview clipped — showing ${(data.content ?? "").length.toLocaleString()} of ${data.total_chars.toLocaleString()} characters; open the file for everything.`
+                  : "Preview clipped — open the file for everything."}
               </p>
             )}
           </div>
@@ -419,7 +644,12 @@ export function DocPreview({
               </table>
               {data.truncated && (
                 <p className="px-1.5 py-2 text-[10.5px] text-zinc-600">
-                  Showing the first 80 rows — open in Excel for the full sheet.
+                  {/* Truncation honesty (v1.166.0): name the REAL row count
+                      when the daemon reports one — a bare "first 80" still
+                      reads as "almost everything" on a 40,000-row sheet. */}
+                  {typeof data.total_rows === "number"
+                    ? `Showing the first ${(data.rows ?? []).length} of ${data.total_rows.toLocaleString()} rows — open in Excel for the full sheet.`
+                    : "Showing the first 80 rows — open in Excel for the full sheet."}
                 </p>
               )}
             </div>
@@ -431,7 +661,9 @@ export function DocPreview({
             </pre>
             {data.truncated && (
               <p className="pt-2 text-[10.5px] text-zinc-600">
-                Preview clipped — open the file for everything.
+                {typeof data.total_chars === "number"
+                  ? `Preview clipped — showing ${(data.content ?? "").length.toLocaleString()} of ${data.total_chars.toLocaleString()} characters; open the file for everything.`
+                  : "Preview clipped — open the file for everything."}
               </p>
             )}
           </div>

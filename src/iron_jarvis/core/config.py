@@ -197,6 +197,11 @@ class Config(BaseModel):
     # thread's own persona, and user overrides of this slug all still win.
     default_persona: str = "assistant"
     max_agent_steps: int = 12
+    # SESSION QUEUE (v1.166.0): cap on concurrently RUNNING managed agent
+    # sessions — spawns beyond the cap park FIFO as QUEUED and start as slots
+    # free (agents/orchestrator.spawn_managed). 0 (the default) = unlimited,
+    # keeping spawn semantics byte-identical to before the queue existed.
+    max_concurrent_sessions: int = 0
     permissions: dict[str, str] = Field(default_factory=default_permissions)
     sandbox: dict[str, Any] = Field(default_factory=default_sandbox_policy)
     sandbox_runtime: str = "native"  # "native" | "docker" (§16)
@@ -345,6 +350,13 @@ class Config(BaseModel):
     # byte-for-byte unchanged. A persisted config without this key defaults
     # cleanly to True (pydantic field default).
     decompose_local_tasks: bool = True
+    # DECOMPOSE EVERYTHING (v1.166.0) — extend plan → execute → verify →
+    # assemble beyond prompted-mode local adapters: when ON, any plausibly
+    # multi-step task takes the decomposed path regardless of the resolved
+    # ``tool_use_mode`` (agents/decompose.should_decompose). OFF by default
+    # so the flat loop and the offline suite stay byte-for-byte unchanged; a
+    # persisted config without this key defaults cleanly to False.
+    decompose_all_tasks: bool = False
     # Self-tuning router (§6 phase-1) — OFF by default. When enabled AND the local
     # Ollama model is configured AND eval/observability shows it has met the
     # quality bar for a task class, the router prefers it for that class. With the

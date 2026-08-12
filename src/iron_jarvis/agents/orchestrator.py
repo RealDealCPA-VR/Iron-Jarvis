@@ -1,15 +1,21 @@
 """Orchestrator (§12 host; §14 sessions; §15 workspaces).
 
 Creates sessions with isolated, disposable workspaces and drives the agent
-runtime. For the slice this is single-agent; the supervisor → subagent hierarchy
-(§12) plugs in at Phase 6 via ``AgentRuntime.run(parent_id=...)``.
+runtime. The supervisor → subagent hierarchy (§12) is LIVE: ``run_session``
+dispatches SUPERVISOR sessions to ``run_supervised``, whose ``delegate`` tool
+spawns child sessions through ``AgentRuntime.run(parent_id=...)`` (depth-capped,
+parallel siblings via the runtime's gathered tool calls). Since v1.166.0 the
+orchestrator is also the background-run concurrency governor: ``spawn_managed``
+runs or parks (QUEUED) session work under ``config.max_concurrent_sessions``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from pathlib import Path
+from typing import Any
 
 from sqlmodel import select
 
@@ -36,7 +42,7 @@ from ..git.review import (
 )
 from .runtime import AgentRuntime, is_direct_workspace
 from .supervisor import run_supervised
-from .types import get_agent_definition
+from .types import AgentDefinition, get_agent_definition
 
 log = get_logger("orchestrator")
 
@@ -54,6 +60,26 @@ class Orchestrator:
         # Serializes the check-then-create of a workspace-reusing continuation so a
         # double-continue can't start two agents writing the same shared workspace.
         self._continue_lock = asyncio.Lock()
+        # Concurrency governor (v1.166.0): runs parked because every
+        # ``max_concurrent_sessions`` slot was busy — FIFO of (session_id,
+        # UN-started coroutine, had_session_row). The coroutine is never
+        # awaited while parked and is ``.close()``d on discard so a dropped
+        # entry can't leak a "coroutine was never awaited" warning.
+        # had_session_row remembers whether a Session row existed at park time:
+        # non-session background work (workflow runs, slack handlers) shares
+        # the same launcher and has no row, so "row gone" only means
+        # "deleted while queued" for entries that HAD one.
+        self._queued: deque[tuple[str, Any, bool]] = deque()
+        # Set by shutdown_queue() during daemon teardown: once draining, the
+        # slot-free hook must never promote a parked run (lifespan cancels the
+        # running tasks, and each cancellation fires _release -> _dequeue_next,
+        # which would otherwise create_task a brand-new agent run mid-shutdown)
+        # and spawn_managed refuses new work instead of parking it into a queue
+        # that has already been discarded.
+        self._draining = False
+        # Strong refs to fire-and-forget event publishes from sync code paths
+        # (an unreferenced Task can be garbage-collected mid-flight).
+        self._event_tasks: set[asyncio.Task] = set()
 
     def register_running(self, session_id: str, task: asyncio.Task) -> None:
         """Track a background run so it can be cancelled (called by the daemon).
@@ -61,9 +87,176 @@ class Orchestrator:
         Always attaches a self-removing done-callback so a finished/failed run can't
         leak its ``_running`` entry — the autonomy non-wait path registers here
         directly (not via the daemon's _spawn_bg), and previously leaked an entry
-        per auto-executed/approved session, inflating running_sessions forever."""
+        per auto-executed/approved session, inflating running_sessions forever.
+        The same callback is the queue's slot-free hook (v1.166.0): ANY managed
+        run finishing frees a slot, so the next parked run (if any) starts."""
         self._running[session_id] = task
-        task.add_done_callback(lambda t, sid=session_id: self._running.pop(sid, None))
+
+        def _release(t: asyncio.Task, sid: str = session_id) -> None:
+            self._running.pop(sid, None)
+            self._dequeue_next()  # a slot just freed — start the next parked run
+
+        task.add_done_callback(_release)
+
+    # --- concurrency governor (v1.166.0): spawn or park background runs ----
+
+    def spawn_managed(self, session_id: str, coro) -> asyncio.Task | None:
+        """Launch a background run now, or park it FIFO when every slot is busy.
+
+        ``config.max_concurrent_sessions`` (0 = unlimited) governs how many
+        managed background tasks may run at once. Under the limit (or with the
+        limit unset) this is EXACTLY the daemon's historical ``_spawn_bg``:
+        create the task, register it for cancellation, surface (log) any crash,
+        return the task. At the limit the coroutine is stored UN-started, the
+        session row (when one exists — workflow/comm ids share this launcher
+        and have none) is marked QUEUED, SESSION_QUEUED is published, and None
+        is returned; ``register_running``'s done-callback starts the next
+        parked entry as each slot frees.
+
+        Two refusals return None WITHOUT parking (coroutine closed, row
+        untouched): the daemon is draining (``shutdown_queue`` ran — parking
+        would leak a coroutine into a queue already discarded), or the session
+        row is already terminal — the create->spawn window lost a race to
+        cancel/delete (the same race ``run_session`` honors at its top), and
+        stamping QUEUED over CANCELLED would resurrect work the user was told
+        was cancelled and finish it COMPLETED.
+
+        NON-SESSION work is exempt (coordinator decision, v1.166.0): workflow
+        runs, comm/slack handlers, and other no-row ids share this launcher,
+        but the setting is named max_concurrent_SESSIONS — parking a workflow
+        behind agent sessions would be a surprise the name does not disclose,
+        and a parked workflow that itself spawns sessions could deadlock the
+        queue. No Session row -> always start."""
+        if self._draining:
+            coro.close()
+            log.warning("refused background spawn for %s: shutting down", session_id)
+            return None
+        limit = int(getattr(self.p.config, "max_concurrent_sessions", 0) or 0)
+        if limit <= 0:
+            return self._start_managed(session_id, coro)
+        session = self.get_session(session_id)
+        if session is None:  # non-session background work is never governed
+            return self._start_managed(session_id, coro)
+        if len(self._running) < limit:
+            return self._start_managed(session_id, coro)
+        if session.status is not SessionStatus.ACTIVE:
+            coro.close()  # never park a terminal row (see docstring); honest no-op
+            log.info(
+                "not queueing session %s: already %s", session_id, session.status.value
+            )
+            return None
+        self._queued.append((session_id, coro, True))
+        session.status = SessionStatus.QUEUED
+        self._save(session)
+        self._publish_bg(
+            EventType.SESSION_QUEUED,
+            {
+                "task": session.task,
+                "position": len(self._queued),
+            },
+            session_id,
+        )
+        return None
+
+    def _start_managed(self, session_id: str, coro) -> asyncio.Task:
+        """Today's ``_spawn_bg`` semantics: create + register + surface crashes.
+
+        Exceptions are retrieved and logged (never swallowed silently, never
+        left as an "exception was never retrieved" warning); the ``_running``
+        entry self-removes via ``register_running``'s done-callback."""
+        task = asyncio.create_task(coro)
+        self.register_running(session_id, task)
+
+        def _done(t: asyncio.Task) -> None:
+            try:
+                t.result()
+            except asyncio.CancelledError:  # pragma: no cover - expected on cancel
+                pass
+            except Exception:  # noqa: BLE001
+                log.exception("background session %s failed", session_id)
+
+        task.add_done_callback(_done)
+        return task
+
+    def _dequeue_next(self) -> None:
+        """Start the next parked run if a slot is free — ONE per freed slot.
+
+        Entries whose session was cancelled/deleted while parked are skipped
+        (their un-started coroutine closed so nothing leaks) and popping
+        continues until a runnable entry is found or the queue is empty. No
+        recursion: the started run triggers the NEXT dequeue only via its own
+        done-callback when it finishes. Inert while draining: lifespan teardown
+        cancels the running tasks and each cancellation lands here via
+        ``_release`` — promoting a parked row to ACTIVE and create_task'ing a
+        brand-new agent run mid-shutdown is exactly wrong."""
+        if self._draining:
+            return
+        limit = int(getattr(self.p.config, "max_concurrent_sessions", 0) or 0)
+        while self._queued:
+            if limit > 0 and len(self._running) >= limit:
+                return  # every slot still busy
+            session_id, coro, had_row = self._queued.popleft()
+            session = self.get_session(session_id)
+            if had_row and (
+                session is None or session.status is not SessionStatus.QUEUED
+            ):
+                coro.close()  # cancelled/deleted while parked — never start it
+                continue
+            if session is not None:
+                session.status = SessionStatus.ACTIVE
+                self._save(session)
+            try:
+                self._start_managed(session_id, coro)
+            except RuntimeError:  # event loop gone (shutdown) — never started
+                coro.close()  # reconcile marks the stranded row on next boot
+                log.warning("could not start queued session %s (no loop)", session_id)
+            return  # one dequeue per freed slot
+
+    def _remove_queued(self, session_id: str) -> bool:
+        """Drop a parked entry, closing its un-started coroutine. True if found."""
+        for i, entry in enumerate(self._queued):
+            if entry[0] == session_id:
+                del self._queued[i]
+                entry[1].close()
+                return True
+        return False
+
+    def shutdown_queue(self) -> int:
+        """Daemon shutdown: stop the governor and discard every parked run.
+
+        Sets ``_draining`` FIRST, then pops + ``.close()``s every un-started
+        coroutine (no "never awaited" warning can leak). Call this BEFORE the
+        lifespan teardown cancels running tasks — each cancellation fires
+        ``_release`` -> ``_dequeue_next``, which the flag makes inert; without
+        it a cancellation would promote a parked row and start a brand-new
+        agent run mid-shutdown. Rows are left QUEUED on purpose:
+        ``reconcile_interrupted_sessions`` marks them FAILED ("interrupted by
+        a daemon restart") at next boot, which is the truth — this process
+        never ran them. Returns the number of parked entries discarded.
+        Wired into daemon/app.py's lifespan finally by the coordinator."""
+        self._draining = True
+        discarded = 0
+        while self._queued:
+            _sid, coro, _had_row = self._queued.popleft()
+            coro.close()
+            discarded += 1
+        if discarded:
+            log.info("discarded %d queued session(s) at shutdown", discarded)
+        return discarded
+
+    def _publish_bg(self, type_: str, payload: dict, session_id: str) -> None:
+        """Publish an event from a SYNC caller: schedule it on the running loop
+        and keep a strong ref until it settles. No loop (bare sync test) = no
+        event — spawn paths always run on the daemon's loop in production."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        t = loop.create_task(
+            self.p.event_bus.publish(type_, payload, session_id=session_id)
+        )
+        self._event_tasks.add(t)
+        t.add_done_callback(self._event_tasks.discard)
 
     def _save(self, session: Session) -> None:
         with session_scope(self.p.engine) as db:
@@ -175,7 +368,9 @@ class Orchestrator:
         )
         return session
 
-    async def run_session(self, session_id: str) -> Session:
+    async def run_session(
+        self, session_id: str, definition: "AgentDefinition | None" = None
+    ) -> Session:
         session = self.get_session(session_id)
         if session is None:
             raise KeyError(f"unknown session '{session_id}'")
@@ -194,7 +389,9 @@ class Orchestrator:
             if session.agent_type is AgentType.SUPERVISOR:
                 run = await run_supervised(self.p, session)  # §12 delegate to subagents
             else:
-                agent_def = get_agent_definition(session.agent_type)
+                # A dynamic (user-authored) agent runs with ITS definition, not the
+                # builtin one its base type maps to — callers pass it explicitly.
+                agent_def = definition or get_agent_definition(session.agent_type)
                 run = await self.runtime.run(session, agent_def)
 
             session.status = (
@@ -399,8 +596,10 @@ class Orchestrator:
     def cancel_session(self, session_id: str) -> Session:
         """Stop a running session. Raises KeyError if unknown, ValueError if
         already finished. Cancelling an in-flight background run unwinds it to
-        CANCELLED via run_session's handler; a session with no live task (e.g. a
-        synchronous run that already settled) is marked CANCELLED directly."""
+        CANCELLED via run_session's handler; a QUEUED (parked, never-started)
+        run is removed from the queue and finalized directly; a session with no
+        live task (e.g. a synchronous run that already settled) is marked
+        CANCELLED directly."""
         session = self.get_session(session_id)
         if session is None:
             raise KeyError(f"unknown session '{session_id}'")
@@ -413,6 +612,13 @@ class Orchestrator:
         task = self._running.get(session_id)
         if task is not None and not task.done():
             task.cancel()  # -> CancelledError in run_session -> _finalize_cancelled
+        elif self._remove_queued(session_id):
+            # Parked, never started (v1.166.0): the un-started coroutine was
+            # closed by _remove_queued; finalize honestly — no agent ever ran.
+            session.status = SessionStatus.CANCELLED
+            session.summary = session.summary or "Cancelled while queued (never started)."
+            session.finished_at = utcnow()
+            self._save(session)
         else:
             session.status = SessionStatus.CANCELLED
             session.finished_at = utcnow()
@@ -500,16 +706,22 @@ class Orchestrator:
             if reuse_ws:
                 ws = prev.workspace_path
                 with session_scope(self.p.engine) as db:
+                    # QUEUED counts as busy (v1.166.0): a continuation parked by
+                    # the concurrency governor still owns this workspace — letting
+                    # a second continue through creates two sessions sharing one
+                    # workspace, the exact race _continue_lock defends against.
                     busy = db.exec(
                         select(Session).where(
                             Session.workspace_path == ws,
-                            Session.status == SessionStatus.ACTIVE,
+                            Session.status.in_(  # type: ignore[attr-defined]
+                                (SessionStatus.ACTIVE, SessionStatus.QUEUED)
+                            ),
                         )
                     ).first()
                 if busy is not None:
                     raise ValueError(
-                        "a continuation is already running in this workspace — wait "
-                        "for it to finish before continuing again"
+                        "a continuation is already running or queued in this "
+                        "workspace — wait for it to finish before continuing again"
                     )
             else:
                 ws = str(self.p.config.workspaces_dir / session.id)
@@ -532,6 +744,9 @@ class Orchestrator:
         task = self._running.get(session_id)
         if task is not None and not task.done():
             raise ValueError("session is still running; cancel it before deleting")
+        # A parked (QUEUED, never-started) run goes with its session — leaving
+        # the entry behind would start a deleted session's coroutine later.
+        self._remove_queued(session_id)
         ws_path = session.workspace_path
         gs = self._git_sessions.pop(session_id, None)
         if gs is not None:
@@ -736,12 +951,20 @@ class Orchestrator:
 
     def reconcile_interrupted_sessions(self) -> int:
         """On boot, mark sessions left ACTIVE by a crash/restart as FAILED (none
-        are actually running on a fresh process) so they don't linger forever."""
+        are actually running on a fresh process) so they don't linger forever.
+        Stranded QUEUED rows get the same treatment (v1.166.0): the queue is
+        in-memory, so a restart discards their un-started coroutines."""
         active_ids = set(self._running.keys())
         marked = 0
         with session_scope(self.p.engine) as db:
             rows = list(
-                db.exec(select(Session).where(Session.status == SessionStatus.ACTIVE))
+                db.exec(
+                    select(Session).where(
+                        Session.status.in_(  # type: ignore[attr-defined]
+                            (SessionStatus.ACTIVE, SessionStatus.QUEUED)
+                        )
+                    )
+                )
             )
             for s in rows:
                 if s.id in active_ids:
