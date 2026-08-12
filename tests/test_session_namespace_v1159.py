@@ -40,7 +40,14 @@ from iron_jarvis.tools.base import Tool, ToolContext, ToolResult
 
 
 class _BigListTool(Tool):
-    """Stands in for `list_files` on a large tree — the motivating case."""
+    """Stands in for `list_files` on a large tree — the motivating case.
+
+    REAL builtin shape (v1.166.2): the payload lives in ``output`` and ``data``
+    carries only small metadata. The original double duplicated the whole
+    payload into ``data`` — a shape no real verbose tool has — which is exactly
+    how the suite stayed green while ``_store_as`` destroyed the payload of
+    every real builtin (it stored the metadata dict and threw the output away).
+    """
 
     name = "big_list"
     description = "test double"
@@ -50,7 +57,7 @@ class _BigListTool(Tool):
         return ToolResult(
             ok=True,
             output="\n".join(f"file_{i}.txt" for i in range(5000)),
-            data={"files": [f"file_{i}.txt" for i in range(5000)]},
+            data={"count": 5000, "truncated": False},
         )
 
 
@@ -124,7 +131,11 @@ def test_the_receipt_says_what_was_stored_and_where(platform, tmp_path):
         res = await _invoke(platform, ctx, "big_list", {"_store_as": "files"})
         assert res.ok
         assert "`files`" in res.output
-        assert "dict" in res.output or "list" in res.output, res.output
+        # v1.166.2: the receipt must NAME where the payload lives — a model
+        # that reaches for the bare variable finds a 2-key dict and must know
+        # ['output'] is the text before it can write code against it.
+        assert "files['output']" in res.output, res.output
+        assert "files['data']" in res.output, res.output
         assert res.data and res.data.get("stored_as") == "files"
 
     run(platform, body)
@@ -138,10 +149,17 @@ def test_the_stored_value_is_reachable_from_the_repl(platform, tmp_path):
         ctx = _ctx(platform, tmp_path)
         await _invoke(platform, ctx, "big_list", {"_store_as": "files"})
         res = await _invoke(
-            platform, ctx, "repl", {"code": "print(len(files['files']))"}
+            platform, ctx, "repl",
+            {"code": "print(len(files['output'].splitlines()))"},
         )
         assert res.ok, res.error
         assert "5000" in res.output
+        # The metadata half survives alongside the payload (v1.166.2).
+        res2 = await _invoke(
+            platform, ctx, "repl", {"code": "print(files['data']['count'])"}
+        )
+        assert res2.ok, res2.error
+        assert "5000" in res2.output
 
     run(platform, body)
 
@@ -155,7 +173,8 @@ def test_the_model_can_summarise_instead_of_printing_everything(platform, tmp_pa
         await _invoke(platform, ctx, "big_list", {"_store_as": "files"})
         res = await _invoke(
             platform, ctx, "repl",
-            {"code": "print([f for f in files['files'] if f.endswith('7.txt')][:3])"},
+            {"code": "print([f for f in files['output'].splitlines() "
+                     "if f.endswith('7.txt')][:3])"},
         )
         assert res.ok, res.error
         assert "file_7.txt" in res.output
@@ -349,3 +368,53 @@ def test_advertising_store_as_never_mutates_the_tool_itself(platform):
     after = set((tool.input_schema.get("properties") or {}))
     assert after == before, "specs() rewrote the tool's own schema"
     assert "_store_as" not in after
+
+
+# --------------------------------------------------------------------------- #
+# (6) THE REAL BUILTINS ROUND-TRIP (v1.166.2 regression pins).
+#
+# The original suite only exercised a double that duplicated its payload into
+# `data`, so `_store_as` shipped storing metadata and DESTROYING the payload of
+# every real verbose tool. These pins go through the real list_files and shell.
+# --------------------------------------------------------------------------- #
+def test_real_list_files_payload_survives_store_as(platform, tmp_path):
+    async def body():
+        ctx = _ctx(platform, tmp_path)
+        for n in ("alpha.txt", "beta.txt", "gamma.txt"):
+            (ctx.workspace / n).write_text("x", encoding="utf-8")
+        stored = await _invoke(
+            platform, ctx, "list_files", {"_store_as": "tree"},
+            allow=["list_files", "repl"],
+        )
+        assert stored.ok, stored.error
+        assert "alpha.txt" not in stored.output  # a receipt, not the listing
+        res = await _invoke(
+            platform, ctx, "repl",
+            {"code": "print(sorted(tree['output'].splitlines()))"},
+        )
+        assert res.ok, res.error
+        for n in ("alpha.txt", "beta.txt", "gamma.txt"):
+            assert n in res.output, (
+                f"{n} unreachable — the real payload did not land: {res.output!r}"
+            )
+
+    run(platform, body)
+
+
+def test_real_shell_stdout_survives_store_as(platform, tmp_path):
+    async def body():
+        ctx = _ctx(platform, tmp_path)
+        stored = await _invoke(
+            platform, ctx, "shell",
+            {"command": "echo MAGIC_STDOUT_7431", "_store_as": "o"},
+            allow=["shell", "repl"],
+        )
+        assert stored.ok, stored.error
+        assert "MAGIC_STDOUT_7431" not in stored.output  # kept out of context
+        res = await _invoke(platform, ctx, "repl", {"code": "print(o['output'])"})
+        assert res.ok, res.error
+        assert "MAGIC_STDOUT_7431" in res.output, (
+            "stdout was destroyed by _store_as — the v1.166.2 bug is back"
+        )
+
+    run(platform, body)

@@ -47,7 +47,9 @@ _STORE_AS_SCHEMA = {
         "Optional variable name. Binds this result into the session's Python "
         "namespace INSTEAD of returning it, and returns a one-line receipt — "
         "use the `repl` tool to inspect it (len, slicing, comprehensions). "
-        "Prefer this whenever the result may be large."
+        "The variable is a dict: v['output'] is the tool's text payload, "
+        "v['data'] its structured metadata. Prefer this whenever the result "
+        "may be large."
     ),
 }
 
@@ -280,7 +282,14 @@ class ToolRegistry:
                 data=result.data,
                 created_paths=result.created_paths,
             )
-        payload: Any = result.data if result.data not in (None, {}) else result.output
+        # BOTH halves, always (v1.166.2). The old `data if data else output`
+        # pick destroyed the real payload for every actual verbose builtin:
+        # list_files/grep/shell/read_file put the payload in `output` and only
+        # metadata in `data`, so `list_files(_store_as="tree")` bound
+        # {'count': N} and the file names existed NOWHERE — while the receipt
+        # asserted "nothing else was returned". Storing the pair loses nothing
+        # for any tool shape.
+        payload: Any = {"output": result.output, "data": result.data}
         try:
             # Bound by EXECUTING a binding, over the namespace's own public
             # `execute` — the session module owns the pipe protocol and this
@@ -297,13 +306,27 @@ class ToolRegistry:
             except (TypeError, ValueError):
                 encoded = json.dumps(str(payload))
             # The receipt is computed INSIDE the namespace and printed, so the
-            # size it reports is the size of the object that actually landed —
-            # not something this side guessed about a value it then shipped.
+            # sizes it reports are the sizes of the object that actually landed —
+            # not something this side guessed about a value it then shipped. It
+            # names BOTH halves explicitly (v1.166.2): a model that cannot see
+            # the value must know the payload lives at ['output'] or it will
+            # compute over the metadata believing it is the result.
             code = (
                 "import json as __ij_json\n"
                 f"{name} = __ij_json.loads({encoded!r})\n"
                 f"__ij_v = {name}\n"
-                "print('stored as `%s` (%s%s) — reach it in the repl tool; "
+                "if isinstance(__ij_v, dict) and set(__ij_v) == {'output', 'data'}:\n"
+                "    __ij_o, __ij_d = __ij_v['output'], __ij_v['data']\n"
+                "    __ij_ds = 'None' if __ij_d is None else '%s%s' % ("
+                "type(__ij_d).__name__, "
+                "(', %d items' % len(__ij_d)) if hasattr(__ij_d, '__len__') else '')\n"
+                "    print(\"stored as `%s` — %s['output'] holds the tool's text "
+                "(str, %d chars), %s['data'] its metadata (%s); reach both in the "
+                "repl tool; nothing else was returned.\" % ("
+                f"{name!r}, {name!r}, len(__ij_o or ''), {name!r}, __ij_ds))\n"
+                "    del __ij_o, __ij_d, __ij_ds\n"
+                "else:\n"
+                "    print('stored as `%s` (%s%s) — reach it in the repl tool; "
                 "nothing else was returned.' % ("
                 f"{name!r}, type(__ij_v).__name__, "
                 "(', %d items' % len(__ij_v)) if hasattr(__ij_v, '__len__') else ''))\n"
