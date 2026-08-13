@@ -1240,6 +1240,23 @@ def build_platform(
         *workflow_tools(platform),
     ):
         platform.registry.register(tool)
+    # v1.170.0: workflow_list is READ-ONLY (same tier as tool_list), but the
+    # permission engine fail-closes unknown keys to "ask" and a headless "ask"
+    # is a DENY — so with no declared mode no agent/scheduled run could ever
+    # list workflows, and live installs' config.toml (dumped from older
+    # defaults at first boot) will never carry the key. Declared HERE, beside
+    # the tool's registration, via setdefault so an explicit user-set mode
+    # (config.toml [permissions]) always wins. workflow_run deliberately gets
+    # NO entry: unknown resolves to "ask", which is exactly its intended gate.
+    # BOTH copies get the default: the PermissionEngine snapshots the mapping
+    # at construction (its _base is a dict COPY), so seeding only one side
+    # would make display surfaces reading config.permissions (`ironjarvis
+    # tools`, GET /settings) report "ask" while the engine enforces "allow" —
+    # display-vs-enforcement drift. config.permissions is never persisted by
+    # put_settings, so this stays in-memory; a user-set config.toml value
+    # already occupies the key and setdefault leaves it alone.
+    platform.permissions._base.setdefault("workflow_list", "allow")
+    platform.config.permissions.setdefault("workflow_list", "allow")
 
     # Motivation Layer ("the pulse"): standing goals + off-by-default deliberation.
     # The orchestrator (the executor) is wired in by the daemon after build; the

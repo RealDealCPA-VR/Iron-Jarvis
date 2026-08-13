@@ -1,6 +1,6 @@
 # The Comprehensive To-Do
 
-*Everything known to be open as of v1.169.0 (2026-08-13), consolidated from
+*Everything known to be open as of v1.170.0 (2026-08-13), consolidated from
 the deep-review wow track, deferred backlogs across waves, and known limits.
 The deep review's 11 confirmed bugs are all FIXED (v1.166.2–v1.167.0) — this
 file is what remains.*
@@ -74,6 +74,25 @@ promote-to-knowledge from the lists further down.*
 - [ ] **Living documents, project-grounded** — add `project_id` to
   LiveDocRecord; regeneration gains project knowledge; freshness on the
   project surface.
+
+
+## Workflows wave — SHIPPED v1.170.0 ✔
+
+*Chat runs saved workflows (workflow_list/workflow_run tools + prompt block +
+live run chip + "+"-menu), name-only POST /workflows/run resolves pin
+server-side (reflex/canvas pin drops fixed), parameterized runs (inputs →
+pre-seeded outputs), verified steps (expect: files/summary_contains against
+ledger evidence), tool-step data handoffs ({{Step.data}}), resume interrupted
+runs, PATCH rename, save-time validation, run pruning, canvas ask-gate +
+DAG honesty + one serializer, 5 starter workflows, /workflows in default nav,
+workflow:<name> origin stamped.*
+
+Still open from the workflows analysis:
+- [ ] Adversarial-verify step kind (fresh-context reviewer step) — expect
+  checks shipped as the deterministic v1.
+- [ ] workflow_list/workflow_run for headless agents (chat-first shipped;
+  agents/types.py allowlists deliberately not extended yet).
+- [ ] Webhook/email/calendar/api trigger stubs in triggers.py remain stubs.
 
 ## Deferred from earlier waves (still valid)
 

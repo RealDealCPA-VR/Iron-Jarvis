@@ -660,10 +660,27 @@ class MemoryWrite(BaseModel):
 class WorkflowRunBody(BaseModel):
     toml: str | None = None
     name: str | None = None
+    #: v1.170.0 — ``name`` ALONE (steps omitted) runs the SAVED def: the server
+    #: resolves stored steps + the project pin via ``WorkflowStore.load_def``
+    #: (404 when unknown). ``name`` + ``steps`` keeps its ad-hoc meaning.
     steps: list[dict] | None = None
     #: Explicit project pin for THIS run. None inherits the saved def's pin
     #: (matched by name); "" forces an unpinned run.
     project_id: str | None = None
+    #: v1.170.0 — run inputs: each becomes a pre-seeded ``completed`` output
+    #: under its name (kind "input"), so ``{{name}}`` templating just works.
+    #: None (the default) keeps the legacy call byte-identical.
+    inputs: dict[str, str] | None = None
+
+
+class WorkflowPatchBody(BaseModel):
+    """Rename / re-describe a saved workflow (v1.170.0) WITHOUT re-posting its
+    steps. ``None`` leaves a field alone (the PATCH convention every other
+    editor here follows); ``new_name`` moves the def AND its project-pin row
+    — 409 when the target name is already taken."""
+
+    new_name: str | None = None
+    description: str | None = None
 
 
 class WorkflowAnswerBody(BaseModel):

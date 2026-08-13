@@ -15,6 +15,7 @@ from ..schemas import (
     TemplateUpdateBody,
     WorkflowGenerateBody,
     WorkflowAnswerBody,
+    WorkflowPatchBody,
     WorkflowRunBody,
     WorkflowSaveBody,
 )
@@ -23,6 +24,26 @@ from ...core.db import session_scope
 
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
+
+    def _spawn_run_or_interrupt(rec_id: str, coro) -> None:
+        """Spawn a workflow-run coroutine, honestly. During daemon drain the
+        governor refuses new background work and returns None (closing the
+        coroutine) — the record would then sit 'running'/'resuming' as a
+        zombie until the next boot's reconcile. Mark it 'interrupted' NOW so
+        every surface tells the truth immediately (v1.170.0 coordinator)."""
+        if d._spawn_bg(rec_id, coro) is not None:
+            return
+        from ...core.ids import utcnow
+        from ...workflows.models import WorkflowRunRecord
+
+        with session_scope(d.platform.engine) as db:
+            rec = db.get(WorkflowRunRecord, rec_id)
+            if rec is not None and rec.status in ("running", "resuming"):
+                rec.status = "interrupted"
+                rec.finished_at = rec.finished_at or utcnow()
+                db.add(rec)
+                db.commit()
+
     @app.post("/workflows/run")
     async def workflow_run(body: WorkflowRunBody) -> dict[str, Any]:
         from ...workflows.engine import WorkflowEngine, load_workflow, load_workflow_toml
@@ -40,22 +61,46 @@ def register(app: FastAPI, d) -> None:
             wf = load_workflow(
                 {"name": body.name, "steps": body.steps, "project_id": pid}
             )
+        elif body.name:
+            # v1.170.0 — ``name`` ALONE runs the SAVED def: stored steps + the
+            # project pin resolve server-side via load_def (the ONE composition
+            # point), so every caller — chat's workflow_run tool, the "+" menu,
+            # a curl — picks the pin up for free instead of re-posting steps.
+            from ...workflows.store import WorkflowStore
+
+            wf = WorkflowStore(d.platform.engine).load_def(body.name)
+            if wf is None:
+                raise HTTPException(
+                    status_code=404, detail=f"no saved workflow named '{body.name}'"
+                )
+            if body.project_id is not None:
+                # Same override rule as the name+steps branch: explicit wins,
+                # "" forces an unpinned run.
+                wf.project_id = body.project_id.strip() or None
         else:
-            raise HTTPException(status_code=400, detail="provide `toml` or `name`+`steps`")
+            raise HTTPException(
+                status_code=400,
+                detail="provide `toml`, `name`+`steps`, or the `name` of a saved workflow",
+            )
         # Create the record synchronously (validating steps), then run it in the
         # BACKGROUND: the HTTP request no longer blocks for the multi-minute run
         # (which was aborting clients into a false "couldn't reach the daemon").
         engine = WorkflowEngine(d.platform, d.orchestrator)
+        # v1.170.0 inputs (contract 5): forwarded ONLY when the caller sent
+        # them, so the legacy call stays byte-identical to the engine.
+        run_kwargs: dict[str, Any] = {}
+        if body.inputs is not None:
+            run_kwargs["inputs"] = dict(body.inputs)
         try:
-            rec = engine.create_record(wf)
+            rec = engine.create_record(wf, **run_kwargs)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-        d._spawn_bg(rec.id, engine.run_record(rec, wf))
+        _spawn_run_or_interrupt(rec.id, engine.run_record(rec, wf, **run_kwargs))
         return rec.model_dump()
 
     @app.get("/workflows/runs")
     def workflow_runs(
-        limit: int = 50, status: str | None = None, slim: bool = False
+        limit: int = 50, status: str | None = None, slim: bool = False, offset: int = 0
     ) -> dict[str, Any]:
         """List runs, newest first.
 
@@ -66,10 +111,15 @@ def register(app: FastAPI, d) -> None:
         (``steps_json``/``outputs_json`` — every step's outputs) so global
         chrome can poll cheaply; ``waiting_json`` survives slim mode because it
         carries the question the bell renders. Defaults unchanged.
+
+        v1.170.0 ADDITIVE: ``offset`` pages past the newest rows (applied after
+        the same ordering + ``status`` filter). Default 0 = exactly the old
+        response.
         """
         from ...workflows.models import WorkflowRunRecord
 
         limit = max(1, min(200, limit))  # clamp: newest-first, bounded
+        offset = max(0, offset)
         with session_scope(d.platform.engine) as db:
             stmt = (
                 select(WorkflowRunRecord)
@@ -78,6 +128,8 @@ def register(app: FastAPI, d) -> None:
             )
             if status:
                 stmt = stmt.where(WorkflowRunRecord.status == status)
+            if offset:
+                stmt = stmt.offset(offset)
             rows = list(db.exec(stmt))
 
         def _dump(r) -> dict[str, Any]:
@@ -88,6 +140,20 @@ def register(app: FastAPI, d) -> None:
             return out
 
         return {"runs": [_dump(r) for r in rows]}
+
+    @app.post("/workflows/runs/prune")
+    def workflow_runs_prune(keep: int = 500) -> dict[str, Any]:
+        """Trim run HISTORY (v1.170.0): delete the oldest FINISHED runs beyond
+        the newest ``keep``. Live state is untouchable — running, parked
+        (waiting), cancelling, and resuming rows survive regardless of age —
+        and ``interrupted`` (RESUMABLE, contract 4) rows survive the keep
+        window too, pruned only past an age threshold so a rendered Resume
+        button never 404s (see :func:`workflows.store.prune_runs`)."""
+        from ...workflows.store import prune_runs
+
+        keep = max(0, min(100_000, keep))
+        deleted = prune_runs(d.platform.engine, keep=keep)
+        return {"deleted": deleted, "keep": keep}
 
     @app.get("/workflows/runs/{run_id}")
     def workflow_run_detail(run_id: str) -> dict[str, Any]:
@@ -170,8 +236,62 @@ def register(app: FastAPI, d) -> None:
                 )
             db.refresh(rec)
         engine = WorkflowEngine(d.platform, d.orchestrator)
-        d._spawn_bg(rec.id, engine.resume_after_answer(rec, answer))
+        _spawn_run_or_interrupt(rec.id, engine.resume_after_answer(rec, answer))
         return {"id": run_id, "status": "running", "answered": True}
+
+    @app.post("/workflows/runs/{run_id}/resume")
+    async def workflow_run_resume(run_id: str) -> dict[str, Any]:
+        """Resume an ``interrupted`` run (v1.170.0) from its first
+        non-completed step — a daemon restart mid-run no longer means starting
+        the whole workflow (and re-doing its side effects) from scratch.
+
+        ATOMIC claim (interrupted -> resuming), the exact compare-and-set
+        /answer uses: Resume buttons render on two surfaces at once, and a
+        double-submit without it would drive the tail TWICE. Any other status
+        is an honest 409. ``finished_at`` is cleared (the reconciler stamped
+        it; a resuming run is not finished) and the engine's resume helper
+        rebuilds the def + remaining work from the record alone.
+        """
+        from ...workflows.engine import WorkflowEngine
+        from ...workflows.models import WorkflowRunRecord
+        from sqlalchemy import update as _sql_update
+
+        engine = WorkflowEngine(d.platform, d.orchestrator)
+        with session_scope(d.platform.engine) as db:
+            rec = db.get(WorkflowRunRecord, run_id)
+            if rec is None:
+                raise HTTPException(status_code=404, detail="no such run")
+            # Pre-validate BEFORE claiming (coordinator, v1.170.0): an
+            # unreconstructable record (corrupt steps_json) that we claimed
+            # first would sit in 'resuming' until the next boot's reconcile.
+            # Validate sync, refuse honest, claim only what can actually run.
+            if rec.status == "interrupted":
+                try:
+                    engine.rebuild_run(rec)
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"this run cannot be reconstructed: {exc}",
+                    )
+            claimed = db.exec(
+                _sql_update(WorkflowRunRecord)
+                .where(
+                    WorkflowRunRecord.id == run_id,
+                    WorkflowRunRecord.status == "interrupted",
+                )
+                .values(status="resuming", finished_at=None, current_session_id=None)
+            )
+            db.commit()
+            if getattr(claimed, "rowcount", 0) != 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"run is {rec.status}, not interrupted — only "
+                    f"interrupted runs can be resumed",
+                )
+            db.refresh(rec)
+            out = rec.model_dump()
+        _spawn_run_or_interrupt(rec.id, engine.resume_interrupted(rec))
+        return out
 
     # Saved workflow definitions (agents author these; the editor loads/saves them).
     @app.get("/workflows")
@@ -182,10 +302,44 @@ def register(app: FastAPI, d) -> None:
             "workflows": [w.model_dump() for w in WorkflowStore(d.platform.engine).list()]
         }
 
+    def _validate_step_shapes(steps: list[dict]) -> None:
+        """SAVE-time strictness (v1.170.0): a step whose ``kind``/``on_failure``
+        the loader would SILENTLY rewrite to the default is a 422 naming the
+        field — a def that says ``kind: "tools"`` and runs as an agent step is
+        a misconfiguration discovered mid-run, weeks later. Loading stays
+        lenient on purpose (old rows keep working); only the save gate is
+        strict. Absent/empty values still mean "the default", exactly as the
+        loader treats them.
+        """
+        from ...workflows.engine import ON_FAILURE, STEP_KINDS
+
+        for i, raw in enumerate(steps or []):
+            if not isinstance(raw, dict):
+                continue  # the loader ignores non-dict entries; keep parity
+            kind_raw = raw.get("kind")
+            if kind_raw:  # falsy = absent/empty = the default, never a rewrite
+                kind = str(kind_raw).strip().lower()
+                if kind not in STEP_KINDS:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"steps[{i}].kind: {kind_raw!r} is not one of "
+                        + "|".join(STEP_KINDS),
+                    )
+            failure_raw = raw.get("on_failure")
+            if failure_raw:
+                on_failure = str(failure_raw).strip().lower()
+                if on_failure not in ON_FAILURE:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"steps[{i}].on_failure: {failure_raw!r} is not "
+                        "one of " + "|".join(ON_FAILURE),
+                    )
+
     @app.post("/workflows")
     def save_workflow(body: WorkflowSaveBody) -> dict[str, Any]:
         from ...workflows.store import WorkflowStore
 
+        _validate_step_shapes(body.steps)
         store = WorkflowStore(d.platform.engine)
         # None PRESERVES an existing pin (dashboards that don't know about
         # pins re-save the whole def); "" explicitly unpins.
@@ -207,6 +361,33 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="no such workflow")
         out = rec.model_dump()
         out["project_id"] = store.get_project_id(name)
+        return out
+
+    @app.patch("/workflows/{name}")
+    def patch_workflow(name: str, body: WorkflowPatchBody) -> dict[str, Any]:
+        """Rename / re-describe a saved workflow IN PLACE (v1.170.0) — steps
+        untouched, project pin MOVED with the name (contract 3). ``None``
+        leaves a field alone; 404 unknown; 409 when ``new_name`` is taken.
+        Response = the same shape GET /workflows/{name} returns, under the
+        NEW name."""
+        from ...workflows.store import WorkflowStore
+
+        new_name = body.new_name
+        if new_name is not None:
+            new_name = new_name.strip()
+            if not new_name:
+                raise HTTPException(
+                    status_code=422, detail="new_name must be non-empty"
+                )
+        store = WorkflowStore(d.platform.engine)
+        try:
+            rec = store.patch(name, new_name=new_name, description=body.description)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        if rec is None:
+            raise HTTPException(status_code=404, detail="no such workflow")
+        out = rec.model_dump()
+        out["project_id"] = store.get_project_id(rec.name)
         return out
 
     @app.delete("/workflows/{name}")

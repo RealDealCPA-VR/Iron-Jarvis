@@ -29,7 +29,10 @@ class WorkflowRunRecord(SQLModel, table=True):
 
     id: str = Field(default_factory=lambda: new_id("wfrun"), primary_key=True)
     workflow_name: str = Field(default="", index=True)
-    status: str = "active"
+    #: v1.170.0: default was "active" — a value nothing ever read or wrote
+    #: (every construction site passes status explicitly, and no reader
+    #: matches "active"); "running" is the true birth state of a run.
+    status: str = "running"
     #: Context spine: the project this run happened in (the active project at
     #: run time). Nullable; old DBs gain the column via _reconcile_additive_columns.
     project_id: str | None = Field(default=None, index=True)

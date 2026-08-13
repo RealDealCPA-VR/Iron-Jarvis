@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import {
   History,
+  LayoutTemplate,
   MessageSquare,
   Send,
   Sparkles,
@@ -14,7 +15,16 @@ import {
 import { useApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
 import { post, ApiError } from "@/lib/api";
-import type { WorkflowRun } from "@/lib/types";
+import type { WorkflowRun, WorkflowStep } from "@/lib/types";
+import {
+  STARTERS,
+  isLiveRun,
+  runBadgeTone,
+  starterKindSummary,
+  starterLoadDetail,
+  stepKindHint,
+  type StarterWorkflow,
+} from "@/components/workflow/starters";
 import { Card, Badge, Empty, SkeletonRows } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -70,6 +80,9 @@ export default function WorkflowsPage() {
       </Reveal>
       <Reveal>
         <WorkflowCanvas />
+      </Reveal>
+      <Reveal>
+        <StarterTemplates />
       </Reveal>
       <Reveal>
         <WorkflowBuilderChat />
@@ -258,7 +271,106 @@ function WorkflowBuilderChat() {
   );
 }
 
-type StepDef = { name?: string; agent?: string };
+/* -------------------------------------------------------------------------- */
+/*  Starter templates: five real workflows, one click to load onto the canvas  */
+/* -------------------------------------------------------------------------- */
+
+function StarterTemplates() {
+  // Whether the user has ANY saved workflows decides prominence: none → the
+  // catalog is the empty state (expanded cards); some → a collapsed Templates
+  // section they can open. Loading or offline means saved defs are UNKNOWN —
+  // auto-expanding there would assert "you have nothing yet" on a guess, so
+  // unknown stays collapsed (the toggle still works).
+  const { data, error, loading } = useApi<{ workflows: unknown[] }>("/workflows");
+  const saved = data?.workflows;
+  const hasSaved = Array.isArray(saved) && saved.length > 0;
+  const [userToggle, setUserToggle] = useState<boolean | null>(null);
+  const expanded = userToggle ?? (!loading && !error && !hasSaved);
+  // Which starter was last loaded — feedback that the click did something,
+  // and where it went (the canvas above, NOT the saved list).
+  const [loadedName, setLoadedName] = useState<string | null>(null);
+
+  function loadStarter(s: StarterWorkflow) {
+    // Same event (and detail shape) as the terminal "→ Workflow" handoff: the
+    // canvas rebuilds its graph from `steps`. Deliberately NOT auto-saved —
+    // the user reviews/edits and presses Save themselves (suggest-don't-act).
+    window.dispatchEvent(
+      new CustomEvent("ij:load-workflow", { detail: starterLoadDetail(s) }),
+    );
+    setLoadedName(s.name);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  return (
+    <Card
+      title="Templates"
+      icon={<LayoutTemplate size={15} />}
+      right={
+        <button
+          type="button"
+          onClick={() => setUserToggle(!expanded)}
+          className="text-[11.5px] text-zinc-400 transition-colors hover:text-accent-soft"
+        >
+          {expanded ? "Hide" : `Show ${STARTERS.length}`}
+        </button>
+      }
+    >
+      {!expanded ? (
+        <p className="text-xs text-zinc-500">
+          {STARTERS.length} starter workflows — client intake, month-end close,
+          weekly digest and more. Load one onto the canvas and make it yours.
+        </p>
+      ) : (
+        <>
+          {!hasSaved && !loading && !error && (
+            <p className="mb-3 text-xs text-zinc-500">
+              No saved workflows yet — start from one of these. Loading a
+              template only fills the editor above; nothing is saved until you
+              press Save.
+            </p>
+          )}
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {STARTERS.map((s) => (
+              <div
+                key={s.name}
+                className="flex flex-col rounded-xl border border-white/[0.06] bg-white/[0.02] p-3"
+              >
+                <div className="text-[13px] font-medium text-zinc-100">
+                  {s.title}
+                </div>
+                <div className="mt-0.5 text-[10.5px] uppercase tracking-[0.08em] text-zinc-500">
+                  {starterKindSummary(s)}
+                </div>
+                <p className="mt-1.5 flex-1 text-[12px] leading-relaxed text-zinc-400">
+                  {s.blurb}
+                </p>
+                <div className="mt-2.5 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => loadStarter(s)}
+                    className="rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-[11.5px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.14]"
+                  >
+                    Load into editor
+                  </button>
+                  {loadedName === s.name && (
+                    <span className="text-[11px] text-zinc-500">
+                      Loaded above — press Save to keep it.
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Run history                                                                */
+/* -------------------------------------------------------------------------- */
+
 type StepOut = {
   session_id?: string | null;
   status?: string;
@@ -266,8 +378,11 @@ type StepOut = {
   tool?: string | null;
 };
 
-/** The ordered step definitions the run was created with. */
-function parseStepDefs(r: WorkflowRun): StepDef[] {
+/** The ordered step definitions the run was created with — the ONE shared
+ *  step shape (v1.170.0); this file used to keep its own two-field copy.
+ *  isLiveRun / runBadgeTone / stepKindHint live in workflow/starters.ts (a
+ *  page file may export nothing beyond its default). */
+function parseStepDefs(r: WorkflowRun): Partial<WorkflowStep>[] {
   try {
     const p = JSON.parse(String((r as { steps_json?: string }).steps_json ?? "[]"));
     return Array.isArray(p) ? p : [];
@@ -327,6 +442,34 @@ function RunHistory() {
   const [answerDraft, setAnswerDraft] = useState<Record<string, string>>({});
   const [answeringId, setAnsweringId] = useState<string | null>(null);
   const [answerErr, setAnswerErr] = useState<string | null>(null);
+  // Resume-from-interrupted (v1.170.0, contract 4).
+  const [resumingRunId, setResumingRunId] = useState<string | null>(null);
+  const [resumeErr, setResumeErr] = useState<{ id: string; message: string } | null>(
+    null,
+  );
+
+  async function resumeRun(runId: string) {
+    if (resumingRunId) return;
+    setResumingRunId(runId);
+    setResumeErr(null);
+    try {
+      await post(`/workflows/runs/${encodeURIComponent(runId)}/resume`, {});
+      reload();
+    } catch (e) {
+      // 409 = the run is no longer interrupted (finished, or already resumed
+      // elsewhere) — the server's message says which; show it, don't guess.
+      setResumeErr({
+        id: runId,
+        message: e instanceof ApiError ? e.message : String(e),
+      });
+      // The 409 is proof our local record is STALE ("interrupted" is terminal,
+      // so no poll would ever correct it) — refetch so the row agrees with the
+      // error message beside it instead of keeping a clickable Resume button.
+      reload();
+    } finally {
+      setResumingRunId(null);
+    }
+  }
 
   async function submitAnswer(runId: string) {
     const text = (answerDraft[runId] ?? "").trim();
@@ -358,6 +501,18 @@ function RunHistory() {
 
   const offline = error && error.status === 0;
   const runs = data?.runs ?? [];
+
+  // While any run is live (running / waiting / resuming — the shared
+  // WORKFLOW_RUN_TERMINAL set decides), keep the table fresh: a resumed run's
+  // progress emits no workflow.completed until the END, so events alone leave
+  // the history stale for the whole run.
+  const hasLive = runs.some(isLiveRun);
+  useEffect(() => {
+    if (!hasLive) return;
+    const id = setInterval(reload, 5000);
+    return () => clearInterval(id);
+  }, [hasLive, reload]);
+
   // Newest first (records carry a started_at timestamp).
   const ordered = [...runs].sort((a, b) => {
     const ta = new Date(runTimestamp(a) ?? 0).getTime();
@@ -423,7 +578,32 @@ function RunHistory() {
                         {r.workflow_name || "—"}
                       </td>
                       <td className="px-2 py-2.5">
-                        <Badge value={r.status || "unknown"} />
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge
+                            value={r.status || "unknown"}
+                            tone={runBadgeTone(r.status)}
+                          />
+                          {r.status === "interrupted" && r.id != null && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void resumeRun(String(r.id));
+                              }}
+                              disabled={resumingRunId != null}
+                              className="rounded-lg border border-accent/30 bg-accent/[0.08] px-2 py-0.5 text-[11px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
+                            >
+                              {resumingRunId === String(r.id)
+                                ? "Resuming…"
+                                : "Resume"}
+                            </button>
+                          )}
+                        </div>
+                        {resumeErr && resumeErr.id === String(r.id) && (
+                          <p className="mt-1 text-[11px] text-rose-300">
+                            {resumeErr.message}
+                          </p>
+                        )}
                       </td>
                       <td className="px-2 py-2.5 text-zinc-400">
                         {n} session{n === 1 ? "" : "s"}
@@ -439,6 +619,7 @@ function RunHistory() {
                             <div className="mb-2 text-[12px] text-amber-300/80">
                               This run was interrupted (the daemon restarted
                               mid-run) — steps below reflect how far it got.
+                              Resume continues from the first unfinished step.
                             </div>
                           )}
                           {r.status === "waiting" && (
@@ -507,9 +688,15 @@ function RunHistory() {
                                     <span className="text-[13px] font-medium text-zinc-100">
                                       {nm}
                                     </span>
-                                    {d.agent && (
+                                    {(d.kind ?? "agent") === "agent" &&
+                                      d.agent && (
+                                        <span className="text-[11px] text-zinc-500">
+                                          · {d.agent}
+                                        </span>
+                                      )}
+                                    {stepKindHint(d) && (
                                       <span className="text-[11px] text-zinc-500">
-                                        · {d.agent}
+                                        · {stepKindHint(d)}
                                       </span>
                                     )}
                                     <Badge value={st} />

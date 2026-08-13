@@ -179,6 +179,34 @@ export interface WorkflowRun {
   [k: string]: unknown;
 }
 
+/** ONE step shape for every workflow surface (v1.170.0). The engine's real
+ * 9-field Step (engine.py:59-76); this type used to be re-declared in five
+ * frontend places with drift between them. All fields beyond `name` optional
+ * — the engine coerces absent kind→agent, on_failure→halt. */
+export interface WorkflowStep {
+  name: string;
+  kind?: "agent" | "tool" | "ask" | "notify" | string;
+  agent?: string;
+  task?: string;
+  tool?: string | null;
+  args?: Record<string, unknown>;
+  message?: string;
+  on_failure?: "halt" | "retry" | "skip" | string;
+  group?: string | null;
+}
+
+/** ONE terminal-status set for run polling (v1.170.0) — the canvas, the draft
+ * card, and the run history each kept their own copy with different contents.
+ * `waiting` (parked on an ask) and `resuming` (answer claimed) are NOT
+ * terminal; keep polling through both. */
+export const WORKFLOW_RUN_TERMINAL = new Set<string>([
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+  "error",
+]);
+
 export interface Tool {
   name: string;
   description: string;

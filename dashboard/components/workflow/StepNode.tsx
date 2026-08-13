@@ -5,6 +5,7 @@
 
 import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { TriangleAlert } from "lucide-react";
 import { agentMeta, KIND_META, type StepKind, type StepNodeData } from "./agents";
 
 const handleClass =
@@ -49,6 +50,18 @@ function StepNodeImpl({ data, selected }: NodeProps) {
           {d.group ? (
             <span className="ml-1 mt-1 inline-flex items-center rounded-full border border-white/[0.1] px-1.5 py-px text-[10px] text-zinc-500">
               ∥ {d.group}
+            </span>
+          ) : null}
+          {d.group && d.groupSplit ? (
+            // DAG honesty (v1.170.0): the engine only runs a group together
+            // when its members are ADJACENT in step order — a split group runs
+            // as separate batches, so say so on the card, not after the run.
+            <span
+              data-testid="group-split-warning"
+              title={`Group “${d.group}” is split by other steps — the split parts run separately, not together. Make the group's steps adjacent to run them in parallel.`}
+              className="ml-1 mt-1 inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-300"
+            >
+              <TriangleAlert size={10} /> group split
             </span>
           ) : null}
         </div>

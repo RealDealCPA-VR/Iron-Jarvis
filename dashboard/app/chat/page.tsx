@@ -108,7 +108,10 @@ import {
   CompactionChip,
   type CompactionInfo,
 } from "@/components/chat/CompactionCard";
-import { WorkflowDraftCard } from "@/components/chat/WorkflowDraftCard";
+import {
+  WorkflowDraftCard,
+  WorkflowRunChip,
+} from "@/components/chat/WorkflowDraftCard";
 import { RunResultCard, type RunResult } from "@/components/chat/RunResultCard";
 import { DraftCard, draftFromFence } from "@/components/chat/DraftCard";
 import { TurnReceipt, type TurnRoute } from "@/components/chat/TurnReceipt";
@@ -122,7 +125,7 @@ import {
 } from "@/components/chat/ArtifactsRail";
 import { PreflightNote } from "@/components/chat/PreflightNote";
 import { useProviderHealth } from "@/lib/useProviderHealth";
-import type { WorkflowDraft } from "@/lib/types";
+import type { WorkflowDraft, WorkflowRun } from "@/lib/types";
 import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
 import { timeAgo } from "@/lib/format";
 import { slashTokenAt, tokenAt, spliceToken } from "@/lib/slash";
@@ -221,6 +224,11 @@ interface ChatMessage {
   /** The turn proposed a reusable workflow — rendered as a draft card
    *  (v1.120.0). Persists with the thread like every other field. */
   workflowDraft?: WorkflowDraft;
+  /** The turn RAN a saved workflow via the workflow_run tool (v1.170.0,
+   *  contract 2) — or the user started one from the "+" menu. Rendered as a
+   *  live WorkflowRunChip under the message; persists with the thread, and on
+   *  reload the chip's run-record poll settles the final truth. */
+  workflowRun?: { runId: string; name: string };
   /** The agent session that produced this reply — the "Keep this as a
    *  workflow?" chip's hook (v1.120.0). */
   fromSession?: string;
@@ -279,6 +287,9 @@ interface ChatResponse {
   escalate_agent?: string | null;
   /** The turn proposed a reusable workflow instead of prose (v1.120.0). */
   workflow_draft?: WorkflowDraft | null;
+  /** The turn's tool loop executed workflow_run successfully (v1.170.0,
+   *  contract 2): {run_id, name}. Absent otherwise (failed tool → absent). */
+  workflow_run?: { run_id?: string; name?: string } | null;
   /** What the turn cost against the answering model's context window
    *  (v1.146.0) — drives the composer's headroom meter. */
   context?: ContextUsage | null;
@@ -288,6 +299,20 @@ interface ChatResponse {
  *  the user typed after "@" — the source prefix is plumbing, not identity. */
 function agentDisplayName(key: string): string {
   return key.includes(":") ? key.slice(key.indexOf(":") + 1) : key;
+}
+
+/** Validate a wire `workflow_run` payload (v1.170.0, contract 2) into the
+ *  message field, or null. A payload without a run id renders NOTHING — a chip
+ *  that can never reconcile against a run record would spin forever, which is
+ *  worse than no chip. Shared by BOTH chat lanes so they cannot drift. */
+function workflowRunFrom(raw: unknown): { runId: string; name: string } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as { run_id?: unknown; name?: unknown };
+  const runId = typeof r.run_id === "string" ? r.run_id.trim() : "";
+  if (!runId) return null;
+  const name =
+    typeof r.name === "string" && r.name.trim() ? r.name.trim() : "workflow";
+  return { runId, name };
 }
 
 /** Human wording for a run phase (v1.149.0). An unknown phase falls through to
@@ -1562,10 +1587,20 @@ export default function ChatPage() {
   const [projectView, setProjectView] = useState<"chat" | ProjectSurfaceView>(
     "chat",
   );
-  // Which "+" submenu flyout is open (skills / connectors / project).
+  // Which "+" submenu flyout is open (skills / connectors / project /
+  // workflows).
   const [plusSub, setPlusSub] = useState<
-    "skills" | "connectors" | "project" | null
+    "skills" | "connectors" | "project" | "workflows" | null
   >(null);
+  // Saved workflow defs for the "+" menu's "Run a workflow…" flyout
+  // (v1.170.0). null = not fetched yet (the flyout shows a loader);
+  // "error" = the daemon didn't answer — a DISTINCT state, because rendering
+  // the genuine-empty copy on a failed fetch would claim "you have none"
+  // when the truth is "I couldn't ask".
+  const [savedWorkflows, setSavedWorkflows] = useState<
+    { name: string; description?: string }[] | "error" | null
+  >(null);
+  const workflowsFetchedRef = useRef(false);
   // The minimalist bottom-right model switcher: name + chevron, no box;
   // opens a provider list whose ▸ flyouts hold that provider's models.
   const modelPopRef = useRef<HTMLDivElement>(null);
@@ -2794,6 +2829,61 @@ export default function ChatPage() {
       });
   }
 
+  /** Lazily fetch the saved workflow defs (the "+" Run-a-workflow flyout,
+   *  v1.170.0). Fetch once, retry on the next open. A FAILED fetch sets the
+   *  "error" sentinel, never [] — the empty state is a positive factual claim
+   *  ("you have none") the daemon never made. */
+  function ensureWorkflows() {
+    if (workflowsFetchedRef.current) return;
+    workflowsFetchedRef.current = true;
+    get<{ workflows: { name: string; description?: string }[] }>("/workflows")
+      .then((d) => setSavedWorkflows(d.workflows ?? []))
+      .catch(() => {
+        workflowsFetchedRef.current = false; // a later open retries
+        setSavedWorkflows("error");
+      });
+  }
+
+  /** Start a SAVED workflow from the "+" menu (v1.170.0). NAME-ONLY body
+   *  (contract 1): the daemon resolves the stored steps AND the project pin
+   *  server-side — sending steps here would silently strip the pin. The run
+   *  lands in the thread as a local card row carrying the live chip, and on a
+   *  USER-owned thread it persists like any other message so the chip survives
+   *  navigation (its run-record poll settles the final truth on reload). On a
+   *  daemon-owned MESSAGING thread it could NOT persist (queueSave no-ops and
+   *  refetchCommThread is replace-only), so the entry point is disabled there
+   *  and this refuses defensively rather than launch a run nothing watches. */
+  async function runSavedWorkflow(name: string) {
+    setToolsOpen(false);
+    setPlusSub(null);
+    setError(null);
+    if (commMetaRef.current) {
+      setError(
+        "This messaging thread is server-owned, so the run card can't persist here — run it from the Workflows page instead.",
+      );
+      return;
+    }
+    try {
+      const rec = await post<WorkflowRun>("/workflows/run", { name });
+      const runId = String(rec.id ?? "");
+      if (!runId) throw new Error("the run record came back without an id");
+      const next: ChatMessage[] = [
+        ...messagesRef.current,
+        {
+          role: "assistant",
+          content: `Started the “${name}” workflow — it runs here.`,
+          workflowRun: { runId, name },
+        },
+      ];
+      pinnedRef.current = true; // the new row scrolls into view
+      setMessages(next);
+      queueSave(next);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 0) setOffline(true);
+      else setError(e instanceof ApiError ? e.message : String(e));
+    }
+  }
+
   // The "+" Connectors flyout: every ESTABLISHED connector (catalog + the
   // user's own MCP servers + memory sources/brains) gets an on/off toggle for
   // this conversation, plus a few not-yet-connected marketplace teasers so the
@@ -3693,6 +3783,9 @@ export default function ChatPage() {
     try {
       // --- Attempt token streaming (live deltas + tool cards + voice) ---
       try {
+        const streamRes = await stream.run(body, (_delta, full) =>
+          feedTTS(full, false),
+        );
         const {
           reply,
           tools_used,
@@ -3705,7 +3798,7 @@ export default function ChatPage() {
           escalateAgent,
           workflowDraft,
           context: ctxUsage,
-        } = await stream.run(body, (_delta, full) => feedTTS(full, false));
+        } = streamRes;
         if (chatGenRef.current !== gen) return; // torn down mid-stream
         if (ctxUsage) setContextUsage(ctxUsage);
         // One tick so the final tool_call frame's state flush lands before the
@@ -3722,10 +3815,20 @@ export default function ChatPage() {
         // Accountability fields (v1.165.0): stored PER MESSAGE so the receipt
         // under each reply keeps telling the truth after restarts, not just on
         // the turn it streamed in.
+        // Contract 2 (v1.170.0): the turn's tool loop ran workflow_run — the
+        // chip under this reply lets the user watch the run where they stand.
+        // useChatStream now decodes the done frame's `workflow_run` into the
+        // typed `workflowRun` result field (coordinator integration); the raw
+        // fallback stays for one release of belt-and-braces.
+        const wfRun = workflowRunFrom(
+          streamRes.workflowRun ??
+            (streamRes as unknown as { workflow_run?: unknown }).workflow_run,
+        );
         const receipt = {
           ...(route ? { route } : {}),
           ...(deniedTools?.length ? { deniedTools } : {}),
           ...(madeDocs?.length ? { documents: madeDocs } : {}),
+          ...(wfRun ? { workflowRun: wfRun } : {}),
         };
         const full: ChatMessage[] = [
           ...history,
@@ -3843,10 +3946,14 @@ export default function ChatPage() {
       // Accountability fields (v1.165.0) — the POST lane's copy of the stream
       // lane's `receipt`. MIRROR NOTE: keep in step with the stream path above.
       const deniedPost = (res.denied_tools ?? []).filter(Boolean);
+      // Contract 2 (v1.170.0) — the POST lane's copy of the stream lane's
+      // workflow_run handling. MIRROR NOTE: keep in step with the stream path.
+      const wfRunPost = workflowRunFrom(res.workflow_run);
       const receiptPost = {
         ...(res.route ? { route: res.route } : {}),
         ...(deniedPost.length ? { deniedTools: deniedPost } : {}),
         ...(res.documents?.length ? { documents: res.documents } : {}),
+        ...(wfRunPost ? { workflowRun: wfRunPost } : {}),
       };
       const full: ChatMessage[] = [
         ...history,
@@ -3871,6 +3978,8 @@ export default function ChatPage() {
             workflowDraft: res.workflow_draft,
             ...(toolsUsed.length ? { toolsUsed } : {}),
             ...(viaPost ? { viaProvider: viaPost } : {}),
+            // A run started earlier in the same turn survives the draft exit.
+            ...(wfRunPost ? { workflowRun: wfRunPost } : {}),
           },
         ];
         setMessages(done);
@@ -5262,6 +5371,13 @@ export default function ChatPage() {
                               </Bubble>
                             )}
                             <WorkflowDraftCard draft={m.workflowDraft} events={events} />
+                            {m.workflowRun && (
+                              <WorkflowRunChip
+                                runId={m.workflowRun.runId}
+                                name={m.workflowRun.name}
+                                events={events}
+                              />
+                            )}
                           </div>
                         );
                       // v1.150.0: a panel reply is attributed. Without a name on
@@ -5350,6 +5466,22 @@ export default function ChatPage() {
                           {m.interrupted && (
                             <div className="ml-11 mt-1 text-[11px] italic text-amber-400/80">
                               interrupted — the reply was cut off
+                            </div>
+                          )}
+                          {/* v1.170.0: the turn RAN a workflow (the model via
+                              the workflow_run tool, or the user from the "+"
+                              menu) — the live chip renders where the user is
+                              standing, INSIDE the generic branch so the reply
+                              keeps every standard affordance: hover actions,
+                              sources, receipt, regenerate. A forked branch
+                              here once silently dropped all of them. */}
+                          {m.workflowRun && (
+                            <div className="mt-2">
+                              <WorkflowRunChip
+                                runId={m.workflowRun.runId}
+                                name={m.workflowRun.name}
+                                events={events}
+                              />
                             </div>
                           )}
                           {/* Honesty chip: the reply came from a DIFFERENT
@@ -6028,6 +6160,83 @@ export default function ChatPage() {
                                 </button>
                               ))
                             )}
+                          </div>
+                        )}
+                      </div>
+                      {/* Run a SAVED workflow from where the user is standing
+                          (v1.170.0): one click starts it name-only (contract 1
+                          — the daemon resolves stored steps + project pin) and
+                          the live chip lands in the thread as a card row.
+                          DISABLED on MESSAGING threads: the daemon owns those
+                          transcripts (queueSave no-ops and every
+                          chat.thread_updated refetch is replace-only), so the
+                          card row would be silently deleted mid-run — same
+                          guard regenerate uses. */}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPlusSub(
+                              plusSub === "workflows" ? null : "workflows",
+                            );
+                            ensureWorkflows();
+                          }}
+                          aria-expanded={plusSub === "workflows"}
+                          disabled={Boolean(commMeta)}
+                          title={
+                            commMeta
+                              ? "This messaging thread is server-owned, so the run card can't persist here — run it from the Workflows page instead."
+                              : undefined
+                          }
+                          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                        >
+                          <GitBranch size={14} className="shrink-0 text-zinc-400" />
+                          Run a workflow…
+                          <ChevronRight size={13} className="ml-auto shrink-0 text-zinc-500" />
+                        </button>
+                        {plusSub === "workflows" && (
+                          <div className="absolute bottom-0 left-full z-30 ml-1 max-h-64 w-64 overflow-y-auto rounded-xl border border-white/10 bg-zinc-900 p-1 shadow-lg shadow-black/40">
+                            {savedWorkflows === null ? (
+                              <div className="px-2.5 py-2">
+                                <LoaderInline />
+                              </div>
+                            ) : savedWorkflows === "error" ? (
+                              <p className="px-2.5 py-2 text-[11px] leading-relaxed text-amber-300/90">
+                                Couldn&apos;t load workflows — reopen to retry.
+                              </p>
+                            ) : savedWorkflows.length === 0 ? (
+                              <p className="px-2.5 py-2 text-[11px] leading-relaxed text-zinc-500">
+                                No saved workflows yet — draft one by asking,
+                                or open the editor.
+                              </p>
+                            ) : (
+                              savedWorkflows.map((w) => (
+                                <button
+                                  key={w.name}
+                                  type="button"
+                                  onClick={() => void runSavedWorkflow(w.name)}
+                                  title={w.description || `Run “${w.name}” now`}
+                                  className="flex w-full flex-col rounded-lg px-2.5 py-1.5 text-left text-zinc-200 transition-colors hover:bg-white/[0.06]"
+                                >
+                                  <span className="truncate text-[12.5px]">
+                                    {w.name}
+                                  </span>
+                                  {w.description && (
+                                    <span className="truncate text-[10.5px] text-zinc-500">
+                                      {w.description}
+                                    </span>
+                                  )}
+                                </button>
+                              ))
+                            )}
+                            <Link
+                              href="/workflows"
+                              onClick={() => setToolsOpen(false)}
+                              className="mt-0.5 flex w-full items-center gap-2 rounded-lg border-t hairline px-2.5 py-2 text-left text-[12px] text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-accent-soft"
+                            >
+                              <ExternalLink size={13} className="shrink-0" />
+                              Open the editor ↗
+                            </Link>
                           </div>
                         )}
                       </div>

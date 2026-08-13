@@ -36,6 +36,7 @@ to the prep or the escalate branch here must land in the stream copy too
 
 from __future__ import annotations
 
+import json as _json
 import logging
 import re as _re
 
@@ -376,6 +377,98 @@ def _profile_section(platform) -> str:
     return f"\n\n{block}" if block else ""
 
 
+#: Char bound for the saved-workflows LINE (v1.170.0) — the section's
+#: ``\n\n# Saved workflows\n`` header (~20 chars) rides on top of it. Charged
+#: on EVERY chat request, so an install with dozens of workflows lists the
+#: newest entries and honestly counts the rest instead of growing without
+#: limit.
+_SAVED_WORKFLOWS_CHARS = 400
+
+
+def _saved_workflows_block(platform) -> str:
+    """The user's saved workflows as a prompt SECTION ("" or ``"\\n\\n" + block``).
+
+    Chat can RUN a saved workflow (v1.170.0), but the tools' schemas name no
+    names — without this line the model cannot know "client-intake" exists and
+    so can never suggest running it. ONE bounded line: newest first (a workflow
+    touched yesterday beats one from March), each entry
+    ``name (N steps[, pinned to X])`` where X is the pinned project's NAME when
+    it resolves (the raw id otherwise — an unreadable pin is still a pin), and
+    an honest ``(+N more)`` count when the ``_SAVED_WORKFLOWS_CHARS`` budget
+    clips the list (the LINE is bounded at that figure; the section header
+    rides on top). "" when nothing is saved. Best-effort and never raises: a
+    broken store must not break a chat turn.
+
+    Every interpolated string is FLATTENED to one physical line first: names
+    are stored VERBATIM (``POST /workflows`` and the ``workflow_create`` tool
+    both accept arbitrary text), so a name carrying newlines + ``#`` would
+    otherwise become its own forged markdown section in every later system
+    prompt — the exact injection ``_sanitize_draft`` slugs DRAFT names against.
+    """
+
+    def _flat(s: object) -> str:
+        return _re.sub(r"\s+", " ", str(s)).strip()
+
+    try:
+        from ..workflows.store import WorkflowStore
+
+        store = WorkflowStore(platform.engine)
+        rows = store.list()
+        if not rows:
+            return ""
+        pins = store.pins()
+        proj_names: dict[str, str] = {}
+        if pins:
+            try:
+                from ..core.models import Project
+
+                with session_scope(platform.engine) as db:
+                    for _pid in set(pins.values()):
+                        _p = db.get(Project, _pid)
+                        if _p is not None and (_p.name or "").strip():
+                            proj_names[_pid] = _p.name.strip()
+            except Exception:  # noqa: BLE001 — the id still identifies the pin
+                proj_names = {}
+        rows.sort(key=lambda r: r.updated_at or r.created_at, reverse=True)
+        prefix = "Saved workflows: "
+        # Reserve room for the prefix and the widest clip note THIS row count
+        # can produce (a fixed " (+999 more)" reserve under-reserved at >=1000
+        # rows and overran the bound by a char), so the WHOLE line provably
+        # fits the bound.
+        budget = _SAVED_WORKFLOWS_CHARS - len(prefix) - len(f" (+{len(rows)} more)")
+        entries: list[str] = []
+        used = 0
+        for r in rows:
+            try:
+                n = len(_json.loads(r.steps_json or "[]"))
+            except (TypeError, ValueError):
+                n = 0
+            # _flat: a stored name/pin label must never carry a newline into
+            # the system prompt (see the docstring — forged-section injection).
+            entry = f"{_flat(r.name or '')} ({n} step{'' if n == 1 else 's'}"
+            pid = pins.get(r.name)
+            if pid:
+                entry += f", pinned to {_flat(proj_names.get(pid, pid))}"
+            entry += ")"
+            sep = 2 if entries else 0
+            if used + sep + len(entry) > budget:
+                break
+            entries.append(entry)
+            used += sep + len(entry)
+        left = len(rows) - len(entries)
+        if not entries:
+            # Even the first entry overflows — still say the workflows EXIST.
+            line = f"{prefix}{len(rows)} saved (names too long to list)"
+        else:
+            line = prefix + ", ".join(entries)
+            if left:
+                line += f" (+{left} more)"
+        return "\n\n# Saved workflows\n" + line
+    except Exception:  # noqa: BLE001 — awareness must never break a turn
+        log.warning("saved-workflows block failed (turn continues)", exc_info=True)
+        return ""
+
+
 def _last_user_text(messages) -> str:
     """The latest user message's text — the false-positive guard for the
     language check (a question ASKED in Chinese may be answered in Chinese)."""
@@ -678,11 +771,22 @@ _WORKFLOW_DRAFT_SPEC = {
             "description": {"type": "string", "description": "one line"},
             "steps": {
                 "type": "array",
-                "description": "2-6 ordered steps; each runs `agent` on `task`",
+                "description": (
+                    "2-6 ordered steps. `kind` decides what a step IS: agent "
+                    "(the default) runs `agent` on `task`; tool calls `tool` "
+                    "with `args`; ask pauses the run to ask the user "
+                    "`message`; notify sends the user `message`."
+                ),
                 "items": {
                     "type": "object",
                     "properties": {
                         "name": {"type": "string"},
+                        "kind": {
+                            "type": "string",
+                            "description": (
+                                "agent | tool | ask | notify (default agent)"
+                            ),
+                        },
                         "agent": {
                             "type": "string",
                             "description": (
@@ -694,8 +798,36 @@ _WORKFLOW_DRAFT_SPEC = {
                             "type": "string",
                             "description": "a clear, self-contained instruction",
                         },
+                        "tool": {
+                            "type": "string",
+                            "description": "kind=tool only: the tool to call",
+                        },
+                        "args": {
+                            "type": "object",
+                            "description": (
+                                "kind=tool only: the tool's arguments; "
+                                "{{Step Name}} inserts an earlier step's output"
+                            ),
+                        },
+                        "message": {
+                            "type": "string",
+                            "description": (
+                                "kind=ask: the question to ask the user; "
+                                "kind=notify: the notice to send"
+                            ),
+                        },
+                        "on_failure": {
+                            "type": "string",
+                            "description": "halt | retry | skip (default halt)",
+                        },
+                        "group": {
+                            "type": "string",
+                            "description": (
+                                "adjacent steps sharing a group run in parallel"
+                            ),
+                        },
                     },
-                    "required": ["name", "task"],
+                    "required": ["name"],
                 },
             },
         },
@@ -714,7 +846,19 @@ def _sanitize_draft(args: dict | None) -> dict | None:
     sessions), task length capped, step names DEDUPED (live-run state and the
     engine's outputs are name-keyed), and the workflow name slugged to a safe
     charset (a "/" in a name makes the saved row unreachable through the
-    GET/DELETE /workflows/{name} routes)."""
+    GET/DELETE /workflows/{name} routes).
+
+    v1.170.0 widens the accepted shape to the engine's FULL step kinds —
+    agent | tool | ask | notify. kind/on_failure clamp through the ENGINE's
+    own vocabularies (imported, so the two can never drift), tool/group slug
+    to the same safe charset as names (group additionally capped at 40 —
+    it is a grouping label, not prose), args stay SHALLOW with every value
+    stringified and bounded (a nested payload is serialized JSON, which the
+    engine's templating treats as an opaque string), and message is bounded.
+    A pre-v1.170.0 agent-only draft sanitizes to the same name/agent/task
+    values as before — the new keys just carry their defaults."""
+    from ..workflows.engine import ON_FAILURE, STEP_KINDS
+
     args = args or {}
     steps: list[dict] = []
     seen_names: set[str] = set()
@@ -723,10 +867,40 @@ def _sanitize_draft(args: dict | None) -> dict | None:
             continue
         task = str(s.get("task") or "").strip()[:4000]
         name = str(s.get("name") or "").strip()
-        if not task and not name:
+        message = str(s.get("message") or "").strip()[:2000]
+        # An ask/notify step legitimately carries ONLY a message — it must
+        # survive; a step with none of the three has nothing to run.
+        if not task and not name and not message:
             continue
         agent = str(s.get("agent") or "builder").strip().lower()
-        base = (name or task)[:80]
+        kind = str(s.get("kind") or "agent").strip().lower()
+        on_failure = str(s.get("on_failure") or "halt").strip().lower()
+        tool = (
+            _re.sub(r"[^\w.-]+", "-", str(s.get("tool") or "").strip())
+            .strip("-._")[:80]
+            or None
+        )
+        group = (
+            _re.sub(r"[^\w.-]+", "-", str(s.get("group") or "").strip())
+            .strip("-._")[:40]
+            or None
+        )
+        raw_args = s.get("args")
+        step_args: dict[str, str] = {}
+        if isinstance(raw_args, dict):
+            for k, v in list(raw_args.items())[:16]:
+                key = str(k).strip()[:80]
+                if not key:
+                    continue
+                if isinstance(v, str):
+                    sv = v
+                else:
+                    try:
+                        sv = _json.dumps(v, default=str)
+                    except (TypeError, ValueError):
+                        sv = str(v)
+                step_args[key] = sv[:2000]
+        base = (name or task or message)[:80]
         uniq, i = base, 2
         while uniq in seen_names:
             uniq = f"{base[:76]}-{i}"
@@ -737,7 +911,12 @@ def _sanitize_draft(args: dict | None) -> dict | None:
                 "name": uniq,
                 "agent": agent if agent in _WORKFLOW_DRAFT_AGENTS else "builder",
                 "task": task or name,
-                "tool": None,
+                "tool": tool,
+                "kind": kind if kind in STEP_KINDS else "agent",
+                "on_failure": on_failure if on_failure in ON_FAILURE else "halt",
+                "group": group,
+                "args": step_args,
+                "message": message,
             }
         )
     if not steps:
@@ -1270,6 +1449,15 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 — the roster must never break a turn
         pass
 
+    # SAVED WORKFLOWS (v1.170.0): the bounded one-line map of the user's
+    # stored workflows, so the model can suggest (and, with workflow_run
+    # armed, actually start) a process the user already built instead of
+    # re-deriving its steps. Added HERE — before the budget planner runs —
+    # so its cost is priced like every other section (the repo rule).
+    # MIRROR NOTE (lock-step): routes/chat.py POST /chat/stream carries this
+    # same line — edit both or neither.
+    system += _saved_workflows_block(platform)
+
     # CONTEXT PROTECTION (v1.146.0): the history is budgeted against the WINDOW
     # of the model that will answer, not sliced at a fixed 30 messages. The
     # system prompt is finished by this point — profile, project, awareness,
@@ -1422,6 +1610,25 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                 else ""
             )
             + (
+                # Lock-step with routes/chat.py's stream lane (v1.170.0): the
+                # workflow tool sentences, each gated on ITS OWN arming.
+                # workflow_list is auto-safe and routinely arms ALONE while
+                # workflow_run is ask-gated and never auto-armed, so a
+                # combined any() gate had the prompt claim a runnable tool
+                # absent from tool_specs — a lie the model relays. The
+                # saved-workflows LIST rides the prompt above regardless.
+                "\nWORKFLOWS: workflow_list lists the user's saved workflows."
+                if "workflow_list" in armed
+                else ""
+            )
+            + (
+                "\nWORKFLOWS: workflow_run runs a saved workflow by name and"
+                " returns its run id — prefer running a saved workflow over"
+                " redoing its steps by hand."
+                if "workflow_run" in armed
+                else ""
+            )
+            + (
                 f"\nYour file tools operate INSIDE the folder {tool_ws}; "
                 "read, edit, and create files there directly, and use the absolute paths "
                 "that file_search returns."
@@ -1464,6 +1671,7 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     escalate_agent = None   # v1.139.0: validated roster target (None = default)
     workflow_draft = None   # the turn proposed a reusable workflow (v1.120.0)
     made_docs: list[str] = []  # documents this turn created/edited (preview)
+    workflow_run_info = None   # v1.170.0: a workflow this turn STARTED (contract 2)
     try:
         for _round in range(_MAX_TOOL_ROUNDS):
             route = await d.platform.router.complete(
@@ -1544,6 +1752,24 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                 # or failed call is not honestly reported as run.
                 if ran:
                     tools_used.append(tc.name)
+                    # WORKFLOW RUN RECEIPT (v1.170.0, contract 2): a
+                    # SUCCESSFUL workflow_run's {run_id, workflow} rides the
+                    # response as `workflow_run` so the client can render the
+                    # live run under this very reply. Only a run the tool
+                    # actually started counts — a failed/denied call leaves
+                    # the key absent — and only with a real run id, because a
+                    # chip pointing at no run would poll a 404 forever. The
+                    # last successful call wins. MIRROR NOTE (lock-step): the
+                    # stream loop in routes/chat.py carries this same capture
+                    # — edit both or neither.
+                    if tc.name == "workflow_run":
+                        _wr = getattr(result, "data", None) or {}
+                        _wr_id = str(_wr.get("run_id") or "").strip()
+                        if _wr_id:
+                            workflow_run_info = {
+                                "run_id": _wr_id,
+                                "name": str(_wr.get("workflow") or "").strip(),
+                            }
                     # Track created/edited documents (workspace-relative in
                     # the tool result) as ABSOLUTE paths for the preview.
                     if tc.name in _DOC_WRITING_TOOLS:
@@ -1683,7 +1909,7 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                 f"\n\n_Note: {provider_choice} can't run tools — this "
                 f"turn was answered text-only._"
             )
-    return {
+    out: dict[str, Any] = {
         "reply": reply,
         "provider": route.provider,
         "model": route.model,
@@ -1733,3 +1959,11 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         # v1.146.0 field keeps its meaning, so existing clients are untouched.
         "context": {**plan.as_dict(), **context_report},
     }
+    # CONTRACT 2 (v1.170.0): present ONLY when this turn's tool loop actually
+    # started a workflow run — absent otherwise (including failed calls), so
+    # clients key off the key itself, never a null. MIRROR NOTE (lock-step):
+    # the stream done-frame in routes/chat.py carries the same conditional
+    # key — edit both or neither.
+    if workflow_run_info is not None:
+        out["workflow_run"] = workflow_run_info
+    return out

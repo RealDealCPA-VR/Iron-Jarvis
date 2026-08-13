@@ -124,6 +124,14 @@ export const ON_FAILURE_OPTIONS = [
   { key: "skip", label: "Skip it and continue" },
 ] as const;
 
+/** v1.170.0 — deterministic post-step checks ("Prove it"): files the step must
+ *  have produced and/or substrings its summary must contain. Serialized ONLY
+ *  when non-empty so old defs stay byte-identical. */
+export interface StepExpect {
+  files?: string[];
+  summary_contains?: string[];
+}
+
 export interface StepNodeData {
   name: string;
   /** Built-in AgentType OR a dynamic/agent-authored agent name — kept verbatim
@@ -142,8 +150,14 @@ export interface StepNodeData {
   args?: Record<string, unknown>;
   /** v1.121.0 — ask/notify text (the question / the notification). */
   message?: string;
+  /** v1.170.0 — optional deterministic post-step checks (see StepExpect). */
+  expect?: StepExpect | null;
   /** 1-based index shown on the card; kept in sync by the canvas. */
   index?: number;
+  /** v1.170.0 — set by the canvas when this step's parallel group is split by
+   *  other steps in serialized order (split parts run separately, not
+   *  together); StepNode renders the warning chip. Never serialized. */
+  groupSplit?: boolean;
   [key: string]: unknown;
 }
 
@@ -161,6 +175,9 @@ export interface WorkflowDef {
   name: string;
   description?: string;
   steps_json: string;
+  /** Project pin — present on GET /workflows/{name} (v1.170.0: the canvas
+   *  preserves it across runs of an edited def); the list endpoint omits it. */
+  project_id?: string | null;
   created_at?: string;
   updated_at?: string;
 }

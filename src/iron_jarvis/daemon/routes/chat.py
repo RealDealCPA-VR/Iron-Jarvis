@@ -59,6 +59,7 @@ from ..chat_turn import (
     _resolve_connectors,
     _resolve_persona,
     _sanitize_draft,
+    _saved_workflows_block,
     _validated_escalate_agent,
     run_chat_turn,
 )
@@ -1341,6 +1342,15 @@ def register(app: FastAPI, d) -> None:
         except Exception:  # noqa: BLE001 — the roster must never break a turn
             pass
 
+        # SAVED WORKFLOWS (v1.170.0) — the lock-step copy of chat_turn's
+        # injection: the bounded one-line map of the user's stored workflows,
+        # added BEFORE the budget planner runs so its cost is priced (the
+        # repo rule). This is the STREAMING lane — the one the dashboard
+        # uses — so skipping it here would make the model workflow-blind on
+        # every real turn. MIRROR NOTE (lock-step): same line in
+        # chat_turn.run_chat_turn — edit both or neither.
+        system += _saved_workflows_block(d.platform)
+
         # CONTEXT PROTECTION (v1.146.0) + COMPACTION (v1.153.0) — the lock-step
         # copy of chat_turn's. MIRROR NOTE: edit both or neither.
         system, _ctx_messages, context_report = await _apply_compaction(
@@ -1472,6 +1482,26 @@ def register(app: FastAPI, d) -> None:
                     else ""
                 )
                 + (
+                    # Lock-step with chat_turn.py's non-stream lane (v1.170.0):
+                    # the workflow tool sentences, each gated on ITS OWN
+                    # arming. workflow_list is auto-safe and routinely arms
+                    # ALONE while workflow_run is ask-gated and never
+                    # auto-armed, so a combined any() gate had the prompt
+                    # claim a runnable tool absent from tool_specs — a lie
+                    # the model relays. The saved-workflows LIST rides the
+                    # prompt above regardless.
+                    "\nWORKFLOWS: workflow_list lists the user's saved workflows."
+                    if "workflow_list" in armed
+                    else ""
+                )
+                + (
+                    "\nWORKFLOWS: workflow_run runs a saved workflow by name and"
+                    " returns its run id — prefer running a saved workflow over"
+                    " redoing its steps by hand."
+                    if "workflow_run" in armed
+                    else ""
+                )
+                + (
                     f"\nYour file tools operate INSIDE the folder {tool_ws}; "
                     "read, edit, and create files there directly, and use the absolute paths "
                     "that file_search returns."
@@ -1502,6 +1532,7 @@ def register(app: FastAPI, d) -> None:
             escalate_agent = None   # v1.139.0: validated roster target (None = default)
             workflow_draft = None           # proposed reusable workflow (v1.120.0)
             made_docs: list[str] = []           # documents created/edited (preview)
+            workflow_run_info = None    # v1.170.0: workflow this turn STARTED (contract 2)
             reply_text = ""
             route_provider = provider_choice or ""
             route_model = model_choice or ""
@@ -1650,6 +1681,27 @@ def register(app: FastAPI, d) -> None:
                             content = f"{type(exc).__name__}: {exc}"
                         if ran:
                             tools_used.append(tc.name)
+                            # WORKFLOW RUN RECEIPT (v1.170.0, contract 2): a
+                            # SUCCESSFUL workflow_run's {run_id, workflow}
+                            # rides the done frame as `workflow_run` so the
+                            # client renders the live run under this reply.
+                            # Only a run the tool actually started counts —
+                            # a failed/denied call leaves the key absent —
+                            # and only with a real run id, because a chip
+                            # pointing at no run would poll a 404 forever.
+                            # The last successful call wins. MIRROR NOTE
+                            # (lock-step): chat_turn.py's tool loop carries
+                            # this same capture — edit both or neither.
+                            if tc.name == "workflow_run":
+                                _wr = getattr(result, "data", None) or {}
+                                _wr_id = str(_wr.get("run_id") or "").strip()
+                                if _wr_id:
+                                    workflow_run_info = {
+                                        "run_id": _wr_id,
+                                        "name": str(
+                                            _wr.get("workflow") or ""
+                                        ).strip(),
+                                    }
                             # Track created/edited documents for the preview
                             # (mirrors chat_complete).
                             if tc.name in _DOC_WRITING_TOOLS:
@@ -1791,7 +1843,7 @@ def register(app: FastAPI, d) -> None:
                     f"\n\n_Note: {provider_choice} can't run tools — this "
                     f"turn was answered text-only._"
                 )
-            yield _sse("done", {
+            done_frame: dict[str, Any] = {
                 "reply": reply,
                 "provider": route_provider,
                 "model": route_model,
@@ -1823,7 +1875,16 @@ def register(app: FastAPI, d) -> None:
                 # composer's headroom meter and the compaction offer behave
                 # identically on both lanes.
                 "context": {**plan.as_dict(), **context_report},
-            })
+            }
+            # CONTRACT 2 (v1.170.0): present ONLY when this turn's tool loop
+            # actually started a workflow run — absent otherwise (including
+            # failed calls), so clients key off the key itself, never a null.
+            # MIRROR NOTE (lock-step): the non-stream response dict in
+            # chat_turn.py carries the same conditional key — edit both or
+            # neither.
+            if workflow_run_info is not None:
+                done_frame["workflow_run"] = workflow_run_info
+            yield _sse("done", done_frame)
 
         return StreamingResponse(
             gen(),

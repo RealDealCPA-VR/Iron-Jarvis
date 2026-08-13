@@ -531,6 +531,18 @@ def create_app(project_root: str | None = None) -> FastAPI:
             reconcile_interrupted_runs(platform.engine)
 
         _rehydrate_step("reconcile_workflow_runs", _reconcile_workflow_runs)
+
+        def _prune_workflow_runs() -> None:
+            """Run-history retention (v1.170.0): nothing ever deleted these rows
+            and the bell polls the list app-wide. Boot-time sweep; live/waiting
+            rows are untouchable and resumable `interrupted` rows age out only
+            past the store's threshold (so a rendered Resume button doesn't
+            404 the day after a restart)."""
+            from ..workflows.store import prune_runs
+
+            prune_runs(platform.engine, keep=500)
+
+        _rehydrate_step("prune_workflow_runs", _prune_workflow_runs)
         if platform.intent is not None:  # reset proposals stranded 'executing' by a crash
             _rehydrate_step("reconcile_proposals", platform.intent.reconcile_executing_proposals)
 

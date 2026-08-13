@@ -84,6 +84,12 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         # past conversations. Same tier as recall — it only reads what was
         # already said in this app, writes nothing, and leaves the machine never.
         "history_search",
+        # Saved workflows (v1.170.0): READ-ONLY discovery — name/description/
+        # step count/project pin of what the user already saved. Deliberately
+        # NOT workflow_run: starting a run spawns multi-minute agent work with
+        # real side effects, so it stays behind explicit arming + its "ask"
+        # gate (the same tier split as code_search vs code_run).
+        "workflow_list",
     }
 )
 
@@ -295,6 +301,15 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             re.IGNORECASE,
         ),
         {"history_search": 8},
+    ),
+    # --- saved workflows (v1.170.0) ---------------------------------------
+    # "run my month-end workflow", "what workflows do I have" — the module is
+    # reachable from chat. Only the READ-ONLY lister is auto-armed (see the
+    # AUTO_SAFE_TOOLS note); with it in hand the model can name real saved
+    # workflows instead of guessing, and workflow_run stays consent-gated.
+    (
+        re.compile(r"\bworkflows?\b", re.IGNORECASE),
+        {"workflow_list": 7},
     ),
     # --- images -----------------------------------------------------------
     (

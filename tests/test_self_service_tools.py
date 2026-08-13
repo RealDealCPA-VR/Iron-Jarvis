@@ -51,7 +51,12 @@ def test_factories_build_named_tools(tmp_path):
     platform = _platform(tmp_path)
     assert [t.name for t in schedule_tools(platform)] == ["schedule_create"]
     assert [t.name for t in webhook_tools(platform)] == ["webhook_add"]
-    assert [t.name for t in workflow_tools(platform)] == ["workflow_create"]
+    # v1.170.0: chat can list and run saved workflows, not just author them.
+    assert [t.name for t in workflow_tools(platform)] == [
+        "workflow_create",
+        "workflow_list",
+        "workflow_run",
+    ]
 
 
 # --- schedule_create -------------------------------------------------------

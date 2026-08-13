@@ -50,6 +50,24 @@ from .models import WorkflowRunRecord
 _MAX_STEP_SUMMARY = 1500
 _MAX_CONTEXT = 4000
 
+#: v1.170.0 bounds: a pre-seeded run input's value, and a tool step's
+#: structured ``data`` (serialized JSON) persisted on the run record.
+_MAX_INPUT_SUMMARY = 4000
+_MAX_STEP_DATA = 8000
+#: The origin tag's rule (mirrors daemon/schemas._ORIGIN_RE — the charset AND
+#: the {1,64} length). Workflow names come from TOML/user text with no charset
+#: restriction, so the stamp is LAUNDERED, not just clipped: a Session origin
+#: the HTTP schema's validator would reject could never round-trip through
+#: origin-consuming surfaces (the v1.166.0 rule).
+_ORIGIN_MAX = 64
+_ORIGIN_BAD_RX = re.compile(r"[^A-Za-z0-9:_\-. ]")
+
+
+def _workflow_origin(name: str) -> str:
+    """The Session origin stamp for a workflow-spawned step session: charset-
+    laundered (out-of-charset characters become ``_``) and length-clipped."""
+    return _ORIGIN_BAD_RX.sub("_", f"workflow:{name}")[:_ORIGIN_MAX]
+
 #: What a step IS (v1.121.0). Unknown values coerce to "agent".
 STEP_KINDS: tuple[str, ...] = ("agent", "tool", "ask", "notify")
 #: What a failed step does to the run. Unknown values coerce to "halt".
@@ -74,6 +92,10 @@ class Step:
     args: dict = field(default_factory=dict)
     #: v1.121.0 — notify/ask text (templated). For ask, THE question.
     message: str = ""
+    #: v1.170.0 — verified steps: ``{files?: [str], summary_contains?: [str]}``.
+    #: Empty dict = no expectations = zero behavior change. Checks run
+    #: DETERMINISTICALLY after the step completes (see ``_expect_failure``).
+    expect: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -98,6 +120,24 @@ def _agent_type(name: str) -> AgentType:
         return AgentType.BUILDER
 
 
+def _coerce_expect(raw: Any) -> dict:
+    """Coerce a step's ``expect`` declaration to its canonical shape
+    (``{files?: [str], summary_contains?: [str]}``), LENIENTLY — old rows and
+    garbage shapes load as ``{}`` (no expectations), never raise. Recognized
+    keys keep only non-blank string entries; unknown keys are dropped."""
+    if not isinstance(raw, dict):
+        return {}
+    expect: dict = {}
+    for key in ("files", "summary_contains"):
+        vals = raw.get(key)
+        if not isinstance(vals, list):
+            continue
+        cleaned = [str(v).strip() for v in vals if str(v).strip()]
+        if cleaned:
+            expect[key] = cleaned
+    return expect
+
+
 def load_workflow(data: dict) -> WorkflowDef:
     """Build a :class:`WorkflowDef` from a parsed mapping (e.g. TOML/JSON)."""
     steps: list[Step] = []
@@ -116,6 +156,7 @@ def load_workflow(data: dict) -> WorkflowDef:
                 group=(str(raw.get("group") or "").strip() or None),
                 args=args if isinstance(args, dict) else {},
                 message=str(raw.get("message", "")),
+                expect=_coerce_expect(raw.get("expect")),
             )
         )
     return WorkflowDef(
@@ -140,6 +181,7 @@ def step_to_dict(s: Step) -> dict:
         "group": s.group,
         "args": s.args,
         "message": s.message,
+        "expect": s.expect,
     }
 
 
@@ -171,6 +213,12 @@ _TEMPLATE_RX = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
 def render_template(text: str, outputs: dict[str, Any]) -> str:
     """Replace ``{{Step Name}}`` with that step's recorded summary/output.
 
+    ``{{Step Name.data}}`` (v1.170.0) resolves to that step's bounded
+    structured ``data`` — the serialized JSON a tool step recorded — so a
+    downstream step can hand off structure, not just prose. An output whose
+    literal name IS ``Step Name.data`` always wins the reference (the
+    reserved-name spirit of the ``{{Trigger}}`` guard: the def owns its names).
+
     Unknown references render as an empty string rather than leaking the
     braces into an agent prompt or tool argument. Values are clipped so one
     verbose step can't blow up a downstream prompt.
@@ -178,9 +226,22 @@ def render_template(text: str, outputs: dict[str, Any]) -> str:
     def _sub(m: re.Match) -> str:
         ref = m.group(1).strip()
         out = outputs.get(ref)
-        if not isinstance(out, dict):
-            return ""
-        return str(out.get("summary") or "")[:_MAX_STEP_SUMMARY]
+        if isinstance(out, dict):
+            return str(out.get("summary") or "")[:_MAX_STEP_SUMMARY]
+        if ref.endswith(".data"):
+            base = outputs.get(ref[: -len(".data")].strip())
+            if isinstance(base, dict):
+                val = base.get("data")
+                if isinstance(val, str):
+                    return val[:_MAX_STEP_DATA]
+                if val is not None:
+                    try:
+                        return json.dumps(val, ensure_ascii=False, default=str)[
+                            :_MAX_STEP_DATA
+                        ]
+                    except (TypeError, ValueError):
+                        return ""
+        return ""
 
     return _TEMPLATE_RX.sub(_sub, text or "")
 
@@ -199,6 +260,38 @@ def _render_args(args: dict, outputs: dict[str, Any]) -> dict:
         else:
             rendered[k] = v
     return rendered
+
+
+def seed_inputs(
+    workflow: WorkflowDef, inputs: dict[str, str] | None
+) -> dict[str, dict]:
+    """Turn run *inputs* into pre-seeded outputs (v1.170.0, contract 5).
+
+    Each input becomes ``{status: "completed", summary: <value clipped>,
+    kind: "input"}`` under its given name, so ``{{name}}`` templating just
+    works with zero new machinery. A name colliding with a REAL step raises an
+    honest ``ValueError`` (the ``{{Trigger}}`` guard lesson: a pre-seeded
+    output would mark that step completed before it ran) — unlike the
+    synthetic Trigger, an explicit input silently stepping aside would drop
+    data the caller deliberately provided.
+    """
+    seeded: dict[str, dict] = {}
+    for name, value in (inputs or {}).items():
+        key = str(name).strip()
+        if not key:
+            raise ValueError("input names must be non-empty")
+        if any(s.name == key for s in workflow.steps):
+            raise ValueError(
+                f"input '{key}' collides with a step name — the pre-seeded "
+                f"output would mark that step already completed; rename the "
+                f"input or the step"
+            )
+        seeded[key] = {
+            "status": "completed",
+            "summary": str(value)[:_MAX_INPUT_SUMMARY],
+            "kind": "input",
+        }
+    return seeded
 
 
 class _AskPark(Exception):
@@ -239,15 +332,21 @@ class WorkflowEngine:
             (s.name or "").strip() or (s.task or "").strip() for s in steps
         )
 
-    def create_record(self, workflow: WorkflowDef) -> WorkflowRunRecord:
+    def create_record(
+        self, workflow: WorkflowDef, inputs: dict[str, str] | None = None
+    ) -> WorkflowRunRecord:
         """Persist a fresh ``running`` record for *workflow* and return it.
 
         Raises ``ValueError`` for a zero-/empty-step workflow (the route turns
-        that into a 400). ``started_at`` is stamped HERE (at the true start), not
-        at the end. The record is refreshed so it stays usable once detached.
+        that into a 400), and for an *input* whose name collides with a step
+        (contract 5 — same 400 path). ``started_at`` is stamped HERE (at the
+        true start), not at the end. Inputs are seeded into ``outputs_json`` at
+        creation so the record is honest from its first read. The record is
+        refreshed so it stays usable once detached.
         """
         if not self._has_runnable_steps(workflow):
             raise ValueError("workflow has no steps")
+        seeded = seed_inputs(workflow, inputs)
         # FULL step serialization (v1.121.0): a parked run must be resumable
         # from the database alone, so the record carries everything.
         steps_meta = [step_to_dict(s) for s in workflow.steps]
@@ -260,7 +359,7 @@ class WorkflowEngine:
             project_id=workflow.project_id,
             steps_json=dumps(steps_meta),
             session_ids_json="[]",
-            outputs_json="{}",
+            outputs_json=dumps(seeded) if seeded else "{}",
         )
         with session_scope(self.platform.engine) as db:
             db.add(record)
@@ -304,6 +403,7 @@ class WorkflowEngine:
         start_index: int = 0,
         outputs: dict[str, Any] | None = None,
         session_ids: list[str] | None = None,
+        inputs: dict[str, str] | None = None,
     ) -> WorkflowRunRecord:
         """Drive *workflow*'s steps, updating *record* in place as it goes.
 
@@ -314,6 +414,20 @@ class WorkflowEngine:
         A cancel (status flips to ``cancelling`` in the DB, checked before every
         batch, plus the in-flight session is cancelled) stops it ``cancelled``.
         Each later agent step's task is enriched with prior steps' summaries.
+        ``inputs`` (contract 5) seed pre-completed outputs so ``{{name}}``
+        templating resolves them; an explicit ``outputs`` entry wins a key
+        collision (the resume path re-plays outputs that already contain the
+        seeds — re-seeding must not overwrite later truth).
+
+        A step whose recorded output is ALREADY ``completed`` is never
+        re-executed (v1.170.0): its output stands and no step events fire.
+        That is what makes resume honest — re-running a completed notify
+        re-messages the user, a completed tool re-writes files, a completed
+        agent re-spawns a session re-doing finished work. Safe for every
+        caller: ``seed_inputs`` rejects step-name collisions, the reflex
+        Trigger seed steps aside on collision, and ``resume_after_answer``
+        starts past the answered ask, so a pending step can carry a
+        pre-completed output ONLY on a resume replaying recorded truth.
         """
         # Lazy import: the orchestrator pulls in the agent runtime, which would
         # create an import cycle if imported at module load time.
@@ -338,8 +452,17 @@ class WorkflowEngine:
 
         steps = list(workflow.steps)
         session_ids = list(session_ids or [])
-        outputs = dict(outputs or {})
+        outputs = {**seed_inputs(workflow, inputs), **dict(outputs or {})}
         final_status = "completed"
+
+        if outputs:
+            # Resume fidelity (v1.170.0): persist the merged seeds (inputs, a
+            # reflex {{Trigger}}, caller outputs) BEFORE the first batch.
+            # outputs_json was otherwise first written only after batch 1
+            # settled, so a daemon death during the first step lost any
+            # in-memory-only seed and the resumed run silently rendered
+            # {{Trigger}} as '' — different behavior from the original run.
+            self._update_record(run_id, outputs=outputs)
 
         def _completed_chain() -> list[tuple[str, str]]:
             chain = []
@@ -349,113 +472,123 @@ class WorkflowEngine:
                     chain.append((s.name, str(o.get("summary") or "")))
             return chain
 
-        try:
-            for batch in self._batches(steps, start_index):
-                # Cancellation is cooperative: re-read the authoritative status
-                # the cancel route wrote before starting each batch.
-                current = self._get_record(run_id)
-                if current is not None and current.status == "cancelling":
+        for batch in self._batches(steps, start_index):
+            # Cancellation is cooperative: re-read the authoritative status
+            # the cancel route wrote before starting each batch.
+            current = self._get_record(run_id)
+            if current is not None and current.status == "cancelling":
+                final_status = "cancelled"
+                for s in (steps[i] for i in range(batch[0], len(steps))):
+                    outputs.setdefault(s.name, {"status": "skipped"})
+                break
+
+            # Already-completed steps are NOT re-run (see docstring): keep
+            # their recorded output, fire no events, execute only the rest.
+            pending = [
+                i
+                for i in batch
+                if not (
+                    isinstance(outputs.get(steps[i].name), dict)
+                    and outputs[steps[i].name].get("status") == "completed"
+                )
+            ]
+            if not pending:
+                continue
+
+            results = await asyncio.gather(
+                *(
+                    self._exec_step(
+                        orch, run_id, workflow, steps[i], i, len(steps),
+                        outputs, _completed_chain(), workspace_root,
+                        session_ids, tool_workspace,
+                    )
+                    for i in pending
+                ),
+                return_exceptions=True,
+            )
+
+            batch_failed = False
+            batch_cancelled = False
+            ask: _AskPark | None = None
+            for i, res in zip(pending, results):
+                step = steps[i]
+                if isinstance(res, _AskPark):
+                    ask = res
+                    continue
+                if isinstance(res, asyncio.CancelledError):
+                    batch_cancelled = True
+                    outputs.setdefault(step.name, {"status": "cancelled"})
+                    continue
+                if isinstance(res, BaseException):
+                    # An unexpected executor crash is a failed step.
+                    outputs[step.name] = {
+                        "status": "failed",
+                        "summary": f"{type(res).__name__}: {res}",
+                        "kind": step.kind,
+                    }
+                    res = outputs[step.name]
+                outputs[step.name] = res
+                st = res.get("status")
+                if st == "cancelled":
+                    # Whether via the run's cancel route or an out-of-band
+                    # session cancel, a cancelled step must cancel the RUN —
+                    # continuing past the hole (and finalizing "completed")
+                    # would silently drop a middle step's work.
+                    batch_cancelled = True
+                elif st == "failed" and not res.get("handled"):
+                    batch_failed = True
+
+            self._update_record(
+                run_id,
+                current_session_id=None,
+                session_ids=session_ids,
+                outputs=outputs,
+            )
+
+            if ask is not None:
+                latest = self._get_record(run_id)
+                if latest is not None and latest.status == "cancelling":
+                    # A cancel landed while the ask batch executed — honor
+                    # it instead of parking (and notifying) a dead run.
                     final_status = "cancelled"
                     for s in (steps[i] for i in range(batch[0], len(steps))):
                         outputs.setdefault(s.name, {"status": "skipped"})
                     break
-
-                results = await asyncio.gather(
-                    *(
-                        self._exec_step(
-                            orch, run_id, workflow, steps[i], i, len(steps),
-                            outputs, _completed_chain(), workspace_root,
-                            session_ids, tool_workspace,
-                        )
-                        for i in batch
-                    ),
-                    return_exceptions=True,
-                )
-
-                batch_failed = False
-                batch_cancelled = False
-                ask: _AskPark | None = None
-                for i, res in zip(batch, results):
-                    step = steps[i]
-                    if isinstance(res, _AskPark):
-                        ask = res
-                        continue
-                    if isinstance(res, asyncio.CancelledError):
-                        batch_cancelled = True
-                        outputs.setdefault(step.name, {"status": "cancelled"})
-                        continue
-                    if isinstance(res, BaseException):
-                        # An unexpected executor crash is a failed step.
-                        outputs[step.name] = {
-                            "status": "failed",
-                            "summary": f"{type(res).__name__}: {res}",
-                            "kind": step.kind,
-                        }
-                        res = outputs[step.name]
-                    outputs[step.name] = res
-                    st = res.get("status")
-                    if st == "cancelled":
-                        # Whether via the run's cancel route or an out-of-band
-                        # session cancel, a cancelled step must cancel the RUN —
-                        # continuing past the hole (and finalizing "completed")
-                        # would silently drop a middle step's work.
-                        batch_cancelled = True
-                    elif st == "failed" and not res.get("handled"):
-                        batch_failed = True
-
+                # PARK (v1.121.0): the run waits durably for the user.
                 self._update_record(
                     run_id,
-                    current_session_id=None,
-                    session_ids=session_ids,
-                    outputs=outputs,
+                    status="waiting",
+                    waiting_json=dumps(
+                        {"index": ask.index, "step": ask.step, "question": ask.question}
+                    ),
                 )
+                await self.platform.event_bus.publish(
+                    "workflow.waiting",
+                    {
+                        "run_id": run_id,
+                        "workflow": workflow.name,
+                        "step": ask.step,
+                        "question": ask.question,
+                    },
+                )
+                self._deliver(
+                    f"Workflow “{workflow.name}” needs you: {ask.question} "
+                    f"— answer it in chat or on the Workflows page."
+                )
+                refreshed = self._get_record(run_id)
+                return refreshed if refreshed is not None else record
 
-                if ask is not None:
-                    latest = self._get_record(run_id)
-                    if latest is not None and latest.status == "cancelling":
-                        # A cancel landed while the ask batch executed — honor
-                        # it instead of parking (and notifying) a dead run.
-                        final_status = "cancelled"
-                        for s in (steps[i] for i in range(batch[0], len(steps))):
-                            outputs.setdefault(s.name, {"status": "skipped"})
-                        break
-                    # PARK (v1.121.0): the run waits durably for the user.
-                    self._update_record(
-                        run_id,
-                        status="waiting",
-                        waiting_json=dumps(
-                            {"index": ask.index, "step": ask.step, "question": ask.question}
-                        ),
-                    )
-                    await self.platform.event_bus.publish(
-                        "workflow.waiting",
-                        {
-                            "run_id": run_id,
-                            "workflow": workflow.name,
-                            "step": ask.step,
-                            "question": ask.question,
-                        },
-                    )
-                    self._deliver(
-                        f"Workflow “{workflow.name}” needs you: {ask.question} "
-                        f"— answer it in chat or on the Workflows page."
-                    )
-                    refreshed = self._get_record(run_id)
-                    return refreshed if refreshed is not None else record
-
-                if batch_cancelled:
-                    final_status = "cancelled"
-                    for s in (steps[i] for i in range(batch[-1] + 1, len(steps))):
-                        outputs.setdefault(s.name, {"status": "skipped"})
-                    break
-                if batch_failed:
-                    # A halting failure stops the workflow: the rest never ran.
-                    final_status = "failed"
-                    for s in (steps[i] for i in range(batch[-1] + 1, len(steps))):
-                        outputs.setdefault(s.name, {"status": "skipped"})
-                    break
-        finally:
-            pass
+            if batch_cancelled:
+                final_status = "cancelled"
+                for s in (steps[i] for i in range(batch[-1] + 1, len(steps))):
+                    outputs.setdefault(s.name, {"status": "skipped"})
+                break
+            if batch_failed:
+                # A halting failure stops the workflow: the rest never ran.
+                final_status = "failed"
+                for s in (steps[i] for i in range(batch[-1] + 1, len(steps))):
+                    outputs.setdefault(s.name, {"status": "skipped"})
+                break
 
         # A cancel that arrived during the final batch has no later pre-batch
         # check to catch it — re-read so "cancelling" can never finalize as a
@@ -488,7 +621,17 @@ class WorkflowEngine:
     ) -> WorkflowRunRecord:
         """Resume a ``waiting`` run: fold the user's answer into the parked
         ``ask`` step's output and drive the remaining steps. Everything is
-        rebuilt from the database — a parked run survives daemon restarts."""
+        rebuilt from the database — a parked run survives daemon restarts.
+
+        Contract 8 reaches the human gate too (v1.170.0): an ``expect``
+        declared on the ask step runs against the FOLDED answer output —
+        ``summary_contains`` gates the answer text ("User answered: …");
+        ``files`` fails honestly via the not-an-agent/tool branch (an ask
+        produces no files). ``on_failure`` routes as usual: ``skip`` continues
+        with the failure visible, ``retry`` re-parks the question ONCE (a
+        re-attempt of an ask is asking again — tracked durably in
+        ``waiting_json.expect_retries``), ``halt`` fails the run.
+        """
         try:
             waiting = json.loads(record.waiting_json or "{}")
         except (TypeError, ValueError):
@@ -505,8 +648,10 @@ class WorkflowEngine:
         )
         if idx < 0 or idx >= len(wf.steps):
             raise ValueError("this run's parked step could not be reconstructed")
+        step = wf.steps[idx]
+        name = step_name or step.name
         outputs = record and json.loads(record.outputs_json or "{}") or {}
-        outputs[step_name or wf.steps[idx].name] = {
+        folded: dict = {
             "status": "completed",
             "summary": f"User answered: {answer}",
             "kind": "ask",
@@ -521,26 +666,178 @@ class WorkflowEngine:
                     record.id, status="cancelled", finished_at=utcnow(), waiting_json=""
                 )
             return latest
-        self._update_record(
-            record.id, status="running", outputs=outputs, waiting_json=""
-        )
+        if step.expect:
+            problem = self._expect_failure(step, folded)
+            if problem is not None:
+                retries = int(waiting.get("expect_retries") or 0)
+                if step.on_failure == "retry" and retries < 1:
+                    # ONE re-attempt of an ask is asking AGAIN: re-park with
+                    # the same question, the attempt tracked durably so a
+                    # second unsatisfying answer fails instead of looping.
+                    question = str(waiting.get("question") or "") or (
+                        f"Continue past “{name}”?"
+                    )
+                    self._update_record(
+                        record.id,
+                        status="waiting",
+                        waiting_json=dumps(
+                            {
+                                "index": idx,
+                                "step": name,
+                                "question": question,
+                                "expect_retries": retries + 1,
+                            }
+                        ),
+                    )
+                    await self.platform.event_bus.publish(
+                        "workflow.waiting",
+                        {
+                            "run_id": record.id,
+                            "workflow": record.workflow_name,
+                            "step": name,
+                            "question": question,
+                        },
+                    )
+                    self._deliver(
+                        f"Workflow “{record.workflow_name}” needs you again — "
+                        f"the answer didn't satisfy the gate ({problem}). "
+                        f"{question}"
+                    )
+                    refreshed = self._get_record(record.id)
+                    return refreshed if refreshed is not None else record
+                folded = {
+                    "status": "failed",
+                    "summary": f"expectation failed: {problem}",
+                    "kind": "ask",
+                    "expect_failed": problem,
+                }
+                if step.on_failure == "skip":
+                    # Visible failure, run continues — the usual skip contract.
+                    folded["handled"] = "skipped"
+        outputs[name] = folded
         await self.platform.event_bus.publish(
             EventType.WORKFLOW_STEP_COMPLETED,
             {
                 "run_id": record.id,
                 "workflow": record.workflow_name,
-                "step": step_name or wf.steps[idx].name,
+                "step": name,
                 "index": idx,
                 "total": len(wf.steps),
                 "agent": "",
                 "kind": "ask",
                 "session_id": "",
-                "status": "completed",
-                "summary": f"User answered: {answer}"[:_MAX_STEP_SUMMARY],
+                "status": str(folded.get("status") or ""),
+                "summary": str(folded.get("summary") or "")[:_MAX_STEP_SUMMARY],
             },
+        )
+        if folded.get("status") == "failed" and not folded.get("handled"):
+            # halt (or an exhausted retry): the run fails, the tail never ran.
+            for s in wf.steps[idx + 1 :]:
+                outputs.setdefault(s.name, {"status": "skipped"})
+            final = self._update_record(
+                record.id,
+                status="failed",
+                current_session_id=None,
+                outputs=outputs,
+                finished_at=utcnow(),
+                waiting_json="",
+            )
+            await self.platform.event_bus.publish(
+                EventType.WORKFLOW_COMPLETED,
+                {
+                    "workflow": record.workflow_name,
+                    "status": "failed",
+                    "run_id": record.id,
+                    "sessions": session_ids,
+                },
+            )
+            return final if final is not None else record
+        self._update_record(
+            record.id, status="running", outputs=outputs, waiting_json=""
         )
         return await self.run_record(
             record, wf, start_index=idx + 1, outputs=outputs, session_ids=session_ids
+        )
+
+    def rebuild_run(
+        self, record: WorkflowRunRecord
+    ) -> tuple[WorkflowDef, dict, list[str], int]:
+        """Rebuild a run's def + progress from the database record ALONE
+        (v1.170.0, contract 4): ``(workflow, outputs, session_ids, start)``,
+        where ``start`` is the first step index whose output is not
+        ``completed`` — the resume point. ``len(steps)`` when everything
+        already completed (resuming then just finalizes honestly). Raises
+        ``ValueError`` when the record carries no reconstructable steps.
+        """
+        try:
+            steps_raw = json.loads(record.steps_json or "[]")
+        except (TypeError, ValueError):
+            steps_raw = []
+        wf = load_workflow(
+            {
+                "name": record.workflow_name,
+                "steps": steps_raw,
+                "project_id": record.project_id,
+            }
+        )
+        if not wf.steps:
+            raise ValueError("this run's steps could not be reconstructed")
+        try:
+            outputs = json.loads(record.outputs_json or "{}")
+        except (TypeError, ValueError):
+            outputs = {}
+        if not isinstance(outputs, dict):
+            outputs = {}
+        try:
+            session_ids = json.loads(record.session_ids_json or "[]")
+        except (TypeError, ValueError):
+            session_ids = []
+        if not isinstance(session_ids, list):
+            session_ids = []
+        start = next(
+            (
+                i
+                for i, s in enumerate(wf.steps)
+                if not (
+                    isinstance(outputs.get(s.name), dict)
+                    and outputs[s.name].get("status") == "completed"
+                )
+            ),
+            len(wf.steps),
+        )
+        return wf, outputs, session_ids, start
+
+    async def resume_interrupted(self, record: WorkflowRunRecord) -> WorkflowRunRecord:
+        """Resume an ``interrupted`` run from its first non-completed step —
+        the ONE engine call the resume route spawns (v1.170.0, contract 4).
+
+        The CALLER owns the atomic ``interrupted -> resuming`` claim (the
+        answer route's double-submit lesson); this method re-reads the record
+        so a cancel landing between the claim and the resume is honored, flips
+        the row back to ``running`` (clearing the reconcile-stamped
+        ``finished_at`` — a running row must not look finished), and drives the
+        remaining steps. Completed steps are NOT re-run; skipped/failed ones
+        get their chance (a halt's tail was skipped only because the run
+        stopped). Raises the same ``ValueError`` as :meth:`rebuild_run` for an
+        unreconstructable record.
+        """
+        wf, outputs, session_ids, start = self.rebuild_run(record)
+        latest = self._get_record(record.id)
+        if latest is not None and latest.status in ("cancelling", "cancelled"):
+            # A cancel must never be resurrected by a queued resume.
+            if latest.status == "cancelling":
+                self._update_record(
+                    record.id,
+                    status="cancelled",
+                    finished_at=utcnow(),
+                    waiting_json="",
+                )
+            return self._get_record(record.id) or latest
+        self._update_record(
+            record.id, status="running", finished_at=None, waiting_json=""
+        )
+        return await self.run_record(
+            record, wf, start_index=start, outputs=outputs, session_ids=session_ids
         )
 
     async def _exec_step(
@@ -593,6 +890,19 @@ class WorkflowEngine:
                     orch, run_id, workflow, step, outputs, completed,
                     workspace_root, session_ids,
                 )
+            # Verified steps (v1.170.0, contract 8): expectations run INSIDE
+            # the attempt loop so a failed expectation routes through
+            # on_failure exactly like any other failure (retry re-attempts,
+            # skip continues, halt stops the run).
+            if out.get("status") == "completed" and step.expect:
+                problem = self._expect_failure(step, out)
+                if problem is not None:
+                    out = {
+                        **out,
+                        "status": "failed",
+                        "summary": f"expectation failed: {problem}",
+                        "expect_failed": problem,
+                    }
             if out.get("status") in ("completed", "cancelled"):
                 break  # never "retry" a CANCELLED attempt — the user said stop
         if out.get("status") == "failed" and step.on_failure == "skip":
@@ -631,6 +941,10 @@ class WorkflowEngine:
             provider=None,
             project_id=workflow.project_id,
             workspace_root=workspace_root,
+            # TX-01 provenance (v1.170.0, contract 6): the audit timeline can
+            # answer "which workflow started this session?" — laundered to the
+            # origin rule's charset and clipped to its 64-char cap.
+            origin=_workflow_origin(workflow.name),
         )
         session_ids.append(session.id)
         # Record the live session id BEFORE running, so a cancel arriving
@@ -746,7 +1060,7 @@ class WorkflowEngine:
                 "tool": step.tool,
                 "kind": "tool",
             }
-        return {
+        out = {
             "status": "completed" if result.ok else "failed",
             "summary": (result.output if result.ok else (result.error or "tool error"))[
                 :_MAX_STEP_SUMMARY
@@ -754,6 +1068,24 @@ class WorkflowEngine:
             "tool": step.tool,
             "kind": "tool",
         }
+        # Bounded structured data (v1.170.0, contract 7): persisted so
+        # ``{{Step Name.data}}`` can hand structure to a later step. SUCCESSFUL
+        # calls only — a failed tool's payload feeding downstream templating as
+        # if trustworthy matches the failed-tools-excluded convention
+        # (v1.165.0). Stored as the serialized JSON string, clipped; a clip
+        # can truncate mid-JSON, which consumers must treat as opaque text.
+        if result.ok and result.data:
+            try:
+                serialized = json.dumps(result.data, ensure_ascii=False, default=str)
+            except (TypeError, ValueError):
+                serialized = ""
+            if serialized:
+                out["data"] = serialized[:_MAX_STEP_DATA]
+        if result.ok and result.created_paths:
+            # Absolute paths (the v1.153.2 say-WHERE rule); feeds the contract-8
+            # file expectations and the run record's honesty about outputs.
+            out["created_paths"] = [str(p) for p in result.created_paths][:50]
+        return out
 
     def _run_notify_step(self, step: Step, outputs: dict) -> dict:
         message = render_template(step.message or step.task, outputs).strip()
@@ -774,6 +1106,110 @@ class WorkflowEngine:
                 "kind": "notify",
             }
         return {"status": "completed", "summary": f"notified: {message[:200]}", "kind": "notify"}
+
+    # ------------------------------------------------------------------ #
+    # verified steps (v1.170.0, contract 8)
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _norm_path(p: str) -> str:
+        """Normalize a path for expectation matching: forward slashes, no
+        leading/trailing separators, casefolded (Windows paths compare
+        case-insensitively; on a case-sensitive filesystem this stays
+        deterministic, merely lenient)."""
+        return str(p).replace("\\", "/").strip().strip("/").casefold()
+
+    def _expect_file_candidates(self, step: Step, out: dict) -> tuple[list[str], str]:
+        """The files a completed step verifiably produced, plus a human name
+        for WHERE that truth came from (the failure detail must say why).
+
+        Agent steps read the ledger-derived created/changed lists
+        (``agents/outcome.session_result`` — ToolInvocation + UndoJournal,
+        workspace-relative). Tool steps read the result's ``created_paths``
+        (absolute) plus path-shaped values in its bounded ``data``. Both are
+        deterministic re-reads of recorded truth — never the step's prose.
+        """
+        if step.kind == "agent":
+            sid = str(out.get("session_id") or "")
+            if not sid:
+                return [], "the step session's ledger (no session was recorded)"
+            # Lazy import — outcome pulls agent models; engine must stay
+            # importable without the agents package fully loaded (and tests
+            # monkeypatch the module attribute).
+            from ..agents import outcome as _outcome
+
+            res = _outcome.session_result(self.platform.engine, sid)
+            cands = list(res.get("files_created") or []) + list(
+                res.get("files_changed") or []
+            )
+            return (
+                [str(c) for c in cands],
+                "the session's ledger-recorded created/changed files",
+            )
+        cands = [str(p) for p in (out.get("created_paths") or [])]
+        raw = out.get("data")
+        if isinstance(raw, str) and raw:
+            try:
+                data = json.loads(raw)
+            except (TypeError, ValueError):
+                data = None  # clipped mid-JSON — opaque text, no candidates
+            if isinstance(data, dict):
+                for key in (
+                    "path",
+                    "abs_path",
+                    "file",
+                    "files",
+                    "paths",
+                    "created_paths",
+                    "documents",
+                ):
+                    val = data.get(key)
+                    if isinstance(val, str) and val.strip():
+                        cands.append(val)
+                    elif isinstance(val, list):
+                        cands.extend(
+                            str(v) for v in val if isinstance(v, str) and v.strip()
+                        )
+        return cands, "the tool result's created paths/data"
+
+    def _expect_failure(self, step: Step, out: dict) -> str | None:
+        """Check a COMPLETED step's declared expectations DETERMINISTICALLY.
+
+        Returns None when every expectation holds, else a detail naming
+        exactly which expectation failed and why. ``files`` match
+        workspace-relative (exact or path-suffix, normalized);
+        ``summary_contains`` is a case-insensitive substring check on the
+        step's recorded summary. Defensive throughout — a checker crash
+        masquerading as a step failure would be a lie about the step.
+        """
+        expect = step.expect if isinstance(step.expect, dict) else {}
+        wanted = [str(f) for f in (expect.get("files") or []) if str(f).strip()]
+        if wanted:
+            if step.kind not in ("agent", "tool"):
+                return (
+                    f"'files' expectations need an agent or tool step — a "
+                    f"'{step.kind}' step produces no files"
+                )
+            try:
+                candidates, source = self._expect_file_candidates(step, out)
+            except Exception as exc:  # noqa: BLE001 — a crashed checker must
+                # not masquerade as a step failure (e.g. a DB error inside
+                # outcome.session_result): name the check honestly instead.
+                return (
+                    f"could not verify 'files' expectations: "
+                    f"{type(exc).__name__}: {exc} (the step itself completed)"
+                )
+            norm = [self._norm_path(c) for c in candidates]
+            for f in wanted:
+                want = self._norm_path(f)
+                if not any(c == want or c.endswith("/" + want) for c in norm):
+                    seen = ", ".join(sorted(candidates)[:8]) or "none"
+                    return f"expected file '{f}' was not found in {source} (saw: {seen})"
+        for needle in expect.get("summary_contains") or []:
+            text = str(needle)
+            if text and text.casefold() not in str(out.get("summary") or "").casefold():
+                return f"step summary does not contain '{text}'"
+        return None
 
     def _deliver(self, message: str) -> tuple[bool, str]:
         """Send to EVERY destination (schedule-delivery semantics — a workflow

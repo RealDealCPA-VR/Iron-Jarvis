@@ -104,6 +104,12 @@ def default_permissions() -> dict[str, str]:
         "schedule_create": "allow",
         "webhook_add": "allow",
         "workflow_create": "allow",
+        # v1.170.0: chat can SEE saved workflows — listing is read-only.
+        # workflow_run deliberately has NO entry here: the permission engine
+        # fail-closes absent tools to "ask", and an entry would make the
+        # settings display imply a configured choice nobody made (P3's pinned
+        # design — see test_workflow_tools_v1170).
+        "workflow_list": "allow",
         # Documents (read any file type; write within the workspace).
         "read_document": "allow",
         "write_document": "allow",

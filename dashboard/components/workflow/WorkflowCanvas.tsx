@@ -45,9 +45,17 @@ import {
   Save,
   RefreshCw,
   CalendarClock,
+  CopyPlus,
+  MessageCircleQuestion,
+  TriangleAlert,
+  X,
 } from "lucide-react";
-import { get, post, del, ApiError } from "@/lib/api";
-import type { WorkflowRun } from "@/lib/types";
+import { get, post, patch, del, ApiError } from "@/lib/api";
+import {
+  WORKFLOW_RUN_TERMINAL,
+  type WorkflowRun,
+  type WorkflowStep,
+} from "@/lib/types";
 import {
   Badge,
   OfflineHint,
@@ -61,6 +69,7 @@ import { NodeInspector } from "./NodeInspector";
 import { TriggerInspector } from "./TriggerInspector";
 import {
   agentMeta,
+  type StepExpect,
   type StepNodeData,
   type WorkflowDef,
 } from "./agents";
@@ -116,21 +125,16 @@ const STEP_X0 = 320; // first step x (matches the seed layout)
 const STEP_DX = 280; // left-to-right spacing
 const STEP_Y = 148;
 
-interface RawStep {
-  name?: string;
-  agent?: string;
-  task?: string;
-  tool?: string | null;
-  kind?: string;
-  on_failure?: string;
-  group?: string | null;
-  args?: Record<string, unknown>;
-  message?: string;
-}
+/** The ONE canvas step shape (v1.170.0): the shared WorkflowStep from
+ *  lib/types plus the optional `expect` checks (engine v1.170.0 — not yet on
+ *  the shared type). Replaces the local RawStep duplicate. */
+export type CanvasStep = WorkflowStep & {
+  expect?: StepExpect | null;
+};
 
 /** Turn a saved `[{name,agent,task}]` list into a Trigger → step₁ → … chain
  *  laid out left-to-right, mirroring the seed graph's geometry. */
-function buildGraph(steps: RawStep[]): { nodes: Node[]; edges: Edge[] } {
+export function buildGraph(steps: CanvasStep[]): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [
     {
       id: "trigger",
@@ -165,6 +169,9 @@ function buildGraph(steps: RawStep[]): { nodes: Node[]; edges: Edge[] } {
       group: s.group ?? null,
       args: s.args && typeof s.args === "object" ? s.args : {},
       message: s.message ?? "",
+      // v1.170.0: `expect` rides through load → edit → save untouched (null
+      // when absent so the serializer knows to omit the key entirely).
+      expect: s.expect && typeof s.expect === "object" ? s.expect : null,
     };
     nodes.push(node);
     edges.push(mkEdge(prev, id));
@@ -173,11 +180,11 @@ function buildGraph(steps: RawStep[]): { nodes: Node[]; edges: Edge[] } {
   return { nodes, edges };
 }
 
-/** Parse a `steps_json` string into a RawStep[] (tolerant of bad data). */
-function parseSteps(stepsJson: string | undefined | null): RawStep[] {
+/** Parse a `steps_json` string into a CanvasStep[] (tolerant of bad data). */
+export function parseSteps(stepsJson: string | undefined | null): CanvasStep[] {
   try {
     const parsed = JSON.parse(stepsJson || "[]");
-    return Array.isArray(parsed) ? (parsed as RawStep[]) : [];
+    return Array.isArray(parsed) ? (parsed as CanvasStep[]) : [];
   } catch {
     return [];
   }
@@ -224,6 +231,142 @@ function topoOrder(nodes: Node[], edges: Edge[]): Node[] {
 const orderedSteps = (nodes: Node[], edges: Edge[]) =>
   topoOrder(nodes, edges).filter((n) => n.type === "step");
 
+/* ---- ONE serializer (v1.170.0) ------------------------------------------- */
+
+/** The single graph → steps serializer, used by BOTH save() and run() (they
+ *  used to hold divergent inline copies). Emits exactly the pre-v1.170.0 nine
+ *  fields; `expect` is added ONLY when it carries a non-empty check AND the
+ *  step is an agent/tool kind — the same gate the inspector's "Prove it"
+ *  section and the engine itself apply. Without the kind gate, an agent step
+ *  given a `files` expect and then switched to Notify kept an INVISIBLE check
+ *  (the inspector only renders expect for agent/tool) that the engine fails
+ *  deterministically on every run ("'files' expectations need an agent or
+ *  tool step"), with no UI path to remove it. Defs that never used expect
+ *  serialize byte-identically to before. */
+export function stepsFromGraph(nodes: Node[], edges: Edge[]): CanvasStep[] {
+  return orderedSteps(nodes, edges).map((n, i) => {
+    const d = n.data as StepNodeData;
+    const kind = d.kind ?? "agent";
+    const step: CanvasStep = {
+      name: d.name?.trim() || `step-${i + 1}`,
+      agent: d.agent,
+      task: (d.task ?? "").trim(),
+      tool: d.tool ?? null,
+      kind,
+      on_failure: d.on_failure ?? "halt",
+      group: d.group ?? null,
+      args: d.args ?? {},
+      message: d.message ?? "",
+    };
+    if (kind === "agent" || kind === "tool") {
+      const files = (d.expect?.files ?? []).filter((f) => f && f.trim());
+      const contains = (d.expect?.summary_contains ?? []).filter(
+        (s) => s && s.trim(),
+      );
+      if (files.length || contains.length) {
+        step.expect = {
+          ...(files.length ? { files } : {}),
+          ...(contains.length ? { summary_contains: contains } : {}),
+        };
+      }
+    }
+    return step;
+  });
+}
+
+/* ---- DAG honesty (v1.170.0) ---------------------------------------------- */
+
+/** Why a new edge must be refused, or null when it may be drawn. The engine
+ *  runs ONE linear chain (parallelism = adjacent steps sharing a group), so a
+ *  second outgoing edge draws a branch that will never run as drawn. Re-drawing
+ *  an existing edge is a no-op (addEdge dedupes) and is not refused. */
+export function connectionRefusal(edges: Edge[], c: Connection): string | null {
+  if (!c.source || !c.target) return null;
+  if (c.source === c.target) return "A step can't feed itself.";
+  const other = edges.some(
+    (e) => e.source === c.source && e.target !== c.target,
+  );
+  if (other) {
+    return (
+      "One outgoing link per step — the engine runs a single chain. " +
+      "Branches run via Parallel group instead: set the same group on adjacent steps."
+    );
+  }
+  return null;
+}
+
+/** Node ids whose parallel group is SPLIT in serialized order (members not
+ *  adjacent): the engine batches only consecutive same-group steps, so a split
+ *  group silently degrades to separate batches — surface it on the cards. */
+export function splitGroupNodeIds(nodes: Node[], edges: Edge[]): Set<string> {
+  const steps = orderedSteps(nodes, edges);
+  const positions = new Map<string, { ids: string[]; indices: number[] }>();
+  steps.forEach((n, i) => {
+    const g = ((n.data as StepNodeData).group ?? "").trim();
+    if (!g) return;
+    const entry = positions.get(g) ?? { ids: [], indices: [] };
+    entry.ids.push(n.id);
+    entry.indices.push(i);
+    positions.set(g, entry);
+  });
+  const out = new Set<string>();
+  for (const { ids, indices } of positions.values()) {
+    if (ids.length < 2) continue;
+    const span = Math.max(...indices) - Math.min(...indices) + 1;
+    if (span !== ids.length) for (const id of ids) out.add(id);
+  }
+  return out;
+}
+
+/* ---- Rename (PATCH, contract 3) + run body ------------------------------- */
+
+/** Rename a SAVED def in place via PATCH /workflows/{name} — moves the pin
+ *  row server-side and migrates the locally-saved layout — instead of forking
+ *  a second row. Returns false when the old row no longer exists (404): the
+ *  caller's plain save is then the correct outcome. 409 (name taken) and every
+ *  other failure propagate for honest surfacing. */
+export async function renameSavedDef(
+  oldName: string,
+  newName: string,
+): Promise<boolean> {
+  try {
+    await patch(`/workflows/${encodeURIComponent(oldName)}`, {
+      new_name: newName,
+    });
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return false;
+    throw err;
+  }
+  try {
+    const raw = localStorage.getItem(layoutKey(oldName));
+    if (raw != null) {
+      localStorage.setItem(layoutKey(newName), raw);
+      localStorage.removeItem(layoutKey(oldName));
+    }
+  } catch {
+    /* ignore (private mode / quota) */
+  }
+  return true;
+}
+
+/** Build the POST /workflows/run body. The loaded def's project pin is
+ *  PRESERVED explicitly (contract 1: an explicit project_id wins) — without it
+ *  a rename-then-run loses the pin because the server can only inherit by
+ *  name. The key is OMITTED when there is no pin: sending "" would force an
+ *  unpinned run, which is not the same thing. */
+export function buildRunBody(
+  name: string,
+  steps: CanvasStep[],
+  loadedPin: string | null,
+): { name: string; steps: CanvasStep[]; project_id?: string } {
+  const body: { name: string; steps: CanvasStep[]; project_id?: string } = {
+    name,
+    steps,
+  };
+  if (loadedPin) body.project_id = loadedPin;
+  return body;
+}
+
 /* ---- Layout persistence (node positions per workflow name) --------------- */
 
 const layoutKey = (name: string) => `ij.wf.layout.${name}`;
@@ -269,13 +412,9 @@ function applyLayout(
 
 /* ---- Live run: derive per-step chips from a run record ------------------- */
 
-const RUN_TERMINAL = new Set([
-  "completed",
-  "failed",
-  "cancelled",
-  "interrupted",
-  "error",
-]);
+// v1.170.0: the shared WORKFLOW_RUN_TERMINAL (lib/types) replaced the local
+// copy — `waiting` (parked on an ask) and `resuming` are NOT terminal; the
+// poll continues through both.
 
 interface StepOutput {
   session_id?: string | null;
@@ -302,22 +441,75 @@ function parseOutputs(json: unknown): Record<string, StepOutput> {
   }
 }
 
+/** The parked ask (v1.170.0): what a `waiting` run is waiting FOR. Parsed from
+ *  `waiting_json` ({index, step, question, options?} — workflows/engine.py);
+ *  null unless the run's status is exactly "waiting". Corrupt JSON still
+ *  returns an honest generic ask — the run IS parked either way. */
+export interface WaitingAsk {
+  index: number;
+  step: string;
+  question: string;
+  options: string[];
+}
+
+export function parseWaiting(run: WorkflowRun): WaitingAsk | null {
+  if (String(run.status ?? "") !== "waiting") return null;
+  const fallback: WaitingAsk = {
+    index: -1,
+    step: "",
+    question: "This run needs your answer.",
+    options: [],
+  };
+  try {
+    const w = JSON.parse(String((run as { waiting_json?: string }).waiting_json || "{}"));
+    if (!w || typeof w !== "object" || Array.isArray(w)) return fallback;
+    return {
+      index: Number.isInteger(w.index) ? (w.index as number) : -1,
+      step: typeof w.step === "string" ? w.step : "",
+      question:
+        typeof w.question === "string" && w.question.trim()
+          ? w.question
+          : fallback.question,
+      options: Array.isArray(w.options)
+        ? (w.options as unknown[]).filter((o): o is string => typeof o === "string")
+        : [],
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 /** Merge the ordered steps_json with the live outputs_json into one view list.
  *  While the run is active, the first step lacking an output entry is the one
- *  currently "running"; later un-entered steps are "pending". */
-function runStepViews(run: WorkflowRun): RunStepView[] {
+ *  currently "running"; later un-entered steps are "pending". A `waiting` run
+ *  is NOT running — the parked ask step is "waiting" (on you), never "running"
+ *  (v1.170.0: labelling a parked run "running" was a lie about who's working). */
+export function runStepViews(run: WorkflowRun): RunStepView[] {
   const steps = parseSteps((run as { steps_json?: string }).steps_json);
   const outputs = parseOutputs((run as { outputs_json?: string }).outputs_json);
-  const active = !RUN_TERMINAL.has(String(run.status ?? ""));
-  let runningAssigned = false;
+  const waiting = parseWaiting(run);
+  const active = !WORKFLOW_RUN_TERMINAL.has(String(run.status ?? ""));
+  let liveAssigned = false;
   return steps.map((s, i) => {
     const nm = s.name?.trim() || `step-${i + 1}`;
     const out = outputs[nm];
     let status: string;
     if (out?.status) status = out.status;
-    else if (active && !runningAssigned) {
+    else if (waiting) {
+      // Exactly ONE parked step: matched by name, else by index, else the
+      // first output-less step (corrupt waiting_json). The rest are pending.
+      const parked = waiting.step
+        ? nm === waiting.step
+        : waiting.index >= 0
+          ? i === waiting.index
+          : !liveAssigned;
+      if (parked && !liveAssigned) {
+        status = "waiting";
+        liveAssigned = true;
+      } else status = "pending";
+    } else if (active && !liveAssigned) {
       status = "running";
-      runningAssigned = true;
+      liveAssigned = true;
     } else status = "pending";
     return {
       name: nm,
@@ -332,6 +524,7 @@ function runStepViews(run: WorkflowRun): RunStepView[] {
 const CHIP_TONE: Record<string, string> = {
   completed: "border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
   running: "border-accent/40 bg-accent/10 text-accent-soft animate-pulse",
+  waiting: "border-amber-500/30 bg-amber-500/10 text-amber-300",
   failed: "border-rose-500/30 bg-rose-500/10 text-rose-300",
   skipped: "border-white/[0.08] bg-white/[0.02] text-zinc-500",
   pending: "border-white/[0.08] bg-white/[0.02] text-zinc-500",
@@ -341,31 +534,88 @@ function ChipIcon({ status }: { status: string }) {
   if (status === "completed") return <CircleCheck size={12} />;
   if (status === "failed") return <CircleX size={12} />;
   if (status === "running") return <Loader2 size={12} className="animate-spin" />;
+  if (status === "waiting") return <MessageCircleQuestion size={12} />;
   if (status === "skipped") return <MinusCircle size={12} />;
   return <Circle size={12} />;
 }
 
-/** The live run strip: a status header + cancel, a chip per step, and an
+/** The live run strip: a status header + cancel, a chip per step, an inline
+ *  answer box while the run is parked on an `ask` step (v1.170.0), and an
  *  honest collapsible per-step results panel (summaries; failures in red). */
-function RunProgress({
+export function RunProgress({
   run,
   onCancel,
   cancelling,
+  onAnswered,
 }: {
   run: WorkflowRun;
   onCancel: () => void;
   cancelling: boolean;
+  /** Called with the answer route's returned status so the owner can reflect
+   *  the resume immediately instead of waiting a poll tick. */
+  onAnswered?: (status: string) => void;
 }) {
   const steps = runStepViews(run);
   const status = String(run.status ?? "running");
-  const active = !RUN_TERMINAL.has(status);
+  const active = !WORKFLOW_RUN_TERMINAL.has(status);
+  const waiting = parseWaiting(run);
   const [open, setOpen] = useState<string | null>(null);
   const hasResults = steps.some((s) => s.summary || s.status === "failed");
+
+  /* Inline answer box state. Reset when a DIFFERENT ask parks the run (a
+     later ask step must not inherit the previous conflict/error). */
+  const [answerText, setAnswerText] = useState("");
+  const [answering, setAnswering] = useState(false);
+  const [answerError, setAnswerError] = useState<string | null>(null);
+  const [conflicted, setConflicted] = useState(false);
+  const askKey = waiting ? `${waiting.index}:${waiting.step}:${waiting.question}` : "";
+  useEffect(() => {
+    setAnswerText("");
+    setAnswering(false);
+    setAnswerError(null);
+    setConflicted(false);
+  }, [askKey]);
+
+  const submitAnswer = async (text: string) => {
+    const answer = text.trim();
+    const id = run.id ? String(run.id) : "";
+    if (!answer || !id || answering) return;
+    setAnswering(true);
+    setAnswerError(null);
+    try {
+      const res = await post<{ id: string; status?: string }>(
+        `/workflows/runs/${encodeURIComponent(id)}/answer`,
+        { answer },
+      );
+      setAnswerText("");
+      onAnswered?.(String(res.status ?? "running"));
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        // Answered from another surface (chat card / bell) — the atomic
+        // waiting→resuming claim lost. Honest note, no retry; the poll
+        // lands the true state.
+        setConflicted(true);
+        setAnswerError(err.message);
+      } else {
+        setAnswerError(err instanceof ApiError ? err.message : String(err));
+      }
+    } finally {
+      setAnswering(false);
+    }
+  };
 
   return (
     <div className="space-y-2.5 rounded-xl border border-white/[0.08] bg-ink-950/40 px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        <Badge value={status} />
+        {/* waiting/resuming get a REAL badge (amber/cyan), not the raw slate
+            fallback the generic status map would render. */}
+        {status === "waiting" ? (
+          <Badge value="waiting on you" tone="amber" />
+        ) : status === "resuming" ? (
+          <Badge value="resuming" tone="cyan" />
+        ) : (
+          <Badge value={status} />
+        )}
         <span className="text-zinc-300">
           Run <b className="font-semibold text-zinc-100">{run.workflow_name}</b>
         </span>
@@ -387,16 +637,78 @@ function RunProgress({
         {steps.map((s) => (
           <span
             key={s.name}
-            title={`${s.name} — ${s.status}`}
+            title={`${s.name} — ${s.status === "waiting" ? "waiting on you" : s.status}`}
             className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
               CHIP_TONE[s.status] ?? CHIP_TONE.pending
             }`}
           >
             <ChipIcon status={s.status} />
             <span className="max-w-[140px] truncate">{s.name}</span>
+            {s.status === "waiting" && (
+              <span className="shrink-0 opacity-80">· waiting on you</span>
+            )}
           </span>
         ))}
       </div>
+
+      {/* Ask gate (v1.170.0): the run is parked on an ask step — the question
+          and an inline answer box, right where the user is watching the run.
+          POSTs the existing /workflows/runs/{id}/answer; a 409 (answered from
+          the chat card or the bell first) surfaces honestly, never retries. */}
+      {waiting && !conflicted && (
+        <div
+          data-testid="run-ask-gate"
+          className="space-y-2 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-3 py-2.5"
+        >
+          <p className="flex items-start gap-2 text-[12px] leading-relaxed text-amber-200">
+            <MessageCircleQuestion size={14} className="mt-0.5 shrink-0" />
+            <span className="whitespace-pre-wrap">{waiting.question}</span>
+          </p>
+          {waiting.options.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {waiting.options.map((o) => (
+                <button
+                  key={o}
+                  type="button"
+                  disabled={answering}
+                  onClick={() => submitAnswer(o)}
+                  className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-200 transition-colors hover:border-amber-500/60 hover:bg-amber-500/20 disabled:opacity-50"
+                >
+                  {o}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <input
+              value={answerText}
+              onChange={(e) => setAnswerText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") submitAnswer(answerText);
+              }}
+              placeholder="Type your answer — the run continues from here"
+              aria-label={`Answer workflow ${String(run.workflow_name ?? "")}`}
+              className="field min-w-0 flex-1 text-[12px]"
+            />
+            <button
+              type="button"
+              onClick={() => submitAnswer(answerText)}
+              disabled={answering || !answerText.trim()}
+              className="shrink-0 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-200 transition-colors hover:border-amber-500/60 hover:bg-amber-500/20 disabled:opacity-50"
+            >
+              {answering ? "Sending…" : "Answer"}
+            </button>
+          </div>
+          {answerError && (
+            <p className="text-[11.5px] text-rose-300">{answerError}</p>
+          )}
+        </div>
+      )}
+      {conflicted && answerError && (
+        <p data-testid="run-ask-conflict" className="text-[11.5px] text-amber-200/90">
+          Already answered elsewhere — {answerError}
+        </p>
+      )}
 
       {/* Honest per-step results (collapsible summaries; failures in red) */}
       {hasResults && (
@@ -468,6 +780,28 @@ function Canvas() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
+  /* v1.170.0 — which SAVED def is on the canvas (rename + pin preservation).
+     loadedName: the def's name at load time (rename PATCHes from it);
+     loadedPin: its project pin, carried into every run of the edited graph. */
+  const [loadedName, setLoadedName] = useState<string | null>(null);
+  const [loadedPin, setLoadedPin] = useState<string | null>(null);
+  const pinFetchRef = useRef<string | null>(null);
+
+  /* v1.170.0 — DAG-honesty notice for a refused edge (inline, auto-clears). */
+  const [edgeNotice, setEdgeNotice] = useState<string | null>(null);
+  const edgeNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showEdgeNotice = useCallback((msg: string) => {
+    setEdgeNotice(msg);
+    if (edgeNoticeTimer.current) clearTimeout(edgeNoticeTimer.current);
+    edgeNoticeTimer.current = setTimeout(() => setEdgeNotice(null), 8000);
+  }, []);
+  useEffect(
+    () => () => {
+      if (edgeNoticeTimer.current) clearTimeout(edgeNoticeTimer.current);
+    },
+    [],
+  );
+
   /* Live run: the polled record + a Cancel-in-flight flag + the poll handle. */
   const [activeRun, setActiveRun] = useState<WorkflowRun | null>(null);
   const [cancelling, setCancelling] = useState(false);
@@ -509,9 +843,43 @@ function Canvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [edges, nodes.length, setNodes]);
 
+  /* Surface non-adjacent same-group degradation (v1.170.0): flag every node
+     whose parallel group is split by other steps in serialized order — the
+     engine batches only CONSECUTIVE same-group steps, so a split group runs
+     as separate batches. Keyed on the group signature (not node data writes),
+     so setting groupSplit below cannot re-trigger it. */
+  const groupSig = nodes
+    .filter((n) => n.type === "step")
+    .map((n) => `${n.id}:${((n.data as StepNodeData).group ?? "").trim()}`)
+    .join("|");
+  useEffect(() => {
+    setNodes((nds) => {
+      const split = splitGroupNodeIds(nds, edges);
+      let changed = false;
+      const next = nds.map((n) => {
+        if (n.type !== "step") return n;
+        const flag = split.has(n.id);
+        if (Boolean((n.data as StepNodeData).groupSplit) === flag) return n;
+        changed = true;
+        return { ...n, data: { ...n.data, groupSplit: flag } };
+      });
+      return changed ? next : nds;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupSig, edges, setNodes]);
+
   const onConnect = useCallback(
-    (c: Connection) => setEdges((eds) => addEdge({ ...c, animated: true }, eds)),
-    [setEdges],
+    (c: Connection) => {
+      // DAG honesty (v1.170.0): the engine runs ONE chain — refuse drawing a
+      // branch it would never run, and say how branching actually works.
+      const refusal = connectionRefusal(edges, c);
+      if (refusal) {
+        showEdgeNotice(refusal);
+        return;
+      }
+      setEdges((eds) => addEdge({ ...c, animated: true }, eds));
+    },
+    [edges, setEdges, showEdgeNotice],
   );
 
   const onNodeClick = useCallback(
@@ -647,6 +1015,25 @@ function Canvas() {
       setNodes(applyLayout(nn, loadLayout(def.name)));
       setEdges(ee);
       setName(def.name);
+      // Track the loaded def for rename-in-place + pin-preserving runs. The
+      // list endpoint omits project_id, so fetch the pin from the detail
+      // route (stale-response guard: only the LATEST load may land it).
+      setLoadedName(def.name);
+      setLoadedPin(def.project_id ?? null);
+      pinFetchRef.current = def.name;
+      if (def.project_id === undefined) {
+        get<{ project_id?: string | null }>(
+          `/workflows/${encodeURIComponent(def.name)}`,
+        )
+          .then((r) => {
+            if (pinFetchRef.current === def.name)
+              setLoadedPin(r.project_id ?? null);
+          })
+          .catch(() => {
+            /* offline/404: run() then omits project_id and the server
+               inherits the pin by name — the pre-v1.170.0 behavior. */
+          });
+      }
       setSelectedId(null);
       setLoadOpen(false);
       setResult(null);
@@ -673,62 +1060,79 @@ function Canvas() {
 
   /* ---- Save: serialize the graph and upsert it server-side --------------- */
 
-  const save = useCallback(async () => {
-    setError(null);
-    setSuccess(null);
-    setResult(null);
-    const steps = orderedSteps(nodes, edges).map((n, i) => {
-      const d = n.data as StepNodeData;
-      return {
-        name: d.name?.trim() || `step-${i + 1}`,
-        agent: d.agent,
-        task: (d.task ?? "").trim(),
-        tool: d.tool ?? null,
-        kind: d.kind ?? "agent",
-        on_failure: d.on_failure ?? "halt",
-        group: d.group ?? null,
-        args: d.args ?? {},
-        message: d.message ?? "",
-      };
-    });
-    const wfName = name.trim();
-    if (!wfName) {
-      setError("Name the workflow before saving.");
-      return;
-    }
-    if (steps.length === 0) {
-      setError("Add at least one step before saving.");
-      return;
-    }
-    setSaving(true);
-    try {
-      await post("/workflows", {
-        name: wfName,
-        steps,
-        description: "saved from the workflow editor",
-      });
-      // Persist the current node layout so a later Load restores it verbatim.
-      saveLayout(wfName, nodes);
-      setSuccess(
-        `Saved “${wfName}” — ${steps.length} step${steps.length === 1 ? "" : "s"}. It’s in the Load list.`,
-      );
-      try {
-        window.dispatchEvent(
-          new CustomEvent("ij:workflow-changed", {
-            detail: { name: wfName, steps },
-          }),
-        );
-      } catch {
-        /* ignore */
+  const save = useCallback(
+    async (opts?: { asNew?: boolean }) => {
+      setError(null);
+      setSuccess(null);
+      setResult(null);
+      const steps = stepsFromGraph(nodes, edges);
+      const wfName = name.trim();
+      if (!wfName) {
+        setError("Name the workflow before saving.");
+        return;
       }
-      await refreshDefs();
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 0) setResult({ offline: true });
-      else setError(err instanceof ApiError ? err.message : String(err));
-    } finally {
-      setSaving(false);
-    }
-  }, [nodes, edges, name, refreshDefs]);
+      if (steps.length === 0) {
+        setError("Add at least one step before saving.");
+        return;
+      }
+      // Rename-in-place (v1.170.0, contract 3): editing the name of a LOADED
+      // def and saving used to fork a second row (the old name lived on with
+      // stale steps and kept the pin). Default = PATCH rename first, then
+      // save the steps under the new name; "Save as new" keeps the fork
+      // behavior, explicitly.
+      const renaming = !opts?.asNew && !!loadedName && wfName !== loadedName;
+      let renamed = false;
+      setSaving(true);
+      try {
+        if (renaming && loadedName) {
+          // false = the old row vanished (deleted elsewhere) — the plain
+          // save below is then the correct outcome, not an error.
+          renamed = await renameSavedDef(loadedName, wfName);
+        }
+        await post("/workflows", {
+          name: wfName,
+          steps,
+          description: "saved from the workflow editor",
+        });
+        // Persist the current node layout so a later Load restores it verbatim.
+        saveLayout(wfName, nodes);
+        setLoadedName(wfName);
+        if (opts?.asNew && wfName !== loadedName) {
+          // "Save as new" forks an UNPINNED row: POST /workflows preserves
+          // the pin of the name it saves, and a fresh name has none. Keep the
+          // local pin in sync — carrying the PARENT's pin forward would make
+          // run() ground the fork's canvas runs in the parent's project while
+          // every other surface runs the same saved def unpinned. Also point
+          // the stale-response guard at the fork so an in-flight pin fetch
+          // for the parent can no longer land its pin here.
+          setLoadedPin(null);
+          pinFetchRef.current = wfName;
+        }
+        setSuccess(
+          renamed
+            ? `Renamed “${loadedName}” to “${wfName}” and saved ${steps.length} step${steps.length === 1 ? "" : "s"}.`
+            : `Saved “${wfName}” — ${steps.length} step${steps.length === 1 ? "" : "s"}. It’s in the Load list.`,
+        );
+        try {
+          window.dispatchEvent(
+            new CustomEvent("ij:workflow-changed", {
+              detail: { name: wfName, steps },
+            }),
+          );
+        } catch {
+          /* ignore */
+        }
+        await refreshDefs();
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 0)
+          setResult({ offline: true });
+        else setError(err instanceof ApiError ? err.message : String(err));
+      } finally {
+        setSaving(false);
+      }
+    },
+    [nodes, edges, name, loadedName, refreshDefs],
+  );
 
   const run = useCallback(async () => {
     setError(null);
@@ -737,20 +1141,7 @@ function Canvas() {
     setActiveRun(null);
     setCancelling(false);
     stopPolling();
-    const steps = orderedSteps(nodes, edges).map((n, i) => {
-      const d = n.data as StepNodeData;
-      return {
-        name: d.name?.trim() || `step-${i + 1}`,
-        agent: d.agent,
-        task: (d.task ?? "").trim(),
-        tool: d.tool ?? null,
-        kind: d.kind ?? "agent",
-        on_failure: d.on_failure ?? "halt",
-        group: d.group ?? null,
-        args: d.args ?? {},
-        message: d.message ?? "",
-      };
-    });
+    const steps = stepsFromGraph(nodes, edges);
     const wfName = name.trim() || "demo-workflow";
     if (steps.length === 0) {
       setError("Add at least one step before running.");
@@ -760,20 +1151,27 @@ function Canvas() {
     try {
       // POST returns the freshly-created record AT ONCE (status "running"); the
       // engine runs the steps in the background. Poll for progress every 2s.
-      const rec = await post<WorkflowRun>("/workflows/run", { name: wfName, steps });
+      // The loaded def's project pin rides along explicitly (buildRunBody) so
+      // an edited/renamed graph keeps running grounded in its project.
+      const rec = await post<WorkflowRun>(
+        "/workflows/run",
+        buildRunBody(wfName, steps, loadedPin),
+      );
       setActiveRun(rec);
       const runId = rec.id ? String(rec.id) : "";
-      if (!runId || RUN_TERMINAL.has(String(rec.status ?? ""))) {
+      if (!runId || WORKFLOW_RUN_TERMINAL.has(String(rec.status ?? ""))) {
         setBusy(false);
         return;
       }
+      // The poll continues through `waiting` (parked on an ask) and
+      // `resuming` — WORKFLOW_RUN_TERMINAL excludes both by design.
       pollRef.current = setInterval(async () => {
         try {
           const fresh = await get<WorkflowRun>(
             `/workflows/runs/${encodeURIComponent(runId)}`,
           );
           setActiveRun(fresh);
-          if (RUN_TERMINAL.has(String(fresh.status ?? ""))) {
+          if (WORKFLOW_RUN_TERMINAL.has(String(fresh.status ?? ""))) {
             stopPolling();
             setBusy(false);
             setCancelling(false);
@@ -787,7 +1185,7 @@ function Canvas() {
       else setError(err instanceof ApiError ? err.message : String(err));
       setBusy(false);
     }
-  }, [nodes, edges, name, stopPolling]);
+  }, [nodes, edges, name, loadedPin, stopPolling]);
 
   const cancelRun = useCallback(async () => {
     const id = activeRun?.id ? String(activeRun.id) : "";
@@ -815,6 +1213,16 @@ function Canvas() {
         !window.confirm(`Delete workflow “${defName}”? This can't be undone.`)
       )
         return;
+      // If the canvas is editing the row being deleted, its loaded-def
+      // tracking is now stale: a later Save must be a fresh create (never a
+      // rename PATCH against a deleted row) and a Run must not carry the
+      // deleted def's pin. Cleared on 404 too — the row is equally gone.
+      const clearIfLoaded = () => {
+        if (defName !== loadedName) return;
+        setLoadedName(null);
+        setLoadedPin(null);
+        pinFetchRef.current = null;
+      };
       try {
         await del(`/workflows/${encodeURIComponent(defName)}`);
         try {
@@ -822,19 +1230,25 @@ function Canvas() {
         } catch {
           /* ignore */
         }
+        clearIfLoaded();
         setSuccess(`Deleted “${defName}”.`);
         await refreshDefs();
       } catch (err) {
-        if (err instanceof ApiError && err.status === 404) await refreshDefs();
-        else setError(err instanceof ApiError ? err.message : String(err));
+        if (err instanceof ApiError && err.status === 404) {
+          clearIfLoaded();
+          await refreshDefs();
+        } else setError(err instanceof ApiError ? err.message : String(err));
       }
     },
-    [refreshDefs],
+    [refreshDefs, loadedName],
   );
 
   const selected = nodes.find((n) => n.id === selectedId && n.type === "step");
   const selData = selected?.data as StepNodeData | undefined;
   const stepCount = nodes.filter((n) => n.type === "step").length;
+  // The name box differs from the loaded def → Save becomes a rename-in-place
+  // (PATCH), with fork-a-copy still available explicitly.
+  const renamePending = !!loadedName && !!name.trim() && name.trim() !== loadedName;
 
   const miniColor = useCallback((node: Node) => {
     if (node.type === "trigger") return "#22d3ee";
@@ -955,12 +1369,38 @@ function Canvas() {
 
           <button
             type="button"
-            onClick={save}
+            onClick={() => save()}
             disabled={saving}
+            title={
+              renamePending
+                ? `Rename “${loadedName}” to “${name.trim()}” and save — its pin and schedule follow the new name`
+                : undefined
+            }
             className="btn-ghost"
           >
-            {saving ? <LoaderInline label="Saving…" /> : (<><Save size={15} /> Save</>)}
+            {saving ? (
+              <LoaderInline label="Saving…" />
+            ) : renamePending ? (
+              <>
+                <Save size={15} /> Rename &amp; save
+              </>
+            ) : (
+              <>
+                <Save size={15} /> Save
+              </>
+            )}
           </button>
+          {renamePending && (
+            <button
+              type="button"
+              onClick={() => save({ asNew: true })}
+              disabled={saving}
+              title={`Keep “${loadedName}” and save a separate copy named “${name.trim()}”`}
+              className="btn-ghost"
+            >
+              <CopyPlus size={15} /> Save as new
+            </button>
+          )}
           <Link
             href={`/schedules?workflow=${encodeURIComponent(name)}`}
             title="Run this workflow on a schedule"
@@ -1018,6 +1458,26 @@ function Canvas() {
           />
         </ReactFlow>
 
+        {/* Inline DAG-honesty notice: why the edge was refused, and what to do
+            instead. Auto-clears; dismissable. */}
+        {edgeNotice && (
+          <div
+            data-testid="edge-notice"
+            className="absolute left-1/2 top-3 z-30 flex max-w-[420px] -translate-x-1/2 items-start gap-2 rounded-xl border border-amber-500/30 bg-ink-950/90 px-3 py-2 text-[12px] leading-relaxed text-amber-200 shadow-card"
+          >
+            <TriangleAlert size={14} className="mt-0.5 shrink-0" />
+            <span>{edgeNotice}</span>
+            <button
+              type="button"
+              onClick={() => setEdgeNotice(null)}
+              aria-label="Dismiss"
+              className="ml-1 shrink-0 rounded-md p-0.5 text-amber-200/70 transition-colors hover:text-amber-100"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        )}
+
         {selData && (
           <NodeInspector
             data={selData}
@@ -1047,6 +1507,13 @@ function Canvas() {
               run={activeRun}
               onCancel={cancelRun}
               cancelling={cancelling}
+              onAnswered={(status) =>
+                // Reflect the resume at once (the 2s poll lands the rest);
+                // waiting_json is cleared so the ask box leaves immediately.
+                setActiveRun((r) =>
+                  r ? { ...r, status, waiting_json: "" } : r,
+                )
+              }
             />
           )}
           {error && <ErrorNote>{error}</ErrorNote>}

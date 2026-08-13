@@ -69,11 +69,22 @@ class CommandInterpreter:
         cfg = self.p.config
         with session_scope(self.p.engine) as db:
             runs = list(db.exec(select(WorkflowRunRecord)))
-        live = sum(1 for r in runs if r.status in ("running", "cancelling"))
+        # v1.170.0: a parked (``waiting``) or just-answered (``resuming``) run
+        # is live work in flight — counting only running/cancelling made a run
+        # waiting on THIS phone invisible to the person it was waiting on.
+        live = sum(
+            1
+            for r in runs
+            if r.status in ("running", "cancelling", "waiting", "resuming")
+        )
+        waiting = sum(1 for r in runs if r.status == "waiting")
+        wf_line = f"Workflows: {live} live, {len(runs)} total"
+        if waiting:
+            wf_line += f" ({waiting} waiting on you)"
         return (
             f"Iron Jarvis v{__version__}\n"
             f"Model: {cfg.default_provider}/{cfg.default_model}\n"
-            f"Workflows: {live} running, {len(runs)} total\n"
+            f"{wf_line}\n"
             f"Sessions: {len(self.orch.list_sessions(limit=200))} recent"
         )
 

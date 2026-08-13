@@ -57,6 +57,9 @@ export type SSEEvent =
       escalate_agent?: string | null;
       /** The turn proposed a reusable workflow instead of prose (v1.120.0). */
       workflow_draft?: WorkflowDraft | null;
+      /** The turn RAN a saved workflow via the workflow_run tool (v1.170.0) —
+       *  render the live run chip under the reply. */
+      workflow_run?: { run_id: string; name: string } | null;
       usage?: { input_tokens?: number; output_tokens?: number };
       /** Context-window accounting for this turn (v1.146.0). */
       context?: ContextUsage | null;
@@ -100,6 +103,8 @@ export interface ChatStreamResult {
   escalateAgent?: string | null;
   /** The turn proposed a reusable workflow — render it as a draft card. */
   workflowDraft?: WorkflowDraft | null;
+  /** The turn RAN a saved workflow (v1.170.0) — render the live run chip. */
+  workflowRun?: { run_id: string; name: string } | null;
   /** How much of the model's context window this turn used (v1.146.0). */
   context?: ContextUsage | null;
 }
@@ -200,6 +205,12 @@ export function sseEventFrom(
 
       if (data.workflow_draft && typeof data.workflow_draft === "object")
         ev.workflow_draft = data.workflow_draft as WorkflowDraft;
+      if (
+        data.workflow_run &&
+        typeof data.workflow_run === "object" &&
+        typeof (data.workflow_run as { run_id?: unknown }).run_id === "string"
+      )
+        ev.workflow_run = data.workflow_run as { run_id: string; name: string };
       if (data.usage && typeof data.usage === "object")
         ev.usage = data.usage as { input_tokens?: number; output_tokens?: number };
       if (data.context && typeof data.context === "object")
@@ -475,6 +486,7 @@ export function useChatStream(): UseChatStream {
                 escalateReason: ev.escalate_reason,
                 escalateAgent: ev.escalate_agent,
                 workflowDraft: ev.workflow_draft,
+                workflowRun: ev.workflow_run,
                 context: ev.context,
               };
               break;

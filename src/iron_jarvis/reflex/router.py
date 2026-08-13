@@ -167,13 +167,16 @@ class ReflexRouter:
         return {"rule": rule.name, "rule_id": rule.id, **result}
 
     def _run_workflow(self, rule: ReflexRule, context: dict[str, str]) -> dict[str, Any]:
-        from ..workflows.engine import WorkflowEngine, load_workflow
+        from ..workflows.engine import WorkflowEngine
         from ..workflows.store import WorkflowStore
 
-        rec = WorkflowStore(self.p.engine).get(rule.target)
-        if rec is None:
+        # v1.170.0: resolve through ``load_def`` — the ONE stored-record -> def
+        # seam — so a webhook/comm/email-triggered run keeps the def's PROJECT
+        # PIN. Building the def by hand here silently dropped the pin: the same
+        # workflow ran grounded from the dashboard but ungrounded from a signal.
+        wf = WorkflowStore(self.p.engine).load_def(rule.target)
+        if wf is None:
             return {"ok": False, "error": f"no saved workflow '{rule.target}'"}
-        wf = load_workflow({"name": rec.name, "steps": _json.loads(rec.steps_json or "[]")})
         engine = WorkflowEngine(self.p, self.orch)
         run = engine.create_record(wf)  # synchronous: persists a run record now
         # v1.122.0: the signal's payload used to be DROPPED for workflow
@@ -192,7 +195,7 @@ class ReflexRouter:
             else None
         )
         self._launch(engine.run_record(run, wf, outputs=outputs), run.id)
-        return {"ok": True, "kind": "workflow", "workflow": rec.name, "run_id": run.id}
+        return {"ok": True, "kind": "workflow", "workflow": wf.name, "run_id": run.id}
 
     def _run_remote(self, rule: ReflexRule, context: dict[str, str]) -> dict[str, Any]:
         from ..agents.remote import RemoteAgentRegistry

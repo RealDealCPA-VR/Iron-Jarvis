@@ -3,7 +3,7 @@
 // Side panel for editing a selected step node: name, agent type, and task
 // (with a voice-dictation mic). Overlays the right edge of the canvas.
 
-import { X, Trash2, SlidersHorizontal } from "lucide-react";
+import { X, Trash2, SlidersHorizontal, BadgeCheck } from "lucide-react";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 import { useApi } from "@/lib/useApi";
 import type { AgentsResponse } from "@/lib/types";
@@ -14,9 +14,18 @@ import {
   KIND_META,
   ON_FAILURE_OPTIONS,
   STEP_KINDS,
+  type StepExpect,
   type StepKind,
   type StepNodeData,
 } from "./agents";
+
+/** Parse a lines-textarea into a trimmed, non-empty string list. */
+function parseLines(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 export function NodeInspector({
   data,
@@ -218,6 +227,10 @@ export function NodeInspector({
           </div>
         )}
 
+        {((data.kind ?? "agent") === "agent" || (data.kind ?? "agent") === "tool") && (
+          <ExpectSection data={data} onChange={onChange} />
+        )}
+
         <div>
           <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
             If this step fails
@@ -262,5 +275,86 @@ export function NodeInspector({
         </button>
       </footer>
     </div>
+  );
+}
+
+/** "Prove it" (v1.170.0, agent + tool steps): optional deterministic checks
+ *  the engine runs after the step — files it must have produced, substrings
+ *  its summary must contain. One line per entry; parsed on blur (the args-JSON
+ *  idiom — parsing per keystroke would eat the newline being typed). Both
+ *  lists empty ⇒ `expect` is null and never serialized. */
+function ExpectSection({
+  data,
+  onChange,
+}: {
+  data: StepNodeData;
+  onChange: (patch: Partial<StepNodeData>) => void;
+}) {
+  const expect = data.expect ?? undefined;
+  const setExpect = (patch: Partial<StepExpect>) => {
+    const merged: StepExpect = { ...(data.expect ?? {}), ...patch };
+    const files = (merged.files ?? []).filter(Boolean);
+    const contains = (merged.summary_contains ?? []).filter(Boolean);
+    onChange({
+      expect:
+        files.length || contains.length
+          ? {
+              ...(files.length ? { files } : {}),
+              ...(contains.length ? { summary_contains: contains } : {}),
+            }
+          : null,
+    });
+  };
+  const hasChecks = !!(expect?.files?.length || expect?.summary_contains?.length);
+
+  return (
+    <details open={hasChecks} data-testid="expect-section">
+      <summary className="flex cursor-pointer items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400 transition-colors hover:text-zinc-200">
+        <BadgeCheck size={13} className="text-accent-soft/80" />
+        Prove it (optional)
+        {hasChecks && (
+          <span className="rounded-full border border-accent/30 bg-accent/10 px-1.5 py-px text-[10px] normal-case tracking-normal text-accent-soft">
+            on
+          </span>
+        )}
+      </summary>
+      <div className="mt-2 space-y-3">
+        <p className="text-[11px] leading-snug text-zinc-500">
+          Checked after the step runs — any miss fails the step, honestly named.
+        </p>
+        <div>
+          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+            Files it must produce
+          </label>
+          <textarea
+            key={`expect-files-${String(data.index ?? data.name)}`}
+            defaultValue={(expect?.files ?? []).join("\n")}
+            onBlur={(e) => setExpect({ files: parseLines(e.target.value) })}
+            rows={2}
+            spellCheck={false}
+            placeholder={"one path per line, e.g.\nreports/summary.md"}
+            aria-label="Files this step must produce"
+            className="field resize-y font-mono text-[12px]"
+          />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+            Summary must contain
+          </label>
+          <textarea
+            key={`expect-contains-${String(data.index ?? data.name)}`}
+            defaultValue={(expect?.summary_contains ?? []).join("\n")}
+            onBlur={(e) =>
+              setExpect({ summary_contains: parseLines(e.target.value) })
+            }
+            rows={2}
+            spellCheck={false}
+            placeholder={"one phrase per line (case-insensitive)"}
+            aria-label="Phrases the step summary must contain"
+            className="field resize-y text-[12px]"
+          />
+        </div>
+      </div>
+    </details>
   );
 }
