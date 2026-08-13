@@ -15,6 +15,7 @@ import {
   ArrowUpRight,
 } from "lucide-react";
 import { post, del, get, ApiError } from "@/lib/api";
+import { CRON_TO_LABEL, REPEAT_PRESETS } from "@/lib/schedules";
 import { usePolledApi, useApi } from "@/lib/useApi";
 import type { Schedule } from "@/lib/types";
 import {
@@ -88,25 +89,10 @@ const TEMPLATES: { label: string; name: string; task: string; cron: string }[] =
 ];
 
 /** Friendly repeat presets that each map to a 5-field cron expression. */
-const REPEAT_PRESETS: { label: string; cron: string }[] = [
-  { label: "Every minute", cron: "* * * * *" },
-  { label: "Every 15 minutes", cron: "*/15 * * * *" },
-  { label: "Hourly", cron: "0 * * * *" },
-  { label: "Daily at midnight", cron: "0 0 * * *" },
-  { label: "Daily at 9am", cron: "0 9 * * *" },
-  { label: "Weekdays at 8am", cron: "0 8 * * 1-5" },
-  { label: "Weekdays at 9am", cron: "0 9 * * 1-5" },
-  { label: "Weekly Mon 9am", cron: "0 9 * * 1" },
-  { label: "Weekly Fri 4pm", cron: "0 16 * * 5" },
-  { label: "Daily at 6pm", cron: "0 18 * * *" },
-  { label: "Monthly 1st", cron: "0 0 1 * *" },
-];
-
 // Sentinel <select> values for the two non-preset modes.
 const ADVANCED = "__advanced__";
 const ONCE = "__once__";
 
-const CRON_TO_LABEL = new Map(REPEAT_PRESETS.map((p) => [p.cron, p.label]));
 
 /** A human-readable description of a stored schedule's trigger. */
 function triggerLabel(s: Schedule): string {

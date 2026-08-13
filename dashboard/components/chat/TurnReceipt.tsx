@@ -29,6 +29,7 @@
  */
 
 import { useId, useState, type ReactNode } from "react";
+import Link from "next/link";
 import {
   AlertTriangle,
   Ban,
@@ -276,8 +277,31 @@ export function TurnReceipt({
                     — requested {rt.requested}
                   </span>
                 )}
-                {rt.reason && (
-                  <span className="text-zinc-500"> ({rt.reason})</span>
+                {rt.reason === "auto-tier" ? (
+                  // v1.169.0: auto-tier stays QUIET (it is the user's own
+                  // configured automation, not a substitution — v1.165.0), but
+                  // the judgment behind it must be REACHABLE: the reason links
+                  // to the Connections page, where each local model's report
+                  // card shows the quality stats the tiering keys off. The
+                  // link lives in the expanded panel only — the collapsed line
+                  // is inside the toggle button, where a nested anchor would
+                  // be illegal DOM.
+                  <span className="text-zinc-500">
+                    {" "}
+                    (
+                    <Link
+                      href="/connections"
+                      title="Auto picked this model from its difficulty tiers and your local models' measured quality — see each model's report card on Connections"
+                      className="underline decoration-zinc-700 underline-offset-2 transition-colors hover:text-zinc-300"
+                    >
+                      auto-tier
+                    </Link>
+                    )
+                  </span>
+                ) : (
+                  rt.reason && (
+                    <span className="text-zinc-500"> ({rt.reason})</span>
+                  )
                 )}
               </div>
             </div>

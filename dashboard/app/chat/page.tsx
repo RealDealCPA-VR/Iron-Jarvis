@@ -103,6 +103,11 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { get, post, put, del, ApiError, API_BASE, ijToken } from "@/lib/api";
 import { CommThreadBanner } from "@/components/chat/CommThreadBanner";
+import {
+  CompactionCard,
+  CompactionChip,
+  type CompactionInfo,
+} from "@/components/chat/CompactionCard";
 import { WorkflowDraftCard } from "@/components/chat/WorkflowDraftCard";
 import { RunResultCard, type RunResult } from "@/components/chat/RunResultCard";
 import { DraftCard, draftFromFence } from "@/components/chat/DraftCard";
@@ -1574,6 +1579,15 @@ export default function ChatPage() {
   const [compactBusy, setCompactBusy] = useState(false);
   const [compactNote, setCompactNote] = useState<string | null>(null);
   const [compactDismissedAt, setCompactDismissedAt] = useState<number | null>(null);
+  // Compaction inspect (v1.169.0): the summary STANDING over this thread —
+  // SERVER truth (GET /chat/threads/{id}/compaction), fetched on thread load
+  // and after a compact, never guessed from the gauge. The chip and card
+  // render only while this is a found record.
+  const [compaction, setCompaction] = useState<CompactionInfo | null>(null);
+  const [compactionOpen, setCompactionOpen] = useState(false);
+  // Monotonic fetch id so a slow response for the PREVIOUS thread can never
+  // land on the one now open (same shape as chatGenRef for turns).
+  const compactionGenRef = useRef(0);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [modelSub, setModelSub] = useState<string | null>(null);
   /**
@@ -2356,6 +2370,14 @@ export default function ChatPage() {
     setSelectedConnectors([]); // so are connector toggles
     setPreviewPath(null); // the preview belongs to the previous conversation
     setThreadDocs([]); // until this thread's setup (if any) restores its own
+    // Clear the chip AND orphan any in-flight compaction fetch: a bare state
+    // clear leaves compactionGenRef untouched, so a GET started for the
+    // PREVIOUS thread would still pass the gen guard when it resolves after
+    // this reset and repaint the old thread's summary here. (The gen is
+    // bumped again after the thread GET below — but that await can throw, and
+    // this reset must stand on its own.)
+    void refreshCompaction(null); // bumps the gen, then clears
+    setCompactionOpen(false);
     sendSetupRef.current = false; // until this thread's setup (if any) restores
     setToolsOpen(false);
     setToolQuery("");
@@ -2372,6 +2394,9 @@ export default function ChatPage() {
       const t = await get<ThreadDetail>(`/chat/threads/${id}`);
       setMessages(t.messages ?? []);
       setThreadId(t.id);
+      // Does a compaction summary stand over this thread? Server-checked on
+      // every open (v1.169.0) — the chip must reflect the store, not memory.
+      void refreshCompaction(t.id);
       // MESSAGING thread? The server owns it: mark the save box daemon so
       // every queued autosave no-ops, and surface the origin banner.
       const isDaemon = t.owner === "daemon";
@@ -3193,6 +3218,36 @@ export default function ChatPage() {
 
   // ---------------------------------------------------------------- compaction
 
+  /** Re-ask the server which summary stands over the saved thread (v1.169.0).
+   *
+   *  The chip must never render off the context gauge alone: `compacted` there
+   *  is a per-turn report, and the summary's text + stripped claims live only
+   *  server-side. `found: false` (or any failure) clears the chip — an
+   *  inspect surface that guesses is worse than none.
+   */
+  async function refreshCompaction(id: string | null) {
+    const gen = ++compactionGenRef.current;
+    if (!id) {
+      setCompaction(null);
+      return;
+    }
+    try {
+      const info = await get<CompactionInfo>(`/chat/threads/${id}/compaction`);
+      if (compactionGenRef.current === gen) setCompaction(info.found ? info : null);
+    } catch {
+      if (compactionGenRef.current === gen) setCompaction(null);
+    }
+  }
+
+  // A turn that arrived compacted (the auto lane past the ceiling) refreshes
+  // the standing summary — by then the record exists server-side, keyed over a
+  // prefix of what this thread already stored, so the fetch finds it even
+  // before the autosave lands.
+  useEffect(() => {
+    if (contextUsage?.compacted && threadId) void refreshCompaction(threadId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contextUsage?.compacted, contextUsage?.covers, threadId]);
+
   /** Compact this conversation because the USER chose to (the suggest band).
    *
    *  Nothing about the thread changes here: the daemon stores the verified
@@ -3204,7 +3259,15 @@ export default function ChatPage() {
     if (compactBusy) return;
     setCompactBusy(true);
     try {
-      const res = await post<{ covers: number; stripped: number }>("/chat/compact", {
+      const res = await post<{
+        covers: number;
+        stripped: number;
+        stripped_claims?: string[];
+        summary?: string;
+        provider?: string;
+        model?: string;
+        trigger?: string;
+      }>("/chat/compact", {
         messages: messages.map(({ role, content }) => ({ role, content })),
         ...(splitChoice(choice).provider
           ? { provider: splitChoice(choice).provider }
@@ -3224,6 +3287,24 @@ export default function ChatPage() {
             } dropped.`
           : `Summarized ${res.covers} earlier messages.`,
       );
+      // The inspect chip (v1.169.0): re-read the standing summary from the
+      // saved thread; a conversation long enough to compact has autosaved by
+      // now, but if this one somehow has no id yet, the POST response itself
+      // is the same record — use it rather than showing nothing.
+      if (threadId) {
+        void refreshCompaction(threadId);
+      } else {
+        setCompaction({
+          found: true,
+          summary: res.summary,
+          covers: res.covers,
+          stripped: res.stripped,
+          stripped_claims: res.stripped_claims ?? [],
+          provider: res.provider,
+          model: res.model,
+          trigger: res.trigger,
+        });
+      }
     } catch (e) {
       setError(
         e instanceof ApiError && e.message
@@ -4300,6 +4381,12 @@ export default function ChatPage() {
     setSelectedConnectors([]); // connector toggles are per-conversation
     setPreviewPath(null); // a fresh conversation starts without a preview
     setThreadDocs([]); // document chips belong to their conversation
+    // The standing summary belongs to its thread — and clearing it must ALSO
+    // invalidate any in-flight fetch (refreshCompaction bumps the gen before
+    // clearing), or a GET racing this New Chat resolves late, passes the gen
+    // guard, and pins the OLD thread's summary onto a fresh conversation.
+    void refreshCompaction(null);
+    setCompactionOpen(false);
     sendSetupRef.current = false; // fresh conversation — nothing armed to persist
     setToolsOpen(false);
     setToolQuery("");
@@ -5098,6 +5185,21 @@ export default function ChatPage() {
                 <CommThreadBanner
                   channel={commMeta.channel}
                   display={commMeta.display}
+                />
+              )}
+              {/* Compaction inspect (v1.169.0): a summary is standing in for
+                  this thread's older messages — say so where the messages are,
+                  and let the user read it (and what was stripped from it as
+                  uncorroborated) instead of taking it on faith. Renders only
+                  off the server's answer, never the gauge. */}
+              <CompactionChip
+                info={compaction}
+                onView={() => setCompactionOpen(true)}
+              />
+              {compactionOpen && compaction?.found && (
+                <CompactionCard
+                  info={compaction}
+                  onClose={() => setCompactionOpen(false)}
                 />
               )}
               {/* Message thread */}

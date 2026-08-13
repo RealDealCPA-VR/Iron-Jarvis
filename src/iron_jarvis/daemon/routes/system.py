@@ -224,7 +224,22 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/schedules")
     def list_schedules() -> dict[str, Any]:
-        return {"schedules": [t.model_dump() for t in d.platform.scheduler.list()]}
+        # v1.169.0 (additive): each row also carries the DECODED payload
+        # ``project_id`` so the project surface can answer "what runs on my
+        # behalf here?" without re-parsing the payload blob client-side.
+        # Non-string / unparseable values become "" — never coerced (a
+        # stringified number could phantom-match a real project id). The
+        # isinstance-dict guard matters: decoded_payload() returns whatever
+        # json.loads produced, and VALID-but-non-object JSON ("[]", '"x"',
+        # "3") has no .get — one such row must not 500 the whole list.
+        rows: list[dict[str, Any]] = []
+        for t in d.platform.scheduler.list():
+            row = t.model_dump()
+            payload = t.decoded_payload()
+            pid = payload.get("project_id") if isinstance(payload, dict) else None
+            row["project_id"] = pid if isinstance(pid, str) else ""
+            rows.append(row)
+        return {"schedules": rows}
 
     @app.post("/schedules")
     def add_schedule(body: ScheduleAdd) -> dict[str, Any]:

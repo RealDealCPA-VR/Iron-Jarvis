@@ -57,8 +57,14 @@ class ScheduledTaskRecord(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
     def decoded_payload(self) -> dict:
-        """Parse ``payload_json`` into a dict (action arguments)."""
+        """Parse ``payload_json`` into a dict (action arguments).
+
+        Guarded like its twin in memory/proposals.py (v1.169.0): valid JSON
+        that is NOT an object ("[]", '"x"', "3") returns {} instead of leaking
+        a non-dict to callers — one corrupted row used to 500 the whole
+        GET /schedules list at the first ``.get()``."""
         try:
-            return json.loads(self.payload_json or "{}")
+            out = json.loads(self.payload_json or "{}")
         except (TypeError, ValueError):
             return {}
+        return out if isinstance(out, dict) else {}

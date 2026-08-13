@@ -1,6 +1,6 @@
 # The Comprehensive To-Do
 
-*Everything known to be open as of v1.168.1 (2026-08-12), consolidated from
+*Everything known to be open as of v1.169.0 (2026-08-13), consolidated from
 the deep-review wow track, deferred backlogs across waves, and known limits.
 The deep review's 11 confirmed bugs are all FIXED (v1.166.2–v1.167.0) — this
 file is what remains.*
@@ -41,14 +41,11 @@ promote-to-knowledge from the lists further down.*
 - [x] Kanban nests delegation teams under the parent card — shipped v1.168.0.
 - [x] Promote any chat answer / rail file into Project Knowledge — shipped v1.168.0.
 - [ ] `terminal_tail` tool — chat reads the pane you're staring at (read-only).
-- [ ] Project heartbeat — list a project's schedules (name, next run, last
-  status, last session link) on its surface.
+- [x] Project heartbeat — shipped v1.169.0.
 - [ ] Cost per client project — GROUP BY `project_id` over session tokens on
   the Usage page; per-engagement cost line on project cards.
-- [ ] Compaction summary inspectable any time (header chip: "N older messages
-  summarized — view", including what was stripped as uncorroborated).
-- [ ] Model report card — surface the `local_quality` stats auto-tier already
-  judges local models by; link the routing receipt to it.
+- [x] Compaction summary inspectable any time — shipped v1.169.0.
+- [x] Model report card — shipped v1.169.0.
 
 ## Medium bets (each ≈ one wave)
 

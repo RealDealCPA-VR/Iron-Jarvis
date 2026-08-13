@@ -20,6 +20,8 @@ view; deleting every row costs nothing but a recomputation.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
 
 from sqlmodel import Field, Session, SQLModel, select
@@ -46,6 +48,13 @@ class CompactionRecord(SQLModel, table=True):
     covers: int = 0
     #: Lines the ledger/transcript check removed from the model's draft.
     stripped: int = 0
+    #: JSON list of the CLAIMS the check removed (v1.169.0, ADDITIVE — reads
+    #: NULL/"" on rows from before the column and on lanes that never pass
+    #: them). The COUNT above was always persisted; the claims themselves were
+    #: previously readable exactly once, in the creating response — and this
+    #: text is injected into every later turn's system prompt, so what was
+    #: REMOVED from it deserves to stay inspectable too.
+    stripped_claims_json: str = ""
     #: "manual" (the user chose it) | "auto" (the ceiling forced it).
     trigger: str = "auto"
     provider: str = ""
@@ -53,6 +62,16 @@ class CompactionRecord(SQLModel, table=True):
     #: The agent session this came from, when it came from a run ("" for chat).
     session_id: str = ""
     created_at: datetime = Field(default_factory=utcnow)
+
+    def claims(self) -> list[str]:
+        """The stripped claims, decoded. ``[]`` when none were recorded —
+        callers must distinguish that from ``stripped == 0`` (see the routes:
+        a count with no text is reported honestly as "not recorded")."""
+        try:
+            out = json.loads(self.stripped_claims_json or "[]")
+        except Exception:  # noqa: BLE001 — a corrupt cell is "not recorded"
+            return []
+        return [c for c in out if isinstance(c, str)] if isinstance(out, list) else []
 
 
 class CompactionStore:
@@ -81,6 +100,7 @@ class CompactionStore:
         summary: str,
         covers: int,
         stripped: int = 0,
+        stripped_claims: list[str] | None = None,
         trigger: str = "auto",
         provider: str = "",
         model: str = "",
@@ -88,11 +108,23 @@ class CompactionStore:
     ) -> CompactionRecord | None:
         if not key or not summary.strip():
             return None
+        # ADDITIVE kwarg (v1.169.0): callers that never pass claims are
+        # untouched and their rows read back ``claims() == []``. Persisted
+        # FAITHFULLY — no truncation here. The store must never silently
+        # shorten the list it was handed: the creating response returns the
+        # caller's list verbatim, and a cap here would make the inspect route
+        # forever disagree with it (same compaction, two different
+        # removed-claims lists depending on which endpoint you ask). Any
+        # bounding is the producer's call (``compaction.compact_messages``
+        # caps its own output) — and when a producer DOES cap, ``stripped``
+        # exceeding ``len(claims)`` is the signal the UI renders honestly.
+        claims = [c for c in (stripped_claims or []) if isinstance(c, str)]
         rec = CompactionRecord(
             id=key,
             summary=summary,
             covers=int(covers),
             stripped=int(stripped),
+            stripped_claims_json=json.dumps(claims) if claims else "",
             trigger=trigger,
             provider=provider,
             model=model,
@@ -105,6 +137,68 @@ class CompactionStore:
         except Exception:  # noqa: BLE001 — losing the cache costs a recompute
             return None
         return rec
+
+    def standing(self, messages: list) -> CompactionRecord | None:
+        """The summary STANDING over this exact conversation, if one is stored
+        (v1.169.0 — the compaction-inspect read path).
+
+        Probes EVERY prefix of *messages* under the chat keying the live turn
+        uses — :func:`~.compaction.prefix_key` over ``f"{role}\\x1e{content}"``
+        pairs, exactly as ``chat_turn._apply_compaction`` and the
+        ``POST /chat/compact`` route compute it — and returns the LONGEST
+        stored record. A single exact-key ``get`` would not do: the live turn
+        keys on the message list it was HANDED, which grows by a message or two
+        every turn, so a summary created three turns ago covers a strict PREFIX
+        of today's thread and its creating key alone would never be found
+        again. Content addressing is what makes the probe sound — a hash hit
+        for a prefix PROVES the covered messages are byte-identical to what the
+        summary was verified against. Longest wins because a re-compaction
+        absorbs the prior summary as material (see ``compaction.build_prompt``),
+        so the longer record supersedes the shorter one it swallowed.
+
+        The incremental hash below is ``prefix_key`` unrolled — one ``\\x1f`` +
+        text update per message, a digest snapshot per prefix — so the whole
+        scan is O(total content) instead of O(n²). Byte-for-byte parity with
+        ``prefix_key`` itself is pinned by
+        ``tests/test_compaction_inspect_v1169.py``; if that function ever
+        changes shape, the pin turns red before this silently returns misses.
+
+        Accepts dict messages (a stored thread's ``messages_json``) or
+        attribute-style ones (``ChatMessageBody``), read the same defaulted way
+        the live turn reads them. Never raises — same contract as :meth:`get`.
+        """
+        keys: dict[str, int] = {}  # prefix key -> prefix length (messages)
+        h = hashlib.sha256()
+        try:
+            for i, m in enumerate(list(messages or [])):
+                if isinstance(m, dict):
+                    role = m.get("role") or "user"
+                    text = m.get("content") or ""
+                else:
+                    role = getattr(m, "role", "user") or "user"
+                    text = getattr(m, "content", "") or ""
+                h.update(b"\x1f")
+                h.update(f"{role}\x1e{text}".encode("utf-8", "replace"))
+                keys[h.copy().hexdigest()] = i + 1
+        except Exception:  # noqa: BLE001 — degrade to "no compaction yet"
+            return None
+        if not keys:
+            return None
+        try:
+            with Session(self.engine) as db:
+                rows = list(
+                    db.exec(
+                        select(CompactionRecord).where(
+                            CompactionRecord.id.in_(list(keys))  # type: ignore[attr-defined]
+                        )
+                    )
+                )
+        except Exception:  # noqa: BLE001 — degrade to "no compaction yet"
+            return None
+        rows = [r for r in rows if r.summary.strip()]
+        if not rows:
+            return None
+        return max(rows, key=lambda r: keys.get(r.id, 0))
 
     def recent(self, limit: int = 20) -> list[CompactionRecord]:
         try:

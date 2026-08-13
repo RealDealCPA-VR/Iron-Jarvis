@@ -13,6 +13,7 @@ import {
   Compass,
   Cpu,
   ExternalLink,
+  Gauge,
   Globe,
   HardDrive,
   KeyRound,
@@ -87,6 +88,179 @@ import { RestHookups } from "@/components/connections/RestHookups";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { ProviderMark } from "@/components/BrandGlyph";
+
+/* -------------------------------------------------------------------------- */
+/*  Model report card (v1.169.0) — the evidence auto-tier judges on            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One row of GET /routing/quality: the router's OWN judgment of a local
+ * (provider, model) — avg completion over evaluated sessions vs the user's
+ * quality bar. `avg` is reported even below the evidence gate; `clears` is
+ * the server's real gated verdict (same function `_local_oracle` consults).
+ */
+interface QualityRow {
+  provider: string;
+  model: string;
+  task_class: string | null;
+  avg: number | null;
+  samples: number;
+  bar: number;
+  min_samples: number;
+  clears: boolean;
+}
+
+/** The bar judges LOCAL models only — a report line on a cloud provider would
+ *  imply it is being judged too. Mirrors providers/local.is_local_provider. */
+function isLocalReportProvider(provider: string): boolean {
+  return (
+    provider === "ollama" ||
+    provider === "custom" ||
+    provider === "opencode-cli" ||
+    provider.startsWith("fleet-")
+  );
+}
+
+/**
+ * avg, displayed so it can never sit on the wrong side of the displayed bar.
+ * toFixed(2) rounds 0.7477 to "0.75", which would read "avg 0.75 … below your
+ * 0.75 bar" — the verdict is right (the server compares the unrounded value),
+ * but the visible evidence would contradict it. Add decimals until the parsed
+ * display agrees with `clears`; as a last resort round AWAY from the bar.
+ */
+function fmtAvg(row: QualityRow): string {
+  const avg = row.avg ?? 0;
+  for (let dp = 2; dp <= 4; dp++) {
+    const s = avg.toFixed(dp);
+    if ((Number(s) >= row.bar) === row.clears) return s;
+  }
+  const scaled = row.clears ? Math.ceil(avg * 100) : Math.floor(avg * 100);
+  return (scaled / 100).toFixed(2);
+}
+
+/** True when a row carries a real gated verdict (enough evidence to judge). */
+function isJudged(row: QualityRow): boolean {
+  return row.samples >= row.min_samples && row.avg != null;
+}
+
+/** One task class's verdict, for the title tooltip — mirrors qualityLine's
+ *  three states so the hover always carries the full per-class picture. */
+function classVerdict(r: QualityRow): string {
+  if (!isJudged(r)) {
+    return `${r.task_class}: not enough evidence (${r.samples} of ${r.min_samples})`;
+  }
+  return `${r.task_class}: avg ${fmtAvg(r)} (${r.clears ? "clears" : "below the bar"})`;
+}
+
+/**
+ * The compact report line — honest about which of the three states holds:
+ * not enough evidence / below the bar (eligible work routes up) / clears.
+ * The verdict word comes from the SERVER's `clears` (the router's own gated
+ * check), never re-derived client-side.
+ *
+ * PER-CLASS HONESTY: the router never judges the aggregate — every live call
+ * carries a task class ("chat" or the agent type), so the aggregate verdict is
+ * a synthetic judgment no request ever receives. When judged classes DISAGREE
+ * with it, a single categorical consequence would be false for some of them
+ * (the exact state-collapse v1.165.0 forbids) — render the consequence per
+ * class instead, and drop the categorical claim.
+ */
+function qualityLine(row: QualityRow, classRows: QualityRow[] = []): string {
+  if (!isJudged(row)) {
+    return `not enough evidence yet (${row.samples} of ${row.min_samples} session${
+      row.min_samples === 1 ? "" : "s"
+    })`;
+  }
+  const avg = fmtAvg(row);
+  const n = `${row.samples} session${row.samples === 1 ? "" : "s"}`;
+  const judged = classRows.filter(isJudged);
+  const cleared = judged.filter((r) => r.clears).map((r) => String(r.task_class));
+  const failed = judged.filter((r) => !r.clears).map((r) => String(r.task_class));
+  const diverges = row.clears ? failed.length > 0 : cleared.length > 0;
+  if (diverges) {
+    const parts: string[] = [];
+    if (cleared.length > 0) {
+      parts.push(
+        `clears your ${row.bar} bar for ${cleared.join(", ")} work, which can stay local`,
+      );
+    }
+    if (failed.length > 0) {
+      parts.push(
+        `${cleared.length > 0 ? "below it" : `below your ${row.bar} bar`} for ${failed.join(
+          ", ",
+        )} work, which routes up`,
+      );
+    } else {
+      // Any class not demonstrably clearing routes up (no evidence => the
+      // router does not prefer local) — say so instead of implying the
+      // clearing classes speak for everything.
+      parts.push("other eligible work routes up");
+    }
+    return `avg ${avg} over ${n} — ${parts.join("; ")}`;
+  }
+  return row.clears
+    ? `avg ${avg} over ${n} — clears your ${row.bar} bar, so eligible work can stay local`
+    : `avg ${avg} over ${n} — below your ${row.bar} bar, so eligible work routes up`;
+}
+
+/**
+ * The report line(s) for ONE local provider — one line per model the router
+ * judges. The line renders from the aggregate row, but its CONSEQUENCE is
+ * qualified per task class when the class verdicts diverge (see qualityLine),
+ * and the tooltip always carries every class's verdict.
+ * Renders nothing for cloud providers or when the report has no rows.
+ */
+function ModelReportLine({
+  rows,
+  provider,
+  surface,
+}: {
+  rows: QualityRow[];
+  provider: string;
+  /** Distinguishes the testid when the same provider's line renders on more
+   *  than one surface (its ConnectionCard vs the CLI-tools row) — duplicate
+   *  testids on one page would make either instance unaddressable. */
+  surface?: string;
+}) {
+  if (!isLocalReportProvider(provider)) return null;
+  const mine = rows.filter(
+    (r) => r.provider === provider && r.task_class == null,
+  );
+  if (mine.length === 0) return null;
+  return (
+    <div
+      className="mt-1 space-y-0.5"
+      data-testid={`model-report-${surface ? `${surface}-` : ""}${provider}`}
+    >
+      {mine.map((r) => {
+        const classRows = rows.filter(
+          (c) =>
+            c.provider === provider &&
+            c.model === r.model &&
+            c.task_class != null,
+        );
+        const detail = classRows.map(classVerdict).join("; ");
+        return (
+          <p
+            key={r.model || "_"}
+            title={`Auto-tier judges local models on the average completion score of their evaluated sessions — below the bar (or without enough evidence), eligible work routes to a stronger model. Tune the bar in Settings.${
+              detail ? ` Per task class — ${detail}.` : ""
+            }`}
+            className="flex items-start gap-1 text-[10.5px] leading-relaxed text-zinc-500"
+          >
+            <Gauge size={10} className="mt-0.5 shrink-0 text-zinc-600" />
+            <span className="min-w-0">
+              {mine.length > 1 && r.model ? (
+                <span className="font-mono text-zinc-400">{r.model}: </span>
+              ) : null}
+              {qualityLine(r, classRows)}
+            </span>
+          </p>
+        );
+      })}
+    </div>
+  );
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Per-provider presentation (the /connections payload carries no help text)  */
@@ -195,11 +369,15 @@ function ConnectionCard({
   conn,
   onChanged,
   id,
+  quality = [],
 }: {
   conn: Connection;
   onChanged: () => void;
   /** Anchor id (`conn-card-${provider}`) the header dropdown smooth-scrolls to. */
   id: string;
+  /** Model report card rows (v1.169.0) — the custom card shows a line per
+   *  local endpoint ("fleet-<id>") and for the legacy "custom" slot. */
+  quality?: QualityRow[];
 }) {
   const meta = metaFor(conn.provider);
   const Icon = meta.icon;
@@ -802,7 +980,7 @@ function ConnectionCard({
               {endpoints.map((ep) => (
                 <div
                   key={ep.id}
-                  className="flex items-center gap-2 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2"
+                  className="flex flex-wrap items-center gap-2 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2"
                 >
                   {renaming === ep.id ? (
                     <input
@@ -895,6 +1073,22 @@ function ConnectionCard({
                     confirmLabel="Delete?"
                     title={`Remove "${ep.label}" — its provider disappears from every picker; the saved key is cleaned up`}
                   />
+                  {/* The report card for THIS endpoint's provider
+                      ("fleet-<id>") — what auto-tier's quality judgment sees
+                      (v1.169.0). Full-width so it wraps under the row; the
+                      wrapper renders only when a report exists, so an
+                      empty div never adds a phantom gap row. */}
+                  {quality.some(
+                    (r) =>
+                      r.provider === `fleet-${ep.id}` && r.task_class == null,
+                  ) && (
+                    <div className="w-full basis-full">
+                      <ModelReportLine
+                        rows={quality}
+                        provider={`fleet-${ep.id}`}
+                      />
+                    </div>
+                  )}
                 </div>
               ))}
               {epError && <ErrorNote>{epError}</ErrorNote>}
@@ -1075,6 +1269,16 @@ function ConnectionCard({
         </div>
       )}
 
+      {/* Runs on the legacy config slot are recorded under provider "custom"
+          — that report card belongs on this card too (v1.169.0). Rendered for
+          the card's OWN provider, not just "custom": any LOCAL provider that
+          gets a ConnectionCard shows its report where the user configures it
+          (the plan's "on each local provider's card"), and the guard inside
+          ModelReportLine keeps every cloud card silent. `surface="card"`
+          scopes the testid so a provider that also appears on the CLI-tools
+          row (ollama) never renders two nodes with one testid. */}
+      <ModelReportLine rows={quality} provider={conn.provider} surface="card" />
+
       {/* Test result + errors */}
       {test &&
         (test.ok ? <SuccessNote>{test.detail}</SuccessNote> : <ErrorNote>{test.detail}</ErrorNote>)}
@@ -1139,7 +1343,17 @@ const CLI_PROVIDERS: CliProviderInfo[] = [
   },
 ];
 
-function CliProviderRow({ info, available }: { info: CliProviderInfo; available: boolean }) {
+function CliProviderRow({
+  info,
+  available,
+  report = [],
+}: {
+  info: CliProviderInfo;
+  available: boolean;
+  /** Model report card rows (v1.169.0) — rendered only for LOCAL providers
+   *  (ollama, opencode-cli); the cloud CLI rows never get a report line. */
+  report?: QualityRow[];
+}) {
   const Icon = info.icon;
   return (
     <div className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
@@ -1157,6 +1371,7 @@ function CliProviderRow({ info, available }: { info: CliProviderInfo; available:
             {info.description}
             {!available && <span className="text-zinc-600"> · {info.hint}</span>}
           </div>
+          <ModelReportLine rows={report} provider={info.provider} />
         </div>
       </div>
       {available ? (
@@ -1256,6 +1471,15 @@ function ConnectElsewhereTile({
 
 export default function ConnectionsPage() {
   const { data, error, loading, reload } = useApi<{ connections: Connection[] }>("/connections");
+  // The model report card (v1.169.0): the router's own quality judgment of
+  // each LOCAL model — server truth, fetched once; best-effort (a missing
+  // report just renders no lines).
+  const { data: qualityData } = useApi<{
+    bar: number;
+    min_samples: number;
+    rows: QualityRow[];
+  }>("/routing/quality");
+  const qualityRows = qualityData?.rows ?? [];
   const { health, refresh: refreshHealth } = useDaemon();
   const offline = error && error.status === 0;
   const connections = data?.connections ?? [];
@@ -1446,6 +1670,7 @@ export default function ConnectionsPage() {
                 conn={conn}
                 onChanged={reload}
                 id={`conn-card-${conn.provider}`}
+                quality={qualityRows}
               />
             ))}
           </div>
@@ -1489,6 +1714,7 @@ export default function ConnectionsPage() {
                 key={info.provider}
                 info={info}
                 available={isDetected(info.provider)}
+                report={qualityRows}
               />
             ))}
           </div>

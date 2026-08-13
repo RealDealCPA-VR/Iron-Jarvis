@@ -346,6 +346,56 @@ def register(app: FastAPI, d) -> None:
             "comm_display": getattr(r, "comm_display", "") or "",
         }
 
+    @app.get("/chat/threads/{thread_id}/compaction")
+    def chat_thread_compaction(thread_id: str) -> dict[str, Any]:
+        """The compaction summary STANDING over a saved thread — readable again
+        (v1.169.0, ADDITIVE).
+
+        The model-written summary is injected into the system prompt of every
+        later turn and read back as authoritative, yet until now it was
+        readable exactly once — in the response of the ``POST /chat/compact``
+        (or auto-compacting turn) that created it. This loads the thread's
+        stored messages and asks the store which summary stands over them,
+        under the SAME content addressing the live turn uses
+        (``CompactionStore.standing``: ``prefix_key`` over role/content pairs,
+        longest stored prefix wins — see its docstring for why an exact-key
+        lookup would go stale one turn after every compaction).
+
+        ``found: false`` when no summary stands. ``stripped_claims`` may be
+        empty while ``stripped`` is positive: rows written before v1.169.0
+        (and the agent auto-lane) persisted only the count — the client says
+        "not recorded" there rather than pretending nothing was removed.
+        """
+        from ...core.models import ChatThreadRecord
+        from ..chat_turn import _compaction_store
+
+        with session_scope(d.platform.engine) as db:
+            r = db.get(ChatThreadRecord, thread_id)
+        if r is None:
+            raise HTTPException(status_code=404, detail="no such thread")
+        try:
+            msgs = json.loads(r.messages_json or "[]")
+        except Exception:  # noqa: BLE001 — a corrupt blob is "no summary", not a 500
+            msgs = []
+        rec = (
+            _compaction_store(d.platform).standing(msgs)
+            if isinstance(msgs, list)
+            else None
+        )
+        if rec is None:
+            return {"found": False}
+        return {
+            "found": True,
+            "summary": rec.summary,
+            "covers": rec.covers,
+            "stripped": rec.stripped,
+            "stripped_claims": rec.claims(),
+            "trigger": rec.trigger,
+            "provider": rec.provider,
+            "model": rec.model,
+            "created_at": rec.created_at.isoformat(),
+        }
+
     @app.put("/chat/threads/{thread_id}")
     def save_chat_thread(thread_id: str, body: dict) -> dict[str, Any]:
         """Upsert a thread (the chat autosaves after every turn). Send
@@ -944,6 +994,10 @@ def register(app: FastAPI, d) -> None:
                 "cached": True,
                 "covers": cached.covers,
                 "stripped": cached.stripped,
+                # ADDITIVE (v1.169.0): the fresh path always returned the
+                # claims; the cached path silently dropped them, so clicking
+                # Compact twice LOST the honest half of the receipt.
+                "stripped_claims": cached.claims(),
                 "summary": cached.summary,
                 "provider": cached.provider,
                 "model": cached.model,
@@ -982,6 +1036,10 @@ def register(app: FastAPI, d) -> None:
             summary=out.summary,
             covers=len(covered),
             stripped=out.stripped,
+            # v1.169.0: persist the claims TEXT, not just the count, so the
+            # inspect route (GET /chat/threads/{id}/compaction) can show what
+            # was removed after the creating response is gone.
+            stripped_claims=out.stripped_claims,
             trigger="manual",
             provider=out.provider,
             model=out.model,

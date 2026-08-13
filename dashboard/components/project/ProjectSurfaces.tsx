@@ -15,6 +15,7 @@ import type { SessionView } from "@/lib/types";
 import { Card, Empty, SkeletonRows } from "@/components/ui";
 import { KanbanBoard } from "@/components/kanban/KanbanBoard";
 import { ProjectTasks } from "@/components/project/ProjectTasks";
+import { ProjectSchedules } from "@/components/project/ProjectSchedules";
 
 export type ProjectSurfaceView = "tasks" | "board" | "media";
 
@@ -47,12 +48,17 @@ function SurfaceTasks({ projectId, hasRoot }: { projectId: string; hasRoot: bool
     `/projects/${encodeURIComponent(projectId)}`,
   );
   return (
-    <ProjectTasks
-      projectId={projectId}
-      hasRoot={hasRoot}
-      sessions={detail.data?.sessions ?? []}
-      reloadSessions={detail.reload}
-    />
+    <div className="space-y-4">
+      <ProjectTasks
+        projectId={projectId}
+        hasRoot={hasRoot}
+        sessions={detail.data?.sessions ?? []}
+        reloadSessions={detail.reload}
+      />
+      {/* v1.169.0: the project's heartbeat — task schedules that run in here,
+          with next fire + last outcome. Renders nothing when there are none. */}
+      <ProjectSchedules projectId={projectId} />
+    </div>
   );
 }
 
