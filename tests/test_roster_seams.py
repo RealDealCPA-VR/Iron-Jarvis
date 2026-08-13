@@ -798,6 +798,8 @@ def test_get_agents_roster_serializes_entries(tmp_path, monkeypatch):
     for e in roster:
         assert set(e) == {
             "name", "kind", "description", "delegable", "healthy", "stats", "line",
+            # v1.171.0 identity fields (additive): activity preview + portrait.
+            "last_active", "last_message", "avatar",
         }
     assert roster[0]["stats"]["sessions"] == 23
     assert roster[1]["healthy"] is False

@@ -9,7 +9,6 @@ import {
   ChevronDown,
   ChevronRight,
   X,
-  Cpu,
   LoaderCircle,
   RotateCcw,
   MessageSquarePlus,
@@ -21,6 +20,7 @@ import { post, del, ApiError } from "@/lib/api";
 import type { SessionView } from "@/lib/types";
 import type { LaneId } from "@/lib/kanban";
 import { StatusDot, ConfirmButton, LoaderInline } from "@/components/ui";
+import AgentFace, { moodForStatus } from "@/components/agents/AgentFace";
 import OriginChip from "@/components/sessions/OriginChip";
 import { timeAgo } from "@/lib/format";
 
@@ -135,7 +135,22 @@ export function CardInner({
 
       <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1.5">
         <span className="inline-flex items-center gap-1 rounded-md bg-white/[0.05] px-1.5 py-0.5 text-[10.5px] font-medium text-zinc-300">
-          <Cpu size={11} className="text-accent-soft/70" />
+          {/* The agent's face replaces the generic Cpu glyph (v1.171.0):
+              identity from the agent type, mood from the card's REAL status
+              via the shared moodForStatus mapping. Nested team children are
+              SessionCards too, so they carry their own face for free.
+              Decorative (title="" + aria-hidden): the agent type is the
+              visible text right beside it — the default SVG <title> made this
+              chip read "codercoder" and doubled every get-by-text (the exact
+              ambiguity that forced title="" on TeamTree). */}
+          <span aria-hidden="true" className="contents">
+            <AgentFace
+              name={session.agent_type}
+              mood={moodForStatus(session.status)}
+              size={16}
+              title=""
+            />
+          </span>
           {session.agent_type}
         </span>
         <span className="rounded-md bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10.5px] text-zinc-400">

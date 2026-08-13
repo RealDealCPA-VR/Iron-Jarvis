@@ -45,9 +45,8 @@ import { ApiError, get, post } from "@/lib/api";
 import { useEvents } from "@/lib/useEvents";
 import { timeAgo } from "@/lib/format";
 import { Empty, ErrorNote, OfflineHint, SkeletonRows } from "@/components/ui";
+import AgentFace, { faceIdentity } from "./AgentFace";
 import {
-  AgentAvatar,
-  AvatarStack,
   RolePill,
   SOURCE_LABEL,
   SourceIcon,
@@ -253,6 +252,23 @@ export function mentionText(name: string): string {
     : `@"${name}"`;
 }
 
+/* ------------------------------------------------------------- identity --- */
+
+/** THE face seed for a participant key (v1.171.0): the BARE NAME.
+ *
+ *  A key is "<source>:<name>". TeamTree and the kanban seed faces by the bare
+ *  agent_type ("builder"); seeding thread surfaces by the full key
+ *  ("builtin:builder") hashed to a DIFFERENT shape/color, so the same agent
+ *  wore a different face on session surfaces than on thread surfaces —
+ *  defeating AgentFace's "same name → same face, everywhere" premise. Every
+ *  key-only call site (transcript entries, round chips) seeds through this;
+ *  sites that hold a Participant seed by `p.name`, which participantKey()
+ *  guarantees is the same string. Stripping only the FIRST colon matches how
+ *  the display name has always been derived from a key. */
+// Canonical seed now lives with the face itself (coordinator relocation);
+// re-exported so existing imports from this module keep working.
+export { faceIdentity };
+
 /* -------------------------------------------------------------- entries --- */
 
 function UserBubble({ content, at }: { content: string; at?: string }) {
@@ -280,14 +296,29 @@ function KindBadge({ source }: { source?: string }) {
 function AgentTurn({ entry, byKey }: { entry: ThreadEntry; byKey: Map<string, Participant> }) {
   const p = byKey.get(entry.who);
   // "<source>:<name>" → the name; a key without a colon renders as-is.
-  const colon = entry.who.indexOf(":");
-  const name = p?.name ?? (colon >= 0 ? entry.who.slice(colon + 1) : entry.who);
+  const name = p?.name ?? faceIdentity(entry.who);
   const role = entry.role ?? p?.role;
   const source = entry.source ?? p?.source;
   const content = (entry.content ?? "").trim();
   return (
     <div className="flex gap-3">
-      <AgentAvatar agentKey={entry.who} name={name} size="md" className="mt-0.5" />
+      {/* The speaker's face (v1.171.0) — seeded by the BARE name
+          (faceIdentity) so this is the SAME face the agent wears on TeamTree
+          and the kanban. An entry that carries an error shows the honest X-X
+          eyes; a landed reply just sits idle — no mood is ever invented.
+          Decorative (title="" + aria-hidden): the speaker's name is the
+          visible label right beside it, and a duplicate SVG <title> text node
+          would double every get-by-text AND read the name twice to a screen
+          reader. */}
+      <span aria-hidden="true" className="contents">
+        <AgentFace
+          name={faceIdentity(entry.who)}
+          title=""
+          mood={entry.error ? "error" : "idle"}
+          size={26}
+          className="mt-0.5"
+        />
+      </span>
       <div className="min-w-0 max-w-[85%]">
         <div className="mb-1 flex flex-wrap items-center gap-1.5">
           <span className="text-xs font-semibold" style={{ color: nameColor(entry.who) }}>
@@ -655,7 +686,19 @@ export function RoundTable({
               className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.03] py-0.5 pl-1 pr-2"
               title={`${p.name} — ${p.role} (${p.source})`}
             >
-              <AgentAvatar agentKey={p.key} name={p.name} size="sm" />
+              {/* Mood is REAL round state only: the panel tracks who is
+                  speaking mid-round (nowSpeaking); everyone else sits idle.
+                  Seeded by the bare name (= p.name) so the chip matches the
+                  face on every other surface; decorative because the name is
+                  the visible text right beside it. */}
+              <span aria-hidden="true" className="contents">
+                <AgentFace
+                  name={p.name}
+                  title=""
+                  mood={round && p.key === nowSpeaking ? "work" : "idle"}
+                  size={18}
+                />
+              </span>
               <span className="text-xs text-zinc-200">{p.name}</span>
               <RolePill role={p.role} />
               <SourceIcon source={p.source} size={11} />
@@ -668,7 +711,19 @@ export function RoundTable({
       <div className="max-h-[62vh] min-h-[40vh] space-y-4 overflow-y-auto p-4">
         {messages.length === 0 && !pendingUser && !speaking ? (
           <div className="flex min-h-[36vh] flex-col items-center justify-center gap-3 px-6 text-center">
-            <AvatarStack participants={participants} size="lg" max={6} />
+            {/* The panel's faces, idle — waiting for the first question.
+                These KEEP their title/label: no visible name sits beside them,
+                so the face is the only identity carrier here. */}
+            <div className="flex items-center gap-1.5">
+              {participants.slice(0, 6).map((p) => (
+                <AgentFace key={p.key} name={p.name} title={p.name} size={34} />
+              ))}
+              {participants.length > 6 && (
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-white/10 bg-ink-800 text-[12px] text-zinc-400">
+                  +{participants.length - 6}
+                </span>
+              )}
+            </div>
             <p className="max-w-sm text-sm leading-relaxed text-zinc-400">
               Ask the panel anything — every agent answers in turn, and they can
               respond to each other. Mention one with @name to ask just them.
@@ -693,8 +748,7 @@ export function RoundTable({
             <div className="flex flex-wrap items-center gap-1.5">
               {round.expected.map((key) => {
                 const p = byKey.get(key);
-                const colon = key.indexOf(":");
-                const name = p?.name ?? (colon >= 0 ? key.slice(colon + 1) : key);
+                const name = p?.name ?? faceIdentity(key);
                 const done = landedKeys.includes(key);
                 const current = !done && key === nowSpeaking;
                 return (
@@ -708,7 +762,17 @@ export function RoundTable({
                           : "border-white/[0.06] text-zinc-500"
                     }`}
                   >
-                    <AgentAvatar agentKey={key} name={name} size="xs" />
+                    {/* Every mood here is tracked round state: landed → done,
+                        the current speaker → work, the rest wait idle. Bare-
+                        name seed + decorative — the name renders beside it. */}
+                    <span aria-hidden="true" className="contents">
+                      <AgentFace
+                        name={faceIdentity(key)}
+                        title=""
+                        mood={done ? "done" : current ? "work" : "idle"}
+                        size={14}
+                      />
+                    </span>
                     {name}
                     {done ? (
                       <Check size={11} className="text-emerald-400" />
@@ -764,7 +828,11 @@ export function RoundTable({
                       : "text-zinc-300"
                   }`}
                 >
-                  <AgentAvatar agentKey={p.key} name={p.name} size="sm" />
+                  {/* Bare-name seed + decorative: the option's visible text
+                      IS the name — see faceIdentity. */}
+                  <span aria-hidden="true" className="contents">
+                    <AgentFace name={p.name} title="" size={18} />
+                  </span>
                   <span className="min-w-0 truncate">{p.name}</span>
                   <RolePill role={p.role} />
                 </button>

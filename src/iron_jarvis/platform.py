@@ -1094,16 +1094,85 @@ def build_platform(
                 raise RuntimeError(
                     "task schedules need the daemon's agent orchestrator"
                 )
+            # v1.171.0 (contract 3): a schedule may name WHO does the work.
+            # Resolution mirrors POST /agents/{name}/spawn exactly — the
+            # DYNAMIC record first (resolved through the registry at FIRE
+            # time, so edits to the agent apply to later fires), then a
+            # builtin AgentType — a schedule and a manual spawn must never
+            # disagree about what a name means. Absent = builder, exactly
+            # as before this wave.
+            from .core.models import AgentType as _AgentType
+
+            # The SAME isinstance guard as the GET /schedules decode: a
+            # non-string payload value (legacy/corrupt row inserted below the
+            # ADD validation) is treated as ABSENT, never str()-coerced —
+            # "123" could phantom-match a dynamic agent literally named
+            # "123", and the fire must agree with what the list shows.
+            _raw_agent = payload.get("agent_type")
+            agent_name = _raw_agent.strip() if isinstance(_raw_agent, str) else ""
+            agent_type = _AgentType.BUILDER
+            definition = None
+            provider = payload.get("provider") or None
+            model = payload.get("model") or None
+            if agent_name:
+                registry = getattr(platform, "agents_registry", None)
+                definition = (
+                    registry.definition(agent_name) if registry is not None else None
+                )
+                if definition is not None:
+                    if definition.type is _AgentType.SUPERVISOR:
+                        # Mirrors the spawn route's 409 (v1.166.0): run_session
+                        # reroutes SUPERVISOR-typed sessions to the builtin
+                        # supervisor, which would silently discard this
+                        # record's custom system prompt.
+                        raise RuntimeError(
+                            f"dynamic agent '{agent_name}' is based on "
+                            "'supervisor' and cannot take a schedule — "
+                            "re-create it with a non-supervisor base type"
+                        )
+                    agent_type = definition.type
+                    # Parity with the spawn route: an explicit payload
+                    # provider/model wins; the record's pinned pair is the
+                    # fallback.
+                    rec = registry.get(agent_name)
+                    provider = provider or (
+                        rec.provider if (rec and rec.provider) else None
+                    )
+                    model = model or (rec.model if (rec and rec.model) else None)
+                else:
+                    try:
+                        agent_type = _AgentType(agent_name)
+                    except ValueError:
+                        # A dynamic agent deleted AFTER scheduling: fail the
+                        # fire HONESTLY (recorded on the row + delivered) —
+                        # never silently degrade to the builder, which would
+                        # run the task without the prompt/tools the user
+                        # scheduled it for.
+                        raise ValueError(
+                            f"scheduled agent '{agent_name}' no longer exists "
+                            "— it may have been deleted; re-create it or "
+                            "re-add the schedule with another agent"
+                        )
             session = await platform.orchestrator.create_session(
                 prompt,
-                provider=payload.get("provider") or None,
-                model=payload.get("model") or None,
+                agent_type,
+                provider=provider,
+                model=model,
                 project_id=payload.get("project_id") or None,
                 origin=f"schedule:{task.name}",
             )
             fired["session_id"] = session.id
             try:
-                done = await platform.orchestrator.run_session(session.id)
+                # The definition kwarg is passed ONLY when a dynamic agent
+                # resolved one: the absent-agent path stays call-signature
+                # byte-identical to pre-v1.171 (callers/stubs that accept
+                # only session_id keep working).
+                if definition is not None:
+                    done = await platform.orchestrator.run_session(
+                        session.id, definition=definition
+                    )
+                else:
+                    done = await platform.orchestrator.run_session(session.id)
             except Exception as exc:  # noqa: BLE001 - recorded, then re-raised
                 # A review that died mid-run is a FAILED run, not an absent one:
                 # the card must show it, and a failed run structurally cannot

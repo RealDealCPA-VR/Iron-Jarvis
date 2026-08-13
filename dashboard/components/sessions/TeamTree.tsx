@@ -22,6 +22,7 @@ import { FileText, Network } from "lucide-react";
 import { get } from "@/lib/api";
 import type { SessionView } from "@/lib/types";
 import { Card, Badge } from "@/components/ui";
+import AgentFace, { moodForStatus } from "@/components/agents/AgentFace";
 import { shortId } from "@/lib/format";
 import { basename } from "@/components/chat/ArtifactsRail";
 import {
@@ -175,6 +176,23 @@ function Branch({
       {nodes.map((n) => (
         <div key={n.session.id} className="py-1">
           <div className="flex flex-wrap items-center gap-2">
+            {/* The delegate's face (v1.171.0): identity from its agent type,
+                mood from the session's REAL status — moodForStatus is the one
+                shared status→mood mapping, never a local guess. title="" keeps
+                the SVG <title> out: the agent's name is the link RIGHT NEXT to
+                the face, and a duplicate text node would double every
+                get-by-text on this panel. The aria-hidden wrapper finishes the
+                decorative mode: title="" alone left role="img" with an EMPTY
+                aria-label, an invalid ARIA state screen readers handle
+                unpredictably. */}
+            <span aria-hidden="true" className="contents">
+              <AgentFace
+                name={n.session.agent_type}
+                mood={moodForStatus(n.session.status)}
+                size={18}
+                title=""
+              />
+            </span>
             <Link
               href={`/sessions/${n.session.id}`}
               className="font-medium text-accent-soft transition-colors hover:text-accent"

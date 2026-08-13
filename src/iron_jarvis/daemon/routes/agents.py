@@ -6,10 +6,15 @@ reached through ``d`` (see the deps object built in create_app).
 
 from __future__ import annotations
 
+import hashlib
 import os
+import re
+import time
+from pathlib import Path
+from typing import Any
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException
-from typing import Any
 
 from ..app import _session_view
 from ..schemas import (
@@ -31,6 +36,238 @@ from ..schemas import (
 
 # Importing this registers the RemoteAgentRecord table on the shared metadata.
 from ...agents.remote import RemoteAgentRegistry
+
+# --- agent identity: portraits + roster activity (v1.171.0) -----------------
+# Storage is BY NAME under <home>/avatars/<slug>.png — the file's existence IS
+# the record (no schema change). Module-level pure helpers so tests can drive
+# them directly, and so `_generate_avatar_bytes` is monkeypatchable (looked up
+# on the module at call time, the `_open_native` pattern from routes/documents).
+
+#: Decoded upload cap — a portrait, not a photo archive.
+_AVATAR_MAX_BYTES = 2 * 1024 * 1024
+#: Stored portraits are normalized to ≤512px PNG.
+_AVATAR_MAX_DIM = 512
+#: last_message preview cap (frozen contract: ≤140 chars, plain text).
+_PREVIEW_CHARS = 140
+
+_NO_IMAGE_MODEL = (
+    "no image model is connected — add a 'pixio' secret (Secrets page) or set "
+    "PIXIO_API_KEY to enable portrait generation"
+)
+
+_AVATAR_PROMPT = (
+    "A friendly square profile avatar portrait for an AI assistant agent "
+    "named {name}. {purpose}Minimal flat vector style, bold simple shapes, "
+    "dark studio background, centered head-and-shoulders composition, "
+    "no text, no watermark."
+)
+
+_AVATAR_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
+
+#: DOS device names: opening ``<dir>/nul.png`` opens the DEVICE, not a file —
+#: Windows matches the segment before the FIRST dot, case-insensitively.
+_WINDOWS_RESERVED = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{i}" for i in "123456789"}
+    | {f"lpt{i}" for i in "123456789"}
+)
+
+
+def _avatar_slug(name: str) -> str:
+    """One path-safe filename segment that never EATS the identity (v1.153.2).
+
+    A clean LOWERCASE name passes through verbatim. Any name the sanitizer had
+    to touch gets a short digest of the ORIGINAL appended, so ``a/b`` and
+    ``a_b`` can never collide on one file — lossy sanitization without the
+    digest would silently merge two agents' portraits.
+
+    CASE-FOLDING IS LOSSY TOO: the shipping filesystems (NTFS, APFS) are
+    case-insensitive, so ``Analyst`` and ``analyst`` as distinct slugs would
+    still resolve to ONE file. The stored segment is therefore lowercase, and
+    a name the fold changed is treated exactly like any other sanitizer touch.
+    Windows reserved device names (nul, con, com1…) get the digest PREFIXED —
+    the device match keys on the segment before the first dot, so an appended
+    digest would not break ``nul.txt``.
+    """
+    raw = str(name or "").strip()
+    slug = _AVATAR_UNSAFE.sub("_", raw).strip("._")
+    lowered = slug.lower()
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
+    if lowered.split(".", 1)[0] in _WINDOWS_RESERVED:
+        return f"{digest}-{lowered}"
+    if not lowered or lowered != raw:
+        return f"{lowered or 'agent'}-{digest}"
+    return lowered
+
+
+#: Non-whitespace C0/C1 controls (ESC/BEL/NUL survive a whitespace collapse)
+#: plus the Unicode bidi controls (U+202E RLO can visually REVERSE a preview,
+#: spoofing what the agent appears to have said). Stripped, never rendered.
+_PREVIEW_UNSAFE = re.compile(
+    "[\x00-\x08\x0b-\x1f\x7f-\x9f"  # C0 (sans \t\n, already collapsed) + DEL + C1
+    "\u200e\u200f"  # LRM / RLM
+    "\u202a-\u202e"  # LRE / RLE / PDF / LRO / RLO
+    "\u2066-\u2069]"  # LRI / RLI / FSI / PDI
+)
+
+
+def _preview_text(text: Any) -> str:
+    """Injection-safe one-line preview: whitespace runs (incl. newlines /
+    control separators) collapse to single spaces, remaining control and
+    bidi-override characters are STRIPPED (a whitespace collapse alone lets
+    ESC/BEL/NUL and U+202E through verbatim — measured), clipped to ≤140
+    chars. A stored message must never escape into layout or terminal/bidi
+    trickery."""
+    flat = " ".join(str(text or "").split())
+    flat = " ".join(_PREVIEW_UNSAFE.sub("", flat).split())
+    if len(flat) <= _PREVIEW_CHARS:
+        return flat
+    return flat[: _PREVIEW_CHARS - 1].rstrip() + "…"
+
+
+def _thread_activity(records: Any) -> dict[str, tuple[str, str]]:
+    """Newest agent-thread entry per participant key → {key: (iso_at, preview)}.
+
+    ONE pass over already-fetched thread rows (the caller does a single
+    ``AgentThreads.list()`` — never N+1 queries). User turns are skipped:
+    the roster asks what the AGENT last said, not what was said to it.
+    Defensive per-row: one corrupt blob costs that thread's contribution only.
+    """
+    import json as _json
+    from datetime import datetime
+
+    newest: dict[str, tuple[datetime, str, str]] = {}
+    for rec in records or []:
+        try:
+            msgs = _json.loads(getattr(rec, "messages_json", "") or "[]")
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(msgs, list):
+            continue
+        for m in msgs:
+            if not isinstance(m, dict):
+                continue
+            who = str(m.get("who") or "")
+            if not who or who == "user":
+                continue
+            raw_at = str(m.get("at") or "")
+            try:
+                at = datetime.fromisoformat(raw_at)
+            except ValueError:
+                continue
+            prev = newest.get(who)
+            try:
+                is_newer = prev is None or at > prev[0]
+            except TypeError:  # naive vs aware timestamps in one store
+                is_newer = False
+            if is_newer:
+                text = m.get("content") or m.get("error") or ""
+                newest[who] = (at, raw_at, _preview_text(text))
+    return {key: (raw_at, preview) for key, (_at, raw_at, preview) in newest.items()}
+
+
+def _sniff_image(data: bytes) -> str | None:
+    """PNG/JPEG/WebP magic-byte sniff — the CONTENT decides, never the name."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def _normalize_avatar_png(data: bytes) -> bytes:
+    """Decode + normalize to a ≤512px PNG. Raises on undecodable bytes —
+    the caller turns that into an honest 415, never stores garbage."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    with Image.open(BytesIO(data)) as im:
+        im = im.convert("RGBA")
+        im.thumbnail((_AVATAR_MAX_DIM, _AVATAR_MAX_DIM))
+        out = BytesIO()
+        im.save(out, format="PNG")
+    return out.getvalue()
+
+
+def _generate_avatar_bytes(key: str, prompt: str, *, timeout_seconds: int = 180) -> bytes:
+    """Generate ONE portrait through the platform's EXISTING image path —
+    the same Pixio API :mod:`iron_jarvis.tools.pixio` speaks (model ids are
+    DISCOVERED from ``/api/v1/models``, never invented). SYNC on purpose: the
+    avatar route is a sync handler, so this runs in FastAPI's threadpool and
+    never blocks the event loop. Raises ``RuntimeError`` with an honest
+    message on ANY failure — there is deliberately no placeholder image.
+    """
+    from ...tools.pixio import _BASE_URL, _default_http, _detail, _http_error, _output_url
+
+    headers = {"Authorization": f"Bearer {key}", "Accept": "application/json"}
+
+    def _api(method: str, path: str, body: dict | None = None) -> Any:
+        resp = _default_http(method, _BASE_URL + path, headers, body)
+        status = int(getattr(resp, "status_code", 0) or 0)
+        try:
+            payload = resp.json()
+        except Exception:  # noqa: BLE001 — non-JSON error bodies happen
+            payload = {}
+        err = _http_error(status, payload if isinstance(payload, dict) else {})
+        if err:
+            raise RuntimeError(err)
+        return payload
+
+    models = _api("GET", "/api/v1/models")
+    if isinstance(models, dict):
+        models = models.get("models") or models.get("data") or []
+    image_models: list[str] = []
+    for m in models or []:
+        if not isinstance(m, dict):
+            continue
+        kind = str(m.get("type") or m.get("category") or "").lower()
+        model_id = str(m.get("id") or m.get("modelId") or "")
+        if model_id and "image" in kind:
+            image_models.append(model_id)
+    if not image_models:
+        raise RuntimeError("no image-capable Pixio model is visible to this account")
+    chosen = next(
+        (m for m in image_models if "nano-banana" in m),
+        next((m for m in image_models if "flux" in m), image_models[0]),
+    )
+
+    body = _api(
+        "POST",
+        "/api/v1/generate",
+        {"providerId": "pixio", "modelId": chosen, "params": {"prompt": prompt}},
+    )
+    body = body if isinstance(body, dict) else {}
+    generation_id = str(body.get("contentId") or body.get("id") or "")
+    if not generation_id:
+        raise RuntimeError("Pixio generate returned no generation id")
+
+    deadline = time.monotonic() + max(1, timeout_seconds)
+    while True:
+        body = _api("GET", f"/api/v1/generations/{generation_id}")
+        body = body if isinstance(body, dict) else {}
+        state = str(body.get("status") or "").lower()
+        if state == "succeeded":
+            url = _output_url(body)
+            if not url:
+                raise RuntimeError("generation succeeded but returned no output url")
+            # Public CDN link — never send the bearer key to a third-party host.
+            resp = _default_http("GET", url, {}, None)
+            status = int(getattr(resp, "status_code", 0) or 0)
+            if not 200 <= status < 300:
+                raise RuntimeError(f"portrait download failed ({status})")
+            return getattr(resp, "content", b"") or b""
+        if state == "failed":
+            raise RuntimeError(
+                f"generation failed: {_detail(body) or 'no error detail from Pixio'}"
+            )
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"generation still '{state or 'pending'}' after {timeout_seconds}s"
+            )
+        time.sleep(5.0)
 
 
 def register(app: FastAPI, d) -> None:
@@ -129,6 +366,29 @@ def register(app: FastAPI, d) -> None:
         sk = d.platform.skills.get(body.name.strip())
         return {"name": sk.name if sk else body.name, "created": True}
 
+    # --- portrait storage (v1.171.0): <home>/avatars/<slug>.png -------------
+
+    def _avatar_path(name: str) -> Path:
+        return d.platform.config.home / "avatars" / f"{_avatar_slug(name)}.png"
+
+    def _avatar_url(name: str) -> str | None:
+        """The serve URL — ONLY when a stored portrait actually exists.
+        None otherwise, so no client ever renders a broken 404 image."""
+        try:
+            if name and _avatar_path(name).is_file():
+                return f"/agents/{quote(name, safe='')}/avatar"
+        except OSError:
+            pass
+        return None
+
+    def _image_key() -> str | None:
+        """Same key resolution as the creative routes: vault first, env second."""
+        try:
+            key = d.platform.secrets.get("pixio")
+        except Exception:  # noqa: BLE001 — vault miss = not configured
+            key = None
+        return key or os.environ.get("PIXIO_API_KEY") or None
+
     @app.get("/agents")
     def list_agents() -> dict[str, Any]:
         import json as _json
@@ -147,6 +407,9 @@ def register(app: FastAPI, d) -> None:
                     # separate detail fetch.
                     "system_prompt": r.system_prompt,
                     "tools": _json.loads(r.tools_json or "[]"),
+                    # v1.171.0 additive: the portrait URL when one is stored
+                    # (None otherwise) — the Setup card's avatar row reads it.
+                    "avatar": _avatar_url(r.name),
                 }
                 for r in d.platform.agents_registry.list()
             ],
@@ -181,9 +444,23 @@ def register(app: FastAPI, d) -> None:
             entries = build_roster(d.platform)
         except Exception:  # noqa: BLE001 — an empty roster beats a 500
             entries = []
+        # v1.171.0: join the roster against agent-thread activity in ONE query
+        # pass (a single AgentThreads.list(), processed in memory — never N+1).
+        # A failed join costs the new fields only, never the roster itself.
+        activity: dict[str, tuple[str, str]] = {}
+        try:
+            from ...agents.threads import AgentThreads
+
+            activity = _thread_activity(AgentThreads(d.platform.engine).list())
+        except Exception:  # noqa: BLE001 — activity is a bonus, roster is the job
+            activity = {}
+        # Roster kind → thread-participant source (the one bridge, both ways).
+        source_by_kind = {"builtin": "builtin", "dynamic": "dynamic", "remote": "remote"}
         roster = []
         for e in entries:
             try:
+                bare = e.name.partition(":")[2] if ":" in e.name else e.name
+                last = activity.get(f"{source_by_kind.get(e.kind, 'builtin')}:{bare}")
                 roster.append(
                     {
                         "name": e.name,
@@ -193,6 +470,11 @@ def register(app: FastAPI, d) -> None:
                         "healthy": e.healthy,
                         "stats": e.stats,
                         "line": e.line(),
+                        # v1.171.0 additive (frozen contract): real activity or
+                        # honest nulls — never an invented "just now".
+                        "last_active": last[0] if last else None,
+                        "last_message": last[1] if last else None,
+                        "avatar": _avatar_url(bare),
                     }
                 )
             except Exception:  # noqa: BLE001 — one bad entry must not drop the rest
@@ -466,6 +748,149 @@ def register(app: FastAPI, d) -> None:
             # 424 Failed Dependency — the remote agent itself failed to answer.
             raise HTTPException(status_code=424, detail=res.get("detail") or "remote call failed")
         return {"result": res.get("result") or "", "agent": name, "kind": rec.kind}
+
+    # --- Agent portraits (v1.171.0) -----------------------------------------
+    # Registered AFTER the /agents/remote/* block on purpose: /agents/remote/…
+    # paths keep their priority for the (pathological) agent name "remote".
+    # Works for BUILTIN names and dynamic slugs alike — storage is by name and
+    # the file's existence is the whole record.
+
+    @app.get("/agents/{name}/avatar")
+    def get_agent_avatar(name: str):
+        """The stored portrait's bytes — INLINE disposition (the v1.166 lesson:
+        an <img> must render it, not trigger a download). 404 when none."""
+        from fastapi.responses import FileResponse
+
+        name = (name or "").strip()
+        p = _avatar_path(name)
+        if not name or not p.is_file():
+            raise HTTPException(status_code=404, detail="no stored portrait for this agent")
+        return FileResponse(
+            str(p),
+            media_type="image/png",
+            filename=p.name,
+            content_disposition_type="inline",
+        )
+
+    @app.post("/agents/{name}/avatar")
+    def set_agent_avatar(name: str, body: dict) -> dict[str, Any]:
+        """Store a portrait: upload (``image_b64``) or generate (``generate``).
+
+        Upload: ≤2MB decoded, PNG/JPEG/WebP sniffed by CONTENT, normalized to
+        a ≤512px PNG. Generate: through the platform's existing Pixio image
+        path — and when no image model is configured, an HONEST 409 naming
+        what's missing. There is deliberately NO placeholder image: a face
+        that pretends a portrait exists is the dishonest kind of warmth.
+
+        Sync handler on purpose — the (possibly minutes-long) generation runs
+        in FastAPI's threadpool, never on the event loop.
+        """
+        import base64
+
+        name = (name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="agent name is required")
+        image_b64 = str(body.get("image_b64") or "")
+        generate = bool(body.get("generate"))
+        if bool(image_b64) == generate:
+            raise HTTPException(
+                status_code=400, detail="give exactly one of image_b64 or generate"
+            )
+
+        if image_b64:
+            # Reject on the base64 length BEFORE decoding (4/3 expansion) so an
+            # oversized body never gets buffered — the uploads-route pattern.
+            approx = (len(image_b64) * 3) // 4
+            if approx > _AVATAR_MAX_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        f"portrait too large (~{approx // (1024 * 1024)} MB); "
+                        "limit is 2 MB"
+                    ),
+                )
+            try:
+                data = base64.b64decode(image_b64, validate=False)
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=400, detail=f"invalid base64: {exc}")
+            if len(data) > _AVATAR_MAX_BYTES:
+                raise HTTPException(
+                    status_code=413, detail="portrait too large; limit is 2 MB"
+                )
+            source = "upload"
+        else:
+            key = _image_key()
+            if not key:
+                # The honest degradation the wave exists for: say what's
+                # missing, never hand back a placeholder.
+                raise HTTPException(status_code=409, detail=_NO_IMAGE_MODEL)
+            purpose = ""
+            try:
+                rec = d.platform.agents_registry.get(name)
+                if rec is not None and (rec.description or "").strip():
+                    purpose = " ".join(str(rec.description).split())[:300]
+            except Exception:  # noqa: BLE001 — a purposeless prompt still works
+                purpose = ""
+            prompt = _AVATAR_PROMPT.format(
+                name=name, purpose=f"Its purpose: {purpose}. " if purpose else ""
+            )
+            try:
+                data = _generate_avatar_bytes(key, prompt)
+            except RuntimeError as exc:
+                # Configured but failing is a dependency failure, not a
+                # conflict — mirrors /creative/publish's 424.
+                raise HTTPException(status_code=424, detail=str(exc))
+            source = "generated"
+
+        if _sniff_image(data) is None:
+            raise HTTPException(
+                status_code=415,
+                detail=(
+                    "the image model returned data that is not PNG/JPEG/WebP"
+                    if source == "generated"
+                    else "not a PNG/JPEG/WebP image"
+                ),
+            )
+        try:
+            png = _normalize_avatar_png(data)
+        except Exception as exc:  # noqa: BLE001 — decode failure, honest 415
+            raise HTTPException(
+                status_code=415, detail=f"could not decode the image: {exc}"
+            )
+        p = _avatar_path(name)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic publish (the creative-thumbs/backup convention): write a
+        # unique temp file beside the target, then os.replace. A concurrent
+        # GET (the roster's <img> refetch) must never be served a half-written
+        # PNG, and a crash mid-write must not leave a corrupt file that then
+        # serves as a "valid" portrait forever.
+        import uuid
+
+        tmp = p.parent / f"{p.name}.{uuid.uuid4().hex}.tmp"
+        try:
+            tmp.write_bytes(png)
+            os.replace(tmp, p)
+        except BaseException:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
+        return {
+            "name": name,
+            "avatar": f"/agents/{quote(name, safe='')}/avatar",
+            "source": source,
+            "bytes": len(png),
+        }
+
+    @app.delete("/agents/{name}/avatar")
+    def delete_agent_avatar(name: str) -> dict[str, Any]:
+        name = (name or "").strip()
+        p = _avatar_path(name)
+        if not name or not p.is_file():
+            raise HTTPException(status_code=404, detail="no stored portrait for this agent")
+        p.unlink()
+        return {"removed": name}
 
     # --- Dynamic-agent edit / delete (catch-all {name} — keep AFTER remote) ---
 

@@ -238,6 +238,11 @@ def register(app: FastAPI, d) -> None:
             payload = t.decoded_payload()
             pid = payload.get("project_id") if isinstance(payload, dict) else None
             row["project_id"] = pid if isinstance(pid, str) else ""
+            # v1.171.0 (additive, same guard pattern): WHO a task fire runs as.
+            # "" when absent (= builder); a non-string is refused, never
+            # coerced — a stringified value could phantom-match a real agent.
+            agent = payload.get("agent_type") if isinstance(payload, dict) else None
+            row["agent_type"] = agent if isinstance(agent, str) else ""
             rows.append(row)
         return {"schedules": rows}
 
@@ -250,6 +255,28 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(
                 status_code=400, detail="a task schedule needs 'task' text in payload"
             )
+        # v1.171.0 (contract 3): a task schedule may name WHO does the work —
+        # validated NOW, not at 3am fire time. The name must be a builtin
+        # agent type or an existing dynamic agent's exact name (the same keys
+        # the fire resolves against). A non-string is refused, never coerced.
+        raw_agent = payload.get("agent_type") if body.kind == "task" else None
+        if raw_agent not in (None, ""):
+            from ...core.models import AgentType
+
+            agent = raw_agent.strip() if isinstance(raw_agent, str) else ""
+            builtin = {t.value for t in AgentType}
+            try:
+                dynamic = {r.name for r in d.platform.agents_registry.list()}
+            except Exception:  # noqa: BLE001 — a broken registry refuses, never guesses
+                dynamic = set()
+            if not agent or (agent not in builtin and agent not in dynamic):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"unknown agent_type {raw_agent!r} — use a builtin agent "
+                        "type or an existing custom agent's name (Agents page)"
+                    ),
+                )
         wanted = payload.get("notify_channels")
         if wanted:
             known = set(d.platform.notifier.channels())

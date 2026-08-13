@@ -131,7 +131,11 @@ async def test_definition_rebuilds_agent_definition(platform, registry, tools, t
     )
     definition = registry.definition("scout")
     assert isinstance(definition, AgentDefinition)
-    assert definition.system_prompt == PROMPT
+    # v1.171.0: a dynamic agent's COMPOSED prompt leads with the identity
+    # anchor; the STORED prompt (rows/records above) stays byte-identical.
+    from iron_jarvis.agents.dynamic import identity_anchor
+
+    assert definition.system_prompt == identity_anchor("scout") + "\n\n" + PROMPT
     assert definition.tools == TOOLS
     # Dynamic agents reuse a base AgentType for lifecycle/persistence.
     assert definition.type is AgentType.BUILDER

@@ -15,9 +15,12 @@ import {
   Save,
   Settings2,
   Sparkles,
+  Trash2,
+  Upload,
+  Wand2,
   X,
 } from "lucide-react";
-import { ApiError, del, patch, post } from "@/lib/api";
+import { API_BASE, ApiError, del, ijToken, patch, post } from "@/lib/api";
 import type { DynamicAgent, ModelOption } from "@/lib/types";
 import {
   Badge,
@@ -27,7 +30,8 @@ import {
   SectionLabel,
   SuccessNote,
 } from "@/components/ui";
-import { AgentAvatar, participantKey, type RemoteAgentInfo } from "./identity";
+import AgentFace from "./AgentFace";
+import type { RemoteAgentInfo } from "./identity";
 
 const OPEN_KEY = "ij_agents_setup_open";
 
@@ -35,7 +39,34 @@ const OPEN_KEY = "ij_agents_setup_open";
 export type DynamicAgentFull = DynamicAgent & {
   system_prompt?: string;
   tools?: string[];
+  /** v1.171.0 additive: the stored portrait's serve path, or null/absent. */
+  avatar?: string | null;
 };
+
+/** Portrait upload cap — mirrors the daemon's 2MB decoded limit so an
+ *  oversized pick fails HERE with a plain line instead of a 413 round-trip. */
+const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
+
+/** <img> can't send the Authorization header — token rides as a query param
+ *  (the creative-gallery pattern). `rev` busts the browser cache after an
+ *  upload/generate/remove, since the URL itself never changes. */
+function avatarSrc(rel: string, rev: number): string {
+  const token = ijToken();
+  return `${API_BASE}${rel}?v=${rev}${token ? `&token=${encodeURIComponent(token)}` : ""}`;
+}
+
+/** File → bare base64 (the data:-URL prefix stripped). */
+function fileToB64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const s = String(reader.result || "");
+      resolve(s.slice(s.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("could not read the file"));
+    reader.readAsDataURL(file);
+  });
+}
 
 type RemoteKind = "http-task" | "openai-chat" | "openai-responses";
 /** The two OpenAI dialects both carry a model id; they differ only in the
@@ -51,11 +82,67 @@ function DynamicRow({ agent, onChanged }: { agent: DynamicAgentFull; onChanged: 
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Portrait state (v1.171.0). `rev` only busts the <img> cache — whether a
+  // portrait EXISTS always comes from the daemon via agent.avatar, so a
+  // failed write can never leave the row pretending one is stored.
+  const [rev, setRev] = useState(0);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+  const avatarUrl = agent.avatar ? avatarSrc(agent.avatar, rev) : undefined;
 
   function startEdit() {
     setPrompt(agent.system_prompt ?? "");
     setError(null);
     setEditing(true);
+  }
+
+  async function uploadAvatar(file: File) {
+    if (file.size > AVATAR_MAX_BYTES) {
+      setAvatarError("portrait too large — 2 MB max");
+      return;
+    }
+    setAvatarBusy(true);
+    setAvatarError(null);
+    try {
+      const b64 = await fileToB64(file);
+      await post(`/agents/${encodeURIComponent(agent.name)}/avatar`, { image_b64: b64 });
+      setRev((v) => v + 1);
+      onChanged();
+    } catch (err) {
+      setAvatarError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
+
+  async function generateAvatar() {
+    setAvatarBusy(true);
+    setAvatarError(null);
+    try {
+      await post(`/agents/${encodeURIComponent(agent.name)}/avatar`, { generate: true });
+      setRev((v) => v + 1);
+      onChanged();
+    } catch (err) {
+      // The daemon's honest 409 ("no image model is connected — …") lands
+      // here as plain text — shown as-is, never swapped for a placeholder.
+      setAvatarError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
+
+  async function removeAvatar() {
+    setAvatarBusy(true);
+    setAvatarError(null);
+    try {
+      await del(`/agents/${encodeURIComponent(agent.name)}/avatar`);
+      setRev((v) => v + 1);
+      onChanged();
+    } catch (err) {
+      setAvatarError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setAvatarBusy(false);
+    }
   }
 
   async function save() {
@@ -87,7 +174,7 @@ function DynamicRow({ agent, onChanged }: { agent: DynamicAgentFull; onChanged: 
   return (
     <li className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2">
       <div className="flex items-center gap-2">
-        <AgentAvatar agentKey={participantKey("dynamic", agent.name)} name={agent.name} size="sm" />
+        <AgentFace name={agent.name} mood="idle" size={20} avatarUrl={avatarUrl} />
         <span className="min-w-0 truncate text-[13px] font-medium text-zinc-100">
           {agent.name}
         </span>
@@ -128,6 +215,58 @@ function DynamicRow({ agent, onChanged }: { agent: DynamicAgentFull; onChanged: 
             aria-label={`Persona prompt for ${agent.name}`}
             className="field resize-y text-xs"
           />
+          {/* Portrait row (v1.171.0): the current face (or stored portrait),
+              Upload / Generate / Remove. Generate goes through the daemon's
+              real image path; with no image model configured the daemon's
+              honest 409 renders below as plain text — never a placeholder. */}
+          <div
+            data-testid={`avatar-row-${agent.name}`}
+            className="flex flex-wrap items-center gap-2"
+          >
+            <AgentFace name={agent.name} mood="idle" size={28} avatarUrl={avatarUrl} />
+            <span className="text-[11px] text-zinc-500">Portrait</span>
+            <span className="ml-auto flex items-center gap-1.5">
+              <label
+                className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
+                title={`Upload a portrait for "${agent.name}" (PNG/JPEG/WebP, 2 MB max)`}
+              >
+                <Upload size={12} /> Upload
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  aria-label={`Upload a portrait for ${agent.name}`}
+                  disabled={avatarBusy}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void uploadAvatar(f);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={generateAvatar}
+                disabled={avatarBusy}
+                title={`Generate a portrait for "${agent.name}" with the connected image model`}
+                className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-50"
+              >
+                {avatarBusy ? <LoaderInline label="…" /> : <><Wand2 size={12} /> Generate</>}
+              </button>
+              {agent.avatar && (
+                <button
+                  type="button"
+                  onClick={removeAvatar}
+                  disabled={avatarBusy}
+                  title={`Remove the stored portrait of "${agent.name}" (back to the drawn face)`}
+                  className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-rose-400/40 hover:text-rose-300 disabled:opacity-50"
+                >
+                  <Trash2 size={12} /> Remove
+                </button>
+              )}
+            </span>
+          </div>
+          {avatarError && <ErrorNote>{avatarError}</ErrorNote>}
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -223,13 +362,28 @@ function YourAgentsSection({
       >
         <SectionLabel>Create an agent</SectionLabel>
         <div className="grid grid-cols-2 gap-2">
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="name — e.g. skeptic"
-            aria-label="Agent name"
-            className="field text-xs"
-          />
+          {/* The deterministic face previews LIVE as the name is typed — the
+              same seed every other surface uses, so what you see here is
+              exactly the face this agent will wear everywhere (v1.171.0). */}
+          <div className="flex min-w-0 items-center gap-2">
+            <AgentFace
+              name={name.trim() || "?"}
+              mood="idle"
+              size={24}
+              title={
+                name.trim()
+                  ? `${name.trim()} — the face this name draws`
+                  : "the face appears as you type a name"
+              }
+            />
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="name — e.g. skeptic"
+              aria-label="Agent name"
+              className="field min-w-0 flex-1 text-xs"
+            />
+          </div>
           <select
             value={model}
             onChange={(e) => setModel(e.target.value)}
@@ -469,7 +623,7 @@ function RemoteRow({ agent, onChanged }: { agent: RemoteAgentInfo; onChanged: ()
   return (
     <li className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2">
       <div className="flex flex-wrap items-center gap-2">
-        <AgentAvatar agentKey={participantKey("remote", agent.name)} name={agent.name} size="sm" />
+        <AgentFace name={agent.name} mood="idle" size={20} />
         <span className="min-w-0 truncate text-[13px] font-medium text-zinc-100">
           {agent.name}
         </span>

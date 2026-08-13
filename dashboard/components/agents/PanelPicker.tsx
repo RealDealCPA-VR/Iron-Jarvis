@@ -24,8 +24,8 @@ import {
 } from "lucide-react";
 import { ApiError } from "@/lib/api";
 import { ErrorNote, LoaderInline } from "@/components/ui";
+import AgentFace from "./AgentFace";
 import {
-  AgentAvatar,
   ROLE_PRESETS,
   RolePill,
   SOURCE_LABEL,
@@ -43,6 +43,8 @@ export interface PickerOption {
   description?: string;
   /** True → shown with the offline pill and not selectable. */
   offline?: boolean;
+  /** Stored portrait URL (roster `avatar`, v1.171.0) — wins over the face. */
+  avatar?: string | null;
 }
 
 /** What the picker offers: the full agent catalog, grouped by source. */
@@ -127,7 +129,15 @@ function AgentPickCard({
         }
         className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left disabled:cursor-not-allowed"
       >
-        <AgentAvatar agentKey={key} name={name} size="md" />
+        {/* Face seeded by the BARE name — the SAME face this agent wears on
+            TeamTree/kanban/round-table (see RoundTable's faceIdentity; the
+            key-seed variant split identity across surfaces). A stored
+            portrait always wins over the geometry. Decorative (title="" +
+            aria-hidden): the name is the visible text right beside it, and a
+            duplicate SVG <title> node doubles every get-by-text. */}
+        <span aria-hidden="true" className="contents">
+          <AgentFace name={name} title="" avatarUrl={option.avatar} size={26} />
+        </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5">
             <span
@@ -211,6 +221,13 @@ export function PanelPicker({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Portrait lookup for the footer chips — a seated participant keeps the
+  // portrait its catalog row carries; absent from the catalog → geometric face.
+  const avatarByKey = new Map<string, string | null>();
+  for (const o of [...catalog.builtin, ...catalog.dynamic, ...catalog.remotes]) {
+    avatarByKey.set(participantKey(o.source, o.name), o.avatar ?? null);
+  }
 
   // Escape closes (unless a submit is in flight).
   useEffect(() => {
@@ -367,7 +384,16 @@ export function PanelPicker({
                   key={p.key}
                   className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] bg-white/[0.03] py-0.5 pl-1 pr-1"
                 >
-                  <AgentAvatar agentKey={p.key} name={p.name} size="sm" />
+                  {/* Bare-name seed + decorative — same policy as the row
+                      card above; the chip's visible text carries the name. */}
+                  <span aria-hidden="true" className="contents">
+                    <AgentFace
+                      name={p.name}
+                      title=""
+                      avatarUrl={avatarByKey.get(p.key)}
+                      size={18}
+                    />
+                  </span>
                   <span className="text-xs text-zinc-200">{p.name}</span>
                   <RolePill role={p.role.trim() || "participant"} />
                   <button

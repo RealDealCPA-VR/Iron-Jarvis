@@ -74,6 +74,19 @@ def _base_agent_type(raw: str) -> AgentType:
         return AgentType.BUILDER
 
 
+def identity_anchor(name: str) -> str:
+    """The identity anchor line a dynamic agent's composed prompt begins with.
+
+    v1.171.0 (contract 4): a NAMED agent should know it is one — a persistent
+    colleague on this machine, not an anonymous per-run persona. The anchor is
+    applied at COMPOSITION time (:meth:`DynamicAgentRegistry.definition`), never
+    written into the stored record, so the edit dialog keeps showing exactly
+    what the user typed and re-saving can never stack anchors. Builtin agent
+    definitions are untouched.
+    """
+    return f"You are {name}, a persistent named agent on this machine."
+
+
 class DynamicAgentRegistry:
     """Persisted, in-memory registry of dynamically defined agents."""
 
@@ -175,8 +188,14 @@ class DynamicAgentRegistry:
             tools = json.loads(record.tools_json or "[]")
         except (TypeError, ValueError):
             tools = []
+        # Identity section (v1.171.0): anchor first, then the stored prompt.
+        # The roster/delegation blocks the runtime appends later are unchanged.
+        stored = record.system_prompt or ""
+        prompt = identity_anchor(record.name)
+        if stored.strip():
+            prompt = f"{prompt}\n\n{stored}"
         return AgentDefinition(
             type=_base_agent_type(record.base_type),
-            system_prompt=record.system_prompt,
+            system_prompt=prompt,
             tools=list(tools),
         )

@@ -34,6 +34,11 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { ChooserTiles } from "@/components/ChooserTiles";
 import { useFocusRef } from "@/lib/useFocusRef";
+import AgentFace from "@/components/agents/AgentFace";
+
+/** Fallback only — the real list comes live from GET /agents (builtin +
+ * dynamic), the same source NewSessionForm's picker uses. */
+const FALLBACK_AGENTS = ["builder", "supervisor", "planner", "researcher", "reviewer"];
 
 /** What a fire DOES (v1.119.0) — task leads because "have an agent do X every
  * morning" is the schedule people actually mean; workflow/event serve
@@ -107,6 +112,24 @@ function triggerLabel(s: Schedule): string {
   return "—";
 }
 
+/** Which agent a task row fires as (v1.171.0). Prefers the server-decoded
+ * `agent_type` field; falls back to the payload blob for a daemon older than
+ * this dashboard. "" / garbage decays to "builder" — the fire's own default —
+ * never to an invented name. */
+function scheduleAgent(s: Schedule): string {
+  const decoded = (s as { agent_type?: unknown }).agent_type;
+  if (typeof decoded === "string" && decoded.trim()) return decoded.trim();
+  try {
+    const p = JSON.parse(s.payload_json || "{}") as Record<string, unknown>;
+    if (typeof p.agent_type === "string" && p.agent_type.trim()) {
+      return p.agent_type.trim();
+    }
+  } catch {
+    /* unparseable payload — the default below is the honest answer */
+  }
+  return "builder";
+}
+
 /** One-line "what this schedule does" for the row (task text > workflow name). */
 function whatLabel(s: Schedule): string {
   let p: Record<string, unknown> = {};
@@ -130,6 +153,12 @@ export default function SchedulesPage() {
   // Saved workflows a "workflow" schedule can reference by name.
   const workflows = useApi<{ workflows: { name: string }[] }>("/workflows");
   const workflowNames = workflows.data?.workflows?.map((w) => w.name) ?? [];
+  // Agents a task schedule can run as (builtin + dynamic — NewSessionForm's source).
+  const { data: agentsData } = useApi<{ builtin: string[]; dynamic: { name: string }[] }>(
+    "/agents",
+  );
+  const builtinAgents = agentsData?.builtin ?? FALLBACK_AGENTS;
+  const dynamicAgents = (agentsData?.dynamic ?? []).map((a) => a.name);
   // Projects a task schedule can run inside; destinations its result can reach.
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
   const [destinations, setDestinations] = useState<string[]>([]);
@@ -152,6 +181,7 @@ export default function SchedulesPage() {
   const [name, setName] = useState("");
   const [kind, setKind] = useState("task");
   const [taskText, setTaskText] = useState("");
+  const [agentName, setAgentName] = useState("builder");
   const [projectId, setProjectId] = useState("");
   // "all" = every destination (the default), "none" = silent, else one name.
   const [dest, setDest] = useState("all");
@@ -215,6 +245,9 @@ export default function SchedulesPage() {
     let payload: Record<string, unknown> = {};
     if (kind === "task") {
       payload = { task: taskText.trim() };
+      // Absent = builder, exactly the daemon's default — an explicit
+      // "builder" pick stays omitted so default payloads look like today's.
+      if (agentName && agentName !== "builder") payload.agent_type = agentName;
       if (projectId) payload.project_id = projectId;
       if (dest === "none") payload.notify = false;
       else if (dest !== "all") payload.notify_channels = [dest];
@@ -243,6 +276,7 @@ export default function SchedulesPage() {
       setOk(`Schedule "${name.trim()}" added.`);
       setName("");
       setTaskText("");
+      setAgentName("builder");
       setProjectId("");
       setDest("all");
       setRepeat("0 9 * * *");
@@ -363,6 +397,44 @@ export default function SchedulesPage() {
                         aria-label="Task text"
                         className="field resize-y text-sm leading-relaxed"
                       />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                        Who runs it
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <AgentFace name={agentName} size={22} />
+                        <select
+                          aria-label="Agent"
+                          value={agentName}
+                          onChange={(e) => setAgentName(e.target.value)}
+                          className="field"
+                        >
+                          {builtinAgents.map((t) => (
+                            <option key={t} value={t}>
+                              {t}
+                            </option>
+                          ))}
+                          {/* A dynamic agent named exactly like a builtin
+                              would render a SECOND option with the same
+                              value — indistinguishable to the select, and
+                              picking the "custom" one would silently fire
+                              the BUILTIN (agent_type==="builder" is omitted
+                              from the payload). The builtin option already
+                              covers the name; at fire time the daemon
+                              resolves it dynamic-first anyway. */}
+                          {dynamicAgents
+                            .filter((t) => !builtinAgents.includes(t))
+                            .map((t) => (
+                              <option key={`custom:${t}`} value={t}>
+                                {t} (custom)
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                      <div className="mt-1 text-[11px] text-zinc-600">
+                        Custom agents fire with their own prompt and tools.
+                      </div>
                     </div>
                     <div>
                       <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
@@ -575,6 +647,15 @@ export default function SchedulesPage() {
                                     title={whatLabel(s)}
                                   >
                                     {whatLabel(s)}
+                                  </span>
+                                )}
+                                {s.kind === "task" && (
+                                  <span
+                                    className="mt-0.5 flex items-center gap-1.5 text-[11px] text-zinc-500"
+                                    data-testid="schedule-agent"
+                                  >
+                                    <AgentFace name={scheduleAgent(s)} size={14} />
+                                    {scheduleAgent(s)}
                                   </span>
                                 )}
                               </span>

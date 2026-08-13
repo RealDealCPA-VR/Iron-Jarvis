@@ -9,15 +9,13 @@
 
 import { useState } from "react";
 import { Briefcase, MessageCircle, WifiOff } from "lucide-react";
+import { API_BASE, ijToken } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
+import { timeAgo } from "@/lib/format";
 import { Card } from "@/components/ui";
 import { Reveal } from "@/components/motion";
-import {
-  AgentAvatar,
-  participantKey,
-  SOURCE_LABEL,
-  type AgentSource,
-} from "@/components/agents/identity";
+import AgentFace from "@/components/agents/AgentFace";
+import { SOURCE_LABEL, type AgentSource } from "@/components/agents/identity";
 
 interface RosterStats {
   sessions?: number | null;
@@ -40,6 +38,24 @@ export interface RosterEntry {
   stats: RosterStats | null;
   /** The daemon's own composed one-liner, stats parenthetical included. */
   line?: string;
+  /** v1.171.0 additive — absent on older daemons, so all optional. ISO time
+   *  of this agent's newest round-table entry; null = no recorded activity. */
+  last_active?: string | null;
+  /** That newest entry's text, daemon-clipped to ≤140 plain chars. */
+  last_message?: string | null;
+  /** Serve path for a stored portrait — present ONLY when one exists. */
+  avatar?: string | null;
+}
+
+/** <img> can't send the Authorization header — the token rides as ?token=,
+ *  the same pattern every media surface uses (creative gallery, previews).
+ *  `cacheKey` (the row's last_active — SetupCard's `rev` idea at low
+ *  resolution) busts the browser cache after a portrait is replaced, so the
+ *  roster never keeps rendering a stale image the daemon no longer serves. */
+function avatarSrc(rel: string, cacheKey?: string | null): string {
+  const token = ijToken();
+  const v = encodeURIComponent(cacheKey || "0");
+  return `${API_BASE}${rel}?v=${v}${token ? `&token=${encodeURIComponent(token)}` : ""}`;
 }
 
 const KIND_PILL: Record<AgentSource, string> = {
@@ -178,10 +194,19 @@ export function RosterStrip({
             offline ? "opacity-55" : ""
           }`}
         >
-          <AgentAvatar
-            agentKey={participantKey(selected.kind, shown)}
+          {/* v1.171.0: the deterministic face (portrait wins when stored).
+              Mood stays "idle" — the roster carries no live busy signal, and
+              an invented "work" scan would be the dishonest kind of warmth. */}
+          <AgentFace
             name={shown}
-            size="sm"
+            mood="idle"
+            size={30}
+            avatarUrl={
+              selected.avatar
+                ? avatarSrc(selected.avatar, selected.last_active)
+                : undefined
+            }
+            className="mt-0.5"
           />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -210,11 +235,33 @@ export function RosterStrip({
                 {statsText(selected)}
               </span>
             </div>
-            {selected.description && (
+            {/* Messenger-style preview (v1.171.0): the agent's REAL last
+                round-table line + when, from the daemon's join — falls back
+                to the static description exactly as before when this agent
+                has no recorded activity. Never both: the preview IS the more
+                current answer to "what is this agent about right now". */}
+            {selected.last_message ? (
+              <p
+                data-testid="roster-preview"
+                className="mt-1 flex items-baseline gap-1.5 text-[11.5px] leading-relaxed"
+              >
+                <span className="min-w-0 flex-1 truncate text-zinc-400">
+                  {selected.last_message}
+                </span>
+                {selected.last_active && (
+                  <span
+                    data-testid="roster-when"
+                    className="shrink-0 text-[10.5px] tabular-nums text-zinc-600"
+                  >
+                    {timeAgo(selected.last_active)}
+                  </span>
+                )}
+              </p>
+            ) : selected.description ? (
               <p className="mt-1 text-[11.5px] leading-relaxed text-zinc-500">
                 {selected.description}
               </p>
-            )}
+            ) : null}
           </div>
         </div>
       </Card>

@@ -202,7 +202,9 @@ def test_the_roster_is_a_picker_not_a_list():
     assert "chat-only" in src
     assert "<li" not in src, "the per-agent list should be gone"
     # The detail the rows used to carry must still be reachable.
-    for kept in ("statsText(selected)", "AgentAvatar", "selected.description"):
+    # v1.171.0: AgentAvatar became AgentFace (the deterministic identity face)
+    # — the pin's intent (an avatar in the picker detail) is unchanged.
+    for kept in ("statsText(selected)", "AgentFace", "selected.description"):
         assert kept in src, f"the picker dropped {kept}"
 
 
