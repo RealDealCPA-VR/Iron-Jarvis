@@ -36,7 +36,9 @@ import {
   ChevronRight,
   FileText,
   Gauge,
+  Loader2,
   Route as RouteIcon,
+  Undo2,
   Wrench,
 } from "lucide-react";
 
@@ -65,6 +67,29 @@ export interface TurnReceiptProps {
   contextPct?: number | null;
   /** Wired by the coordinator to the DocPreview rail. Receives the FULL path. */
   onOpenDocument?: (path: string) => void;
+  /**
+   * v1.168.0 — "Undo this write" under the receipt's file chip. The caller
+   * joins the undo journal to each document's absolute path and returns the
+   * match, or null/undefined when there is none — an UNMATCHED file shows no
+   * undo at all (never a guess). A matched not-undoable row renders disabled
+   * with the honest reason as its title. Requires `onUndo` too.
+   */
+  undoFor?: (path: string) => ReceiptUndoState | null | undefined;
+  /**
+   * Performs the undo (the caller owns the explicit confirm + POST + refresh).
+   * A rejection is shown inline under the file row — a failed undo must never
+   * look like it happened.
+   */
+  onUndo?: (actionId: string, path: string) => void | Promise<void>;
+}
+
+/** The journal row matched to one of this turn's documents. */
+export interface ReceiptUndoState {
+  actionId: string;
+  undoable: boolean;
+  /** Honest reason a matched row cannot be undone ("already undone"…). */
+  reason?: string;
+  kind?: string;
 }
 
 /**
@@ -126,9 +151,28 @@ export function TurnReceipt({
   usage,
   contextPct,
   onOpenDocument,
+  undoFor,
+  onUndo,
 }: TurnReceiptProps) {
   const [open, setOpen] = useState(false);
+  const [undoingPath, setUndoingPath] = useState<string | null>(null);
+  const [undoErr, setUndoErr] = useState<string | null>(null);
   const panelId = useId();
+
+  /** Run the caller's undo; surface a rejection inline instead of swallowing
+   *  it — a failed undo must never look like it happened. */
+  async function runUndo(actionId: string, path: string) {
+    if (!onUndo || undoingPath) return;
+    setUndoingPath(path);
+    setUndoErr(null);
+    try {
+      await onUndo(actionId, path);
+    } catch (e) {
+      setUndoErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUndoingPath(null);
+    }
+  }
 
   const tools = names(toolsUsed);
   const denied = names(deniedTools);
@@ -276,18 +320,60 @@ export function TurnReceipt({
           {docs.length > 0 && (
             <div className="flex items-start gap-2">
               <FileText size={12} className="mt-0.5 shrink-0 text-zinc-500" />
-              <div className="flex min-w-0 flex-wrap gap-x-1.5 gap-y-1">
-                {docs.map((path) => (
-                  <button
-                    key={path}
-                    type="button"
-                    title={path}
-                    onClick={() => onOpenDocument?.(path)}
-                    className="max-w-[16rem] truncate rounded bg-white/[0.04] px-1.5 py-0.5 font-mono text-[11px] text-zinc-300 transition-colors hover:bg-white/[0.08] hover:text-accent-soft"
-                  >
-                    {docBasename(path)}
-                  </button>
-                ))}
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+                  {docs.map((path) => {
+                    // Undo renders ONLY for a chip the caller matched to a
+                    // journal row by path (v1.168.0) — never a guess.
+                    const undoState =
+                      undoFor && onUndo ? (undoFor(path) ?? null) : null;
+                    return (
+                      <span
+                        key={path}
+                        className="inline-flex min-w-0 items-center gap-0.5"
+                      >
+                        <button
+                          type="button"
+                          title={path}
+                          onClick={() => onOpenDocument?.(path)}
+                          className="max-w-[16rem] truncate rounded bg-white/[0.04] px-1.5 py-0.5 font-mono text-[11px] text-zinc-300 transition-colors hover:bg-white/[0.08] hover:text-accent-soft"
+                        >
+                          {docBasename(path)}
+                        </button>
+                        {undoState && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void runUndo(undoState.actionId, path)
+                            }
+                            disabled={
+                              !undoState.undoable || undoingPath !== null
+                            }
+                            aria-label={`Undo the write to ${docBasename(path)}`}
+                            title={
+                              undoState.undoable
+                                ? `Undo this write — revert ${docBasename(path)}`
+                                : `Can't undo: ${undoState.reason ?? "not undoable"}`
+                            }
+                            className="inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 text-[10.5px] text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-amber-300 disabled:opacity-40"
+                          >
+                            {undoingPath === path ? (
+                              <Loader2 size={10} className="animate-spin" />
+                            ) : (
+                              <Undo2 size={10} />
+                            )}
+                            undo
+                          </button>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+                {undoErr && (
+                  <p className="mt-1 text-[10.5px] text-rose-300/90">
+                    {undoErr}
+                  </p>
+                )}
               </div>
             </div>
           )}

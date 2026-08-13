@@ -38,22 +38,67 @@ def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
 
     @app.get("/undo")
-    def list_undoable(limit: int = 100) -> dict[str, Any]:
-        """Recent reversible actions still eligible for undo (newest first)."""
+    def list_undoable(
+        limit: int = 100, session_id: str | None = None
+    ) -> dict[str, Any]:
+        """Recent reversible actions still eligible for undo (newest first).
+
+        v1.168.0, ADDITIVE: ``session_id`` narrows the list to one session's
+        actions (chat's file writes all run as session id ``"chat"``), and each
+        row also carries ``path`` (the journal envelope's workspace-relative
+        target) and ``workspace`` (the v1.166.3 capture-time stamp). Both are
+        ``null`` when the envelope has no single target — a pathless kind
+        (``setting_restore``), a multi-file ``files_delete`` envelope, or a
+        pre-stamp row — so a client can only ever join a row to a file it can
+        actually name, never to a guess. ``path`` is also ``null`` when the
+        envelope journaled an ABSOLUTE target (``memory_*`` kinds record the
+        LTM store's absolute file path — see ltm/tools.py and
+        memory/proposals.py): the field's contract is workspace-relative, and
+        ``workspace + "/" + <absolute>`` joins to a path that names no real
+        file, so reporting it verbatim would hand a future consumer a value
+        that only ever mis-joins.
+        """
         engine = d.platform.engine
         limit = max(1, min(int(limit or 100), 500))
         items: list[dict[str, Any]] = []
         with session_scope(engine) as db:
-            rows = db.exec(
+            stmt = (
                 select(UndoJournal, ToolInvocation)
                 .where(UndoJournal.action_id == ToolInvocation.id)
                 .where(UndoJournal.reversible == True)  # noqa: E712
                 .where(ToolInvocation.undone_at == None)  # noqa: E711
-                .order_by(ToolInvocation.created_at.desc())
-                .limit(limit)
+            )
+            if session_id:
+                stmt = stmt.where(ToolInvocation.session_id == session_id)
+            rows = db.exec(
+                stmt.order_by(ToolInvocation.created_at.desc()).limit(limit)
             ).all()
             for journal, inv in rows:
                 rev = (inv.reversibility or "").lower()
+                # The envelope in pre_inline is the ONLY place the target path
+                # and capture-time workspace live (the journal's column set is
+                # fixed). Best-effort parse: an unreadable envelope reports
+                # null rather than failing the whole listing.
+                env_path: str | None = None
+                env_workspace: str | None = None
+                try:
+                    meta = json.loads(journal.pre_inline or "{}")
+                except (TypeError, ValueError):
+                    meta = None
+                if isinstance(meta, dict):
+                    raw_path = meta.get("path")
+                    if (
+                        isinstance(raw_path, str)
+                        and raw_path
+                        # Honest-null: the field means workspace-RELATIVE (see
+                        # docstring); memory_* envelopes journal absolute LTM
+                        # store paths, which would only ever mis-join.
+                        and not Path(raw_path).is_absolute()
+                    ):
+                        env_path = raw_path
+                    raw_ws = meta.get("workspace")
+                    if isinstance(raw_ws, str) and raw_ws:
+                        env_workspace = raw_ws
                 items.append(
                     {
                         "action_id": inv.id,
@@ -71,6 +116,9 @@ def register(app: FastAPI, d) -> None:
                         "created_at": inv.created_at.isoformat()
                         if inv.created_at
                         else None,
+                        # v1.168.0 additive fields (see docstring).
+                        "path": env_path,
+                        "workspace": env_workspace,
                     }
                 )
         return {"actions": items}

@@ -54,19 +54,40 @@ def register(app: FastAPI, d) -> None:
         return rec.model_dump()
 
     @app.get("/workflows/runs")
-    def workflow_runs(limit: int = 50) -> dict[str, Any]:
+    def workflow_runs(
+        limit: int = 50, status: str | None = None, slim: bool = False
+    ) -> dict[str, Any]:
+        """List runs, newest first.
+
+        v1.168.0 ADDITIVE: ``status`` filters server-side — the notification
+        bell polls for parked (``waiting``) runs, and a client-side filter over
+        a newest-first page is chunk-blind (a parked run older than the page
+        silently vanishes from the count). ``slim`` drops the heavy blobs
+        (``steps_json``/``outputs_json`` — every step's outputs) so global
+        chrome can poll cheaply; ``waiting_json`` survives slim mode because it
+        carries the question the bell renders. Defaults unchanged.
+        """
         from ...workflows.models import WorkflowRunRecord
 
         limit = max(1, min(200, limit))  # clamp: newest-first, bounded
         with session_scope(d.platform.engine) as db:
-            rows = list(
-                db.exec(
-                    select(WorkflowRunRecord)
-                    .order_by(WorkflowRunRecord.started_at.desc())  # type: ignore[attr-defined]
-                    .limit(limit)
-                )
+            stmt = (
+                select(WorkflowRunRecord)
+                .order_by(WorkflowRunRecord.started_at.desc())  # type: ignore[attr-defined]
+                .limit(limit)
             )
-        return {"runs": [r.model_dump() for r in rows]}
+            if status:
+                stmt = stmt.where(WorkflowRunRecord.status == status)
+            rows = list(db.exec(stmt))
+
+        def _dump(r) -> dict[str, Any]:
+            out = r.model_dump()
+            if slim:
+                out.pop("steps_json", None)
+                out.pop("outputs_json", None)
+            return out
+
+        return {"runs": [_dump(r) for r in rows]}
 
     @app.get("/workflows/runs/{run_id}")
     def workflow_run_detail(run_id: str) -> dict[str, Any]:

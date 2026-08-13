@@ -28,6 +28,7 @@ const RING: Record<Tone, string> = {
 export function KanbanColumn({
   lane,
   sessions,
+  count,
   draggingFrom,
   busyId,
   onApprove,
@@ -35,6 +36,11 @@ export function KanbanColumn({
 }: {
   lane: LaneDef;
   sessions: SessionView[];
+  /** TRUE lane membership (v1.168.0): with team nesting, a cross-lane child
+   *  renders in its parent's column and a collapsed team hides its members —
+   *  `sessions.length` would then count what is DRAWN, not what the lane
+   *  holds. The board passes the pre-nesting count; absent, fall back. */
+  count?: number;
   draggingFrom: LaneId | null;
   busyId: string | null;
   onApprove: (id: string) => void;
@@ -55,7 +61,7 @@ export function KanbanColumn({
           <span className={`h-2.5 w-2.5 rounded-full ${head.dot}`} />
           <h2 className={`text-sm font-semibold ${head.text}`}>{lane.title}</h2>
           <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[11px] font-medium tabular-nums text-zinc-400">
-            {sessions.length}
+            {count ?? sessions.length}
           </span>
         </div>
         <span className="text-[11px] text-zinc-600">{lane.hint}</span>

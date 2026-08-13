@@ -18,8 +18,9 @@
 // no-op, never a throw and never a fake check), and an open failure prints the
 // daemon's error instead of pretending the app launched.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  BookmarkPlus,
   Check,
   Copy,
   Download,
@@ -34,6 +35,7 @@ import {
   Files,
   Loader2,
   ScrollText,
+  Undo2,
   X,
 } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
@@ -83,6 +85,139 @@ export interface ArtifactsRailProps {
    * Absent or 0 → no footer ever (rendering identical to the pre-cap rail).
    */
   cap?: number;
+  /**
+   * v1.168.0 — "Undo this write" where the user is looking. The caller joins
+   * the undo journal (GET /undo rows carrying workspace+path) to this row's
+   * absolute path and returns the match, or null/undefined when the row could
+   * not be matched — an UNMATCHED file gets NO undo affordance at all (a
+   * button whose target the journal cannot name would be a guess). A matched
+   * but not-undoable row renders the button DISABLED with the honest reason
+   * as its title. Requires `onUndo` too; either absent → no button, rendering
+   * identical to the pre-v1.168.0 rail.
+   */
+  undoFor?: (path: string) => ArtifactUndoState | null | undefined;
+  /**
+   * Performs the undo (the caller owns the explicit confirm + POST /undo/{id}
+   * + list/preview refresh). Called with the journal row's action id and the
+   * row's FULL path. A rejection is surfaced on the rail's error line — a
+   * failed undo must never look like it happened.
+   */
+  onUndo?: (actionId: string, path: string) => void | Promise<void>;
+  /**
+   * v1.168.0 — "Add to project knowledge" per row. The caller posts the file
+   * through the EXISTING knowledge path (POST /projects/{id}/knowledge); a
+   * rejection lands on the rail's error line, a resolve flashes a check.
+   * Absent → no button.
+   */
+  onPromote?: (path: string) => void | Promise<void>;
+  /**
+   * When set, the promote button renders DISABLED with this reason as its
+   * title ("bind this chat to a project first") — an honest disabled state,
+   * never a silent no-op.
+   */
+  promoteDisabledReason?: string | null;
+}
+
+/** The journal row matched to a rail item — what `undoFor` returns. */
+export interface ArtifactUndoState {
+  actionId: string;
+  /** False → button renders disabled with `reason` as the title. */
+  undoable: boolean;
+  /** The honest reason a matched row cannot be undone ("already undone"…). */
+  reason?: string;
+  /** Journal kind — picks the confirm wording (restore vs remove-created). */
+  kind?: string;
+}
+
+/** One row of GET /undo as the chat page consumes it (v1.168.0 fields). */
+export interface UndoRowLike {
+  action_id: string;
+  kind?: string;
+  undoable?: boolean;
+  /** Workspace-relative target from the journal envelope; null = pathless. */
+  path?: string | null;
+  /** The v1.166.3 capture-time stamp; null for pre-stamp rows. */
+  workspace?: string | null;
+}
+
+/**
+ * JOIN identity for "is this rail item the file that journal row wrote?" —
+ * separators unified to "/", duplicate separators collapsed (a UNC lead
+ * "//server" survives), trailing separators stripped. Beyond that the EXACT
+ * string, case-sensitively — same policy as `cleanPath` (see its doc): both
+ * sides of the join come from the daemon's own resolved reporting, so their
+ * casing agrees, and casefolding would wrongly merge distinct posix paths.
+ */
+export function normalizeFsPath(p: string): string {
+  const unified = p.trim().replace(/\\/g, "/");
+  const lead = unified.startsWith("//") ? "/" : "";
+  const collapsed = lead + unified.replace(/\/{2,}/g, "/");
+  const stripped = collapsed.replace(/\/+$/, "");
+  return stripped || "/";
+}
+
+/**
+ * Absolute-path → journal-row map. Rows arrive NEWEST FIRST (GET /undo order)
+ * and the first row per path wins — the newest write is the one "Undo this
+ * write" means. Rows without BOTH `workspace` and `path` are skipped: they
+ * cannot be joined to a file, so no affordance is ever offered for them.
+ */
+export function joinUndoByPath(
+  rows: UndoRowLike[] | null | undefined,
+): Map<string, UndoRowLike> {
+  const map = new Map<string, UndoRowLike>();
+  for (const r of rows ?? []) {
+    if (!r || typeof r.action_id !== "string" || !r.action_id) continue;
+    if (typeof r.path !== "string" || !r.path.trim()) continue;
+    if (typeof r.workspace !== "string" || !r.workspace.trim()) continue;
+    const abs = normalizeFsPath(`${r.workspace}/${r.path}`);
+    if (!map.has(abs)) map.set(abs, r);
+  }
+  return map;
+}
+
+/** The slice of an /events frame this module needs — structurally matches
+ *  `IJEvent` (lib/types) without importing the whole shape. */
+export interface RevertEventLike {
+  id: string;
+  type: string;
+  payload?: Record<string, unknown> | null;
+}
+
+/**
+ * Action ids reverted in frames NEWER than `boundaryId` (v1.168.0 fix). An
+ * undo performed on another surface (Timeline page, a second window) publishes
+ * `action.reverted`; without reacting to it the rail keeps offering a live
+ * "Undo this write" whose POST can only 409. Events arrive NEWEST FIRST
+ * (useEvents prepends); the scan stops at the boundary id so a re-render never
+ * re-processes old frames, and a null boundary (first frame batch) scans them
+ * all. Frames without a string `action_id` are skipped — no id, no marking.
+ */
+export function revertedActionIds(
+  events: RevertEventLike[],
+  boundaryId: string | null,
+): string[] {
+  const out: string[] = [];
+  for (const e of events) {
+    if (e.id === boundaryId) break; // frames already processed
+    if (e.type !== "action.reverted") continue;
+    const aid = e.payload?.action_id;
+    if (typeof aid === "string" && aid) out.push(aid);
+  }
+  return out;
+}
+
+/**
+ * The explicit-confirm wording (window.confirm — the app's convention, see
+ * DocPreview's overwrite prompt) shared by every undo call site. It says what
+ * will actually happen: a `file_delete`/`files_delete` journal row means the
+ * chat CREATED the file, so its undo REMOVES it — wording that promised a
+ * "restore" there would confirm the user into a deletion.
+ */
+export function confirmUndoPrompt(kind: string | undefined, base: string): string {
+  return kind === "file_delete" || kind === "files_delete"
+    ? `Undo this write? ${base} was created by the chat and will be removed.`
+    : `Undo this write? ${base} will be restored to its content from before the write.`;
 }
 
 /**
@@ -209,6 +344,10 @@ export function ArtifactsRail({
   downloadHref,
   onDismiss,
   cap,
+  undoFor,
+  onUndo,
+  onPromote,
+  promoteDisabledReason,
 }: ArtifactsRailProps) {
   // Defensive dedupe (first occurrence wins — items arrive newest-first) so a
   // coordinator that concatenates per-turn lists still shows each file once.
@@ -228,7 +367,22 @@ export function ArtifactsRail({
 
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
   const [openingPath, setOpeningPath] = useState<string | null>(null);
+  const [undoingPath, setUndoingPath] = useState<string | null>(null);
+  const [promotingPath, setPromotingPath] = useState<string | null>(null);
+  const [promotedPath, setPromotedPath] = useState<string | null>(null);
+  const promotedTimer = useRef<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // The check-flash timer must not outlive the rail (thread switch, last doc
+  // dismissed) — it would fire setPromotedPath on an unmounted component.
+  // Same cleanup pattern as PromoteKnowledgeButton in chat/page.tsx.
+  useEffect(
+    () => () => {
+      if (promotedTimer.current !== null)
+        window.clearTimeout(promotedTimer.current);
+    },
+    [],
+  );
 
   // No artifacts → no chrome. An empty "Files" box in the chat column would be
   // noise on every fresh thread.
@@ -266,6 +420,47 @@ export function ArtifactsRail({
     }
   }
 
+  /** Run the caller's undo (which owns the confirm + POST); a rejection lands
+   *  on the error line — a failed undo must never look like it happened. */
+  async function runUndo(actionId: string, path: string) {
+    if (!onUndo || undoingPath) return;
+    setUndoingPath(path);
+    setError(null);
+    try {
+      await onUndo(actionId, path);
+    } catch (e) {
+      setError(
+        e instanceof ApiError || e instanceof Error ? e.message : String(e),
+      );
+    } finally {
+      setUndoingPath(null);
+    }
+  }
+
+  /** Add the file to the bound project's knowledge; the check only flashes
+   *  when the caller's promise RESOLVED — same honesty rule as the copy. */
+  async function runPromote(path: string) {
+    if (!onPromote || promotingPath) return;
+    setPromotingPath(path);
+    setError(null);
+    try {
+      await onPromote(path);
+      setPromotedPath(path);
+      if (promotedTimer.current !== null)
+        window.clearTimeout(promotedTimer.current);
+      promotedTimer.current = window.setTimeout(
+        () => setPromotedPath((p) => (p === path ? null : p)),
+        1600,
+      );
+    } catch (e) {
+      setError(
+        e instanceof ApiError || e instanceof Error ? e.message : String(e),
+      );
+    } finally {
+      setPromotingPath(null);
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-col rounded-xl border border-white/[0.06] bg-white/[0.02]">
       <div className="flex shrink-0 items-center gap-1.5 border-b border-white/[0.05] px-2.5 py-2">
@@ -294,6 +489,10 @@ export function ArtifactsRail({
           const base = basename(it.path);
           const dir = parentDir(it.path);
           const Icon = KIND_ICON[fileKind(it.path)];
+          // Undo renders ONLY for a row the caller matched to a journal entry
+          // by path — an unmatched file gets no affordance, never a guess.
+          const undoState =
+            undoFor && onUndo ? (undoFor(it.path) ?? null) : null;
           return (
             <li
               key={it.path}
@@ -352,6 +551,62 @@ export function ArtifactsRail({
                   <ExternalLink size={12} />
                 )}
               </button>
+              {undoState && (
+                // "Undo this write" WHERE THE FILE IS LISTED (v1.168.0). A
+                // matched-but-not-undoable row stays visible, disabled, with
+                // the honest reason as its title — greying beats vanishing,
+                // which would read as "this was never undoable".
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void runUndo(undoState.actionId, it.path);
+                  }}
+                  disabled={!undoState.undoable || undoingPath !== null}
+                  aria-label={`Undo the write to ${base}`}
+                  title={
+                    undoState.undoable
+                      ? `Undo this write — revert ${base}`
+                      : `Can't undo: ${undoState.reason ?? "not undoable"}`
+                  }
+                  className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-amber-300 disabled:opacity-40"
+                >
+                  {undoingPath === it.path ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : (
+                    <Undo2 size={12} />
+                  )}
+                </button>
+              )}
+              {onPromote && (
+                // "Add to project knowledge" (v1.168.0) — disabled with the
+                // honest reason when no project is bound, never a silent no-op.
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void runPromote(it.path);
+                  }}
+                  disabled={!!promoteDisabledReason || promotingPath !== null}
+                  aria-label={`Add ${base} to project knowledge`}
+                  title={
+                    promoteDisabledReason ?? `Add ${base} to project knowledge`
+                  }
+                  className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft disabled:opacity-40"
+                >
+                  {promotingPath === it.path ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : promotedPath === it.path ? (
+                    <Check
+                      size={12}
+                      data-testid="promoted-check"
+                      className="text-emerald-400"
+                    />
+                  ) : (
+                    <BookmarkPlus size={12} />
+                  )}
+                </button>
+              )}
               {downloadHref && (
                 // Sized like the v1.153.2 inline block's download anchor
                 // (h-5 w-5, icon 12) — this rail replaces that block and the

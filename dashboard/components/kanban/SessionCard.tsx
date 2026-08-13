@@ -6,6 +6,8 @@ import { useDraggable } from "@dnd-kit/core";
 import {
   GripVertical,
   Check,
+  ChevronDown,
+  ChevronRight,
   X,
   Cpu,
   LoaderCircle,
@@ -13,11 +15,13 @@ import {
   MessageSquarePlus,
   Paperclip,
   Send,
+  Users,
 } from "lucide-react";
 import { post, del, ApiError } from "@/lib/api";
 import type { SessionView } from "@/lib/types";
 import type { LaneId } from "@/lib/kanban";
 import { StatusDot, ConfirmButton, LoaderInline } from "@/components/ui";
+import OriginChip from "@/components/sessions/OriginChip";
 import { timeAgo } from "@/lib/format";
 
 export interface CardData {
@@ -37,6 +41,40 @@ export interface KanbanCardActions {
 }
 
 export const KanbanActionsContext = createContext<KanbanCardActions | null>(null);
+
+/**
+ * Team nesting (v1.168.0, P5): the board derives parent/child session links
+ * from `GET /sessions/teams` and lays children out under their parent's card.
+ * KanbanColumn sits between the board and the cards with a frozen prop
+ * surface, so — exactly like KanbanActionsContext above — the per-card layout
+ * facts (depth, member count, collapsed) travel by context, keyed by id.
+ * A board without the context (or a session without an entry) renders exactly
+ * the pre-v1.168.0 card.
+ */
+export interface TeamCardInfo {
+  /** 0 = root; >0 renders indented under the parent's card. */
+  depth: number;
+  /** Number of team members nested under this card (descendants on the board). */
+  childCount: number;
+  /** Whether this card's team is currently collapsed behind the badge. */
+  collapsed: boolean;
+  /**
+   * The card's TRUE board lane — its own status/review, which for a nested
+   * child DIFFERS from the column it renders in (children sit in the parent's
+   * column). Every lane-keyed affordance must key off this, not the column:
+   * a nested failed child otherwise loses Retry/Dismiss, a nested review
+   * child loses Approve/Reject, and its drag payload lies to onDragEnd so
+   * "Drop to approve" arms and then silently no-ops.
+   */
+  trueLane: LaneId;
+}
+
+export interface KanbanTeamState {
+  info: ReadonlyMap<string, TeamCardInfo>;
+  toggle: (id: string) => void;
+}
+
+export const KanbanTeamContext = createContext<KanbanTeamState | null>(null);
 
 /** Read a File as raw base64 (FileReader gives a data: URL — strip the prefix). */
 function readAsBase64(file: File): Promise<string> {
@@ -63,6 +101,7 @@ export function CardInner({
   onReject,
   dragHandle,
   footer,
+  teamBadge,
 }: {
   session: SessionView;
   lane: LaneId;
@@ -74,6 +113,8 @@ export function CardInner({
   dragHandle?: React.ReactNode;
   /** Extra per-lane actions rendered inside the card (live card only, not the drag ghost). */
   footer?: React.ReactNode;
+  /** "Team of N" toggle chip (live card only — the drag ghost has no toggle). */
+  teamBadge?: React.ReactNode;
 }) {
   const reviewable = lane === "review";
   return (
@@ -100,6 +141,10 @@ export function CardInner({
         <span className="rounded-md bg-white/[0.05] px-1.5 py-0.5 font-mono text-[10.5px] text-zinc-400">
           {session.provider}
         </span>
+        {/* Provenance (v1.168.0): who dispatched this session. Renders nothing
+            for the (historically most common) untagged user-started case. */}
+        <OriginChip origin={session.origin} />
+        {teamBadge}
         <span className="ml-auto text-[11px] tabular-nums text-zinc-500">
           {timeAgo(session.created_at)}
         </span>
@@ -154,18 +199,60 @@ export function SessionCard({
   onApprove: () => void;
   onReject: () => void;
 }) {
+  // Team layout (v1.168.0): depth indents a child under its parent; a parent
+  // with members gets the "Team of N" toggle. No context / no entry = flat.
+  const team = useContext(KanbanTeamContext);
+  const teamInfo = team?.info.get(session.id);
+  const depth = teamInfo?.depth ?? 0;
+  const childCount = teamInfo?.childCount ?? 0;
+  // The `lane` prop is where the card SITS (its column); a nested child sits
+  // in its PARENT'S column, so every lane-keyed affordance — the drag payload,
+  // the review Approve/Reject, the failed Retry/Dismiss, the status dot —
+  // keys off the card's own TRUE lane instead. Flat cards are unchanged
+  // (trueLane === column lane), and without the context the fallback is the
+  // pre-v1.168.0 card.
+  const effLane = teamInfo?.trueLane ?? lane;
+
   const { setNodeRef, listeners, attributes, isDragging } = useDraggable({
     id: session.id,
-    data: { lane },
+    data: { lane: effLane },
   });
 
   // Lane-specific extras: failed cards get Retry/Dismiss, review cards get an
   // inline "Add context" form. Rendered only on the live card (never the ghost).
   const footer =
-    lane === "failed" ? (
+    effLane === "failed" ? (
       <FailedActions session={session} />
-    ) : lane === "review" ? (
+    ) : effLane === "review" ? (
       <AddContext session={session} />
+    ) : undefined;
+
+  const teamBadge =
+    team && childCount > 0 ? (
+      <button
+        type="button"
+        data-testid="team-badge"
+        aria-expanded={!teamInfo?.collapsed}
+        title={
+          teamInfo?.collapsed
+            ? `Show the ${childCount} team member${childCount === 1 ? "" : "s"} under this session`
+            : `Hide the ${childCount} team member${childCount === 1 ? "" : "s"} under this session`
+        }
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          team.toggle(session.id);
+        }}
+        className="inline-flex items-center gap-1 rounded-md border border-accent/25 bg-accent/[0.08] px-1.5 py-0.5 text-[10.5px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.16]"
+      >
+        <Users size={11} aria-hidden="true" />
+        Team of {childCount}
+        {teamInfo?.collapsed ? (
+          <ChevronRight size={11} aria-hidden="true" />
+        ) : (
+          <ChevronDown size={11} aria-hidden="true" />
+        )}
+      </button>
     ) : undefined;
 
   // A stretched <Link> is the keyboard-accessible primary action ("open session").
@@ -174,7 +261,14 @@ export function SessionCard({
   // the action is reachable by keyboard (was a click-only div). The content layer is
   // pointer-events-none so a body click falls through to the link; buttons re-enable.
   return (
-    <div ref={setNodeRef} className="relative rounded-xl">
+    <div
+      ref={setNodeRef}
+      data-team-depth={depth}
+      className={`relative rounded-xl ${
+        depth > 0 ? "border-l-2 border-accent/20 pl-2" : ""
+      }`}
+      style={depth > 0 ? { marginLeft: depth * 12 } : undefined}
+    >
       <Link
         href={`/sessions/${session.id}`}
         aria-label={`Open session: ${session.task || "untitled task"}`}
@@ -183,12 +277,13 @@ export function SessionCard({
       <div className="pointer-events-none relative z-10 [&_button]:pointer-events-auto">
         <CardInner
           session={session}
-          lane={lane}
+          lane={effLane}
           dragging={isDragging}
           busy={busy}
           onApprove={onApprove}
           onReject={onReject}
           footer={footer}
+          teamBadge={teamBadge}
           dragHandle={
             <button
               type="button"

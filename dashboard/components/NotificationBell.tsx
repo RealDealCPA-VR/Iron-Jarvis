@@ -10,12 +10,14 @@ import {
   ArrowRight,
   MessageSquare,
   CalendarClock,
+  Workflow,
   type LucideIcon,
 } from "lucide-react";
+import { ApiError, post } from "@/lib/api";
 import { useEvents } from "@/lib/useEvents";
 import { usePolledApi } from "@/lib/useApi";
 import { useDesktopNotifications } from "@/lib/useDesktopNotifications";
-import type { ComputerUseStatus, IJEvent } from "@/lib/types";
+import type { ComputerUseStatus, IJEvent, WorkflowRun } from "@/lib/types";
 import { shortId, clockTime } from "@/lib/format";
 
 /** Best-effort session id for a review event (top-level wins, then payload). */
@@ -88,6 +90,146 @@ function toActivity(e: IJEvent): ActivityItem | null {
   return null;
 }
 
+/** A workflow run parked on an `ask` step (v1.121.0) — it WAITS on the user,
+ *  so it counts toward the badge and is answerable right in the dropdown. */
+interface WaitingAsk {
+  runId: string;
+  /** Stable identity of THIS ask: run id + parked step index, so a run that
+   *  later parks on a DIFFERENT ask is a new item even after we suppressed
+   *  the answered one locally. */
+  key: string;
+  workflow: string;
+  question: string;
+  /** The engine writes {index, step, question} today (workflows/engine.py) —
+   *  options are rendered only if a future park carries them. */
+  options: string[];
+  startedAt: string;
+}
+
+/** Parse one /workflows/runs row into a WaitingAsk (null = not waiting). */
+function parseWaitingRun(r: WorkflowRun): WaitingAsk | null {
+  if (r.status !== "waiting" || !r.id) return null;
+  let w: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(String(r.waiting_json ?? "") || "{}");
+    if (parsed && typeof parsed === "object") w = parsed as Record<string, unknown>;
+  } catch {
+    /* corrupt blob — still show the row with the fallback question */
+  }
+  const question =
+    typeof w.question === "string" && w.question ? w.question : "This run needs your answer.";
+  const options = Array.isArray(w.options)
+    ? w.options.filter((o): o is string => typeof o === "string" && o.length > 0)
+    : [];
+  return {
+    runId: String(r.id),
+    key: `${r.id}#${typeof w.index === "number" ? w.index : question}`,
+    workflow: String(r.workflow_name || "workflow"),
+    question,
+    options,
+    startedAt: String(r.started_at ?? ""),
+  };
+}
+
+/** One parked run in the dropdown: the actual question + an inline answer box
+ *  (same idiom as the chat WorkflowDraftCard's waiting banner). Success hands
+ *  the ask back up so the row leaves the list; a 409 means someone answered it
+ *  elsewhere first (the atomic waiting→resuming claim lost) — surfaced
+ *  honestly, never retried. */
+function WaitingRunRow({
+  ask,
+  onAnswered,
+  onConflict,
+}: {
+  ask: WaitingAsk;
+  onAnswered: (ask: WaitingAsk) => void;
+  onConflict: (ask: WaitingAsk, message: string) => void;
+}) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(answer: string) {
+    const trimmed = answer.trim();
+    if (!trimmed || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      // Encode the id (same idiom as the Workflows page / canvas callers): the
+      // id arrives from a polled response, and one containing "/" or "?" would
+      // otherwise silently hit the wrong path.
+      await post(`/workflows/runs/${encodeURIComponent(ask.runId)}/answer`, {
+        answer: trimmed,
+      });
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : String(e);
+      if (e instanceof ApiError && e.status === 409) {
+        onConflict(ask, msg); // answered elsewhere — the row leaves, the note stays
+      } else {
+        setError(msg);
+        setBusy(false); // daemon blip / validation — keep the row answerable
+      }
+      return;
+    }
+    onAnswered(ask); // unmounts this row — no state updates past this point
+  }
+
+  return (
+    <li data-testid="bell-waiting-run" className="px-4 py-3">
+      <div className="flex items-start gap-3">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-amber-500/25 bg-amber-500/[0.08] text-amber-300">
+          <Workflow size={15} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <span className="block text-sm font-medium text-zinc-100">
+            Workflow &ldquo;{ask.workflow}&rdquo; needs an answer
+          </span>
+          <p className="mt-0.5 text-[12px] leading-snug text-amber-200">{ask.question}</p>
+          {ask.options.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {ask.options.map((o) => (
+                <button
+                  key={o}
+                  type="button"
+                  onClick={() => void submit(o)}
+                  disabled={busy}
+                  className="rounded-full border border-amber-500/30 bg-amber-500/[0.08] px-2.5 py-1 text-[11px] text-amber-200 transition-colors hover:bg-amber-500/[0.16] disabled:opacity-50"
+                >
+                  {o}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <input
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void submit(text);
+              }}
+              placeholder="Type your answer — the run continues"
+              aria-label={`Answer workflow ${ask.workflow}`}
+              className="field flex-1 py-1.5 text-[12px]"
+            />
+            <button
+              type="button"
+              onClick={() => void submit(text)}
+              disabled={busy || !text.trim()}
+              className="btn-accent px-3 py-1.5 text-[12px] disabled:opacity-50"
+            >
+              {busy ? "Sending…" : "Answer"}
+            </button>
+          </div>
+          {error && <p className="mt-1 text-[11px] text-rose-300">{error}</p>}
+          <span className="mt-1 block font-mono text-[10px] text-zinc-600">
+            {shortId(ask.runId)} · {clockTime(ask.startedAt)}
+          </span>
+        </div>
+      </div>
+    </li>
+  );
+}
+
 /**
  * Notification center: a bell + unread badge counting work that needs a human —
  * unresolved review requests (from the live event stream) plus any pending
@@ -104,9 +246,62 @@ export function NotificationBell() {
   // a reload silently hides reviews that are still waiting on the user.
   const diag = usePolledApi<{ pending_reviews?: number }>("/diagnostics", 15000);
   const polledReviews = diag.data?.pending_reviews ?? 0;
+  // Workflow runs parked on an `ask` step wait on the user too — same polled
+  // cadence as the other bell sources (they don't ride a replayable stream).
+  // Server-side `status=waiting` (v1.168.0) so an old parked question can
+  // never fall out of a newest-first page and vanish from the very badge that
+  // promises to count it; `slim=true` drops steps/outputs blobs — this poll
+  // runs on EVERY page, and it only needs waiting_json (the question).
+  const runsApi = usePolledApi<{ runs?: WorkflowRun[] }>(
+    "/workflows/runs?status=waiting&slim=true&limit=200",
+    15000,
+  );
 
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+
+  // Asks answered (or conflicted) from THIS dropdown: suppressed locally so the
+  // row leaves immediately instead of lingering until the next poll lands.
+  const [resolvedAsks, setResolvedAsks] = useState<ReadonlySet<string>>(new Set());
+  // 409s — someone answered the same ask elsewhere (chat card / Workflows
+  // page). Shown as an informational note, cleared when the dropdown closes.
+  const [conflicts, setConflicts] = useState<
+    { key: string; workflow: string; message: string }[]
+  >([]);
+
+  const waiting = useMemo(() => {
+    const out: WaitingAsk[] = [];
+    for (const r of runsApi.data?.runs ?? []) {
+      const ask = parseWaitingRun(r);
+      if (ask && !resolvedAsks.has(ask.key)) out.push(ask);
+    }
+    return out;
+  }, [runsApi.data, resolvedAsks]);
+
+  // A live `workflow.waiting` event means the polled list is already stale —
+  // refetch right away so the question appears without the up-to-15s lag.
+  const reloadRuns = runsApi.reload;
+  const prevWaitingEventId = useRef<string | null>(null);
+  useEffect(() => {
+    const latest = events.find((e) => e.type === "workflow.waiting");
+    if (!latest || prevWaitingEventId.current === latest.id) return;
+    prevWaitingEventId.current = latest.id;
+    reloadRuns();
+  }, [events, reloadRuns]);
+
+  const handleAnswered = (ask: WaitingAsk) => {
+    setResolvedAsks((prev) => new Set(prev).add(ask.key));
+    reloadRuns();
+  };
+  const handleConflict = (ask: WaitingAsk, message: string) => {
+    setResolvedAsks((prev) => new Set(prev).add(ask.key));
+    setConflicts((prev) => [...prev, { key: ask.key, workflow: ask.workflow, message }]);
+    reloadRuns();
+  };
+
+  useEffect(() => {
+    if (!open) setConflicts((c) => (c.length ? [] : c));
+  }, [open]);
 
   // Unresolved review.requested events: dedupe by session and drop any whose
   // review later resolved/approved/rejected (defensive — those types may not
@@ -150,7 +345,9 @@ export function NotificationBell() {
 
   // Use the larger of live-streamed vs polled reviews so neither a fresh reload
   // (no events yet) nor a just-arrived live event under-reports the badge/title.
-  const count = Math.max(reviews.length, polledReviews) + pendingApprovals;
+  const reviewish = Math.max(reviews.length, polledReviews) + pendingApprovals;
+  // Parked workflow questions wait on the user exactly like reviews/approvals.
+  const count = reviewish + waiting.length;
 
   // Desktop notifications + browser tab title are owned here, app-wide.
   const { permission, requestPermission, notify } = useDesktopNotifications();
@@ -177,10 +374,14 @@ export function NotificationBell() {
         parts.push(
           `${pendingApprovals} computer-use approval${pendingApprovals === 1 ? "" : "s"}`,
         );
+      if (waiting.length)
+        parts.push(
+          `${waiting.length} workflow question${waiting.length === 1 ? "" : "s"} waiting`,
+        );
       const body = parts.join(" · ") || "Something needs your attention.";
       notify(`Iron Jarvis — ${count} pending`, body, () => setOpen(true));
     }
-  }, [count, reviews.length, pendingApprovals, notify]);
+  }, [count, reviews.length, pendingApprovals, waiting.length, notify]);
 
   // Ping a desktop notification when a NEW activity event arrives. The event
   // buffer starts empty on load and /events only streams (never replays
@@ -258,12 +459,13 @@ export function NotificationBell() {
             </header>
 
             <div className="max-h-[22rem] overflow-y-auto">
-              {count === 0 && activity.length === 0 ? (
+              {count === 0 && activity.length === 0 && conflicts.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 px-4 py-8 text-center">
                   <Inbox size={22} className="text-zinc-600" />
                   <div className="text-sm text-zinc-500">You&apos;re all caught up.</div>
                   <div className="max-w-[15rem] text-[11px] text-zinc-600">
-                    Reviews and approvals that need you will show up here.
+                    Reviews, approvals, and workflow questions that need you will
+                    show up here.
                   </div>
                 </div>
               ) : (
@@ -291,6 +493,29 @@ export function NotificationBell() {
                       </Link>
                     </li>
                   )}
+
+                  {waiting.map((ask) => (
+                    <WaitingRunRow
+                      key={ask.key}
+                      ask={ask}
+                      onAnswered={handleAnswered}
+                      onConflict={handleConflict}
+                    />
+                  ))}
+
+                  {/* 409 notes: the ask was answered from another surface while
+                      this dropdown held it — say so instead of vanishing. */}
+                  {conflicts.map((c) => (
+                    <li
+                      key={`conflict-${c.key}`}
+                      data-testid="bell-waiting-conflict"
+                      className="px-4 py-2.5"
+                    >
+                      <p className="text-[11px] leading-snug text-amber-200/90">
+                        Couldn&apos;t answer &ldquo;{c.workflow}&rdquo;: {c.message}
+                      </p>
+                    </li>
+                  ))}
 
                   {reviews.map((e) => {
                     const summary =
@@ -367,12 +592,15 @@ export function NotificationBell() {
 
             {count > 0 && (
               <footer className="border-t hairline px-4 py-2">
+                {/* Point at the surface that actually holds the pending work:
+                    only-parked-workflows pending → the Workflows page. */}
                 <Link
-                  href="/kanban"
+                  href={reviewish > 0 ? "/kanban" : "/workflows"}
                   onClick={() => setOpen(false)}
                   className="flex items-center justify-center gap-1.5 text-[11px] font-medium text-accent-soft transition-colors hover:text-accent"
                 >
-                  Open the review board <ArrowRight size={12} />
+                  {reviewish > 0 ? "Open the review board" : "Open the Workflows page"}{" "}
+                  <ArrowRight size={12} />
                 </Link>
               </footer>
             )}

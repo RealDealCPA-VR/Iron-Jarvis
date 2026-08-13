@@ -202,6 +202,75 @@ def register(app: FastAPI, d) -> None:
             return {"sessions": [_session_view(s) for s in scoped]}
         return {"sessions": [_session_view(s) for s in d.orchestrator.list_sessions(limit=lim)]}
 
+    @app.get("/sessions/teams")
+    def sessions_teams() -> dict[str, Any]:
+        """Child-session → parent-session map for the whole board (v1.168.0).
+
+        ``{"parents": {child_session_id: parent_session_id, ...}}`` derived in
+        ONE query pass from ``AgentRun.parent_id`` links — the honest record,
+        never the model's narrative (same derivation as ``/sessions/{id}/team``
+        but flattened board-wide, so the Kanban can nest team members under
+        their parent's card without probing per session). Rules:
+
+        * a child run's ``parent_id`` names a RUN; the mapping resolves it to
+          that run's owning session — a dangling parent run id maps nowhere;
+        * blank session ids are skipped (a run that outlived its session);
+        * a link between two runs of the SAME session (continuations) is not a
+          team edge — no self-mapping;
+        * when a session's runs disagree, the EARLIEST recorded link wins
+          (link rows are walked in ``created_at`` order), so the map is stable.
+
+        Registered BEFORE ``GET /sessions/{session_id}`` on purpose: FastAPI
+        matches in registration order, so moving this below that route would
+        turn every call into a 404 ("session not found" for id "teams").
+
+        BOUNDED on purpose (v1.168.0 review finding): AgentRun is unbounded
+        run history and every mounted board polls this every 8s, so a bare
+        SELECT over the whole table grows forever. Two index-backed passes
+        instead: link rows only (``parent_id IS NOT NULL``), then an ``IN()``
+        lookup resolving just the referenced parent run ids — solo runs (the
+        vast majority) are never read at all.
+        """
+        from sqlmodel import select
+
+        from ...core.db import session_scope
+        from ...core.models import AgentRun
+
+        with session_scope(d.platform.engine) as db:
+            linked = list(
+                db.exec(
+                    select(
+                        AgentRun.id,
+                        AgentRun.session_id,
+                        AgentRun.parent_id,
+                    )
+                    .where(AgentRun.parent_id.is_not(None))  # type: ignore[union-attr]
+                    .order_by(AgentRun.created_at)  # type: ignore[arg-type, attr-defined]
+                )
+            )
+            # Resolve only the run ids the links actually name. Chunked so a
+            # pathological history can't overflow SQLite's variable limit.
+            wanted = sorted({parent for _rid, _sid, parent in linked if parent})
+            run_session: dict[str, str] = {}
+            for i in range(0, len(wanted), 500):
+                chunk = wanted[i : i + 500]
+                for rid, sid in db.exec(
+                    select(AgentRun.id, AgentRun.session_id).where(
+                        AgentRun.id.in_(chunk)  # type: ignore[attr-defined]
+                    )
+                ):
+                    if sid:
+                        run_session[rid] = sid
+        parents: dict[str, str] = {}
+        for _rid, sid, parent in linked:
+            if not sid or not parent:
+                continue
+            parent_sid = run_session.get(parent)
+            if not parent_sid or parent_sid == sid:
+                continue
+            parents.setdefault(sid, parent_sid)
+        return {"parents": parents}
+
     @app.get("/sessions/{session_id}")
     def get_session(session_id: str) -> dict[str, Any]:
         session = d.orchestrator.get_session(session_id)

@@ -18,11 +18,17 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Network } from "lucide-react";
+import { FileText, Network } from "lucide-react";
 import { get } from "@/lib/api";
 import type { SessionView } from "@/lib/types";
 import { Card, Badge } from "@/components/ui";
 import { shortId } from "@/lib/format";
+import { basename } from "@/components/chat/ArtifactsRail";
+import {
+  sessionFileRows,
+  type SessionFileRow,
+  type SessionResult,
+} from "@/components/sessions/SessionFiles";
 
 /** One run row from the team endpoint (a slice of AgentRun). */
 export interface TeamRun {
@@ -95,7 +101,75 @@ export function teamSize(nodes: TeamNode[]): number {
   return n;
 }
 
-function Branch({ nodes, depth }: { nodes: TeamNode[]; depth: number }) {
+/** Per-child file handover (v1.168.0, P2): rows are that child's OWN ledger
+ *  result, `total` the honest server-side count (the lists are capped). */
+export interface ChildFiles {
+  rows: SessionFileRow[];
+  total: number;
+}
+
+/** How many file chips a tree node shows before "+N more" takes over — a
+ *  delegate that wrote 40 files must not turn the tree into a wall. */
+const CHIPS_SHOWN = 5;
+
+function FileChips({
+  files,
+  onPreviewFile,
+}: {
+  files: ChildFiles;
+  onPreviewFile?: (path: string) => void;
+}) {
+  const shown = files.rows.slice(0, CHIPS_SHOWN);
+  const more = files.total - shown.length;
+  const chipClass =
+    "inline-flex max-w-[16rem] items-center gap-1 rounded-md border " +
+    "border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 font-mono " +
+    "text-[10.5px] text-zinc-400";
+  return (
+    <div
+      className="mt-1 flex flex-wrap items-center gap-1.5"
+      data-testid="team-files"
+    >
+      <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-zinc-600">
+        wrote
+      </span>
+      {shown.map((f) =>
+        onPreviewFile ? (
+          <button
+            key={f.path}
+            type="button"
+            onClick={() => onPreviewFile(f.path)}
+            title={f.path}
+            className={`${chipClass} transition-colors hover:border-accent/40 hover:text-accent-soft`}
+          >
+            <FileText size={10} className="shrink-0" aria-hidden />
+            <span className="truncate">{basename(f.path)}</span>
+          </button>
+        ) : (
+          <span key={f.path} title={f.path} className={chipClass}>
+            <FileText size={10} className="shrink-0" aria-hidden />
+            <span className="truncate">{basename(f.path)}</span>
+          </span>
+        ),
+      )}
+      {more > 0 && (
+        <span className="text-[10px] text-zinc-600">+{more} more</span>
+      )}
+    </div>
+  );
+}
+
+function Branch({
+  nodes,
+  depth,
+  files,
+  onPreviewFile,
+}: {
+  nodes: TeamNode[];
+  depth: number;
+  files: Record<string, ChildFiles>;
+  onPreviewFile?: (path: string) => void;
+}) {
   return (
     <div className={depth > 0 ? "ml-4 border-l border-white/[0.07] pl-3" : ""}>
       {nodes.map((n) => (
@@ -115,8 +189,19 @@ function Branch({ nodes, depth }: { nodes: TeamNode[]; depth: number }) {
           <div className="mt-0.5 line-clamp-1 text-xs text-zinc-500">
             {n.session.task}
           </div>
+          {files[n.session.id] && (
+            <FileChips
+              files={files[n.session.id]}
+              onPreviewFile={onPreviewFile}
+            />
+          )}
           {n.children.length > 0 && (
-            <Branch nodes={n.children} depth={depth + 1} />
+            <Branch
+              nodes={n.children}
+              depth={depth + 1}
+              files={files}
+              onPreviewFile={onPreviewFile}
+            />
           )}
         </div>
       ))}
@@ -133,18 +218,66 @@ function Branch({ nodes, depth }: { nodes: TeamNode[]; depth: number }) {
 export function TeamTree({
   sessionId,
   active,
+  onPreviewFile,
 }: {
   sessionId: string;
   active: boolean;
+  /** When provided, each child's file chips become preview buttons (v1.168.0).
+   *  Absent → chips render as plain, titled labels, never dead buttons. */
+  onPreviewFile?: (path: string) => void;
 }) {
   const [team, setTeam] = useState<TeamResponse | null>(null);
+  const [files, setFiles] = useState<Record<string, ChildFiles>>({});
 
   useEffect(() => {
     let alive = true;
     const load = async () => {
       try {
         const t = await get<TeamResponse>(`/sessions/${sessionId}/team`);
-        if (alive) setTeam(t);
+        if (!alive) return;
+        setTeam(t);
+        const kids = t?.children ?? [];
+        if (kids.length === 0) return;
+        // Each delegate's OWN ledger result — "child A wrote the workbook" is
+        // only honest when the files hang off the child that journaled them.
+        // The tree itself never depends on these fetches, and the map MERGES
+        // rather than replaces: a child whose fetch fails on one poll keeps
+        // its last-good chips ("absent beats wrong" is for data never loaded,
+        // not for discarding data already shown — the same rule the team
+        // fetch above follows by keeping the old tree). Only a SUCCESSFUL
+        // response saying "no files" clears a child's entry.
+        const entries = await Promise.all(
+          kids.map(
+            async (
+              c,
+            ): Promise<readonly [string, ChildFiles | null] | null> => {
+              try {
+                const r = await get<SessionResult>(`/sessions/${c.id}/result`);
+                if (!r?.found) return [c.id, null] as const;
+                const rows = sessionFileRows(r, c.workspace_path ?? "");
+                if (rows.length === 0) return [c.id, null] as const;
+                const total =
+                  (r.files_created_total ?? 0) + (r.files_changed_total ?? 0);
+                return [c.id, { rows, total: total || rows.length }] as const;
+              } catch {
+                // Transient failure — keep whatever this child showed before.
+                return null;
+              }
+            },
+          ),
+        );
+        if (alive) {
+          setFiles((prev) => {
+            const next = { ...prev };
+            for (const e of entries) {
+              if (e === null) continue; // errored fetch: last-good stays
+              const [childId, val] = e;
+              if (val === null) delete next[childId];
+              else next[childId] = val;
+            }
+            return next;
+          });
+        }
       } catch {
         /* optional panel — absent beats wrong */
       }
@@ -176,7 +309,12 @@ export function TeamTree({
       }
     >
       <div className="text-sm text-zinc-300">
-        <Branch nodes={tree} depth={0} />
+        <Branch
+          nodes={tree}
+          depth={0}
+          files={files}
+          onPreviewFile={onPreviewFile}
+        />
       </div>
     </Card>
   );

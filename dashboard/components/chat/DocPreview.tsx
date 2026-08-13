@@ -8,7 +8,14 @@
 // Excel/…" launches the OS-associated app through POST /documents/open — an
 // explicit, user-initiated click.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Check,
   Copy,
@@ -19,6 +26,7 @@ import {
   FolderOpen,
   Loader2,
   RefreshCw,
+  ShieldCheck,
   X,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -192,6 +200,124 @@ function snapshotKey(path: string, d: PreviewData): string {
   return `${path}\u0000${d.kind === "sheet" ? (d.sheet ?? "") : ""}`;
 }
 
+// --- Redaction receipt: "Compare to original" (v1.168.0) ---------------------
+// The redaction engine writes its output as `<stem>.redacted<suffix>` beside
+// the source (documents/redact.py callers: the tool, the scan/apply routes,
+// the skill — pinned server-side in tests/test_redaction_receipt_v1168.py).
+// So a preview of `organizer.redacted.txt` can OFFER the original: both files
+// go through GET /documents/read (the same extract_text on both sides — the
+// preview payload carries no text at all for pdf/docx, the formats tax
+// documents actually arrive in), the existing diffLines machinery renders
+// what changed, and the removed-PII counts come from the placeholder tokens
+// the engine itself wrote into the redacted copy — counted by re-reading the
+// written file, never repeated from a tool's claim, and net of any markers
+// the original already carried (see markerDelta).
+
+/** The `label` style's in-document tags (mirrors _LABELS in
+ *  documents/redact.py — the backend test pins this exact vocabulary). */
+const REDACTION_LABELS = [
+  "SSN", "ITIN", "EIN", "EMAIL", "PHONE", "CARD", "ACCOUNT", "DOB",
+  "ADDRESS", "IP", "REDACTED",
+] as const;
+
+/** GET /documents/read clips text at this many chars (pinned server-side) —
+ *  a payload AT the cap means the comparison window may be short. */
+const READ_CAP = 20_000;
+
+/** The original this file is a redacted copy of, per the engine's naming
+ *  convention — or null when the name doesn't say so. `report.redacted.pdf`
+ *  → `report.pdf`, `notes.redacted` → `notes`, anything else → null. */
+export function redactionSourcePath(path: string): string | null {
+  const parts = /^(.*[\\/])?([^\\/]+)$/.exec(path);
+  if (!parts) return null;
+  const m = /^(.+)\.redacted(\.[^.]+)?$/i.exec(parts[2]);
+  if (!m) return null;
+  return (parts[1] ?? "") + m[1] + (m[2] ?? "");
+}
+
+export interface RedactionMarkers {
+  /** Label-style tag → occurrences (`[SSN]` twice → { SSN: 2 }). */
+  categories: Record<string, number>;
+  /** Runs of █ — the `black` style's same-length blocks, one run per value. */
+  blocks: number;
+}
+
+/** Count the redaction markers the engine wrote into *text*. Only the exact
+ *  `[SSN]`-style tags the engine emits count — `[NOPE]` is document text. */
+export function redactionMarkers(text: string): RedactionMarkers {
+  const categories: Record<string, number> = {};
+  const rx = new RegExp(`\\[(${REDACTION_LABELS.join("|")})\\]`, "g");
+  for (const m of text.matchAll(rx))
+    categories[m[1]] = (categories[m[1]] ?? 0) + 1;
+  return { categories, blocks: (text.match(/█+/g) ?? []).length };
+}
+
+/** Markers the redacted copy carries BEYOND the original's, clamped at 0.
+ *  The original can legitimately contain markers — re-redacting an already-
+ *  redacted copy (`x.redacted.redacted.txt`, the engine's own convention
+ *  applied twice), or a document quoting a literal `[SSN]` — and counting
+ *  those would claim removals THIS pass never made, contradicting the diff
+ *  right below the badges. */
+export function markerDelta(
+  red: RedactionMarkers,
+  orig: RedactionMarkers,
+): RedactionMarkers {
+  const categories: Record<string, number> = {};
+  for (const [label, n] of Object.entries(red.categories)) {
+    const left = n - (orig.categories[label] ?? 0);
+    if (left > 0) categories[label] = left;
+  }
+  return { categories, blocks: Math.max(0, red.blocks - orig.blocks) };
+}
+
+/** The header line's honest count — empty string when nothing was found
+ *  (`remove` style leaves no marker, so the diff alone tells that story). */
+export function markerSummary(m: RedactionMarkers): string {
+  const parts = Object.entries(m.categories).map(([l, n]) => `${n} × ${l}`);
+  if (m.blocks > 0) parts.push(`${m.blocks} × blacked-out (█)`);
+  if (parts.length === 0) return "";
+  return `Removed: ${parts.join(", ")} — counted by re-reading the redacted file itself.`;
+}
+
+/** Render a diff line's text with the engine's markers highlighted, so the
+ *  eye lands on what replaced the PII. */
+function withMarkersHighlighted(text: string): ReactNode[] {
+  const rx = new RegExp(`\\[(?:${REDACTION_LABELS.join("|")})\\]|█+`, "g");
+  const out: ReactNode[] = [];
+  let last = 0;
+  let key = 0;
+  for (const m of text.matchAll(rx)) {
+    const at = m.index ?? 0;
+    if (at > last) out.push(text.slice(last, at));
+    out.push(
+      <mark
+        key={key++}
+        data-testid="redaction-marker"
+        className="rounded bg-amber-400/20 px-0.5 text-amber-200"
+      >
+        {m[0]}
+      </mark>,
+    );
+    last = at + m[0].length;
+  }
+  out.push(text.slice(last));
+  return out;
+}
+
+/** State of one comparison: both texts fetched, diffed, counted. */
+interface CompareState {
+  loading: boolean;
+  error: string | null;
+  /** Which file failed and why, in words that fit the ACTUAL failure —
+   *  never "the original may have been deleted" when the redacted copy's
+   *  read is the one that failed, or when the daemon's file policy refused. */
+  errorHint: string | null;
+  diff: DiffLine[] | null;
+  markers: RedactionMarkers | null;
+  /** Either side sat at the /documents/read clip — window honesty. */
+  clipped: boolean;
+}
+
 export function DocPreview({
   path,
   onClose,
@@ -216,6 +342,101 @@ export function DocPreview({
   // and whether the diff view is the one on screen. See the module block above.
   const [changedFrom, setChangedFrom] = useState<string[] | null>(null);
   const [showChanges, setShowChanges] = useState(false);
+  // "Compare to original" (v1.168.0): fetched lazily on first toggle — text
+  // extraction on a big PDF is real work, so it never runs unasked.
+  const [compare, setCompare] = useState<CompareState | null>(null);
+  const [showCompare, setShowCompare] = useState(false);
+
+  // The original this file is a redacted copy of, by the engine's naming
+  // convention (null for every non-redacted file — the row simply isn't there).
+  const redactionSource = useMemo(() => redactionSourcePath(path), [path]);
+  const redactionSourceName =
+    redactionSource?.split(/[\\/]/).pop() ?? redactionSource ?? "";
+
+  // In-flight guard for the comparison fetch. /documents/read can take
+  // SECONDS (the scanned-PDF OCR fallback goes through the vision router), so
+  // a Refresh, sheet switch, or path change that invalidates the comparison
+  // mid-fetch must also make the in-flight result unlandable — otherwise the
+  // old Promise resolves after the reset and the next toggle shows a stale
+  // (or the PREVIOUS file's) diff and counts without refetching.
+  const compareGen = useRef(0);
+
+  /** Fetch BOTH extracted texts and diff them (original → redacted copy). */
+  const loadCompare = useCallback(async () => {
+    if (!redactionSource) return;
+    const gen = ++compareGen.current; // a newer call invalidates this one too
+    setCompare({
+      loading: true,
+      error: null,
+      errorHint: null,
+      diff: null,
+      markers: null,
+      clipped: false,
+    });
+    const read = (p: string) =>
+      get<{ path: string; text: string }>(
+        `/documents/read?path=${encodeURIComponent(p)}`,
+      );
+    // allSettled, not all: an error must say WHICH side failed — blaming the
+    // original when the redacted copy's read is the broken one sends the user
+    // hunting for the wrong file.
+    const [orig, red] = await Promise.allSettled([
+      read(redactionSource),
+      read(path),
+    ]);
+    if (gen !== compareGen.current) return; // invalidated mid-flight — drop it
+    if (orig.status === "rejected" || red.status === "rejected") {
+      const failedOriginal = orig.status === "rejected";
+      const reason: unknown = failedOriginal ? orig.reason : (red as PromiseRejectedResult).reason;
+      const failedName = failedOriginal
+        ? redactionSourceName
+        : (path.split(/[\\/]/).pop() ?? path);
+      const status = reason instanceof ApiError ? reason.status : null;
+      // The hint fits the failure: 403 is the daemon's file policy saying no
+      // (protected path / outside the allowlist) — "moved or deleted" would
+      // be simply wrong there. Only a 400 "cannot read" earns that wording.
+      const errorHint =
+        status === 403
+          ? `The daemon's file policy refused to read ${failedName} — a protected path, or one outside the configured allowlist.`
+          : status === 400
+            ? `The comparison needs both files on disk — ${failedName} may have been moved, renamed, or deleted.`
+            : `Couldn't read ${failedName} — use Refresh to try again.`;
+      setCompare({
+        loading: false,
+        error: reason instanceof Error ? reason.message : String(reason),
+        errorHint,
+        diff: null,
+        markers: null,
+        clipped: false,
+      });
+      return;
+    }
+    const origText = orig.value.text ?? "";
+    const redText = red.value.text ?? "";
+    setCompare({
+      loading: false,
+      error: null,
+      errorHint: null,
+      diff: diffLines(origText.split(/\r?\n/), redText.split(/\r?\n/)),
+      // Only markers this pass ADDED count — the original may already carry
+      // markers (a re-redacted copy, or a literal "[SSN]" in the document),
+      // and badging those would claim removals the diff below denies.
+      markers: markerDelta(redactionMarkers(redText), redactionMarkers(origText)),
+      clipped: origText.length >= READ_CAP || redText.length >= READ_CAP,
+    });
+  }, [path, redactionSource, redactionSourceName]);
+
+  function toggleCompare() {
+    setShowChanges(false); // one diff view at a time
+    setShowCompare((v) => {
+      const next = !v;
+      // Refetch on first open AND when reopening onto a cached error — the
+      // failure may have been transient (daemon hiccup, file restored), and
+      // re-showing a stale error with no way to retry dead-ends the user.
+      if (next && (compare === null || compare.error)) void loadCompare();
+      return next;
+    });
+  }
 
   useEffect(() => {
     let alive = true;
@@ -293,6 +514,12 @@ export function DocPreview({
           setChangedFrom(null);
         }
         setShowChanges(false); // a fresh payload always lands on the current view
+        // A fresh payload also invalidates a fetched comparison — the file on
+        // disk may have changed, and a stale diff would claim otherwise. The
+        // generation bump makes any IN-FLIGHT comparison unlandable too.
+        compareGen.current += 1;
+        setCompare(null);
+        setShowCompare(false);
       } catch (e) {
         setError(e instanceof ApiError ? e.message : String(e));
         setData(null);
@@ -303,8 +530,12 @@ export function DocPreview({
     [path],
   );
 
-  // A new path resets the panel (and the sheet selection) entirely.
+  // A new path resets the panel (and the sheet selection) entirely. The
+  // generation bump here is belt-and-braces with load()'s: a comparison
+  // started under the OLD path must never land under the new one — that
+  // would show file A's removal receipt under "a redacted copy of B".
   useEffect(() => {
+    compareGen.current += 1;
     setSheet("");
     setOpenNote(null);
     setImgError(false);
@@ -472,7 +703,10 @@ export function DocPreview({
         <div className="flex shrink-0 items-center gap-2 px-1">
           <button
             type="button"
-            onClick={() => setShowChanges((v) => !v)}
+            onClick={() => {
+              setShowCompare(false); // one diff view at a time
+              setShowChanges((v) => !v);
+            }}
             className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] transition-colors ${
               showChanges
                 ? "border-accent/40 bg-accent/[0.1] text-accent-soft"
@@ -483,6 +717,29 @@ export function DocPreview({
           </button>
           <span className="text-[10.5px] text-zinc-500">
             this file changed since you last previewed it
+          </span>
+        </div>
+      )}
+      {/* Redaction receipt (v1.168.0): this file's NAME says it is a redacted
+          copy (`<stem>.redacted<suffix>`, the engine's one convention), so
+          offer the original side-by-side — what was removed, category by
+          category, counted from the redacted file's own text. */}
+      {redactionSource && !loading && data && (
+        <div className="flex shrink-0 items-center gap-2 px-1">
+          <button
+            type="button"
+            onClick={toggleCompare}
+            className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] transition-colors ${
+              showCompare
+                ? "border-accent/40 bg-accent/[0.1] text-accent-soft"
+                : "border-white/[0.08] text-zinc-300 hover:bg-white/[0.06]"
+            }`}
+          >
+            <ShieldCheck size={11} />{" "}
+            {showCompare ? "Hide comparison" : "Compare to original"}
+          </button>
+          <span className="text-[10.5px] text-zinc-500">
+            a redacted copy of {redactionSourceName}
           </span>
         </div>
       )}
@@ -501,7 +758,84 @@ export function DocPreview({
           <div className="p-3">
             <LoaderInline label="Loading preview…" />
           </div>
-        ) : !data ? null : diff ? (
+        ) : !data ? null : showCompare ? (
+          // The redaction receipt: original vs redacted copy, one unified
+          // line diff (the same view idiom as "Changes"), removed PII lines
+          // red, the engine's replacement markers highlighted amber.
+          <div className="p-3">
+            {!compare || compare.loading ? (
+              <LoaderInline label="Reading both files…" />
+            ) : compare.error ? (
+              <div className="text-[11.5px]">
+                <p className="text-rose-300/90">
+                  Couldn&apos;t compare: {compare.error}
+                </p>
+                {compare.errorHint && (
+                  // Computed at fetch time: names the file that actually
+                  // failed, with wording that fits the failure (moved/deleted
+                  // only for a 400 "cannot read"; policy refusal for a 403).
+                  <p className="pt-1 text-zinc-400">{compare.errorHint}</p>
+                )}
+              </div>
+            ) : (
+              <>
+                {(Object.keys(compare.markers?.categories ?? {}).length > 0 ||
+                  (compare.markers?.blocks ?? 0) > 0) && (
+                  <div className="flex flex-wrap items-center gap-1.5 pb-2">
+                    {Object.entries(compare.markers?.categories ?? {}).map(
+                      ([label, n]) => (
+                        <span
+                          key={label}
+                          data-testid="redaction-badge"
+                          className="inline-flex items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-amber-300"
+                        >
+                          {label} × {n}
+                        </span>
+                      ),
+                    )}
+                    {(compare.markers?.blocks ?? 0) > 0 && (
+                      <span
+                        data-testid="redaction-badge"
+                        className="inline-flex items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/[0.08] px-1.5 py-0.5 text-[10px] font-medium text-amber-300"
+                      >
+                        █ × {compare.markers!.blocks}
+                      </span>
+                    )}
+                  </div>
+                )}
+                <p className="pb-2 text-[10.5px] text-zinc-500">
+                  {compare.markers && markerSummary(compare.markers)
+                    ? markerSummary(compare.markers)
+                    : "No new redaction markers in this file's extracted text — the diff below shows what differs from the original."}{" "}
+                  Red lines are the original&apos;s text; green lines are the
+                  redacted copy.
+                  {compare.clipped &&
+                    // Window honesty: /documents/read clips at 20k chars, so
+                    // a payload AT the cap means later PII is out of view.
+                    ` Compared over the first ${READ_CAP.toLocaleString()} extracted characters of each file only.`}
+                </p>
+                <div className="whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed">
+                  {(compare.diff ?? []).map((l, i) => (
+                    <div
+                      key={i}
+                      data-testid={`cmp-${l.kind}`}
+                      className={
+                        l.kind === "added"
+                          ? "bg-emerald-500/[0.08] text-emerald-300"
+                          : l.kind === "removed"
+                            ? "bg-rose-500/[0.08] text-rose-300/90"
+                            : "text-zinc-500"
+                      }
+                    >
+                      {l.kind === "added" ? "+ " : l.kind === "removed" ? "− " : "  "}
+                      {l.kind === "added" ? withMarkersHighlighted(l.text) : l.text}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        ) : diff ? (
           // The line diff, "since you last previewed": green added, red
           // removed, unchanged lines dimmed for reading context.
           <div className="p-3">

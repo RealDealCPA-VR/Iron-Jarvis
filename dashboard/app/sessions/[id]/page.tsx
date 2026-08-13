@@ -45,6 +45,9 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { TeamTree } from "@/components/sessions/TeamTree";
+import { SessionFiles } from "@/components/sessions/SessionFiles";
+import OriginChip from "@/components/sessions/OriginChip";
+import { DocPreview } from "@/components/chat/DocPreview";
 import { BlackboardPanel } from "@/components/sessions/BlackboardPanel";
 import { ReviewPanel } from "@/components/ReviewPanel";
 import { TracesPanel } from "@/components/TracesPanel";
@@ -169,10 +172,17 @@ export default function SessionDetailPage({
   );
   // The newest session-scoped event that warrants a refetch.
   const latestRefetch = sessionEvents.find((e) => REFETCH_EVENTS.has(e.type));
+  /* Reload channel for SessionFiles (v1.168.0, P2): a finished session's
+   * panel does not poll, but the SAME page's Time-travel feed can undo a
+   * write — and an undo is a ledger row that arrives here as tool.executed.
+   * Bumping the nonce makes the panel refetch so its counts/rows never
+   * present a just-reverted handover as current. */
+  const [filesNonce, setFilesNonce] = useState(0);
   useEffect(() => {
     if (!latestRefetch) return;
     detail.reload();
     evaluation.reload();
+    setFilesNonce((n) => n + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latestRefetch?.id]);
 
@@ -180,6 +190,12 @@ export default function SessionDetailPage({
   const [acting, setActing] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [followup, setFollowup] = useState("");
+
+  /* ---- Files handover (v1.168.0, P2): preview target for SessionFiles rows
+   * and TeamTree file chips. One state at the page level so both surfaces
+   * drive the SAME embedded DocPreview (the chat right-rail component, reused
+   * — never chat/page.tsx). */
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
 
   async function stop() {
     setActing("stop");
@@ -303,6 +319,10 @@ export default function SessionDetailPage({
                       {tts.enabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
                     </button>
                   )}
+                  {/* Origin chip (v1.168.0): who started this session — a
+                      scheduled/automated session says so where the user reads
+                      its outcome. Renders nothing when origin is absent. */}
+                  <OriginChip origin={session.origin} />
                   {session.provider === "mock" && <MockChip />}
                   {/* "queued" predates statusTone's table — style it here so it
                       reads as "parked", not the slate unknown-status grey. */}
@@ -523,9 +543,37 @@ export default function SessionDetailPage({
             </Reveal>
           )}
 
+          {/* Files handover (v1.168.0, P2) — what this session's tool ledger
+              says it wrote, previewable/downloadable right here. Renders
+              nothing when the session produced no files. */}
+          <SessionFiles
+            sessionId={id}
+            workspacePath={session.workspace_path}
+            active={isActive}
+            onPreview={setPreviewPath}
+            reloadNonce={filesNonce}
+          />
+
+          {/* Embedded preview for a handed-over file — the chat's DocPreview,
+              driven by SessionFiles rows AND TeamTree file chips. */}
+          {previewPath && (
+            <Reveal>
+              <div className="h-[34rem]" data-testid="session-doc-preview">
+                <DocPreview
+                  path={previewPath}
+                  onClose={() => setPreviewPath(null)}
+                />
+              </div>
+            </Reveal>
+          )}
+
           {/* Team + blackboard (v1.166.0, B3) — both render nothing for a
               solo session, so most pages are unchanged. */}
-          <TeamTree sessionId={id} active={isActive} />
+          <TeamTree
+            sessionId={id}
+            active={isActive}
+            onPreviewFile={setPreviewPath}
+          />
           <BlackboardPanel sessionId={id} active={isActive} />
 
           {/* Live activity feed (filtered to this session) */}

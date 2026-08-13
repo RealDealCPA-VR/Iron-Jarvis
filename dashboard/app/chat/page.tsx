@@ -53,6 +53,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import Link from "next/link";
 import {
   AudioLines,
+  BookmarkPlus,
   Bot,
   Brain,
   Check,
@@ -106,7 +107,14 @@ import { WorkflowDraftCard } from "@/components/chat/WorkflowDraftCard";
 import { RunResultCard, type RunResult } from "@/components/chat/RunResultCard";
 import { DraftCard, draftFromFence } from "@/components/chat/DraftCard";
 import { TurnReceipt, type TurnRoute } from "@/components/chat/TurnReceipt";
-import { ArtifactsRail } from "@/components/chat/ArtifactsRail";
+import {
+  ArtifactsRail,
+  confirmUndoPrompt,
+  joinUndoByPath,
+  normalizeFsPath,
+  revertedActionIds,
+  type UndoRowLike,
+} from "@/components/chat/ArtifactsRail";
 import { PreflightNote } from "@/components/chat/PreflightNote";
 import { useProviderHealth } from "@/lib/useProviderHealth";
 import type { WorkflowDraft } from "@/lib/types";
@@ -843,6 +851,69 @@ function CopyIconButton({
   );
 }
 
+/** Hover action "Add to project knowledge" (v1.168.0): promotes an assistant
+ *  reply into the bound project's knowledge through the EXISTING knowledge
+ *  path. Disabled with the honest reason when no project is bound (never a
+ *  silent no-op); success flashes a quiet check like the copy button; a
+ *  failure surfaces the server's error right next to the button. */
+function PromoteKnowledgeButton({
+  disabledReason,
+  onPromote,
+}: {
+  disabledReason?: string | null;
+  onPromote: () => Promise<void>;
+}) {
+  const [state, setState] = useState<"idle" | "busy" | "done">("idle");
+  const [err, setErr] = useState<string | null>(null);
+  const timerRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    },
+    [],
+  );
+  async function run() {
+    if (state === "busy") return;
+    setState("busy");
+    setErr(null);
+    try {
+      await onPromote();
+      setState("done");
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+      timerRef.current = window.setTimeout(() => setState("idle"), 1800);
+    } catch (e) {
+      setState("idle");
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }
+  const label = disabledReason
+    ? `Add to project knowledge — ${disabledReason}`
+    : "Add to project knowledge";
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1">
+      <button
+        type="button"
+        disabled={!!disabledReason || state === "busy"}
+        onClick={() => void run()}
+        title={label}
+        aria-label={label}
+        className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {state === "busy" ? (
+          <Loader2 size={12} className="animate-spin" />
+        ) : state === "done" ? (
+          <Check size={12} className="text-emerald-400" />
+        ) : (
+          <BookmarkPlus size={12} />
+        )}
+      </button>
+      {err && (
+        <span className="truncate text-[10.5px] text-rose-300/90">{err}</span>
+      )}
+    </span>
+  );
+}
+
 // Lets the <code> override know it sits inside a <pre> block (block code keeps
 // the pre's styling; standalone inline code gets the accent pill).
 const PreContext = createContext(false);
@@ -1175,6 +1246,22 @@ export default function ChatPage() {
   // The conversation's generated documents — persisted in the thread setup so
   // the preview chips survive leaving the page and restarts until dismissed.
   const [threadDocs, setThreadDocs] = useState<string[]>([]);
+  // UNDO WHERE YOU LOOK (v1.168.0): chat's undo-journal rows (GET
+  // /undo?session_id=chat — every chat tool call runs as session id "chat"),
+  // joined to rail items / receipt file chips by ABSOLUTE path so "Undo this
+  // write" lives next to the file it reverts. Refetched whenever the thread's
+  // document list changes (every file-writing turn changes it) and after an
+  // undo.
+  const [undoRows, setUndoRows] = useState<UndoRowLike[]>([]);
+  // Rows undone THIS visit: the refetched list drops them (the route only
+  // lists live candidates), but the affordance must GREY to "already undone"
+  // rather than vanish — vanishing reads as "this was never undoable". So the
+  // undone row is stashed (undoneRows) and its id marked (undoneIds).
+  const [undoneIds, setUndoneIds] = useState<Set<string>>(new Set());
+  const [undoneRows, setUndoneRows] = useState<UndoRowLike[]>([]);
+  // Bumped after an undo: it keys the DocPreview, so an open preview of the
+  // reverted file remounts and refetches instead of showing stale content.
+  const [previewNonce, setPreviewNonce] = useState(0);
   // Side-rail width (px, desktop only): draggable via the rail's left-edge
   // grip, clamped, persisted per device. Default keeps today's layout.
   const [railW, setRailW] = useState(RAIL_DEFAULT_W);
@@ -3322,6 +3409,174 @@ export default function ChatPage() {
     queueSaveDocs(next);
   }
 
+  // ---- UNDO WHERE YOU LOOK (v1.168.0) --------------------------------------
+
+  /** Refresh chat's live undo candidates. Failure is a quiet degrade — the
+   *  rail simply offers no undo; chat itself must never block on this. */
+  async function refreshUndoRows() {
+    try {
+      const res = await get<{ actions: UndoRowLike[] }>("/undo?session_id=chat");
+      setUndoRows(res.actions ?? []);
+    } catch {
+      /* offline / older daemon — no undo affordances, nothing broken */
+    }
+  }
+
+  // Fetch on mount and again whenever the thread's document list changes —
+  // every file-writing turn merges into threadDocs, so this is exactly "a new
+  // journal row may exist".
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await get<{ actions: UndoRowLike[] }>(
+          "/undo?session_id=chat",
+        );
+        if (!cancelled) setUndoRows(res.actions ?? []);
+      } catch {
+        /* offline / older daemon — no undo affordances, nothing broken */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [threadDocs]);
+
+  // UNDO PERFORMED ELSEWHERE (v1.168.0 fix): an undo run on another surface
+  // (Timeline page, a second window) publishes action.reverted on /events —
+  // without reacting, this page keeps offering a live "Undo this write" whose
+  // POST can only 409. New frames grey the affected row immediately (the same
+  // "already undone" state a local undo leaves — vanishing would read as
+  // "never undoable") and refetch the candidate list, which also re-joins a
+  // since-re-edited file to its NEWEST journal row. Seen-boundary is an event
+  // id (the commEventSeenRef pattern) so re-renders never re-process frames.
+  const undoEventSeenRef = useRef<string | null>(null);
+  useEffect(() => {
+    const newest = events[0];
+    if (!newest) return;
+    const boundary = undoEventSeenRef.current;
+    undoEventSeenRef.current = newest.id;
+    const ids = revertedActionIds(events, boundary);
+    if (ids.length === 0) return;
+    const hit = new Set(ids);
+    setUndoneIds((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) next.add(id);
+      return next;
+    });
+    // Stash the greyed rows BEFORE the refetch drops them from the live list
+    // (the route only lists not-yet-undone candidates).
+    setUndoneRows((prev) => [
+      ...prev,
+      ...undoRows.filter(
+        (r) =>
+          hit.has(r.action_id) &&
+          !prev.some((p) => p.action_id === r.action_id),
+      ),
+    ]);
+    void refreshUndoRows();
+    // On a rerun from the undoRows dep, boundary === newest.id, so the scan
+    // stops immediately — no double processing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [events, undoRows]);
+
+  // Live rows first (newest write per path wins), stashed undone rows behind
+  // them so an undone file keeps its greyed affordance until a NEWER write to
+  // the same path takes the slot back.
+  const undoByPath = useMemo(
+    () => joinUndoByPath([...undoRows, ...undoneRows]),
+    [undoRows, undoneRows],
+  );
+
+  /** Journal match for one absolute path — the rail's/receipt's `undoFor`.
+   *  null = no row could be matched by path, so NO affordance is offered. */
+  function undoForPath(path: string) {
+    const row = undoByPath.get(normalizeFsPath(path));
+    if (!row) return null;
+    if (undoneIds.has(row.action_id))
+      return {
+        actionId: row.action_id,
+        undoable: false,
+        reason: "already undone",
+        kind: row.kind,
+      };
+    return {
+      actionId: row.action_id,
+      undoable: row.undoable !== false,
+      reason:
+        row.undoable === false
+          ? "this action has no safe inverse"
+          : undefined,
+      kind: row.kind,
+    };
+  }
+
+  /** The one undo implementation both call sites share (rail row + receipt
+   *  file chip): explicit confirm (window.confirm — the DocPreview
+   *  convention), POST /undo/{id}, mark the row undone, refresh an open
+   *  preview and the candidate list. THROWS on failure so each call site
+   *  surfaces the server's error where the user clicked. */
+  async function undoWrite(actionId: string, path: string) {
+    const row = undoByPath.get(normalizeFsPath(path));
+    const base = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+    if (!window.confirm(confirmUndoPrompt(row?.kind, base))) return;
+    await post(`/undo/${encodeURIComponent(actionId)}`, {});
+    setUndoneIds((prev) => {
+      const next = new Set(prev);
+      next.add(actionId);
+      return next;
+    });
+    if (row)
+      setUndoneRows((prev) =>
+        prev.some((r) => r.action_id === actionId) ? prev : [...prev, row],
+      );
+    // An open preview of the reverted file must show the reverted truth — the
+    // nonce keys the DocPreview, so bumping it remounts + refetches. (A
+    // preview of an unrelated file just refetches its own unchanged data.)
+    setPreviewNonce((n) => n + 1);
+    void refreshUndoRows();
+  }
+
+  // ---- PROMOTE TO KNOWLEDGE (v1.168.0) -------------------------------------
+
+  /** Add an assistant reply to the bound project's knowledge as a note —
+   *  the EXISTING knowledge path (the server names it from the first line).
+   *  Throws when no project is bound / on server error; the button surfaces
+   *  it. */
+  async function promoteNoteToKnowledge(content: string) {
+    const pid = projectIdRef.current;
+    if (!pid) throw new Error("bind this chat to a project first");
+    await post(`/projects/${encodeURIComponent(pid)}/knowledge`, {
+      text: content,
+    });
+  }
+
+  /** Add a produced FILE to the bound project's knowledge: fetch its bytes
+   *  off the daemon (the same /documents/file the preview/download use) and
+   *  post them through the existing knowledge upload path, which extracts the
+   *  text server-side by filename. */
+  async function promoteFileToKnowledge(path: string) {
+    const pid = projectIdRef.current;
+    if (!pid) throw new Error("bind this chat to a project first");
+    const tok = ijToken();
+    const url = `${API_BASE}/documents/file?path=${encodeURIComponent(path)}${
+      tok ? `&token=${encodeURIComponent(tok)}` : ""
+    }`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`could not read the file (HTTP ${res.status})`);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    let bin = "";
+    const CHUNK = 0x8000; // spread in chunks — one call per byte is quadratic,
+    for (let i = 0; i < bytes.length; i += CHUNK)
+      bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    const base = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+    await post(`/projects/${encodeURIComponent(pid)}/knowledge`, {
+      content_b64: btoa(bin),
+      filename: base,
+      name: base,
+    });
+  }
+
   /** Put a failed turn's typed message back in the composer — but only when
    *  it's empty (never clobber text typed while the turn was in flight). The
    *  restore is programmatic, so it must never count as voice input: Voice
@@ -5010,6 +5265,8 @@ export default function ChatPage() {
                                 deniedTools={m.deniedTools}
                                 documents={m.documents}
                                 onOpenDocument={openDocPreview}
+                                undoFor={undoForPath}
+                                onUndo={undoWrite}
                               />
                             </div>
                           )}
@@ -5060,6 +5317,16 @@ export default function ChatPage() {
                             )}
                           <div className="ml-11 mt-1 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100">
                             <CopyIconButton text={m.content} title="Copy message" />
+                            <PromoteKnowledgeButton
+                              disabledReason={
+                                projectId
+                                  ? null
+                                  : "bind this chat to a project first"
+                              }
+                              onPromote={() =>
+                                promoteNoteToKnowledge(m.content)
+                              }
+                            />
                             {canRegen && (
                               <button
                                 type="button"
@@ -6233,6 +6500,9 @@ export default function ChatPage() {
                 {previewPath ? (
                   <div className="min-h-0 flex-1">
                     <DocPreview
+                      // The nonce remounts the preview after an undo so it
+                      // refetches and shows the reverted file (v1.168.0).
+                      key={`${previewNonce}:${previewPath}`}
                       path={previewPath}
                       onClose={() => setPreviewPath(null)}
                     />
@@ -6259,6 +6529,12 @@ export default function ChatPage() {
                       onPreview={openDocPreview}
                       onDismiss={dismissThreadDoc}
                       cap={MAX_THREAD_DOCS}
+                      undoFor={undoForPath}
+                      onUndo={undoWrite}
+                      onPromote={promoteFileToKnowledge}
+                      promoteDisabledReason={
+                        projectId ? null : "bind this chat to a project first"
+                      }
                       downloadHref={(p) => {
                         const tok = ijToken();
                         // &download=1 forces Content-Disposition: attachment

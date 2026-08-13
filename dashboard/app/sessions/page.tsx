@@ -31,6 +31,7 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { NewSessionForm } from "@/components/NewSessionForm";
+import OriginChip, { originKind } from "@/components/sessions/OriginChip";
 import { PageShell, Reveal } from "@/components/motion";
 import { timeAgo, shortId } from "@/lib/format";
 
@@ -40,12 +41,20 @@ const ACTIVE = new Set(["active", "running", "pending"]);
 // param for the null case, so it is narrowed client-side.
 const NO_PROJECT = "__none__";
 
+// Origin-filter sentinels (v1.168.0). Kind values are PREFIXED ("kind:…")
+// because the origin charset allows underscores — a literal origin could
+// otherwise collide with a sentinel and filter the wrong rows.
+const ORIGIN_MINE = "__mine__";
+const ORIGIN_AUTOMATED = "__auto__";
+const ORIGIN_KIND_PREFIX = "kind:";
+
 export default function SessionsPage() {
   // Toolbar state. `query`/`statusFilter`/`agentFilter` filter the fetched list
   // client-side; `projectFilter` is server-SCOPED — it changes the fetch path.
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [agentFilter, setAgentFilter] = useState("");
+  const [originFilter, setOriginFilter] = useState("");
   const [projectFilter, setProjectFilter] = useState("");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
@@ -111,6 +120,19 @@ export default function SessionsPage() {
     () => Array.from(new Set(sessions.map((s) => s.agent_type))).sort(),
     [sessions],
   );
+  // Origin KINDS present in the fetched list (prefix before ":", e.g.
+  // "schedule:nightly" → schedule) — the per-kind filter options.
+  const originKindOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          sessions
+            .map((s) => originKind((s.origin || "").trim()))
+            .filter(Boolean),
+        ),
+      ).sort(),
+    [sessions],
+  );
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -121,6 +143,19 @@ export default function SessionsPage() {
       );
     if (statusFilter) rows = rows.filter((s) => s.status === statusFilter);
     if (agentFilter) rows = rows.filter((s) => s.agent_type === agentFilter);
+    // Provenance (v1.168.0): "Mine" = no origin tag (historically how
+    // user-started lanes record themselves), "Automated" = any non-empty
+    // origin, or one specific kind.
+    if (originFilter === ORIGIN_MINE)
+      rows = rows.filter((s) => !(s.origin || "").trim());
+    else if (originFilter === ORIGIN_AUTOMATED)
+      rows = rows.filter((s) => (s.origin || "").trim());
+    else if (originFilter.startsWith(ORIGIN_KIND_PREFIX)) {
+      const kind = originFilter.slice(ORIGIN_KIND_PREFIX.length);
+      rows = rows.filter(
+        (s) => originKind((s.origin || "").trim()) === kind,
+      );
+    }
     // Project scope is served server-side, but re-apply it here so the filter
     // still works if the daemon predates the ?project_id= param, and so the
     // "No project" case (which has no server param) is honoured.
@@ -132,11 +167,13 @@ export default function SessionsPage() {
       const db = new Date(b.created_at).getTime();
       return sortDir === "asc" ? da - db : db - da;
     });
-  }, [sessions, query, statusFilter, agentFilter, projectFilter, sortDir]);
+  }, [sessions, query, statusFilter, agentFilter, originFilter, projectFilter, sortDir]);
 
   // Any active filter — used to keep the toolbar reachable and to show the
   // right empty state when a server-scoped fetch legitimately returns nothing.
-  const anyFilter = Boolean(query || statusFilter || agentFilter || projectFilter);
+  const anyFilter = Boolean(
+    query || statusFilter || agentFilter || originFilter || projectFilter,
+  );
 
   async function stopSession(id: string) {
     setStoppingId(id);
@@ -286,6 +323,22 @@ export default function SessionsPage() {
                     ))}
                   </select>
                   <select
+                    aria-label="Filter by origin"
+                    title='Who started the session — "Mine" = no origin tag, "Automated" = dispatched by a schedule, job, workflow…'
+                    value={originFilter}
+                    onChange={(e) => setOriginFilter(e.target.value)}
+                    className="rounded-lg border border-white/[0.08] bg-ink-900/80 px-2.5 py-1.5 text-sm text-zinc-300 outline-none focus:border-accent/60"
+                  >
+                    <option value="">All origins</option>
+                    <option value={ORIGIN_MINE}>Mine</option>
+                    <option value={ORIGIN_AUTOMATED}>Automated</option>
+                    {originKindOptions.map((k) => (
+                      <option key={k} value={`${ORIGIN_KIND_PREFIX}${k}`}>
+                        {k}
+                      </option>
+                    ))}
+                  </select>
+                  <select
                     aria-label="Filter by project"
                     value={projectFilter}
                     onChange={(e) => setProjectFilter(e.target.value)}
@@ -389,6 +442,9 @@ export default function SessionsPage() {
                                   {shortId(s.id)}
                                 </span>
                                 {s.provider === "mock" && <MockChip />}
+                                {/* Provenance (v1.168.0): who dispatched this
+                                    session; renders nothing when untagged. */}
+                                <OriginChip origin={s.origin} />
                                 {/* Context spine: which project produced this
                                     session. Links to the project; unresolved
                                     (deleted) ids degrade to a neutral, unlinked

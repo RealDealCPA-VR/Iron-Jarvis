@@ -55,7 +55,9 @@ def test_both_lanes_persist_the_receipt_fields():
 
 
 def test_the_receipt_component_is_mounted_with_server_truth():
-    mount = re.search(r"<TurnReceipt[\s\S]{0,400}?/>", _PAGE)
+    # Window sized for the v1.168.0 mount (undo-action props grew it past the
+    # original 400) — same growth pattern as the ArtifactsRail pin below.
+    mount = re.search(r"<TurnReceipt[\s\S]{0,1000}?/>", _PAGE)
     assert mount, "TurnReceipt is never rendered — the whole feature is dark"
     body = mount.group(0)
     for prop in ("route={m.route}", "deniedTools={m.deniedTools}",

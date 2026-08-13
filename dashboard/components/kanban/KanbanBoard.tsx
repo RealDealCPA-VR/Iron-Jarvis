@@ -12,6 +12,7 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/core";
 import { post, ApiError } from "@/lib/api";
+import { usePolledApi } from "@/lib/useApi";
 import { ConfirmButton } from "@/components/ui";
 import type { Review, SessionView } from "@/lib/types";
 import {
@@ -22,7 +23,14 @@ import {
   type LaneId,
 } from "@/lib/kanban";
 import { KanbanColumn } from "./KanbanColumn";
-import { CardInner, KanbanActionsContext, type KanbanCardActions } from "./SessionCard";
+import {
+  CardInner,
+  KanbanActionsContext,
+  KanbanTeamContext,
+  type KanbanCardActions,
+  type KanbanTeamState,
+  type TeamCardInfo,
+} from "./SessionCard";
 
 /* ---- Queued lane (v1.166.0, B6) -----------------------------------------
  * `spawn_managed` parks sessions past the `max_concurrent_sessions` cap with
@@ -75,6 +83,132 @@ function asLaneId(lane: BoardLaneId): LaneId {
   return lane === "queued" ? "active" : lane;
 }
 
+/* ---- Team nesting (v1.168.0, P5) ----------------------------------------
+ * `GET /sessions/teams` maps child session -> parent session (derived from
+ * AgentRun.parent_id — the honest record). The board lays each child out
+ * DIRECTLY UNDER its parent's card, in the parent's lane, indented; a parent
+ * card grows a "Team of N" badge that collapses/expands its members. A child
+ * whose parent is not on the board (filtered out, deleted, different project
+ * scope) renders exactly as before — flat, in its own lane. */
+
+const LANE_ORDER: BoardLaneId[] = ["queued", "active", "review", "completed", "failed"];
+
+export interface TeamRow {
+  session: SessionView;
+  /** 0 = root; >0 = nested this many levels under the preceding parent. */
+  depth: number;
+}
+
+export interface TeamLayout {
+  rows: Record<BoardLaneId, TeamRow[]>;
+  /** session id -> descendants ON THE BOARD under it (the "Team of N" count). */
+  counts: Map<string, number>;
+}
+
+/** Visual cap only — a corrupt 50-deep chain must not push cards off-screen. */
+const MAX_TEAM_DEPTH = 3;
+
+/**
+ * Pure lane→rows layout. Children move into their parent's lane, right after
+ * the parent, depth-first, siblings in created_at order; collapsed parents
+ * keep their descendants off the board. Corrupt data degrades flat, never
+ * silently drops a session: self-links are ignored and a parent cycle
+ * (a→b→a — both "children", so neither would ever be emitted) falls through
+ * to the second pass, which renders survivors flat in their own lane.
+ */
+export function layoutTeams(
+  lanes: Record<BoardLaneId, SessionView[]>,
+  parents: Record<string, string>,
+  collapsed: ReadonlySet<string>,
+): TeamLayout {
+  const present = new Map<string, SessionView>();
+  for (const laneId of LANE_ORDER) {
+    for (const s of lanes[laneId]) present.set(s.id, s);
+  }
+
+  const childrenOf = new Map<string, SessionView[]>();
+  const isChild = new Set<string>();
+  for (const [cid, pid] of Object.entries(parents)) {
+    if (cid === pid) continue; // self-link: corrupt, ignore
+    const child = present.get(cid);
+    if (!child || !present.has(pid)) continue; // parent off the board → flat
+    const arr = childrenOf.get(pid);
+    if (arr) arr.push(child);
+    else childrenOf.set(pid, [child]);
+    isChild.add(cid);
+  }
+  for (const arr of childrenOf.values()) {
+    arr.sort(
+      (a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+    );
+  }
+
+  const counts = new Map<string, number>();
+  function countUnder(id: string, seen: Set<string>): number {
+    let n = 0;
+    for (const c of childrenOf.get(id) ?? []) {
+      if (seen.has(c.id)) continue; // cycle guard
+      seen.add(c.id);
+      n += 1 + countUnder(c.id, seen);
+    }
+    return n;
+  }
+  for (const pid of childrenOf.keys()) {
+    counts.set(pid, countUnder(pid, new Set([pid])));
+  }
+
+  const rows: Record<BoardLaneId, TeamRow[]> = {
+    queued: [],
+    active: [],
+    review: [],
+    completed: [],
+    failed: [],
+  };
+  const emitted = new Set<string>();
+  function emit(laneId: BoardLaneId, s: SessionView, depth: number) {
+    if (emitted.has(s.id)) return; // cycle guard — a card renders exactly once
+    emitted.add(s.id);
+    rows[laneId].push({ session: s, depth });
+    if (collapsed.has(s.id)) return;
+    for (const c of childrenOf.get(s.id) ?? []) {
+      emit(laneId, c, Math.min(depth + 1, MAX_TEAM_DEPTH));
+    }
+  }
+  for (const laneId of LANE_ORDER) {
+    for (const s of lanes[laneId]) {
+      if (!isChild.has(s.id)) emit(laneId, s, 0);
+    }
+  }
+  // Second pass: anything still unplaced (parent cycles) renders flat in its
+  // OWN lane — unless a collapsed ancestor legitimately hides it.
+  for (const laneId of LANE_ORDER) {
+    for (const s of lanes[laneId]) {
+      if (emitted.has(s.id)) continue;
+      if (hiddenByCollapse(s.id, parents, present, collapsed)) continue;
+      emit(laneId, s, 0);
+    }
+  }
+  return { rows, counts };
+}
+
+/** Is some ancestor of `id` on the board AND collapsed? (Walk is cycle-safe.) */
+function hiddenByCollapse(
+  id: string,
+  parents: Record<string, string>,
+  present: ReadonlyMap<string, SessionView>,
+  collapsed: ReadonlySet<string>,
+): boolean {
+  const seen = new Set<string>([id]);
+  let cur = parents[id];
+  while (cur && present.has(cur) && !seen.has(cur)) {
+    if (collapsed.has(cur)) return true;
+    seen.add(cur);
+    cur = parents[cur];
+  }
+  return false;
+}
+
 export function KanbanBoard({
   sessions,
   reviews,
@@ -110,6 +244,50 @@ export function KanbanBoard({
     return m;
   }, [scoped]);
 
+  // Team nesting (v1.168.0): one cheap board-wide map, polled on the same
+  // rhythm as the session list's slower cousins. Until it arrives (or if the
+  // endpoint errors) `parents` is empty and the board is exactly the flat
+  // pre-v1.168.0 board — honest degradation, no layout flicker.
+  const { data: teamsData } = usePolledApi<{ parents: Record<string, string> }>(
+    "/sessions/teams",
+    8000,
+  );
+  const parents = useMemo(() => teamsData?.parents ?? {}, [teamsData]);
+  const [collapsedTeams, setCollapsedTeams] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const layout = useMemo(
+    () => layoutTeams(lanes, parents, collapsedTeams),
+    [lanes, parents, collapsedTeams],
+  );
+  const teamState = useMemo<KanbanTeamState>(() => {
+    const info = new Map<string, TeamCardInfo>();
+    for (const laneId of LANE_ORDER) {
+      for (const row of layout.rows[laneId]) {
+        info.set(row.session.id, {
+          depth: row.depth,
+          childCount: layout.counts.get(row.session.id) ?? 0,
+          collapsed: collapsedTeams.has(row.session.id),
+          // The card's OWN lane — a nested child renders in the parent's
+          // column, but its affordances (Approve/Reject, Retry/Dismiss, drag
+          // payload) must follow its own status/review, or a nested review
+          // child arms "Drop to approve" that no-ops on drop.
+          trueLane: asLaneId(boardLaneFor(row.session, !!reviews[row.session.id])),
+        });
+      }
+    }
+    return {
+      info,
+      toggle: (id: string) =>
+        setCollapsedTeams((prev) => {
+          const next = new Set(prev);
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+          return next;
+        }),
+    };
+  }, [layout, collapsedTeams, reviews]);
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor),
@@ -119,7 +297,17 @@ export function KanbanBoard({
   const draggingFrom: BoardLaneId | null = activeSession
     ? boardLaneFor(activeSession, !!reviews[activeSession.id])
     : null;
-  const columns = visibleLanes(lanes);
+  // Columns render the TEAM layout (children live in their parent's lane), so
+  // lane visibility must follow the same rows — otherwise a queued child
+  // nested under an active parent would summon an empty Queued column.
+  const laneSessions = useMemo(() => {
+    const out = {} as Record<BoardLaneId, SessionView[]>;
+    for (const laneId of LANE_ORDER) {
+      out[laneId] = layout.rows[laneId].map((r) => r.session);
+    }
+    return out;
+  }, [layout]);
+  const columns = visibleLanes(laneSessions);
 
   // Card-level actions (failed-lane retry/dismiss, review-lane add-context) reach
   // the cards via context — KanbanColumn sits between us and them, prop-frozen.
@@ -190,6 +378,7 @@ export function KanbanBoard({
 
   return (
     <KanbanActionsContext.Provider value={cardActions}>
+    <KanbanTeamContext.Provider value={teamState}>
     <div className="space-y-3">
       {toast && (
         <div
@@ -207,20 +396,27 @@ export function KanbanBoard({
           clear affordances sit here, right-aligned above Completed/Failed.
           POST /sessions/clear is status-wide (not project-scoped), so the
           bulk-clear buttons only appear on the unscoped standalone board — an
-          embedded per-project board must never over-clear other projects. */}
-      {!projectId && (lanes.completed.length > 0 || lanes.failed.length > 0) && (
+          embedded per-project board must never over-clear other projects.
+          Counts derive from laneSessions — the SAME rows the columns render —
+          so the toolbar can never contradict the column right under it (a
+          failed child nested under an active parent lives in the Active
+          column; "Clear failed (1)" over an empty Failed column was the
+          v1.168.0 review finding). The clear itself stays status-wide and the
+          toast reports the REAL cleared count. */}
+      {!projectId &&
+        (laneSessions.completed.length > 0 || laneSessions.failed.length > 0) && (
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {lanes.completed.length > 0 && (
+          {laneSessions.completed.length > 0 && (
             <ConfirmButton
-              label={`Clear completed (${lanes.completed.length})`}
+              label={`Clear completed (${laneSessions.completed.length})`}
               confirmLabel="Confirm clear?"
               title="Remove every completed session from the board"
               onConfirm={() => clearLane("completed")}
             />
           )}
-          {lanes.failed.length > 0 && (
+          {laneSessions.failed.length > 0 && (
             <ConfirmButton
-              label={`Clear failed (${lanes.failed.length})`}
+              label={`Clear failed (${laneSessions.failed.length})`}
               confirmLabel="Confirm clear?"
               title="Remove every failed or cancelled session from the board"
               onConfirm={() => clearLane("failed")}
@@ -244,7 +440,8 @@ export function KanbanBoard({
             <KanbanColumn
               key={lane.id}
               lane={lane}
-              sessions={lanes[lane.id]}
+              sessions={laneSessions[lane.id]}
+              count={lanes[lane.id].length}
               draggingFrom={draggingFrom ? asLaneId(draggingFrom) : null}
               busyId={busyId}
               onApprove={(id) => act("approve", id)}
@@ -262,6 +459,7 @@ export function KanbanBoard({
         </DragOverlay>
       </DndContext>
     </div>
+    </KanbanTeamContext.Provider>
     </KanbanActionsContext.Provider>
   );
 }
