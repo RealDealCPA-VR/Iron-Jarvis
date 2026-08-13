@@ -1,6 +1,6 @@
 # The Comprehensive To-Do
 
-*Everything known to be open as of v1.167.2 (2026-08-12), consolidated from
+*Everything known to be open as of v1.168.1 (2026-08-12), consolidated from
 the deep-review wow track, deferred backlogs across waves, and known limits.
 The deep review's 11 confirmed bugs are all FIXED (v1.166.2–v1.167.0) — this
 file is what remains.*
@@ -16,27 +16,30 @@ file is what remains.*
   that finishes in the fetch→subscribe window leaves "waiting for the first
   token" forever. `daemon/routes/sessions.py` + `sessions/[id]/page.tsx`
 
-## Wow wave 1 — five small connections, one story (*the app closes its own loops*)
+## Wow wave 1 — five small connections, one story — **SHIPPED v1.168.0** ✔
 
-- [ ] **Redaction receipt** — after `redact_pii`, diff source vs. redacted in
+*All five below landed in v1.168.0, plus kanban team nesting and
+promote-to-knowledge from the lists further down.*
+
+- [x] **Redaction receipt** — after `redact_pii`, diff source vs. redacted in
   DocPreview (the diff engine already exists), badge removed spans by
   category. The nervous pre-email check becomes a shown proof.
-- [ ] **Job deliverables on the session page** — render the ledger-proven
+- [x] **Job deliverables on the session page** — render the ledger-proven
   `files_created/changed` from `GET /sessions/{id}/result` as an ArtifactsRail
   on session detail, per delegate in the TeamTree.
 - [ ] **Undo where you look** — join rail/TurnReceipt paths against the undo
   journal; "Undo this write" under the message that did it.
-- [ ] **Origin chips** — `Session.origin` is indexed and serialized; render
+- [x] **Origin chips** — `Session.origin` is indexed and serialized; render
   it (schedule:nightly · comm:telegram · job:agents · autonomy) on session
   rows + detail, with a filter.
-- [ ] **The bell knows it's waiting on you** — fold workflow runs parked on
+- [x] **The bell knows it's waiting on you** — fold workflow runs parked on
   an *ask* step (question text in `waiting_json`) into the notification bell
   with an inline answer box.
 
 ## More small wins
 
-- [ ] Kanban nests delegation teams under the parent card (team endpoint exists).
-- [ ] Promote any chat answer / rail file into Project Knowledge (one hover action).
+- [x] Kanban nests delegation teams under the parent card — shipped v1.168.0.
+- [x] Promote any chat answer / rail file into Project Knowledge — shipped v1.168.0.
 - [ ] `terminal_tail` tool — chat reads the pane you're staring at (read-only).
 - [ ] Project heartbeat — list a project's schedules (name, next run, last
   status, last session link) on its surface.
