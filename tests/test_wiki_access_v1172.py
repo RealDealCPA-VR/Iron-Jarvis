@@ -125,6 +125,12 @@ def test_asking_about_the_wiki_arms_the_knowledge_tools():
         "what does the runbook say when the daemon won't boot?",
         "look in our internal docs for the retention policy",
         "does the handbook cover PTO carryover?",
+        # Found live against a real firm wiki: "firm docs" armed NOTHING
+        # before v1.172.1 — the vocabulary has to be the USER's.
+        "look in the firm docs for the client template",
+        "check the office docs for the engagement letter",
+        "what's in the hermes brain about the antique mall?",
+        "check the brain for that client's onboarding steps",
     ):
         armed = _armed(message)
         assert "recall" in armed, f"nothing memory-ish armed for: {message!r}"
@@ -139,6 +145,9 @@ def test_the_new_vocabulary_does_not_hijack_unrelated_messages():
         "write a python docstring for this function",
         "document this endpoint in the README",
         "the doctor appointment is tuesday",
+        # Precision guards for the widened list: no possessive, no arming.
+        "brain surgery is scheduled for next week",
+        "firm handshake",
     ):
         armed = _armed(message)
         assert "recall" not in armed, f"over-armed on: {message!r} -> {armed}"

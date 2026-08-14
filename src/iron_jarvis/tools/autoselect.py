@@ -282,10 +282,20 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
     # BOTH the memory bases and file search: a "wiki" is a markdown vault for
     # one user and a folder of docs for the next, and the model should be able
     # to reach whichever it is rather than guess.
+    #
+    # The possessive list is deliberately concrete rather than "any word +
+    # docs": it was widened after testing against a real firm's wiki, where
+    # "look in the FIRM docs for the client template" armed nothing at all —
+    # the vocabulary has to be the user's, not the developer's. "the/our
+    # brain" is here for the same reason: it is what people call the store
+    # once it has a name (the bases here are literally `brain` and
+    # `hermes-brain`), and the definite article keeps it away from "brain
+    # surgery" prose.
     (
         re.compile(
             r"\b(wikis?|knowledge ?base|documentation|handbooks?|runbooks?|"
-            r"playbooks?|(?:the|our|company|team|internal) docs)\b",
+            r"playbooks?|(?:the|our|company|team|internal|firm|office|practice) docs|"
+            r"(?:the|our|my|hermes) brains?)\b",
             re.IGNORECASE,
         ),
         {"recall": 8, "ltm_search": 7, "file_search": 6},
