@@ -174,6 +174,7 @@ _LATE_MODEL_MODULES = (
     "..memory.proposals",     # MemoryProposalRecord — the steward's queue
     "..workflows.store",      # WorkflowPinRecord
     "..context.store",        # CompactionRecord — the compaction cache
+    "..worklist.models",      # WorklistItem — durable per-item checkpoints
 )
 
 

@@ -27,7 +27,6 @@ from ..schemas import (
     PersonaSaveBody,
 )
 from ...core.db import CONVERSATION_WRITE_LOCK, session_scope
-from ...core.fs_policy import fs_read_ok
 from ...core.models import AgentState
 
 # The chat TURN lives in daemon/chat_turn.py (v1.136.0 messaging surfaces):
@@ -45,6 +44,7 @@ from ..chat_turn import (
     _WORKFLOW_DRAFT_SPEC,
     _WORKFLOW_DRAFT_TOOL,
     _attachment_budgets,
+    _prepare_attachments,
     _compose_recall_query,
     _connector_memory_block,
     _claimed_write_note,
@@ -1268,57 +1268,18 @@ def register(app: FastAPI, d) -> None:
             model_choice or d.platform.config.default_model,
         )
 
-        # Attachments: text formats extracted inline; images go to VISION.
-        images: list[dict[str, str]] = []
-        attach_block = ""
-        _IMG = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                ".webp": "image/webp", ".gif": "image/gif"}
-        for raw in (body.attachments or [])[:4]:
-            p = Path(raw)
-            if not p.is_absolute():
-                p = d.platform.config.home / "uploads" / p.name
-            ok, _reason = fs_read_ok(str(p))
-            if not ok or not p.is_file():
-                continue
-            suffix = p.suffix.lower()
-            if suffix in _IMG:
-                import base64 as _b64
-
-                if p.stat().st_size <= 8 * 1024 * 1024:
-                    images.append(
-                        {"data_b64": _b64.b64encode(p.read_bytes()).decode("ascii"),
-                         "media_type": _IMG[suffix]}
-                    )
-                else:
-                    _mb = p.stat().st_size / (1024 * 1024)
-                    attach_block += (
-                        f"\n\n## Attached image: {p.name}\n(NOT analyzed — {_mb:.0f} MB "
-                        "exceeds the 8 MB inline-image limit; ask the user to resize "
-                        "it or describe what they want from it.)"
-                    )
-            else:
-                try:
-                    from ...documents.attachment_rag import extract_for_rag, rag_block
-
-                    text = extract_for_rag(p)
-                    if len(text) <= _inline_budget:
-                        attach_block += f"\n\n## Attached file: {p.name}\n{text}"
-                    else:
-                        # RETRIEVAL, not a head-clip: ground on the chunks
-                        # relevant to THIS question, with location refs — the
-                        # old fixed clip fed page 1 and dropped the rest.
-                        _q = next(
-                            (m.content or "" for m in reversed(body.messages)
-                             if m.role == "user"),
-                            "",
-                        )
-                        attach_block += rag_block(
-                            p.name, text, _q,
-                            getattr(d.platform, "embedder", None),
-                            k=_rag_k, char_budget=_rag_budget,
-                        )
-                except Exception as exc:  # noqa: BLE001
-                    attach_block += f"\n\n## Attached file: {p.name}\n(could not read: {exc})"
+        # Attachments: text formats extracted inline (scans via OCR), images to
+        # VISION. SHARED IMPLEMENTATION (v1.174.0): this lane and
+        # chat_turn.run_chat_turn both call `_prepare_attachments`. It was a
+        # hand-copied block in each until a scanned PDF — no text layer, "0
+        # indexed sections", half of a real tax folder — had to be fixed in
+        # both; the copy in THIS lane is the one the dashboard runs, so a
+        # single-lane fix is a fix the user never sees. Do not re-inline it.
+        images, attach_block = await _prepare_attachments(
+            d, body,
+            inline_budget=_inline_budget, rag_budget=_rag_budget, rag_k=_rag_k,
+            provider_choice=provider_choice, model_choice=model_choice,
+        )
         if attach_block:
             system += "\n\n# Attachments (provided by the user this turn)" + attach_block
 

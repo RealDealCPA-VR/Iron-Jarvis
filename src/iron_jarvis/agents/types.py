@@ -89,6 +89,13 @@ _SELF_SERVICE_TOOLS = [
 # formula validation, sheet reproduction, and account-diffing chat has.
 _DOCUMENT_TOOLS = [
     "read_document", "write_document", "extract_pdf",
+    # EYES (v1.174.0). `view_image` has been registered platform-wide since
+    # v1.89 — its own comment says it "gives any agent EYES" — and it was in
+    # NO agent definition, so no builder/planner/reviewer session could ever
+    # call it. Third time this file's header lesson has bitten (history_search
+    # v1.142, workflow_list v1.172): a tool absent from these lists reaches no
+    # session. A scanned receipt is unreadable without it.
+    "view_image",
     "excel_read", "excel_edit", "excel_profile", "excel_query",
     "excel_formula_check", "excel_sheet_spec", "excel_apply_spec",
     "excel_accounts_diff",

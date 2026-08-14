@@ -2113,4 +2113,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
     _routes.undo.register(app, d)
     _routes.fleet.register(app, d)
     _routes.system.register(app, d)
+    # Worklist (v1.174.0): the durable per-item checkpoints a chunked
+    # job reports progress through — without this the store exists and
+    # no surface can read it.
+    from ..worklist import register as _register_worklist
+
+    _register_worklist(app, d)
     return app

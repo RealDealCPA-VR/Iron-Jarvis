@@ -68,6 +68,31 @@ _MAX_TOOL_ROUNDS = 6
 #: Per-attachment extract budget (chars); clips carry an explicit marker.
 _ATTACH_EXTRACT_CHARS = 6000
 
+#: Attachments read per turn (the historical cap — kept as a named constant so
+#: both lanes and the tests can point at the same number).
+_MAX_ATTACHMENTS = 4
+#: Inline-image cap: every vision API drops a bigger payload, so a larger image
+#: is DECLARED unanalyzed instead of silently vanishing.
+_MAX_INLINE_IMAGE_BYTES = 8 * 1024 * 1024
+#: Scanned PAGES this ONE turn may transcribe across ALL attachments. Each page
+#: is a separate vision call (one live scan took >180s), so the per-document cap
+#: (`config.ocr_max_pages`) is not enough on its own: four scanned attachments
+#: would multiply it by four. Attachments are served in order and the rest get
+#: the honest OCR_BUDGET_NOTE rather than a silent blank.
+_TURN_OCR_PAGES = 20
+#: Chat attachment types that ride INLINE to vision rather than the text
+#: readers. Deliberately NARROWER than ``readers._IMAGE_SUFFIXES``: these are
+#: the media types every vision API accepts as-is. A reader-supported image
+#: outside this map (``.bmp``, and ``.tif`` if the readers gain it) takes the
+#: document path instead, where ``extract_for_rag_async`` transcribes it through
+#: the same OCR — it used to arrive as the literal string
+#: "[image BMP 800x600, mode RGB]" with no note, which is worse than empty: it
+#: is an invitation to invent.
+_ATTACH_IMAGE_TYPES = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".webp": "image/webp", ".gif": "image/gif",
+}
+
 #: Connector toggles per turn (the "+" menu): ids capped, and the tools an MCP
 #: connector contributes are bounded SEPARATELY from the 6 individually-armed
 #: tools — the whole server's tool group is the unit the user consented to, so
@@ -1117,6 +1142,217 @@ def _attachment_budgets(d, provider: str, model: str) -> tuple[int, int, int]:
     return inline, rag, k
 
 
+def _vision_unavailable_reason(d, provider: str, model: str) -> str:
+    """Why the images on this turn will NOT be seen — or ``""`` when they may be.
+
+    An image attachment rides on the last user message and the router prefers a
+    vision-capable adapter for it (``_enforce_capabilities``). But that
+    preference is SOFT: ``_first_capable`` happily falls back to a merely
+    tool-capable adapter, and then the images are dropped by the adapter
+    without a word — the user watches an answer about a screenshot nobody
+    looked at. The >8 MB case has said so since it shipped; this is the same
+    honesty for the other way an image goes unseen.
+
+    Deliberately CONSERVATIVE — it reports only what is certain. A false
+    "not analyzed" is its own lie, so the note fires only when neither the
+    picked provider nor ANY available real provider claims vision. An empty
+    availability set means there is no real route at all (the offline/mock
+    path, which v1.165.0 already discloses as ``reason="mock"``) and is left
+    alone. Synchronous by design — ``available()`` touches PATH/disk — so
+    callers run it through ``asyncio.to_thread``.
+
+    It mirrors ``_first_capable``'s filter, INCLUDING the circuit breaker: a
+    vision provider whose circuit is OPEN is one the router will skip, so
+    counting it as "vision is available" left the one case this function exists
+    for — routing lands on a blind adapter — silent again."""
+    try:
+        from ..providers.router import _capabilities
+
+        router = getattr(d.platform, "router", None)
+        manager = getattr(d.platform, "providers", None)
+        if router is None or manager is None:
+            return ""
+        snapshot = getattr(router, "_snapshot", None)
+        avail = set(snapshot()) if callable(snapshot) else set()
+        if not avail:
+            return ""
+        health = getattr(router, "health", None)
+        allow = getattr(health, "allow", None)
+
+        def _routable(name: str) -> bool:
+            if not callable(allow):
+                return True
+            try:
+                return bool(allow(name))
+            except Exception:  # noqa: BLE001 — an unreadable breaker is not a verdict
+                return True
+
+        pick = (provider or "").strip()
+        order = ([pick] if pick and pick != "auto" else []) + sorted(avail)
+        checked: list[str] = []
+        for name in dict.fromkeys(order):
+            if not name or name == "mock" or not _routable(name):
+                continue
+            # The model name belongs to the PICKED provider only — handing
+            # "claude-sonnet" to an Ollama factory builds a fiction.
+            want = (model or "").strip() if name == pick else ""
+            try:
+                adapter = manager.get(name, want or None)
+            except Exception:  # noqa: BLE001 — an unbuildable provider is not a verdict
+                continue
+            if _capabilities(adapter).get("vision", True):
+                return ""
+            checked.append(name)
+        if not checked:
+            return ""
+        return (
+            "the model answering this turn cannot accept images and no "
+            "connected provider can (" + ", ".join(checked) + "), so this "
+            "image was NOT seen; connect a vision-capable model (Anthropic/"
+            "Google, or a local llava/qwen-VL) and send it again"
+        )
+    except Exception:  # noqa: BLE001 — a probe must never break a turn
+        return ""
+
+
+async def _prepare_attachments(
+    d,
+    body,
+    *,
+    inline_budget: int,
+    rag_budget: int,
+    rag_k: int,
+    provider_choice: str = "",
+    model_choice: str = "",
+) -> "tuple[list[dict[str, str]], str]":
+    """This turn's attachments → ``(images, attach_block)``.
+
+    ONE implementation for BOTH chat lanes (v1.174.0). It used to be a
+    hand-copied block in ``run_chat_turn`` and in POST /chat/stream, which is
+    exactly the kind of pair that drifts: the streaming lane is the one the
+    dashboard uses, so a fix landing in only one of them is a fix the user
+    never sees.
+
+    Three properties this holds that the copies did not:
+
+    * SCANS ARE READ, ONCE. An image-only PDF extracted to nothing and was
+      chunked to "0 indexed sections" — half the PDFs in a real tax folder. It
+      now goes through the vision OCR path, bounded per document
+      (``config.ocr_max_pages``, read through ``ocr_settings`` so chat and every
+      other OCR path agree what the value means) and per TURN
+      (``_TURN_OCR_PAGES``), and THROUGH THE CONTRACT-5 CACHE — so a follow-up
+      question with the attachment still attached does not re-pay the whole
+      transcription, and a scan the Documents page already read is free here.
+      The per-turn budget is a GATE, never the cap: the cap is half the cache
+      key, and a shrinking one would miss its own entries.
+    * A READER-SUPPORTED IMAGE OUTSIDE ``_ATTACH_IMAGE_TYPES`` (``.bmp``) takes
+      the document path, where it is transcribed rather than handed over as
+      "[image BMP 800x600, mode RGB]".
+    * NOTHING BLOCKS THE LOOP. The parse, the PDF walk and the image read all
+      run in threads; the copies parsed multi-MB documents on the event loop.
+    * SILENCE IS DISCLOSED. Every way an attachment fails to reach the model —
+      too big, unreadable, a scan with no OCR, an image with no vision — puts
+      a note in the prompt saying so.
+    """
+    from ..documents.attachment_rag import extract_for_rag_async, rag_block
+    from ..documents.ocr import ocr_settings
+
+    cfg = getattr(d.platform, "config", None)
+    # ONE reading of the OCR config for the whole app: `ocr_settings` treats 0
+    # as "use the default" and clamps to 1..MAX_OCR_PAGES_CEILING. Re-deriving
+    # it here meant `ocr_max_pages = 0` refused the FIRST attachment of a turn
+    # with "the budget was already spent on earlier attachments" — when there
+    # were none — and chat disagreed with every other OCR path about what the
+    # same config value meant.
+    ocr_enabled, per_doc_pages = ocr_settings(cfg)
+    ocr_budget = _TURN_OCR_PAGES
+    router = getattr(d.platform, "router", None)
+    query = next(
+        (m.content or "" for m in reversed(body.messages) if m.role == "user"),
+        "",
+    )
+
+    images: list[dict[str, str]] = []
+    # Parts, not one growing string, so an unseen-image note can be spliced back
+    # NEXT TO its own attachment instead of after every file block.
+    parts: list[str] = []
+    image_slots: list[tuple[int, str]] = []
+    for raw in (body.attachments or [])[:_MAX_ATTACHMENTS]:
+        p = Path(raw)
+        if not p.is_absolute():
+            p = d.platform.config.home / "uploads" / p.name
+        ok, _reason = fs_read_ok(str(p))
+        if not ok or not p.is_file():
+            continue
+        suffix = p.suffix.lower()
+        if suffix in _ATTACH_IMAGE_TYPES:
+            import base64 as _b64
+
+            try:
+                size = (await asyncio.to_thread(p.stat)).st_size
+            except OSError:
+                continue
+            if size <= _MAX_INLINE_IMAGE_BYTES:
+                images.append({
+                    "data_b64": await asyncio.to_thread(
+                        lambda: _b64.b64encode(p.read_bytes()).decode("ascii")
+                    ),
+                    "media_type": _ATTACH_IMAGE_TYPES[suffix],
+                })
+                image_slots.append((len(parts), p.name))
+                parts.append("")  # filled below iff the images go unseen
+            else:
+                # Too large to send to vision — be HONEST rather than answering
+                # blind on an image the user thinks was seen (>8 MB is dropped
+                # by every vision API's inline-image cap).
+                _mb = size / (1024 * 1024)
+                parts.append(
+                    f"\n\n## Attached image: {p.name}\n(NOT analyzed — {_mb:.0f} MB "
+                    "exceeds the 8 MB inline-image limit; ask the user to resize "
+                    "it or describe what they want from it.)"
+                )
+            continue
+        try:
+            got = await extract_for_rag_async(
+                p,
+                router=router,
+                ocr_enabled=ocr_enabled,
+                # The PER-DOCUMENT cap, unshrunk: it is half the OCR cache key
+                # (contract 5), so handing it a dwindling per-turn remainder
+                # would fragment the key and miss this file's own entries. The
+                # turn budget is a separate GATE.
+                max_ocr_pages=per_doc_pages,
+                ocr_budget=ocr_budget,
+                config=cfg,
+            )
+            ocr_budget = max(0, ocr_budget - got.ocr_pages)
+            text, note = got.text, got.note
+            if len(text) <= inline_budget:
+                head = f"\n\n## Attached file: {p.name}\n"
+                parts.append(head + (f"[{note}]\n{text}" if note else text))
+            else:
+                # RETRIEVAL, not a head-clip: ground on the chunks
+                # relevant to THIS question, with location refs — the
+                # old fixed clip fed page 1 and dropped the rest.
+                parts.append(rag_block(
+                    p.name, text, query,
+                    getattr(d.platform, "embedder", None),
+                    k=rag_k, char_budget=rag_budget, note=note,
+                ))
+        except Exception as exc:  # noqa: BLE001
+            parts.append(f"\n\n## Attached file: {p.name}\n(could not read: {exc})")
+    if images:
+        blind = await asyncio.to_thread(
+            _vision_unavailable_reason, d, provider_choice, model_choice
+        )
+        if blind:
+            for slot, name in image_slots:
+                parts[slot] = (
+                    f"\n\n## Attached image: {name}\n(NOT analyzed — {blind}.)"
+                )
+    return images, "".join(parts)
+
+
 def _persist_chat_usage(
     d, *, provider: str, model: str, state: AgentState,
     completions: int, usage_in: int, usage_out: int,
@@ -1377,60 +1613,14 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         model_choice or d.platform.config.default_model,
     )
 
-    # Attachments: text formats extracted inline; images go to VISION.
-    images: list[dict[str, str]] = []
-    attach_block = ""
-    _IMG = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-            ".webp": "image/webp", ".gif": "image/gif"}
-    for raw in (body.attachments or [])[:4]:
-        p = Path(raw)
-        if not p.is_absolute():
-            p = d.platform.config.home / "uploads" / p.name
-        ok, _reason = fs_read_ok(str(p))
-        if not ok or not p.is_file():
-            continue
-        suffix = p.suffix.lower()
-        if suffix in _IMG:
-            import base64 as _b64
-
-            if p.stat().st_size <= 8 * 1024 * 1024:
-                images.append(
-                    {"data_b64": _b64.b64encode(p.read_bytes()).decode("ascii"),
-                     "media_type": _IMG[suffix]}
-                )
-            else:
-                # Too large to send to vision — be HONEST rather than answering
-                # blind on an image the user thinks was seen (>8 MB is dropped
-                # by every vision API's inline-image cap).
-                _mb = p.stat().st_size / (1024 * 1024)
-                attach_block += (
-                    f"\n\n## Attached image: {p.name}\n(NOT analyzed — {_mb:.0f} MB "
-                    "exceeds the 8 MB inline-image limit; ask the user to resize "
-                    "it or describe what they want from it.)"
-                )
-        else:
-            try:
-                from ..documents.attachment_rag import extract_for_rag, rag_block
-
-                text = extract_for_rag(p)
-                if len(text) <= _inline_budget:
-                    attach_block += f"\n\n## Attached file: {p.name}\n{text}"
-                else:
-                    # RETRIEVAL, not a head-clip: ground on the chunks
-                    # relevant to THIS question, with location refs — the
-                    # old fixed clip fed page 1 and dropped the rest.
-                    _q = next(
-                        (m.content or "" for m in reversed(body.messages)
-                         if m.role == "user"),
-                        "",
-                    )
-                    attach_block += rag_block(
-                        p.name, text, _q,
-                        getattr(d.platform, "embedder", None),
-                        k=_rag_k, char_budget=_rag_budget,
-                    )
-            except Exception as exc:  # noqa: BLE001
-                attach_block += f"\n\n## Attached file: {p.name}\n(could not read: {exc})"
+    # Attachments: text formats extracted inline (scans via OCR), images to
+    # VISION. SHARED with POST /chat/stream (v1.174.0) — the two lanes ran
+    # hand-copied loops until a scanned PDF had to be fixed in both.
+    images, attach_block = await _prepare_attachments(
+        d, body,
+        inline_budget=_inline_budget, rag_budget=_rag_budget, rag_k=_rag_k,
+        provider_choice=provider_choice, model_choice=model_choice,
+    )
     if attach_block:
         system += "\n\n# Attachments (provided by the user this turn)" + attach_block
 

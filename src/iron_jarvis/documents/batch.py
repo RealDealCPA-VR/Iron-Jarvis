@@ -7,9 +7,14 @@ The pipeline keeps every LLM call bounded regardless of folder size:
 1. :func:`sweep`       — list a folder's supported documents, each read gated by
    the shared fs policy; deterministic order; an over-``max_files`` folder is
    truncated with the remainder RECORDED (no silent caps).
-2. :func:`extract_one` — ONE document alone: ``extract_text`` → clipped input →
-   one-shot strict-JSON fact extraction, with exactly one repair round that
-   feeds the validation error back.
+2. :func:`extract_one` — ONE document alone: ``extract_text`` → OCR when the
+   file has no text layer (v1.174.0: a folder of scanned tax documents reported
+   every single file FAILED, because the pipeline held a vision-capable router
+   and never asked it to look) → clipped input → one-shot strict-JSON fact
+   extraction, with exactly one repair round that feeds the validation error
+   back. An OCR'd document is DISCLOSED as such to the extraction model and in
+   the synthesis digest — a transcription can misread a digit, and a model told
+   it is reading ground truth will state a wrong EIN with full confidence.
 3. Each extraction is persisted to ``<out_dir>/extractions/<slug>.json`` with
    the source path + mtime + size + content hash. Re-runs are RESUMABLE: an
    unchanged file (hash match) is loaded from disk and counted as "cached".
@@ -55,12 +60,17 @@ MAX_DOC_CHARS = 12_000
 #: the pipeline is that this stays bounded no matter how many docs were swept.
 MAX_SYNTHESIS_CHARS = 16_000
 
-#: Suffixes the sweep picks up: everything ``extract_text`` reads EXCEPT raster
-#: images — an image extracts to a size note only ("[image PNG 800x600 ...]"),
-#: which hands a fact-extraction model nothing but an invitation to fabricate.
-#: (``_IMAGE_SUFFIXES`` is the reader's own definition of "image"; importing it
-#: keeps the two modules from drifting apart.)
+#: Suffixes the sweep picks up WITHOUT OCR: everything ``extract_text`` reads
+#: EXCEPT raster images — an image extracts to a size note only ("[image PNG
+#: 800x600 ...]"), which hands a fact-extraction model nothing but an invitation
+#: to fabricate. (``_IMAGE_SUFFIXES`` is the reader's own definition of "image";
+#: importing it keeps the two modules from drifting apart.)
 SWEEP_SUFFIXES: frozenset[str] = frozenset(SUPPORTED_READ - _IMAGE_SUFFIXES)
+
+#: With OCR available an image IS a document — a photographed W-2 is exactly
+#: the file this pipeline exists for. It joins the sweep only when OCR is on,
+#: because without transcription it would go back to being that size note.
+SWEEP_SUFFIXES_WITH_OCR: frozenset[str] = frozenset(SUPPORTED_READ)
 
 _EXTRACT_SYSTEM = (
     "You extract structured facts from ONE document for a batch pipeline. "
@@ -119,16 +129,21 @@ def _sha256_file(path: Path) -> str:
 
 
 def sweep(
-    folder: str | Path, max_files: int
+    folder: str | Path, max_files: int, *, include_images: bool = False
 ) -> tuple[list[Path], list[dict[str, str]]]:
     """List the supported documents directly in *folder* (top level only — a
     subfolder is a separate batch), each read gated by the SHARED fs policy
     (:func:`fs_read_ok` = allowlist + protected roots), in deterministic
     name order. Returns ``(files, skipped)`` where every excluded entry —
     unsupported type, policy denial, over the ``max_files`` limit — is RECORDED
-    with its reason so nothing is ever silently dropped."""
+    with its reason so nothing is ever silently dropped.
+
+    ``include_images`` (v1.174.0) admits ``.png``/``.jpg``… — correct only when
+    OCR can transcribe them, so :func:`run_batch` derives it from
+    ``config.ocr_enabled``. The default keeps the pre-OCR sweep exactly."""
     folder = Path(folder)
     max_files = max(1, int(max_files))
+    wanted = SWEEP_SUFFIXES_WITH_OCR if include_images else SWEEP_SUFFIXES
     files: list[Path] = []
     skipped: list[dict[str, str]] = []
     # casefold-then-exact key: stable, deterministic order on every platform.
@@ -146,7 +161,7 @@ def sweep(
                 }
             )
             continue
-        if p.suffix.lower() not in SWEEP_SUFFIXES:
+        if p.suffix.lower() not in wanted:
             skipped.append(
                 {
                     "file": str(p),
@@ -287,16 +302,42 @@ def _repair_prompt(error: Exception, raw: str) -> str:
 
 
 async def extract_one(
-    path: str | Path, router: Any, instructions: str = "", *, llm: Any = None
+    path: str | Path,
+    router: Any,
+    instructions: str = "",
+    *,
+    llm: Any = None,
+    config: Any = None,
 ) -> dict[str, Any]:
     """Extract ONE document into the structured-facts contract.
 
-    ``extract_text`` → clip to :data:`MAX_DOC_CHARS` (disclosed in the prompt)
-    → one-shot strict-JSON completion, with exactly ONE repair round feeding
-    the validation error back. A second contract violation, or any provider
-    failure, raises — the caller records it as this document's error."""
+    ``extract_text`` → OCR when there is no text layer → clip to
+    :data:`MAX_DOC_CHARS` (disclosed in the prompt) → one-shot strict-JSON
+    completion, with exactly ONE repair round feeding the validation error
+    back. A second contract violation, or any provider failure, raises — the
+    caller records it as this document's error.
+
+    The OCR step (v1.174.0) is why a folder of scans no longer reports every
+    file FAILED. It uses the SAME router this pipeline already holds, through
+    the content-hash cache, so re-running the folder never re-transcribes. When
+    a scan cannot be transcribed the document still fails — but with the reason
+    ("no vision model connected"), not with "extracted to no text", which named
+    the symptom and hid the cause."""
     path = Path(path)
     text = await asyncio.to_thread(extract_text, path)
+    ocr_note = ""
+    from .ocr import needs_ocr, ocr_document  # lazy: keeps the import graph flat
+
+    if await asyncio.to_thread(needs_ocr, path, text):
+        ocr_text, ocr_note = await ocr_document(path, router, config=config)
+        if ocr_text:
+            text = ocr_text
+        else:
+            # Honest and SPECIFIC: the note names the missing capability.
+            raise ValueError(
+                f"{path.name} has no text layer and could not be transcribed — "
+                f"{ocr_note or 'OCR is unavailable'}"
+            )
     if not (text or "").strip():
         # An empty prompt is a fabrication invitation — fail this doc honestly.
         raise ValueError("document extracted to no text — nothing to base facts on")
@@ -309,20 +350,33 @@ async def extract_one(
             f"{len(text):,} characters]"
         )
     )
+    # An OCR transcription is disclosed to the extracting model: a scan can
+    # misread a digit, and a model told the text is verbatim ground truth will
+    # state a wrong EIN with full confidence.
+    ocr_line = (
+        f"\n[This text is an OCR transcription of a scanned document ({ocr_note}) "
+        "— it may contain recognition errors; do not invent anything to fix "
+        "them.]"
+        if ocr_note
+        else ""
+    )
     user = (
         (f"Batch instructions: {instructions.strip()}\n\n" if instructions.strip() else "")
-        + f"Document: {path.name}\n---\n{clipped}{trunc_note}"
+        + f"Document: {path.name}{ocr_line}\n---\n{clipped}{trunc_note}"
     )
     raw = await _one_shot(router, _EXTRACT_SYSTEM, user, "extract", llm=llm)
     try:
-        return _parse_extraction(raw)
+        extraction = _parse_extraction(raw)
     except ValueError as exc:
         # ONE repair round: the specific validation error goes back to the
         # model; a second violation propagates as this document's failure.
         raw2 = await _one_shot(
             router, _EXTRACT_SYSTEM, _repair_prompt(exc, raw), "extract", llm=llm
         )
-        return _parse_extraction(raw2)
+        extraction = _parse_extraction(raw2)
+    if ocr_note:  # travels into the persisted record and the deliverable
+        extraction["ocr_note"] = ocr_note
+    return extraction
 
 
 def _load_cached(record_path: Path, sha256: str) -> "dict[str, Any] | None":
@@ -377,6 +431,10 @@ def _digest(records: list[dict[str, Any]]) -> str:
             f"- {fig.get('label')}: {fig.get('value')}"
             for fig in ex.get("figures") or []
         ]
+        if ex.get("ocr_note"):
+            # Provenance the synthesis model must see: facts from a scan were
+            # read by a vision model, not lifted from a text layer.
+            lines.append("- [source: OCR transcription of a scanned document]")
         blocks.append("\n".join(lines))
     if sum(len(b) for b in blocks) > MAX_SYNTHESIS_CHARS:
         per = max(200, MAX_SYNTHESIS_CHARS // max(1, len(blocks)))
@@ -748,7 +806,11 @@ async def run_batch(
     formats = _OUTPUT_FORMATS.get(str(output).strip().lower())
     if formats is None:
         raise ValueError(f"unknown output {output!r} — use xlsx, docx, or both")
-    files, skipped = sweep(folder, max_files)
+    # Images join the sweep only when OCR can actually read them (v1.174.0).
+    from .ocr import ocr_settings
+
+    ocr_on, _ocr_pages = ocr_settings(config)
+    files, skipped = sweep(folder, max_files, include_images=ocr_on)
     ext_dir = out_dir / "extractions"
     ext_dir.mkdir(parents=True, exist_ok=True)
     processed = 0
@@ -764,7 +826,9 @@ async def run_batch(
                 cached += 1
                 extractions.append(record)
                 continue
-            extraction = await extract_one(path, router, instructions, llm=extract_llm)
+            extraction = await extract_one(
+                path, router, instructions, llm=extract_llm, config=config
+            )
             st = path.stat()
             record = {
                 "source": str(path),

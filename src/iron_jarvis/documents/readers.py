@@ -16,7 +16,11 @@ dispatching on the lowercased filename suffix:
   latin-1, so cp1252/latin-1 office exports survive instead of turning into
   replacement chars).
 * ``.png/.jpg/.jpeg/.gif/.bmp/.webp`` -> Pillow, returning a concise note such as
-  ``"[image PNG 800x600, mode RGB]"`` (NO OCR).
+  ``"[image PNG 800x600, mode RGB]"``. Transcription of an image (or of an
+  image-only PDF) needs a vision model and therefore an async router call, so
+  it lives in :mod:`.ocr`; what this module does is serve an ALREADY-CACHED
+  transcription of the same bytes when one exists, so callers that never learned
+  about OCR still see the text instead of a size note.
 
 Reliability guarantees the office-daily-driver path depends on:
 
@@ -56,10 +60,34 @@ _SCANNED_PDF_SENTINEL = (
     "[no extractable text — likely a scanned/image-only PDF; OCR not available]"
 )
 
+#: Public alias — callers that must branch on "unreadable scan" (redaction, the
+#: batch pipeline, the OCR reach point) compare against THIS rather than
+#: re-spelling the sentence, so the two can never drift apart.
+SCANNED_PDF_SENTINEL = _SCANNED_PDF_SENTINEL
+
 #: OLE2 / Compound File Binary magic. Encrypted OOXML (a password-protected
 #: .docx/.xlsx/.pptx) is wrapped in this container, so python-docx/openpyxl see
 #: it as "not a zip file". Detect it up front to give an honest error.
 _OLE_MAGIC = b"\xd0\xcf\x11\xe0"
+
+#: OOXML suffixes — zip containers, so their bytes are checkable up front.
+_OOXML_SUFFIXES: frozenset[str] = frozenset({".docx", ".xlsx", ".pptx"})
+
+#: PDF magic. A file NAMED .xlsx whose bytes start with this is a PDF someone
+#: renamed — real, and in the acceptance folder this wave was built from
+#: ("ORGANIZED NUMBERS FOR HOUSES 2025.xlsx", 71 KB, `%PDF-1.4`). openpyxl
+#: reported ``BadZipFile: File is not a zip file``, which tells an agent
+#: nothing it can act on, so the file was simply unreadable — on a job whose
+#: whole point was to notice that filenames do not match contents.
+_PDF_MAGIC = b"%PDF-"
+
+
+def _head_bytes(p: Path, n: int = 8) -> bytes:
+    try:
+        with open(p, "rb") as f:
+            return f.read(n)
+    except OSError:
+        return b""
 
 #: Suffixes read verbatim as encoding-detected text.
 _TEXT_SUFFIXES: frozenset[str] = frozenset(
@@ -104,11 +132,45 @@ _LEGACY_HINTS: dict[str, str] = {
 SUPPORTED_READ: set[str] = set(_DOC_SUFFIXES | _TEXT_SUFFIXES | _IMAGE_SUFFIXES)
 
 
+def _cached_ocr_text(p: Path, *, keep: str = "") -> str:
+    """A PREVIOUS OCR transcription of these exact bytes, or ``keep``.
+
+    This is the one place OCR reaches callers that know nothing about it —
+    ``read_file``'s office redirect, the CLI's ``read`` command, the project
+    ingest route. It can only ever REPLACE a useless sentinel with text that a
+    vision model really produced (the cache stores successes only, keyed by
+    content hash), and the returned text carries its own disclosure line, so
+    nobody downstream can mistake a transcription for a text layer. A miss —
+    the common case, and the only case before anything has ever been OCR'd —
+    costs one dictionary check and returns ``keep`` unchanged.
+
+    The banner SAYS "cached" (v1.174.0), using the same constant
+    ``ocr_document`` appends on its own cache hit. The two lanes serve the same
+    stored record and told different stories: the async one disclosed the hit
+    and this one reported a fresh transcription, which is the honesty rule
+    ("a skipped-because-cached read must say so") broken in the lane the user
+    reaches through ``read_file``.
+    """
+    try:
+        # lazy: ocr imports this module
+        from .ocr import CACHED_NOTE_SUFFIX, lookup_cached_text
+
+        hit = lookup_cached_text(p)
+    except Exception:  # noqa: BLE001 — a cache fault must never fail a read
+        return keep
+    if hit is None:
+        return keep
+    text, note = hit
+    banner = f"[{note or 'text recovered via OCR'}{CACHED_NOTE_SUFFIX}]"
+    return f"{keep}\n{banner}\n\n{text}" if keep else f"{banner}\n\n{text}"
+
+
 def extract_text(
     path: str | Path,
     *,
     page_range: str | None = None,
     sheet: str | int | None = None,
+    use_ocr_cache: bool = True,
 ) -> str:
     """Return the text content of ``path``, dispatched by file suffix.
 
@@ -116,6 +178,15 @@ def extract_text(
     inclusive) slices PDF pages / PPTX slides. ``sheet`` (name or 0-based index)
     selects a single worksheet of an XLSX. Both are ignored by formats they do
     not apply to.
+
+    ``use_ocr_cache`` (v1.174.0) lets an image-only PDF or a raster image be
+    served from a PREVIOUS OCR transcription of the same bytes instead of the
+    "no extractable text" sentinel (see :func:`_cached_ocr_text`). It applies
+    only to the whole document (never a ``page_range`` slice, which the
+    document-level transcript does not answer) and only when the extraction
+    produced nothing. Redaction passes ``False``: a redactor must see the file's
+    REAL text layer, or it would rebuild a scan from transcribed text and call
+    that a redaction.
 
     Raises :class:`ValueError` for a truly unsupported / binary file type (or a
     password-protected / oversized / legacy file) and :class:`FileNotFoundError`
@@ -128,8 +199,33 @@ def extract_text(
         raise ValueError(f"path is a directory, not a document: {p}")
 
     suffix = p.suffix.lower()
+    # CONTENT BEATS EXTENSION when the two disagree (v1.174.0). A PDF renamed
+    # .xlsx used to die on `BadZipFile: File is not a zip file` — a cryptic no
+    # for a file we can read perfectly, on the very job (rename these by their
+    # contents) that exists because names lie. Read it as what it IS and SAY
+    # SO: the mismatch is itself the answer the caller was looking for.
+    mislabel = ""
+    if suffix in _OOXML_SUFFIXES and _head_bytes(p, 5) == _PDF_MAGIC:
+        mislabel = (
+            f"[NOTE: this file is named {p.name} but its contents are a PDF — "
+            "reading it as a PDF; the extension does not match the file]\n"
+        )
+        suffix = ".pdf"
+    # A slice asks about specific pages; the cached transcript covers the whole
+    # document and cannot honestly answer it.
+    ocr_cache_ok = use_ocr_cache and not str(page_range or "").strip()
     if suffix == ".pdf":
-        return _read_pdf(p, page_range=page_range)
+        text = _read_pdf(p, page_range=page_range)
+        if ocr_cache_ok and text == _SCANNED_PDF_SENTINEL:
+            # DROP the sentinel on a hit — do not stack the transcript on top of
+            # it. Keeping both handed the model "[no extractable text — likely a
+            # scanned/image-only PDF; OCR not available]" immediately followed by
+            # the OCR output, and a model relaying the first half tells the user
+            # their document could not be read while holding its text.
+            # (Images keep their size note: dimensions are real information the
+            # transcription does not contain, and callers branch on it.)
+            text = _cached_ocr_text(p) or text
+        return mislabel + text
     if suffix == ".docx":
         return _read_docx(p)
     if suffix == ".xlsx":
@@ -141,7 +237,10 @@ def extract_text(
     if suffix == ".rtf":
         return _read_rtf(p)
     if suffix in _IMAGE_SUFFIXES:
-        return _describe_image(p)
+        # The size note is KEPT as the first line: an image's dimensions are
+        # real information, and existing callers branch on it.
+        described = _describe_image(p)
+        return _cached_ocr_text(p, keep=described) if ocr_cache_ok else described
     if suffix in _LEGACY_HINTS:
         # Named legacy format: fail with a useful next step, not "binary file".
         raise ValueError(f"cannot read {_LEGACY_HINTS[suffix]}")

@@ -46,6 +46,98 @@ def _truncate(text: str) -> tuple[str, bool]:
     return text[:_MAX_OUTPUT] + note, True
 
 
+#: What a caller is told when it asked for PAGES of a document whose text is
+#: pixels. OCR transcribes pages 1..cap of the WHOLE document, so honouring the
+#: request was never on offer — and doing it silently meant `page_range="3"` on
+#: a 4-page scan made FOUR vision calls and returned pages 1-4 labelled with the
+#: document's own numbering. On a 200-page scan an agent narrowing to one page
+#: pays the full cap every time and cannot tell that it did.
+_SLICE_NO_OCR_NOTE = (
+    "scanned/image-only document AND a page_range was requested — OCR was "
+    "SKIPPED and NOTHING was transcribed. A transcription covers the whole "
+    "document (pages 1..cap) and cannot answer a page slice, so re-read this "
+    "file WITHOUT page_range to have it transcribed"
+)
+
+
+async def _with_ocr(
+    path: Path,
+    text: str,
+    resolver: "Any | None",
+    ctx: ToolContext,
+    *,
+    page_range: "str | None" = None,
+) -> tuple[str, str]:
+    """``(text, note)`` after the shared OCR reach point (v1.174.0).
+
+    EVERY document-reading tool goes through this one call. Before it,
+    ``read_document`` transcribed a scan and ``extract_pdf`` returned silence
+    for the SAME file — so which capability an agent got depended on which of
+    two interchangeable tools it happened to name. The measured cost of that
+    was a job that spent 12 steps and renamed nothing: ``extract_pdf`` returned
+    nothing, the agent retried with ``read_document``, and half the folder was
+    scans.
+
+    ``page_range`` mirrors ``readers.extract_text``'s cache guard onto the lane
+    that SPENDS MONEY: a slice and a transcription are different questions, so
+    the slice wins and the caller is told, in words, that no OCR happened.
+
+    Returns ``(text, "")`` unchanged when there is nothing to recover, so a
+    caller can route through it unconditionally.
+    """
+    from .ocr import ocr_if_unreadable
+
+    config = getattr(ctx, "config", None)
+    if resolver is not None and str(page_range or "").strip():
+        try:
+            wanted = await asyncio.to_thread(_no_text_layer, path, text)
+        except Exception:  # noqa: BLE001 — a detection fault is simply "no OCR"
+            wanted = False
+        if wanted:
+            return text, _SLICE_NO_OCR_NOTE
+        return text, ""
+    return await ocr_if_unreadable(path, text, resolver, config=config)
+
+
+def _no_text_layer(path: Path, text: str) -> bool:
+    """True when *path* carries no readable text layer (scan / image)."""
+    from .ocr import needs_ocr
+
+    return needs_ocr(path, text)
+
+
+def _carries_ocr_mark(note_or_text: str) -> bool:
+    """True when a note (or a served text) carries the contract marker
+    :data:`ocr.OCR_MARK` — i.e. a transcription really happened.
+
+    Judging "is this still unreadable?" by re-running ``needs_ocr`` on the text
+    OCR just returned is WRONG and was measurably wrong: the transcript is not
+    marked (the marker lives in the NOTE), so an image — for which ``needs_ocr``
+    is True by definition — was declared "NO TEXT LAYER … nothing was scanned"
+    in the same breath as "image file — text recovered via OCR", after spending
+    a real vision call. The identical call then SUCCEEDED on the second run,
+    because by then the readers' cache prepended a banner carrying the marker.
+    Same file, same config, opposite answers.
+    """
+    from .ocr import OCR_MARK
+
+    return OCR_MARK in (note_or_text or "")
+
+
+#: The message a redaction path gives for a file whose text lives in PIXELS.
+#: This is the highest-consequence honesty rule in the module: the patterns in
+#: :mod:`.redact` run over EXTRACTED TEXT, and a scanned tax return extracts to
+#: nothing — so the tools reported "no PII candidates found" and "no PII found
+#: (output is an identical copy)" for a document full of SSNs. A silent clean
+#: scan on a tax return is the worst possible failure here, so these paths
+#: refuse loudly instead of returning a reassuring nothing.
+_NO_TEXT_LAYER_MSG = (
+    "this document has NO TEXT LAYER — it is a scan/photo, so its words live "
+    "in the page image and NOTHING was scanned for PII. Do not report it as "
+    "clean"
+)
+
+
 class ListFolderTool(Tool):
     name = "list_folder"
     reversibility = Reversibility.READONLY  # a listing has no side effect
@@ -182,19 +274,14 @@ class ReadDocumentTool(Tool):
             )
         except Exception as exc:  # reading real files must never crash the runtime
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
-        # SCANNED-PDF fallback: image-only pages have no text layer — recover
-        # via vision OCR (never the mock; the note names the method) instead
-        # of handing the model empty silence about a real document.
-        note = ""
-        from .ocr import looks_scanned_pdf, ocr_pdf
-
-        if self._router_resolver is not None and looks_scanned_pdf(path, text):
-            try:
-                ocr_text, note = await ocr_pdf(path, self._router_resolver())
-                if ocr_text:
-                    text = ocr_text
-            except Exception as exc:  # noqa: BLE001 — OCR failure ≠ read failure
-                note = f"scanned PDF — OCR fallback failed ({type(exc).__name__}: {exc})"
+        # SCANNED fallback: image-only pages (and raster images) have no text
+        # layer — recover via vision OCR (never the mock; the note names the
+        # method) instead of handing the model empty silence about a real
+        # document. Cached by content hash, so the same scan is paid for once.
+        text, note = await _with_ocr(
+            path, text, self._router_resolver, ctx,
+            page_range=args.get("page_range"),
+        )
         out, truncated = _truncate(text)
         if note:
             out = f"[{note}]\n{out}" if out.strip() else f"[{note}]"
@@ -384,7 +471,11 @@ class ExtractPdfTool(Tool):
     name = "extract_pdf"
     reversibility = Reversibility.READONLY  # extraction has no side effect
     returns_untrusted_content = True  # a PDF can carry planted instructions
-    description = "Extract the text of a PDF file (absolute or workspace-relative path)."
+    description = (
+        "Extract the text of a PDF file (absolute or workspace-relative path). "
+        "Scanned (image-only) PDFs are OCR-transcribed via the vision model "
+        "when one is available — the same as read_document."
+    )
     input_schema = {
         "type": "object",
         "properties": {
@@ -400,9 +491,24 @@ class ExtractPdfTool(Tool):
         "required": ["path"],
     }
 
+    def __init__(self, router_resolver: "Any | None" = None) -> None:
+        #: () -> the platform's ModelRouter. extract_pdf is in the Builder,
+        #: Planner and Reviewer rosters, so an agent that reaches for it on a
+        #: scan used to get SILENCE for a file read_document would have
+        #: transcribed — the capability depended on the tool name. Same
+        #: resolver, same OCR, same honest notes.
+        self._router_resolver = router_resolver
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        from .ocr import is_pdf_file
+
         path = _resolve_read_path(args["path"], ctx)
-        if path.suffix.lower() != ".pdf":
+        # CONTENT, not extension (v1.174.0). The acceptance folder's "ORGANIZED
+        # NUMBERS FOR HOUSES 2025.xlsx" IS a 71 KB PDF — the file this sniff was
+        # written for — and this gate refused it while read_document read it
+        # perfectly. Whether the app can read the user's file must not depend on
+        # which of two interchangeable tools the model happened to name.
+        if not await asyncio.to_thread(is_pdf_file, path):
             return ToolResult(ok=False, error=f"not a PDF file: {args['path']}")
         allowed, reason = fs_read_ok(path)
         if not allowed:
@@ -413,11 +519,22 @@ class ExtractPdfTool(Tool):
             )
         except Exception as exc:
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+        text, note = await _with_ocr(
+            path, text, self._router_resolver, ctx,
+            page_range=args.get("page_range"),
+        )
         out, truncated = _truncate(text)
+        if note:
+            out = f"[{note}]\n{out}" if out.strip() else f"[{note}]"
         return ToolResult(
             ok=True,
             output=out,
-            data={"path": str(path), "chars": len(text), "truncated": truncated},
+            data={
+                "path": str(path),
+                "chars": len(text),
+                "truncated": truncated,
+                **({"note": note} if note else {}),
+            },
         )
 
 
@@ -473,7 +590,10 @@ class ConvertDocumentTool(Tool):
         "csv<->xlsx conversions preserve real rows and cells; other sources "
         "are extracted to text and rendered with markdown-aware formatting. "
         "The source may be ANY local path (absolute or workspace-relative); "
-        "the target is created inside the session workspace."
+        "the target is created inside the session workspace. A scanned "
+        "(image-only) PDF or an image is OCR-transcribed first when a vision "
+        "model is available, so converting a scan produces its real text "
+        "instead of an empty document."
     )
     input_schema = {
         "type": "object",
@@ -492,6 +612,11 @@ class ConvertDocumentTool(Tool):
         },
         "required": ["source", "target"],
     }
+
+    def __init__(self, router_resolver: "Any | None" = None) -> None:
+        #: () -> the platform's ModelRouter — powers the scanned-source OCR
+        #: below. Optional so a bare factory (tests) still constructs.
+        self._router_resolver = router_resolver
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         source = _resolve_read_path(args["source"], ctx)
@@ -520,11 +645,18 @@ class ConvertDocumentTool(Tool):
                     f"target formats: {', '.join(sorted(SUPPORTED_WRITE))}"
                 ),
             )
+        note = ""
         try:
             existed = target.exists()  # created_paths means CREATED, not overwritten
             content = await asyncio.to_thread(  # CPU-bound parse off the loop
                 _load_for_conversion, source, src_suffix, tgt_suffix
             )
+            # A scanned source converts to an EMPTY document unless its text is
+            # recovered first — the tabular paths return rows and are untouched.
+            if isinstance(content, str):
+                content, note = await _with_ocr(
+                    source, content, self._router_resolver, ctx
+                )
             out = await asyncio.to_thread(write_document, target, content)
         except Exception as exc:  # converting real files must never crash the runtime
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
@@ -533,8 +665,15 @@ class ConvertDocumentTool(Tool):
         _abs = str(out.resolve())
         return ToolResult(
             ok=True,
-            output=f"converted {source.name} -> {_abs} ({size} bytes)",
-            data={"source": str(source), "path": rel, "abs_path": _abs, "bytes": size},
+            output=f"converted {source.name} -> {_abs} ({size} bytes)"
+            + (f"\nNote: {note}" if note else ""),
+            data={
+                "source": str(source),
+                "path": rel,
+                "abs_path": _abs,
+                "bytes": size,
+                **({"note": note} if note else {}),
+            },
             # Created-files contract (v1.166.0): absolute, success-only, and only
             # when this call brought the file into existence — an overwrite
             # journaled as "created" would let undo unlink a pre-existing file.
@@ -553,7 +692,10 @@ class RedactScanTool(Tool):
         "NUMBERED list with counts and context. Present the list to the user "
         "and ask exactly which items to remove (and what to add) — then call "
         "redact_pii with terms=[the confirmed values]. Never redact without "
-        "this confirmation when the user is available."
+        "this confirmation when the user is available. A scanned (image-only) "
+        "document is OCR-transcribed first and the candidates are found in "
+        "that transcription; if it cannot be transcribed the scan FAILS rather "
+        "than reporting the document clean."
     )
     input_schema = {
         "type": "object",
@@ -583,6 +725,12 @@ class RedactScanTool(Tool):
         "required": ["path"],
     }
 
+    def __init__(self, router_resolver: "Any | None" = None) -> None:
+        #: () -> the platform's ModelRouter — a scanned document is transcribed
+        #: before detection runs, so the numbered candidate list covers scans
+        #: instead of silently coming back empty.
+        self._router_resolver = router_resolver
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from .redact import ALL_CATEGORIES, scan_document
 
@@ -601,19 +749,68 @@ class RedactScanTool(Tool):
                       f"valid: {', '.join(sorted(ALL_CATEGORIES))}",
             )
         try:
-            findings = await asyncio.to_thread(
-                scan_document,
-                source,
-                extra_terms=[str(t) for t in (args.get("extra_terms") or [])],
-                categories=set(raw_cats) or None,
+            # Detection runs over EXTRACTED TEXT, so a scan must be transcribed
+            # first or the answer is a confident, wrong "clean".
+            raw_text = await asyncio.to_thread(extract_text, source)
+            # Classify BEFORE OCR, then ask whether OCR delivered. Re-running the
+            # detector on the returned text answered "no text layer" for every
+            # freshly transcribed image (see _carries_ocr_mark) — a refusal that
+            # contradicted itself in one sentence, after paying for the vision
+            # call, and that flipped to success on an identical second call.
+            no_layer = await asyncio.to_thread(_no_text_layer, source, raw_text)
+            text, ocr_note = await _with_ocr(
+                source, raw_text, self._router_resolver, ctx
+            )
+            unreadable = no_layer and not _carries_ocr_mark(ocr_note)
+            if not ocr_note and _carries_ocr_mark(text):
+                # The readers served an EARLIER transcription of these exact
+                # bytes (no vision call was needed), so the OCR reach point had
+                # nothing to do and returned no note. The provenance is still
+                # true and still changes what redaction can do — say it, or the
+                # SECOND scan of a file presents the same candidates as if they
+                # had come off a real text layer.
+                from .ocr import CACHED_NOTE_SUFFIX, OCR_MARK
+
+                ocr_note = f"scanned document — {OCR_MARK}{CACHED_NOTE_SUFFIX}"
+            findings = (
+                []
+                if unreadable
+                else await asyncio.to_thread(
+                    scan_document,
+                    source,
+                    extra_terms=[str(t) for t in (args.get("extra_terms") or [])],
+                    categories=set(raw_cats) or None,
+                    text=text,
+                )
             )
         except Exception as exc:  # noqa: BLE001 — real files must not crash the loop
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+        if unreadable:
+            # FAIL, never "clean". An empty finding list here would be read by
+            # the model as "this file is safe to share".
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"{source.name}: {_NO_TEXT_LAYER_MSG}."
+                    + (f" OCR: {ocr_note}" if ocr_note else "")
+                    + " Connect a vision-capable model so the scan can be "
+                    "transcribed, or review this document by eye."
+                ),
+            )
+        header = ""
+        if ocr_note:
+            # The values below came out of a TRANSCRIPTION, not a text layer —
+            # say so before the list, because it changes what redaction can do.
+            header = (
+                f"[{ocr_note}] — candidates below were found in the OCR "
+                "transcription; PII in a scan cannot be removed by rewriting "
+                "text, so redact the ORIGINAL image or a text-layer version.\n"
+            )
         if not findings:
             return ToolResult(
                 ok=True,
-                output="no PII candidates found — nothing to confirm",
-                data={"findings": []},
+                output=header + "no PII candidates found — nothing to confirm",
+                data={"findings": [], **({"note": ocr_note} if ocr_note else {})},
             )
         lines = [f"{len(findings)} PII candidate(s) in {source.name} — confirm"
                  " which to redact:"]
@@ -621,7 +818,9 @@ class RedactScanTool(Tool):
             times = f" ×{f['count']}" if f["count"] > 1 else ""
             lines.append(f"{f['id']}. [{f['label']}] {f['value']}{times} — …{f['context']}…")
         return ToolResult(
-            ok=True, output="\n".join(lines), data={"findings": findings}
+            ok=True,
+            output=header + "\n".join(lines),
+            data={"findings": findings, **({"note": ocr_note} if ocr_note else {})},
         )
 
 
@@ -639,7 +838,9 @@ class RedactPiiTool(Tool):
         "blocks), 'label' ([SSN]-style tags), 'remove' (deleted). Formats: "
         ".docx/.xlsx/.pptx keep their styling; text formats rewrite in place; "
         ".pdf is REBUILT from extracted text (content truly removed, layout "
-        "approximate). Never quote the redacted PII values back in your reply."
+        "approximate). A scanned/image-only document is REFUSED — its text is "
+        "pixels, so no text rewrite can remove it. Never quote the redacted "
+        "PII values back in your reply."
     )
     input_schema = {
         "type": "object",
@@ -693,6 +894,12 @@ class RedactPiiTool(Tool):
         "required": ["path"],
     }
 
+    def __init__(self, router_resolver: "Any | None" = None) -> None:
+        #: () -> the platform's ModelRouter. Not used to redact (a scan is
+        #: refused, see execute) — held so the refusal can name what a prior
+        #: transcription already found, without spending a single vision call.
+        self._router_resolver = router_resolver
+
     def _output_target(self, source: Path, args: dict[str, Any], ctx: ToolContext) -> Path:
         raw = str(args.get("output_path") or "").strip()
         if raw:
@@ -736,6 +943,30 @@ class RedactPiiTool(Tool):
     async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
         return await revert_workspace_file(undo, ctx)
 
+    @staticmethod
+    def _known_pii_hint(source: Path) -> str:
+        """What an EARLIER transcription of these exact bytes already found —
+        counts only, never values, and never a new vision call. Silent when
+        nothing was ever transcribed; a refusal must not depend on this."""
+        try:
+            from .ocr import lookup_cached_text
+            from .redact import scan_text
+
+            hit = lookup_cached_text(source)
+            if hit is None:
+                return ""
+            findings = scan_text(hit[0])
+            if not findings:
+                return ""
+            total = sum(int(f.get("count") or 1) for f in findings)
+            cats = sorted({str(f.get("label")) for f in findings})
+            return (
+                f"A previous OCR of this file found {total} PII candidate(s) "
+                f"({', '.join(cats)}) — they are still in it. "
+            )
+        except Exception:  # noqa: BLE001 — the hint is a bonus, never a blocker
+            return ""
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from .redact import ALL_CATEGORIES, STYLES, redact_file
 
@@ -770,6 +1001,34 @@ class RedactPiiTool(Tool):
         # CONFIRMED mode: the user approved these exact values (redact_scan →
         # confirmation) — detection is skipped and precisely they are removed.
         only_terms = [str(t) for t in (args.get("terms") or []) if str(t).strip()]
+        # SCANNED SOURCE = REFUSE (v1.174.0). Every redactor in this app rewrites
+        # TEXT; a scan has none, so the old path wrote an "identical copy" and
+        # reported "no PII found" for a tax return full of SSNs. The check reads
+        # the file's REAL text layer (use_ocr_cache=False on purpose — a cached
+        # transcription proves the words exist, it does NOT make the pixels
+        # editable), so a transcribed scan is refused just as loudly as a fresh
+        # one. Nothing is written before this returns.
+        try:
+            raw_text = await asyncio.to_thread(
+                extract_text, source, use_ocr_cache=False
+            )
+            scanned = await asyncio.to_thread(_no_text_layer, source, raw_text)
+        except Exception:  # noqa: BLE001 — an unreadable file falls through to
+            scanned = False  # the redactor's own, already-honest error
+        if scanned:
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"{source.name}: {_NO_TEXT_LAYER_MSG}. Redaction is refused "
+                    "— rewriting the text would neither preserve this document "
+                    "nor remove anything from the image, and the copy would "
+                    "LOOK redacted while still carrying every value. "
+                    + self._known_pii_hint(source)
+                    + "Use redact_scan to see what a transcription finds, then "
+                    "redact the original image (or a text-layer version of it) "
+                    "before sharing."
+                ),
+            )
         try:
             target = self._output_target(source, args, ctx)
             if target.resolve() == source.resolve():
@@ -983,19 +1242,23 @@ class BatchDocumentsTool(Tool):
 
 def document_tools(router_resolver: "Any | None" = None) -> list[Tool]:
     """Build the document tools. ``router_resolver`` (() -> ModelRouter) is
-    optional and powers the scanned-PDF OCR fallback in ``read_document``;
-    without it the tools behave exactly as before (no platform dependency)."""
+    optional and powers OCR on EVERY reading path — ``read_document``,
+    ``extract_pdf``, ``convert_document``, ``redact_scan`` and
+    ``batch_documents`` (v1.174.0: it used to reach ``read_document`` alone, so
+    the same scan was readable or silent depending on which tool the model
+    picked). Without it the tools behave exactly as before (no platform
+    dependency)."""
     from .excel_tools import excel_tools
     from .pdf_tools import pdf_page_tools
 
     return [
         ReadDocumentTool(router_resolver),
         WriteDocumentTool(),
-        ExtractPdfTool(),
-        ConvertDocumentTool(),
+        ExtractPdfTool(router_resolver),
+        ConvertDocumentTool(router_resolver),
         ListFolderTool(),
-        RedactScanTool(),
-        RedactPiiTool(),
+        RedactScanTool(router_resolver),
+        RedactPiiTool(router_resolver),
         BatchDocumentsTool(router_resolver),
         *excel_tools(),
         *pdf_page_tools(),

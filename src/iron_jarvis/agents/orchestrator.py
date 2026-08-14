@@ -24,6 +24,8 @@ from ..core.events import EventType
 from ..core.ids import utcnow
 from ..core.logging import get_logger
 from ..core.models import (
+    SESSION_MAX_STEPS_MAX,
+    SESSION_MAX_STEPS_MIN,
     AgentRun,
     AgentState,
     AgentType,
@@ -45,6 +47,30 @@ from .supervisor import run_supervised
 from .types import AgentDefinition, get_agent_definition
 
 log = get_logger("orchestrator")
+
+
+def normalize_max_steps(value: Any) -> int | None:
+    """A per-session step budget as it may be STORED (v1.174.0, Contract 4).
+
+    The HTTP boundary already rejects anything outside
+    ``SESSION_MAX_STEPS_MIN..MAX`` with a 422 (``schemas._clean_max_steps``) —
+    this is the defence for DIRECT Python callers (workflows, schedules,
+    delegation, tests), which have no validator in front of them. It is
+    deliberately forgiving where the API is strict, because there is nobody to
+    show an error to: junk (``None``, a non-number, ``True``, zero or negative)
+    becomes ``None`` = "use ``config.max_agent_steps``", the pre-v1.174.0
+    behavior; an over-large number is CLAMPED to the ceiling rather than
+    honored, since an unbounded loop is a runaway, not a feature.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        steps = int(value)
+    except (TypeError, ValueError):
+        return None
+    if steps < SESSION_MAX_STEPS_MIN:
+        return None
+    return min(steps, SESSION_MAX_STEPS_MAX)
 
 
 class Orchestrator:
@@ -315,6 +341,7 @@ class Orchestrator:
         allow_tools: list[str] | None = None,
         workspace_root: str | None = None,
         origin: str | None = None,
+        max_steps: int | None = None,
     ) -> Session:
         import json as _json
 
@@ -352,6 +379,9 @@ class Orchestrator:
             # is passed by the caller. Defaults None = unattributed (the audit
             # timeline falls back to inferring from the spawning event).
             origin=origin or ("self_dev" if self_dev else None),
+            # Contract 4 (v1.174.0): per-session step budget. None = the
+            # configured ``max_agent_steps`` (today's behavior).
+            max_steps=normalize_max_steps(max_steps),
         )
         if direct_root is not None:
             direct_root.mkdir(parents=True, exist_ok=True)
@@ -696,6 +726,11 @@ class Orchestrator:
             project_id=prev.project_id,  # a rerun stays in its project (spine)
             allow_tools=allow_tools or None,
             workspace_root=self._rerun_direct_root(prev),
+            # The step budget is part of the session's INPUTS (v1.174.0): a big
+            # job re-run on the default 12 steps would fail exactly the way the
+            # raised budget was set to prevent, and the user never touched a
+            # control to lose it.
+            max_steps=getattr(prev, "max_steps", None),
         )
 
     def _rerun_direct_root(self, prev: Session) -> str | None:
@@ -735,6 +770,10 @@ class Orchestrator:
             model=prev.model,
             status=SessionStatus.ACTIVE,
             project_id=prev.project_id,  # a chat stays in its project
+            # …and so does its step budget (v1.174.0): a follow-up turn on a big
+            # job is the SAME job, so silently dropping back to the configured
+            # default would strand the continuation the user just asked for.
+            max_steps=normalize_max_steps(getattr(prev, "max_steps", None)),
         )
         # Reuse the prior workspace so the follow-up sees the earlier files — but
         # ONLY for non-git sessions. A git worktree can be discarded by the

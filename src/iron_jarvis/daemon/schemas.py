@@ -12,6 +12,8 @@ from typing import Any
 
 from pydantic import BaseModel, field_validator
 
+from ..core.models import SESSION_MAX_STEPS_MAX, SESSION_MAX_STEPS_MIN
+
 #: What an ``origin`` tag may look like (v1.166.0): the TX-01 provenance values
 #: ("job:agents", "schedule:<name>", "self_dev", …) all fit, and nothing that
 #: could smuggle markup/control characters into the audit timeline does.
@@ -35,6 +37,47 @@ def _clean_origin(value: str | None) -> str | None:
     return value
 
 
+def _clean_max_steps(value: Any) -> int | None:
+    """Validate a per-session step budget (v1.174.0, Contract 4).
+
+    ``None`` means "use ``config.max_agent_steps``" — the absent-param default,
+    byte-identical to pre-v1.174.0 behavior. Anything outside
+    ``SESSION_MAX_STEPS_MIN..MAX`` is a 422, deliberately NOT clamped: a job
+    posted with ``max_steps: 1000`` that quietly runs 200 and then reports
+    "reached max steps" is a run measured against a budget nobody set.
+
+    Runs in ``mode="before"`` and does its OWN type narrowing, because pydantic
+    would otherwise have already coerced the interesting cases away: ``bool``
+    is an ``int`` subclass, so a JSON ``true`` arrives at an "after" validator
+    as a 1-step budget that strands every run at its first tool call. A
+    fractional number is a 422 too — a request asking for 2.5 steps is a
+    request nobody can honestly satisfy.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("max_steps must be a whole number, not a boolean")
+    if isinstance(value, int):
+        steps = value
+    elif isinstance(value, float):
+        if not value.is_integer():
+            raise ValueError("max_steps must be a whole number")
+        steps = int(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text.isdigit():
+            raise ValueError("max_steps must be a whole number")
+        steps = int(text)
+    else:
+        raise ValueError("max_steps must be a whole number")
+    if steps < SESSION_MAX_STEPS_MIN or steps > SESSION_MAX_STEPS_MAX:
+        raise ValueError(
+            f"max_steps must be between {SESSION_MAX_STEPS_MIN} and "
+            f"{SESSION_MAX_STEPS_MAX} (omit it to use the configured default)"
+        )
+    return steps
+
+
 class SessionCreate(BaseModel):
     task: str
     agent_type: str = "builder"
@@ -53,11 +96,21 @@ class SessionCreate(BaseModel):
     # unattributed; validated (see _clean_origin) so the audit timeline stays
     # clean.
     origin: str | None = None
+    # Per-session STEP BUDGET (v1.174.0, Contract 4). None/absent = the
+    # configured ``max_agent_steps`` — today's behavior for every existing
+    # caller. A big job ("rename all 26 files in this folder") can ask for the
+    # room it needs without raising the global default for every small task.
+    max_steps: int | None = None
 
     @field_validator("origin")
     @classmethod
     def _validate_origin(cls, v: str | None) -> str | None:
         return _clean_origin(v)
+
+    @field_validator("max_steps", mode="before")
+    @classmethod
+    def _validate_max_steps(cls, v: Any) -> int | None:
+        return _clean_max_steps(v)
 
 
 class DocEnhanceBody(BaseModel):
@@ -449,6 +502,15 @@ class ProjectTaskBody(BaseModel):
     # Bundled tool grant (perm_keys) the user approved for this task after the
     # /task/plan step — these run without per-call prompts.
     allow_tools: list[str] = []
+    # v1.174.0: the per-session step budget (Contract 4). The measured failure
+    # was posted through THIS surface, so a budget that only POST /sessions
+    # could set would never have reached it. None = config.max_agent_steps.
+    max_steps: int | None = None
+
+    @field_validator("max_steps", mode="before")
+    @classmethod
+    def _v_max_steps(cls, v: Any) -> int | None:
+        return _clean_max_steps(v)
 
 
 class ToolPlanBody(BaseModel):

@@ -37,6 +37,10 @@ def register(app: FastAPI, d) -> None:
                 project_id=body.project_id or None,
                 allow_tools=body.allow_tools or None,
                 origin=body.origin,
+                # Contract 4 (v1.174.0): the caller's per-session step budget.
+                # Already range-validated by SessionCreate (a 422 outside
+                # 1..200); None = the configured default.
+                max_steps=body.max_steps,
             )
         except (PermissionError, RuntimeError) as exc:  # self-dev gating
             raise HTTPException(status_code=400, detail=str(exc))

@@ -208,6 +208,12 @@ class Config(BaseModel):
     # free (agents/orchestrator.spawn_managed). 0 (the default) = unlimited,
     # keeping spawn semantics byte-identical to before the queue existed.
     max_concurrent_sessions: int = 0
+    #: OCR (v1.174.0) — scanned documents are transcribed by a VISION model
+    #: (there is no tesseract in this app); off means a scan honestly reports
+    #: "no text layer" instead of costing vision calls. `ocr_max_pages` bounds
+    #: the spend per document: one vision call per page.
+    ocr_enabled: bool = True
+    ocr_max_pages: int = 10
     permissions: dict[str, str] = Field(default_factory=default_permissions)
     sandbox: dict[str, Any] = Field(default_factory=default_sandbox_policy)
     sandbox_runtime: str = "native"  # "native" | "docker" (§16)

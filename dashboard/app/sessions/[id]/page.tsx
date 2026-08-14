@@ -49,6 +49,7 @@ import { SessionFiles } from "@/components/sessions/SessionFiles";
 import OriginChip from "@/components/sessions/OriginChip";
 import { DocPreview } from "@/components/chat/DocPreview";
 import { BlackboardPanel } from "@/components/sessions/BlackboardPanel";
+import { WorklistPanel } from "@/components/sessions/WorklistPanel";
 import { ReviewPanel } from "@/components/ReviewPanel";
 import { TracesPanel } from "@/components/TracesPanel";
 import { SessionFeedback } from "@/components/SessionFeedback";
@@ -378,6 +379,15 @@ export default function SessionDetailPage({
               )}
             </Card>
           </Reveal>
+
+          {/* Worklist (v1.174.0, P3) — "12 of 26 done", counted from the
+              durable per-item record rather than read out of the run's prose.
+              Sits directly under the Summary because on a bulk job it answers
+              the question the summary could not: a run that stopped at its step
+              ceiling still says exactly what it finished and what is left.
+              Renders nothing for a session that queued no items, which is
+              almost all of them. */}
+          <WorklistPanel sessionId={id} active={isActive} />
 
           {/* Lifecycle controls */}
           <Reveal>

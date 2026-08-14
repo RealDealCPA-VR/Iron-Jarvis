@@ -8,6 +8,7 @@ defaults to permission ``ask`` and real isolation lands with the Sandbox Manager
 
 from __future__ import annotations
 
+import asyncio
 import re
 import subprocess
 from pathlib import Path
@@ -120,17 +121,83 @@ _DOC_EXTENSIONS = {
 }
 
 
-def _extract_document(path: Path, kind: str) -> ToolResult:
+def _document_body(text: str) -> str:
+    """The document's OWN text, with the READER's metadata stripped.
+
+    ``extract_text`` can prepend a ``[NOTE: ...]`` line (an extension that lies
+    about its contents) and returns a bracketed sentinel sentence for a file with
+    no extractable text. Both are the reader talking ABOUT the file rather than
+    text FROM it, so counting them as content is what made an unreadable scan
+    look like a successfully read document.
+    """
+    lines = [
+        ln
+        for ln in (text or "").splitlines()
+        if not ln.startswith("[NOTE:") and not ln.startswith("[no extractable text")
+    ]
+    body = "\n".join(lines)
+    try:
+        from ..documents.readers import SCANNED_PDF_SENTINEL
+
+        body = body.replace(SCANNED_PDF_SENTINEL, "")
+    except Exception:  # noqa: BLE001 — the prefix filter above already covers it
+        pass
+    return body.strip()
+
+
+def _empty_extraction_note(path: Path, text: str) -> str:
+    """What to SAY when a document extracted to nothing at all.
+
+    Two different facts, and conflating them would be its own dishonesty: a scan
+    holds text we simply cannot reach from here, an empty file holds none. Runs
+    ``needs_ocr`` (which parses the PDF), so callers hand it to a thread.
+    """
+    try:
+        from ..documents.ocr import needs_ocr
+
+        scanned = needs_ocr(path, text)
+    except Exception:  # noqa: BLE001 — an undecidable file is reported plainly
+        scanned = False
+    if scanned:
+        return (
+            "NOTHING WAS READ from this file: its text lives in the page image "
+            "(a scan or photo) and no vision model is available on this path, so "
+            "it was NOT transcribed. Do not describe or rename it from this "
+            "output — read it with read_document, or say plainly that it could "
+            "not be read"
+        )
+    return (
+        "NOTHING WAS READ from this file — the extractor returned no text at "
+        "all (it may be empty, image-only, or password-protected). Do not treat "
+        "the absence of text as a description of its contents"
+    )
+
+
+async def _extract_document(
+    path: Path, kind: str, ctx: ToolContext | None = None, resolver: Any = None
+) -> ToolResult:
     """Serve a document through the extractor, LABELLED as extracted text.
 
     The label is not decoration. This is a lossy, read-only view of the file —
     round-tripping it through ``write_file`` would replace a real .docx with
     plain text and destroy the document, so the reply says so explicitly.
+
+    OFF THE EVENT LOOP (v1.174.0). ``extract_text`` parses a whole PDF/DOCX
+    synchronously, and this ran INLINE on the daemon's single loop — the exact
+    shape of the v1.153.1 outage, and about to get far worse now that an
+    unreadable scan can reach a per-page vision call. Every other document tool
+    already offloads; this one was simply never brought in line.
+
+    It also routes through the SHARED OCR reach point, so a scanned PDF opened
+    with ``read_file`` gets the same treatment (or, with no vision model wired,
+    the same honest note) it gets from ``read_document`` — which one of two
+    interchangeable tools the model happened to name must not decide whether
+    the app can read the user's file at all.
     """
     from ..documents import extract_text
 
     try:
-        text = extract_text(str(path))
+        text = await asyncio.to_thread(extract_text, str(path))
     except ValueError as exc:  # legacy/protected/oversized — a real, nameable no
         return ToolResult(
             ok=False, error=f"cannot read {path.name}: {exc}"
@@ -139,14 +206,37 @@ def _extract_document(path: Path, kind: str) -> ToolResult:
         return ToolResult(
             ok=False, error=f"cannot read {path.name}: {type(exc).__name__}: {exc}"
         )
+    ocr_note = ""
+    if ctx is not None:
+        try:
+            from ..documents.tools import _with_ocr
+
+            text, ocr_note = await _with_ocr(path, text, resolver, ctx)
+        except Exception:  # noqa: BLE001 — recovery is a bonus, never a gate
+            ocr_note = ""
+    if not ocr_note and not _document_body(text):
+        # SILENCE IS NOT AN ANSWER (v1.174.0 review). With no resolver wired,
+        # `ocr_if_unreadable` returns immediately and says nothing — so a scanned
+        # PDF opened with `read_file` came back ok=True carrying ONLY the
+        # "[extracted text from a PDF document ...]" header. A header over an
+        # empty body reads as "this document is blank", and the model then
+        # renames/summarises a file nobody read. Say what happened instead.
+        ocr_note = await asyncio.to_thread(_empty_extraction_note, path, text)
     note = (
         f"[extracted text from a {kind} document — read-only view; to change it "
         f"use write_document, never write_file]\n\n"
     )
+    if ocr_note:
+        note = f"[{ocr_note}]\n" + note
     return ToolResult(
         ok=True,
         output=note + text,
-        data={"bytes": len(text), "extracted": True, "format": kind},
+        data={
+            "bytes": len(text),
+            "extracted": True,
+            "format": kind,
+            **({"note": ocr_note} if ocr_note else {}),
+        },
     )
 
 
@@ -165,22 +255,32 @@ class ReadFileTool(Tool):
         "required": ["path"],
     }
 
+    def __init__(self, router_resolver: "Any | None" = None) -> None:
+        #: () -> the platform's ModelRouter, when the caller wired one. Same
+        #: shape as ReadDocumentTool/ExtractPDFTool: it powers the scanned-file
+        #: OCR fallback. Optional so ``default_registry()`` and every bare
+        #: construction in the tests still work unchanged — with no resolver the
+        #: unreadable-scan path degrades to the honest note, never to silence.
+        self._router_resolver = router_resolver
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = safe_path(ctx.workspace, args["path"])
-        if not path.is_file():
+        if not await asyncio.to_thread(path.is_file):
             return ToolResult(ok=False, error=f"no such file: {args['path']}")
         # A known office format goes straight to the extractor — the extension
         # is certain knowledge, so there is nothing to try and fail at first.
         kind = _DOC_EXTENSIONS.get(path.suffix.lower())
         if kind:
-            return _extract_document(path, kind)
+            return await _extract_document(path, kind, ctx, self._router_resolver)
         try:
-            text = path.read_text(encoding="utf-8")
+            # Offloaded for the same reason the walk below is: a large file on a
+            # slow or unhydrated path blocks every other request in the daemon.
+            text = await asyncio.to_thread(path.read_text, encoding="utf-8")
         except UnicodeDecodeError:
             # Not text and not a known document extension: let the extractor
             # sniff it (it handles unknown-suffix files and images) rather than
             # returning a decode traceback nothing can act on.
-            return _extract_document(path, "binary")
+            return await _extract_document(path, "binary", ctx, self._router_resolver)
         except OSError as exc:  # permissions, a vanished file, a locked handle
             return ToolResult(ok=False, error=f"could not read {path.name}: {exc}")
         return ToolResult(ok=True, output=text, data={"bytes": len(text)})
@@ -417,6 +517,18 @@ class GrepTool(Tool):
 
 
 class ShellTool(Tool):
+    """The PLACEHOLDER shell — superseded in the running app.
+
+    ``platform.py`` registers ``SandboxedShellTool`` under the same name and
+    overwrites this one, so in the packaged daemon nothing here executes: the
+    real command path is ``sandbox/shell_tool.py`` over ``sandbox/native.py``
+    (which already carries partial output into ``SandboxResult.output``, so
+    contract 1 composes a timeout's diagnostic there too). This class still runs
+    in ``default_registry()`` and in every test that builds a bare registry —
+    which is the only reason the timeout below is worth fixing here rather than
+    deleting. Do not read a fix in this file as a fix in production.
+    """
+
     name = "shell"
     description = "Run a shell command in the workspace. (Sandboxing arrives in Phase 4.)"
     permission_key = "shell"  # defaults to 'ask' — fail-closed in headless mode
@@ -443,8 +555,27 @@ class ShellTool(Tool):
                     timeout=60,
                 )
             )
-        except subprocess.TimeoutExpired:
-            return ToolResult(ok=False, error="command timed out")
+        except subprocess.TimeoutExpired as exc:
+            # Hand back whatever the command DID print before it hung. A bare
+            # "command timed out" is the same dead end as a bare "exit 1": the
+            # partial output is usually the only clue about which stage stalled.
+            # (`.stdout`/`.stderr` are bytes or str depending on the platform's
+            # buffering, so decode defensively.)
+            def _text(raw: Any) -> str:
+                if isinstance(raw, bytes):
+                    return raw.decode("utf-8", "replace")
+                return str(raw or "")
+
+            partial = (
+                _text(getattr(exc, "stdout", ""))
+                + _text(getattr(exc, "stderr", ""))
+            ).strip()
+            return ToolResult(
+                ok=False,
+                output=partial,
+                error="command timed out after 60s",
+                data={"returncode": None, "timed_out": True},
+            )
         out = proc.stdout + (("\n[stderr]\n" + proc.stderr) if proc.stderr else "")
         return ToolResult(
             ok=proc.returncode == 0,

@@ -50,6 +50,54 @@ def is_direct_workspace(config, workspace_path: str | Path | None) -> bool:
 #: subsequent step of the loop — O(n^2) token growth at full input price.
 _MAX_TOOL_CONTEXT_CHARS = 16000
 
+#: REPEATED-FAILURE BREAKER (contract 2, v1.174.0).
+#:
+#: The evidence run made 18 tool calls in 12 steps and renamed nothing: five
+#: shell calls that each said only "exit 1", then the same PDFs read twice by
+#: two different tools. A model with no new information repeats itself, and the
+#: loop had nothing that noticed.
+#:
+#: Scoped to the CALL — the tool plus its arguments — not to the tool. That
+#: distinction is the whole safety of the mechanism: an agent legitimately reads
+#: several paths that turn out not to exist, and a breaker that disabled
+#: `read_file` after three consecutive misses would end the run instead of
+#: saving it. What is never legitimate is issuing the IDENTICAL failing call a
+#: third time.
+_BREAKER_NOTE_AT = 2    # ...failures of the same call earn an honest note
+_BREAKER_REFUSE_AT = 3  # ...and the next identical attempt is refused
+
+
+def call_signature(name: str, arguments: dict | None) -> str:
+    """A canonical identity for "the same call again".
+
+    Argument ORDER must not create a new identity (a model re-emitting the same
+    JSON object with keys shuffled is repeating itself), hence sort_keys; and an
+    unserialisable argument degrades to its repr rather than raising inside the
+    tool loop.
+    """
+    try:
+        canon = json.dumps(arguments or {}, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        canon = repr(arguments)
+    return f"{name}({canon[:2000]})"
+
+
+def resolve_max_steps(session, config) -> int:
+    """This run's step budget: the session's own, else the configured default.
+
+    Contract 4 (v1.174.0). ``getattr`` rather than ``session.max_steps`` because
+    the column is optional and every caller that never sets it — every existing
+    one — must land on exactly today's number. A non-positive or unparseable
+    value means "unset", never "zero steps": a run that can take no action at
+    all is not a budget, it is a broken session.
+    """
+    raw = getattr(session, "max_steps", None)
+    try:
+        wanted = int(raw) if raw is not None else 0
+    except (TypeError, ValueError):
+        wanted = 0
+    return wanted if wanted > 0 else int(config.max_agent_steps)
+
 
 def _effective(messages, system_prompt: str, summary: str, covers: int):
     """Apply an existing compaction WITHOUT touching the caller's list.
@@ -507,7 +555,7 @@ class AgentRuntime:
                 tool_specs=tool_specs,
                 session_allow=session_allow,
                 sink=sink,
-                max_steps=self.p.config.max_agent_steps,
+                max_steps=resolve_max_steps(session, self.p.config),
             )
             if not finished:
                 run.result = "stopped: reached max steps before completion"
@@ -559,6 +607,13 @@ class AgentRuntime:
         # 12-step run over budget would otherwise bury the timeline in twelve
         # identical notices.
         trim_reported = False
+        # REPEATED-FAILURE BREAKER STATE (contract 2, v1.174.0). Per CALL
+        # signature: how many times in a row it has failed, and — once armed —
+        # the reason the next identical attempt is refused with. A success
+        # clears the streak, so a flaky call that eventually works is never
+        # punished for its history.
+        fail_streaks: dict[str, int] = {}
+        broken_calls: dict[str, str] = {}
         # COMPACTION STATE (v1.153.0). An agent loop has no one to ask mid-run,
         # so unlike chat it never offers the choice — it compacts on its own at
         # the ceiling and reports it. `_cpt_covers` counts messages consumed
@@ -683,6 +738,13 @@ class AgentRuntime:
             step_out = int(usage.get("output_tokens", 0) or 0)
             run.input_tokens += step_in
             run.output_tokens += step_out
+            # Persist the step count BEFORE the tools run (v1.174.0). It used to
+            # be saved only at the END of a step, so for the whole of step N the
+            # stored record still said N-1 — and anything reading the ledger
+            # mid-step (the read cache's "already read at step N" note, a live
+            # dashboard) quoted a step that had already passed. One extra merge
+            # per step buys a number that is true while the step is happening.
+            self._save(run)
             # TX-01 audit: one persisted event PER LLM call so every token is
             # individually replayable on the timeline (the per-run aggregate lives
             # on AgentRun). Best-effort — never let telemetry break a run.
@@ -734,6 +796,12 @@ class AgentRuntime:
             # failure/denial in one call so it never cancels its siblings. Results
             # are then appended in the ORIGINAL call order (the model maps tool
             # results to calls positionally), keeping behavior deterministic.
+            # A call the breaker has armed is refused through the registry's
+            # `deny_reason` seam rather than short-circuited here, so the
+            # refusal is RECORDED as a ToolInvocation and published like any
+            # other denial — `agents/outcome` derives what a run did from that
+            # ledger, and a refusal that never reached it would make the run's
+            # own history disagree with the transcript.
             async def _invoke(tc):
                 return await self.p.registry.invoke(
                     tc.name,
@@ -742,6 +810,17 @@ class AgentRuntime:
                     self.p.permissions,
                     agent_def.permission_overrides,
                     session_allow=session_allow,
+                    deny_reason=broken_calls.get(
+                        call_signature(tc.name, tc.arguments), ""
+                    ),
+                    # ...but NOT as a permission denial (v1.174.0 review). The
+                    # breaker is the app's own circuit breaker; labelling it
+                    # "permission denied" makes the model tell the user it lacks
+                    # permission, and both chat lanes string-match that phrase to
+                    # list a turn's user-refused tools. The ledger row and the
+                    # tool.denied event are unchanged — only the wording the
+                    # model reads.
+                    deny_label="refused",
                 )
 
             # FX-01: announce each tool call BEFORE the fan-out, with args redacted
@@ -800,15 +879,44 @@ class AgentRuntime:
                         content[:_MAX_TOOL_CONTEXT_CHARS]
                         + f"\n[... truncated {dropped} chars — full output in the transcript]"
                     )
+
+                # THE BREAKER (contract 2). Bookkeeping runs AFTER the truncation
+                # above so its note can never be the thing that gets cut — the
+                # note is the only part of this result the model must not miss.
+                call_ok = (
+                    result.ok if not isinstance(result, BaseException) else False
+                )
+                signature = call_signature(tc.name, tc.arguments)
+                if call_ok:
+                    fail_streaks.pop(signature, None)
+                    broken_calls.pop(signature, None)
+                else:
+                    streak = fail_streaks.get(signature, 0) + 1
+                    fail_streaks[signature] = streak
+                    if streak >= _BREAKER_NOTE_AT:
+                        last = " ".join(str(content).split())[:200]
+                        broken_calls[signature] = (
+                            f"repeated-failure breaker — `{tc.name}` has now "
+                            f"failed {streak} times in a row with these exact "
+                            f"arguments, so this call is refused for the rest "
+                            f"of the run. Last failure: {last}. Change the "
+                            f"arguments, use a different tool, or say plainly "
+                            f"what is blocking you — do not send it again."
+                        )
+                    if streak == _BREAKER_NOTE_AT:
+                        content += (
+                            f"\n\n[repeat — this is failure {streak} in a row "
+                            f"for `{tc.name}` with these exact arguments. A "
+                            f"{_BREAKER_REFUSE_AT}rd identical call will be "
+                            f"refused. Read the error above and change the "
+                            f"arguments, use a different tool, or report what "
+                            f"is blocking you.]"
+                        )
                 if sink:
                     sink.tool_finished(
                         tc.id,
                         tc.name,
-                        ok=(
-                            result.ok
-                            if not isinstance(result, BaseException)
-                            else False
-                        ),
+                        ok=call_ok,
                         preview=str(content)[:500],
                     )
                 messages.append(

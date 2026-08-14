@@ -24,6 +24,18 @@ extracted text — layout approximate, PII genuinely gone — and the note says
 which path produced the file. The source is NEVER touched; output always lands
 in a new file.
 
+A source with NO TEXT LAYER — a scanned/photographed PDF, or an image — is
+REFUSED by BOTH entry points (v1.174.0, :data:`NO_TEXT_LAYER_ERROR`): the one
+that rewrites a document (:func:`redact_file`) and the one that CERTIFIES it
+(:func:`scan_document`). Detection here runs over extracted text, so such a
+file used to produce zero findings, an identical "redacted" copy, and the
+sentence "no PII found": a certification of cleanliness for a document the tool
+never read a word of. Guarding only the rewrite is not enough — nobody redacts
+a file they have just been told is clean. OCR can recover the text for REVIEW
+(``redact_scan`` passes it in via ``text=``), but recovered text cannot be
+rewritten out of an image, so redaction refuses rather than shipping a copy
+that looks safe.
+
 Styles: ``black`` = same-length █ blocks (layout preserved), ``label`` =
 ``[SSN]``-style category tags, ``remove`` = deleted outright.
 """
@@ -319,13 +331,32 @@ def scan_document(
     *,
     extra_terms: list[str] | None = None,
     categories: set[str] | frozenset[str] | None = None,
+    text: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Scan a document file for PII candidates (see :func:`scan_text`)."""
+    """Scan a document file for PII candidates (see :func:`scan_text`).
+
+    ``text`` (v1.174.0) supplies text the caller ALREADY has — specifically an
+    OCR transcription of a scanned document, which has no text layer for
+    ``extract_text`` to find. Omitted, this reads the file itself — and then
+    REFUSES a file whose words are pixels (:data:`NO_TEXT_LAYER_ERROR`).
+
+    That refusal is the whole point of the function's safety story, and it was
+    missing from the leg that matters most. ``POST /documents/redact/scan``
+    calls this with no ``text``: on a scanned tax return the patterns ran over
+    the "no extractable text" sentinel, found nothing, and the Documents page
+    rendered a green shield reading "No personal data found." for a document
+    the app had never read a word of. The APPLY leg refusing is not enough —
+    a user told the file is clean never reaches apply. A file some earlier OCR
+    already transcribed is NOT refused: ``extract_text`` serves that
+    transcription (it carries the OCR marker), so the candidates below are the
+    ones really in the document.
+    """
     from .readers import extract_text
 
-    return scan_text(
-        extract_text(path), extra_terms=extra_terms, categories=categories
-    )
+    if text is None:
+        text = extract_text(path)
+        _refuse_if_no_text_layer(Path(path), text)
+    return scan_text(text, extra_terms=extra_terms, categories=categories)
 
 
 # -------------------------------------------------------- format redactors ---
@@ -458,6 +489,37 @@ def _redact_pptx(src: Path, dst: Path, spans_for) -> dict[str, int]:
     return counts
 
 
+#: Raised (as a ValueError) for a source whose words are PIXELS. Every redactor
+#: below rewrites TEXT, so on a scanned PDF the old path found no spans, wrote
+#: an identical copy, and reported "no PII found" — a tax return full of SSNs
+#: certified clean by a tool that never read a word of it. Refusing is the only
+#: honest answer: there is no rewrite of a text layer that does not exist.
+NO_TEXT_LAYER_ERROR = (
+    "this document has NO TEXT LAYER (it is a scan/photo/image) — nothing was "
+    "scanned for PII and nothing can be redacted by rewriting text. A rebuilt "
+    "copy would look redacted and still carry every value, and an empty finding "
+    "list here means NOT SCANNED, never CLEAN. Transcribe or re-scan it with a "
+    "text layer, or redact the image itself"
+)
+
+
+def _refuse_if_no_text_layer(src: Path, text: str) -> None:
+    """Guard EVERY entry point that reads a file here — :func:`scan_document`
+    (the leg that CERTIFIES a document clean) and :func:`redact_file` (the leg
+    that rewrites one), tool and route alike.
+
+    ``needs_ocr`` rather than ``looks_scanned_pdf``: a ``.png``/``.jpg`` of a
+    W-2 has no text layer either and would otherwise be scanned for PII as the
+    string ``"[image PNG 900x1200, mode RGB]"`` — clean by construction. It
+    also recognises a transcript we already produced (the OCR marker), so a
+    file whose text was recovered earlier is scanned, not refused.
+    """
+    from .ocr import needs_ocr
+
+    if needs_ocr(src, text):
+        raise ValueError(NO_TEXT_LAYER_ERROR)
+
+
 def _redact_pdf(src: Path, dst: Path, spans_for) -> tuple[dict[str, int], str]:
     """Redact a PDF IN PLACE when we can prove it worked; rebuild when we can't.
 
@@ -473,7 +535,12 @@ def _redact_pdf(src: Path, dst: Path, spans_for) -> tuple[dict[str, int], str]:
     from .readers import extract_text
     from .writers import write_document
 
-    text = extract_text(src)
+    # The file's REAL text layer: `use_ocr_cache=False` because a cached
+    # transcription proves the words are there, it does not make them
+    # rewritable — rebuilding a scan from OCR text would destroy the document
+    # AND leave the original pixels in whatever the user shares next.
+    text = extract_text(src, use_ocr_cache=False)
+    _refuse_if_no_text_layer(src, text)
     spans = spans_for(text)
     masked, counts = _apply_spans(text, spans)
 

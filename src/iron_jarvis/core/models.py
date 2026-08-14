@@ -104,6 +104,15 @@ class ProjectKnowledge(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+#: Bounds for a per-session step budget (v1.174.0, Contract 4). ONE definition,
+#: imported by the API validator (``daemon/schemas.SessionCreate``) and by the
+#: orchestrator's defensive normalizer — two copies would drift, and the two
+#: layers disagreeing about "valid" is how a 422 and a silent clamp end up
+#: describing the same request.
+SESSION_MAX_STEPS_MIN = 1
+SESSION_MAX_STEPS_MAX = 200
+
+
 class Session(SQLModel, table=True):
     id: str = Field(default_factory=lambda: new_id("session"), primary_key=True)
     project_id: str | None = Field(default=None, index=True)
@@ -126,6 +135,14 @@ class Session(SQLModel, table=True):
     #: | user_task | autonomy | schedule | comm | reflex | workflow | self_dev |
     #: continuation | rerun. Additive nullable column (auto-reconciled).
     origin: str | None = Field(default=None, index=True)
+    #: Per-session STEP BUDGET (v1.174.0, Contract 4). The perceive→act loop and
+    #: decompose's mini-loops resolve ``session.max_steps or
+    #: config.max_agent_steps``, so a job the user KNOWS is big ("rename all 26
+    #: files in this folder") can be given the room it needs without raising the
+    #: global default for every small task. ``None`` = the configured default,
+    #: i.e. exactly today's behavior. Bounded by SESSION_MAX_STEPS_MIN/MAX at
+    #: both entry points. Additive nullable column (auto-reconciled).
+    max_steps: int | None = None
     created_at: datetime = Field(default_factory=utcnow)
     finished_at: datetime | None = None
 

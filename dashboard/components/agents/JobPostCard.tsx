@@ -65,6 +65,37 @@ export interface JobRequest {
   body: Record<string, unknown>;
 }
 
+/** Per-session step budget bounds (v1.174.0) — the SAME 1..200 the daemon
+ *  enforces (`SESSION_MAX_STEPS_MIN/MAX`); outside it the API answers 422. */
+export const MIN_JOB_STEPS = 1;
+export const MAX_JOB_STEPS = 200;
+
+/**
+ * The typed "Max steps" box → the wire value, or null for "leave it out".
+ *
+ * Blank means the configured default, so it must send NO key at all — a `null`
+ * or `0` in the body is a different request from an absent one. Anything that
+ * is not a whole number in range is also left out rather than guessed at:
+ * clamping "1000" down to 200 would run a job against a budget the user never
+ * chose and then report "reached max steps" as if they had.
+ */
+export function jobMaxSteps(raw: string): number | null {
+  const text = (raw ?? "").trim();
+  if (!text || !/^\d+$/.test(text)) return null;
+  const n = Number(text);
+  if (!Number.isInteger(n) || n < MIN_JOB_STEPS || n > MAX_JOB_STEPS)
+    return null;
+  return n;
+}
+
+/** Does this target's route accept a step budget? `POST /sessions` does;
+ *  `POST /agents/<slug>/spawn` (a dynamic agent) does NOT — so the card
+ *  DISABLES the box for those rather than posting a field the daemon drops
+ *  on the floor, which would be a budget the user set and never got. */
+export function supportsMaxSteps(target: string): boolean {
+  return !target.startsWith("custom:");
+}
+
 /**
  * Target → the exact dispatch (pure, so tests can pin every field):
  *  - Team / builtin → POST /sessions (Team means agent_type "supervisor");
@@ -74,14 +105,21 @@ export interface JobRequest {
  *    delegate to that remote via the delegate tool. A remote has no session
  *    shape of its own; the supervisor wrapper is the honest bridge (never
  *    silently reroute to builder — that's the exact bug class this repo bans).
+ *
+ * `maxSteps` (v1.174.0) is the raw text of the optional "Max steps" box —
+ * blank/invalid adds NO key, so every pre-v1.174.0 dispatch is byte-identical.
  */
 export function jobRequest(
   target: string,
   task: string,
   projectId: string,
+  maxSteps = "",
 ): JobRequest {
   const base: Record<string, unknown> = { wait: false, origin: JOB_ORIGIN };
   if (projectId) base.project_id = projectId;
+  // Only on routes that actually read it — see supportsMaxSteps.
+  const steps = jobMaxSteps(maxSteps);
+  if (steps !== null && supportsMaxSteps(target)) base.max_steps = steps;
   if (target.startsWith("custom:")) {
     const slug = target.slice("custom:".length);
     return {
@@ -137,9 +175,18 @@ export function JobPostCard({
   const [task, setTask] = useState("");
   const [target, setTarget] = useState(TEAM_TARGET);
   const [projectId, setProjectId] = useState("");
+  // Optional per-session step budget (v1.174.0). Kept as TEXT, because "" is a
+  // real value here — "use the configured default" — and a number input that
+  // coerces blank to 0 would post a budget of zero steps.
+  const [maxSteps, setMaxSteps] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [posted, setPosted] = useState<SessionView | null>(null);
+  // The budget the DISPATCH actually carried (null = none was sent, so the run
+  // takes the configured default). Read off the request body this card built,
+  // not off the form: after a post the box is cleared, and the form is anyway
+  // the intent while the body is the fact.
+  const [postedSteps, setPostedSteps] = useState<number | null>(null);
 
   // Optional project grounding, same live list the sessions page uses.
   const { data: projData } = useApi<{ projects: Project[] }>("/projects");
@@ -184,18 +231,35 @@ export function JobPostCard({
       ? target
       : TEAM_TARGET;
 
+  // The box only applies where the route reads it, and a value that would be
+  // DROPPED is refused up front rather than posted and silently ignored — the
+  // user would otherwise watch a 26-file job stop at the default budget.
+  const stepsSupported = supportsMaxSteps(effectiveTarget);
+  const stepsText = maxSteps.trim();
+  const stepsInvalid =
+    stepsSupported && stepsText !== "" && jobMaxSteps(stepsText) === null;
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     const t = task.trim();
-    if (!t) return;
+    if (!t || stepsInvalid) return;
     setBusy(true);
     setError(null);
     setPosted(null);
+    setPostedSteps(null);
     try {
-      const req = jobRequest(effectiveTarget, t, projectId);
+      const req = jobRequest(effectiveTarget, t, projectId, maxSteps);
       const session = await post<SessionView>(req.path, req.body);
       setPosted(session);
+      setPostedSteps(
+        typeof req.body.max_steps === "number" ? req.body.max_steps : null,
+      );
       setTask("");
+      // Sizing belongs to the job that was sized. Keeping it meant a 200-step
+      // budget typed for one big job silently rode along on the next quick one
+      // — a setting outliving the thing it was set for. What that budget WAS is
+      // not lost: the note below states what the dispatch carried.
+      setMaxSteps("");
       reloadJobs();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
@@ -275,10 +339,50 @@ export function JobPostCard({
           </div>
         </div>
 
+        {/* JOB SIZE (v1.174.0). A big job ("rename all 26 files in this
+            folder") needs more room than the global default, and raising that
+            default for every small task is the wrong trade. Blank keeps the
+            configured default — the field is not a number input, because a
+            number input hands back "" and 0 indistinguishably. */}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <label
+              htmlFor="job-max-steps"
+              className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400"
+            >
+              Max steps (optional)
+            </label>
+            <input
+              id="job-max-steps"
+              type="text"
+              inputMode="numeric"
+              value={maxSteps}
+              disabled={!stepsSupported}
+              onChange={(e) => setMaxSteps(e.target.value)}
+              placeholder="blank = default"
+              aria-invalid={stepsInvalid || undefined}
+              aria-describedby="job-max-steps-hint"
+              className="field disabled:opacity-50"
+            />
+            <div
+              id="job-max-steps-hint"
+              className={`mt-1 text-[11px] ${
+                stepsInvalid ? "text-amber-300" : "text-zinc-500"
+              }`}
+            >
+              {!stepsSupported
+                ? "A custom agent runs on the configured default — this route takes no step budget."
+                : stepsInvalid
+                  ? `Enter a whole number from ${MIN_JOB_STEPS} to ${MAX_JOB_STEPS}, or leave it blank.`
+                  : `Room for a big job — ${MIN_JOB_STEPS}–${MAX_JOB_STEPS} steps.`}
+            </div>
+          </div>
+        </div>
+
         <div className="flex items-center justify-end">
           <button
             type="submit"
-            disabled={busy || !task.trim()}
+            disabled={busy || !task.trim() || stepsInvalid}
             className="btn-accent"
           >
             {busy ? (
@@ -300,6 +404,15 @@ export function JobPostCard({
             >
               watch it run
             </Link>
+            {/* WHAT THE DISPATCH CARRIED (v1.174.0). Without this a user who
+                typed 60 and later reads "reached max steps" cannot tell whether
+                the budget was ignored or spent — the same silence this repo
+                bans elsewhere. Says the number AND its source. */}
+            <span className="block text-[11px] text-emerald-200/70">
+              {postedSteps !== null
+                ? `Running with the ${postedSteps}-step budget you set.`
+                : "Running on the configured default step budget."}
+            </span>
           </SuccessNote>
         )}
         {error && <ErrorNote>{error}</ErrorNote>}

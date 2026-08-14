@@ -60,6 +60,8 @@ from .agents.agent_tools import agent_management_tools
 from .agents.dynamic import DynamicAgentRegistry
 from .blackboard import BlackboardStore, blackboard_tools
 from .blackboard import models as _bb_models  # noqa: F401  (registers BlackboardRecord)
+from .worklist import WORKLIST_TOOL_NAMES, WorklistStore, worklist_tools
+from .worklist import models as _wl_models  # noqa: F401  (registers WorklistItem)
 from .comm import Notifier, build_notifier, httpx_get, httpx_post, notify_tools
 from .comm import models as _comm_models  # noqa: F401  (registers InboundOffsetRecord)
 from .filesearch import FileSearchService, filesearch_tools
@@ -165,6 +167,11 @@ class Platform:
     computeruse: CUContext
     terminals: TerminalManager
     blackboard: "BlackboardStore | None" = None
+    #: The department's durable WORKLIST (v1.174.0) — which units of a bulk job
+    #: exist, which are claimed, which are finished and what each produced. Same
+    #: scope as ``blackboard`` (the root session id), so a supervisor and its
+    #: subagents share one list.
+    worklist: "WorklistStore | None" = None
     scheduler: Scheduler | None = None
     sentinels: "SentinelService | None" = None
     agents_registry: DynamicAgentRegistry | None = None
@@ -757,6 +764,15 @@ def build_platform(
     # (+ markdown-aware RICH creation and cross-format conversion).
     for tool in document_tools(router_resolver=lambda: router):
         registry.register(tool)
+    # read_file's office/binary redirect reads documents too, so it needs the
+    # same OCR reach (v1.174.0). It is built in default_registry() BEFORE the
+    # router exists, so re-register it here with the resolver — otherwise an
+    # agent that opens a scanned PDF with read_file gets silence while
+    # read_document transcribes the same file, which is exactly the
+    # which-tool-did-you-happen-to-pick lottery this wave removes.
+    from .tools.builtins import ReadFileTool
+
+    registry.register(ReadFileTool(router_resolver=lambda: router))
 
     # Images: view_image gives any agent EYES (vision via the router — works
     # with whichever vision-capable model is connected), plus convert/resize/
@@ -919,6 +935,36 @@ def build_platform(
     platform.blackboard = BlackboardStore(engine)
     for tool in blackboard_tools(platform.blackboard):
         platform.registry.register(tool)
+
+    # The department's durable WORKLIST (v1.174.0). Same scope as the board
+    # above (the root session id) and for a complementary reason: the
+    # blackboard is prose between teammates, this is state two teammates can
+    # never disagree about — `worklist_next` CLAIMS its chunk with a
+    # compare-and-swap, so a chunked bulk job cannot hand the same file to two
+    # subagents, and a run that hit its step ceiling resumes from what is
+    # genuinely still pending.
+    # `config` is passed for ONE question the board id depends on: whether a
+    # session's workspace is a folder the USER named (part of the job's
+    # identity, and the same across a re-run) or a disposable managed workspace
+    # (a fresh path every run). Without it the store cannot tell them apart and
+    # falls back to the task text alone — see `WorklistStore.board_for_root`.
+    platform.worklist = WorklistStore(engine, config=config)
+    for tool in worklist_tools(platform.worklist):
+        platform.registry.register(tool)
+    # Declared HERE, beside the registration, exactly as `workflow_list` is
+    # above: the permission engine fail-closes an unknown key to "ask", and a
+    # headless "ask" (no resolver) is a DENY — so without these four defaults no
+    # agent and no scheduled run could ever record its progress, and the whole
+    # feature would be invisible-dead on the user's install (whose config.toml,
+    # dumped from an older default set, will never carry the keys). Bookkeeping
+    # in the app's own database, no host reach: the same "allow" tier as the
+    # blackboard tools. BOTH copies are seeded because the PermissionEngine
+    # snapshots the mapping at construction (its `_base` is a dict COPY), and
+    # seeding one side alone makes the settings display and the enforcement
+    # disagree. `setdefault`, so a user-set config.toml value always wins.
+    for _wl_key in WORKLIST_TOOL_NAMES:
+        platform.permissions._base.setdefault(_wl_key, "allow")
+        platform.config.permissions.setdefault(_wl_key, "allow")
 
     # Memory curation (v1.143.0): ONE shared steward, attached here because the
     # scheduled-fire dispatcher below asks it for the window each weekly review

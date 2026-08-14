@@ -557,6 +557,7 @@ def register(app: FastAPI, d) -> None:
                 project_id=project.id,
                 allow_tools=body.allow_tools or None,
                 workspace_root=str(root) if in_folder else None,
+                max_steps=body.max_steps,
             )
         except (PermissionError, RuntimeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
