@@ -18,5 +18,11 @@ class MarkdownBrainConnector(MarkdownDirConnector):
 
     name = "brain"
 
-    def __init__(self, directory: Path | str, embedder: Any = None) -> None:
-        super().__init__(directory, embedder=embedder, recursive=False)
+    def __init__(
+        self, directory: Path | str, embedder: Any = None, create: bool = True
+    ) -> None:
+        # The built-in brain lives under the state home and is created on
+        # first run (create=True). A USER-registered markdown source passes
+        # create=False so a vanished folder is reported, not recreated
+        # empty (v1.172.0).
+        super().__init__(directory, embedder=embedder, recursive=False, create=create)

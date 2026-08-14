@@ -266,11 +266,35 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/ltm/sources")
     def ltm_sources() -> dict[str, Any]:
+        """Registered memory sources + the LIVE bases.
+
+        v1.172.0 ADDITIVE ``bases``: each active connector with whether it can
+        actually be read right now. A base whose folder moved used to be
+        indistinguishable from a base with no matches — the app answered from
+        nothing and looked healthy doing it. ``sources`` and ``active`` are
+        unchanged for existing callers.
+        """
         from ...ltm.sources import CustomSourceStore
 
+        bases: list[dict[str, Any]] = []
+        for base_name in d.platform.ltm.sources():
+            conn = d.platform.ltm.get(base_name)
+            health = getattr(conn, "health", None)
+            info: dict[str, Any] = {"name": base_name, "kind": getattr(conn, "name", "")}
+            if callable(health):
+                try:
+                    info.update(health())
+                except Exception as exc:  # noqa: BLE001 — a listing never 500s
+                    info.update({"available": False, "detail": f"{type(exc).__name__}: {exc}"})
+            else:
+                # Remote kinds (Notion/cloud/http_rag) have no cheap local
+                # probe; claim nothing rather than a comforting default.
+                info.update({"available": None, "detail": ""})
+            bases.append(info)
         return {
             "sources": [s.model_dump() for s in CustomSourceStore(d.platform.engine).list()],
             "active": d.platform.ltm.sources(),
+            "bases": bases,
         }
 
     @app.post("/ltm/sources")

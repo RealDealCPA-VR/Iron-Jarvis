@@ -92,11 +92,45 @@ class MarkdownDirConnector(LTMConnector):
         directory: Path | str,
         embedder: Any = None,
         recursive: bool = True,
+        create: bool = True,
     ) -> None:
         self.dir = Path(directory)
         self.embedder = embedder
         self.recursive = recursive
-        self.dir.mkdir(parents=True, exist_ok=True)
+        # REFUSE, DON'T RECREATE (v1.172.0). This mkdir used to be
+        # unconditional, so a USER's vault that had moved, been renamed, sat on
+        # an unmounted drive, or de-synced from a cloud folder was silently
+        # re-created EMPTY at the old path — after which every read honestly
+        # returned nothing and the connector looked perfectly healthy. The app
+        # went blind and said nothing. Only the app's OWN store (the built-in
+        # brain, under the state home) is created on demand; a configured user
+        # path is left alone and reports itself missing.
+        self.create = bool(create)
+        if self.create:
+            self.dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def missing(self) -> bool:
+        """True when a user-configured directory is not there right now."""
+        try:
+            return not self.dir.is_dir()
+        except OSError:  # unreadable/offline share — treat as missing, loudly
+            return True
+
+    def health(self) -> dict[str, Any]:
+        """Availability for the UI: a base that cannot be read SAYS SO, with
+        the path, instead of blending into 'no matches' (v1.172.0)."""
+        if not self.missing:
+            return {"available": True, "detail": "", "path": str(self.dir)}
+        return {
+            "available": False,
+            "path": str(self.dir),
+            "detail": (
+                f"folder not found: {self.dir} — it was moved, renamed, or is "
+                "on a drive/cloud folder that isn't available right now "
+                "(nothing was created in its place)"
+            ),
+        }
 
     # -- helpers ----------------------------------------------------------
     def _files(self) -> list[Path]:

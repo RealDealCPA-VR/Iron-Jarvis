@@ -272,6 +272,24 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
         ),
         {"recall": 8, "ltm_append": 5},
     ),
+    # --- the KNOWLEDGE-BASE vocabulary (v1.172.0) -------------------------
+    # A live report: "it has no access to the wikis — blind as a bat." The
+    # bases were registered and `recall` was armable, but NOTHING here matched
+    # the word people actually use. "What does our wiki say about X" armed no
+    # tool at all and answered from thin air — the worst possible failure for
+    # a question that names a source. These nouns are unambiguous (a wiki /
+    # handbook / runbook / knowledge base IS a store to look in), so they arm
+    # BOTH the memory bases and file search: a "wiki" is a markdown vault for
+    # one user and a folder of docs for the next, and the model should be able
+    # to reach whichever it is rather than guess.
+    (
+        re.compile(
+            r"\b(wikis?|knowledge ?base|documentation|handbooks?|runbooks?|"
+            r"playbooks?|(?:the|our|company|team|internal) docs)\b",
+            re.IGNORECASE,
+        ),
+        {"recall": 8, "ltm_search": 7, "file_search": 6},
+    ),
     # --- past conversations (v1.142.0) ------------------------------------
     # "what did we decide about X", "find the thread where we discussed Y",
     # "when did we talk about Z" — a question about THIS APP'S OWN history,

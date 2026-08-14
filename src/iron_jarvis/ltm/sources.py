@@ -203,7 +203,8 @@ def connector_from_record(
     HTTP clients are produced by ``http_factory`` (a sync ``httpx.Client``).
     """
     if rec.kind == "markdown":
-        conn: LTMConnector = MarkdownBrainConnector(Path(rec.path))
+        # A user-registered folder: never recreated if it vanishes (v1.172.0).
+        conn: LTMConnector = MarkdownBrainConnector(Path(rec.path), create=False)
     elif rec.kind == "notion":
         conn = NotionConnector(
             rec.database_id,

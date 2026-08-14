@@ -18,4 +18,7 @@ class ObsidianConnector(MarkdownDirConnector):
     name = "obsidian"
 
     def __init__(self, vault_dir: Path | str, embedder: Any = None) -> None:
-        super().__init__(vault_dir, embedder=embedder, recursive=True)
+        # create=False (v1.172.0): a vault is the USER's folder. If it has
+        # moved or its drive is offline, report it missing — never conjure
+        # an empty one at the old path and answer from nothing.
+        super().__init__(vault_dir, embedder=embedder, recursive=True, create=False)

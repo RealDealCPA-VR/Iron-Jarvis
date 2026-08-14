@@ -333,7 +333,15 @@ function metaFor(provider: string): ProviderMeta {
 function StatusPill({ conn }: { conn: Connection }) {
   let tone: string;
   let label: string;
-  if (conn.connected) {
+  // A connection that loaded ZERO tools is not usable, however green it looks
+  // (v1.172.0): MCP tools load once at daemon boot, so a server added since
+  // startup — or one whose command failed to launch — delivers nothing while
+  // the old flat "Connected" badge insisted it was fine. That badge is exactly
+  // what hid a dark wiki from a user who then found Jarvis "blind as a bat".
+  if (conn.status === "no_tools") {
+    tone = "border-amber-500/25 bg-amber-500/10 text-amber-300";
+    label = "0 tools — restart";
+  } else if (conn.connected) {
     tone = "border-emerald-500/25 bg-emerald-500/10 text-emerald-300";
     label = "Connected";
   } else if (conn.status === "needs_auth") {
@@ -349,11 +357,13 @@ function StatusPill({ conn }: { conn: Connection }) {
     >
       <span
         className={`h-1.5 w-1.5 rounded-full ${
-          conn.connected
-            ? "bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.5)]"
-            : conn.status === "needs_auth"
-              ? "bg-amber-400"
-              : "bg-zinc-500"
+          conn.status === "no_tools"
+            ? "bg-amber-400"
+            : conn.connected
+              ? "bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.5)]"
+              : conn.status === "needs_auth"
+                ? "bg-amber-400"
+                : "bg-zinc-500"
         }`}
       />
       {label}
@@ -849,6 +859,12 @@ function ConnectionCard({
         </div>
         <StatusPill conn={conn} />
       </div>
+
+      {conn.status === "no_tools" && conn.detail ? (
+        <p className="rounded-lg border border-amber-500/20 bg-amber-500/[0.06] px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-200/90">
+          {conn.detail}
+        </p>
+      ) : null}
 
       {/* Body */}
       {isMock ? (

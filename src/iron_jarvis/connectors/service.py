@@ -30,13 +30,53 @@ def _server_cfg(platform, connector_id: str) -> "dict | None":
     return next((s for s in _mcp_servers(platform) if s.get("name") == connector_id), None)
 
 
+def _mcp_status(configured: bool, tools_loaded: int) -> dict[str, Any]:
+    """The honest three states of an MCP connector (v1.172.0).
+
+    ``disconnected``  — no config entry; the user never added it.
+    ``no_tools``      — the connection EXISTS but zero tools are loaded, so the
+                        model can call NOTHING through it. This is the state a
+                        flat "connected" badge used to hide: MCP tools load
+                        ONCE at daemon boot, so a server added since startup —
+                        or one whose command failed to resolve (npx/uvx cold,
+                        PATH missing in the frozen daemon, a 15s timeout) —
+                        stays dark with a confident green light.
+    ``connected``     — configured AND at least one tool is callable.
+
+    ``connected`` deliberately stays TRUE for ``no_tools``: the user's
+    connection really does exist and survives restarts (that is what
+    ``/connectors/{id}/connect`` persisted), and flipping it would tell them
+    their connect FAILED — a different lie. The truth lives in ``status`` +
+    ``tools_loaded``, which the Connections page renders as its own state.
+    """
+    if not configured:
+        return {"connected": False, "status": "disconnected", "detail": ""}
+    if tools_loaded <= 0:
+        return {
+            "connected": True,
+            "status": "no_tools",
+            "detail": (
+                "connected, but 0 tools are loaded — MCP tools load when the "
+                "daemon starts, so restart to pick this server up. If you have "
+                "already restarted, its command failed to launch (check the "
+                "command and that npx/uvx resolve)."
+            ),
+        }
+    return {"connected": True, "status": "connected", "detail": ""}
+
+
 def _status_for(platform, connector, conn_status: dict) -> dict[str, Any]:
     if connector.connect_via == "mcp":
-        connected = _server_cfg(platform, connector.id) is not None
-        loaded = platform.registry.mcp_names(connector.id) if connected else []
+        configured = _server_cfg(platform, connector.id) is not None
+        loaded = platform.registry.mcp_names(connector.id) if configured else []
         return {
-            "connected": connected,
-            "status": "connected" if connected else "disconnected",
+            # CONNECTED MEANS REACHABLE (v1.172.0). This used to be "a config
+            # entry exists", so a server whose tools failed to load at boot —
+            # npx/uvx unresolved, a cold cache, a 15s timeout — reported a
+            # confident green while the model could not call a single tool.
+            # The one surface that could have revealed a dark wiki was the
+            # surface insisting it was fine. Tools loaded IS the connection.
+            **_mcp_status(configured, len(loaded)),
             "tools_loaded": len(loaded),
             "tool_names": [n.split("__", 2)[-1] for n in loaded],
             "account": "",
@@ -81,8 +121,9 @@ def _user_mcp_connectors(platform) -> list[dict[str, Any]]:
                 "Its tools are available to chat and agents once toggled on.",
                 "mcp",
             ),
-            "connected": True,
-            "status": "connected",
+            # Was hardcoded connected:true — a user-added server that loaded no
+            # tools claimed a working connection (v1.172.0).
+            **_mcp_status(True, len(loaded)),
             "tools_loaded": len(loaded),
             "tool_names": [n.split("__", 2)[-1] for n in loaded],
             "account": "",

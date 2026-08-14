@@ -489,7 +489,13 @@ export interface Connection {
   /** Manual-code OAuth (Anthropic): the provider shows a code to paste back. */
   oauth_manual_code?: boolean;
   connected: boolean;
-  status: string; // "connected" | "disconnected" | "needs_auth"
+  /** "connected" | "disconnected" | "needs_auth" | "no_tools".
+   *  v1.172.0 `no_tools`: the connection EXISTS (and survives restarts) but
+   *  zero tools loaded, so the model can call nothing through it. `connected`
+   *  stays true — the capability truth is here and in `tools_loaded`. */
+  status: string;
+  /** Why a non-green status holds, in the user's words (v1.172.0). */
+  detail?: string;
   account: string;
   scopes: string[];
 }

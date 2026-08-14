@@ -49,6 +49,12 @@ _SELF_SERVICE_TOOLS = [
     "schedule_create",
     "webhook_add",
     "workflow_create",
+    # v1.172.0: an agent that can AUTHOR a workflow must be able to SEE the
+    # ones that already exist, or it re-invents the user's saved process every
+    # time. Shipped in v1.170.0 to the registry, permissions and auto-arming —
+    # but to no agent list, so it reached NO agent session: the exact
+    # history_search hole this file's header documents.
+    "workflow_list",
     # Motivation Layer: record/list standing goals (recording never acts — the
     # autonomy dial + budget + autonomy_enabled govern whether a goal ever acts).
     "goal_add",
