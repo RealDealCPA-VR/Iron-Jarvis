@@ -36,6 +36,7 @@ to the prep or the escalate branch here must land in the stream copy too
 
 from __future__ import annotations
 
+import asyncio
 import json as _json
 import logging
 import re as _re
@@ -1325,7 +1326,14 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     fabric = getattr(d.platform, "fabric", None)
     if fabric is not None and recall_query.strip():
         try:
-            grounding = fabric.ground(
+            # OFF THE EVENT LOOP (v1.173.0). Grounding reads the DB and, for
+            # a remote base (an MCP-served wiki, Notion, a cloud drive), makes
+            # NETWORK calls — and since v1.173.0 a thin multi-word query can
+            # fan out into several passes. Run synchronously it froze every
+            # request in the daemon (the v1.153.1 rule: one loop, so a blocking
+            # call is not slow, it is "Daemon offline").
+            grounding = await asyncio.to_thread(
+                fabric.ground,
                 recall_query,
                 project_id=pid,
                 sources=["files", "notes", "memory", "lessons", "sessions", "chats"],
@@ -1346,7 +1354,11 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     # recall query as the fabric (X.3).
     conn_tools, conn_memory = _resolve_connectors(d, body)
     if conn_memory:
-        cm_block = _connector_memory_block(d, conn_memory, recall_query)
+        # Same reason as the fabric above: a toggled memory connector is a
+        # remote read (v1.173.0).
+        cm_block = await asyncio.to_thread(
+            _connector_memory_block, d, conn_memory, recall_query
+        )
         if cm_block:
             system += cm_block
 

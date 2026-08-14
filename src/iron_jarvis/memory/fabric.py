@@ -63,6 +63,8 @@ from typing import Any
 
 from ..core.db import session_scope
 from ..core.fs_policy import fs_path_allowed, is_protected_path
+from ..ltm.manager import LongTermMemory as _LongTermMemory
+from ..ltm.manager import shared_deadline as _ltm_deadline
 
 #: The store keys a caller may filter on (``sources=``). Order here is also the
 #: tie-break/diversity order when scores are equal.
@@ -102,6 +104,20 @@ _CHAT_OVERSCAN = 5
 #: slots are topped up from the held-back chat hits, so a pure conversation
 #: query still fills ``k``.
 _CHAT_SLOT_SHARE = 3
+
+#: How much a PARTIAL note hit is damped (v1.173.0).
+#:
+#: ``LongTermMemory.search`` retries a thin multi-word search with decomposed
+#: terms (see ``ltm/manager.py``) and marks every hit that only surfaced that
+#: way with ``match="partial"``. The notes lane inherits that for free — it
+#: calls the manager — but it must not then present a note found by ONE of the
+#: user's terms as though the whole question matched it. Same rule, same
+#: number as the history index's :data:`~iron_jarvis.search.index.LOOSE_PENALTY`
+#: (0.7): a partial match cannot outrank a real one. It stays well clear of
+#: ``ground()``'s 0.05 floor, so a damped hit still reaches the prompt — the
+#: whole point of the retry is that the note becomes REACHABLE, and demoting it
+#: into invisibility would just be the old silence with extra steps.
+_PARTIAL_NOTE_DAMP = 0.7
 
 #: WIDENING LIVES IN THE INDEX NOW (v1.142.0). The ``OR``-of-content-words
 #: retry, its two-content-word floor, its prefix-tolerant overlap count and its
@@ -379,6 +395,19 @@ class MemoryFabric:
         A named base that no longer exists is SKIPPED, not fatal — deleting a
         source must not silently break grounding for every project that
         referenced it (LTMManager.search raises ValueError on an unknown name).
+
+        QUERY DECOMPOSITION IS INHERITED, NOT REIMPLEMENTED (v1.173.0). Both
+        calls below go through :meth:`LongTermMemory.search`, which retries a
+        thin multi-word query with decomposed terms, so a natural question
+        ("what do we have on s-corp vs llc") reaches a note a literal-matching
+        remote store would never have returned for the whole phrase. Nothing
+        here special-cases a connector; the only thing this lane adds is
+        HONESTY about the difference — a hit marked ``match="partial"`` is
+        damped by :data:`_PARTIAL_NOTE_DAMP` and carries the marker into
+        ``extra`` so a caller can say how it was found. Do NOT add a second
+        widening here: two of them drift, and this one would only ever help
+        automatic recall while ``ltm_search`` (the tool every agent calls) kept
+        the old silence.
         """
         ltm = self.ltm
         if ltm is None:
@@ -386,9 +415,27 @@ class MemoryFabric:
         try:
             if bases:
                 raw = []
+                # ONE wall-clock ceiling for the whole loop (v1.173.0). Each
+                # search() otherwise starts its own, so a project bound to four
+                # bases would multiply the fallback budget by four — on the
+                # event loop, since this lane is called synchronously from both
+                # chat lanes. Each base still gets its first fallback pass, so
+                # a slow first base cannot silently mute the rest.
+                #
+                # Guarded by the isinstance check because ``ltm`` is duck-typed
+                # here (tests and partially wired setups pass a stand-in with
+                # the historical ``search(query, k, source)`` signature); an
+                # unexpected keyword would raise TypeError straight into the
+                # per-base ``except`` below and silently return NO notes at
+                # all, which is the failure mode this whole wave is about.
+                shared = (
+                    {"deadline": _ltm_deadline()}
+                    if isinstance(ltm, _LongTermMemory)
+                    else {}
+                )
                 for name in bases:
                     try:
-                        raw += ltm.search(query, k=k, source=name)
+                        raw += ltm.search(query, k=k, source=name, **shared)
                     except Exception:  # noqa: BLE001 — a stale/broken base
                         continue
             else:
@@ -401,6 +448,15 @@ class MemoryFabric:
             # LTM connectors return no numeric score; approximate with lexical
             # relevance, floored so a real note still competes with vector hits.
             score = max(0.4, _lexical(qtokens, f"{h.get('title','')} {snippet}"))
+            partial = h.get("match") == "partial"
+            extra: dict[str, Any] = {"origin": h.get("source", "ltm")}
+            if partial:
+                # Damped, not hidden — and SAID OUT LOUD, because "we found this
+                # by taking your question apart" is a different claim from "this
+                # matched what you asked".
+                score *= _PARTIAL_NOTE_DAMP
+                extra["match"] = "partial"
+                extra["matched_terms"] = list(h.get("matched_terms") or [])
             out.append(
                 FabricHit(
                     source="notes",
@@ -408,7 +464,7 @@ class MemoryFabric:
                     title=h.get("title", ""),
                     snippet=_clip(snippet),
                     score=score,
-                    extra={"origin": h.get("source", "ltm")},
+                    extra=extra,
                 )
             )
         return out

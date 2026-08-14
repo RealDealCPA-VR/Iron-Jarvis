@@ -6,6 +6,7 @@ reached through ``d`` (see the deps object built in create_app).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re as _re
@@ -1226,7 +1227,11 @@ def register(app: FastAPI, d) -> None:
         fabric = getattr(d.platform, "fabric", None)
         if fabric is not None and recall_query.strip():
             try:
-                grounding = fabric.ground(
+                # OFF THE EVENT LOOP (v1.173.0) — lock-step with chat_turn:
+                # grounding hits the DB and remote bases, and can now fan out
+                # into several passes.
+                grounding = await asyncio.to_thread(
+                    fabric.ground,
                     recall_query,
                     project_id=pid,
                     sources=["files", "notes", "memory", "lessons", "sessions", "chats"],
@@ -1243,7 +1248,9 @@ def register(app: FastAPI, d) -> None:
         # composed recall query as the fabric (X.3).
         conn_tools, conn_memory = _resolve_connectors(d, body)
         if conn_memory:
-            cm_block = _connector_memory_block(d, conn_memory, recall_query)
+            cm_block = await asyncio.to_thread(
+                _connector_memory_block, d, conn_memory, recall_query
+            )
             if cm_block:
                 system += cm_block
 

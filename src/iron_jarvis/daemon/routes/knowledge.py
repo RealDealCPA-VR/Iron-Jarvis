@@ -16,6 +16,31 @@ from .. import app as _app
 from ..schemas import IngestDocumentBody, LTMAppend, LTMSourceBody
 from ...core.fs_policy import fs_read_ok, is_protected_path
 
+#: Total wall-clock the /ltm/sources listing will spend on REMOTE availability
+#: probes (v1.173.0). Each connector already bounds its own probe, but the page
+#: polls this endpoint on a timer and three dead brains in a row would still
+#: add up. Bases past the budget report an honest "not checked" (available
+#: null) instead of a made-up verdict, and the next poll — arriving with warm
+#: caches for the ones already checked — reaches them. Module-level so tests
+#: can drive the exhausted-budget path without waiting for it.
+_LTM_PROBE_BUDGET = 6.0
+
+
+def _unprobed(conn: Any, reason: str) -> dict[str, Any]:
+    """The row for a remote base this listing deliberately did NOT check.
+
+    It still carries ``path``: the row a user is most likely to question is the
+    one with no verdict, and the location is exactly what they check against
+    reality. ``location()`` is a pure accessor (no network), so filling it costs
+    nothing — and a connector that predates it simply has no path, as before.
+    """
+    where = getattr(conn, "location", None)
+    return {
+        "available": None,
+        "detail": f"not checked yet — {reason}",
+        "path": str(where() or "") if callable(where) else "",
+    }
+
 
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
@@ -265,7 +290,7 @@ def register(app: FastAPI, d) -> None:
         }
 
     @app.get("/ltm/sources")
-    def ltm_sources() -> dict[str, Any]:
+    def ltm_sources(refresh: bool = False, probe: bool = False) -> dict[str, Any]:
         """Registered memory sources + the LIVE bases.
 
         v1.172.0 ADDITIVE ``bases``: each active connector with whether it can
@@ -273,17 +298,71 @@ def register(app: FastAPI, d) -> None:
         indistinguishable from a base with no matches — the app answered from
         nothing and looked healthy doing it. ``sources`` and ``active`` are
         unchanged for existing callers.
+
+        v1.173.0: REMOTE bases can answer too — but only when ASKED. A
+        connector exposing ``cached_health`` costs a network round trip, so it
+        is served from its own cache first, and an uncached one is probed only
+        under ``probe=true`` (or ``refresh=true``, the explicit "re-check now",
+        which also drops those caches). The default listing stays as instant as
+        it was in v1.172.0: two pre-existing callers
+        (``components/memory/LongTerm.tsx``, ``app/projects/[id]/page.tsx``)
+        want only ``sources``/``active`` and must not start paying for network
+        probes of a dead brain because a new card wanted them. Local bases (an
+        instant ``stat``) are always checked, as before.
+
+        Every probe shares the endpoint-wide ``_LTM_PROBE_BUDGET`` and is
+        HANDED the time that is left, so the total really is bounded by it: the
+        guard alone only decided whether to START a probe, and a probe started
+        just inside the deadline could still run its own full timeout on top.
+        (The contract for a network connector is therefore: exposing
+        ``cached_health`` means ``health()`` also takes ``timeout=`` and
+        ``location()`` answers without touching the network.)
+        This handler is ``def``, not ``async def``, so FastAPI runs it in the
+        threadpool: no probe ever touches the event loop.
         """
+        import time as _time
+
         from ...ltm.sources import CustomSourceStore
 
+        deadline = _time.monotonic() + _LTM_PROBE_BUDGET
         bases: list[dict[str, Any]] = []
         for base_name in d.platform.ltm.sources():
             conn = d.platform.ltm.get(base_name)
             health = getattr(conn, "health", None)
             info: dict[str, Any] = {"name": base_name, "kind": getattr(conn, "name", "")}
             if callable(health):
+                cached = getattr(conn, "cached_health", None)
                 try:
-                    info.update(health())
+                    if callable(cached):  # a NETWORK probe — cache + budget apply
+                        if refresh:
+                            invalidate = getattr(conn, "invalidate_health", None)
+                            if callable(invalidate):
+                                invalidate()
+                        verdict = cached()
+                        left = deadline - _time.monotonic()
+                        if verdict is not None:
+                            info.update(verdict)
+                        elif not (probe or refresh):
+                            info.update(
+                                _unprobed(
+                                    conn,
+                                    "this listing does not run network checks; the "
+                                    "Memory page's base card checks it (or ask for "
+                                    "it with probe=true)",
+                                )
+                            )
+                        elif left <= 0:
+                            info.update(
+                                _unprobed(
+                                    conn,
+                                    "other bases used up this page's check budget; "
+                                    "it is re-checked on the next refresh",
+                                )
+                            )
+                        else:
+                            info.update(health(timeout=max(0.05, left)))
+                    else:
+                        info.update(health())
                 except Exception as exc:  # noqa: BLE001 — a listing never 500s
                     info.update({"available": False, "detail": f"{type(exc).__name__}: {exc}"})
             else:

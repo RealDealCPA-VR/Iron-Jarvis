@@ -56,7 +56,15 @@ class LTMSearchTool(Tool):
         k = int(args.get("k", 5))
         source = args.get("source")
         try:
-            hits = self.manager.search(args["query"], k=k, source=source)
+            # OFF THE EVENT LOOP (v1.173.0): a remote base is a network call,
+            # and the multi-term fallback can spend several passes. This tool
+            # is on every agent definition now (the shared brain), so a slow
+            # base here would stall the whole daemon, not just this session.
+            import asyncio
+
+            hits = await asyncio.to_thread(
+                self.manager.search, args["query"], k, source
+            )
         except Exception as exc:  # incl. a real embedder failing on a named source
             # Never raise into the agent loop: a flaky embedder / store degrades
             # to "no results", it does not crash the session.

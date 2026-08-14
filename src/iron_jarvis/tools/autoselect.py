@@ -111,7 +111,11 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
     (
         re.compile(
             r"\b(search|look\s?up|google|research|browse|online|internet|"
-            r"web|latest|news|headline|up.to.date|weather|price of|stock|"
+            # v1.173.0: `web` alone never matched "the IRS WEBSITE" — the word
+            # boundary sits after "web" — so "look that up on the IRS website"
+            # armed the brain and NOTHING that can reach the internet. A named
+            # site is the least ambiguous web signal there is.
+            r"web(?:sites?)?|latest|news|headline|up.to.date|weather|price of|stock|"
             r"release date|who won|trending)\b",
             re.IGNORECASE,
         ),
@@ -264,13 +268,138 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
     # possessive ("your/my/our memory") because that phrasing is about what
     # the assistant/user knows, never about RAM. remember/recall/note(s)/
     # "what do we know" carry the rest of the intent.
+    #
+    # v1.173.0 adds ``ltm_search`` here: this rule owned the memory VOCABULARY
+    # but armed only the federated reader and the writer, so the one tool that
+    # goes straight at the knowledge bases was missing from the very sentences
+    # that ask for them. It stays BELOW ``recall`` — recall federates every
+    # store (files, notes, graph, past conversations) and must keep the first
+    # slot when a message is memory-ish.
     (
         re.compile(
             r"\b(remember|recall|notes?|what do (?:we|you) know|"
             r"(?:your|my|our) memor(?:y|ies))\b",
             re.IGNORECASE,
         ),
-        {"recall": 8, "ltm_append": 5},
+        {"recall": 8, "ltm_search": 6, "ltm_append": 5},
+    ),
+    # --- the GENERAL calling vocabulary (v1.173.0) ------------------------
+    # The user's words: "multiple agents are to utilize this centralized brain,
+    # so much of what long-term details are needed should be ALWAYS REACHABLE.
+    # Also for calling it, terms like 'search your memory' or 'look into the
+    # history' would be more general for all the users, not just myself."
+    #
+    # v1.172.x accreted THIS firm's nouns ("firm docs", "hermes brain"). A
+    # brain shared by many agents has to answer to the words ANY user would
+    # say, or long-term knowledge is reachable only by the person who named it.
+    #
+    # (a) A STORE NOUN under a possessive — "search your memory", "look into
+    #     your memory", "check your notes", "your knowledge", "our records".
+    #     No verb is required (the same call the wiki rule above makes): a
+    #     possessive plus a store noun is already a statement about what WE
+    #     hold. It cannot be the RAM sense ("memory usage of the process" has
+    #     no possessive) and it cannot be a stranger's filing cabinet.
+    #
+    #     THE WEIGHTS ARE SMALL ON PURPOSE, and this is the whole subtlety of
+    #     the rule. `memor(y|ies)` and `notes?` are ALREADY owned by the
+    #     v1.141.0 rule above, so a full-weight rule here does not widen the
+    #     vocabulary — it DOUBLE-SCORES the sentences that already matched, and
+    #     the cap is 6. Measured at 8/7: "redact the pii in my notes pdf and
+    #     save a new file in the folder" lost `redact_pii` (the user asked to
+    #     redact and only `redact_scan` was armed — the v1.153.2 failure where
+    #     the reply announces work no armed tool can do), "our records show a
+    #     $500 payment; add it to the spreadsheet" lost `excel_edit`, and
+    #     "extract the tables from the pdf of my notes and check the formulas
+    #     in the sheet" lost `excel_formula_check`. This rule's job is to ADD
+    #     the nouns the old rule never had (`knowledge`, `records`, `archives`,
+    #     "the team's notes") and to nudge, not to outrank the verb the user
+    #     actually wrote. Deleting the overlapping nouns instead is NOT the fix:
+    #     "check your notes for the retention policy" then loses recall's first
+    #     slot to `read_document`, because the nudge is what wins that tie.
+    #     A possessive store noun does appear in pure declaratives with no
+    #     lookup intent ("our records show a $500 payment", "to the best of my
+    #     knowledge the return was filed"). At 3/2 that costs two read-only
+    #     tools on a sentence that armed nothing else, and cannot cost a slot on
+    #     a sentence that did — which is the only harm worth preventing.
+    (
+        re.compile(
+            r"\b(?:your|our|my|the (?:shared|team'?s|firm'?s|company'?s))\s+"
+            r"(?:own\s+|long[-\s]?term\s+|internal\s+|saved\s+|stored\s+)?"
+            r"(?:memor(?:y|ies)|knowledge|notes?|records?|archives?)\b",
+            re.IGNORECASE,
+        ),
+        {"recall": 3, "ltm_search": 2},
+    ),
+    # (b) The verb-shaped asks that name no store at all. Every alternative is
+    #     anaphoric ("it"/"that") or first-person-plural ("we"/"you" = this
+    #     assistant) — it refers to something ALREADY IN PLAY, which is what
+    #     makes it a memory question instead of a web one:
+    #       "look it up" / "look that up"  — deliberately NOT the web rule's
+    #         `look up X`, which names an external subject and keeps its own
+    #         sentence ("look up the IRS phone number online" must stay a web
+    #         search; pinned both ways in tests/test_brain_reach_v1173.py).
+    #       "what do we have on the Henderson file" / "what do you have on X"
+    #       "dig up ..." / "pull up what we have"
+    #
+    #     `recall` is weighted 7, one BELOW the web rule's 8, and that single
+    #     point is load-bearing. "look it up ON GOOGLE" and "look it up ONLINE"
+    #     match this rule AND the web rule; at equal weight recall won the
+    #     alphabetical tiebreak, so an unambiguous web request led with the
+    #     brain. Both tools still arm (the anaphor may well point at something
+    #     we already hold), but when the user names the web the web goes first.
+    #     Nothing else changes: with no web marker present this rule is the only
+    #     one firing, so "look it up" is still exactly `recall` + `ltm_search`.
+    (
+        re.compile(
+            r"\blook\s+(?:it|that|this|them|these|those)\s+up\b|"
+            r"\bwhat (?:do|does) (?:we|you) have\b|"
+            r"\bwhat have (?:we|you) got\b|"
+            r"\bdig\s+(?:up|out)\b|"
+            r"\bpull\s+up\s+(?:what|everything|anything|all)\b",
+            re.IGNORECASE,
+        ),
+        {"recall": 7, "ltm_search": 6},
+    ),
+    # (c) "look into the history" / "search the history" — the user's other
+    #     example. TWO surfaces answer to that word and they are not the same
+    #     thing: ``history_search`` reads THIS APP's own threads, ``ltm_search``
+    #     reads the knowledge bases, ``recall`` federates both. The phrase names
+    #     the past record without saying which, so it arms all three,
+    #     history-first, rather than guessing (a wrong single pick reads to the
+    #     user as "we never discussed that").
+    #
+    #     PRECISION, decided case by case: the article must sit directly
+    #     against the noun, which keeps out every history that is NOT our
+    #     record — "the BROWSER history", "the GIT history", "the REVISION
+    #     history" all fail the match because the intervening word is not one
+    #     of the conversation nouns. And an "of" immediately after means the
+    #     word is a TOPIC, not a place to look ("look into the history OF the
+    #     S-corp election"), so the lookahead drops it.
+    #
+    #     Two asymmetries were fixed after v1.173.0's first cut, both of which
+    #     sent a question about the user's OWN record to the internet — the
+    #     precise failure this wave exists to remove:
+    #       * `look`/`dig`/`comb`/`go back` accepted a preposition but
+    #         `search`/`check`/`review`/`scan` had to sit against the article,
+    #         so "look through the history" matched and "search THROUGH the
+    #         history" did not — and since the web rule owns the bare verb
+    #         `search`, that sentence armed web_search and nothing else.
+    #       * the conversation nouns were singular-only: "search our message
+    #         history" reached the thread index, "search our messageS history"
+    #         went to the web. Both are the same sentence.
+    (
+        re.compile(
+            r"\b(?:(?:search|check|review|scan)"
+            r"(?:\s+(?:back\s+)?(?:through|in|into))?|"
+            r"look\s+(?:in|into|through|back\s+(?:in|through|at))|"
+            r"dig\s+(?:in|into|through)|go\s+back\s+through|"
+            r"comb\s+through)\s+"
+            r"(?:the|our|your|my|this)\s+"
+            r"(?:(?:conversation|chat|message|thread|session)s?\s*)?"
+            r"histor(?:y|ies)\b(?!\s+of\b)",
+            re.IGNORECASE,
+        ),
+        {"history_search": 8, "recall": 7, "ltm_search": 4},
     ),
     # --- the KNOWLEDGE-BASE vocabulary (v1.172.0) -------------------------
     # A live report: "it has no access to the wikis — blind as a bat." The
