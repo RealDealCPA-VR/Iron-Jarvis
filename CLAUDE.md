@@ -217,11 +217,23 @@ cd dashboard && pnpm dev           # dashboard
   request onto the same blocked loop, and no threads load. That was a real
   four-hour outage on the user's install, diagnosed as 84% CPU with the
   MainThread parked in `pathlib.is_file` under `ListFilesTool.execute`. Any
-  tool touching the filesystem or CPU goes through `asyncio.to_thread` (as
-  `ShellTool` always did) AND is bounded — `tools/builtins._walk_files` caps
+  tool touching the filesystem or CPU goes through `asyncio.to_thread` AND is
+  bounded — `tools/builtins._walk_files` caps
   entries, enforces a deadline, and prunes heavy dirs with `os.walk` (`rglob`
   cannot prune). Truncation is always REPORTED: a silently short listing reads
   as complete and the model then says a file does not exist.
+  **CHECK WHICH IMPLEMENTATION IS REGISTERED** (v1.175.0). This rule was
+  obeyed by `tools/builtins.ShellTool` — and that class is DEAD CODE:
+  `platform.py` registers `sandbox/shell_tool.SandboxedShellTool` under the
+  same `shell` name, and for two years it ran `subprocess.run(shell=True)`
+  straight on the loop. The protection sat in the shadowed copy where every
+  reader (and this file) kept finding it. Both are offloaded now
+  (`sandbox/shell_tool` hops ONCE for `manager.get()` + `sandbox.run()` —
+  the Docker probe is a socket round-trip that hangs when Docker Desktop is
+  wedged — and `tools/dynamic.CommandTool` for every `custom:*` tool), and
+  `tests/test_event_loop_offload_v1175.py` asserts the worker thread AND that
+  the loop kept ticking. When a rule cites a class, confirm that class is the
+  one the registry actually holds.
 - **Frozen-build verification**: anything touching native deps or subprocess
   spawning MUST be verified in the packaged daemon, not just source. The
   terminals feature shipped dead once because PyInstaller dropped

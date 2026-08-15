@@ -353,6 +353,14 @@ export interface AiCli {
   url: string; // install/docs page (for ones not yet installed)
   installed: boolean;
   path?: string | null;
+  /**
+   * The exact "run without permission prompts" flag Creative Studio appends
+   * when Autopilot is on — "" for a CLI that has none. Served by the daemon
+   * (terminals/ai_clis.AUTOPILOT_FLAGS) so the UI names the flag it will
+   * ACTUALLY pass; the checkbox used to describe this in prose and the prose
+   * went stale on both CLIs. ABSENT on older daemons.
+   */
+  autopilot_flag?: string;
 }
 
 /* ---- Filesystem directory browser (terminals tree panel) ----------------- */

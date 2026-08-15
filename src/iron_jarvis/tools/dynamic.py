@@ -16,6 +16,7 @@ under ``custom:<name>`` (default ``ask`` — fail-closed, like ``shell``).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import subprocess
@@ -95,13 +96,19 @@ class CommandTool(Tool):
         if not argv:
             return ToolResult(ok=False, error="custom tool has an empty command")
         try:
-            proc = subprocess.run(
-                argv,
-                shell=False,  # argv form: a parameter value can't inject shell words
-                cwd=ctx.workspace,
-                capture_output=True,
-                text=True,
-                timeout=self._timeout,
+            # Offloaded for the same reason ShellTool is (v1.175.0): this runs on
+            # the daemon's single event loop and blocks for up to self._timeout
+            # (capped at MAX_TIMEOUT_SECONDS), so inline it would freeze every
+            # request and every other session while a custom tool runs.
+            proc = await asyncio.to_thread(
+                lambda: subprocess.run(
+                    argv,
+                    shell=False,  # argv form: a parameter value can't inject shell words
+                    cwd=ctx.workspace,
+                    capture_output=True,
+                    text=True,
+                    timeout=self._timeout,
+                )
             )
         except subprocess.TimeoutExpired:
             return ToolResult(ok=False, error="command timed out")

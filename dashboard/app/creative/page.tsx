@@ -1801,6 +1801,27 @@ function StudioView({
     writeStudioStore({ ...(cli ? { cli } : {}), skill, autopilot });
   }, [cli, skill, autopilot]);
 
+  // The chosen engine, its REAL autopilot flag, and the line that will be typed
+  // into the shell. All three come from the daemon's CLI record (v1.175.0): the
+  // checkbox used to describe the flag in hand-written prose and the prose went
+  // stale on BOTH engines — it promised Claude engaged auto-accept via Shift+Tab
+  // (replaced by a launch flag, because Shift+Tab could never reach a genuinely
+  // hands-off mode) and named a Codex `--full-auto` that codex ≥0.4x removed.
+  // A user was told something milder than what actually ran. Reading the flag
+  // the daemon will pass makes that class of drift impossible.
+  const selectedCli = useMemo(
+    () => clis.find((c) => c.id === cli) ?? null,
+    [clis, cli],
+  );
+  // "" when this CLI has none; undefined on an older daemon that doesn't serve
+  // the field — in that case say nothing rather than guess a flag.
+  const autopilotFlag = autopilot ? (selectedCli?.autopilot_flag ?? "") : "";
+  const launchPreview = useMemo(() => {
+    const base = (selectedCli?.command ?? "").trim();
+    if (!base) return "";
+    return autopilotFlag ? `${base} ${autopilotFlag}` : base;
+  }, [selectedCli, autopilotFlag]);
+
   // Destination picker — same navigation pieces as the Library view, compact.
   const {
     data: drivesData,
@@ -2569,6 +2590,18 @@ function StudioView({
             >
               → {session.dest}
             </code>
+            {/* What ACTUALLY launched, straight from the start response — flags
+             *  and all. The setup card previews this, but the daemon may swap in
+             *  a resolved executable path, so the running session shows the real
+             *  line rather than asking the user to trust the preview. */}
+            {session.command && (
+              <code
+                title={session.command}
+                className="hidden min-w-0 max-w-[18rem] shrink truncate rounded-md border border-white/10 bg-black/30 px-2 py-0.5 font-mono text-[11px] text-zinc-500 sm:block"
+              >
+                $ {session.command}
+              </code>
+            )}
             <Link
               href={`/terminals?focus=${encodeURIComponent(session.terminalId)}`}
               className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent-soft transition-colors hover:text-accent"
@@ -3061,11 +3094,32 @@ function StudioView({
                 className="mt-0.5 h-3.5 w-3.5 accent-cyan-400"
               />
               <span>
-                <span className="font-medium text-zinc-300">Autopilot</span> — runs unattended.
-                For Claude: engages auto-accept via Shift+Tab after boot (no permission prompts);
-                for Codex: launches with <code className="font-mono">--full-auto</code>.
+                <span className="font-medium text-zinc-300">Autopilot</span> — runs unattended,
+                with no approval prompts and no sandbox: {selectedCli?.label ?? "the CLI"} can
+                read and write files, run commands, and reach the network on its own. Leave it
+                off to approve each step in the terminal yourself.
+                {autopilotFlag ? (
+                  <>
+                    {" "}
+                    Launches with <code className="font-mono text-zinc-300">{autopilotFlag}</code>.
+                  </>
+                ) : selectedCli ? (
+                  <> {selectedCli.label} has no hands-off flag — it launches normally.</>
+                ) : null}
               </span>
             </label>
+            {/* The exact line that will be typed into the shell. The daemon may
+             *  substitute a RESOLVED executable path when the bare command
+             *  wouldn't survive the spawned shell's PATH, so this is a preview —
+             *  the launched session header shows what actually ran. */}
+            {launchPreview && (
+              <code
+                title={launchPreview}
+                className="block truncate rounded-lg border border-white/10 bg-black/30 px-2.5 py-1.5 font-mono text-[11px] text-zinc-500"
+              >
+                $ {launchPreview}
+              </code>
+            )}
           </div>
         </Card>
       </Reveal>

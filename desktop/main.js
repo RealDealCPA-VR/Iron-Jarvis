@@ -82,6 +82,49 @@ const DASHBOARD_PORT = parseInt(process.env.IJ_DASHBOARD_PORT || "8788", 10);
 
 const DASHBOARD_URL = `http://localhost:${DASHBOARD_PORT}`;
 const DASHBOARD_PROBE_URL = `http://127.0.0.1:${DASHBOARD_PORT}/`;
+
+//: The two origins the main window is ever allowed to be on. An ORIGIN, not a
+//: prefix (v1.175.0): `will-navigate` used to allow anything starting with
+//: DASHBOARD_URL, which has no trailing slash — so
+//: `http://localhost:8788@evil.com/` satisfied it. That is userinfo; the real
+//: host is evil.com. The main window carries the preload that exposes
+//: `window.ironjarvis` (the per-install daemon TOKEN, clipboard, the update
+//: bridge) and a preload survives navigation, so a single click on a link in
+//: model-authored or fetched content could have handed all of it to a remote
+//: page. URL parsing decides this now, because string prefixes cannot.
+const DASHBOARD_ORIGINS = new Set([
+  `http://localhost:${DASHBOARD_PORT}`,
+  `http://127.0.0.1:${DASHBOARD_PORT}`,
+]);
+
+/** True only when `url` genuinely resolves to the local dashboard origin. */
+function isDashboardUrl(url) {
+  try {
+    return DASHBOARD_ORIGINS.has(new URL(String(url)).origin);
+  } catch {
+    return false; // unparseable → not ours → goes to the system browser
+  }
+}
+
+/**
+ * True when an IPC message came from a frame still ON the dashboard origin
+ * (v1.175.0). The privileged handlers below — reading the user's clipboard,
+ * installing an update — used to answer whoever asked, because a handler that
+ * ignores its `event` cannot tell one sender from another. A preload survives
+ * navigation and is shared by every frame in the window, so this is what stops
+ * an off-origin page (or an embedded frame) from reaching them. Checks the
+ * SENDER FRAME rather than the window: an iframe is a different frame with the
+ * same `webContents`.
+ */
+function isTrustedDashboardSender(event) {
+  try {
+    const frame = event && event.senderFrame;
+    const url = frame ? String(frame.url || "") : "";
+    return url ? isDashboardUrl(url) : false;
+  } catch {
+    return false; // frame already gone → not trusted
+  }
+}
 // Packaged cold boots are slow the first time (AV scans the PyInstaller-frozen
 // daemon exe) — give them 90s; dev keeps the tight 30s feedback loop.
 const STARTUP_TIMEOUT_MS = IS_PACKAGED ? 90000 : 30000;
@@ -926,7 +969,16 @@ function createMainWindow() {
 
   // Keep navigation inside the dashboard origin; everything else → browser.
   mainWin.webContents.on("will-navigate", (event, url) => {
-    if (!url.startsWith(DASHBOARD_URL) && !url.startsWith(DASHBOARD_PROBE_URL)) {
+    if (!isDashboardUrl(url)) {
+      event.preventDefault();
+      shell.openExternal(url);
+    }
+  });
+  // A server-side redirect never fires will-navigate, so guard it too: without
+  // this, a dashboard-origin URL that 302s off-origin lands in the window with
+  // the preload still attached.
+  mainWin.webContents.on("will-redirect", (event, url) => {
+    if (!isDashboardUrl(url)) {
       event.preventDefault();
       shell.openExternal(url);
     }
@@ -1203,7 +1255,11 @@ function installSpotlightIpc() {
       return false;
     }
   });
-  ipcMain.handle("clipboard:read", () => {
+  // Sender-checked: this hands back whatever the user last copied — passwords,
+  // client data — so it answers the dashboard only (v1.175.0). Refusal returns
+  // the same empty string as an unavailable clipboard, which callers handle.
+  ipcMain.handle("clipboard:read", (event) => {
+    if (!isTrustedDashboardSender(event)) return "";
     try {
       return clipboard.readText();
     } catch {
@@ -1278,7 +1334,11 @@ function installSpotlightIpc() {
     }
     return _updateState;
   });
-  ipcMain.handle("update:apply", () => {
+  // Sender-checked (v1.175.0): this quits the app and runs an installer. The
+  // tray item and the update notification call applyPendingUpdate() directly —
+  // they are main-process code and never come through here.
+  ipcMain.handle("update:apply", (event) => {
+    if (!isTrustedDashboardSender(event)) return false;
     if (pendingUpdateInfo) applyPendingUpdate();
     return true;
   });

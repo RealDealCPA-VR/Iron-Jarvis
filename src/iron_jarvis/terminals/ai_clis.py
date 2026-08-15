@@ -32,6 +32,25 @@ AI_CLIS: list[dict[str, str]] = [
 ]
 
 
+#: Per-CLI "run without permission prompts" LAUNCH FLAG for Creative Studio
+#: autopilot. THE CANONICAL HOME (v1.175.0): the Studio's checkbox used to
+#: DESCRIBE this in hand-written prose, and the prose went stale twice over —
+#: it still promised Claude engaged auto-accept "via Shift+Tab after boot" (that
+#: mechanism was replaced by the flag because Shift+Tab could never reach a
+#: genuinely hands-off mode) and that Codex launched with ``--full-auto`` (codex
+#: ≥0.4x REMOVED that flag; launching with it exited instantly). A user reading
+#: the checkbox was told something milder than what actually ran.
+#:
+#: So the flag is DATA now, served on every CLI record by :func:`detect_ai_clis`
+#: and rendered verbatim by the dashboard. There is one string, in one place,
+#: and the UI cannot describe a flag other than the one that is passed.
+#: ``routes/creative.py`` re-exports this as ``_AUTOPILOT_FLAGS``.
+AUTOPILOT_FLAGS: dict[str, str] = {
+    "codex": "--dangerously-bypass-approvals-and-sandbox",
+    "claude": "--dangerously-skip-permissions",
+}
+
+
 def _extra_bin_dirs() -> list[Path]:
     """Common per-user tool bin dirs that a GUI-launched daemon's PATH may miss
     (npm/pipx/cargo/bun/deno global installs)."""
@@ -75,9 +94,19 @@ def _find(command: str) -> str | None:
 
 
 def detect_ai_clis() -> list[dict[str, Any]]:
-    """The full catalog, each tagged ``installed`` (+ resolved ``path``)."""
+    """The full catalog, each tagged ``installed`` (+ resolved ``path``) and
+    carrying its ``autopilot_flag`` ("" when that CLI has none), so the Studio's
+    UI names the EXACT flag it will launch with instead of a prose copy that
+    drifts (v1.175.0)."""
     out: list[dict[str, Any]] = []
     for cli in AI_CLIS:
         path = _find(cli["command"])
-        out.append({**cli, "installed": path is not None, "path": path})
+        out.append(
+            {
+                **cli,
+                "installed": path is not None,
+                "path": path,
+                "autopilot_flag": AUTOPILOT_FLAGS.get(cli["id"], ""),
+            }
+        )
     return out

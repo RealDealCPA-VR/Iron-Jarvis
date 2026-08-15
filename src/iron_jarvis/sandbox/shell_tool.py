@@ -7,10 +7,12 @@ Sandbox Manager (native by default) under the session's sandbox policy. Keeps
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
 from ..tools.base import Tool, ToolContext, ToolResult
+from .base import Sandbox, SandboxResult
 from .manager import SandboxManager
 from .native import NativeSandbox
 from .policy import SandboxPolicy
@@ -61,13 +63,30 @@ class SandboxedShellTool(Tool):
         if isolating and prefer != "docker":
             prefer = "docker"
         manager = SandboxManager(policy, prefer=prefer)
-        # Resolve the concrete runtime once so we can tell whether confinement
-        # actually held (and warn the operator when it didn't).
-        sandbox = manager.get()
+
+        # BOTH steps below block, and this coroutine runs on the daemon's single
+        # event loop, so they are offloaded together in ONE thread hop (v1.175.0):
+        #   * manager.get() probes Docker (ping + info = a socket round-trip to
+        #     the Docker daemon, which hangs for seconds when Docker Desktop is
+        #     starting or wedged), and
+        #   * sandbox.run() is subprocess.run(shell=True) for up to policy
+        #     .timeout_s — an ARBITRARY user/model command.
+        # Inline, either one freezes every request, WS event delivery, and every
+        # other session (the v1.153.1 rule; the four-hour "Daemon offline"
+        # outage was `pathlib.is_file`, far cheaper than this). The protected
+        # copy of this logic lived in the SHADOWED tools/builtins.ShellTool —
+        # platform.py registers THIS class under the same name, so the offload
+        # has to be here.
+        def _select_and_run() -> tuple[Sandbox, SandboxResult]:
+            # Resolve the concrete runtime once so we can tell whether
+            # confinement actually held (and warn the operator when it didn't).
+            sandbox = manager.get()
+            return sandbox, sandbox.run(
+                args["command"], cwd=ctx.workspace, timeout=policy.timeout_s
+            )
+
+        sandbox, result = await asyncio.to_thread(_select_and_run)
         native_fallback = isinstance(sandbox, NativeSandbox)
-        result = sandbox.run(
-            args["command"], cwd=ctx.workspace, timeout=policy.timeout_s
-        )
         ok = result.returncode == 0 and not result.timed_out
         if result.timed_out:
             error: str | None = "command timed out"

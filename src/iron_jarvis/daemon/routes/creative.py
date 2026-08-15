@@ -28,6 +28,7 @@ from ..schemas import (
 )
 from ...core.fs_policy import fs_read_ok
 from ...creative.service import list_media, media_kind, mime_for
+from ...terminals.ai_clis import AUTOPILOT_FLAGS
 
 #: Per-CLI "run without permission prompts" LAUNCH FLAGS for studio autopilot.
 #: Claude uses --dangerously-skip-permissions: on current Claude Code, Shift+Tab
@@ -36,17 +37,19 @@ from ...creative.service import list_media, media_kind, mime_for
 #: run), so cycling could never reach a truly hands-off mode and a generation
 #: stalled at the first command prompt (the "stuck, go to Build" failure). The
 #: flag launches Claude genuinely hands-off from boot; its one-time acceptance
-#: screen is auto-answered by _engage_claude_automode. It's opt-in (the autopilot
-#: toggle) and scoped to the studio's chosen folder.
-_AUTOPILOT_FLAGS = {
-    # Codex ≥0.4x removed --full-auto (launching with it was an instant
-    # unknown-argument exit — the studio's "codex failed" report, live-hit
-    # 2026-07-18). This is codex's exact equivalent of Claude's flag below;
-    # same opt-in autopilot posture, and codex's sandbox is unreliable on
-    # native Windows anyway.
-    "codex": "--dangerously-bypass-approvals-and-sandbox",
-    "claude": "--dangerously-skip-permissions",
-}
+#: screen is auto-answered by _engage_claude_automode. Codex ≥0.4x removed
+#: --full-auto (launching with it was an instant unknown-argument exit — the
+#: studio's "codex failed" report, live-hit 2026-07-18), so it takes its own
+#: equivalent flag; same opt-in posture, and codex's sandbox is unreliable on
+#: native Windows anyway. It's opt-in (the autopilot toggle) and scoped to the
+#: studio's chosen folder.
+#:
+#: THE TABLE ITSELF now lives with the CLI catalog in ``terminals/ai_clis.py``
+#: and rides on every detected CLI record as ``autopilot_flag`` (v1.175.0), so
+#: the dashboard renders the exact flag rather than a prose copy that goes
+#: stale. Re-exported here under the original name: this module's readers (and
+#: tests) have always reached for ``_AUTOPILOT_FLAGS``.
+_AUTOPILOT_FLAGS = AUTOPILOT_FLAGS
 
 #: Shift+Tab as a terminal keystroke (CSI Z) — cycles Claude Code's permission
 #: mode. The current cycle is: manual → accept-edits → plan → auto → manual.
@@ -808,7 +811,7 @@ def register(app: FastAPI, d) -> None:
         # after boot. Background + best-effort; /tail reports the live mode.
         automode_method = "flag" if flag else None
         # A flag-launched autopilot paints no mode banner immediately. For
-        # NON-Claude CLIs (codex --full-auto) there's no acceptance screen and no
+        # NON-Claude CLIs (codex's bypass flag) there's no acceptance screen and no
         # further confirmation, so mark it engaged up front. For Claude we do NOT
         # claim auto-mode yet: the flag shows a one-time acceptance screen and the
         # composer takes a moment to come up, and the frontend fires the first
