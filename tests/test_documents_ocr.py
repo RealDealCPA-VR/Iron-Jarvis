@@ -70,8 +70,11 @@ def test_looks_scanned_only_for_empty_pdfs(tmp_path):
 def test_scan_images_harvested(tmp_path):
     pdf = tmp_path / "scan.pdf"
     _scanned_pdf(pdf)
-    blobs, total = pdf_page_scan_images(pdf)
+    # v1.176.0: also returns the 1-INDEXED page each blob came from, so a mixed
+    # document's transcript can say "page 12" instead of "page 1".
+    blobs, total, numbers = pdf_page_scan_images(pdf)
     assert total == 1 and len(blobs) == 1
+    assert numbers == [1]
     from PIL import Image
 
     with Image.open(io.BytesIO(blobs[0])) as im:

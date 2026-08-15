@@ -174,9 +174,11 @@ def test_ocr_settings_page_cap_reaches_the_transcription(tmp_path):
     seen: list[int] = []
     real = _ocr.pdf_page_scan_images
 
-    def spy(path, *, max_pages):
+    # `pages` (v1.176.0): the per-page routing plan. Accepted and forwarded so
+    # this spy measures the CAP without changing which pages are harvested.
+    def spy(path, *, max_pages, pages=None):
         seen.append(max_pages)
-        return real(path, max_pages=max_pages)
+        return real(path, max_pages=max_pages, pages=pages)
 
     _ocr.pdf_page_scan_images = spy
     try:
@@ -363,9 +365,9 @@ async def test_pdf_parsing_never_runs_on_the_event_loop(tmp_path):
     seen: list[str] = []
     real = _ocr.pdf_page_scan_images
 
-    def spy(path, *, max_pages):
+    def spy(path, *, max_pages, pages=None):
         seen.append(threading.current_thread().name)
-        return real(path, max_pages=max_pages)
+        return real(path, max_pages=max_pages, pages=pages)
 
     _ocr.pdf_page_scan_images = spy
     try:

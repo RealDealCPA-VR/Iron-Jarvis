@@ -131,6 +131,15 @@ for pkg in ("pypdf", "docx", "openpyxl", "pptx", "fpdf", "PIL"):
 # back into the reflowed output this release exists to replace.
 _collect("pikepdf")
 
+# pdf_inspector (v1.176.0) — per-PAGE scan routing. A NATIVE Rust/PyO3
+# extension, so collect_all is required for the same reason pikepdf is. Its
+# absence is survivable BY DESIGN (documents/pdf_classify returns None and
+# needs_ocr falls back to the whole-document heuristic), but a silently missing
+# copy would quietly restore the exact blindness this release fixes: a mixed
+# return whose stapled-in scanned pages read as empty. The fallback is what
+# keeps that survivable; the spec entry is what keeps it from happening.
+_collect("pdf_inspector")
+
 # --- markitdown: structure-preserving PDF/office -> Markdown -----------------
 # Lazily imported inside iron_jarvis.documents.pdf_markdown (only when a PDF is
 # ingested into memory), so the daemon still BOOTS without any of these. But

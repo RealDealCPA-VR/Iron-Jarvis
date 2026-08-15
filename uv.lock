@@ -699,7 +699,7 @@ wheels = [
 
 [[package]]
 name = "iron-jarvis"
-version = "1.173.0"
+version = "1.176.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -714,6 +714,7 @@ dependencies = [
     { name = "numpy" },
     { name = "openpyxl" },
     { name = "paramiko" },
+    { name = "pdf-inspector" },
     { name = "pikepdf" },
     { name = "pillow" },
     { name = "playwright" },
@@ -757,6 +758,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.5.0" },
     { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "paramiko", specifier = ">=3.4" },
+    { name = "pdf-inspector", specifier = ">=1.14.2,<2" },
     { name = "pikepdf", specifier = ">=10.11.0" },
     { name = "pillow", specifier = ">=11" },
     { name = "playwright", specifier = ">=1.60.0" },
@@ -1152,6 +1154,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/62/93/dcc25d52f49022ae6175d15e6bd751f1acc99b98bc61fc55e5155a7be2e7/paramiko-5.0.0.tar.gz", hash = "sha256:36763b5b95c2a0dcfdf1abc48e48156ee425b21efe2f0e787c2dd5a95c0e5e79", size = 1548586, upload-time = "2026-05-09T18:28:52.256Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/82/5b/eadf6d45de38d30ab603f49393b6cd2cbe7e233af8cf90197e32782b68a9/paramiko-5.0.0-py3-none-any.whl", hash = "sha256:b7044611c30140d9a75261653210e2002977b71a0497ff3ba0d98d7edbf62f7c", size = 208919, upload-time = "2026-05-09T18:28:50.295Z" },
+]
+
+[[package]]
+name = "pdf-inspector"
+version = "1.14.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/bd/ba/6ef1dddc4151ed262bffd452d2289d59ddcb0525b64b62b36f34350c22a4/pdf_inspector-1.14.2.tar.gz", hash = "sha256:a0956ce5491112dbcbfeb8cefd1eaf0ef3409c0e008c434d74de1397cec447c7", size = 1576409, upload-time = "2026-08-13T21:19:08.486Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3f/66/992ab5293bc5713eec671aca1c69bcd9dbbda3e16721d5f024ab21a91cbe/pdf_inspector-1.14.2-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:9689427e4d8643355052acf2b837c6466f4f019a60ad59bdb5b96332c2b0e8c2", size = 2870693, upload-time = "2026-08-13T21:19:00.604Z" },
+    { url = "https://files.pythonhosted.org/packages/94/02/15ae2baf2b19de2e53d874b5177d5ce7982ef8f6dd60c643bc51f113be48/pdf_inspector-1.14.2-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:54fa3ae38c340c51b9e507bde91c94b77ac2338327c710f50147c22303d3cf38", size = 2785049, upload-time = "2026-08-13T21:19:02.582Z" },
+    { url = "https://files.pythonhosted.org/packages/36/b3/965bfec69b0bad2430d4603d14a5bc17386849fdca37c439c3c03c03fa9f/pdf_inspector-1.14.2-cp38-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:99a1edd232855bdb69b7f35add87987c8e3d40c8240638b2cd159987d3e29513", size = 2958709, upload-time = "2026-08-13T21:19:04.099Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/51/49b486a78dfd8ec27be56004443b4bf9be27c0aa23430074d9a6e29b8190/pdf_inspector-1.14.2-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:8bf3536ddbc7756d6c60b2e8e023bc21366370ad6efb1a910f959206bcadf023", size = 3059332, upload-time = "2026-08-13T21:19:05.435Z" },
+    { url = "https://files.pythonhosted.org/packages/3d/23/a2896789cc1e3c078f46dd3f25eec90b854099ae797ff1eca9df0a4d401e/pdf_inspector-1.14.2-cp38-abi3-win_amd64.whl", hash = "sha256:1f3638b6f2e54afbc1940c0bfd83740713d4fde6c44bcb75f1328254801f0ff4", size = 2702638, upload-time = "2026-08-13T21:19:07.008Z" },
 ]
 
 [[package]]

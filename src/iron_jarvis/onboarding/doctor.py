@@ -188,6 +188,32 @@ def check_browser() -> dict:
     )
 
 
+def check_pdf_classifier() -> dict:
+    """The per-page scan router (v1.176.0) is a NATIVE extension.
+
+    RECOMMENDED, not required: without it the document pipeline falls back to
+    the v1.174.0 whole-document heuristic and still reads wholly-scanned files.
+    What is lost is silent and specific — a native-text return with a SCANNED
+    page stapled in reads as if that page were blank. A packaged build that
+    dropped the extension would degrade exactly that way forever without a word,
+    which is the pikepdf lesson; this check is how it says so instead.
+    """
+    from ..documents.pdf_classify import available
+
+    ok = available()
+    return _result(
+        "pdf scan routing",
+        ok,
+        "Per-page PDF scan routing is available (mixed documents are detected)."
+        if ok
+        else "pdf-inspector is missing — scanned pages inside an otherwise "
+        "text-based PDF will not be found (whole-file scans still are).",
+        fix="" if ok else "Reinstall dependencies (`uv sync`); if this is the "
+        "packaged app, the native extension is missing from the build.",
+        level=RECOMMENDED,
+    )
+
+
 #: Ordered list of every check callable — callers may render this directly.
 CHECKS = [
     check_python,
@@ -196,6 +222,7 @@ CHECKS = [
     check_node,
     check_pnpm,
     check_browser,
+    check_pdf_classifier,
 ]
 
 

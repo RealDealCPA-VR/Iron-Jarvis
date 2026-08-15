@@ -369,7 +369,22 @@ cd dashboard && pnpm dev           # dashboard
   (note: `POST /workflows/run` spawns the run in the background and returns the
   record immediately; it does NOT block until steps finish). `ltm/`,
   `memory/`, `comm/`, `computeruse/`, `sandbox/`, `scheduling/`.
-- `documents/` — readers (extract_text: pdf/docx/xlsx/pptx/csv/text/images),
+- `documents/` — `pdf_classify.py` is the per-PAGE scan router (v1.176.0,
+  wraps the MIT `pdf-inspector` Rust extension). It answers "which pages of
+  this PDF are scans", which `looks_scanned_pdf` structurally cannot: that
+  asks ONE question of the whole file, so a native-text return with a scanned
+  K-1 stapled in at page 12 reads as fully readable and the scan is silently
+  invisible. THE ASYMMETRY IS THE SAFETY ARGUMENT and must survive any edit:
+  `needs_ocr` ORs the classifier with the old heuristic and never ANDs, an
+  empty plan falls back to harvesting rather than to harvesting nothing, and
+  every entry point returns `None` (never raises) so an absent or broken
+  extension degrades to exactly the v1.174.0 behaviour. A classifier may make
+  the app read MORE of a client's document, never less. It is a NATIVE wheel:
+  `packaging/ironjarvis.spec` entry + a RECOMMENDED `doctor` check, because a
+  packaged build that dropped it would degrade silently forever (the pikepdf
+  lesson). Cache version bumped to 2 — v1 records covered the first N pages
+  and serving one for a mixed file would freeze that blindness in permanently.
+  Also: readers (extract_text: pdf/docx/xlsx/pptx/csv/text/images),
   writers (markdown-AWARE rich creation: headings/lists/tables/code become
   real structure in docx/pdf/pptx/html; xlsx multi-sheet dict + formulas),
   markdown.py (the shared block parser), tools (read/write/extract_pdf/

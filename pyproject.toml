@@ -1,6 +1,6 @@
 [project]
 name = "iron-jarvis"
-version = "1.175.0"
+version = "1.176.0"
 description = "Iron Jarvis - a local-first AI operating system: a multi-agent orchestrator with tools, memory, workflows, a sandbox, git-native review, and a Next.js control center."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -35,6 +35,11 @@ dependencies = [
     "markitdown[pdf]>=0.1.6",
     "mammoth>=1.12.0",
     "pikepdf>=10.11.0",
+    # Deterministic per-PAGE scan routing (v1.176.0). A Rust/PyO3 wheel (abi3,
+    # win_amd64 published) with one dependency; no model, no network, ~1.5ms on
+    # a 3-page file. Pinned to a minor range on purpose: it went 1.0 -> 1.14 in
+    # weeks, and it decides which pages of a client document get read.
+    "pdf-inspector>=1.14.2,<2",
 ]
 
 [project.optional-dependencies]

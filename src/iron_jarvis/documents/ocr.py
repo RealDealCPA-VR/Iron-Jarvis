@@ -178,6 +178,35 @@ def looks_scanned_pdf(path: Path, extracted_text: str) -> bool:
         return False
 
 
+def ocr_page_plan(path: Path, extracted_text: str) -> "tuple[int, ...] | None":
+    """The 0-indexed PDF pages worth transcribing, or ``None`` when unknown.
+
+    THE MIXED-DOCUMENT FIX (v1.176.0). :func:`looks_scanned_pdf` asks one
+    question of the whole file and so cannot see a native-text return with a
+    SCANNED page stapled into the middle of it: the document's text clears
+    :data:`_SCANNED_TEXT_THRESHOLD` on page one and page one carries no image,
+    so both signals say "not a scan" while page 12 stays invisible. Measured on
+    a 3-page fixture (2 native + 1 scan): 3,178 characters extracted,
+    ``needs_ocr`` False, the scanned page silently absent from every answer.
+
+    :mod:`.pdf_classify` answers per PAGE instead. ``None`` means it had
+    nothing to say and the caller keeps the old behaviour; ``()`` means it
+    positively cleared the file.
+
+    Already-transcribed text short-circuits here exactly as in
+    :func:`needs_ocr` — a cached transcript must never buy a second round of
+    vision calls for the same bytes.
+    """
+    if OCR_MARK in (extracted_text or ""):
+        return ()
+    path = Path(path)
+    if not is_pdf_file(path):
+        return None
+    from .pdf_classify import scan_pages  # lazy: keeps the import graph flat
+
+    return scan_pages(path)
+
+
 def needs_ocr(path: Path, extracted_text: str) -> bool:
     """THE classifier every document path shares: would OCR add anything here?
 
@@ -186,13 +215,22 @@ def needs_ocr(path: Path, extracted_text: str) -> bool:
     is a transcript we produced earlier — transcribing it again would spend a
     second round of vision calls for the same bytes, so it is False. Blocking
     (it parses the PDF), so callers run it off the event loop.
+
+    Since v1.176.0 the per-page classifier can ADD a reason to say yes: a MIXED
+    document (native text plus stapled-in scans) that the whole-document
+    heuristic clears. The two are deliberately combined with OR and never with
+    AND — a classifier that is wrong, absent, or newly-broken may cause us to
+    read MORE of a client's document than before, never less. That asymmetry is
+    the whole safety argument for taking the dependency at all.
     """
     if OCR_MARK in (extracted_text or ""):
         return False
     path = Path(path)
     if is_image(path):
         return True
-    return looks_scanned_pdf(path, extracted_text)
+    if looks_scanned_pdf(path, extracted_text):
+        return True
+    return bool(ocr_page_plan(path, extracted_text))
 
 
 # ------------------------------------------------- cache (FROZEN CONTRACT 5) ---
@@ -204,7 +242,15 @@ def needs_ocr(path: Path, extracted_text: str) -> bool:
 # miss every one of them on the second pass.
 
 #: Cache record schema version — a bump invalidates old records by construction.
-_CACHE_VERSION = 1
+#:
+#: 2 (v1.176.0): per-PAGE routing changed WHICH pages a transcript covers for
+#: the same (digest, cap). A v1 record for a MIXED document transcribed the
+#: first N pages — mostly native-text pages, missing the stapled-in scan — and
+#: serving it after the upgrade would freeze that exact blindness into the
+#: cache permanently, which is the one failure this module's contract 5 says it
+#: must never cause. The bump costs a one-time re-transcription of scans seen
+#: before the upgrade; a wrong answer served forever costs more.
+_CACHE_VERSION = 2
 
 #: Cache roots seen this process, most recent first. :func:`lookup_cached_text`
 #: is SYNCHRONOUS (it serves ``extract_text``, which has no config in scope) and
@@ -394,18 +440,46 @@ def _encode_jpeg(data: bytes) -> "bytes | None":
 
 
 def pdf_page_scan_images(
-    path: Path, *, max_pages: int = MAX_OCR_PAGES
-) -> "tuple[list[bytes], int]":
+    path: Path,
+    *,
+    max_pages: int = MAX_OCR_PAGES,
+    pages: "tuple[int, ...] | None" = None,
+) -> "tuple[list[bytes], int, list[int]]":
     """The LARGEST embedded image per page (a scan page is one big image),
-    re-encoded as JPEG under the vision payload cap. Returns ``(blobs,
-    total_pages)``; an empty list = nothing OCR could work on (vector-only,
-    encrypted, or no embedded images)."""
+    re-encoded as JPEG under the vision payload cap.
+
+    Returns ``(blobs, total_pages, page_numbers)`` where ``page_numbers`` are
+    the 1-INDEXED pages each blob came from — the caller labels the transcript
+    with them, so a mixed document's output says "page 12" and not "page 1".
+
+    ``pages`` (0-indexed, from :func:`ocr_page_plan`) selects WHICH pages to
+    harvest; without it the first *max_pages* are taken, exactly as before
+    v1.176.0. Selecting matters twice over: the whole point is to reach page 12
+    of a 20-page return, and the page cap now bounds the pages that are
+    actually SCANS rather than being spent on the native-text pages in front of
+    them.
+
+    An empty blob list = nothing OCR could work on (vector-only, encrypted, or
+    no embedded images).
+    """
     from pypdf import PdfReader
 
     blobs: list[bytes] = []
+    numbers: list[int] = []
     reader = PdfReader(str(path))
     total = len(reader.pages)
-    for page in reader.pages[:max_pages]:
+    if pages is None:
+        wanted = range(min(max_pages, total))
+    else:
+        # Ascending, de-duplicated, in range, capped. The cap applies to the
+        # SELECTION, so ten scanned pages are ten transcriptions wherever they
+        # sit in the document.
+        wanted = sorted({p for p in pages if 0 <= p < total})[:max_pages]
+    for index in wanted:
+        try:
+            page = reader.pages[index]
+        except Exception:  # noqa: BLE001 — an unreachable page is skipped
+            continue
         best: bytes | None = None
         try:
             page_images = list(page.images)
@@ -420,7 +494,8 @@ def pdf_page_scan_images(
         blob = _encode_jpeg(best)
         if blob is not None:
             blobs.append(blob)
-    return blobs, total
+            numbers.append(index + 1)  # 1-indexed for humans and transcripts
+    return blobs, total, numbers
 
 
 def image_scan_blob(path: Path) -> "bytes | None":
@@ -469,6 +544,7 @@ async def _transcribe(
     *,
     route_kwargs: "dict[str, Any]",
     label_pages: bool,
+    page_numbers: "list[int] | None" = None,
 ) -> "tuple[list[str], str]":
     """Transcribe each blob with one vision call. Returns ``(pages, fatal_note)``
     — a non-empty ``fatal_note`` means NOTHING may be reported as text (the mock
@@ -477,7 +553,8 @@ async def _transcribe(
     from ..providers.adapters.base import LLMMessage
 
     pages: list[str] = []
-    for i, blob in enumerate(blobs, start=1):
+    labels = list(page_numbers or range(1, len(blobs) + 1))
+    for i, blob in zip(labels, blobs):
         msg = LLMMessage(
             role="user",
             content=_OCR_PROMPT,
@@ -515,17 +592,38 @@ async def _transcribe(
 
 
 async def ocr_pdf(
-    path: Path, router: Any, *, max_pages: int = MAX_OCR_PAGES, config: Any = None
+    path: Path,
+    router: Any,
+    *,
+    max_pages: int = MAX_OCR_PAGES,
+    config: Any = None,
+    pages_needing_ocr: "tuple[int, ...] | None" = None,
 ) -> "tuple[str, str]":
     """Transcribe up to *max_pages* scanned pages via the router's vision path.
+
+    ``pages_needing_ocr`` (0-indexed, from :func:`ocr_page_plan`) targets the
+    pages that are actually scans; without it the first *max_pages* are taken,
+    the pre-v1.176.0 behaviour. Resolved HERE rather than demanded of every
+    caller, so ``ocr_pdf`` cannot be called in a way that silently reverts to
+    reading page one of a mixed return.
 
     Returns ``(text, note)``. ``text == ""`` means nothing was recovered and
     the note says why — the caller shows the note either way, so the user
     always learns HOW their text was (or wasn't) produced."""
+    p = Path(path)
+    routed = pages_needing_ocr
+    if routed is None:
+        # A classification failure returns None and we harvest as before.
+        routed = await asyncio.to_thread(ocr_page_plan, p, "")
+    # An EMPTY plan on a file we were nonetheless asked to OCR means the
+    # classifier disagrees with the caller (e.g. looks_scanned_pdf matched a
+    # vector-only page). Trust the caller and fall back to the first N — the
+    # asymmetry rule: never read LESS because of the classifier.
+    selection = routed or None
     # pypdf parsing + Pillow re-encoding are CPU-bound and were running on the
     # event loop: a 10-page scan froze every request in the app (v1.153.1).
-    blobs, total = await asyncio.to_thread(
-        pdf_page_scan_images, Path(path), max_pages=max_pages
+    blobs, total, numbers = await asyncio.to_thread(
+        pdf_page_scan_images, p, max_pages=max_pages, pages=selection
     )
     if not blobs:
         return "", (
@@ -537,6 +635,7 @@ async def ocr_pdf(
         router,
         route_kwargs=_vision_route_kwargs(router, config),
         label_pages=True,
+        page_numbers=numbers,
     )
     if fatal:
         return "", fatal
@@ -545,10 +644,34 @@ async def ocr_pdf(
             "scanned PDF — the current model returned no transcription; it may "
             "not support vision (connect a vision-capable model and retry)"
         )
-    capped = total > len(blobs)
+    # The second number is the count of pages that were CANDIDATES, not the
+    # document's length: `attachment_rag.ocr_pages_spent` charges the turn
+    # `min(cap, that number)`, and billing a 20-page return for 20 vision calls
+    # when 2 pages were scans is the same lie in the other direction. The
+    # "(N of M page(s) transcribed" prefix is a PARSED CONTRACT — keep it exact.
+    candidates = len(selection) if selection else total
+    capped = candidates > len(blobs)
+    # MIXED = the scans are a strict subset of the document. Only then is "which
+    # pages" worth saying: on a wholly-scanned file every page is a scan and the
+    # clause would be noise on the most common case. This is also what keeps the
+    # note byte-identical to pre-v1.176.0 for every document that is not mixed.
+    mixed = selection is not None and len(selection) < total
+    where = ""
+    if mixed:
+        shown = ", ".join(str(n) for n in numbers[:12])
+        where = (
+            f"; the scanned page(s) of a {total}-page document: {shown}"
+            + (" …" if len(numbers) > 12 else "")
+        )
     note = (
-        f"scanned PDF — {OCR_MARK} ({len(pages)} of {total} page(s) transcribed"
-        + (f"; only the first {max_pages} pages are attempted" if capped else "")
+        f"scanned PDF — {OCR_MARK} ({len(pages)} of {candidates} page(s) transcribed"
+        + where
+        + (
+            f"; only the first {max_pages} {'scanned ' if mixed else ''}pages "
+            "are attempted"
+            if capped
+            else ""
+        )
         + ")"
     )
     return "\n\n".join(pages), note
