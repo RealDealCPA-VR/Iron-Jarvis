@@ -74,6 +74,42 @@ jobs:
         if: steps.gate.outputs.publish == 'true'
         run: uv sync --extra dev
 
+      # THE GATE COVERS WHAT THE INSTALLER CONTAINS. First cut ran only the
+      # backend suite — and the very next push proved why that is not enough: a
+      # dashboard test went red on CI while the backend was green, and the
+      # installer (which bundles that same dashboard) would have shipped
+      # regardless. The product is daemon + dashboard + desktop; the gate is all
+      # three or it is theatre.
+      - name: Set up Node 20
+        if: steps.gate.outputs.publish == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up pnpm
+        if: steps.gate.outputs.publish == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dashboard deps
+        if: steps.gate.outputs.publish == 'true'
+        working-directory: dashboard
+        run: pnpm install --frozen-lockfile
+
+      - name: Dashboard unit tests (vitest)
+        if: steps.gate.outputs.publish == 'true'
+        working-directory: dashboard
+        run: pnpm test
+
+      - name: Syntax-check the desktop entry points
+        if: steps.gate.outputs.publish == 'true'
+        shell: bash
+        run: |
+          for f in desktop/main.js desktop/preload.js desktop/spotlight-preload.js; do
+            [ -f "$f" ] && node --check "$f"
+          done
+
       - name: Run the offline suite (a red suite must not ship an installer)
         if: steps.gate.outputs.publish == 'true'
         shell: bash

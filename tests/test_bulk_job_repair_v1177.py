@@ -269,22 +269,65 @@ def test_the_session_budget_still_wins():
 # --------------------------------- 5. the worklist hands work out in order ---
 
 
-def test_a_batch_add_claims_in_a_stable_order():
-    """The v1.176.0 CI flake, and the bug under it: a survey adds a whole folder
-    in ONE call, so every row ties on created_at and the tiebreaker was a RANDOM
-    id. Which files a chunk held changed between runs over identical input."""
-    from iron_jarvis.core.db import init_db, make_engine
+def _tied_board():
+    """A board whose rows all share one ``created_at`` — what a SURVEY produces.
+
+    Reproducing the real condition matters: a folder is added in ONE call, and on
+    a machine with a coarse clock every row of that batch lands on the same
+    timestamp. THIS BOX DOES NOT (it stamps three distinct times for three rows),
+    which is exactly why the first version of this test passed here and failed on
+    CI. Forcing the tie removes the machine from the equation.
+
+    Rows are inserted in REVERSE alphabetical order on purpose. Without an ORDER
+    BY, SQLite hands back rowid order — insertion order — so an unordered
+    read-back returns zzz, mmm, aaa and an ordered one returns aaa, mmm, zzz.
+    The two are distinguishable only because the insert order disagrees with the
+    sort order.
+    """
+    from sqlmodel import select
+
+    from iron_jarvis.core.db import init_db, make_engine, session_scope
+    from iron_jarvis.worklist.models import WorklistItem
     from iron_jarvis.worklist.store import WorklistStore
 
-    orders = set()
-    for _ in range(8):
-        db = Path(tempfile.mkdtemp()) / "t.db"
-        engine = make_engine(str(db))
-        init_db(engine)
-        store = WorklistStore(engine)
-        store.add("b", [(f"C:/f/{n}.pdf", "") for n in ("dead", "live", "aaa")])
-        got, _ = store.claim("b", "c", 3)
-        orders.add(tuple(i.key for i in got))
+    engine = make_engine(str(Path(tempfile.mkdtemp()) / "t.db"))
+    init_db(engine)
+    store = WorklistStore(engine)
+    store.add("b", [(f"C:/f/{n}.pdf", "") for n in ("zzz", "mmm", "aaa")])
+    with session_scope(engine) as db:
+        rows = list(db.exec(select(WorklistItem)))
+        stamp = rows[0].created_at
+        for row in rows:
+            row.created_at = stamp
+            db.add(row)
+        db.commit()
+    return store
+
+
+def test_a_tied_batch_claims_in_key_order_not_insertion_order():
+    """THE TIEBREAKER. A survey adds a folder in one call, every row ties on
+    created_at, and the tiebreaker used to be `id` — `new_id("wl")`, RANDOM. So
+    which files a chunk held changed between runs over identical input."""
+    got, _ = _tied_board().claim("b", "c", 3)
+    assert [i.key for i in got] == ["C:/f/aaa.pdf", "C:/f/mmm.pdf", "C:/f/zzz.pdf"]
+
+
+def test_the_claim_READ_BACK_is_ordered_too():
+    """THE HALF THE FIRST FIX MISSED, and CI caught. Ordering the `pending`
+    query decides WHICH rows are claimed; the read-back decides what order the
+    agent RECEIVES them in. With no ORDER BY on the read-back that is whatever
+    index the planner picked — one order on this box, five across eight
+    identical CI runs. Same assertion as above, stated against the returned
+    sequence, because that sequence is the thing the agent works through."""
+    store = _tied_board()
+    got, _ = store.claim("b", "c", 2)
+    # A partial claim must take the FIRST two by key, in key order.
+    assert [i.key for i in got] == ["C:/f/aaa.pdf", "C:/f/mmm.pdf"]
+
+
+def test_repeated_claims_agree_across_fresh_databases():
+    """Belt and braces: identical input, identical output, every time."""
+    orders = {tuple(i.key for i in _tied_board().claim("b", "c", 3)[0]) for _ in range(8)}
     assert len(orders) == 1, f"claim order is not deterministic: {orders}"
 
 

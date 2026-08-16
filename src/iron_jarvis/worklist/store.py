@@ -536,7 +536,21 @@ class WorklistStore:
                         retaken = [r for r in retaken if r.claim_token == token]
                     reclaimed = len(retaken)
                     won.extend(retaken)
-            won.sort(key=lambda r: (r.created_at, r.id))
+            # THE AUTHORITATIVE ORDER (v1.177.0). This sort runs AFTER the
+            # read-back and after `retaken` is merged in, so it — not any SQL
+            # ORDER BY — decides the sequence the agent works through. It sorted
+            # by (created_at, id), and `id` is `new_id("wl")`: RANDOM. A survey
+            # adds a whole folder in ONE call, so on a machine whose clock ties
+            # those rows the tiebreaker was pure chance, and which files a chunk
+            # held changed between runs over identical input. `key_norm` is
+            # unique per board, so adding it makes the order total and
+            # explainable (by key) instead of arbitrary.
+            #
+            # The first attempt at this fix put ORDER BY on the QUERIES and
+            # missed this line entirely — green here, five different orders
+            # across eight CI runs. If you add another ordering somewhere,
+            # remember this sort is the last word.
+            won.sort(key=lambda r: (r.created_at, r.key_norm, r.id))
             # Detach: the Session closes with this block, and callers read these
             # rows afterwards (a lazy refresh on a closed session raises).
             for row in won:

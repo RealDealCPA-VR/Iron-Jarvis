@@ -296,9 +296,18 @@ describe("JobPostCard — the Max steps box", () => {
     fireEvent.change(taskBox(), { target: { value: "Job one" } });
     fireEvent.change(stepsBox(), { target: { value: "50" } });
     fireEvent.click(postButton());
-    await waitFor(() => expect(hooks.posts.length).toBe(1));
-    expect(taskBox().value).toBe("");
-    expect(stepsBox().value).toBe("");
+    // Wait for THE CLEAR, not for the post. `submit` records the request and
+    // only then — after its `await post(...)` resolves — calls setTask("") /
+    // setMaxSteps(""). So `posts.length === 1` becomes true one render BEFORE
+    // the boxes empty, and asserting the values right after it is a race: green
+    // on a fast machine, red on a contended CI runner (it was, on v1.177.0).
+    // Putting the real assertions inside waitFor lets them retry until the
+    // state settles, which is what this test always meant to check.
+    await waitFor(() => {
+      expect(hooks.posts.length).toBe(1);
+      expect(taskBox().value).toBe("");
+      expect(stepsBox().value).toBe("");
+    });
     // …and the next job posts NO budget rather than inheriting one.
     fireEvent.change(taskBox(), { target: { value: "Job two" } });
     fireEvent.click(postButton());
