@@ -39,6 +39,18 @@ def _build_input_schema(params: list[dict]) -> dict[str, Any]:
     props: dict[str, Any] = {}
     required: list[str] = []
     for p in params:
+        # A NON-DICT PARAMETER MUST NOT BRICK THE BOOT (v1.178.0 review finding).
+        # `tool_create` COMMITS the record and only then builds the tool, so a
+        # parameter list like ["path"] (a bare string where an object belongs)
+        # is persisted before anything rejects it — and `build_tool` is called
+        # for EVERY stored record in `build_platform`, with no guard. The next
+        # start then raises `'str' object has no attribute 'get'` while wiring
+        # the registry, which is before the daemon can serve anything or explain
+        # itself. Skipping the malformed entry costs that one parameter; raising
+        # costs the install. `ToolCreateTool` rejects the shape up front so this
+        # is a floor, not the error message.
+        if not isinstance(p, dict):
+            continue
         name = str(p.get("name", "")).strip()
         if not name:
             continue
@@ -60,9 +72,18 @@ class CommandTool(Tool):
         self.description = record.description or f"custom tool {record.name}"
         self.permission_key = f"custom:{record.name}"  # default 'ask' (fail-closed)
         try:
-            self._params = json.loads(record.params_json or "[]")
+            stored = json.loads(record.params_json or "[]")
         except (TypeError, ValueError):
-            self._params = []
+            stored = []
+        # FILTERED ONCE, HERE (v1.178.0 review finding). Three sites read these
+        # entries as mappings — the schema build, `_render`, and `execute`'s
+        # missing-args check — so a persisted non-dict (a bare "path" string
+        # where an object belongs) raises in whichever runs first. The schema
+        # build runs at BOOT, for every stored record, with no guard around it:
+        # `build_platform` would die wiring the registry, before the daemon can
+        # serve anything or say why. Dropping the malformed entry costs one
+        # parameter; raising costs the install.
+        self._params = [p for p in stored if isinstance(p, dict)] if isinstance(stored, list) else []
         try:
             self._argv = [str(a) for a in json.loads(record.argv_json or "[]")]
         except (TypeError, ValueError):
@@ -266,6 +287,22 @@ class ToolCreateTool(Tool):
         params = args.get("parameters") or []
         if not isinstance(params, list):
             return ToolResult(ok=False, error="parameters must be an array")
+        # REJECT THE SHAPE BEFORE IT IS COMMITTED (v1.178.0 review finding). This
+        # method persists the record and only THEN builds the tool, so without
+        # this an entry like ["path"] is stored and every later boot has to cope
+        # with it. `CommandTool` now drops such an entry rather than raising, but
+        # a dropped parameter is a tool that silently ignores an argument — an
+        # honest refusal here is the better half of the same fix.
+        bad = [p for p in params if not isinstance(p, dict)]
+        if bad:
+            return ToolResult(
+                ok=False,
+                error=(
+                    "each entry in `parameters` must be an object like "
+                    '{"name": "path", "type": "string", "required": true} — '
+                    f"got {bad[0]!r}"
+                ),
+            )
         try:
             rec = self.p.tools_registry.register(
                 name,

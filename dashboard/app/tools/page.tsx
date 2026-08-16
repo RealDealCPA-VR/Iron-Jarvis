@@ -45,6 +45,7 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { timeAgo } from "@/lib/format";
+import { ProposalsCard } from "@/components/capability/ProposalsCard";
 
 /* -------------------------------------------------------------------------- */
 /*  Types (local — lib/types.ts is intentionally untouched)                    */
@@ -1029,6 +1030,16 @@ export default function ToolsPage() {
           )}
         </Card>
       </Reveal>
+
+      {/* ------------------------------------------------------------------ */}
+      {/*  Capability requests (v1.178.0) — the other direction of the hero  */}
+      {/*  above: there YOU ask for a tool, here an AGENT does. It sits      */}
+      {/*  directly under it for that reason, and above "Your tools" because */}
+      {/*  a pending request is work waiting on the user, not reference.     */}
+      {/*  No <Reveal> wrapper: the card carries its own, so a daemon        */}
+      {/*  without /capability/proposals leaves no empty gap behind.         */}
+      {/* ------------------------------------------------------------------ */}
+      <ProposalsCard />
 
       {/* ------------------------------------------------------------------ */}
       {/*  Existing custom tools                                             */}

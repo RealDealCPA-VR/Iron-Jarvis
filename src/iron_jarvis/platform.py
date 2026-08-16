@@ -230,6 +230,11 @@ class Platform:
     #: private steward. Optional so bare-platform unit tests still construct; every
     #: reader treats ``None`` as "this build has no curation" rather than failing.
     memory_steward: "object | None" = None
+    #: Capability requests (v1.178.0) — the suggest-only queue an agent files
+    #: into when the app has no verb for the job. ONE shared store so the tool
+    #: and the review routes cannot diverge. Optional: every reader treats
+    #: ``None`` as "this build cannot take requests", never as a failure.
+    capabilities: "object | None" = None
 
 
 def build_platform(
@@ -1335,6 +1340,18 @@ def build_platform(
             platform.tools_registry.build_tool(record), custom=True
         )
     for tool in dynamic_tool_tools(platform):
+        platform.registry.register(tool)
+
+    # Capability requests (v1.178.0, P4): the agent asks for the tool it needs
+    # instead of working around the gap in silence. Registered HERE, directly
+    # after the dynamic-tool registry, because that is what an APPROVED request
+    # is created through — the store calls the live `tool_create`, so this line
+    # has to come after `tools_registry` exists or approval would fall back to a
+    # second, unvalidated construction path.
+    from .capability import CapabilityProposalStore, capability_proposal_tools
+
+    platform.capabilities = CapabilityProposalStore(engine, platform=platform)
+    for tool in capability_proposal_tools(platform.capabilities):
         platform.registry.register(tool)
 
     # Reflex Loop: the durable rule store (signal→action bindings). The executing

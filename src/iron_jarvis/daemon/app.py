@@ -2119,4 +2119,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from ..worklist import register as _register_worklist
 
     _register_worklist(app, d)
+    # Capability requests (v1.178.0): the queue an agent files into when the app
+    # has no verb for the job — without this the store exists, the tool files
+    # rows, and nothing the user can reach ever shows them.
+    from ..capability import register as _register_capability
+
+    _register_capability(app, d)
     return app

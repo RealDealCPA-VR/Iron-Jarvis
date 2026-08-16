@@ -4,7 +4,7 @@
 // threads stay the star. Two columns on lg: your (dynamic) agents and remote
 // agents. Collapsed by default; the open state persists in localStorage.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2,
   ChevronDown,
@@ -18,9 +18,10 @@ import {
   Trash2,
   Upload,
   Wand2,
+  Wrench,
   X,
 } from "lucide-react";
-import { API_BASE, ApiError, del, ijToken, patch, post } from "@/lib/api";
+import { API_BASE, ApiError, del, get, ijToken, patch, post } from "@/lib/api";
 import type { DynamicAgent, ModelOption } from "@/lib/types";
 import {
   Badge,
@@ -35,10 +36,10 @@ import type { RemoteAgentInfo } from "./identity";
 
 const OPEN_KEY = "ij_agents_setup_open";
 
-/** Dynamic-agent rows carry their editable config (GET /agents includes it). */
+/** Dynamic-agent rows carry their editable config (GET /agents includes it).
+ *  `system_prompt` / `tools` / `effective_tools` / `base_type` all live on
+ *  `DynamicAgent` now (lib/types.ts); only the portrait is row-local. */
 export type DynamicAgentFull = DynamicAgent & {
-  system_prompt?: string;
-  tools?: string[];
   /** v1.171.0 additive: the stored portrait's serve path, or null/absent. */
   avatar?: string | null;
 };
@@ -68,6 +69,49 @@ function fileToB64(file: File): Promise<string> {
   });
 }
 
+/* ------------------------------------------------------- tools, truthfully --- */
+
+/**
+ * The two tool fields and why the card must read BOTH (v1.178.0).
+ *
+ * MEASURED: this form POSTed `tools: []` hardcoded — there was no tools control
+ * at all — and the daemon stored that as a literal empty allowlist, so every
+ * agent created here advertised NOTHING to its model and read as a dumb agent
+ * rather than an empty roster. The daemon now reads an empty STORED list as
+ * "not specified" and resolves it to the base type's roster, and returns both:
+ *
+ *   `tools`            the stored list, exactly as saved — the field we PATCH
+ *   `effective_tools`  what the agent actually holds, inheritance resolved
+ *
+ * Render `effective_tools`; PATCH `tools`. Rendering the stored list alone says
+ * "no tools" about an agent that works (the bug this closes), and PATCHing the
+ * effective list back would freeze inheritance into an explicit allowlist on
+ * the first save the user made for an entirely unrelated reason.
+ *
+ * `effective_tools` is ABSENT on a daemon older than v1.178.0 — `null` here
+ * means "this daemon does not report it", which is NOT the same as "the roster
+ * is empty" and must never be rendered as one.
+ */
+function effectiveOrNull(agent: DynamicAgentFull): string[] | null {
+  return Array.isArray(agent.effective_tools) ? agent.effective_tools : null;
+}
+
+/** How the agent's roster is decided right now — drives every label below. */
+type ToolOrigin = "explicit" | "inherited" | "unreported";
+
+function toolOrigin(agent: DynamicAgentFull): ToolOrigin {
+  if ((agent.tools ?? []).length > 0) return "explicit";
+  return effectiveOrNull(agent) ? "inherited" : "unreported";
+}
+
+/** "the builder base type" when the daemon named it, a generic phrase when it
+ *  did not — `base_type` is optional on the wire and inventing one would be a
+ *  small lie in the one place the user is deciding what an agent can do. */
+function baseTypePhrase(agent: DynamicAgentFull): string {
+  const base = (agent.base_type ?? "").trim();
+  return base ? `the ${base} base type` : "its base type";
+}
+
 type RemoteKind = "http-task" | "openai-chat" | "openai-responses";
 /** The two OpenAI dialects both carry a model id; they differ only in the
  *  request field (`messages` vs `input`). */
@@ -80,8 +124,88 @@ const modelKey = (m: ModelOption) => `${m.provider}|${m.model}`;
 function DynamicRow({ agent, onChanged }: { agent: DynamicAgentFull; onChanged: () => void }) {
   const [editing, setEditing] = useState(false);
   const [prompt, setPrompt] = useState("");
+  const [description, setDescription] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // --- tools (v1.178.0) --------------------------------------------------
+  // `mode` is what the user has CHOSEN in this editing session; `toolsDirty`
+  // is whether they touched the control at all. Both matter: an untouched
+  // picker must send NO `tools` field, so a save made to fix a typo in the
+  // description cannot convert an inheriting agent into an explicit allowlist.
+  const [toolMode, setToolMode] = useState<"inherit" | "explicit">("inherit");
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [toolsDirty, setToolsDirty] = useState(false);
+  const [toolFilter, setToolFilter] = useState("");
+  const [catalog, setCatalog] = useState<string[] | null>(null);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const catalogFetched = useRef(false);
+
+  const storedTools = useMemo(() => agent.tools ?? [], [agent.tools]);
+  const effectiveTools = effectiveOrNull(agent);
+  const origin = toolOrigin(agent);
+  // What the row DISPLAYS as the agent's roster. `effective_tools` already
+  // equals the stored list when one is set, so this is one branch, not two —
+  // but on an older daemon (no effective_tools) a non-empty stored list is
+  // still honest truth and worth showing.
+  const shownTools = effectiveTools ?? (storedTools.length > 0 ? storedTools : null);
+
+  /** The tool registry (GET /tools) — the daemon's own list of what exists.
+   *  Fetched lazily, once, the first time a picker is opened: ~60 specs is a
+   *  wasteful payload for a card most sessions never expand. */
+  async function loadCatalog() {
+    if (catalogFetched.current) return;
+    catalogFetched.current = true;
+    try {
+      const r = await get<{ tools?: { name?: string }[] }>("/tools");
+      const names = (r?.tools ?? [])
+        .map((t) => String(t?.name ?? "").trim())
+        .filter(Boolean);
+      setCatalog(Array.from(new Set(names)).sort());
+    } catch (err) {
+      // No catalog is NOT no tools: the picker falls back to the agent's own
+      // roster below, so narrowing still works and nothing is claimed absent.
+      setCatalogError(err instanceof ApiError ? err.message : String(err));
+    }
+  }
+
+  /** Everything checkable. The registry's list UNIONed with what this agent
+   *  already holds — a tool it holds whose provider has since disconnected
+   *  (an MCP pack, a deleted custom tool) would otherwise vanish from the
+   *  picker and be silently dropped by the very next save. */
+  const pickable = useMemo(() => {
+    const set = new Set<string>(catalog ?? []);
+    for (const t of effectiveTools ?? []) set.add(t);
+    for (const t of storedTools) set.add(t);
+    return Array.from(set).sort();
+  }, [catalog, effectiveTools, storedTools]);
+
+  const visibleTools = useMemo(() => {
+    const q = toolFilter.trim().toLowerCase();
+    return q ? pickable.filter((n) => n.toLowerCase().includes(q)) : pickable;
+  }, [pickable, toolFilter]);
+
+  function chooseExplicit() {
+    // Start from what the agent actually holds, so "narrow it" is unchecking
+    // rather than rebuilding the roster from memory. This is deliberately
+    // dirty-on-click: pressing a button named "Choose specific tools" IS the
+    // decision to stop inheriting, and the note under the list says so.
+    setChosen(storedTools.length > 0 ? [...storedTools] : [...(effectiveTools ?? [])]);
+    setToolMode("explicit");
+    setToolsDirty(true);
+    void loadCatalog();
+  }
+
+  function backToInherited() {
+    setToolMode("inherit");
+    setToolsDirty(true); // save will PATCH `tools: []` — the "not specified" value
+  }
+
+  function toggleTool(name: string) {
+    setChosen((prev) =>
+      prev.includes(name) ? prev.filter((t) => t !== name) : [...prev, name],
+    );
+    setToolsDirty(true);
+  }
   // Portrait state (v1.171.0). `rev` only busts the <img> cache — whether a
   // portrait EXISTS always comes from the daemon via agent.avatar, so a
   // failed write can never leave the row pretending one is stored.
@@ -92,8 +216,15 @@ function DynamicRow({ agent, onChanged }: { agent: DynamicAgentFull; onChanged: 
 
   function startEdit() {
     setPrompt(agent.system_prompt ?? "");
+    setDescription(agent.description ?? "");
     setError(null);
+    // Open on the truth as stored, and UNTOUCHED — see `toolsDirty`.
+    setToolMode(storedTools.length > 0 ? "explicit" : "inherit");
+    setChosen([...storedTools]);
+    setToolsDirty(false);
+    setToolFilter("");
     setEditing(true);
+    if (storedTools.length > 0) void loadCatalog();
   }
 
   async function uploadAvatar(file: File) {
@@ -152,6 +283,18 @@ function DynamicRow({ agent, onChanged }: { agent: DynamicAgentFull; onChanged: 
       // An empty prompt keeps the current one (PATCH only changes sent fields).
       const body: Record<string, unknown> = {};
       if (prompt.trim()) body.system_prompt = prompt.trim();
+      if (description.trim() !== (agent.description ?? "").trim()) {
+        body.description = description.trim();
+      }
+      // TOOLS ARE SENT ONLY WHEN THE USER TOUCHED THE PICKER (v1.178.0), and
+      // what is sent is the STORED shape, never `effective_tools`:
+      //   explicit -> the chosen allowlist verbatim
+      //   inherit  -> [] , the daemon's "not specified" -> base type's roster
+      // An untouched picker sends nothing at all, so an edit to the persona or
+      // the description leaves inheritance exactly as it was. Writing the
+      // effective roster here instead would look identical in the UI and
+      // silently pin the agent to today's tool list forever.
+      if (toolsDirty) body.tools = toolMode === "explicit" ? [...chosen] : [];
       await patch(`/agents/${encodeURIComponent(agent.name)}`, body);
       setEditing(false);
       onChanged();
@@ -201,6 +344,49 @@ function DynamicRow({ agent, onChanged }: { agent: DynamicAgentFull; onChanged: 
       {agent.description && !editing && (
         <p className="mt-0.5 truncate pl-7 text-[11px] text-zinc-500">{agent.description}</p>
       )}
+
+      {/* WHAT THIS AGENT ACTUALLY HOLDS (v1.178.0), always visible — the row
+          used to say nothing at all about tools, which is how every agent
+          created here shipped with an empty allowlist unnoticed. */}
+      <div data-testid={`tools-summary-${agent.name}`} className="mt-1 pl-7">
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+          <Wrench size={10} className="shrink-0 text-amber-300/80" aria-hidden />
+          {origin === "explicit" && (
+            <span className="text-[10px] text-zinc-400">
+              Tools · {storedTools.length} chosen — an explicit set
+            </span>
+          )}
+          {origin === "inherited" && (
+            <span className="text-[10px] text-zinc-400">
+              Tools · {(effectiveTools ?? []).length} inherited from{" "}
+              {baseTypePhrase(agent)}
+            </span>
+          )}
+          {/* The older-daemon degrade: it does not report the resolved roster,
+              so say the rule (it inherits) and show NO list. An empty chip row
+              here would read as "this agent can do nothing", which is exactly
+              the lie this feature exists to stop telling. */}
+          {origin === "unreported" && (
+            <span className="text-[10px] text-zinc-500">
+              Tools · inherits {baseTypePhrase(agent)} — this daemon doesn’t
+              report which ones
+            </span>
+          )}
+        </div>
+        {shownTools && shownTools.length > 0 && (
+          <div className="mt-1 flex max-h-16 flex-wrap gap-1 overflow-y-auto">
+            {shownTools.map((t) => (
+              <span
+                key={t}
+                className="rounded border border-white/[0.07] bg-white/[0.03] px-1 py-px font-mono text-[10px] text-zinc-400"
+              >
+                {t}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
       {editing && (
         <div className="mt-2 space-y-2 border-t hairline pt-2">
           <textarea
@@ -215,6 +401,100 @@ function DynamicRow({ agent, onChanged }: { agent: DynamicAgentFull; onChanged: 
             aria-label={`Persona prompt for ${agent.name}`}
             className="field resize-y text-xs"
           />
+          <input
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="short description (optional)"
+            aria-label={`Description for ${agent.name}`}
+            className="field text-xs"
+          />
+
+          {/* THE TOOLS PICKER. Two states, one decision: inherit the base
+              type's roster (the default, stored as an empty list) or pin an
+              explicit allowlist. Only what is touched here is ever sent. */}
+          <div
+            data-testid={`tools-editor-${agent.name}`}
+            className="space-y-2 rounded-lg border border-white/[0.06] bg-white/[0.02] p-2.5"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <Wrench size={12} className="shrink-0 text-amber-300" aria-hidden />
+              <span className="text-[11px] font-medium text-zinc-300">Tools</span>
+              <span className="ml-auto">
+                {toolMode === "inherit" ? (
+                  <button
+                    type="button"
+                    onClick={chooseExplicit}
+                    className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
+                  >
+                    Choose specific tools
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={backToInherited}
+                    className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
+                  >
+                    Use inherited tools
+                  </button>
+                )}
+              </span>
+            </div>
+
+            {toolMode === "inherit" ? (
+              <p className="text-[10px] leading-relaxed text-zinc-500">
+                {effectiveTools
+                  ? `Inherits ${baseTypePhrase(agent)} — ${effectiveTools.length} tools today, and it follows that roster as it changes.`
+                  : `Inherits ${baseTypePhrase(agent)}. This daemon doesn’t report the resolved list.`}
+              </p>
+            ) : (
+              <>
+                <input
+                  value={toolFilter}
+                  onChange={(e) => setToolFilter(e.target.value)}
+                  placeholder="filter tools…"
+                  aria-label={`Filter tools for ${agent.name}`}
+                  className="field text-xs"
+                />
+                <div className="max-h-40 space-y-0.5 overflow-y-auto pr-1">
+                  {visibleTools.map((t) => (
+                    <label
+                      key={t}
+                      className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 hover:bg-white/[0.04]"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={chosen.includes(t)}
+                        onChange={() => toggleTool(t)}
+                        className="accent-cyan-400"
+                      />
+                      <span className="min-w-0 truncate font-mono text-[11px] text-zinc-300">
+                        {t}
+                      </span>
+                    </label>
+                  ))}
+                  {visibleTools.length === 0 && (
+                    <p className="px-1 py-1 text-[10px] text-zinc-500">
+                      no tool matches “{toolFilter.trim()}”
+                    </p>
+                  )}
+                </div>
+                <p className="text-[10px] leading-relaxed text-amber-300/80">
+                  {chosen.length} chosen. An explicit set stops this agent
+                  picking up later changes to {baseTypePhrase(agent)}
+                  {chosen.length === 0
+                    ? " — and with nothing checked, saving clears it back to inherited."
+                    : "."}
+                </p>
+                {catalogError && (
+                  <p className="text-[10px] text-zinc-500">
+                    Couldn’t load the full tool list ({catalogError}) — showing
+                    what this agent already holds.
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+
           {/* Portrait row (v1.171.0): the current face (or stored portrait),
               Upload / Generate / Remove. Generate goes through the daemon's
               real image path; with no image model configured the daemon's
@@ -319,12 +599,19 @@ function YourAgentsSection({
       await post("/agents", {
         name: name.trim(),
         system_prompt: prompt.trim(),
+        // `[]` is "not specified", NOT "no tools" — since v1.178.0 the daemon
+        // resolves an empty stored list to the base type's roster, so a new
+        // agent starts able to work and is narrowed afterwards with the
+        // picker on its row. This line used to mean the opposite: it stored a
+        // literal empty allowlist and every agent created here held nothing.
         tools: [],
         description: description.trim(),
         provider,
         model: modelName,
       });
-      setOk(`"${name.trim()}" is ready — add it to a thread.`);
+      setOk(
+        `"${name.trim()}" is ready — it inherits its base type's tools; open it to narrow them.`,
+      );
       setName("");
       setPrompt("");
       setDescription("");

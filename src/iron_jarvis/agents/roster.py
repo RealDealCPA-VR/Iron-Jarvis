@@ -223,10 +223,27 @@ def _dynamic_entries(platform) -> list[RosterEntry]:
             # stored tool list carries `delegate`, or whose base type is the
             # supervisor, would be REFUSED at delegation time — listing it as
             # delegable would be aspiration, not verified capability.
+            # READ THE COMPOSED DEFINITION, NOT THE RAW ROW (v1.178.0). This
+            # asked the STORED list, and since v1.178.0 an empty stored list
+            # means "not specified" and INHERITS the base type's roster. A
+            # dynamic agent with base_type="planner" and no stored tools
+            # therefore holds `delegate` (types.py, since v1.166.0) while this
+            # row still said delegable=True — so the roster advertised a
+            # delegation `delegate_tool` would refuse, which is precisely the
+            # aspiration-not-capability this block exists to prevent. Reachable
+            # via the `create_agent` tool, which accepts base_type.
+            definition = None
             try:
-                tools = json.loads(getattr(record, "tools_json", "") or "[]")
-            except (TypeError, ValueError):
-                tools = []
+                definition = registry.definition(name)
+            except Exception:  # noqa: BLE001 — one bad record must not kill the roster
+                definition = None
+            if definition is not None:
+                tools = list(definition.tools)
+            else:
+                try:
+                    tools = json.loads(getattr(record, "tools_json", "") or "[]")
+                except (TypeError, ValueError):
+                    tools = []
             coordinator = (
                 isinstance(tools, list) and "delegate" in tools
             ) or base.casefold() == "supervisor"

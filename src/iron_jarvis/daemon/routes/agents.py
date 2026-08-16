@@ -371,6 +371,18 @@ def register(app: FastAPI, d) -> None:
     def _avatar_path(name: str) -> Path:
         return d.platform.config.home / "avatars" / f"{_avatar_slug(name)}.png"
 
+    def _effective_tools(name: str) -> list[str]:
+        """What this agent ACTUALLY holds, inheritance resolved (v1.178.0).
+
+        Never raises: a card that cannot show the effective roster falls back to
+        showing none, which is what it displayed before this field existed.
+        """
+        try:
+            definition = d.platform.agents_registry.definition(name)
+        except Exception:  # noqa: BLE001 — a display field never breaks the list
+            return []
+        return list(definition.tools) if definition is not None else []
+
     def _avatar_url(name: str) -> str | None:
         """The serve URL — ONLY when a stored portrait actually exists.
         None otherwise, so no client ever renders a broken 404 image."""
@@ -406,7 +418,17 @@ def register(app: FastAPI, d) -> None:
                     # Editable fields so the Agents page can PATCH them without a
                     # separate detail fetch.
                     "system_prompt": r.system_prompt,
+                    # `tools` stays the STORED list — the Agents page PATCHes
+                    # this field back, so echoing an inherited roster here would
+                    # freeze the inheritance into an explicit allowlist on the
+                    # first save the user makes for an unrelated reason.
                     "tools": _json.loads(r.tools_json or "[]"),
+                    # ...and `effective_tools` is what the agent ACTUALLY holds
+                    # (v1.178.0): an empty stored list inherits the base type's
+                    # roster, so a card rendering only `tools` would tell the
+                    # user "no tools" about an agent that works. Read-only,
+                    # additive, and never PATCHed back.
+                    "effective_tools": _effective_tools(r.name),
                     # v1.171.0 additive: the portrait URL when one is stored
                     # (None otherwise) — the Setup card's avatar row reads it.
                     "avatar": _avatar_url(r.name),
@@ -1012,6 +1034,58 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="no such thread")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.post("/agents/threads/{thread_id}/remember")
+    async def remember_agent_thread(thread_id: str, body: dict) -> dict[str, Any]:
+        """Commit a round table to LONG-TERM MEMORY (v1.178.0) — the agent-side
+        twin of ``POST /chat/threads/{id}/remember``. Without it a decision the
+        panel reached dies with the thread.
+
+        Body (all optional): ``mode`` distill|full, ``source`` (an LTM store,
+        "" = the default brain), ``provider``/``model`` (distill override), and
+        ``preview``.
+
+        ``preview`` DEFAULTS TO TRUE and that is the point: the default call
+        writes nothing and returns ``items`` (the extracted claims) plus the
+        exact ``content`` that would land, so the user reviews agent-written
+        text before the app can quote it back as fact. Send ``preview: false``
+        to commit — the explicit call. With no real model connected, distill
+        degrades to a verbatim excerpt and says so (``distilled: false`` +
+        ``note``); a mock must never fabricate a memory of a real conversation.
+        The ladder lives in ``AgentThreads.remember``; errors map the same way
+        ``/say`` maps them."""
+        body = body or {}
+        # ONLY AN EXPLICIT FALSE MAY DEFEAT THE PREVIEW. ``bool(body.get(
+        # "preview", True))`` reads right and is not: every falsy JSON value
+        # resolves to False, so ``{"preview": null}`` — what a client sends for
+        # a field it has not decided yet — COMMITTED. Measured: that exact body
+        # wrote the panel into the brain and answered ``"preview": false``,
+        # which is the suggest-don't-act default failing silently in the one
+        # direction that cannot be undone. Anything not recognisable as a
+        # "false" previews; the caller that means to write says so.
+        _pv = body.get("preview", True)
+        try:
+            return await _threads().remember(
+                thread_id,
+                d,
+                mode=str(body.get("mode") or "distill"),
+                source=str(body.get("source") or ""),
+                provider=str(body.get("provider") or ""),
+                model=str(body.get("model") or ""),
+                preview=_pv is None
+                or str(_pv).strip().lower() not in ("false", "0", "no"),
+                # The body the preview returned, sent back on the commit so what
+                # the user approved is what lands (v1.178.0 review finding).
+                # Optional: a caller that never previewed omits it and the
+                # ladder runs exactly as before.
+                approved_content=str(body.get("content") or ""),
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail="no such thread")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
 
     # Custom (agent/user-authored) reusable tools.
     @app.get("/tools/custom")

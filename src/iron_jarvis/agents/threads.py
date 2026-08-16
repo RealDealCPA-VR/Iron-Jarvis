@@ -19,10 +19,17 @@ thread renders the round while it unfolds instead of after it. Rounds are
 DIRECTED with @-mentions (see :meth:`AgentThreads.run_round`), and a remote
 participant whose registration is disabled or gone is skipped with an honest
 entry instead of a doomed network call.
+
+A round's WORTH OUTLIVES THE ROUND (v1.178.0): :meth:`AgentThreads.remember`
+commits a panel to long-term memory the way ``POST /chat/threads/{id}/remember``
+commits a chat — same distill/verbatim ladder, same honest-mock refusal, same
+LTM front door — and defaults to a PREVIEW, so what a panel concluded is
+reviewed before it becomes something the app quotes back later as fact.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from datetime import datetime
@@ -151,6 +158,207 @@ def clean_participants(raw: Any) -> list[dict[str, str]]:
             }
         )
     return out
+
+
+# -- committing a panel to long-term memory (v1.178.0) ----------------------- #
+#
+# WHAT IS SHARED WITH CHAT AND WHAT IS NOT. ``POST /chat/threads/{id}/remember``
+# (daemon/routes/chat.py) already owns the ladder this surface needs, and two
+# notions of "what mattered here" WILL drift — the draftFromFence lesson. So the
+# budgets are IMPORTED from that module (never re-declared), the clip contract
+# is one function used for both budgets, the mock refusal is the same class
+# check plus the same ``d._failover_adapter("mock")`` hop, the model call is the
+# same ``d._one_shot_complete``, and the write is the same ``ltm.append`` front
+# door. What is NOT shared is the transcript renderer and the distill prompt,
+# because a panel's data shape forbids it — see :func:`panel_transcript` and
+# :data:`PANEL_DISTILL_SYSTEM`. Chat's ladder itself lives INLINE inside its
+# route handler (a closure inside ``register``), so it cannot be called from
+# here at all; lifting it into a shared module is a follow-up that has to touch
+# daemon/routes/chat.py.
+
+
+def _remember_budgets() -> tuple[int, int]:
+    """(distill input budget, verbatim excerpt budget) in chars — CHAT's.
+
+    Imported rather than re-declared so the two surfaces can never disagree
+    about how much conversation a model is shown or how long an offline excerpt
+    may be. Lazy: ``daemon.routes.chat`` imports this package, so a module-level
+    import would be a cycle.
+    """
+    from ..daemon.routes.chat import _REMEMBER_INPUT, _REMEMBER_VERBATIM
+
+    return _REMEMBER_INPUT, _REMEMBER_VERBATIM
+
+
+def clip_with_marker(text: str, budget: int, marker: str) -> str:
+    """Head+tail clip with an EXPLICIT omission marker (chat's contract).
+
+    A silently truncated transcript is the one thing that must never happen
+    here: the model would present a digest of the last third as the whole
+    panel, and a memory note is read back later as authoritative.
+    """
+    if len(text) <= budget:
+        return text
+    head, tail = budget // 3, budget * 2 // 3
+    return text[:head] + marker + text[-tail:]
+
+
+#: Distill instruction for a PANEL. Deliberately not chat's prompt text: a round
+#: table's value is WHO concluded what and where the panelists disagreed, and a
+#: prompt that flattens N speakers into one voice throws away the only thing
+#: this surface produces that chat cannot.
+PANEL_DISTILL_SYSTEM = (
+    "You distill multi-agent panel conversations into durable memory notes."
+    " Extract ONLY what is worth remembering long-term: the decision the panel"
+    " reached, the facts and figures established, unresolved disagreements, and"
+    " open action items — as compact markdown bullets under short headings."
+    " ATTRIBUTE: name the agent behind a claim or objection, because who said"
+    " it is what makes a panel worth re-reading. Keep exact names, numbers,"
+    " dates and identifiers as written. Skip pleasantries and restatement."
+    " NEVER invent content that is not in the transcript, and never resolve a"
+    " disagreement the panel left open; if the transcript notes an omitted"
+    " middle, say the note covers the shared parts. No preamble, no sign-off."
+)
+
+_BULLET_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(.*\S)\s*$")
+_HEADING_RE = re.compile(r"^\s*#{1,6}\s+(.*\S)\s*$")
+
+
+def review_items(body: str, *, limit: int = 40, width: int = 300) -> list[str]:
+    """What WOULD be committed, as a flat reviewable list.
+
+    Suggest-don't-act needs the user to see the CLAIMS, not a wall of markdown —
+    a preview whose only content is the finished note is a diff nobody reads. A
+    heading becomes the prefix of the bullets under it so an item still says
+    what it is about once it is out of its section. Falls back to plain lines
+    when the body carries no bullets at all (the verbatim-excerpt path), because
+    an empty review list would read as "there is nothing to commit".
+    """
+    def _scan(bullets_only: bool) -> list[str]:
+        out: list[str] = []
+        section = ""
+        for raw in (body or "").splitlines():
+            line = raw.strip()
+            if not line or line == "---":
+                continue
+            heading = _HEADING_RE.match(line)
+            if heading:
+                section = heading.group(1).strip()
+                continue
+            bullet = _BULLET_RE.match(line)
+            if bullet:
+                text = bullet.group(1).strip()
+            elif bullets_only:
+                continue
+            else:
+                text = line
+            out.append(f"{section}: {text}" if section else text)
+            if len(out) >= limit:
+                break
+        return out
+
+    items = _scan(True) or _scan(False)
+    # TRUNCATION IS ALWAYS REPORTED (v1.178.0 review finding). Both caps used to
+    # bite silently, in the one payload the user reads before an irreversible
+    # write: a 41st claim simply vanished, and a long claim lost its tail
+    # mid-sentence with nothing to say it had. A preview that quietly shows less
+    # than what will land is worse than no preview — the user approves what they
+    # were shown and something else is written. This is the same rule the file
+    # walker and the OCR page cap already follow: cap, then SAY SO.
+    clipped = [(i[: width - 1] + "…") if len(i) > width else i for i in items]
+    if len(clipped) >= limit:
+        clipped = clipped[:limit]
+        clipped.append(
+            f"[… only the first {limit} items are listed here — the full text "
+            "below is what will be committed …]"
+        )
+    return clipped
+
+
+def _panel_header(rec: Any, title: str, participants: list, msgs: list) -> str:
+    """The provenance line every committed panel carries.
+
+    ONE definition (v1.178.0): the preview and the commit must show the same
+    header, and they are produced on two different code paths — the approved-
+    content commit skips the ladder entirely. Two copies of this string would
+    mean the note the user approved and the note that landed differed by their
+    first line, which is exactly the mismatch this header exists to prevent.
+    """
+    stamp = ""
+    try:
+        stamp = rec.updated_at.strftime("%Y-%m-%d")
+    except Exception:  # noqa: BLE001 — a missing stamp is not a failure
+        stamp = ""
+    roster = ", ".join(str(p.get("name") or "?") for p in participants)
+    return (
+        f"_Committed from the agent panel “{title}”"
+        f" ({len(msgs)} messages; {roster or 'no participants on record'}"
+        f"{', ' + stamp if stamp else ''})._\n\n"
+    )
+
+
+def panel_transcript(
+    title: str, participants: list[dict], msgs: list[dict], updated_at: Any = None
+) -> str:
+    """The panel VERBATIM as markdown. Deterministic — no model in the loop.
+
+    NOT ``routes.chat._share_transcript``, and that is a data-shape fact rather
+    than a duplicate: chat's renderer has a speaker vocabulary two words wide
+    ("You" / "Iron Jarvis") because a chat has two speakers. Flattening five
+    panelists into "Iron Jarvis" would store a memory that cannot answer the one
+    question worth asking of a round table later — who concluded what. Honest
+    errors ride along as their own labelled line for the same reason the share
+    renderer keeps its footnotes: a panelist that could NOT answer is part of
+    how the conclusion was reached, and dropping it overstates the consensus.
+    """
+    # An entry's ``who`` is the participant KEY. Both the stored key and the
+    # derived one are accepted: participants written before ``clean_participants``
+    # existed carry no ``key``, and a label of "" would silently collapse every
+    # such panelist onto one another.
+    names: dict[str, str] = {}
+    labels: list[str] = []
+    for p in participants:
+        label = f"{p.get('name') or '?'} ({p.get('role') or 'participant'})"
+        labels.append(label)
+        derived = participant_key(str(p.get("source") or ""), str(p.get("name") or ""))
+        for k in (str(p.get("key") or ""), derived):
+            if k and k != ":":
+                names.setdefault(k, label)
+    meta = ["Agent panel", f"{len(participants)} agents"]
+    roster = ", ".join(labels)
+    if roster:
+        meta.append(roster)
+    if updated_at is not None:
+        try:
+            meta.append(updated_at.strftime("%Y-%m-%d %H:%M UTC"))
+        except Exception:  # noqa: BLE001 — a str timestamp still renders fine
+            meta.append(str(updated_at))
+    lines = [f"# {title}", "", "_" + " · ".join(meta) + "_", "", "---"]
+    for m in msgs:
+        who = str(m.get("who") or "user")
+        label = "You" if who == "user" else names.get(who, who)
+        lines += ["", f"### {label}", ""]
+        content = str(m.get("content") or "").strip()
+        error = str(m.get("error") or "").strip()
+        lines.append(content or "_(no reply)_")
+        if error:
+            lines += ["", f"_{error}_"]
+    return "\n".join(lines) + "\n"
+
+
+def _load_round(rec: Any) -> tuple[list[dict], list[dict]]:
+    """Parse a record's two JSON blobs, leniently. Runs in a worker thread —
+    a 400-message thread is real CPU work and the daemon is one loop."""
+    def _parse(blob: str) -> list[dict]:
+        try:
+            data = json.loads(blob or "[]")
+        except Exception:  # noqa: BLE001 — a corrupt blob is an empty panel
+            return []
+        return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
+
+    return _parse(getattr(rec, "participants_json", "")), _parse(
+        getattr(rec, "messages_json", "")
+    )
 
 
 class AgentThreads:
@@ -569,3 +777,210 @@ class AgentThreads:
         if not out.get("ok"):
             raise RuntimeError(out.get("detail") or "remote agent failed")
         return str(out.get("result") or "").strip()
+
+    # -- long-term memory -----------------------------------------------------
+
+    async def remember(
+        self,
+        thread_id: str,
+        d: Any,
+        *,
+        mode: str = "distill",
+        source: str = "",
+        provider: str = "",
+        model: str = "",
+        preview: bool = True,
+        approved_content: str = "",
+    ) -> dict[str, Any]:
+        """Commit a panel to LONG-TERM MEMORY — the chat ``/remember`` ladder,
+        for a round table (v1.178.0).
+
+        A decision reached between agents used to die with the thread: rounds
+        were persisted and searchable, but nothing ever crossed into the memory
+        the app reads back on later turns. This is that crossing.
+
+        ``mode`` distill = a one-shot distillation of what is worth remembering
+        (see :data:`PANEL_DISTILL_SYSTEM`); full = the verbatim panel. HONEST
+        MOCK RULE: a mock adapter would FABRICATE a memory of a real
+        conversation, so distill hops to a real provider via
+        ``d._failover_adapter("mock")`` and, with none connected, degrades to a
+        verbatim excerpt and SAYS SO in ``note`` with ``distilled=False``. It
+        degrades rather than refuses because memory must keep working offline —
+        the same choice chat made, and the reason the ``note`` is not optional.
+
+        SUGGEST-DON'T-ACT: ``preview`` defaults to TRUE. The default call WRITES
+        NOTHING and returns ``items`` (the extracted claims, flat and readable)
+        plus the exact ``content`` that would land; committing needs the
+        explicit ``preview=False``. Chat's route commits on the first call
+        because the user is remembering their OWN words; here the text was
+        written by agents, and a note the user never read would be quoted back
+        as fact by every later turn.
+
+        Raises ``KeyError`` (unknown thread), ``ValueError`` (bad mode / empty
+        thread / unknown memory source) or ``RuntimeError`` (the store refused
+        the write) — the route maps them to 404/400/422, exactly like ``/say``.
+
+        Every blocking step — the DB read, the JSON parse, the render, the LTM
+        append (which writes files) — goes through ``asyncio.to_thread``.
+        """
+        mode = (mode or "distill").strip().lower()
+        if mode not in ("distill", "full"):
+            raise ValueError("mode must be 'distill' or 'full'")
+        rec = await asyncio.to_thread(self.get, thread_id)
+        if rec is None:
+            raise KeyError(thread_id)
+        participants, msgs = await asyncio.to_thread(_load_round, rec)
+        if not msgs:
+            raise ValueError("this thread has no messages to remember")
+
+        ltm = d.platform.ltm
+        src = (source or "").strip() or ltm.default_source()
+        if not src or ltm.get(src) is None:
+            raise ValueError(f"no such memory source: {src}")
+
+        title = (getattr(rec, "title", "") or "").strip() or "Agent thread"
+
+        # WHAT WAS APPROVED IS WHAT LANDS (v1.178.0, review finding). Without
+        # this, `preview=False` re-ran the whole ladder — including a SECOND
+        # distillation — so the text the user read and approved was not the text
+        # that reached memory. A model asked twice does not answer twice the
+        # same, which makes the preview a decoration rather than a decision: the
+        # entire point of suggest-don't-act is that the thing shown IS the thing
+        # done. Measured by the reviewer with a numbering adapter.
+        #
+        # So a commit may carry the previewed body back. It is written verbatim,
+        # no second model call (cheaper AND honest), with the same header the
+        # preview showed. Absent, the ladder runs as before — an older client, or
+        # a caller that never previewed, is unchanged.
+        approved = (approved_content or "").strip()
+        if approved and not preview:
+            # VERBATIM — the approved text already IS the whole note (review
+            # finding). The preview returns `content` as header + body + the
+            # thread reference, and that whole string is what comes back here.
+            # Prepending the header again put it in TWICE, so the note that
+            # landed differed from the note the user read — the exact mismatch
+            # this branch exists to prevent, reintroduced by the fix for it.
+            # (The test that should have caught it asserted `startswith(header)`,
+            # which is trivially true of a doubled header; it now counts.)
+            content = approved
+            mem_title = f"Panel: {title}"
+            out: dict[str, Any] = {
+                "ok": True,
+                "preview": False,
+                "ref": "",
+                "source": src,
+                "mode": mode,
+                # NOT re-derived: this text came back from a preview and was
+                # written as approved, so claiming a fresh distillation here
+                # would misreport how it was produced.
+                "distilled": False,
+                "title": mem_title,
+                "messages": len(msgs),
+                "participants": [str(p.get("name") or "?") for p in participants],
+                "items": await asyncio.to_thread(review_items, approved),
+                "content": content,
+                "note": "committed the text you approved (no re-distillation)",
+            }
+            try:
+                out["ref"] = await asyncio.to_thread(
+                    ltm.append, mem_title, content, source=src
+                )
+            except ValueError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — an append failure is honest
+                raise RuntimeError(f"could not write to '{src}': {exc}")
+            return out
+
+        input_budget, verbatim_budget = _remember_budgets()
+        transcript = await asyncio.to_thread(
+            panel_transcript, title, participants, msgs, getattr(rec, "updated_at", None)
+        )
+        verbatim = clip_with_marker(
+            transcript,
+            verbatim_budget,
+            "\n\n[… middle of the panel omitted for length …]\n\n",
+        )
+
+        distilled = False
+        used_provider = ""
+        note = ""
+        content_body = verbatim
+        if mode == "distill":
+            from ..providers.adapters.base import LLMMessage
+            from ..providers.adapters.mock import MockLLMAdapter
+
+            want_provider = provider or d.platform.config.default_provider
+            want_model = model or d.platform.config.default_model
+            try:
+                adapter = d.platform.providers.get(want_provider, want_model)
+            except Exception:  # noqa: BLE001 — unreachable provider == offline
+                adapter = None
+            if adapter is not None and isinstance(adapter, MockLLMAdapter):
+                adapter, want_provider = d._failover_adapter("mock")
+            if adapter is None:
+                note = (
+                    "no real model connected — this is a verbatim excerpt, not a"
+                    " distillation"
+                )
+            else:
+                clipped = clip_with_marker(
+                    transcript,
+                    input_budget,
+                    "\n\n[… middle of the panel omitted for length —"
+                    " note this in the memory …]\n\n",
+                )
+                try:
+                    resp, used_provider, _m = await d._one_shot_complete(
+                        want_provider,
+                        adapter,
+                        system=PANEL_DISTILL_SYSTEM,
+                        messages=[LLMMessage(role="user", content=clipped)],
+                    )
+                    digest = (resp.text or "").strip()
+                except Exception as exc:  # noqa: BLE001 — degrade, don't lose it
+                    digest = ""
+                    note = f"distillation failed ({exc}) — verbatim excerpt instead"
+                if digest:
+                    content_body = digest
+                    distilled = True
+                else:
+                    note = note or (
+                        "the model returned nothing — verbatim excerpt instead"
+                    )
+
+        content = (
+            _panel_header(rec, title, participants, msgs)
+            + content_body
+            + f"\n\nagent thread: {thread_id}"
+        )
+        mem_title = f"Panel: {title}"
+        items = await asyncio.to_thread(review_items, content_body)
+
+        out: dict[str, Any] = {
+            "ok": True,
+            "preview": preview,
+            "ref": "",
+            "source": src,
+            "mode": mode,
+            "distilled": distilled,
+            "title": mem_title,
+            "messages": len(msgs),
+            "participants": [str(p.get("name") or "?") for p in participants],
+            "items": items,
+            "content": content,
+        }
+        if used_provider and distilled:
+            out["provider"] = used_provider
+        if note:
+            out["note"] = note
+        if preview:
+            return out
+        try:
+            out["ref"] = await asyncio.to_thread(
+                ltm.append, mem_title, content, source=src
+            )
+        except ValueError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — an append failure is honest
+            raise RuntimeError(f"could not write to '{src}': {exc}")
+        return out

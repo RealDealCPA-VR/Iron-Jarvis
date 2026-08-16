@@ -33,6 +33,15 @@ def default_permissions() -> dict[str, str]:
         "read_file": "allow",
         "write_file": "allow",
         "edit_file": "allow",
+        # rename_file (v1.178.0). It shipped in v1.177.2 with NO entry here, and
+        # an absent key fail-closes to "ask" — which in a headless agent run
+        # means DENIED (`headless_ask_resolver` auto-approves only delegate/
+        # spawn_agent). So the tool built to fix "rename all files in this
+        # folder" could not be called by the agent doing that job. It sits at
+        # the same tier as `edit_file`: workspace-confined, refuses to clobber,
+        # and TX-01 undoable — strictly less destructive than the overwrite
+        # `write_file` has always been allowed to do.
+        "rename_file": "allow",
         "list_files": "allow",
         "grep": "allow",
         "search_codebase": "deny",  # no tool yet — fail-closed (use grep/file_search)
@@ -86,6 +95,15 @@ def default_permissions() -> dict[str, str]:
         # headless daemon, so the scheduled steward could never file anything
         # and the review queue would stay empty with nobody seeing an error.
         "memory_propose": "allow",
+        # Capability requests (v1.178.0): the agent SAYS the app has no verb for
+        # the job instead of shelling out around it. Same tier and the same
+        # fail-closed reasoning as memory_propose above — it files a row the
+        # user must approve before anything is created, so filing is strictly
+        # weaker than every write tool the session already holds, and an absent
+        # key would resolve to "ask" and be DENIED in exactly the headless agent
+        # runs that hit the gap. A tool for reporting "I cannot do this" that is
+        # itself silently denied would reproduce the failure it exists to end.
+        "capability_propose": "allow",
         "list_agents": "allow",
         "create_agent": "ask",
         "spawn_agent": "ask",
@@ -110,10 +128,37 @@ def default_permissions() -> dict[str, str]:
         # settings display imply a configured choice nobody made (P3's pinned
         # design — see test_workflow_tools_v1170).
         "workflow_list": "allow",
+        # THE DURABLE WORKLIST (v1.177.0, permissioned v1.178.0). These four had
+        # NO entry, so they fail-closed to "ask" and a headless agent run —
+        # every agent run — was DENIED all four. The whole checkpointing
+        # mechanism built to make a 26-file job survivable could not be called
+        # by the lane it was built for, which is why the measured run showed
+        # ZERO worklist calls and got blamed on the planner. They are pure
+        # bookkeeping in this app's own SQLite: no host reach, no network, no
+        # user files touched, and the claim/report cycle is the thing that makes
+        # a bulk job resumable at all.
+        "worklist_add": "allow",
+        "worklist_next": "allow",
+        "worklist_done": "allow",
+        "worklist_status": "allow",
         # Documents (read any file type; write within the workspace).
         "read_document": "allow",
         "write_document": "allow",
         "extract_pdf": "allow",
+        # Whole-folder read (v1.174.0) and format conversion, both permissioned
+        # in v1.178.0 for the same reason as the worklist: absent meant denied.
+        # `batch_documents` is the bulk-read path built FOR the folder job;
+        # `convert_document` writes only a NEW file; `list_folder` is READONLY
+        # and already narrowed by `fs_read_ok` (reads stay broad on purpose —
+        # the user's documents live all over the disk, see repl confinement).
+        "batch_documents": "allow",
+        "convert_document": "allow",
+        "list_folder": "allow",
+        # `images` is the ONE key behind view_image + image_convert/resize/info
+        # (tools/images.py). view_image was put on every agent roster in
+        # v1.174.0 as "eyes for any agent" and was denied in every headless run
+        # for want of this line. Looking at an image is a read.
+        "images": "allow",
         # Page-level PDF ops (arrange/split): inputs read-gated, outputs are
         # NEW workspace files only (never the source) and TX-01 undoable.
         "pdf_arrange": "allow",

@@ -6,6 +6,17 @@
 // each other's replies. The management surfaces (create dynamic agents,
 // connect remote ones) collapse into the "Set up agents" card; the
 // round-table is the star.
+//
+// v1.178.0 — A ROOM, NOT A FORM. The roster stands as a PERSISTENT LEFT RAIL
+// of faces (sticky from md up) and everything else — give work, setup, the
+// round-table — is the module beside it. Clicking a face is the page's main
+// gesture: it preselects that agent in the job-post card and, when a 1:1
+// thread with exactly that agent already exists, opens it so the user carries
+// on where they left off. It never CREATES a thread — that stays behind the
+// explicit Talk button, because a POST is not what a click on a portrait
+// promises. The rail column only appears when the roster does: an older
+// daemon that doesn't serve /agents/roster gets the plain stacked page it has
+// always had, with no empty column beside it.
 
 import { useEffect, useRef, useState } from "react";
 import { Check, MessagesSquare, Plus, Trash2 } from "lucide-react";
@@ -27,7 +38,11 @@ import {
 } from "@/components/agents/identity";
 import { SetupCard, type DynamicAgentFull } from "@/components/agents/SetupCard";
 import { RosterStrip, type RosterEntry } from "@/components/agents/RosterStrip";
-import { JobPostCard, type JobAssign } from "@/components/agents/JobPostCard";
+import {
+  JobPostCard,
+  TEAM_TARGET,
+  type JobAssign,
+} from "@/components/agents/JobPostCard";
 import {
   PanelPicker,
   type PickerCatalog,
@@ -112,6 +127,15 @@ export default function AgentsPage() {
   // target there and scrolls the card into view.
   const jobRef = useRef<HTMLDivElement>(null);
   const [assign, setAssign] = useState<JobAssign | null>(null);
+  // The rail's gear reveals the setup surfaces through this wrapper.
+  const setupRef = useRef<HTMLDivElement>(null);
+  // WHO THE USER IS WORKING WITH (v1.178.0). This lives on the page, not
+  // inside the rail, because it drives the page: the job card's target and
+  // which thread is open. Kept as kind + BARE name, the shape every handler
+  // here already speaks (participantKey, JobAssign, talkWith).
+  const [picked, setPicked] = useState<{ kind: AgentSource; name: string } | null>(
+    null,
+  );
 
   const polled = (threadsData?.threads ?? []).filter((t) => !hidden.has(t.id));
   const threads =
@@ -216,14 +240,23 @@ export default function AgentsPage() {
     }
   }
 
+  /** The one 1:1 thread whose panel is EXACTLY this agent, if it exists.
+   *  Extracted (v1.178.0) so the rail's "continue working with" and the Talk
+   *  button ask the same question — two copies of this predicate would be two
+   *  chances to open a thread with somebody else on the panel. */
+  function soloThreadWith(kind: AgentSource, name: string) {
+    const key = participantKey(kind, name);
+    return threads.find(
+      (t) => t.participants.length === 1 && t.participants[0]?.key === key,
+    );
+  }
+
   /** The roster's Talk button: open the existing 1:1 thread with exactly this
    *  agent, or start one ("Talk with <name>"), then jump to the round-table. */
   async function talkWith(kind: AgentSource, name: string) {
     if (talkBusyRef.current) return;
     const key = participantKey(kind, name);
-    const existing = threads.find(
-      (t) => t.participants.length === 1 && t.participants[0]?.key === key,
-    );
+    const existing = soloThreadWith(kind, name);
     setTableError(null);
     if (existing) {
       setSelectedId(existing.id);
@@ -247,6 +280,74 @@ export default function AgentsPage() {
   function assignWork(kind: AgentSource, name: string) {
     setAssign({ kind, name, nonce: Date.now() });
     jobRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  /**
+   * A face in the rail was clicked (v1.178.0): "this is who I'm working with".
+   *
+   * Two effects, both of them things the user can already do by hand — the
+   * click just stops making them do it:
+   *   - the job-post card preselects this agent, so typing a job and pressing
+   *     Post sends it to the face that is highlighted. Only when it can
+   *     actually TAKE work: `canWork` is the roster's delegable + healthy
+   *     gate, and preselecting an offline remote would put a target in the box
+   *     that the card then silently falls back to Team for.
+   *   - "continue working with": an existing 1:1 thread with exactly this
+   *     agent opens. Nothing is created — that is Talk's job, and a POST is
+   *     not what clicking a portrait promises.
+   * It deliberately does NOT scroll the job card into view the way Give-work
+   * does: selecting is a light gesture, and yanking the page under someone who
+   * was reading a transcript is the opposite of what a rail is for.
+   */
+  function selectAgent(kind: AgentSource, name: string, canWork: boolean) {
+    setPicked({ kind, name });
+    // ADVERSARIAL REVIEW (v1.178.0): the `if (canWork)` guard alone left a
+    // STALE target behind. Click the analyst (job card → "custom:analyst"),
+    // then click the offline down-box: the rail moved its ring and its
+    // aria-current onto down-box while the card still said analyst, and Post
+    // would have sent the job to the analyst. That is the page disagreeing
+    // with itself, the same class of bug that forced the selection onto the
+    // page in the first place — just reached from the other side.
+    //
+    // So an un-workable pick doesn't merely skip the preselect, it RESETS the
+    // target to the Team. `wireTarget` passes builtin names through unchanged
+    // (its own contract: "builtins are bare on the wire already"), so a
+    // builtin-kinded assign carrying JobPostCard's own TEAM_TARGET sentinel
+    // lands as exactly that sentinel and the card visibly reads
+    // "Team — supervisor plans & delegates". Team is also the honest answer:
+    // the supervisor is non-delegable and an offline remote cannot take a
+    // session, so the Team is where that job was always going to end up.
+    setAssign(
+      canWork
+        ? { kind, name, nonce: Date.now() }
+        : { kind: "builtin", name: TEAM_TARGET, nonce: Date.now() },
+    );
+    const existing = soloThreadWith(kind, name);
+    if (existing) {
+      setTableError(null);
+      setSelectedId(existing.id);
+    }
+  }
+
+  /**
+   * The gear-with-a-face: reveal the create/connect surfaces (both doors).
+   *
+   * SetupCard owns its own open state — hydrated from localStorage on mount —
+   * and exposes no `open` prop, so the gear drives it through the disclosure
+   * button the card already renders. That is deliberate over duplicating its
+   * storage key here: clicking runs the card's OWN toggle, so the state
+   * persists exactly as a manual click would, and a card that is already open
+   * is not slammed shut by the gear. If its markup ever changes shape the
+   * worst case is that we only scroll there — never a thrown error on click.
+   */
+  function openSetup() {
+    const host = setupRef.current;
+    const toggle = host?.querySelector<HTMLButtonElement>("button[aria-expanded]");
+    if (toggle?.getAttribute("aria-expanded") === "false") toggle.click();
+    host?.scrollIntoView({ behavior: "smooth", block: "start" });
+    // Focus follows the reveal — otherwise a keyboard user activates the gear
+    // and their focus is still down in the rail, three sections away.
+    toggle?.focus();
   }
 
   // --- the participant picker's catalog ------------------------------------
@@ -288,6 +389,24 @@ export default function AgentsPage() {
           })),
         };
 
+  // The rail (v1.178.0). `hasRoster` decides the page LAYOUT, so the rail is
+  // handed the page's OWN rows rather than fetching a second opinion — a rail
+  // that disagreed with the grid would leave a 15rem column of nothing beside
+  // the work. When the page has no rows (older daemon, or its fetch failed
+  // while the strip's succeeded) the component falls back to fetching for
+  // itself and simply renders in the stacked flow, exactly as before.
+  const hasRoster = rosterEntries.length > 0;
+  const rail = (
+    <RosterStrip
+      entries={hasRoster ? rosterEntries : undefined}
+      onTalk={threadsMissing ? undefined : talkWith}
+      onAssign={assignWork}
+      onSelect={selectAgent}
+      onConfigure={openSetup}
+      selected={picked}
+    />
+  );
+
   return (
     <PageShell>
       <Reveal>
@@ -314,176 +433,212 @@ export default function AgentsPage() {
         </Reveal>
       )}
 
-      {/* Give work (v1.166.0) — post a job to the Team (a supervisor session
-          that plans & delegates) or straight to one delegable roster agent.
-          Dispatched sessions carry origin "job:agents" and list in the card. */}
-      <Reveal>
-        <div ref={jobRef}>
-          <JobPostCard roster={rosterEntries} assign={assign} />
-        </div>
-      </Reveal>
+      {/* THE ROOM: faces down the left, the module beside them. With no
+          roster the wrapper is a plain block and the column below keeps the
+          page's own space-y-6 — byte-for-byte the layout an older daemon has
+          always rendered. */}
+      <div
+        className={
+          hasRoster
+            ? "grid items-start gap-4 lg:grid-cols-[15rem_minmax(0,1fr)]"
+            : ""
+        }
+      >
+        {hasRoster && (
+          // Sticky so the faces stay reachable while a long transcript
+          // scrolls — "persistent" is the whole point of a rail. Only from lg
+          // up: below that the grid is one column and a sticky block would
+          // pin the roster over the content it sits above.
+          //
+          // ADVERSARIAL REVIEW (v1.178.0): this breakpoint was `md` and that
+          // wrecked exactly the widths the brief said not to wreck. The page
+          // has no persistent sidebar (MainContent is `w-full ... px-3`), so a
+          // 768px window is ~744px of content; the ROUND-TABLE below already
+          // splits at `md:grid-cols-[16rem_minmax(0,1fr)]`, so both engaged at
+          // the same width and the transcript column got
+          // 744 − 240 − 16 − 256 − 16 ≈ 216px, minus card padding. At `lg`
+          // (1024px) it gets 1000 − 240 − 16 − 256 − 16 ≈ 472px — the same
+          // width it had at md BEFORE the rail existed — and the 768–1023px
+          // band falls back to the stacked single column, which is the layout
+          // that band has always had. Keep this breakpoint in lock-step with
+          // RosterStrip's `hidden lg:block` column / `lg:hidden` <select>:
+          // they are two halves of one responsive rule.
+          <div className="lg:sticky lg:top-4">{rail}</div>
+        )}
 
-      {/* Setup — collapsed by default; the round-table below is the star. */}
-      <Reveal>
-        <SetupCard
-          builtin={builtin}
-          dynamic={dynamic}
-          remotes={remotes}
-          models={models}
-          onAgentsChanged={reloadAgents}
-          onRemotesChanged={reloadRemotes}
-        />
-      </Reveal>
+        <div className="min-w-0 space-y-6">
+          {/* Roster (v1.139.0) — who can take delegated work. Renders nothing
+              on daemons that predate GET /agents/roster (it carries its own
+              Reveal, so hiding leaves no empty gap). The Talk button needs the
+              thread routes, so it's only offered when they exist. */}
+          {!hasRoster && rail}
 
-      {/* Roster (v1.139.0) — who can take delegated work. Renders nothing on
-          daemons that predate GET /agents/roster (it carries its own Reveal,
-          so hiding leaves no empty gap). The Talk button needs the thread
-          routes, so it's only offered when they exist. */}
-      <RosterStrip
-        onTalk={threadsMissing ? undefined : talkWith}
-        onAssign={assignWork}
-      />
+          {/* Give work (v1.166.0) — post a job to the Team (a supervisor
+              session that plans & delegates) or straight to one delegable
+              roster agent. Dispatched sessions carry origin "job:agents". */}
+          <Reveal>
+            <div ref={jobRef}>
+              <JobPostCard roster={rosterEntries} assign={assign} />
+            </div>
+          </Reveal>
 
-      {tableError && (
-        <Reveal>
-          <ErrorNote>{tableError}</ErrorNote>
-        </Reveal>
-      )}
+          {/* Setup — collapsed by default; the round-table below is the star.
+              The rail's gear reaches it through this wrapper. */}
+          <Reveal>
+            <div ref={setupRef}>
+              <SetupCard
+                builtin={builtin}
+                dynamic={dynamic}
+                remotes={remotes}
+                models={models}
+                onAgentsChanged={reloadAgents}
+                onRemotesChanged={reloadRemotes}
+              />
+            </div>
+          </Reveal>
 
-      {/* The round-table (hidden entirely on daemons without the thread routes) */}
-      {!threadsMissing && (
-        <Reveal>
-          <div ref={tableRef}>
-            {!threadsReady ? (
-              <Card>
-                <SkeletonRows rows={4} />
-              </Card>
-            ) : threadsData === null ? (
-              // Errored before any data — never fake an empty list. Offline
-              // shows the hint at the top; other failures get an honest note.
-              threadsError && threadsError.status !== 0 ? (
-                <ErrorNote>{threadsError.message}</ErrorNote>
-              ) : null
-            ) : threads.length === 0 ? (
-              <Card>
-                <Empty icon={<MessagesSquare size={26} />}>
-                  <span className="mb-1 block text-sm font-medium text-zinc-300">
-                    The round-table is empty
-                  </span>
-                  Start a thread and pick which agents sit at the table — a
-                  planner, your own skeptic, and an agent on another computer
-                  can all talk it out.
-                </Empty>
-                <div className="flex justify-center pb-2">
-                  <button
-                    type="button"
-                    onClick={() => setPicker({ mode: "create" })}
-                    className="btn-accent"
-                  >
-                    <Plus size={14} /> New thread
-                  </button>
-                </div>
-              </Card>
-            ) : (
-              <div className="grid items-start gap-4 md:grid-cols-[16rem_minmax(0,1fr)]">
-                {/* Thread rail */}
-                <Card pad={false} className="overflow-hidden">
-                  <div className="flex items-center justify-between border-b hairline px-3 py-2">
-                    <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-                      Round-table · {threads.length}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setPicker({ mode: "create" })}
-                      className="btn-ghost px-2 py-1 text-[12px]"
-                      title="Start a new agent thread"
-                    >
-                      <Plus size={13} /> New
-                    </button>
-                  </div>
-                  <div className="max-h-[70vh] space-y-0.5 overflow-y-auto p-1.5">
-                    {railError && <ErrorNote>{railError}</ErrorNote>}
-                    {threads.map((t) => {
-                      const active = t.id === selectedId;
-                      return (
-                        <div
-                          key={t.id}
-                          className={`group/thread relative rounded-xl border transition-colors ${
-                            active
-                              ? "border-accent/25 bg-accent/[0.08]"
-                              : "border-transparent hover:bg-white/[0.04]"
-                          }`}
+          {tableError && (
+            <Reveal>
+              <ErrorNote>{tableError}</ErrorNote>
+            </Reveal>
+          )}
+
+          {/* The round-table (hidden entirely on daemons without the thread routes) */}
+          {!threadsMissing && (
+            <Reveal>
+              <div ref={tableRef}>
+                {!threadsReady ? (
+                  <Card>
+                    <SkeletonRows rows={4} />
+                  </Card>
+                ) : threadsData === null ? (
+                  // Errored before any data — never fake an empty list. Offline
+                  // shows the hint at the top; other failures get an honest note.
+                  threadsError && threadsError.status !== 0 ? (
+                    <ErrorNote>{threadsError.message}</ErrorNote>
+                  ) : null
+                ) : threads.length === 0 ? (
+                  <Card>
+                    <Empty icon={<MessagesSquare size={26} />}>
+                      <span className="mb-1 block text-sm font-medium text-zinc-300">
+                        The round-table is empty
+                      </span>
+                      Start a thread and pick which agents sit at the table — a
+                      planner, your own skeptic, and an agent on another computer
+                      can all talk it out.
+                    </Empty>
+                    <div className="flex justify-center pb-2">
+                      <button
+                        type="button"
+                        onClick={() => setPicker({ mode: "create" })}
+                        className="btn-accent"
+                      >
+                        <Plus size={14} /> New thread
+                      </button>
+                    </div>
+                  </Card>
+                ) : (
+                  <div className="grid items-start gap-4 md:grid-cols-[16rem_minmax(0,1fr)]">
+                    {/* Thread rail */}
+                    <Card pad={false} className="overflow-hidden">
+                      <div className="flex items-center justify-between border-b hairline px-3 py-2">
+                        <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                          Round-table · {threads.length}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setPicker({ mode: "create" })}
+                          className="btn-ghost px-2 py-1 text-[12px]"
+                          title="Start a new agent thread"
                         >
-                          <button
-                            type="button"
-                            onClick={() => setSelectedId(t.id)}
-                            className="w-full px-2.5 py-2 pr-8 text-left"
-                            title={t.title || "Agent thread"}
-                          >
-                            <span
-                              className={`block truncate text-[13px] ${
-                                active ? "text-accent-soft" : "text-zinc-200"
+                          <Plus size={13} /> New
+                        </button>
+                      </div>
+                      <div className="max-h-[70vh] space-y-0.5 overflow-y-auto p-1.5">
+                        {railError && <ErrorNote>{railError}</ErrorNote>}
+                        {threads.map((t) => {
+                          const active = t.id === selectedId;
+                          return (
+                            <div
+                              key={t.id}
+                              className={`group/thread relative rounded-xl border transition-colors ${
+                                active
+                                  ? "border-accent/25 bg-accent/[0.08]"
+                                  : "border-transparent hover:bg-white/[0.04]"
                               }`}
                             >
-                              {t.title || "Agent thread"}
-                            </span>
-                            <span className="mt-1.5 flex items-center gap-2">
-                              <AvatarStack participants={t.participants} size="sm" />
-                              <span className="text-[11px] text-zinc-500">
-                                {t.message_count} msg{t.message_count === 1 ? "" : "s"} ·{" "}
-                                {timeAgo(t.updated_at)}
-                              </span>
-                            </span>
-                          </button>
-                          {pendingDelete === t.id ? (
-                            <button
-                              type="button"
-                              onClick={() => void removeThread(t.id)}
-                              aria-label="Confirm delete"
-                              title="Click again to delete"
-                              className="absolute right-1.5 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md bg-rose-500/15 text-rose-300"
-                            >
-                              <Check size={13} />
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => setPendingDelete(t.id)}
-                              aria-label={`Delete ${t.title || "thread"}`}
-                              title="Delete this thread"
-                              className="absolute right-1.5 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md text-zinc-500 opacity-0 transition-opacity hover:bg-white/[0.06] hover:text-rose-300 focus-visible:opacity-100 group-hover/thread:opacity-100"
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </Card>
-
-                {/* Conversation */}
-                <div className="min-w-0">
-                  {selectedId ? (
-                    <RoundTable
-                      threadId={selectedId}
-                      reloadNonce={detailNonce}
-                      onEditPanel={(detail) => setPicker({ mode: "edit", thread: detail })}
-                      onRoundDone={reloadThreads}
-                    />
-                  ) : (
-                    <Card>
-                      <Empty icon={<MessagesSquare size={22} />}>
-                        Pick a thread from the rail — or start a new one.
-                      </Empty>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedId(t.id)}
+                                className="w-full px-2.5 py-2 pr-8 text-left"
+                                title={t.title || "Agent thread"}
+                              >
+                                <span
+                                  className={`block truncate text-[13px] ${
+                                    active ? "text-accent-soft" : "text-zinc-200"
+                                  }`}
+                                >
+                                  {t.title || "Agent thread"}
+                                </span>
+                                <span className="mt-1.5 flex items-center gap-2">
+                                  <AvatarStack participants={t.participants} size="sm" />
+                                  <span className="text-[11px] text-zinc-500">
+                                    {t.message_count} msg{t.message_count === 1 ? "" : "s"} ·{" "}
+                                    {timeAgo(t.updated_at)}
+                                  </span>
+                                </span>
+                              </button>
+                              {pendingDelete === t.id ? (
+                                <button
+                                  type="button"
+                                  onClick={() => void removeThread(t.id)}
+                                  aria-label="Confirm delete"
+                                  title="Click again to delete"
+                                  className="absolute right-1.5 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md bg-rose-500/15 text-rose-300"
+                                >
+                                  <Check size={13} />
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setPendingDelete(t.id)}
+                                  aria-label={`Delete ${t.title || "thread"}`}
+                                  title="Delete this thread"
+                                  className="absolute right-1.5 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md text-zinc-500 opacity-0 transition-opacity hover:bg-white/[0.06] hover:text-rose-300 focus-visible:opacity-100 group-hover/thread:opacity-100"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </Card>
-                  )}
-                </div>
+
+                    {/* Conversation */}
+                    <div className="min-w-0">
+                      {selectedId ? (
+                        <RoundTable
+                          threadId={selectedId}
+                          reloadNonce={detailNonce}
+                          onEditPanel={(detail) => setPicker({ mode: "edit", thread: detail })}
+                          onRoundDone={reloadThreads}
+                        />
+                      ) : (
+                        <Card>
+                          <Empty icon={<MessagesSquare size={22} />}>
+                            Pick a thread from the rail — or start a new one.
+                          </Empty>
+                        </Card>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        </Reveal>
-      )}
+            </Reveal>
+          )}
+        </div>
+      </div>
 
       {/* New-thread / edit-panel modal */}
       {picker && (

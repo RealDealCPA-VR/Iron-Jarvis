@@ -67,6 +67,123 @@ _BREAKER_NOTE_AT = 2    # ...failures of the same call earn an honest note
 _BREAKER_REFUSE_AT = 3  # ...and the next identical attempt is refused
 
 
+#: Cap on tools armed FOR THE TASK on top of a definition's static roster
+#: (v1.178.0). Matches chat's total-armed cap (`_MAX_ARMED_TOOLS`), but here it
+#: bounds ADDITIONS only — see :func:`arm_for_task` for why it is the point.
+_AUTO_ARM_CAP = 6
+
+#: The `AUTO_SAFE_TOOLS` members that CREATE OR MODIFY content — files,
+#: workbooks, the long-term stores. That frozenset was curated for CHAT, where
+#: arming is an interactive per-turn act the user performs with the Auto toggle
+#: and can see: `daemon/chat_turn.py` says so in as many words ("the Auto toggle
+#: in the UI is the user's standing consent for exactly that set") and goes on to
+#: pass the armed names as `session_allow`. An agent run has no toggle, no one
+#: watching, and its DEFINITION is its capability contract — so arming here must
+#: widen a run's VOCABULARY, never its TIER.
+_WRITE_TIER: frozenset[str] = frozenset(
+    {
+        "write_file",
+        "write_document",
+        "excel_edit",
+        "redact_pii",
+        "pdf_arrange",
+        "pdf_split",
+        "ltm_append",
+        "remember_preference",
+    }
+)
+
+#: A definition holding one of these is already a WRITING agent, so the tier is
+#: nothing new and the gate below is a no-op. Every built-in except REVIEWER and
+#: SUPERVISOR qualifies — both of those are deliberately read-only (see the
+#: reviewer's own "DELIBERATELY NO `mcp:*`" note in `agents/types.py`, which
+#: reasons about exactly this blast radius) — so the gate costs the feature
+#: nothing on the six types that do the work.
+_ROSTER_WRITERS: frozenset[str] = _WRITE_TIER | {
+    "edit_file",
+    "rename_file",
+    "memory_write",
+    "excel_apply_spec",
+}
+
+
+def arm_for_task(platform, task: str, roster: list[str], *, cap: int = _AUTO_ARM_CAP):
+    """*roster* plus up to *cap* capability-selected tools for THIS task.
+
+    FIVE RELEASES IN A ROW FAILED THE SAME WAY: the tool the run needed was not
+    on the definition's roster, so it did not exist — `rename_file` (v1.177.2),
+    the worklist (v1.177.0), `view_image` (v1.174.0), `workflow_list`
+    (v1.172.0), `history_search` (v1.142.0). Each was repaired by editing
+    `agents/types.py` afterwards, which only ever fixes the case that already
+    burned. Chat has not had this problem: it reads the request and arms what it
+    needs every turn (`tools/autoselect.select_auto_tools`, called from
+    `daemon/chat_turn.py`). The agent lane resolved its roster at DEFINITION
+    time and never looked at the task text at all. This is that same reading,
+    applied once at run start.
+
+    ADDITIVE BY CONSTRUCTION. The roster rides at the front unchanged and only
+    ever gains names; `exclude` keeps a tool it already grants from being
+    re-listed. Candidates come exclusively from `autoselect.AUTO_SAFE_TOOLS`
+    (that module enforces it), so no run can pick up `shell`, `edit_file`,
+    `browse`, `web_action` or `mcp_call` this way — arming those stays a
+    definition-time/consent decision. That frozenset is not the whole safety
+    argument though: it also carries eight tools that WRITE (see `_WRITE_TIER`),
+    which is a per-turn consent decision in chat and would be an unwitnessed
+    capability grant here, so a definition holding no writer never gains one.
+
+    THE CAP IS THE POINT, not a token nicety. The default provider on this
+    machine is a LOCAL model, and the evidence run behind v1.174.0 shows the
+    failure mode: five `shell` calls where `read_file` was sitting right there.
+    Every extra schema in the prompt is another wrong door, so a run gets the
+    few tools its task actually argues for, never the whole safe set.
+
+    Cheap and offline: `select_auto_tools` is pure regex scoring over the task
+    string — no model call, no I/O, nothing to offload — and returns ``[]`` for
+    a task with no signal, which leaves the armed list byte-identical to the
+    roster that shipped before.
+    """
+    # An EMPTY roster is not a roster to widen: a definition that grants no
+    # tools is a text-only run, and arming file/document tools onto it would be
+    # a capability grant nobody asked for. A DYNAMIC agent record whose tools
+    # list is empty means "not specified" and is resolved to its base type's
+    # roster before a definition ever reaches the runtime, so what arrives here
+    # empty is a deliberate zero.
+    if not roster or cap <= 0:
+        return roster
+    skip = set(roster)
+    if not (skip & _ROSTER_WRITERS):
+        # TIER GATE. MEASURED on the reviewer roster (13 read-only tools, no
+        # writer of any kind): "review the draft report and save a corrected
+        # version as a docx" armed `write_document` + `write_file`, "fix the
+        # formulas in the sheet" armed `excel_edit`, "redact the pii" armed
+        # `redact_pii`, "merge these pdfs" armed `pdf_arrange`/`pdf_split` —
+        # and every one of those defaults to permission "allow"
+        # (`core/config.default_permissions`), so nothing downstream would have
+        # stopped the write. Reading a task is not consent to author files with
+        # an agent the user chose *because* it only reads.
+        #
+        # Excluded BEFORE the selector rather than filtered after it, so the cap
+        # still fills with `cap` tools this run may actually use instead of
+        # quietly returning fewer.
+        skip |= _WRITE_TIER
+    try:
+        from ..tools.autoselect import select_auto_tools
+
+        extra = [
+            name
+            for name in select_auto_tools(task or "", exclude=skip, cap=cap)
+            # Drop anything this install does not actually serve. `registry
+            # .specs` already filters by `t.name in allow`, so an unknown name
+            # cannot produce a spec — this keeps the returned LIST honest too,
+            # and mirrors chat's `if d.platform.registry.get(t)` filter.
+            if platform.registry.get(name) is not None
+        ]
+    except Exception:  # noqa: BLE001 — arming is an optimisation; a failure
+        # must leave the run with exactly the roster it had before.
+        return roster
+    return [*roster, *extra] if extra else roster
+
+
 def call_signature(name: str, arguments: dict | None) -> str:
     """A canonical identity for "the same call again".
 
@@ -399,7 +516,16 @@ class AgentRuntime:
             from .delegate_tool import DelegateTool
 
             self.p.registry.register(DelegateTool(self.p))
-        tool_specs = self.p.registry.specs(agent_def.tools)
+        # CAPABILITY ARMING (v1.178.0): the roster is fixed at authoring time,
+        # what this task needs is not. Build a NEW list — the built-in
+        # definitions are module-level singletons (`agents/types._DEFINITIONS`),
+        # so appending to `agent_def.tools` in place would rewrite that type's
+        # roster for the life of the process (the `_spec_with_store_as`
+        # deep-copy lesson). Both lanes below consume this one `tool_specs`, so
+        # the decomposed run is armed identically to the flat one.
+        tool_specs = self.p.registry.specs(
+            arm_for_task(self.p, session.task, agent_def.tools)
+        )
 
         system_prompt = agent_def.system_prompt
         # Auto-inject any configured default skills (§23) into the prompt.

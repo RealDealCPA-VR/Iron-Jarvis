@@ -252,3 +252,101 @@ async def test_list_agents_includes_builtin_and_dynamic(platform, registry, tool
     assert "builder" in result.data["builtin"]  # a built-in agent type
     assert any(d["name"] == "scout" for d in result.data["dynamic"])  # the new one
     assert "builder" in result.output and "scout" in result.output
+
+
+# -- an EMPTY roster inherits the base type's tools -------------------------
+#
+# THE LIVE BUG: `dashboard/components/agents/SetupCard.tsx` has no tool picker
+# and posts `tools: []` hardcoded, so every agent the user created from the
+# Agents page rebuilt into `AgentDefinition(tools=[])` and could do NOTHING —
+# the runtime advertises exactly `registry.specs(agent_def.tools)`, and an
+# empty roster reads as a dumb model rather than as a disarmed agent. An empty
+# stored list means "not specified", never "no tools". Imports stay local to
+# each test (the file's existing style) so this section is a pure append.
+
+
+def test_empty_roster_inherits_base_type_tools(platform):
+    from iron_jarvis.agents.dynamic import identity_anchor
+    from iron_jarvis.agents.types import get_agent_definition
+
+    registry = DynamicAgentRegistry(platform.engine).load()
+    # Exactly what the dashboard posts today: a prompt, and tools=[].
+    registry.register("dash_agent", PROMPT, [], base_type="builder")
+
+    definition = registry.definition("dash_agent")
+    assert definition is not None
+    assert definition.tools, "an inherited roster must be non-empty"
+    assert definition.tools == list(get_agent_definition(AgentType.BUILDER).tools)
+    # The stored record is untouched — the edit dialog still shows what the user
+    # typed, and inheritance stays a COMPOSITION-time decision (as v1.171.0's
+    # identity anchor is), which this asserts is unchanged by the new branch.
+    assert json.loads(registry.get("dash_agent").tools_json) == []
+    assert definition.system_prompt == identity_anchor("dash_agent") + "\n\n" + PROMPT
+
+
+def test_empty_roster_inherits_the_declared_base_type_not_builder(platform):
+    from iron_jarvis.agents.types import get_agent_definition
+
+    # Inheritance follows the record's OWN base type, so a researcher-based
+    # agent gets the researcher roster, not the builder fallback.
+    registry = DynamicAgentRegistry(platform.engine).load()
+    registry.register("digger", PROMPT, [], base_type="researcher")
+
+    definition = registry.definition("digger")
+    assert definition.type is AgentType.RESEARCHER
+    assert definition.tools == list(get_agent_definition(AgentType.RESEARCHER).tools)
+
+
+def test_non_empty_roster_is_honored_verbatim(platform):
+    from iron_jarvis.agents.types import get_agent_definition
+
+    # An explicit allowlist stays an allowlist: no base-type tools bleed in.
+    registry = DynamicAgentRegistry(platform.engine).load()
+    registry.register("narrow", PROMPT, TOOLS, base_type="builder")
+
+    definition = registry.definition("narrow")
+    assert definition.tools == TOOLS
+    builtin_only = set(get_agent_definition(AgentType.BUILDER).tools) - set(TOOLS)
+    assert builtin_only, "fixture guard: the builder roster must be wider than TOOLS"
+    assert not builtin_only & set(definition.tools)
+
+
+def test_inheritance_never_mutates_the_shared_builtin_definition(platform):
+    from iron_jarvis.agents.types import get_agent_definition
+
+    # `get_agent_definition` returns the SHARED module-level object, and callers
+    # append to `definition.tools`; handing that same list out would leak one
+    # dynamic agent's roster into every builtin session for the process's life.
+    registry = DynamicAgentRegistry(platform.engine).load()
+    registry.register("leaky", PROMPT, [], base_type="builder")
+    builtin = get_agent_definition(AgentType.BUILDER)
+    before = list(builtin.tools)
+
+    first = registry.definition("leaky")
+    first.tools.append("tool_from_a_dynamic_agent")
+    second = registry.definition("leaky")
+
+    assert builtin.tools == before  # the shared object survived the append
+    assert first.tools is not builtin.tools
+    assert second.tools is not first.tools
+    assert "tool_from_a_dynamic_agent" not in second.tools
+    assert second.tools == before
+
+
+def test_malformed_tools_json_inherits_rather_than_disarming(platform):
+    from iron_jarvis.agents.types import get_agent_definition
+
+    # The except-branch produced `[]` too, which is the same silent disarm.
+    registry = DynamicAgentRegistry(platform.engine).load()
+    registry.register("broken", PROMPT, TOOLS, base_type="builder")
+    with session_scope(platform.engine) as db:
+        row = db.exec(
+            select(DynamicAgentRecord).where(DynamicAgentRecord.name == "broken")
+        ).first()
+        row.tools_json = "{not json"
+        db.add(row)
+        db.commit()
+    registry._records.pop("broken", None)  # force a re-read from the DB
+
+    definition = registry.definition("broken")
+    assert definition.tools == list(get_agent_definition(AgentType.BUILDER).tools)

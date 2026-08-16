@@ -175,6 +175,7 @@ _LATE_MODEL_MODULES = (
     "..workflows.store",      # WorkflowPinRecord
     "..context.store",        # CompactionRecord — the compaction cache
     "..worklist.models",      # WorklistItem — durable per-item checkpoints
+    "..capability.models",    # CapabilityProposalRecord — the agent's asks
 )
 
 

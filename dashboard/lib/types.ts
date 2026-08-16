@@ -622,6 +622,25 @@ export interface DynamicAgent {
   description: string;
   provider?: string;
   model?: string;
+  /** The agent's own base type ("builder", "planner", …) — what it inherits. */
+  base_type?: string;
+  system_prompt?: string;
+  /**
+   * The STORED allowlist, exactly as saved. Empty means "not specified", NOT
+   * "no tools" — the daemon resolves an empty list to the base type's roster
+   * (v1.178.0). This is the field the Agents page PATCHes back, so it must
+   * keep round-tripping the stored value; writing the inherited roster here
+   * would freeze inheritance into an explicit allowlist on the first
+   * unrelated save.
+   */
+  tools?: string[];
+  /**
+   * What the agent ACTUALLY holds, inheritance resolved — read-only, never
+   * PATCHed back. Render THIS wherever the user is told what an agent can do:
+   * showing `tools` alone said "no tools" about an agent that works, which is
+   * the bug this pair of fields exists to close. ABSENT on older daemons.
+   */
+  effective_tools?: string[];
 }
 
 export interface AgentsResponse {

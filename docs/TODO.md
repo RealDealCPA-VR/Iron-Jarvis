@@ -123,3 +123,144 @@ Still open from the workflows analysis:
   a sandbox against hostile code (its own docs say so).
 - A restart loses in-flight sessions (they reconcile honestly as FAILED
   "interrupted by a daemon restart"; QUEUED rows included).
+
+
+---
+
+# Agent mode: one surface, no pre-configuration — SHIPPED v1.178.0 ✔
+
+*Written 2026-08-16 from a live product observation by the user, after five
+consecutive releases in which the acceptance job ("rename all files in this
+folder", 26 real tax documents) failed for a different missing-capability
+reason each time.*
+
+**The observation.** Chat already works the way the whole app claims to: leave
+Auto on, describe the job, and `chat_turn.py` calls `select_auto_tools` to arm
+what the turn needs. The AGENT lane does not. It takes a STATIC roster fixed at
+definition time, so the user is asked to have pre-decided what a job would
+need — which is exactly the "mode picker" the product thesis says it does not
+have. Every failure this week traces to that: `rename_file` absent from the
+builder, the worklist on the supervisor only, `view_image` registered
+platform-wide and on no roster.
+
+**The principle to build to.** Separate agents are for HANDOFF AND TEAM SHAPE,
+not for capability gating. When one human asks the app for work, "may it use
+this tool?" is a PERMISSION question — already answered, fail-closed, with a
+deny floor — and the roster is a second, redundant gate doing the same job
+worse. A narrow roster stays available as a deliberate opt-in (a reviewer that
+genuinely cannot write), never as the default a user inherits by accident.
+
+## P0 — the live bug (ship alone, as a patch)
+
+- [x] **A dashboard-created agent has NO tools.** `SetupCard.tsx:322` posts
+  `tools: []` hardcoded — there is no picker in the UI — and
+  `dynamic.py:200` passes that straight through as the definition's tool
+  list. Every custom agent made from the Agents page holds an empty roster.
+  Fix: an empty/absent list means "inherit the base type's tools", never "no
+  tools". Nobody creates an agent intending it to hold none. This is the
+  SIXTH roster gap in a row and the first the UI itself creates
+  (history_search v1.142, workflow_list v1.172, view_image v1.174, the
+  worklist v1.177.0, rename_file v1.177.2).
+
+## P1 — capability-based arming for agent runs
+
+- [x] **Reach `tools/autoselect.select_auto_tools` from the agent runtime**, as
+  both chat lanes do. A solo human->app run arms what the task plausibly
+  needs; permissions gate the rest. NOT "hand every agent all ~60 tools": the
+  default provider here is a local model, and the measured failure mode is a
+  model choosing `shell` over `read_file` when both are in front of it. More
+  schema is its own regression — trading a missing-tool failure for a
+  wrong-tool one.
+- [x] **Keep the explicit roster as an opt-in** on the agent record: empty =
+  auto, non-empty = exactly these. The constrained specialist is a real use;
+  it just must be chosen.
+- [x] **A roster-coverage test.** Assert every tool the acceptance jobs depend
+  on is reachable by the agent type that runs them. Five gaps in five
+  releases is a pattern, not a coincidence, and it deserves an assertion
+  rather than another retrospective.
+- [x] **The tools picker in the UI** — LAST, and mostly for building the
+  opt-in specialist above. Shipping the picker first would only make the
+  manual configuration the user does not want slightly less annoying.
+
+## P2 — the Agents surface reads as a room, not a form
+
+- [x] **Roster rail down the LEFT of the module.** `AgentFace` (v1.171.0)
+  already renders deterministic faces + moods; move them out of the pickers
+  into a persistent left rail: click a face to select that agent, or to
+  resume the thread already in flight with them. Live state on the face
+  (working / error / idle) is already modelled by `moodForStatus`.
+- [x] **A gear-with-a-face at the bottom of the rail** — one affordance that
+  configures a NEW agent, local or remote. Remote already has its own
+  create/PATCH path (v1.164.0, token never returned); local is the dynamic
+  registry. One door, two kinds.
+- [x] Selection drives the job-post card and the thread view, so "continue
+  working with this one" is a click, not a picker round-trip.
+
+## P3 — a thread's worth outlives the thread
+
+- [x] **"Extract and add to memory" on an agent thread.** Chat already has
+  exactly this at `POST /chat/threads/{id}/remember` (distill budget,
+  verbatim-excerpt fallback with no model). Agent threads
+  (`agents/threads.py`) have no equivalent, so a decision reached between
+  agents dies with the thread. Reuse the chat path rather than writing a
+  second distiller — two implementations of "what mattered here" will drift.
+- [x] Honest-mock rule applies: no real model => no distillation, offer the
+  verbatim excerpts instead. Never fabricate what a thread concluded.
+- [x] Land it as a review step, not a silent write: show the extracted items,
+  let the user drop any, then commit.
+
+## P4 — the agent asks for the tool it needs
+
+- [x] **Agent-proposed capability, user-approved.** When a job would go better
+  with a tool/MCP server/connection that is not present, the agent should be
+  able to PROPOSE it and the user approve — the app already has every piece:
+  `tool_create` (argv-template custom tools, gated under `custom:<name>`,
+  default ask), the MCP client, and `memory_propose` as the established
+  suggest-don't-act shape (proposes, changes nothing, waits for a click).
+- [x] Model it on `memory_propose`, NOT on `tool_create` directly: a proposal
+  record the user sees, with what it would add, why, and what it would be
+  allowed to do. Approval is the only thing that creates it.
+- [x] The deny floor still holds: `shell`, `repl`, `browser_use`,
+  `web_action`, `mcp_call` can never be raised to `allow` by a definition, so
+  a proposed tool cannot smuggle host reach in through the side door.
+- [x] This is the honest closing of the five-gap pattern: when the app lacks a
+  verb, the agent should be able to SAY SO and ask, instead of flailing in
+  `shell` writing PyMuPDF scripts to re-read PDFs it had already read
+  (measured, run_ab82dea4bf8a, v1.177.1).
+
+## Ordering rationale
+
+P0 is a live bug and ships alone. P1 is the substance — fix the default and
+the picker becomes optional polish. P2 is the surface that makes agent mode
+feel like a room you walk into. P3 and P4 are independent and can land in
+either order, but P4 should follow P1: proposing new capability only makes
+sense once the existing capability reliably reaches the agent.
+
+## Carried forward from the v1.178.0 wave (found by reviewers, not yet fixed)
+
+- [ ] **Chat's remember ladder is a closure, so it now exists twice.**
+  `remember_chat_thread` is defined inside `register(app, d)` in
+  `daemon/routes/chat.py` — there is no importable symbol. `agents/threads.py`
+  imports the two budget constants and calls the shared runtime pieces, but the
+  distill/verbatim DECISION LADDER and the distill system prompt are duplicated
+  and will drift. Lift chat's handler body into a shared module (e.g.
+  `memory/commit.py`) that both routes call, with the system prompt as a
+  PARAMETER — a panel prompt must attribute claims per agent and never resolve
+  a disagreement the panel left open, which is meaningless for a two-party chat.
+  It also removes a layering inversion: `agents/threads.py` currently reaches
+  into a route module for those constants.
+- [ ] **`_effective_tools` returns `[]` on its except branch**
+  (`daemon/routes/agents.py`), so `[]` doubles as "unknown" and as "genuinely
+  none". The card cannot tell the two apart. Return `None` for unknown.
+- [ ] **`LoaderInline`'s spinner ignores `prefers-reduced-motion`**
+  (`components/ui.tsx`, `animate-spin-slow`). Pre-existing, not from this wave;
+  surfaced by the P4 reviewer. Every other animation in the app guards it.
+- [ ] **`GET /capability/proposals` returns EVERY proposal ever filed**
+  (pending-first). Fine at today's volume; add a status filter before it grows.
+- [ ] **`approve()` is not atomic against a concurrent second approve**
+  (`capability/store.py`): the pending guard, `_apply`, and the APPROVED write
+  are three separate transactions. Two simultaneous clicks both pass the guard.
+  Not exploitable from one dashboard, but it is a real race.
+- [ ] **`ListAgentsTool` (the agent-facing `list_agents`) does not emit
+  `effective_tools`** — the HTTP route does. An agent asking what another agent
+  holds still reads the stored list.

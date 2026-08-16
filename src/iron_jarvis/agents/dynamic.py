@@ -21,7 +21,7 @@ from sqlmodel import select
 from ..core.db import session_scope
 from ..core.models import AgentType
 from .dynamic_models import DynamicAgentRecord
-from .types import AgentDefinition
+from .types import AgentDefinition, get_agent_definition
 
 if TYPE_CHECKING:  # avoid importing the heavy SQLAlchemy symbol at runtime
     from sqlalchemy import Engine
@@ -188,6 +188,22 @@ class DynamicAgentRegistry:
             tools = json.loads(record.tools_json or "[]")
         except (TypeError, ValueError):
             tools = []
+        base_type = _base_agent_type(record.base_type)
+        # An EMPTY stored roster means "not specified" -> INHERIT the base type's
+        # tools. It never means "no tools". Measured: the dashboard's Agents page
+        # has no tool picker and `SetupCard.tsx` posts `tools: []` hardcoded, so
+        # every agent the user created there rebuilt into
+        # `AgentDefinition(tools=[])` — the runtime advertises exactly
+        # `registry.specs(agent_def.tools)`, so those agents could not read a
+        # file, write one, or call anything at all, and the failure looked like
+        # a dumb model rather than an empty roster. A NON-empty list is still
+        # honoured verbatim (an explicit allowlist, unchanged). The copy is
+        # load-bearing: `get_agent_definition` hands back the SHARED builtin
+        # definition object, and the runtime/permission layers append to
+        # `definition.tools` — mutating it here would leak one dynamic agent's
+        # roster into every builtin session for the life of the process.
+        if not tools:
+            tools = list(get_agent_definition(base_type).tools)
         # Identity section (v1.171.0): anchor first, then the stored prompt.
         # The roster/delegation blocks the runtime appends later are unchanged.
         stored = record.system_prompt or ""
@@ -195,7 +211,7 @@ class DynamicAgentRegistry:
         if stored.strip():
             prompt = f"{prompt}\n\n{stored}"
         return AgentDefinition(
-            type=_base_agent_type(record.base_type),
+            type=base_type,
             system_prompt=prompt,
             tools=list(tools),
         )

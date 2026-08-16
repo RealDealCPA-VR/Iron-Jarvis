@@ -19,6 +19,11 @@
 // DIRECTING: "@name" (or "@role") in the message makes only the mentioned
 // participants speak; no mention → everyone. The composer offers an
 // @-autocomplete popover over the thread's participants.
+//
+// MEMORY (v1.178.0): "Extract and add to memory" commits what the panel
+// concluded to long-term memory — but only AFTER the user reads it. The first
+// POST is a preview that writes nothing; the commit sends the previewed text
+// back verbatim. See MemoryReviewCard for why both halves are load-bearing.
 
 import {
   createContext,
@@ -31,6 +36,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  Brain,
   Check,
   Copy,
   LoaderCircle,
@@ -44,7 +50,7 @@ import remarkGfm from "remark-gfm";
 import { ApiError, get, post } from "@/lib/api";
 import { useEvents } from "@/lib/useEvents";
 import { timeAgo } from "@/lib/format";
-import { Empty, ErrorNote, OfflineHint, SkeletonRows } from "@/components/ui";
+import { Empty, ErrorNote, OfflineHint, SkeletonRows, SuccessNote } from "@/components/ui";
 import AgentFace, { faceIdentity } from "./AgentFace";
 import {
   RolePill,
@@ -347,6 +353,198 @@ function AgentTurn({ entry, byKey }: { entry: ThreadEntry; byKey: Map<string, Pa
   );
 }
 
+/* ---------------------------------------------------------------- memory --- */
+
+/** What `POST /agents/threads/{id}/remember` answers — the preview AND the
+ *  commit (same shape; the commit carries `preview:false` and a filled `ref`).
+ *
+ *  EVERY FIELD IS OPTIONAL ON PURPOSE. A daemon older than v1.178.0 has no such
+ *  route at all (the call 404s and the message is shown), and this UI must also
+ *  survive a response that simply omits something: `items` missing is not "no
+ *  claims", `distilled` missing is not "not distilled". Each read below states
+ *  its own degrade. */
+interface RememberResult {
+  /** true = nothing was written. The daemon defaults to true; we still send it
+   *  explicitly, so a future default flip cannot turn a look into a write. */
+  preview?: boolean;
+  /** Where the note landed (a commit only). */
+  ref?: string;
+  /** The memory base the note goes to ("" = the default brain). */
+  source?: string;
+  mode?: string;
+  /** FALSE = a real model never ran; the body is a verbatim excerpt. */
+  distilled?: boolean;
+  /** The daemon's own words about a degrade. Always shown when present. */
+  note?: string;
+  title?: string;
+  messages?: number;
+  participants?: string[];
+  /** The extracted claims, flat — what the user actually reads. May carry a
+   *  truncation marker as its LAST entry; that marker is an item like any
+   *  other and is rendered, never filtered. */
+  items?: string[];
+  /** The exact text that would land. The commit sends this back verbatim. */
+  content?: string;
+  provider?: string;
+}
+
+/** An honest message for a failed call: status 0 is the daemon being gone
+ *  (lib/api maps a dead fetch to 0), anything else is the daemon's own words —
+ *  relayed, never replaced by a friendlier sentence that hides the reason. */
+function failureText(e: unknown, offline: string): string {
+  if (e instanceof ApiError) return e.status === 0 ? offline : e.message;
+  return String(e);
+}
+
+/** The review step: what WOULD be committed, before anything is.
+ *
+ *  TWO THINGS HERE ARE THE FEATURE, not decoration:
+ *
+ *  1. THE COMMIT SENDS `content` BACK. A bare `preview:false` re-runs the whole
+ *     distillation server-side, and a model asked twice does not answer twice
+ *     the same — so the text the user approved would not be the text stored,
+ *     and every later turn would quote back something nobody read. If the
+ *     preview carried no `content` (an unexpected/older shape) we REFUSE to
+ *     commit rather than fire the blind call: silently storing unreviewed
+ *     agent-written text is the exact failure this whole screen exists to
+ *     prevent.
+ *  2. `distilled === false` IS SAID OUT LOUD. With no real model connected the
+ *     daemon degrades to a verbatim excerpt. Rendering that identically to a
+ *     real distillation would let the user believe a summary was written when
+ *     it was not, so the note rides in amber, above the fold, before the
+ *     button — not in a receipt afterwards. */
+function MemoryReviewCard({
+  result,
+  committing,
+  error,
+  onCommit,
+  onDiscard,
+}: {
+  result: RememberResult;
+  committing: boolean;
+  error: string | null;
+  onCommit: () => void;
+  onDiscard: () => void;
+}) {
+  const items = result.items ?? [];
+  const content = (result.content ?? "").trim();
+  const approvable = content !== "";
+  // Explicit false only — an ABSENT flag is unknown, not a denial, and
+  // accusing a real distillation of being an excerpt is its own lie.
+  const degraded = result.distilled === false;
+  return (
+    <section
+      aria-label="Review what will be added to memory"
+      className="border-b hairline bg-white/[0.02] px-4 py-3"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <Brain size={14} className="shrink-0 text-accent-soft" aria-hidden="true" />
+        <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-300">
+          Add to memory — read it first
+        </h3>
+        <span className="text-[11px] text-zinc-500">
+          {result.title ? `“${result.title}”` : "this panel"}
+          {result.source ? ` → ${result.source}` : ""}
+          {typeof result.messages === "number" ? ` · ${result.messages} messages` : ""}
+        </span>
+      </div>
+      <p className="mt-1 text-[11px] text-zinc-500">
+        Nothing has been written yet — this is what would be saved.
+      </p>
+
+      {degraded && (
+        // The honesty signal. `note` is the daemon's own sentence and is
+        // preferred verbatim; the fallback covers a response that set the flag
+        // without one, because the FLAG is the claim that must not go unsaid.
+        <p className="mt-2 flex items-start gap-2 rounded-lg border border-amber-400/25 bg-amber-400/[0.06] px-3 py-2 text-[11px] leading-relaxed text-amber-200/90">
+          <TriangleAlert size={13} className="mt-px shrink-0" aria-hidden="true" />
+          <span>
+            {result.note ||
+              "No real model was connected — this is a verbatim excerpt, not a distillation."}
+          </span>
+        </p>
+      )}
+      {!degraded && result.note && (
+        // A note WITHOUT the degrade flag still says something true about how
+        // this text was produced (a failed distillation, an approved commit) —
+        // never swallowed just because the amber case didn't fire.
+        <p className="mt-2 text-[11px] leading-relaxed text-zinc-400">{result.note}</p>
+      )}
+
+      {items.length > 0 ? (
+        <ul className="mt-2 max-h-52 space-y-1 overflow-y-auto pr-1 text-xs leading-relaxed text-zinc-300">
+          {items.map((it, i) => (
+            <li key={i} className="flex gap-2">
+              <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-accent/60" aria-hidden="true" />
+              {/* A truncation marker is an ITEM: the daemon caps the list and
+                  says so in the last entry. Hiding it would show the user less
+                  than what lands — the one thing a preview may never do. */}
+              <span className={it.startsWith("[") ? "italic text-zinc-500" : ""}>{it}</span>
+            </li>
+          ))}
+        </ul>
+      ) : approvable ? (
+        <p className="mt-2 text-xs italic text-zinc-500">
+          This daemon listed no separate items — read the full text below before
+          saving.
+        </p>
+      ) : (
+        // …and when there is no text below either, saying "read the full text
+        // below" points at nothing: the <details> only renders when there IS
+        // something to approve. A review screen that describes content it is
+        // not showing is the same lie as one that shows less than what lands,
+        // just quieter (reviewer finding).
+        <p className="mt-2 text-xs italic text-zinc-500">
+          This preview carried nothing to read — no items and no text.
+        </p>
+      )}
+
+      {approvable && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-[11px] text-zinc-500 hover:text-zinc-300">
+            Show the exact text that will be saved
+          </summary>
+          <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap rounded-lg bg-black/40 p-3 font-mono text-[11px] leading-relaxed text-zinc-300">
+            {content}
+          </pre>
+        </details>
+      )}
+
+      {error && <div className="mt-2"><ErrorNote>{error}</ErrorNote></div>}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={onCommit}
+          disabled={committing || !approvable}
+          className="btn-accent py-1 text-xs"
+          title={
+            approvable
+              ? "Save exactly the text above to long-term memory"
+              : "The preview carried no text — nothing can be approved"
+          }
+        >
+          {committing ? (
+            <LoaderCircle size={13} className="animate-spin-slow" aria-hidden="true" />
+          ) : (
+            <Brain size={13} aria-hidden="true" />
+          )}
+          Save to memory
+        </button>
+        <button type="button" onClick={onDiscard} disabled={committing} className="btn-ghost py-1 text-xs">
+          Discard
+        </button>
+        {!approvable && (
+          <span className="text-[11px] text-amber-200/80">
+            The preview returned no text to approve, so saving is blocked — a
+            blind save would store something you never read.
+          </span>
+        )}
+      </div>
+    </section>
+  );
+}
+
 /* ----------------------------------------------------------------- view --- */
 
 /** One round in flight: the message count when it started (everything after
@@ -382,6 +580,16 @@ export function RoundTable({
   const [round, setRound] = useState<RoundState | null>(null);
   const [pendingUser, setPendingUser] = useState<string | null>(null);
   const [sayError, setSayError] = useState<string | null>(null);
+  // MEMORY (v1.178.0). Four separate pieces on purpose: `memPreview` is the
+  // text the user is reading and NOTHING is written while it is set;
+  // `memSaved` is the commit receipt; `memBusy` names which call is in flight
+  // (a preview and a commit must not read as the same wait); `memError` is
+  // kept OUTSIDE the preview so a failed commit leaves the preview standing
+  // exactly as it was read — nothing about the thread changes on failure.
+  const [memPreview, setMemPreview] = useState<RememberResult | null>(null);
+  const [memSaved, setMemSaved] = useState<RememberResult | null>(null);
+  const [memBusy, setMemBusy] = useState<"preview" | "commit" | null>(null);
+  const [memError, setMemError] = useState<string | null>(null);
   // The @-autocomplete popover: the partial after "@" and where it starts.
   const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
   const [mentionIdx, setMentionIdx] = useState(0);
@@ -410,6 +618,13 @@ export function RoundTable({
     speakingRef.current = false;
     setInput("");
     setMention(null);
+    // A preview belongs to the thread it was extracted from. Carrying one
+    // across a thread switch would offer a Save that writes ANOTHER panel's
+    // text under this thread's id.
+    setMemPreview(null);
+    setMemSaved(null);
+    setMemBusy(null);
+    setMemError(null);
     get<ThreadDetail>(`/agents/threads/${encodeURIComponent(threadId)}`)
       .then((d) => {
         if (!cancelled) setDetail(d);
@@ -558,6 +773,66 @@ export function RoundTable({
     }
   }
 
+  /* --------------------------------------------------------- memory ------- */
+
+  /** STEP 1 — LOOK. `preview: true` writes nothing and answers with the items
+   *  plus the exact text that would land. The daemon already defaults to a
+   *  preview; sending the flag anyway means a future change of that default
+   *  cannot turn this button into a write. */
+  async function previewMemory() {
+    if (memBusy !== null || !detail) return;
+    const gen = genRef.current;
+    setMemBusy("preview");
+    setMemError(null);
+    setMemSaved(null);
+    try {
+      const res = await post<RememberResult>(
+        `/agents/threads/${encodeURIComponent(threadId)}/remember`,
+        { preview: true },
+      );
+      if (genRef.current !== gen) return; // switched threads mid-fetch
+      setMemPreview(res ?? {});
+    } catch (e) {
+      if (genRef.current !== gen) return;
+      setMemError(
+        failureText(e, "Daemon offline — couldn't read this thread for memory."),
+      );
+    } finally {
+      if (genRef.current === gen) setMemBusy(null);
+    }
+  }
+
+  /** STEP 2 — COMMIT. `preview:false` PLUS the previewed text, verbatim.
+   *
+   *  The content is not optional politeness: without it the daemon re-runs the
+   *  whole ladder, including a second distillation, so what lands is not what
+   *  the user read and approved. Untrimmed and unedited — any reshaping here
+   *  reintroduces the same mismatch on a smaller scale. */
+  async function commitMemory() {
+    const approved = memPreview?.content ?? "";
+    if (memBusy !== null || approved.trim() === "") return;
+    const gen = genRef.current;
+    setMemBusy("commit");
+    setMemError(null);
+    try {
+      const res = await post<RememberResult>(
+        `/agents/threads/${encodeURIComponent(threadId)}/remember`,
+        { preview: false, content: approved },
+      );
+      if (genRef.current !== gen) return;
+      setMemSaved(res ?? {});
+      setMemPreview(null);
+    } catch (e) {
+      if (genRef.current !== gen) return;
+      // The preview stays on screen: the write did not happen, so the review
+      // the user was in the middle of must not vanish (and must not read as
+      // done). Retrying sends the SAME approved text.
+      setMemError(failureText(e, "Daemon offline — nothing was saved to memory."));
+    } finally {
+      if (genRef.current === gen) setMemBusy(null);
+    }
+  }
+
   /* -------------------------------------------------- @-autocomplete ------ */
 
   function updateMention(el: HTMLTextAreaElement) {
@@ -670,11 +945,33 @@ export function RoundTable({
           <h2 className="min-w-0 truncate text-sm font-semibold tracking-wide text-zinc-100">
             {detail.title || "Agent thread"}
           </h2>
+          {/* Extract to memory. Disabled with an empty transcript (the daemon
+              400s: there is nothing to remember) and DURING a round — a
+              preview taken while replies are still landing would ask the user
+              to approve a snapshot of a moving transcript. */}
+          <button
+            type="button"
+            onClick={() => void previewMemory()}
+            disabled={memBusy !== null || speaking || messages.length === 0}
+            title={
+              messages.length === 0
+                ? "Nothing has been said yet"
+                : "Read what this panel concluded, then choose to save it to long-term memory"
+            }
+            className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-40 disabled:hover:border-white/10 disabled:hover:text-zinc-400"
+          >
+            {memBusy === "preview" ? (
+              <LoaderCircle size={13} className="animate-spin-slow" aria-hidden="true" />
+            ) : (
+              <Brain size={13} aria-hidden="true" />
+            )}
+            Extract and add to memory
+          </button>
           <button
             type="button"
             onClick={() => onEditPanel(detail)}
             title="Change who sits at this round-table and their roles"
-            className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
           >
             <UserRoundPen size={13} /> Edit panel
           </button>
@@ -706,6 +1003,50 @@ export function RoundTable({
           ))}
         </div>
       </div>
+
+      {/* The review step — present only while there is something to approve.
+          Nothing has been written while this is on screen. */}
+      {memPreview && (
+        <MemoryReviewCard
+          result={memPreview}
+          committing={memBusy === "commit"}
+          error={memError}
+          onCommit={() => void commitMemory()}
+          onDiscard={() => {
+            setMemPreview(null);
+            setMemError(null);
+          }}
+        />
+      )}
+      {/* A preview that never arrived: the reason is shown where the button
+          is, and no review card is faked around it. */}
+      {!memPreview && !memSaved && memError && (
+        <div className="border-b hairline px-4 py-3">
+          <ErrorNote>{memError}</ErrorNote>
+        </div>
+      )}
+      {memSaved && (
+        <div className="space-y-1.5 border-b hairline px-4 py-3">
+          <SuccessNote>
+            Saved to memory
+            {memSaved.source ? ` — ${memSaved.source}` : ""}
+            {memSaved.ref ? ` · ${memSaved.ref}` : ""}
+          </SuccessNote>
+          {/* The receipt relays the daemon's note VERBATIM and applies none of
+              the review card's degrade wording: a commit of approved text
+              answers distilled:false because it did not re-distill, which is
+              not the same claim as "no model was connected". Reusing that
+              copy here would invent a degrade that did not happen. */}
+          {memSaved.note && <p className="text-[11px] text-zinc-500">{memSaved.note}</p>}
+          <button
+            type="button"
+            onClick={() => setMemSaved(null)}
+            className="btn-ghost py-1 text-xs"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Transcript */}
       <div className="max-h-[62vh] min-h-[40vh] space-y-4 overflow-y-auto p-4">

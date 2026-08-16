@@ -62,6 +62,24 @@ class CreateAgentTool(Tool):
         tools = args.get("tools") or []
         if not isinstance(tools, list):
             return ToolResult(ok=False, error="`tools` must be a list of tool names")
+        if not tools:
+            # AN EMPTY LIST FROM A MODEL IS NOT THE SAME AS AN EMPTY FORM FIELD
+            # (v1.178.0). Since this release a stored empty roster means "not
+            # specified" and resolves to the BASE TYPE's full roster — which is
+            # right for the dashboard, where the field does not exist and the
+            # user plainly did not mean "no tools". Reached from HERE the same
+            # semantics would let a model mint an agent holding everything its
+            # base type holds, `shell` included, by simply omitting the list.
+            # So this path demands the list it already declares as required:
+            # naming the tools is the authoring decision.
+            return ToolResult(
+                ok=False,
+                error=(
+                    "`tools` must name at least one tool — an agent's tool list "
+                    "is its capability contract, so it has to be stated here "
+                    "rather than inherited. Call tool_list to see what exists."
+                ),
+            )
         description = args.get("description") or ""
         base_type = args.get("base_type") or "builder"
 
@@ -76,7 +94,7 @@ class CreateAgentTool(Tool):
             ok=True,
             output=(
                 f"Created dynamic agent '{record.name}' (base={record.base_type}) "
-                f"with tools: {', '.join(json.loads(record.tools_json)) or '(none)'}"
+                f"with tools: {', '.join(json.loads(record.tools_json))}"
             ),
             data={
                 "name": record.name,

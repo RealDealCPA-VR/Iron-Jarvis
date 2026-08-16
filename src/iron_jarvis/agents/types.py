@@ -75,6 +75,18 @@ _SELF_SERVICE_TOOLS = [
     # autonomy dial + budget + autonomy_enabled govern whether a goal ever acts).
     "goal_add",
     "goal_list",
+    # ASK FOR THE CAPABILITY YOU DO NOT HAVE (v1.178.0). Five capabilities in a
+    # row shipped without reaching the roster that needed them, and the agent
+    # could only flail — the measured run wrote PyMuPDF scripts through `shell`
+    # to re-read PDFs it had already read, because no rename tool existed and it
+    # had no way to SAY so. `capability_propose` files a suggestion and changes
+    # nothing; the user approves or rejects it.
+    #
+    # AND IT NEARLY SHIPPED WITH THE SAME HOLE: registered, permissioned, and on
+    # no agent definition. `tests/test_roster_coverage_v1178.py` — written in
+    # this same release to catch exactly that — went red and named it. The
+    # sixth instance was caught by the test built for the first five.
+    "capability_propose",
     # Author + reuse custom tools. "custom:*" is a sentinel the registry expands
     # to every agent/user-authored tool, so a tool one agent creates is callable
     # by every future agent.
