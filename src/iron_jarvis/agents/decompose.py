@@ -68,6 +68,21 @@ MINI_LOOP_BUDGET_SHARE = 4
 #: budget gets — past this a "small verifiable step" is just the flat loop
 #: again, wearing a plan's clothes.
 MAX_MINI_LOOP_CEILING = 24
+#: Rounds a BULK step gets when no budget was typed (v1.177.0). MEASURED: the
+#: 26-file rename job failed a SECOND time with "the mini-loop budget was
+#: exhausted before step 2 completed" — and six rounds is genuinely not enough
+#: for the work a chunk step has to do. A `worklist_next` chunk is
+#: :data:`~iron_jarvis.worklist.store.DEFAULT_CLAIM` (5) items, and finishing it
+#: means claim (1) + read each + act on each + `worklist_done` each. Even when
+#: the model batches its calls — the runtime does gather parallel tool calls —
+#: that is past six before anything goes wrong.
+#:
+#: Six was right for the step this number was written for ("write the summary
+#: file"). A bulk step is a different animal, so it gets its own figure rather
+#: than raising the default for every step in the app. Still bounded, and still
+#: clamped by the session's own budget below: half the ceiling, which fits a
+#: 5-item chunk with room for a retry, and no more.
+BULK_MINI_LOOP_STEPS = 12
 #: Cap on the running prior-step context fed into each mini-loop, so late steps
 #: don't re-inflate the very context burden decomposition exists to remove.
 MAX_PRIOR_CONTEXT_CHARS = 2000
@@ -331,11 +346,30 @@ def mini_loop_budget(config, session) -> int:
     explicit = explicit_max_steps(session)
     if explicit is None:
         base = MAX_MINI_LOOP_STEPS
+        # A BULK step needs room to finish a CHUNK (v1.177.0) — claim, read each
+        # item, act on each, report each. Six rounds cannot do that for five
+        # files, and the job died on exactly that ("the mini-loop budget was
+        # exhausted before step 2 completed"), twice.
+        #
+        # ONLY on the unsized path, and the distinction is not convenience. A
+        # TYPED budget is a run-wide ceiling: the plan gets that many rounds in
+        # TOTAL, so making each step take more would just mean fewer steps run —
+        # it redistributes the user's stated budget instead of adding to it, and
+        # `test_a_typed_budget_is_a_CEILING_on_the_whole_plan` measures exactly
+        # that (12 typed = two 6-round loops, not one 12-round one). A typed
+        # budget already scales the grant through MINI_LOOP_BUDGET_SHARE below,
+        # which is the lever that belongs to the user's number. Unsized, there
+        # is no aggregate ceiling at all, so the per-step figure is the only
+        # thing standing between a chunk step and finishing its chunk.
+        if is_bulk_task(getattr(session, "task", "") or ""):
+            base = BULK_MINI_LOOP_STEPS
     else:
         base = min(
             MAX_MINI_LOOP_CEILING,
             max(MAX_MINI_LOOP_STEPS, explicit // MINI_LOOP_BUDGET_SHARE),
         )
+    # The session's own budget still wins: this raises a per-step allowance,
+    # never the total a run may spend.
     return max(1, min(base, budget))
 
 
@@ -525,7 +559,18 @@ _PLAN_SYSTEM_TEMPLATE = (
     'tool names this step needs>"]}}]}}\n'
     "Rules: each goal must be doable in a couple of tool calls; "
     '"success_criteria" and "tools" may be omitted; if the task is a single '
-    'simple action that needs no decomposition, reply {{"steps": []}}.'
+    'simple action that needs no decomposition, reply {{"steps": []}}.\n'
+    "BULK JOBS (one action repeated over a folder/list of files or records): "
+    'NEVER write a step like "for each file, read it" or "rename each file" — '
+    "one step is a few tool calls, and a folder of 26 files is not. Plan the "
+    "LOOP instead: (1) survey once and queue every item with worklist_add, "
+    "(2) one step that claims a chunk with worklist_next, does the work on "
+    "those items, and reports each with worklist_done — its success_criteria "
+    "is that the claimed chunk is marked done, NOT that the whole folder is, "
+    "(3) repeat that same claim-work-report step until worklist_status "
+    "reports nothing pending, (4) summarize from worklist_status. The "
+    "worklist is durable: a step that runs out of rounds loses nothing, and "
+    "the next step picks up exactly what is still pending."
 )
 
 
@@ -848,6 +893,20 @@ async def execute_plan(
             return None
         return total_budget - (_run_steps(run) - steps_at_start)
 
+    # REPEATED-FAILURE BREAKER STATE, SHARED BY THE WHOLE PLAN (v1.177.0). The
+    # breaker (contract 2, v1.174.0) refuses the third identical failing call —
+    # but its bookkeeping was declared INSIDE `perceive_act`, and this loop calls
+    # `perceive_act` once per step AND again for every retry. So on a decomposed
+    # run — the bulk jobs the breaker was written for — it forgot everything at
+    # each boundary and the same doomed call could be reissued indefinitely.
+    # MEASURED: a 26-file rename job made four identical failing `read_file`
+    # calls on the same folder inside one plan, then fell to `shell` and spent
+    # 24 of its 68 calls before reading anything.
+    #
+    # One dict for the run, threaded through every step and every retry. A step
+    # that legitimately succeeds still clears its own signature's streak, so
+    # this only ever remembers calls that keep failing.
+    breaker_state: dict[str, Any] = {}
     results: list[StepResult] = []
     prior: list[str] = []
     for index, step in enumerate(plan):
@@ -935,6 +994,7 @@ async def execute_plan(
                 session_allow=session_allow,
                 sink=sink,
                 max_steps=(max_mini if left is None else max(1, min(max_mini, left))),
+                breaker_state=breaker_state,
             )
             # A mini-loop that spends its budget is a step OUTCOME (verify will
             # judge it), never a whole-run failure like the flat loop's budget.

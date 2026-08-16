@@ -739,7 +739,16 @@ class RedactScanTool(Tool):
         if not allowed:
             return ToolResult(ok=False, error=f"read denied: {reason}")
         if not source.is_file():
-            return ToolResult(ok=False, error=f"not a file: {args.get('path')}")
+            # Say WHICH kind of "not a file" (v1.177.0) — a directory, a
+            # non-regular path, or genuinely absent. A flat "not a file" sent
+            # an agent through five spellings of a folder it had listed.
+            from ..tools.builtins import unreadable_reason
+
+            return ToolResult(
+                ok=False,
+                error=unreadable_reason(source, str(args.get("path")))
+                or f"not a file: {args.get('path')}",
+            )
         raw_cats = [str(c).strip().lower() for c in (args.get("categories") or [])]
         unknown = [c for c in raw_cats if c and c not in ALL_CATEGORIES]
         if unknown:
@@ -975,7 +984,16 @@ class RedactPiiTool(Tool):
         if not allowed:
             return ToolResult(ok=False, error=f"read denied: {reason}")
         if not source.is_file():
-            return ToolResult(ok=False, error=f"not a file: {args.get('path')}")
+            # Say WHICH kind of "not a file" (v1.177.0) — a directory, a
+            # non-regular path, or genuinely absent. A flat "not a file" sent
+            # an agent through five spellings of a folder it had listed.
+            from ..tools.builtins import unreadable_reason
+
+            return ToolResult(
+                ok=False,
+                error=unreadable_reason(source, str(args.get("path")))
+                or f"not a file: {args.get('path')}",
+            )
         style = str(args.get("style") or "black").strip().lower()
         if style not in STYLES:
             return ToolResult(

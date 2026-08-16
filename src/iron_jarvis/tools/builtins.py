@@ -240,6 +240,58 @@ async def _extract_document(
     )
 
 
+#: How many children a "that's a directory" error names before it truncates.
+#: Enough to be actionable, few enough that a 5,000-entry folder cannot flood
+#: the transcript the budget is trying to protect.
+_DIR_HINT_ENTRIES = 12
+
+
+def unreadable_reason(target: Path, raw: str) -> "str | None":
+    """WHY *target* cannot be read as a file, or ``None`` when it can.
+
+    THE MEASURED FAILURE (v1.177.0). Every reader answered
+    ``f"no such file: {path}"`` whenever ``is_file()`` was False — so a
+    DIRECTORY THAT EXISTS, a path outside the workspace, and a genuinely absent
+    file all produced the same sentence, and the only one of the three the
+    sentence is true about is the last. On a real job (rename 26 tax documents)
+    the agent called ``read_file`` on the folder, was told "no such file", and
+    reasonably concluded it had the path wrong: it then tried the same folder
+    five different ways, fell back to ``shell``, and burned 24 of the run's 68
+    tool calls before reading anything. The step budget stopped it, and the run
+    reported "budget" as the cause — a symptom two layers above a tool that lied
+    about what it was looking at.
+
+    This is the v1.174.0 "FAILED TOOLS TELL THE TRUTH" rule applied to the
+    readers' OWN errors: a failure has to say which of those three happened, and
+    for a directory it names what is inside so the next call can be the right
+    one instead of another guess.
+    """
+    try:
+        if target.is_file():
+            return None
+        if target.is_dir():
+            try:
+                names = sorted(p.name + ("/" if p.is_dir() else "") for p in target.iterdir())
+            except OSError:
+                names = []
+            shown = ", ".join(names[:_DIR_HINT_ENTRIES])
+            more = f" (+{len(names) - _DIR_HINT_ENTRIES} more)" if len(names) > _DIR_HINT_ENTRIES else ""
+            inside = f" It contains: {shown}{more}." if names else " It is empty."
+            return (
+                f"'{raw}' is a DIRECTORY, not a file — this tool reads one file "
+                f"at a time.{inside} Use list_files to enumerate it, then read a "
+                "file inside it by name."
+            )
+        if target.exists():
+            return (
+                f"'{raw}' exists but is not a regular file (it may be a device, "
+                "socket, or broken link), so there is nothing to read."
+            )
+    except OSError as exc:  # an unstattable path is reported, never swallowed
+        return f"'{raw}' could not be inspected: {exc}"
+    return f"no such file: {raw}"
+
+
 class ReadFileTool(Tool):
     name = "read_file"
     description = (
@@ -265,8 +317,11 @@ class ReadFileTool(Tool):
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = safe_path(ctx.workspace, args["path"])
-        if not await asyncio.to_thread(path.is_file):
-            return ToolResult(ok=False, error=f"no such file: {args['path']}")
+        # Stat + (for a directory) one listing — off the event loop like every
+        # other filesystem step here (v1.153.1).
+        reason = await asyncio.to_thread(unreadable_reason, path, str(args["path"]))
+        if reason is not None:
+            return ToolResult(ok=False, error=reason)
         # A known office format goes straight to the extractor — the extension
         # is certain knowledge, so there is nothing to try and fail at first.
         kind = _DOC_EXTENSIONS.get(path.suffix.lower())
@@ -400,8 +455,9 @@ class EditFileTool(Tool):
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = safe_path(ctx.workspace, args["path"])
-        if not path.is_file():
-            return ToolResult(ok=False, error=f"no such file: {args['path']}")
+        reason = unreadable_reason(path, str(args["path"]))
+        if reason is not None:
+            return ToolResult(ok=False, error=reason)
         text = path.read_text(encoding="utf-8")
         if args["old"] not in text:
             return ToolResult(ok=False, error="`old` text not found")

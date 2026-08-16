@@ -41,9 +41,17 @@ cd dashboard && pnpm dev           # dashboard
    (`version = `), `src/iron_jarvis/__init__.py` (`__version__`),
    `desktop/package.json` (`"version"`).
 2. Commit + push to master. CI (`.github/workflows/release.yml`) detects the
-   bump, PRE-CREATES the tag+release (electron-builder 422s otherwise), builds
-   the frozen daemon + installer, publishes `Iron-Jarvis-Setup-X.Y.Z.exe` +
-   blockmap + `latest.yml` (~10 min).
+   bump, RUNS THE OFFLINE SUITE AS A GATE (the `suite` job; the installer job
+   `needs:` it), PRE-CREATES the tag+release (electron-builder 422s otherwise),
+   builds the frozen daemon + installer, publishes `Iron-Jarvis-Setup-X.Y.Z.exe`
+   + blockmap + `latest.yml` (~35 min now that the gate runs first; a push with
+   NO version bump still costs nothing — the gate script skips the suite too).
+   **The gate is new in v1.177.0 and this file used to claim it already
+   existed.** It did not: `Tests` and `Release` are separate workflows and ran
+   CONCURRENTLY, so on v1.176.0 Release published a green installer in 8 minutes
+   and Tests went red 16 minutes later — a red suite shipped to the user's
+   daily driver, which auto-downloads. If you ever split these again, the
+   installer must still not be reachable without a green suite.
 3. The desktop app auto-downloads (checks at boot + every 30 min) and installs
    only when the user clicks Restart-to-update (tray item / notification /
    Updates page). `latest.yml` missing assets = release still uploading.

@@ -53,6 +53,7 @@ from iron_jarvis.agents import decompose
 from iron_jarvis.agents.decompose import (
     DEFAULT_MAX_AGENT_STEPS,
     MAX_MINI_LOOP_CEILING,
+    BULK_MINI_LOOP_STEPS,
     MAX_MINI_LOOP_STEPS,
     MAX_PLAN_STEPS,
     MAX_PLAN_STEPS_CEILING,
@@ -95,6 +96,15 @@ MEASURED_SENTENCE = (
     "Rename all files in this folder to a name that is more appropriate "
     "given the content in the file."
 )
+
+#: A task that is emphatically NOT a collection — one file, one action.
+#: v1.177.0 gave a BULK step its own unsized round budget (six rounds cannot
+#: claim five worklist items, read them, act on them and report each — the
+#: measured job died on exactly that, twice). The assertions below pin the
+#: GENERIC budget arithmetic, which is unchanged; they happened to use the bulk
+#: sentence as their fixture, which now selects the other branch. They use this
+#: instead, and the bulk branch is pinned separately just below them.
+NON_BULK_SENTENCE = "Fix the typo in README.md."
 
 #: What the DAEMON actually stored on session_8d66af4dc17b — the wrapped 487
 #: characters composed by routes/projects.py for every project task. Copied out
@@ -519,7 +529,8 @@ def test_a_zeroed_global_cap_does_not_become_a_bigger_budget():
 def test_mini_loop_budget_is_byte_identical_when_no_session_budget(configured):
     """The pre-v1.174.0 formula, reproduced exactly: additive means additive."""
     old = max(1, min(MAX_MINI_LOOP_STEPS, configured))
-    assert mini_loop_budget(_cfg(configured), _session_stub(max_steps=None)) == old
+    session = _session_stub(task=NON_BULK_SENTENCE, max_steps=None)
+    assert mini_loop_budget(_cfg(configured), session) == old
 
 
 @pytest.mark.parametrize(
@@ -643,11 +654,11 @@ class _RecordingRuntime:
         return True, "did the step"
 
 
-async def _run_two_steps(platform, tmp_path, max_steps):
+async def _run_two_steps(platform, tmp_path, max_steps, task=MEASURED_SENTENCE):
     runtime = _RecordingRuntime(platform)
     session = SimpleNamespace(
         id="s-1",
-        task=MEASURED_SENTENCE,
+        task=task,
         provider="mock",
         model=None,
         workspace_path=str(tmp_path),
@@ -671,7 +682,20 @@ async def _run_two_steps(platform, tmp_path, max_steps):
 
 async def test_mini_loops_spend_the_configured_default_when_unsized(platform, tmp_path):
     platform.config.max_agent_steps = 12
-    assert await _run_two_steps(platform, tmp_path, None) == [6, 6]
+    got = await _run_two_steps(platform, tmp_path, None, task=NON_BULK_SENTENCE)
+    assert got == [6, 6]
+
+
+async def test_an_unsized_BULK_step_gets_room_to_finish_a_chunk(platform, tmp_path):
+    """v1.177.0. The other half of the same arithmetic: unsized, a bulk step
+    takes BULK_MINI_LOOP_STEPS rather than six, because a `worklist_next`
+    chunk is five items and finishing one means claim + read each + act on
+    each + report each. Two live runs died reporting the six-round grant as
+    the cause. There is no aggregate ceiling on this path, so the per-step
+    figure is the only thing bounding the step."""
+    platform.config.max_agent_steps = 12
+    got = await _run_two_steps(platform, tmp_path, None, task=MEASURED_SENTENCE)
+    assert got == [BULK_MINI_LOOP_STEPS, BULK_MINI_LOOP_STEPS]
 
 
 async def test_mini_loops_spend_the_sessions_own_budget(platform, tmp_path):
@@ -704,12 +728,12 @@ class _SpendingRuntime:
         return True, "did the step"
 
 
-async def _run_plan(platform, tmp_path, *, steps, max_steps, cost=None):
+async def _run_plan(platform, tmp_path, *, steps, max_steps, cost=None, task=MEASURED_SENTENCE):
     runtime = _SpendingRuntime(platform, cost)
     run = _bare_run()
     session = SimpleNamespace(
         id="s-1",
-        task=MEASURED_SENTENCE,
+        task=task,
         provider="mock",
         model=None,
         workspace_path=str(tmp_path),
@@ -775,7 +799,9 @@ async def test_an_unsized_session_keeps_the_pre_v1174_per_stage_behaviour(
     it would silently shorten every plan the local lane has been running since
     v1.132.0. Only a budget the user TYPED is a run-wide ceiling."""
     platform.config.max_agent_steps = 12
-    runtime, run, results = await _run_plan(platform, tmp_path, steps=5, max_steps=None)
+    runtime, run, results = await _run_plan(
+        platform, tmp_path, steps=5, max_steps=None, task=NON_BULK_SENTENCE
+    )
     assert runtime.seen == [6, 6, 6, 6, 6]
     assert run.steps == 30
     assert all(r.attempted and r.ok for r in results)

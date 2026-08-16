@@ -43,7 +43,8 @@ from ..git.review import (
     reject as _reject_review,
 )
 from .runtime import AgentRuntime, is_direct_workspace
-from .supervisor import run_supervised
+from .decompose import is_bulk_task
+from .supervisor import run_supervised, with_worklist
 from .types import AgentDefinition, get_agent_definition
 
 log = get_logger("orchestrator")
@@ -454,6 +455,25 @@ class Orchestrator:
                     # A dynamic (user-authored) agent runs with ITS definition, not the
                     # builtin one its base type maps to — callers pass it explicitly.
                     agent_def = definition or get_agent_definition(session.agent_type)
+                    # THE WORKLIST REACHES THE AGENT THAT ACTUALLY DOES BULK WORK
+                    # (v1.177.0). `with_worklist` was written general on purpose —
+                    # its docstring records that the measured failure was a BUILDER,
+                    # not a supervisor — and then nothing ever called it for one:
+                    # `supervisor_definition()` was its only caller, so every
+                    # `POST /sessions` and every project task (both default to
+                    # BUILDER) ran a bulk job with no worklist tools and no
+                    # survey-once procedure. MEASURED on a 26-file rename: the
+                    # planner wrote "for each file, read its content" as ONE step
+                    # because a durable list was not among the things it could use,
+                    # and the run died mid-step with nothing recorded. That is the
+                    # FOURTH time a capability shipped without reaching a roster
+                    # (history_search v1.142, workflow_list v1.172, view_image
+                    # v1.174) — check the roster, every time.
+                    #
+                    # Gated on the task, not applied blanket: a bulk job pays four
+                    # tool specs plus the procedure, and a one-file edit should not.
+                    if is_bulk_task(session.task or ""):
+                        agent_def = with_worklist(agent_def)
                     run = await self.runtime.run(session, agent_def)
 
                 session.status = (

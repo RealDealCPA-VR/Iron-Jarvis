@@ -23,7 +23,76 @@ permissions:
   contents: write # create the GitHub Release + upload the installer
 
 jobs:
+  # THE SUITE IS A GATE, NOT A PARALLEL OPINION (v1.177.0). Tests and Release
+  # are separate workflows, so they ran CONCURRENTLY: on v1.176.0 Release
+  # finished green in 8 minutes and published the installer, and Tests went red
+  # 16 minutes later. The app auto-downloads from Releases, so a red suite
+  # shipped to the user's daily driver — while CLAUDE.md claimed "a red Tests
+  # run BLOCKS the installer". It never did. Nothing enforced it.
+  #
+  # Running the suite HERE (rather than waiting on the other workflow) keeps the
+  # gate self-contained: no workflow_run indirection, no cross-workflow SHA
+  # matching, and the installer job simply cannot start until this passes.
+  #
+  # It costs ~25 minutes, so it is spent ONLY when a release will actually be
+  # published — the gate script below is the same check the installer job runs,
+  # duplicated deliberately so a no-bump push to master still costs nothing.
+  suite:
+    runs-on: windows-latest # same runner the product ships for
+    outputs:
+      publish: ${{ steps.gate.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Gate — is this version unreleased?
+        id: gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ver="$(grep -Po '^version\s*=\s*"\K[^"]+' pyproject.toml | head -1)"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$(gh release view "v$ver" --repo "$GITHUB_REPOSITORY" \
+                    --json isDraft -q .isDraft 2>/dev/null)" == "false" ]]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python 3.12
+        if: steps.gate.outputs.publish == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        if: steps.gate.outputs.publish == 'true'
+        uses: astral-sh/setup-uv@v3
+
+      - name: Sync Python deps
+        if: steps.gate.outputs.publish == 'true'
+        run: uv sync --extra dev
+
+      - name: Run the offline suite (a red suite must not ship an installer)
+        if: steps.gate.outputs.publish == 'true'
+        shell: bash
+        run: |
+          # Actions runs `bash -eo pipefail`, so a failing pytest would abort the
+          # step right here and the summary line — the one that says WHAT failed —
+          # would never be written. Take the exit code by hand, always write the
+          # summary, then fail with pytest's own status. PIPESTATUS[0] is pytest's,
+          # never tee's: piping pytest into tee/tail is the documented way to
+          # report a red run as green.
+          set +e
+          uv run pytest -q --no-header | tee pytest-out.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          tail -1 pytest-out.txt >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
+
   windows-installer:
+    needs: suite
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

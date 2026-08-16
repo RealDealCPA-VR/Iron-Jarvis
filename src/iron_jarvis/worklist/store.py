@@ -400,6 +400,17 @@ class WorklistStore:
         except (TypeError, ValueError):
             want = DEFAULT_CLAIM
         want = max(1, min(want, MAX_CLAIM))
+        # ORDERING IS DETERMINISTIC OR IT IS NOTHING (v1.177.0). This used to
+        # order by (created_at, id). A survey adds a whole folder in ONE call,
+        # so every row of that batch shares a timestamp to the microsecond, and
+        # `id` is `new_id("wl")` — RANDOM. The tiebreaker therefore shuffled the
+        # list: which files a chunk contained, and the order a resumed run saw
+        # them in, changed between runs over identical inputs. It also made
+        # `test_a_dead_claim_is_reclaimed_and_a_live_one_is_not` a coin flip that
+        # finally came up tails on CI (green locally, red on the runner, same
+        # commit). `key_norm` is unique per board, so ordering on it before `id`
+        # is total: same-batch items now come back in a stable, explainable
+        # order (by key) instead of an arbitrary one.
         token = new_id("clm")
         now = utcnow()
         reclaimed = 0
@@ -411,7 +422,7 @@ class WorklistStore:
                         WorklistItem.board_id == board_id,
                         WorklistItem.status == PENDING,
                     )
-                    .order_by(WorklistItem.created_at, WorklistItem.id)  # type: ignore[arg-type]
+                    .order_by(WorklistItem.created_at, WorklistItem.key_norm, WorklistItem.id)  # type: ignore[arg-type]
                     .limit(want)
                 )
             )
@@ -453,7 +464,7 @@ class WorklistStore:
                             WorklistItem.status == DOING,
                             WorklistItem.claim_token != token,
                         )
-                        .order_by(WorklistItem.updated_at, WorklistItem.id)  # type: ignore[arg-type]
+                        .order_by(WorklistItem.updated_at, WorklistItem.key_norm, WorklistItem.id)  # type: ignore[arg-type]
                         .limit(_STALE_SCAN_LIMIT)
                     )
                 )
@@ -674,7 +685,7 @@ class WorklistStore:
             stmt = select(WorklistItem).where(WorklistItem.board_id == board_id)
             if wanted:
                 stmt = stmt.where(WorklistItem.status.in_(wanted))  # type: ignore[attr-defined]
-            stmt = stmt.order_by(WorklistItem.created_at, WorklistItem.id).limit(  # type: ignore[arg-type]
+            stmt = stmt.order_by(WorklistItem.created_at, WorklistItem.key_norm, WorklistItem.id).limit(  # type: ignore[arg-type]
                 max(1, int(limit))
             )
             rows = list(db.exec(stmt))
@@ -754,7 +765,7 @@ class WorklistStore:
                 db.exec(
                     select(WorklistItem)
                     .where(*base)
-                    .order_by(WorklistItem.created_at, WorklistItem.id)  # type: ignore[arg-type]
+                    .order_by(WorklistItem.created_at, WorklistItem.key_norm, WorklistItem.id)  # type: ignore[arg-type]
                     .limit(max(1, int(limit)))
                 )
             )

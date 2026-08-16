@@ -592,6 +592,7 @@ class AgentRuntime:
         session_allow: set[str],
         sink,
         max_steps: int,
+        breaker_state: "dict[str, Any] | None" = None,
     ) -> tuple[bool, str]:
         """The per-round route → tool-execute body of the perceive→act loop —
         extracted (v1.132.0) as THE reusable seam so the decomposition
@@ -612,8 +613,17 @@ class AgentRuntime:
         # the reason the next identical attempt is refused with. A success
         # clears the streak, so a flaky call that eventually works is never
         # punished for its history.
-        fail_streaks: dict[str, int] = {}
-        broken_calls: dict[str, str] = {}
+        #
+        # SCOPE IS THE CALLER'S CHOICE (v1.177.0). This method is invoked ONCE
+        # for a flat run but once PER STEP (and again per retry) for a decomposed
+        # one, so state owned here reset at every boundary — and the breaker
+        # stopped working on exactly the bulk jobs it was written for. A caller
+        # that spans several invocations passes one dict and the streaks survive;
+        # `None` keeps the old per-invocation scope, so the flat lane is
+        # byte-identical.
+        _bstate = breaker_state if breaker_state is not None else {}
+        fail_streaks: dict[str, int] = _bstate.setdefault("fail_streaks", {})
+        broken_calls: dict[str, str] = _bstate.setdefault("broken_calls", {})
         # COMPACTION STATE (v1.153.0). An agent loop has no one to ask mid-run,
         # so unlike chat it never offers the choice — it compacts on its own at
         # the ceiling and reports it. `_cpt_covers` counts messages consumed

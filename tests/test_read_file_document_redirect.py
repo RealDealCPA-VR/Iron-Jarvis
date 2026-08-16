@@ -106,9 +106,19 @@ def test_missing_file_keeps_its_own_error(tmp_path):
 
 
 def test_a_directory_is_not_treated_as_a_document(tmp_path):
+    """A directory still fails rather than reaching the extractor — but since
+    v1.177.0 it says WHICH kind of failure it is. The old message was "no such
+    file", about a directory that plainly exists, and an agent that believed it
+    spent five more calls guessing at the path (see
+    tests/test_bulk_job_repair_v1177.py). The intent this test protects is
+    unchanged; only the sentence is truer."""
     (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "inner.txt").write_text("x", encoding="utf-8")
     res = _read(tmp_path, "sub")
-    assert res.ok is False and "no such file" in res.error
+    assert res.ok is False
+    assert "DIRECTORY" in res.error
+    assert "inner.txt" in res.error  # it names a way forward
+    assert "no such file" not in res.error
 
 
 def test_unknown_binary_fails_nameably_not_with_a_traceback(tmp_path):
