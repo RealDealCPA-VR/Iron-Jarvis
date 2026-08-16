@@ -465,6 +465,138 @@ class EditFileTool(Tool):
         return ToolResult(ok=True, output=f"edited {args['path']}")
 
 
+class RenameFileTool(Tool):
+    """Rename or move ONE file inside the workspace (v1.177.2).
+
+    THE CAPABILITY THAT WAS NOT THERE. "Rename all files in this folder to a
+    name that is more appropriate given the content" is this app's own
+    acceptance job, run four times, and the roster held read_file, write_file,
+    edit_file, list_files, grep — and nothing that can rename a file. So the
+    agent did what a person would: it shelled out. The measured run spent 25
+    ``shell`` calls, several of them writing PyMuPDF scripts to re-extract PDFs
+    ``read_file`` had ALREADY read successfully, and renamed nothing.
+
+    Every wave before this one built scaffolding around the hole — honest
+    directory errors, OCR, a durable worklist, a deterministic plan — and all of
+    it was necessary, and none of it could put a new name on a file. This is the
+    same lesson v1.174.0 wrote down and did not finish applying: the agent was
+    not confused, it was compensating for a missing capability.
+
+    Doing it as a TOOL rather than a shell command buys the three things shell
+    cannot: the workspace confinement every other file tool obeys, an entry in
+    the undo journal (a rename is trivially reversible — rename back), and a
+    refusal to clobber. `move` is the same operation, so this serves both.
+    """
+
+    name = "rename_file"
+    description = (
+        "Rename or move ONE file inside the workspace. Give `path` (the file "
+        "now) and `new_path` (what it should be called, or where it should go — "
+        "a bare filename keeps it in the same folder). Refuses to overwrite an "
+        "existing file unless overwrite=true. Reversible."
+    )
+    reversibility = Reversibility.REVERSIBLE
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "new_path": {"type": "string"},
+            "overwrite": {"type": "boolean"},
+        },
+        "required": ["path", "new_path"],
+    }
+
+    @staticmethod
+    def _targets(args: dict[str, Any], ctx: ToolContext) -> "tuple[Path, Path]":
+        src = safe_path(ctx.workspace, args["path"])
+        raw_new = str(args["new_path"]).strip()
+        # A BARE NAME KEEPS THE FOLDER. Resolving "2025_W2.pdf" against the
+        # workspace root would silently move a file out of the subfolder it
+        # lives in — on a rename job over a nested folder that is data loss the
+        # user never asked for and would not notice until the folder was empty.
+        if not Path(raw_new).parent.parts:
+            dst = safe_path(ctx.workspace, str(Path(args["path"]).parent / raw_new))
+        else:
+            dst = safe_path(ctx.workspace, raw_new)
+        return src, dst
+
+    async def capture_undo(
+        self, args: dict[str, Any], ctx: ToolContext
+    ) -> "dict[str, Any] | None":
+        """The inverse of a rename is a rename back — no pre-image needed.
+
+        The destination path is what the revert must move FROM, so it is stored
+        as the descriptor's ``path`` and the ORIGINAL rides in ``mode``'s slot
+        via a dedicated envelope field.
+        """
+        try:
+            src, dst = self._targets(args, ctx)
+        except Exception:  # noqa: BLE001 — an unresolvable pair is not journaled
+            return None
+        if not src.is_file():
+            return None
+        descriptor = make_file_descriptor(
+            ctx.config.home,
+            kind="file_rename",
+            path=str(dst),
+            mode="rename",
+            pre_sha256=None,
+            post_sha256=None,
+        )
+        # Carry the original path alongside; read_envelope hands it back.
+        import json as _json
+
+        meta = _json.loads(descriptor["pre_inline"])
+        meta["rename_from"] = str(src)
+        descriptor["pre_inline"] = _json.dumps(meta)
+        return descriptor
+
+    async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        return await revert_workspace_file(undo, ctx)
+
+    async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        try:
+            src, dst = self._targets(args, ctx)
+        except PermissionError as exc:
+            return ToolResult(ok=False, error=str(exc))
+        reason = await asyncio.to_thread(unreadable_reason, src, str(args["path"]))
+        if reason is not None:
+            return ToolResult(ok=False, error=reason)
+        if src == dst:
+            return ToolResult(
+                ok=False, error=f"the new name is the same as the old one: {src.name}"
+            )
+        if not await asyncio.to_thread(lambda: dst.parent.is_dir()):
+            return ToolResult(
+                ok=False,
+                error=f"the destination folder does not exist: {dst.parent}",
+            )
+        if await asyncio.to_thread(dst.exists) and not args.get("overwrite"):
+            # NEVER silently. Two documents whose contents suggest the same name
+            # is the NORMAL case on a tax folder (two 1099-NECs from one payer),
+            # and a clobber there destroys a client's file.
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"'{dst.name}' already exists in that folder — refusing to "
+                    "overwrite it. Choose a different name (add a distinguishing "
+                    "detail), or pass overwrite=true if replacing it is intended."
+                ),
+            )
+        try:
+            await asyncio.to_thread(src.replace, dst)
+        except OSError as exc:
+            return ToolResult(ok=False, error=f"could not rename: {exc}")
+        # ABSOLUTE paths (the v1.153.2 rule): a workspace-relative answer is a
+        # bare filename whenever the file sits in the workspace root, and the
+        # user then looks for it next to the original.
+        return ToolResult(
+            ok=True,
+            output=f"renamed:\n  from: {src}\n  to:   {dst}",
+            data={"from": str(src), "to": str(dst), "abs_path": str(dst)},
+        )
+
+
 class ListFilesTool(Tool):
     name = "list_files"
     description = "List files under a workspace directory (default: workspace root)."
@@ -650,6 +782,7 @@ def default_registry():
         ReadFileTool,
         WriteFileTool,
         EditFileTool,
+        RenameFileTool,
         ListFilesTool,
         GrepTool,
         ShellTool,

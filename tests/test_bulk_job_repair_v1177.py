@@ -266,6 +266,264 @@ def test_the_session_budget_still_wins():
     assert tiny <= 4
 
 
+# ------------------- 0. THE TOOL THAT COULD RENAME A FILE --------------------
+
+
+def _rw_ctx(tmp_path: Path) -> ToolContext:
+    from types import SimpleNamespace
+
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    return ToolContext(
+        workspace=tmp_path, session_id="s", agent_run_id="r",
+        config=SimpleNamespace(home=str(home)), event_bus=None, engine=None,
+    )
+
+
+def test_a_rename_tool_exists_and_is_on_the_roster():
+    """THE HOLE UNDER ALL OF IT. "Rename all files in this folder" is this app's
+    own acceptance job, run four times, and the roster held read_file,
+    write_file, edit_file, list_files, grep — and nothing that renames a file.
+    So the agent shelled out: 25 shell calls, several writing PyMuPDF scripts to
+    re-extract PDFs read_file had ALREADY read, and zero renames. Every earlier
+    wave built scaffolding around a capability that was not there."""
+    from iron_jarvis.tools.builtins import default_registry
+
+    registry = default_registry()
+    names = [getattr(t, "name", "") for t in registry._tools.values()]  # noqa: SLF001
+    assert "rename_file" in names
+    assert "rename_file" in get_agent_definition(AgentType.BUILDER).tools
+
+
+async def test_rename_moves_the_file(tmp_path):
+    (tmp_path / "1099-INT NAVY FED CRED.pdf").write_text("x", encoding="utf-8")
+    from iron_jarvis.tools.builtins import RenameFileTool
+
+    result = await RenameFileTool().execute(
+        {"path": "1099-INT NAVY FED CRED.pdf", "new_path": "2025_1099-INT_Navy.pdf"},
+        _rw_ctx(tmp_path),
+    )
+    assert result.ok is True
+    assert (tmp_path / "2025_1099-INT_Navy.pdf").is_file()
+    assert not (tmp_path / "1099-INT NAVY FED CRED.pdf").exists()
+    # ABSOLUTE, per the v1.153.2 rule — a bare filename sends the user looking
+    # in the wrong folder.
+    assert str(tmp_path) in result.data["to"]
+
+
+async def test_a_bare_new_name_keeps_the_file_in_its_folder(tmp_path):
+    """Resolving a bare name against the workspace ROOT would quietly move a
+    file out of the subfolder it lives in — on a rename job over a nested
+    folder that is data loss nobody asked for."""
+    sub = tmp_path / "Extensions"
+    sub.mkdir()
+    (sub / "ext.pdf").write_text("x", encoding="utf-8")
+    from iron_jarvis.tools.builtins import RenameFileTool
+
+    result = await RenameFileTool().execute(
+        {"path": "Extensions/ext.pdf", "new_path": "2025_Extension.pdf"},
+        _rw_ctx(tmp_path),
+    )
+    assert result.ok is True
+    assert (sub / "2025_Extension.pdf").is_file()
+    assert not (tmp_path / "2025_Extension.pdf").exists()
+
+
+async def test_rename_refuses_to_clobber(tmp_path):
+    """Two documents whose contents suggest the same name is the NORMAL case on
+    a tax folder (two 1099-NECs from one payer). A clobber there destroys a
+    client's file."""
+    (tmp_path / "a.pdf").write_text("a", encoding="utf-8")
+    (tmp_path / "b.pdf").write_text("b", encoding="utf-8")
+    from iron_jarvis.tools.builtins import RenameFileTool
+
+    result = await RenameFileTool().execute(
+        {"path": "a.pdf", "new_path": "b.pdf"}, _rw_ctx(tmp_path)
+    )
+    assert result.ok is False
+    assert "already exists" in result.error
+    assert (tmp_path / "b.pdf").read_text(encoding="utf-8") == "b", "b was clobbered"
+    # ...and says how to proceed deliberately.
+    assert "overwrite=true" in result.error
+
+
+async def test_rename_is_undoable(tmp_path):
+    (tmp_path / "old.pdf").write_text("x", encoding="utf-8")
+    from iron_jarvis.tools.builtins import RenameFileTool
+
+    tool, ctx = RenameFileTool(), _rw_ctx(tmp_path)
+    args = {"path": "old.pdf", "new_path": "new.pdf"}
+    undo = await tool.capture_undo(args, ctx)
+    assert undo is not None and undo["kind"] == "file_rename"
+    await tool.execute(args, ctx)
+    assert (tmp_path / "new.pdf").is_file()
+
+    reverted = await tool.revert(undo, ctx)
+    assert reverted.ok is True
+    assert (tmp_path / "old.pdf").is_file()
+    assert not (tmp_path / "new.pdf").exists()
+
+
+async def test_undo_refuses_when_the_old_name_was_taken_again(tmp_path):
+    """Undo must not clobber either."""
+    (tmp_path / "old.pdf").write_text("x", encoding="utf-8")
+    from iron_jarvis.tools.builtins import RenameFileTool
+
+    tool, ctx = RenameFileTool(), _rw_ctx(tmp_path)
+    args = {"path": "old.pdf", "new_path": "new.pdf"}
+    undo = await tool.capture_undo(args, ctx)
+    await tool.execute(args, ctx)
+    (tmp_path / "old.pdf").write_text("something else", encoding="utf-8")
+
+    reverted = await tool.revert(undo, ctx)
+    assert reverted.ok is False and "already exists" in reverted.error
+    assert (tmp_path / "old.pdf").read_text(encoding="utf-8") == "something else"
+
+
+async def test_rename_will_not_escape_the_workspace(tmp_path):
+    (tmp_path / "a.pdf").write_text("x", encoding="utf-8")
+    from iron_jarvis.tools.builtins import RenameFileTool
+
+    result = await RenameFileTool().execute(
+        {"path": "a.pdf", "new_path": "../escaped.pdf"}, _rw_ctx(tmp_path)
+    )
+    assert result.ok is False
+    assert not (tmp_path.parent / "escaped.pdf").exists()
+
+
+async def test_renaming_a_directory_says_so(tmp_path):
+    (tmp_path / "sub").mkdir()
+    from iron_jarvis.tools.builtins import RenameFileTool
+
+    result = await RenameFileTool().execute(
+        {"path": "sub", "new_path": "sub2"}, _rw_ctx(tmp_path)
+    )
+    assert result.ok is False and "DIRECTORY" in result.error
+
+
+# ------------- 3b. the plan is BUILT for a bulk job, never asked for ---------
+
+
+async def test_a_bulk_job_gets_the_canonical_plan_without_asking_the_model():
+    """v1.177.2, MEASURED THREE TIMES. v1.177.0 told the planner never to write
+    "for each file, read it". The instruction reaches the model — verified in
+    the live prompt — and the local model produced this anyway:
+
+        2. For each file, read its full content to determine an appropriate new name
+        3. Rename each file to a name that reflects its content
+
+    26 files in one step. It cannot land, and the steps after it inherit the
+    failure. A bulk job has a known shape; asking a model to rediscover it is a
+    bet with nothing on the upside."""
+    from types import SimpleNamespace
+
+    from iron_jarvis.agents import decompose as _d
+
+    called = []
+
+    async def _boom(*a, **kw):
+        called.append(1)
+        raise AssertionError("the planner model must not be consulted")
+
+    original = _d._one_shot
+    _d._one_shot = _boom
+    try:
+        session = SimpleNamespace(task=TASK, max_steps=None)
+        agent_def = with_worklist(get_agent_definition(AgentType.BUILDER))
+        plan = await _d.plan_task(None, None, session, agent_def)
+    finally:
+        _d._one_shot = original
+
+    assert called == [], "a bulk plan cost a model call"
+    assert plan is not None and len(plan) >= 4
+    goals = " ".join(s.goal.lower() for s in plan)
+    assert "for each file" not in goals
+    assert "worklist_add" in goals and "worklist_next" in goals
+    assert "worklist_done" in goals and "worklist_status" in goals
+
+
+def test_the_bulk_plan_covers_a_real_folder():
+    """27 files at DEFAULT_CLAIM per chunk must fit inside the step cap."""
+    from iron_jarvis.agents.decompose import bulk_plan, plan_step_cap
+    from iron_jarvis.worklist.store import DEFAULT_CLAIM
+    from types import SimpleNamespace
+
+    cap = plan_step_cap(SimpleNamespace(task=TASK, max_steps=None))
+    plan = bulk_plan(cap)
+    assert len(plan) == cap
+    chunk_steps = len(plan) - 2  # survey + summary
+    assert chunk_steps * DEFAULT_CLAIM >= 27
+
+
+def test_the_bulk_plan_hints_no_tools():
+    """`execute_plan` NARROWS a step's tool set to the plan's hints, so a hint
+    here would be a second place to forget a tool — and a step that could not
+    rename. Empty means the step gets the agent's full set."""
+    from iron_jarvis.agents.decompose import bulk_plan
+
+    assert all(step.tools == [] for step in bulk_plan(8))
+
+
+def test_each_chunk_step_is_judged_on_ITS_chunk():
+    """"the whole folder is done" would fail every step but the last, and a
+    failed step burns its retry and reads to the user as a broken run."""
+    from iron_jarvis.agents.decompose import bulk_plan
+
+    middle = bulk_plan(8)[1]
+    assert "claimed in this step" in middle.success_criteria
+    # ...and an empty worklist is a legitimate finish, not a failure.
+    assert "nothing left to claim" in middle.success_criteria
+
+
+async def test_without_the_worklist_tools_the_model_is_still_asked():
+    """The canonical plan names four tools. An agent that does not hold them
+    must not be handed a plan it cannot execute — fall through and ask."""
+    from types import SimpleNamespace
+
+    from iron_jarvis.agents import decompose as _d
+
+    asked = []
+
+    async def _fake(*a, **kw):
+        asked.append(1)
+        return '{"steps": [{"goal": "a"}, {"goal": "b"}]}'
+
+    original = _d._one_shot
+    _d._one_shot = _fake
+    try:
+        session = SimpleNamespace(task=TASK, max_steps=None)
+        bare = get_agent_definition(AgentType.BUILDER)  # no worklist tools
+        plan = await _d.plan_task(None, None, session, bare)
+    finally:
+        _d._one_shot = original
+
+    assert asked == [1], "the model should have been consulted"
+    assert plan is not None and len(plan) == 2
+
+
+async def test_a_non_bulk_task_still_asks_the_model():
+    from types import SimpleNamespace
+
+    from iron_jarvis.agents import decompose as _d
+
+    asked = []
+
+    async def _fake(*a, **kw):
+        asked.append(1)
+        return '{"steps": [{"goal": "a"}, {"goal": "b"}]}'
+
+    original = _d._one_shot
+    _d._one_shot = _fake
+    try:
+        session = SimpleNamespace(task="Fix the typo in README.md", max_steps=None)
+        agent_def = with_worklist(get_agent_definition(AgentType.BUILDER))
+        await _d.plan_task(None, None, session, agent_def)
+    finally:
+        _d._one_shot = original
+
+    assert asked == [1]
+
+
 # --------------------------------- 5. the worklist hands work out in order ---
 
 

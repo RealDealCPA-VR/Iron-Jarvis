@@ -14,7 +14,12 @@ from dataclasses import dataclass, field
 
 from ..core.models import AgentType
 
-_FILE_TOOLS = ["read_file", "write_file", "edit_file", "list_files", "grep"]
+# `rename_file` (v1.177.2): the acceptance job is "rename all files in this
+# folder" and NOTHING here could rename a file — the agent shelled out and
+# renamed nothing. A capability that is not on a roster does not exist (the
+# FIFTH time: history_search v1.142, workflow_list v1.172, view_image v1.174,
+# the worklist v1.177.0).
+_FILE_TOOLS = ["read_file", "write_file", "edit_file", "rename_file", "list_files", "grep"]
 # THE SHARED BRAIN (v1.173.0). One centralized long-term store serves EVERY
 # agent, so the two read paths into it belong on every definition:
 # ``recall`` federates all memory (files, notes, graph, past conversations) and

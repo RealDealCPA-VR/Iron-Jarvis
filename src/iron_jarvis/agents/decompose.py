@@ -616,6 +616,88 @@ def _parse_plan(text: str) -> tuple[list[PlanStep] | None, str | None]:
     return steps, None
 
 
+#: Steps of a bulk plan that are NOT chunk-work (the survey and the summary).
+_BULK_FIXED_STEPS = 2
+
+
+def bulk_plan(cap: int) -> list[PlanStep]:
+    """THE plan for a one-action-over-a-collection job — written in code, not
+    asked for (v1.177.2).
+
+    MEASURED, THREE TIMES. v1.177.0 added a BULK JOBS section to the planner
+    prompt telling the model never to write "for each file, read it" and to plan
+    a claim-work-report loop instead. The instruction reaches the model
+    (verified in the live prompt: 1378 chars, contains "BULK JOBS" and
+    "worklist_add"), and the model — a local one on the user's own hardware —
+    produced this anyway:
+
+        1. List all files in the current directory
+        2. For each file, read its full content to determine an appropriate new name
+        3. Rename each file to a name that reflects its content
+        4. Verify the final list of files and write a summary in the response
+
+    Step 2 is 26 files in one step. It cannot land, and steps 3 and 4 inherit
+    the failure. That is the same plan the job produced before the instruction
+    existed, so the instruction bought nothing.
+
+    A bulk job has a KNOWN SHAPE. Asking a model to rediscover it is a
+    reliability bet with nothing on the upside, and this app's rule is to
+    prefer the deterministic path where one exists. The model still does all
+    the WORK — reading each document, choosing each name — it just no longer
+    gets to invent the control flow.
+
+    NO ``tools`` HINTS, deliberately: ``execute_plan`` narrows a step's tool set
+    to the plan's hints, so naming tools here would be a second place to forget
+    one (and a step that could not rename). An empty hint means the step gets
+    the agent's full set, worklist included.
+    """
+    chunks = max(1, cap - _BULK_FIXED_STEPS)
+    steps = [
+        PlanStep(
+            goal=(
+                "Survey the collection ONCE (list the folder, including "
+                "subfolders), then call worklist_add with EVERY item in a "
+                "single call, using full paths as keys. Do not start the work "
+                "itself in this step."
+            ),
+            success_criteria=(
+                "worklist_add was called and worklist_status reports the "
+                "queued items"
+            ),
+        )
+    ]
+    for _ in range(chunks):
+        steps.append(
+            PlanStep(
+                goal=(
+                    "Call worklist_next to claim the next chunk. Do the task's "
+                    "work on EACH claimed item, then report each one with "
+                    "worklist_done ('done' with a one-line note, or 'failed' "
+                    "with the reason). If worklist_next returns nothing, the "
+                    "job is finished — say so and stop."
+                ),
+                # Scoped to THIS chunk on purpose. "the whole folder is done"
+                # would fail every step but the last, and a failed step burns a
+                # retry and reads to the user as a broken run.
+                success_criteria=(
+                    "every item claimed in this step was reported with "
+                    "worklist_done, or there was nothing left to claim"
+                ),
+            )
+        )
+    steps.append(
+        PlanStep(
+            goal=(
+                "Call worklist_status and write the final summary from it: what "
+                "was done, what failed and why, and what is still pending. "
+                "Count from the worklist, never from memory."
+            ),
+            success_criteria="the summary states the done/failed/pending counts",
+        )
+    )
+    return steps
+
+
 async def plan_task(
     runtime, run, session, agent_def, *, llm: "RoleResolution | None" = None
 ) -> list[PlanStep] | None:
@@ -627,6 +709,17 @@ async def plan_task(
     (:data:`MAX_PLAN_STEPS`, raised for a session with a bigger step budget).
     ``llm`` = the "plan" role's resolved pair (None → the session's own)."""
     cap = plan_step_cap(session)
+    # A BULK job's structure is not a question (v1.177.2) — see `bulk_plan`.
+    # Gated on the agent actually HOLDING the worklist tools: `with_worklist`
+    # wraps a bulk run's definition, but a caller that passed its own
+    # definition, or a platform built without the worklist, would otherwise get
+    # a plan whose every step names tools that do not exist. When they are
+    # absent we fall through and ask the model, exactly as before.
+    if is_bulk_task(getattr(session, "task", "") or "") and all(
+        name in agent_def.tools
+        for name in ("worklist_add", "worklist_next", "worklist_done", "worklist_status")
+    ):
+        return bulk_plan(cap)
     plan_system = _plan_system(cap)
     user = (
         f"Task:\n{session.task}\n\n"

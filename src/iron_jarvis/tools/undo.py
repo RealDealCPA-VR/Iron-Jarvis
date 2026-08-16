@@ -252,6 +252,39 @@ async def revert_workspace_file(
     except Exception as exc:  # path escaped the workspace — never write outside it
         return ToolResult(ok=False, error=f"undo: unsafe path: {exc}")
 
+    if kind == "file_rename":
+        # The inverse of a rename is a rename back (v1.177.2). No pre-image and
+        # no content hash: the BYTES never changed, so `guard_unchanged` has
+        # nothing to compare and running it would refuse every undo. What must
+        # be checked instead is that the two ends still look like a rename —
+        # the file is where we left it, and putting it back would not clobber
+        # something that has since taken the old name.
+        origin = meta.get("rename_from")
+        if not origin:
+            return ToolResult(ok=False, error="undo: no original path recorded")
+        try:
+            back = safe_path(ctx.workspace, str(origin))
+        except Exception as exc:  # noqa: BLE001 — never write outside the workspace
+            return ToolResult(ok=False, error=f"undo: unsafe path: {exc}")
+        if not target.exists():
+            return ToolResult(
+                ok=False,
+                error=f"undo: {rel} is no longer there (renamed or removed since)",
+            )
+        if back.exists():
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"undo: {back.name} already exists again — restoring the old "
+                    "name would overwrite it"
+                ),
+            )
+        try:
+            target.replace(back)
+        except OSError as exc:
+            return ToolResult(ok=False, error=f"undo: could not rename back: {exc}")
+        return ToolResult(ok=True, output=f"undo: renamed {rel} back to {origin}")
+
     conflict = guard_unchanged(sha256_target(target, mode), undo.get("post_sha256"))
     if conflict is not None:
         raise RevertConflict(conflict)
