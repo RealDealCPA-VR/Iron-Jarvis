@@ -23,8 +23,10 @@ bearer token: `%APPDATA%/Iron Jarvis/token.txt` — every daemon request needs
 ## Commands
 
 ```bash
-# Backend tests (~3100, offline, ~10min). ALWAYS run before shipping.
-uv run pytest -q --no-header
+# Backend tests (4800+, offline). ALWAYS run before shipping.
+# Serial ~16min; -n auto runs one worker per core (~4.5min) and is what CI
+# uses. Measured parallel-safe over three runs — identical pass counts.
+uv run pytest -q --no-header -n auto
 # Dashboard build (must show "Generating static pages (43/43)")
 cd dashboard && pnpm build
 # Syntax-check desktop changes

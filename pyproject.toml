@@ -46,6 +46,15 @@ dependencies = [
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
+    # The suite runs across CPU cores (v1.182.1). It is the release GATE — the
+    # installer cannot build until it is green — so its wall time is time the
+    # user waits for an update: 4814 tests took 16m14s serially here and
+    # ~23min on the CI runner, which was most of a ~40min release. MEASURED at
+    # -n 4: 4m35s / 4m51s / 4m34s across three runs, 4814 passed 2 skipped
+    # every time, identical to serial. Nothing about WHAT is verified changes.
+    # If a future test needs true isolation, mark it rather than reverting
+    # this — a 3.5x slower gate is paid on every release, forever.
+    "pytest-xdist>=3.6",
     "pyinstaller>=6.21",
 ]
 # Bundled OFFLINE speech-to-text. Kept OPTIONAL (not a base dep) so a plain

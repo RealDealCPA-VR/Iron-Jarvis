@@ -34,7 +34,11 @@ jobs:
       - name: Run the offline suite
         shell: bash
         run: |
-          uv run pytest -q --no-header | tee pytest-out.txt
+          # -n auto: one worker per core. This suite is the release gate, so
+          # its wall time is time the user waits for an update (23min serially
+          # on this runner). Measured parallel-safe over three local runs:
+          # 4814 passed / 2 skipped every time, identical to serial.
+          uv run pytest -q --no-header -n auto | tee pytest-out.txt
           tail -1 pytest-out.txt >> "$GITHUB_STEP_SUMMARY"
 
   dashboard:
