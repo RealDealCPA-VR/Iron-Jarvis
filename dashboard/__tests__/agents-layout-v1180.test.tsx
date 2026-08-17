@@ -289,20 +289,27 @@ describe("the roster sits BELOW the round-table", () => {
     expect(stack().className).not.toMatch(/grid-cols/);
   });
 
-  it("keeps the roster narrow and left, with the conversation at full width", async () => {
-    // ADVERSARIAL REVIEW (v1.180.0): stacking alone is only half the ask. "I
-    // enjoy the roster on the left" survives because the roster column is
-    // width-capped — drop the cap and the roster becomes a full-width banner
-    // sitting on top of the transcript, which is a different page from the one
-    // the report asked for and which NO other assertion here would catch (the
-    // order still holds, and the container still has no grid-cols).
+  it("matches the conversation width, so it sits squarely beneath it", async () => {
+    // INVERTED IN v1.183.0, and the guard it replaces was RIGHT for its
+    // moment. The v1.180.0 review added a width cap because stacking alone
+    // does not give you a rail: with the roster ABOVE the transcript, the
+    // 17rem cap WAS "the roster on the left", and dropping it turned the
+    // roster into a full-width banner over the conversation.
+    //
+    // v1.182.0 moved the roster BELOW the conversation (so expanding it
+    // stopped pushing the transcript down the page), and that inverted the
+    // reasoning: a 17rem card under a full-width one does not read as a
+    // column, it reads as a misaligned offcut. The user reported exactly
+    // that. Same width as the card above is now what makes it look
+    // deliberate — so the assertion flips rather than disappearing, and the
+    // cap can never creep back in unnoticed.
     render(<AgentsPage />);
     await waitFor(() => expect(table()).toBeTruthy());
     const column = screen.getByTestId("roster-column");
-    expect(column.className).toMatch(/w-\[17rem\]/);
+    expect(column.className).not.toMatch(/w-\[/);
+    expect(column.className).not.toMatch(/max-w-/);
     expect(within(column).getByTestId("roster-pane")).toBeTruthy();
-    // ...and the conversation is OUTSIDE that cap, or "full width" would be a
-    // 17rem transcript.
+    // ...and it is still its own block, not wrapped around the transcript.
     expect(within(column).queryByTestId("round-table")).toBeNull();
   });
 });

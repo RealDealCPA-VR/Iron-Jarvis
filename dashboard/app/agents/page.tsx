@@ -847,7 +847,14 @@ export default function AgentsPage() {
           // it and the roster becomes a full-width banner over the transcript,
           // which is the shape the user did not ask for and no other assertion
           // on this page would notice.
-          <div data-testid="roster-column" className="md:w-[17rem]">
+          // FULL WIDTH, ALIGNED UNDER THE CONVERSATION (v1.183.0). The
+          // 17rem cap existed to keep "the roster on the left" while the
+          // roster sat ABOVE the transcript — stacking alone does not give
+          // you a rail, so the cap was the rail. Moved BELOW in v1.182.0
+          // that reasoning inverted: a narrow card under a full-width one
+          // reads as a misaligned offcut, not as a column. Same width as
+          // the card above it is what makes it sit there deliberately.
+          <div data-testid="roster-column">
             {rail}
           </div>
         )}

@@ -419,7 +419,15 @@ export function RosterStrip({
           {onSelect && (
             <div
               data-testid="roster-rail"
-              className="hidden max-h-[44vh] space-y-0.5 overflow-y-auto p-1.5 md:block"
+              // FLOWS INTO COLUMNS AT WIDTH (v1.183.0). The card is now as
+              // wide as the conversation above it, so a single 17rem-ish
+              // stack of faces would leave most of the card empty and the
+              // rows stretched to absurdity. A grid keeps each row the size
+              // it wants to be and uses the space the alignment bought.
+              // max-h still bounds it so a 30-agent roster cannot push the
+              // gear off the bottom; with fewer rows per column now, the
+              // scroll starts later than it used to.
+              className="hidden max-h-[44vh] grid-cols-1 gap-x-2 gap-y-0.5 overflow-y-auto p-1.5 md:grid lg:grid-cols-2 xl:grid-cols-3"
             >
               {entries.map((e) => {
                 const active = isPick && e.name === selected.name;
