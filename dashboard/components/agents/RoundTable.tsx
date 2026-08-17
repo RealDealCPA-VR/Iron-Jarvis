@@ -64,6 +64,13 @@
 // add leaves the thread exactly as it was, with the daemon's reason in the
 // picker. The catalog is fetched on demand from the same roster the rail
 // shows, with the /agents + /agents/remote fallback older daemons need.
+//
+// THE CARD IS AS TALL AS THE CONVERSATION (v1.181.0): the transcript hugs its
+// content under a `max-h-[62vh]` ceiling, so the composer follows the last
+// message instead of floating at the bottom of a reserved band. The floor that
+// keeps a fresh thread roomy is CONDITIONAL and lives at `openingRoom` — see
+// the block comment there for why deleting it outright trades a gap for a
+// mid-round flinch.
 
 import {
   createContext,
@@ -1482,6 +1489,43 @@ export function RoundTable({
     ? round.expected.find((k) => !landedKeys.includes(k))
     : undefined;
 
+  /* THE ROOM BELONGS TO THE OPENING, NOT TO THE CARD (v1.181.0).
+   *
+   * The transcript used to carry `min-h-[40vh]`, so a two-message thread
+   * rendered its bubbles at the top of a box 40% of the viewport tall and then
+   * a dead band down to the composer — which read as the composer being pinned
+   * to the bottom of a card that never needed to be that tall. Stacked under
+   * the roster (v1.180.0) that band is the last thing on the page, so there is
+   * nothing below it to explain it away. The fix is that the transcript HUGS
+   * ITS CONTENT and the composer follows the conversation; `max-h-[62vh]` still
+   * caps it so a long thread scrolls inside the card instead of growing the
+   * page forever.
+   *
+   * WHY NOT COPY CHAT. `app/chat/page.tsx` holds a floor (`min-h-[24rem]`) and
+   * gets away with it for a reason that does not transfer: that card IS the
+   * page, it is the only thing the user came for, and reserved room there reads
+   * as room for the conversation. It also fills the floor in the only state
+   * that can — the empty state is `flex-1` and centred (note this file's empty
+   * state carries its own floor as well, so `flex-1` here is agreement-keeping
+   * rather than load-bearing; see the comment at that node). A SHORT-BUT-NON-EMPTY
+   * thread has nothing to fill it with, in chat or here; chat simply never gets
+   * the complaint because it is not sitting at the bottom of a stack. So we
+   * take chat's filling technique (flex column + a `flex-1` empty state) and
+   * drop its unconditional floor.
+   *
+   * NO JUMP, WHICH IS WHY THIS IS A CONDITION AND NOT A DELETION. Removing the
+   * floor outright trades a gap for a flinch: an empty thread is deliberately
+   * roomy (the panel's faces, idle, centred), so hitting Send would collapse
+   * the card to one bubble and then grow it again as each agent answers. The
+   * floor therefore survives exactly as long as it can be FILLED — while the
+   * thread is empty, and through the opening round (`round.base === 0` is the
+   * round that started on an empty thread). It releases when that round ends,
+   * downward onto a transcript that just gained a full round of answers. A
+   * round in an EXISTING thread never gets the floor, so sending into a short
+   * thread cannot make the card grow and shrink around the reply.
+   */
+  const openingRoom = messages.length === 0 || (round !== null && round.base === 0);
+
   return (
     <div className="card-surface flex min-w-0 flex-col overflow-hidden">
       {/* Header: title + the panel */}
@@ -1594,9 +1638,29 @@ export function RoundTable({
       )}
 
       {/* Transcript */}
-      <div className="max-h-[62vh] min-h-[40vh] space-y-4 overflow-y-auto p-4">
+      <div
+        data-testid="thread-transcript"
+        className={`flex max-h-[62vh] flex-col gap-4 overflow-y-auto p-4${
+          openingRoom ? " min-h-[36vh]" : ""
+        }`}
+      >
         {messages.length === 0 && !pendingUser && !speaking ? (
-          <div className="flex min-h-[36vh] flex-col items-center justify-center gap-3 px-6 text-center">
+          // TWO FLOORS, AND BE HONEST ABOUT WHICH ONE ACTS. This child's own
+          // `min-h-[36vh]` is what makes a fresh thread generous, and it is
+          // the one that acts today: the container's conditional floor is the
+          // SAME 36vh, so once this child plus the scroller's `p-4` is laid
+          // out there is no free space left and `flex-1` grows nothing. It is
+          // kept anyway because it is the only thing that keeps the two in
+          // agreement — raise the container's floor (or drop this one) and the
+          // copy would otherwise sit at the TOP of the reserved room with the
+          // blank band under it, which is the bug this whole change removed.
+          // Do not read `flex-1` here as load-bearing the way it is on
+          // `app/chat/page.tsx:5321`, where the empty child carries NO floor of
+          // its own and `flex-1` is the entire filling mechanism.
+          <div
+            data-testid="thread-empty"
+            className="flex min-h-[36vh] flex-1 flex-col items-center justify-center gap-3 px-6 text-center"
+          >
             {/* The panel's faces, idle — waiting for the first question.
                 These KEEP their title/label: no visible name sits beside them,
                 so the face is the only identity carrier here. */}
