@@ -226,6 +226,14 @@ export default function AgentsPage() {
     justCreated && !polled.some((t) => t.id === justCreated.id)
       ? [justCreated, ...polled]
       : polled;
+  // TRUE exactly when the two-column conversation grid renders, i.e. when
+  // there is a round-table card for the roster to sit beneath and match.
+  // The roster is rendered in that cell when this holds, and in the page
+  // flow when it does not — never both.
+  const showsConversationCell =
+    !threadsMissing &&
+    !(threadsError && threadsError.status !== 0) &&
+    threads.length > 0;
   const threadsReady = threadsData !== null || threadsError !== null;
 
   /**
@@ -749,6 +757,7 @@ export default function AgentsPage() {
                                   <Trash2 size={13} />
                                 </button>
                               )}
+
                             </div>
                           );
                         })}
@@ -797,6 +806,18 @@ export default function AgentsPage() {
                           </div>
                         </Card>
                       )}
+
+                      {/* THE ROSTER, IN THE SAME CELL AS THE CONVERSATION
+                          (v1.184.0). It sat in the page stack, one level
+                          ABOVE this grid — so it spanned the full page while
+                          the round-table only ever got
+                          `minmax(0,1fr)` beside a 16rem thread rail. The
+                          roster really was the wider card; comparing it to
+                          the PAGE instead of to the card above it is what
+                          hid that. Inside this cell the two share an edge by
+                          construction, at every width, with no cap to keep
+                          in step. */}
+                      {hasRoster && rail}
                     </div>
                   </div>
                 )}
@@ -813,6 +834,18 @@ export default function AgentsPage() {
               stood here was the second door. Dispatched sessions still carry
               origin "job:agents", which is how the recent-jobs list finds
               them wherever it is rendered. */}
+
+          {/* ...AND WHEREVER THERE IS NO CONVERSATION CARD TO MATCH
+              (v1.184.0). The roster belongs in the round-table's cell so the
+              two share an edge — but that cell only exists once there is a
+              thread to show. With no threads yet, a thread error, or a daemon
+              serving no thread routes at all, there is no card to line up
+              with, so the roster stands in the page flow instead. Gated so it
+              can never render TWICE: the cell owns it whenever the cell
+              exists. Caught by the degraded-path test, not by reading — the
+              first cut of this move made the roster vanish entirely on a
+              daemon without thread routes. */}
+          {hasRoster && !showsConversationCell && rail}
 
           {/* SETUP — only once the gear says so. Not rendered at all otherwise:
               "not shown unless the user decided to configure an agent". */}
@@ -832,32 +865,6 @@ export default function AgentsPage() {
           )}
         </div>
 
-        {/* THE ROSTER SITS BELOW THE CONVERSATION (v1.182.0). It was above,
-            and the fold made that the wrong way round: expanding the list
-            pushed the chat DOWN the page, so opening the roster moved the
-            thing you were reading. Below it, the list grows into empty space
-            and the conversation never shifts — the fold costs nothing to
-            open. Not sticky, for the same reason as before: pinning a roster
-            over a transcript is worse than scrolling to it. */}
-        {hasRoster && (
-          // The width cap is what keeps this a ROSTER and not a full-width
-          // banner: it is the half of "the roster on the left" that stacking
-          // does not give you. REVIEW (v1.180.0): dropping it is the half
-          // of "the roster on the left" that stacking does NOT give you — drop
-          // it and the roster becomes a full-width banner over the transcript,
-          // which is the shape the user did not ask for and no other assertion
-          // on this page would notice.
-          // FULL WIDTH, ALIGNED UNDER THE CONVERSATION (v1.183.0). The
-          // 17rem cap existed to keep "the roster on the left" while the
-          // roster sat ABOVE the transcript — stacking alone does not give
-          // you a rail, so the cap was the rail. Moved BELOW in v1.182.0
-          // that reasoning inverted: a narrow card under a full-width one
-          // reads as a misaligned offcut, not as a column. Same width as
-          // the card above it is what makes it sit there deliberately.
-          <div data-testid="roster-column">
-            {rail}
-          </div>
-        )}
 
       </div>
 

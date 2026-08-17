@@ -289,28 +289,26 @@ describe("the roster sits BELOW the round-table", () => {
     expect(stack().className).not.toMatch(/grid-cols/);
   });
 
-  it("matches the conversation width, so it sits squarely beneath it", async () => {
-    // INVERTED IN v1.183.0, and the guard it replaces was RIGHT for its
-    // moment. The v1.180.0 review added a width cap because stacking alone
-    // does not give you a rail: with the roster ABOVE the transcript, the
-    // 17rem cap WAS "the roster on the left", and dropping it turned the
-    // roster into a full-width banner over the conversation.
-    //
-    // v1.182.0 moved the roster BELOW the conversation (so expanding it
-    // stopped pushing the transcript down the page), and that inverted the
-    // reasoning: a 17rem card under a full-width one does not read as a
-    // column, it reads as a misaligned offcut. The user reported exactly
-    // that. Same width as the card above is now what makes it look
-    // deliberate — so the assertion flips rather than disappearing, and the
-    // cap can never creep back in unnoticed.
+  it("shares the conversation's cell, so the two cards are the same width", async () => {
+    // v1.184.0, and the earlier versions of this test were measuring the
+    // WRONG PAIR. The round-table does not span the page: it sits in the
+    // right cell of `md:grid-cols-[16rem_minmax(0,1fr)]`, beside the thread
+    // rail. The roster sat one level ABOVE that grid, so it spanned the
+    // whole page and really was the wider card — the user said so twice.
+    // Comparing the roster to the PAGE (a width cap, then no width cap) was
+    // the mistake; comparing it to the CARD ABOVE IT is the requirement.
+    // Same cell = same width by construction, at every breakpoint, with no
+    // pair of classes to keep in step.
     render(<AgentsPage />);
     await waitFor(() => expect(table()).toBeTruthy());
-    const column = screen.getByTestId("roster-column");
-    expect(column.className).not.toMatch(/w-\[/);
-    expect(column.className).not.toMatch(/max-w-/);
-    expect(within(column).getByTestId("roster-pane")).toBeTruthy();
-    // ...and it is still its own block, not wrapped around the transcript.
-    expect(within(column).queryByTestId("round-table")).toBeNull();
+    const cell = table().closest("div.min-w-0");
+    expect(cell).toBeTruthy();
+    expect(cell!.contains(screen.getByTestId("roster-pane"))).toBe(true);
+    // ...and the roster FOLLOWS the conversation inside it.
+    expect(
+      table().compareDocumentPosition(screen.getByTestId("roster-pane")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 });
 
@@ -566,5 +564,29 @@ describe("a daemon that serves the roster but not the thread routes", () => {
       ).toBe("custom:analyst"),
     );
     expect(hooks.posts).toHaveLength(0);
+  });
+});
+
+/* ------------------------------------------------- one roster, never two --- */
+
+describe("the roster renders exactly once", () => {
+  it("lives in the conversation's cell when there is one", async () => {
+    render(<AgentsPage />);
+    await waitFor(() => expect(table()).toBeTruthy());
+    expect(screen.getAllByTestId("roster-pane")).toHaveLength(1);
+    expect(table().closest("div.min-w-0")!.contains(screen.getByTestId("roster-pane"))).toBe(true);
+  });
+
+  it("falls back to the page flow when no conversation card exists", async () => {
+    // v1.184.0 REGRESSION GUARD. Moving the roster into the round-table's cell
+    // made it vanish on every path WITHOUT that cell — a daemon serving no
+    // thread routes lost its roster entirely, and only the degraded-path test
+    // noticed. One `rail` in two places, gated so it can never be both.
+    delete hooks.api["/agents/threads"];
+    hooks.api["/agents/threads"] = { threads: [] };
+    render(<AgentsPage />);
+    await waitFor(() => expect(screen.getByTestId("roster-pane")).toBeTruthy());
+    expect(screen.getAllByTestId("roster-pane")).toHaveLength(1);
+    expect(screen.queryByTestId("round-table")).toBeNull();
   });
 });
