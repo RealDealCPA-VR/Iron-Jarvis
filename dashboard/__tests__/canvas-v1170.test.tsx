@@ -777,9 +777,18 @@ describe("Canvas pin lifecycle (Save as new / delete)", () => {
       target: { value: "fork-wf" },
     });
     fireEvent.click(await screen.findByRole("button", { name: /Save as new/ }));
-    await waitFor(() =>
-      expect(postMock.mock.calls.some((c) => c[0] === "/workflows")).toBe(true),
-    );
+    // WAIT FOR THE HANDLER, NOT FOR THE POST (fixed after a CI failure on
+    // v1.178.0; the same shape flaked in v1.177.1). `save()` awaits
+    // `post("/workflows")` and only AFTERWARDS runs `setLoadedPin(null)` —
+    // so the POST being recorded is true one render BEFORE the fork is
+    // actually unpinned, and clicking Run in that window sends the PARENT's
+    // project_id. Green on a fast machine, red on a contended runner.
+    // The success note is set at the END of the handler, so seeing it means
+    // the pin has been cleared and rendered.
+    expect(
+      await screen.findByText(/Saved .*fork-wf/),
+    ).toBeInTheDocument();
+    expect(postMock.mock.calls.some((c) => c[0] === "/workflows")).toBe(true);
     expect(patchMock).not.toHaveBeenCalled(); // as-new never renames
     // POST /workflows saved the fork UNPINNED (a fresh name has no pin row to
     // preserve) — the canvas must agree or its runs ground sessions in the
@@ -808,9 +817,14 @@ describe("Canvas pin lifecycle (Save as new / delete)", () => {
       target: { value: "fork-wf" },
     });
     fireEvent.click(await screen.findByRole("button", { name: /Save as new/ }));
-    await waitFor(() =>
-      expect(postMock.mock.calls.some((c) => c[0] === "/workflows")).toBe(true),
-    );
+    // Same reason as the test above: wait for the HANDLER to finish, not for
+    // its POST. `pinFetchRef.current = wfName` — the stale-response guard this
+    // test is about — is set in the same block as `setLoadedPin(null)`, AFTER
+    // the awaited post. Resolving the late pin before that ran would arm the
+    // guard too late and the test would measure nothing.
+    expect(
+      await screen.findByText(/Saved .*fork-wf/),
+    ).toBeInTheDocument();
     // The parent's pin arrives LATE — the stale-response guard must refuse it.
     await act(async () => {
       resolvePin({ project_id: "proj-1" });

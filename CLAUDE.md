@@ -318,6 +318,18 @@ cd dashboard && pnpm dev           # dashboard
   (`daemon/app.py`, `Sidebar.tsx`, `types.ts`, `ui.tsx`, `main.js`) are owned
   by the coordinating session. Don't run the full test suite while agents are
   mid-edit.
+- **A frontend `waitFor` must wait for the THING YOU ARE ASSERTING**, never for
+  a proxy signal that lands earlier. TWICE now this exact shape has cost a
+  release: v1.177.1 (`JobPostCard` — waited for the POST to be recorded, then
+  asserted the boxes had cleared, which happens in a LATER state update) and
+  v1.178.0 (`canvas-v1170` — waited for `post("/workflows")`, then clicked Run
+  and asserted the fork was unpinned; `setLoadedPin(null)` runs AFTER that
+  awaited post). Both were green locally and on most CI runs — a contended
+  runner is the only place the window is wide enough to see. The rule: put the
+  real assertion INSIDE `waitFor`, or wait on a signal set at the END of the
+  handler (the success note, the re-enabled button), not on the first
+  observable side effect. A handler that does `await x` and then sets state has
+  a window between the two, and CI will find it eventually.
 - **Windows dev shell**: PowerShell 5.1 — no `&&` chaining; Git Bash available.
   This machine lacks ffmpeg on PATH.
 
