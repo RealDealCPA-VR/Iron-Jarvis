@@ -15,13 +15,15 @@
 //     faces nobody can select is decoration, and the older in-flow composition
 //     (no selection state to drive) still has to work unchanged.
 //   * the <select> did not go away — it IS the narrow-width form of the rail
-//     (`lg:hidden` against the column's `hidden lg:block`), so exactly one of
+//     (`md:hidden` since v1.180.0, against the column's `hidden md:block`), so one of
 //     the two is in the a11y tree at any viewport (display:none removes the
 //     other) and a 380px-wide window gets a control that fits instead of a
 //     15rem column eating the screen.
-// The breakpoint is `lg`, not `md`, and app/agents/page.tsx's grid must agree:
-// the round-table on that page splits at md with its OWN 16rem rail, so a
-// 15rem rail at md left the transcript ~216px on a 768px window.
+// The breakpoint was `lg`, not `md`, and app/agents/page.tsx's grid had to
+// agree: the round-table on that page splits at md with its OWN 16rem rail, so
+// a 15rem rail BESIDE it at md left the transcript ~216px on a 768px window.
+// (v1.180.0 stacks them instead, which is what let the rule move to `md` — see
+// the note at the foot of this header.)
 // The gear-with-a-face at the foot of the rail is ONE door to both setup
 // surfaces (an agent of your own, or one on another computer).
 //
@@ -41,9 +43,28 @@
 // worded offline pill. Built-in/Yours stay off the rows on purpose: at 15rem a
 // pill on all five rows is noise, and their kind shows on the selected row's
 // detail line and in every row's title.
+//
+// v1.180.0 — IT FOLDS. "The roster list should be collapsable for a cleaner
+// look." The header becomes the disclosure (the page owns the state and
+// persists it, the same way it owns the selection and the setup reveal), and
+// folding HIDES rather than unmounts, so the narrow <select>'s value and the
+// scroll position of a long rail survive a fold. Two things deliberately
+// survive the fold on screen:
+//   * the HEADER still says how many agents there are AND who is selected — a
+//     collapsed control that says nothing about what it is hiding is a control
+//     nobody reopens;
+//   * THE GEAR. Agent configuration lives behind it and nowhere else since
+//     v1.179.0, so folding the list must not make creating an agent
+//     unreachable. It sits outside the folded region on purpose.
+// The face column's breakpoint moved `lg` → `md` in the same release: the page
+// stacks the conversation BELOW the roster now (v1.180.0) instead of beside it,
+// so the two no longer compete for width and the reason the rule sat at `lg`
+// is gone. It is still ONE rule in two halves — this file's `hidden md:block`
+// column and `md:hidden` <select>, and the page's `md:w-[17rem]` cap — and all
+// three must move together or a viewport band gets two pickers, or none.
 
 import { type ReactElement, useState } from "react";
-import { Briefcase, MessageCircle, WifiOff } from "lucide-react";
+import { Briefcase, ChevronDown, MessageCircle, WifiOff } from "lucide-react";
 import { API_BASE, ijToken } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { timeAgo } from "@/lib/format";
@@ -189,6 +210,8 @@ export function RosterStrip({
   onSelect,
   onConfigure,
   configureOpen = false,
+  onToggleCollapse,
+  collapsed = false,
   selected: picked = null,
 }: {
   /** The page's OWN GET /agents/roster rows (v1.178.0). The page needs them
@@ -202,9 +225,13 @@ export function RosterStrip({
    *  round-table. Only offered for delegable + healthy entries; omit the
    *  prop (older daemons without thread routes) and no button renders. */
   onTalk?: (kind: AgentSource, name: string) => void;
-  /** The Give-work button (v1.166.0): preselect this agent in the job-post
-   *  card. Same delegable + healthy gate as Talk — a non-delegable entry
-   *  (supervisor) stays chat-only, and an offline remote can't take work. */
+  /** The Give-work button (v1.166.0): aim the work at this agent. Same
+   *  delegable + healthy gate as Talk — a non-delegable entry (supervisor)
+   *  stays chat-only, and an offline remote can't take work. WHERE the work
+   *  lands is the page's call, not this strip's: since v1.180.0 the agents
+   *  page opens the 1:1 thread and arms its composer, while the pre-rail /
+   *  no-thread-routes compositions still aim the standalone job card. So the
+   *  button's wording here names the INTENT and never a destination. */
   onAssign?: (kind: AgentSource, name: string) => void;
   /** A face was clicked (v1.178.0): this agent is now the one being worked
    *  with. `canWork` is the SAME delegable + healthy gate the buttons use, so
@@ -226,6 +253,16 @@ export function RosterStrip({
    *  gear is a DISCLOSURE now — setup is not on the page until it is clicked —
    *  so the button has to announce the state it controls, not just change it. */
   configureOpen?: boolean;
+  /** Fold the list away (v1.180.0). Supplying this turns the header into a
+   *  disclosure button; omit it and the header is the plain caption it has
+   *  always been. The STATE lives on the page — it is persisted across visits
+   *  and the page is where the other two disclosure keys already live — so this
+   *  component stays the renderer of a decision it does not own. */
+  onToggleCollapse?: () => void;
+  /** Whether the list is currently folded. Ignored without
+   *  `onToggleCollapse`: a folded roster with no control to unfold it would be
+   *  a section the user cannot get back. */
+  collapsed?: boolean;
 } = {}) {
   const [choice, setChoice] = useState("");
   // A supplied roster disables the fetch outright (path null) rather than
@@ -277,9 +314,9 @@ export function RosterStrip({
    *  in rail mode — one the user has actually picked (see the note by the
    *  buttons). */
   const actionable = (!onSelect || isPick) && selected.delegable && selected.healthy;
-  /** Is there anything IN the action row at lg? (Below lg the <select> is
-   *  always in it.) An empty padded strip between the rail and the gear is
-   *  just dead space, so at lg the row folds away until it has a button. */
+  /** Is there anything IN the action row at md and up? (Below md the <select>
+   *  is always in it.) An empty padded strip between the rail and the gear is
+   *  just dead space, so at md the row folds away until it has a button. */
   const showActions = Boolean((onTalk || onAssign) && actionable);
   const offline = selected.kind === "remote" && !selected.healthy;
   const shown = bareName(selected.name);
@@ -295,6 +332,18 @@ export function RosterStrip({
     onSelect?.(e.kind, bareName(e.name), e.delegable && e.healthy);
   }
 
+  /** The fold (v1.180.0). `collapsed` alone never hides anything — without a
+   *  toggle there is no way back, and a section the user cannot reopen is
+   *  worse than a cluttered one. */
+  const foldable = Boolean(onToggleCollapse);
+  const folded = foldable && collapsed;
+  /** What the folded header says it is hiding. The count is always true; the
+   *  name is only shown for a REAL pick (the same distinction the aria-current
+   *  gate draws — `selected` falls back to entries[0] as a preview). */
+  const foldedCaption = isPick
+    ? `${shown} selected · tap to show all`
+    : "who can take delegated work";
+
   return (
     <Reveal>
       {/* The whole left pane, addressable as one thing (v1.179.0): the
@@ -303,25 +352,66 @@ export function RosterStrip({
           never see that. */}
       <div data-testid="roster-pane">
         <Card pad={false} className="overflow-hidden">
-          <div className="border-b hairline px-4 py-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-                Roster · {entries.length}
-              </span>
-              {!onSelect && (
-                <span className="text-[11px] text-zinc-600">
-                  who can take delegated work
+          {/* THE HEADER IS THE FOLD (v1.180.0) when the page hands over a
+              toggle. Its accessible name is the count plus the caption, so a
+              screen-reader user hears WHAT is being hidden and — once someone
+              is picked — who stays selected while it is hidden. Without a
+              toggle it is the plain caption block it has always been. */}
+          {foldable ? (
+            <button
+              type="button"
+              onClick={onToggleCollapse}
+              data-testid="roster-toggle"
+              aria-expanded={!folded}
+              aria-controls="roster-body"
+              title={folded ? "Show the roster" : "Hide the roster"}
+              className="flex w-full items-center gap-2 border-b hairline px-4 py-2.5 text-left transition-colors hover:bg-white/[0.03]"
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                  Roster · {entries.length}
                 </span>
+                <span className="block truncate text-[11px] text-zinc-600">
+                  {folded ? foldedCaption : "who can take delegated work"}
+                </span>
+              </span>
+              <ChevronDown
+                size={14}
+                aria-hidden
+                className={`shrink-0 text-zinc-500 motion-safe:transition-transform ${
+                  folded ? "-rotate-90" : ""
+                }`}
+              />
+            </button>
+          ) : (
+            <div className="border-b hairline px-4 py-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                  Roster · {entries.length}
+                </span>
+                {!onSelect && (
+                  <span className="text-[11px] text-zinc-600">
+                    who can take delegated work
+                  </span>
+                )}
+              </div>
+              {onSelect && (
+                <p className="mt-0.5 text-[11px] text-zinc-600">
+                  who can take delegated work
+                </p>
               )}
             </div>
-            {onSelect && (
-              <p className="mt-0.5 text-[11px] text-zinc-600">
-                who can take delegated work
-              </p>
-            )}
-          </div>
+          )}
 
-          {/* THE RAIL (lg and up). A column of faces you scan, not a list you
+          {/* EVERYTHING THE FOLD HIDES — and nothing else. `hidden` rather than
+              an unmount: the narrow <select>'s value, the scroll position of a
+              long rail and the local `choice` all survive a fold, and the
+              attribute takes the controls out of the a11y tree so a folded list
+              is not something a screen reader can still tab through. The gear
+              below is OUTSIDE this wrapper on purpose — see the header note. */}
+          <div id="roster-body" hidden={folded}>
+
+          {/* THE RAIL (md and up). A column of faces you scan, not a list you
               read: name + face + health, and the detail for the selected one on
               the selected ROW — ONE rendering per agent, never a second portrait
               of it below. Capped height with its own scroll so a 30-agent roster
@@ -329,7 +419,7 @@ export function RosterStrip({
           {onSelect && (
             <div
               data-testid="roster-rail"
-              className="hidden max-h-[44vh] space-y-0.5 overflow-y-auto p-1.5 lg:block"
+              className="hidden max-h-[44vh] space-y-0.5 overflow-y-auto p-1.5 md:block"
             >
               {entries.map((e) => {
                 const active = isPick && e.name === selected.name;
@@ -459,22 +549,27 @@ export function RosterStrip({
           {/* ADVERSARIAL REVIEW (v1.179.0): the bottom padding used to come
               from the detail block that sat under this row. With the block gone
               in rail mode the buttons landed flush against the gear's divider,
-              so the row carries its own `pb-3` there — and folds at lg when it
+              so the row carries its own `pb-3` there — and folds at md when it
               has nothing to show, rather than leaving a padded blank strip. */}
           <div
-            className={`flex flex-wrap items-center gap-2 px-4 pt-3 lg:pt-2.5 ${
-              !onSelect ? "" : showActions ? "pb-3" : "pb-3 lg:hidden"
+            className={`flex flex-wrap items-center gap-2 px-4 pt-3 md:pt-2.5 ${
+              !onSelect ? "" : showActions ? "pb-3" : "pb-3 md:hidden"
             }`}
           >
             {/* The narrow-width form of the rail above (and the whole picker on
-                a page that supplies no onSelect). `lg:hidden` keeps exactly one
+                a page that supplies no onSelect). `md:hidden` keeps exactly one
                 of the two in the a11y tree — and it must stay in lock-step with
-                the column's `hidden lg:block` and with app/agents/page.tsx's
-                `lg:grid-cols-[15rem_...]`, or a viewport band gets either two
-                pickers or none. (Was `md` — see the page's comment: at 768px the
-                rail and the round-table's own 16rem rail engaged together and
-                left the transcript ~216px.) */}
-            <label className={`sr-only ${onSelect ? "lg:hidden" : ""}`} htmlFor="roster-pick">
+                the column's `hidden md:block` above and with
+                app/agents/page.tsx's `md:w-[17rem]` cap on the roster wrapper,
+                or a viewport band gets either two pickers or none.
+                REVIEW (v1.180.0): this note still said `lg` in all three places
+                and cited a `lg:grid-cols-[15rem_...]` on the page — the grid the
+                same release deleted. The rule really did move down to `md` (the
+                page stacks the conversation BELOW the roster now, so the two no
+                longer compete for width), and a comment naming the old
+                breakpoint and a container that no longer exists is how the next
+                editor moves one half of a two-half rule. */}
+            <label className={`sr-only ${onSelect ? "md:hidden" : ""}`} htmlFor="roster-pick">
               Choose an agent
             </label>
             {/* ADVERSARIAL REVIEW (v1.179.0): in RAIL mode this select showed
@@ -498,7 +593,7 @@ export function RosterStrip({
                 if (next) choose(next);
               }}
               className={`field min-w-0 flex-1 py-1.5 text-[12.5px] ${
-                onSelect ? "lg:hidden" : ""
+                onSelect ? "md:hidden" : ""
               }`}
             >
               {onSelect && !isPick && (
@@ -540,7 +635,13 @@ export function RosterStrip({
               <button
                 type="button"
                 onClick={() => onAssign(selected.kind, shown)}
-                title={`Give ${shown} a job via the job-post card`}
+                // REVIEW (v1.180.0): this said "via the job-post card", and on
+                // the page the user actually opens that card no longer exists —
+                // the work is aimed at the thread composer now. A tooltip that
+                // names a removed surface is a small lie about the only thing
+                // the button does, and the strip cannot know which composition
+                // it is in, so it names the intent instead.
+                title={`Give ${shown} a job`}
                 className="btn-ghost shrink-0 px-2.5 py-1.5 text-[11.5px]"
               >
                 <Briefcase size={12} /> Give work
@@ -632,6 +733,8 @@ export function RosterStrip({
             </div>
           </div>
           )}
+          </div>
+          {/* ...end of the folded region. */}
 
           {/* ONE DOOR at the foot of the rail (v1.178.0). Local or remote is a
               question the setup surface itself asks — making the rail ask it
@@ -643,7 +746,12 @@ export function RosterStrip({
               agent gear face ... and not shown unless the user decided to
               configure an agent") — so it announces what it controls. */}
           {onConfigure && (
-            <div className="border-t hairline p-1.5">
+            // REVIEW (v1.180.0): the divider is CONDITIONAL now. Folded, the
+            // hidden body collapses to nothing and this `border-t` landed
+            // directly under the header's `border-b` — two hairlines stacked
+            // into one 2px rule, on the one composition whose whole point is
+            // looking tidier.
+            <div className={`p-1.5 ${folded ? "" : "border-t hairline"}`}>
               <button
                 type="button"
                 onClick={onConfigure}

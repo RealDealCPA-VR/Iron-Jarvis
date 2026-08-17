@@ -1,4 +1,5 @@
 "use client";
+import { useFaceStyle } from "@/components/agents/FaceStyles";
 
 import { type ReactElement, useEffect, useState } from "react";
 
@@ -15,6 +16,21 @@ import { type ReactElement, useEffect, useState } from "react";
  * Deterministic: same name → same face, everywhere (roster, TeamTree, kanban,
  * round table). An uploaded/generated portrait (avatarUrl) always wins over
  * the geometric face.
+ *
+ * CHOOSABLE SINCE v1.180.0. The seed is the DEFAULT, no longer the ceiling: an
+ * optional `face` override (stored per agent by the daemon, served on the
+ * roster and the agents list) replaces the seeded value FIELD BY FIELD — a set
+ * shape overrides the shape, a set color the color, a set eye style the eyes,
+ * and anything unset keeps deriving from the name. Precedence, top down:
+ *
+ *     portrait (avatarUrl)  >  override field  >  name-derived field
+ *
+ * A portrait still wins over everything, unchanged: a real picture is a
+ * stronger identity than a chosen geometry. An override value this build does
+ * not know (an older dashboard against a newer daemon) is IGNORED per field
+ * and that field derives — a face that renders is always better than a face
+ * that throws, and it is never a lie because the seeded face is the honest
+ * default.
  */
 
 const SHAPES = [
@@ -42,6 +58,38 @@ const COLORS = [
   "#a8b0b8", // silver
 ] as const;
 
+/**
+ * Eye styles — a REAL NAMED SET, never a free-form string (v1.180.0).
+ *
+ * Each name has geometry drawn below, so the daemon can validate a chosen
+ * value against exactly this list. THIS ARRAY AND `FACE_EYES` IN
+ * `agents/faces.py` MUST NAME THE SAME VALUES: a value the daemon accepts but
+ * this file cannot draw renders as the derived face while the picker claims
+ * it is set — the one way this feature can lie.
+ */
+export const EYE_STYLES = [
+  "round",
+  "oval",
+  "wide",
+  "sleepy",
+  "square",
+  "visor",
+] as const;
+export type EyeStyle = (typeof EYE_STYLES)[number];
+
+/** The shapes and colors, exported so a picker offers the real sets. */
+export const FACE_SHAPES = SHAPES;
+export const FACE_COLORS = COLORS;
+
+/** A stored per-agent override. Each field is INDEPENDENT and optional;
+ *  absent/null means "derive this one from the name". Matches the daemon's
+ *  wire shape (`face` on /agents and /agents/roster) exactly. */
+export type FaceOverride = {
+  shape?: string | null;
+  color?: string | null;
+  eyes?: string | null;
+};
+
 /** Stable 32-bit hash (FNV-1a) — the ONE seeding function. */
 export function faceSeed(name: string): number {
   let h = 0x811c9dc5;
@@ -59,6 +107,37 @@ export function faceShape(name: string): Shape {
 export function faceColor(name: string): string {
   // Second-order seed so shape and color don't correlate.
   return COLORS[Math.floor(faceSeed(name) / 7) % COLORS.length];
+}
+
+/** Third-order seed so the eyes correlate with neither shape nor color. */
+export function faceEyes(name: string): EyeStyle {
+  return EYE_STYLES[Math.floor(faceSeed(name) / 53) % EYE_STYLES.length];
+}
+
+/** An override value, or null when it is unset OR not a value this build can
+ *  draw. ONE gate for all three fields — see the precedence note at the top. */
+function pick<T extends string>(
+  value: string | null | undefined,
+  allowed: readonly T[],
+): T | null {
+  const v = (value ?? "").trim().toLowerCase();
+  return (allowed as readonly string[]).includes(v) ? (v as T) : null;
+}
+
+/** The face actually drawn: the override where it is set, the name's seed
+ *  everywhere else. Exported so tests (and the picker's preview) resolve
+ *  precedence through the SAME function the component draws with — two copies
+ *  of this rule would drift silently. */
+export function resolveFace(
+  name: string,
+  override?: FaceOverride | null,
+): { shape: Shape; color: string; eyes: EyeStyle } {
+  const seed = faceIdentity(name);
+  return {
+    shape: pick(override?.shape, SHAPES) ?? faceShape(seed),
+    color: pick(override?.color, COLORS) ?? faceColor(seed),
+    eyes: pick(override?.eyes, EYE_STYLES) ?? faceEyes(seed),
+  };
 }
 
 /** Dark eyes on light bodies, parchment on dark (perceptual luminance). */
@@ -106,6 +185,163 @@ const EYE_Y: Record<Shape, number> = {
   drop: 27,
 };
 
+/** Per-STYLE eye size (viewBox 0 0 48 48). `visor` is drawn separately — it is
+ *  one bar across both sockets rather than a pair. */
+const EYE_DIMS: Record<Exclude<EyeStyle, "visor">, { rx: number; ry: number }> = {
+  round: { rx: 3, ry: 3 },
+  oval: { rx: 2.2, ry: 3.8 },
+  wide: { rx: 4, ry: 4 },
+  sleepy: { rx: 3.6, ry: 1.4 },
+  square: { rx: 2.8, ry: 2.8 },
+};
+
+/** The two eye centres — one x per socket, shared by every style. */
+const EYE_X = [18, 30] as const;
+
+/**
+ * The eyes, in the chosen style, still carrying MOOD.
+ *
+ * Mood outranks style everywhere it matters: `error` is drawn by the caller as
+ * X-X for EVERY style (a status surface must not become unreadable because the
+ * user liked visors), and idle-blink / work-scan animations exist in each style
+ * rather than only in the default one — a style that silently lost the scan
+ * would make a running agent look idle.
+ */
+function eyePair({
+  style,
+  ey,
+  body,
+  animate,
+  mood,
+  phase,
+}: {
+  style: EyeStyle;
+  ey: number;
+  body: string;
+  animate: boolean;
+  mood: FaceMood;
+  phase: number;
+}): ReactElement {
+  const blink = animate && mood === "idle";
+  const scan = animate && mood === "work";
+  if (style === "visor") {
+    const h = 5.6;
+    return (
+      <>
+        <rect
+          x="12.5"
+          y={ey - h / 2}
+          width="23"
+          height={h}
+          rx={h / 2}
+          data-testid="face-eye"
+        >
+          {blink && (
+            <>
+              <animate
+                attributeName="height"
+                values={`${h};${h};1;${h}`}
+                keyTimes="0;0.93;0.965;1"
+                dur="4.8s"
+                begin={`${phase}s`}
+                repeatCount="indefinite"
+              />
+              <animate
+                attributeName="y"
+                values={`${ey - h / 2};${ey - h / 2};${ey - 0.5};${ey - h / 2}`}
+                keyTimes="0;0.93;0.965;1"
+                dur="4.8s"
+                begin={`${phase}s`}
+                repeatCount="indefinite"
+              />
+            </>
+          )}
+        </rect>
+        {/* The scanner: a body-coloured dot sweeping the bar, so "working"
+            reads at 20px the way the paired scan does. */}
+        {scan && (
+          <circle cx="16" cy={ey} r="1.6" fill={body} data-testid="face-scan">
+            <animate
+              attributeName="cx"
+              values="16;32;16"
+              dur="1.3s"
+              repeatCount="indefinite"
+            />
+          </circle>
+        )}
+      </>
+    );
+  }
+  const { rx, ry } = EYE_DIMS[style];
+  return (
+    <>
+      {EYE_X.map((cx) =>
+        style === "square" ? (
+          <rect
+            key={cx}
+            x={cx - rx}
+            y={ey - ry}
+            width={rx * 2}
+            height={ry * 2}
+            rx="0.9"
+            data-testid="face-eye"
+          >
+            {scan && (
+              <animate
+                attributeName="x"
+                values={`${cx - rx - 1.5};${cx - rx + 1.5};${cx - rx - 1.5}`}
+                dur="1.1s"
+                repeatCount="indefinite"
+              />
+            )}
+            {blink && (
+              <>
+                <animate
+                  attributeName="height"
+                  values={`${ry * 2};${ry * 2};0.8;${ry * 2}`}
+                  keyTimes="0;0.93;0.965;1"
+                  dur="4.8s"
+                  begin={`${phase}s`}
+                  repeatCount="indefinite"
+                />
+                <animate
+                  attributeName="y"
+                  values={`${ey - ry};${ey - ry};${ey - 0.4};${ey - ry}`}
+                  keyTimes="0;0.93;0.965;1"
+                  dur="4.8s"
+                  begin={`${phase}s`}
+                  repeatCount="indefinite"
+                />
+              </>
+            )}
+          </rect>
+        ) : (
+          <ellipse key={cx} cx={cx} cy={ey} rx={rx} ry={ry} data-testid="face-eye">
+            {scan && (
+              <animate
+                attributeName="cx"
+                values={`${cx - 1.5};${cx + 1.5};${cx - 1.5}`}
+                dur="1.1s"
+                repeatCount="indefinite"
+              />
+            )}
+            {blink && (
+              <animate
+                attributeName="ry"
+                values={`${ry};${ry};0.4;${ry}`}
+                keyTimes="0;0.93;0.965;1"
+                dur="4.8s"
+                begin={`${phase}s`}
+                repeatCount="indefinite"
+              />
+            )}
+          </ellipse>
+        ),
+      )}
+    </>
+  );
+}
+
 function bodyPath(shape: Shape): ReactElement {
   switch (shape) {
     case "circle":
@@ -132,6 +368,7 @@ export default function AgentFace({
   mood = "idle",
   size = 28,
   avatarUrl,
+  face,
   className = "",
   title,
 }: {
@@ -141,6 +378,9 @@ export default function AgentFace({
   size?: number;
   /** A real portrait always wins over the geometric face. */
   avatarUrl?: string | null;
+  /** The user's stored choice — per field, absent means "derive from the
+   *  name" (v1.180.0). Absent entirely = the pre-v1.180.0 behaviour exactly. */
+  face?: FaceOverride | null;
   className?: string;
   title?: string;
 }) {
@@ -165,8 +405,14 @@ export default function AgentFace({
       />
     );
   }
-  const body = faceColor(seed);
-  const shape = faceShape(seed);
+  // Override where set, seed everywhere else — ONE resolver (v1.180.0).
+  // An explicit prop wins (the picker previews a DRAFT, not the saved
+  // value); otherwise the stored override arrives from the provider, so a
+  // chosen face reaches every surface that draws one — not only the control
+  // it was chosen in. No provider, or an older daemon: `stored` is null and
+  // this is byte-identical to the derived face that shipped before.
+  const stored = useFaceStyle(seed);
+  const { shape, color: body, eyes: eyeStyle } = resolveFace(seed, face ?? stored);
   const eyes = eyeColor(body);
   const ey = EYE_Y[shape];
   const animate = !reduced;
@@ -187,6 +433,10 @@ export default function AgentFace({
       data-testid="agent-face"
       data-face-shape={shape}
       data-face-mood={mood}
+      // The resolved values, so a surface passing the wrong seed OR dropping
+      // the override is catchable from the DOM (v1.180.0).
+      data-face-eyes={eyeStyle}
+      data-face-color={body}
     >
       {!decorative && <title>{title ?? seed}</title>}
       <g fill={body}>{bodyPath(shape)}</g>
@@ -202,46 +452,7 @@ export default function AgentFace({
         </g>
       ) : (
         <g fill={eyes}>
-          <ellipse cx="18" cy={ey} rx="3" ry="3">
-            {animate && mood === "work" && (
-              <animate
-                attributeName="cx"
-                values="16.5;19.5;16.5"
-                dur="1.1s"
-                repeatCount="indefinite"
-              />
-            )}
-            {animate && mood === "idle" && (
-              <animate
-                attributeName="ry"
-                values="3;3;0.4;3"
-                keyTimes="0;0.93;0.965;1"
-                dur="4.8s"
-                begin={`${phase}s`}
-                repeatCount="indefinite"
-              />
-            )}
-          </ellipse>
-          <ellipse cx="30" cy={ey} rx="3" ry="3">
-            {animate && mood === "work" && (
-              <animate
-                attributeName="cx"
-                values="28.5;31.5;28.5"
-                dur="1.1s"
-                repeatCount="indefinite"
-              />
-            )}
-            {animate && mood === "idle" && (
-              <animate
-                attributeName="ry"
-                values="3;3;0.4;3"
-                keyTimes="0;0.93;0.965;1"
-                dur="4.8s"
-                begin={`${phase}s`}
-                repeatCount="indefinite"
-              />
-            )}
-          </ellipse>
+          {eyePair({ style: eyeStyle, ey, body, animate, mood, phase })}
           {mood === "done" && (
             <g
               stroke={eyes}

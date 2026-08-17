@@ -4,7 +4,14 @@
 // threads stay the star. Two columns on lg: your (dynamic) agents and remote
 // agents. Collapsed by default; the open state persists in localStorage.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   CheckCircle2,
   ChevronDown,
@@ -21,7 +28,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { API_BASE, ApiError, del, get, ijToken, patch, post } from "@/lib/api";
+import { API_BASE, ApiError, del, get, ijToken, patch, post, put } from "@/lib/api";
 import type { DynamicAgent, ModelOption } from "@/lib/types";
 import {
   Badge,
@@ -31,7 +38,12 @@ import {
   SectionLabel,
   SuccessNote,
 } from "@/components/ui";
-import AgentFace from "./AgentFace";
+import AgentFace, {
+  EYE_STYLES,
+  FACE_COLORS,
+  FACE_SHAPES,
+  type FaceOverride,
+} from "./AgentFace";
 import type { RemoteAgentInfo } from "./identity";
 
 const OPEN_KEY = "ij_agents_setup_open";
@@ -42,7 +54,36 @@ const OPEN_KEY = "ij_agents_setup_open";
 export type DynamicAgentFull = DynamicAgent & {
   /** v1.171.0 additive: the stored portrait's serve path, or null/absent. */
   avatar?: string | null;
+  /** v1.180.0 additive: the chosen face, or null/absent to derive from the
+   *  name. Absent on a daemon older than v1.180.0 — which is the derived
+   *  face, i.e. exactly what that daemon has always drawn. */
+  face?: FaceOverride | null;
 };
+
+/** Every stored override, keyed by agent name (GET /agents/faces). `null`
+ *  means "not loaded yet"; a LOADED map is authoritative — a name missing from
+ *  it has no override, which is how a Reset stops showing a stale face. */
+export type FaceMap = Record<string, FaceOverride> | null;
+
+/**
+ * The override to draw an agent with.
+ *
+ * A LOADED map wins outright, including when it has no entry for this name:
+ * that is what makes a Reset visible immediately instead of waiting for the
+ * agents list to be refetched (the row's own `face` field would still carry
+ * the removed override until then, which would show the user a face that is
+ * no longer stored). Before the map lands — and on a daemon that has no
+ * /agents/faces at all — the row's own field is used, and absent means
+ * derived, which is exactly the pre-v1.180.0 behaviour.
+ */
+export function faceFor(
+  faces: FaceMap,
+  name: string,
+  rowFace?: FaceOverride | null,
+): FaceOverride | null {
+  if (faces) return faces[name] ?? null;
+  return rowFace ?? null;
+}
 
 /** Portrait upload cap — mirrors the daemon's 2MB decoded limit so an
  *  oversized pick fails HERE with a plain line instead of a 413 round-trip. */
@@ -112,6 +153,300 @@ function baseTypePhrase(agent: DynamicAgentFull): string {
   return base ? `the ${base} base type` : "its base type";
 }
 
+/* ------------------------------------------------------------ face picker --- */
+
+/**
+ * One row of face choices — a radiogroup whose FIRST option is "from the
+ * name". Module-level on purpose: declared inside `FacePicker` it would be a
+ * NEW component type on every keystroke of state, so React would unmount and
+ * remount the whole row after each click and throw keyboard focus away.
+ */
+function FaceRow({
+  label,
+  agentName,
+  options,
+  current,
+  onChoose,
+  render,
+  testId,
+}: {
+  label: string;
+  agentName: string;
+  options: readonly string[];
+  /** The pinned value, or null for "derive this field from the name". */
+  current: string | null;
+  onChoose: (value: string | null) => void;
+  render: (value: string | null) => ReactNode;
+  testId: string;
+}) {
+  return (
+    <div data-testid={testId}>
+      <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+        {label}
+      </div>
+      <div
+        role="radiogroup"
+        aria-label={`${label} for ${agentName}`}
+        className="flex flex-wrap gap-1"
+      >
+        {[null, ...options].map((value) => {
+          const active = current === value;
+          return (
+            <button
+              key={value ?? "__derived__"}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => onChoose(value)}
+              title={
+                value === null
+                  ? `${label}: from the name “${agentName}”`
+                  : `${label}: ${value}`
+              }
+              // Every control accessibly named — the swatches and mini faces
+              // carry no text of their own.
+              aria-label={
+                value === null ? `${label} from the name` : `${label} ${value}`
+              }
+              className={`grid h-8 min-w-8 place-items-center rounded-lg border px-1.5 transition-colors ${
+                active
+                  ? "border-accent/60 bg-accent/[0.10]"
+                  : "border-white/[0.07] bg-white/[0.02] hover:border-accent/30"
+              }`}
+            >
+              {render(value)}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Choose an agent's face: shape, eyes, colour (v1.180.0).
+ *
+ * The face has been DERIVED from the agent's name since v1.171.0 — pretty, and
+ * fixed. This is the control that makes the seed a default instead of a
+ * ceiling, and it is deliberately PER FIELD: leaving one on "From the name"
+ * keeps it deriving, so picking a colour does not silently freeze the shape as
+ * well. That matters because the derived face is the thing that stays
+ * consistent everywhere; the fewer fields pinned, the less there is to drift.
+ *
+ * Nothing is written until Apply. The preview updates instantly (it is the
+ * real `AgentFace`, resolved through the same `resolveFace` every surface
+ * uses, so what is previewed is exactly what the roster will draw), while the
+ * stored record changes once, on purpose — a PUT per swatch click would make a
+ * casual browse of the palette into twenty writes.
+ *
+ * Apply with nothing pinned sends DELETE, not an empty PUT: an override with
+ * no fields is not a state the daemon stores, and "reset" is what the user
+ * means by it.
+ */
+function FacePicker({
+  name,
+  avatarUrl,
+  face,
+  onChanged,
+}: {
+  name: string;
+  /** A stored portrait still WINS over any chosen face — shown, and said. */
+  avatarUrl?: string;
+  face: FaceOverride | null;
+  onChanged: () => void;
+}) {
+  const [draft, setDraft] = useState<FaceOverride>(face ?? {});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+
+  // Re-sync when the daemon's answer arrives (or changes underneath us) so the
+  // control always opens on the truth as STORED, never on a stale draft.
+  //
+  // `name` IS A DEPENDENCY (reviewer, v1.180.0). The built-in strip reuses ONE
+  // picker instance for whichever chip is open, so switching from an agent with
+  // no override to another with no override leaves `face` at `null` both times
+  // — the effect would not re-run and the second agent's picker opened
+  // PRE-PINNED with the first agent's unapplied choice, reading "chosen" and
+  // one Apply away from writing it to the wrong agent.
+  useEffect(() => {
+    setDraft(face ?? {});
+  }, [face, name]);
+
+  const pinned = Boolean(draft.shape || draft.color || draft.eyes);
+
+  function choose(field: keyof FaceOverride, value: string | null) {
+    setOk(null);
+    // A previous failure described the previous attempt — keeping it on screen
+    // while the user picks something else says the new choice already failed.
+    setError(null);
+    setDraft((prev) => ({ ...prev, [field]: value }));
+  }
+
+  async function apply() {
+    setBusy(true);
+    setError(null);
+    setOk(null);
+    try {
+      if (pinned) {
+        await put(`/agents/${encodeURIComponent(name)}/face`, {
+          shape: draft.shape ?? null,
+          color: draft.color ?? null,
+          eyes: draft.eyes ?? null,
+        });
+      } else {
+        await del(`/agents/${encodeURIComponent(name)}/face`);
+      }
+      onChanged();
+      // TELL THE REST OF THE APP (v1.180.0). `onChanged` refreshes THIS
+      // card's map; every other AgentFace in the app reads the shared
+      // provider, which would otherwise keep drawing the old face until a
+      // reload — a chosen face that appears only where it was chosen is
+      // the defect this release exists to fix.
+      window.dispatchEvent(new CustomEvent("ij:agent-face-changed"));
+      // Set LAST in the handler: this note is what a test (and the user) can
+      // safely read as "the write landed" — an earlier signal would be true
+      // before the request finished (the v1.177.1 / v1.178.0 lesson).
+      setOk(pinned ? "Face saved." : "Back to the face this name draws.");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reset() {
+    setBusy(true);
+    setError(null);
+    setOk(null);
+    try {
+      await del(`/agents/${encodeURIComponent(name)}/face`);
+      setDraft({});
+      onChanged();
+      window.dispatchEvent(new CustomEvent("ij:agent-face-changed"));
+      setOk("Back to the face this name draws.");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      data-testid={`face-picker-${name}`}
+      className="space-y-2.5 rounded-lg border border-white/[0.06] bg-white/[0.02] p-2.5"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <AgentFace
+          name={name}
+          mood="idle"
+          size={34}
+          face={draft}
+          avatarUrl={avatarUrl}
+          title={`${name} — the face as chosen`}
+        />
+        <span className="text-[11px] font-medium text-zinc-300">Face</span>
+        <span className="text-[10px] text-zinc-500">
+          {pinned ? "chosen" : "drawn from the name"}
+        </span>
+        <span className="ml-auto flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={apply}
+            disabled={busy}
+            className="btn-accent px-2.5 py-1 text-[11px]"
+          >
+            {busy ? <LoaderInline label="Saving…" /> : "Apply face"}
+          </button>
+          <button
+            type="button"
+            onClick={reset}
+            disabled={busy}
+            title={`Reset ${name}'s face to the one its name draws`}
+            className="rounded-lg border border-white/10 px-2 py-1 text-[11px] text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-50"
+          >
+            Reset
+          </button>
+        </span>
+      </div>
+
+      {avatarUrl && (
+        <p className="text-[10px] leading-relaxed text-amber-300/80">
+          A stored portrait is shown instead of the drawn face wherever this
+          agent appears — remove it to see this one.
+        </p>
+      )}
+
+      {/* Each option previews the face it would actually produce — the real
+          AgentFace, resolved through the same rule the roster uses, so the
+          swatch cannot promise a face the app then draws differently. */}
+      <FaceRow
+        testId={`face-row-shape-${name}`}
+        label="Shape"
+        agentName={name}
+        options={FACE_SHAPES}
+        current={draft.shape ?? null}
+        onChoose={(v) => choose("shape", v)}
+        render={(value) =>
+          value === null ? (
+            <Sparkles size={12} className="text-zinc-500" aria-hidden />
+          ) : (
+            <AgentFace
+              name={name}
+              size={18}
+              title=""
+              face={{ shape: value, color: draft.color, eyes: draft.eyes }}
+            />
+          )
+        }
+      />
+      <FaceRow
+        testId={`face-row-eyes-${name}`}
+        label="Eyes"
+        agentName={name}
+        options={EYE_STYLES}
+        current={draft.eyes ?? null}
+        onChoose={(v) => choose("eyes", v)}
+        render={(value) =>
+          value === null ? (
+            <Sparkles size={12} className="text-zinc-500" aria-hidden />
+          ) : (
+            <AgentFace
+              name={name}
+              size={18}
+              title=""
+              face={{ shape: draft.shape, color: draft.color, eyes: value }}
+            />
+          )
+        }
+      />
+      <FaceRow
+        testId={`face-row-color-${name}`}
+        label="Colour"
+        agentName={name}
+        options={FACE_COLORS}
+        current={draft.color ?? null}
+        onChoose={(v) => choose("color", v)}
+        render={(value) =>
+          value === null ? (
+            <Sparkles size={12} className="text-zinc-500" aria-hidden />
+          ) : (
+            <span
+              aria-hidden
+              className="block h-4 w-4 rounded-full"
+              style={{ backgroundColor: value }}
+            />
+          )
+        }
+      />
+
+      {ok && <SuccessNote>{ok}</SuccessNote>}
+      {error && <ErrorNote>{error}</ErrorNote>}
+    </div>
+  );
+}
+
 type RemoteKind = "http-task" | "openai-chat" | "openai-responses";
 /** The two OpenAI dialects both carry a model id; they differ only in the
  *  request field (`messages` vs `input`). */
@@ -121,7 +456,23 @@ const modelKey = (m: ModelOption) => `${m.provider}|${m.model}`;
 
 /* ------------------------------------------------------------ your agents --- */
 
-function DynamicRow({ agent, onChanged }: { agent: DynamicAgentFull; onChanged: () => void }) {
+function DynamicRow({
+  agent,
+  face,
+  facesSupported,
+  onChanged,
+  onFaceChanged,
+}: {
+  agent: DynamicAgentFull;
+  /** The stored face override, or null to derive from the name (v1.180.0). */
+  face: FaceOverride | null;
+  /** False on a daemon with no face routes — the picker is hidden rather than
+   *  shown and always failing. The face still renders (derived), which is
+   *  exactly what that daemon has always drawn. */
+  facesSupported: boolean;
+  onChanged: () => void;
+  onFaceChanged: () => void;
+}) {
   const [editing, setEditing] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [description, setDescription] = useState("");
@@ -317,7 +668,13 @@ function DynamicRow({ agent, onChanged }: { agent: DynamicAgentFull; onChanged: 
   return (
     <li className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2">
       <div className="flex items-center gap-2">
-        <AgentFace name={agent.name} mood="idle" size={20} avatarUrl={avatarUrl} />
+        <AgentFace
+          name={agent.name}
+          mood="idle"
+          size={20}
+          avatarUrl={avatarUrl}
+          face={face}
+        />
         <span className="min-w-0 truncate text-[13px] font-medium text-zinc-100">
           {agent.name}
         </span>
@@ -503,7 +860,13 @@ function DynamicRow({ agent, onChanged }: { agent: DynamicAgentFull; onChanged: 
             data-testid={`avatar-row-${agent.name}`}
             className="flex flex-wrap items-center gap-2"
           >
-            <AgentFace name={agent.name} mood="idle" size={28} avatarUrl={avatarUrl} />
+            <AgentFace
+              name={agent.name}
+              mood="idle"
+              size={28}
+              avatarUrl={avatarUrl}
+              face={face}
+            />
             <span className="text-[11px] text-zinc-500">Portrait</span>
             <span className="ml-auto flex items-center gap-1.5">
               <label
@@ -547,6 +910,19 @@ function DynamicRow({ agent, onChanged }: { agent: DynamicAgentFull; onChanged: 
             </span>
           </div>
           {avatarError && <ErrorNote>{avatarError}</ErrorNote>}
+
+          {/* THE FACE PICKER (v1.180.0) — shape, eyes, colour, live preview,
+              reset. It writes on its own Apply, independent of this form's
+              Save, because a face is not part of the persona edit and should
+              not need one to stick. */}
+          {facesSupported && (
+            <FacePicker
+              name={agent.name}
+              avatarUrl={avatarUrl}
+              face={face}
+              onChanged={onFaceChanged}
+            />
+          )}
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -574,11 +950,20 @@ function DynamicRow({ agent, onChanged }: { agent: DynamicAgentFull; onChanged: 
 function YourAgentsSection({
   dynamic,
   models,
+  faces,
+  facesSupported,
   onChanged,
+  onFaceChanged,
 }: {
   dynamic: DynamicAgentFull[];
   models: ModelOption[];
+  /** Loaded override map, or null while it is still loading. A LOADED map is
+   *  authoritative (see FaceMap); until it lands, the row's own `face` field
+   *  from GET /agents is used so a face never flickers to derived. */
+  faces: FaceMap;
+  facesSupported: boolean;
   onChanged: () => void;
+  onFaceChanged: () => void;
 }) {
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -638,7 +1023,14 @@ function YourAgentsSection({
       {dynamic.length > 0 && (
         <ul className="space-y-2">
           {dynamic.map((a) => (
-            <DynamicRow key={a.name} agent={a} onChanged={onChanged} />
+            <DynamicRow
+              key={a.name}
+              agent={a}
+              face={faceFor(faces, a.name, a.face)}
+              facesSupported={facesSupported}
+              onChanged={onChanged}
+              onFaceChanged={onFaceChanged}
+            />
           ))}
         </ul>
       )}
@@ -873,7 +1265,19 @@ function RemoteEditForm({
   );
 }
 
-function RemoteRow({ agent, onChanged }: { agent: RemoteAgentInfo; onChanged: () => void }) {
+function RemoteRow({
+  agent,
+  face,
+  facesSupported,
+  onChanged,
+  onFaceChanged,
+}: {
+  agent: RemoteAgentInfo;
+  face: FaceOverride | null;
+  facesSupported: boolean;
+  onChanged: () => void;
+  onFaceChanged: () => void;
+}) {
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<{ ok: boolean; detail: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -910,7 +1314,7 @@ function RemoteRow({ agent, onChanged }: { agent: RemoteAgentInfo; onChanged: ()
   return (
     <li className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2">
       <div className="flex flex-wrap items-center gap-2">
-        <AgentFace name={agent.name} mood="idle" size={20} />
+        <AgentFace name={agent.name} mood="idle" size={20} face={face} />
         <span className="min-w-0 truncate text-[13px] font-medium text-zinc-100">
           {agent.name}
         </span>
@@ -952,15 +1356,24 @@ function RemoteRow({ agent, onChanged }: { agent: RemoteAgentInfo; onChanged: ()
         </span>
       </div>
       {editing && (
-        <RemoteEditForm
-          agent={agent}
-          onDone={() => {
-            setEditing(false);
-            setTest(null); // a stale "Reachable." would describe the OLD config
-            onChanged();
-          }}
-          onCancel={() => setEditing(false)}
-        />
+        <>
+          <RemoteEditForm
+            agent={agent}
+            onDone={() => {
+              setEditing(false);
+              setTest(null); // a stale "Reachable." would describe the OLD config
+              onChanged();
+            }}
+            onCancel={() => setEditing(false)}
+          />
+          {/* A remote wears a face on every panel too — same picker, same
+              store, keyed by the same name (v1.180.0). */}
+          {facesSupported && (
+            <div className="mt-2">
+              <FacePicker name={agent.name} face={face} onChanged={onFaceChanged} />
+            </div>
+          )}
+        </>
       )}
       <div className="mt-1 overflow-x-auto pl-7">
         <code className="whitespace-pre font-mono text-[10px] text-zinc-500">
@@ -979,10 +1392,16 @@ function RemoteRow({ agent, onChanged }: { agent: RemoteAgentInfo; onChanged: ()
 
 function RemoteAgentsSection({
   remotes,
+  faces,
+  facesSupported,
   onChanged,
+  onFaceChanged,
 }: {
   remotes: RemoteAgentInfo[];
+  faces: FaceMap;
+  facesSupported: boolean;
   onChanged: () => void;
+  onFaceChanged: () => void;
 }) {
   const [name, setName] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
@@ -1036,7 +1455,14 @@ function RemoteAgentsSection({
       {remotes.length > 0 && (
         <ul className="space-y-2">
           {remotes.map((r) => (
-            <RemoteRow key={r.name} agent={r} onChanged={onChanged} />
+            <RemoteRow
+              key={r.name}
+              agent={r}
+              face={faceFor(faces, r.name)}
+              facesSupported={facesSupported}
+              onChanged={onChanged}
+              onFaceChanged={onFaceChanged}
+            />
           ))}
         </ul>
       )}
@@ -1112,6 +1538,78 @@ function RemoteAgentsSection({
   );
 }
 
+/* ------------------------------------------------- built-ins, with faces --- */
+
+/**
+ * The built-in specialists (v1.180.0: their faces are customizable too).
+ *
+ * They used to be a row of flat badges. They still are a row — same list, same
+ * "always available" label, nothing lost — but each chip now wears the agent's
+ * actual face and opens the same picker the dynamic rows use, because "the
+ * faces for each agent should be customizable" includes the eight agents the
+ * user never created and cannot edit anywhere else.
+ *
+ * On a daemon with no face routes the chips fall back to the original badges:
+ * a control that could only fail is worse than the plain list it replaced.
+ */
+function BuiltinFaces({
+  builtin,
+  faces,
+  facesSupported,
+  onFaceChanged,
+}: {
+  builtin: string[];
+  faces: FaceMap;
+  facesSupported: boolean;
+  onFaceChanged: () => void;
+}) {
+  const [openName, setOpenName] = useState<string | null>(null);
+  return (
+    <div className="mb-5 space-y-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="mr-1 text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">
+          Built-in · always available
+        </span>
+        {builtin.map((b) =>
+          facesSupported ? (
+            <button
+              key={b}
+              type="button"
+              onClick={() => setOpenName((cur) => (cur === b ? null : b))}
+              aria-expanded={openName === b}
+              title={`Customize ${b}'s face`}
+              className={`inline-flex items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-[11px] transition-colors ${
+                openName === b
+                  ? "border-accent/60 bg-accent/[0.10] text-accent-soft"
+                  : "border-accent/30 bg-accent/[0.06] text-accent-soft hover:border-accent/50"
+              }`}
+            >
+              {/* Decorative: the chip's own text is the name (title="" +
+                  aria-hidden, the v1.171.0 rule). */}
+              <AgentFace name={b} size={14} title="" face={faceFor(faces, b)} />
+              {b}
+            </button>
+          ) : (
+            <Badge key={b} value={b} tone="cyan" />
+          ),
+        )}
+      </div>
+      {openName && (
+        // `key` so switching chips MOUNTS a fresh picker rather than handing
+        // the next agent the previous one's draft (reviewer, v1.180.0). The
+        // effect above also keys off `name`; this is the belt to that braces —
+        // a draft is per-agent and must never outlive the agent it was made for.
+        <FacePicker
+          key={openName}
+          name={openName}
+          face={faceFor(faces, openName)}
+          onChanged={onFaceChanged}
+        />
+      )}
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------- card --- */
 
 export function SetupCard({
@@ -1139,6 +1637,43 @@ export function SetupCard({
       /* storage unavailable — stays collapsed */
     }
   }, []);
+
+  // --- stored faces (v1.180.0) -------------------------------------------
+  // ONE fetch for every agent's override instead of one per row: this card
+  // draws a face for every built-in, dynamic and remote agent, and it is
+  // collapsed by default, so the load waits until it is opened.
+  const [faces, setFaces] = useState<FaceMap>(null);
+  const [facesSupported, setFacesSupported] = useState(true);
+
+  const loadFaces = useCallback(async () => {
+    try {
+      const r = await get<{ faces?: Record<string, FaceOverride> }>("/agents/faces");
+      setFaces(r?.faces ?? {});
+      setFacesSupported(true);
+    } catch (err) {
+      // A daemon older than v1.180.0 has no such route. DEGRADE: every face
+      // derives from its name (what that daemon has always drawn) and the
+      // pickers hide themselves — never an error, never a broken control. An
+      // empty map is the TRUTH there: that daemon stores no overrides at all.
+      if (err instanceof ApiError && err.status === 404) {
+        setFacesSupported(false);
+        setFaces({});
+        return;
+      }
+      // ANY OTHER FAILURE TELLS US NOTHING about what is stored (reviewer,
+      // v1.180.0). A loaded map is AUTHORITATIVE, so writing `{}` here would
+      // claim "no agent has an override" on the strength of a timeout: every
+      // customized face would silently redraw as derived, and the refetch that
+      // follows an Apply would reset the open picker to "drawn from the name"
+      // one line under "Face saved." Keep the last confirmed answer (or "not
+      // loaded", which falls back to each row's own `face` field from
+      // GET /agents) and let the next load correct it.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (open) void loadFaces();
+  }, [open, loadFaces]);
 
   function toggle() {
     const next = !open;
@@ -1182,18 +1717,29 @@ export function SetupCard({
       {open && (
         <div className="border-t hairline p-5">
           {builtin.length > 0 && (
-            <div className="mb-5 flex flex-wrap items-center gap-1.5">
-              <span className="mr-1 text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">
-                Built-in · always available
-              </span>
-              {builtin.map((b) => (
-                <Badge key={b} value={b} tone="cyan" />
-              ))}
-            </div>
+            <BuiltinFaces
+              builtin={builtin}
+              faces={faces}
+              facesSupported={facesSupported}
+              onFaceChanged={loadFaces}
+            />
           )}
           <div className="grid gap-8 lg:grid-cols-2">
-            <YourAgentsSection dynamic={dynamic} models={models} onChanged={onAgentsChanged} />
-            <RemoteAgentsSection remotes={remotes} onChanged={onRemotesChanged} />
+            <YourAgentsSection
+              dynamic={dynamic}
+              models={models}
+              faces={faces}
+              facesSupported={facesSupported}
+              onChanged={onAgentsChanged}
+              onFaceChanged={loadFaces}
+            />
+            <RemoteAgentsSection
+              remotes={remotes}
+              faces={faces}
+              facesSupported={facesSupported}
+              onChanged={onRemotesChanged}
+              onFaceChanged={loadFaces}
+            />
           </div>
         </div>
       )}

@@ -25,6 +25,33 @@
 // POST is a preview that writes nothing; the commit sends the previewed text
 // back verbatim. See MemoryReviewCard for why both halves are load-bearing.
 //
+// THE THREAD IS WHERE WORK STARTS (v1.180.0): a round is a CONVERSATION —
+// `AgentThreads.run_round` asks each participant to answer, and nothing runs
+// the perceive→act tool loop. A JOB is a SESSION: it uses tools and produces
+// deliverables. The user said the separate "Post a job" form is redundant,
+// because choosing to start a thread with an agent already IS posting a job.
+// So the thread dispatches too. Chat solved this first ("one surface, zero
+// routing": a chat turn escalates itself to a full agent session and SAYS it
+// did), and this is the same move on the Agents page: the composer's text is
+// the task, "Ask the panel" talks, "Give it to <agent>" starts a real session.
+//
+// THREE THINGS MAKE IT HONEST RATHER THAN A SECOND SEND BUTTON:
+//   * THE BODY IS NOT RE-DERIVED. `jobRequest` (JobPostCard) is imported and
+//     used verbatim — target→route mapping, the `job:agents` origin, the
+//     max_steps rules. A second copy of those shapes would drift, and each way
+//     of drifting fails SILENTLY: a dynamic agent posted to /sessions is quietly
+//     downgraded to Builder, and a dispatch without the origin is invisible to
+//     every recent-jobs list in the app.
+//   * NOTHING THAT WAS ON THE FORM IS LOST. Project grounding and the step
+//     budget live behind "Job options" (a disclosure, because the user's
+//     complaint was clutter) and they REACH the request. The recent-jobs list is
+//     in the same disclosure, reading the same `jobSessions(GET /sessions)` the
+//     card reads — the origin stamp is what makes both work.
+//   * TALKING AND DISPATCHING NEVER LOOK ALIKE. A round renders speakers in the
+//     transcript; a dispatch renders a receipt that names the session, links to
+//     it, and states out loud that nobody spoke in the thread. A failed dispatch
+//     shows the daemon's reason, keeps the typed task, and starts nothing.
+//
 // ADD AN AGENT (v1.179.0): a thread is a ROOM, so bringing somebody else into
 // it belongs IN the room — bottom right of the composer, next to "Let them
 // continue" — not only behind the header's panel editor. The control reuses
@@ -48,13 +75,17 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import Link from "next/link";
 import {
+  ArrowUpRight,
   Brain,
+  Briefcase,
   Check,
   Copy,
   LoaderCircle,
   MessagesSquare,
   Send,
+  SlidersHorizontal,
   TriangleAlert,
   UserRoundPen,
   UserRoundPlus,
@@ -64,8 +95,21 @@ import remarkGfm from "remark-gfm";
 import { ApiError, get, post, put } from "@/lib/api";
 import { useEvents } from "@/lib/useEvents";
 import { timeAgo } from "@/lib/format";
-import { Empty, ErrorNote, OfflineHint, SkeletonRows, SuccessNote } from "@/components/ui";
+import { Badge, Empty, ErrorNote, OfflineHint, SkeletonRows, StatusDot, SuccessNote } from "@/components/ui";
+import type { Project, SessionView } from "@/lib/types";
 import AgentFace, { faceIdentity } from "./AgentFace";
+import {
+  MAX_JOB_STEPS,
+  MIN_JOB_STEPS,
+  TEAM_TARGET,
+  jobMaxSteps,
+  jobRequest,
+  jobSessions,
+  supportsMaxSteps,
+  wireTarget,
+  type JobAssign,
+} from "./JobPostCard";
+import type { RosterEntry } from "./RosterStrip";
 import { PanelPicker, type PickerCatalog, type PickerOption } from "./PanelPicker";
 import {
   RolePill,
@@ -660,6 +704,59 @@ function addedNames(before: Participant[], after: Participant[]): string[] {
   return after.filter((p) => !seated.has(p.key)).map((p) => p.name);
 }
 
+/* ------------------------------------------------------- dispatch work --- */
+
+/** How many dispatched jobs the thread's list shows before it says so. */
+const MAX_THREAD_JOBS = 5;
+
+/** WHO TAKES THE WORK when this thread dispatches — the wire target
+ *  `jobRequest` expects.
+ *
+ *  ONE participant that is a builtin or a dynamic agent → THAT agent takes it
+ *  directly (`builder`, `custom:remy`), which is the whole point of the user's
+ *  observation: starting a thread with an agent already chose who does the job.
+ *  Anything else → the TEAM (a supervisor session that plans and delegates),
+ *  because a panel of several agents has no single owner and the supervisor's
+ *  own job IS delegating. A lone REMOTE routes through `remote:<name>`, which
+ *  jobRequest turns into a supervisor session that delegates over the registered
+ *  transport — a remote has no session shape of its own, and silently rerouting
+ *  it to a local builder is the exact bug class this repo bans.
+ *
+ *  Exported so it can be pinned directly: the mapping is invisible on screen
+ *  (every target posts *something*) and wrong is only visible in the body. */
+export function dispatchTarget(participants: Participant[]): string {
+  if (participants.length !== 1) return TEAM_TARGET;
+  const only = participants[0];
+  // The builtin supervisor IS the team: it carries the delegate tool and the
+  // roster lists it as non-delegable, so naming it as a direct target would
+  // describe the same session by a name the user does not use for it.
+  if (only.source === "builtin" && only.name.trim().toLowerCase() === "supervisor")
+    return TEAM_TARGET;
+  return wireTarget(only.source, only.name);
+}
+
+/** What the button calls a wire target — the agent's bare name, or "the team".
+ *  Takes the TARGET rather than the panel so the label can never describe the
+ *  thread while the body posts somewhere else (a roster "Give work" click arms
+ *  an agent who may not be seated here). */
+export function dispatchLabel(target: string): string {
+  return target === TEAM_TARGET ? "the team" : bareRosterName(target);
+}
+
+/** What a landed dispatch is allowed to claim. Read off the REQUEST and the
+ *  RESPONSE, never off the form: the boxes are the intent, the body is the
+ *  fact, and after a dispatch the composer is cleared. */
+interface DispatchReceipt {
+  /** The session id, or "" when the daemon answered without one. */
+  id: string;
+  /** Who took it, in the words the button used. */
+  label: string;
+  /** The budget the body actually carried (null = the configured default). */
+  steps: number | null;
+  /** The grounding project's NAME, or "" — never an id the user never saw. */
+  project: string;
+}
+
 /* ----------------------------------------------------------------- view --- */
 
 /** One round in flight: the message count when it started (everything after
@@ -681,6 +778,8 @@ export function RoundTable({
   reloadNonce,
   onEditPanel,
   onRoundDone,
+  roster = [],
+  assign = null,
 }: {
   threadId: string;
   /** Bump to refetch the transcript (e.g. after the panel was edited). */
@@ -688,6 +787,14 @@ export function RoundTable({
   onEditPanel: (detail: ThreadDetail) => void;
   /** A speaking round finished — refresh the thread rail counts. */
   onRoundDone: () => void;
+  /** The page's GET /agents/roster rows (v1.180.0) — who can take a dispatch.
+   *  Empty on an older daemon, and the thread's own agent still takes the job:
+   *  the target is derived from the PANEL, the roster only widens the choice. */
+  roster?: RosterEntry[];
+  /** The rail's "Give work" click, if any: it ARMS this composer's dispatch
+   *  target, which is why the page hands it down here now instead of to a
+   *  separate form. Null = the target is the thread's own. */
+  assign?: JobAssign | null;
 }) {
   const [detail, setDetail] = useState<ThreadDetail | null>(null);
   const [loadError, setLoadError] = useState<ApiError | null>(null);
@@ -715,6 +822,28 @@ export function RoundTable({
   const [addLoading, setAddLoading] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
   const [addNote, setAddNote] = useState<string | null>(null);
+  // DISPATCH THE WORK (v1.180.0). `jobOptions` is the disclosure (project,
+  // step budget, recent jobs) — closed by default because the complaint that
+  // started this was clutter, and open is one click. `projects`/`jobs` are
+  // null until that disclosure has asked for them: a mount-time fetch would
+  // spend two requests per thread open on controls most rounds never touch.
+  // Each carries its own error, because "the list didn't load" and "you have
+  // none" must never render as the same thing.
+  const [jobOptions, setJobOptions] = useState(false);
+  const [projects, setProjects] = useState<Project[] | null>(null);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
+  const [projectId, setProjectId] = useState("");
+  const [maxSteps, setMaxSteps] = useState("");
+  // An EXPLICIT target choice (the rail's Give-work, or the options select).
+  // null = "whoever this thread is with" — see dispatchTarget. Kept separate
+  // from the derived value so adding an agent to the panel still moves the
+  // default, while a choice the user made out loud is never overwritten.
+  const [target, setTarget] = useState<string | null>(null);
+  const [jobs, setJobs] = useState<SessionView[] | null>(null);
+  const [jobsError, setJobsError] = useState<string | null>(null);
+  const [dispatching, setDispatching] = useState(false);
+  const [dispatchError, setDispatchError] = useState<string | null>(null);
+  const [dispatched, setDispatched] = useState<DispatchReceipt | null>(null);
   // The @-autocomplete popover: the partial after "@" and where it starts.
   const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
   const [mentionIdx, setMentionIdx] = useState(0);
@@ -757,6 +886,20 @@ export function RoundTable({
     setAddLoading(false);
     setAddError(null);
     setAddNote(null);
+    // A dispatch receipt names a session started FROM ANOTHER THREAD once this
+    // one is open, and the grounding/budget were chosen for that thread's work.
+    // Carrying either across would attribute a running job to the wrong panel.
+    setJobOptions(false);
+    setProjects(null);
+    setProjectsError(null);
+    setProjectId("");
+    setMaxSteps("");
+    setTarget(null);
+    setJobs(null);
+    setJobsError(null);
+    setDispatching(false);
+    setDispatchError(null);
+    setDispatched(null);
     get<ThreadDetail>(`/agents/threads/${encodeURIComponent(threadId)}`)
       .then((d) => {
         if (!cancelled) setDetail(d);
@@ -769,6 +912,15 @@ export function RoundTable({
       cancelled = true;
     };
   }, [threadId, reloadNonce]);
+
+  // THE RAIL'S "Give work" ARMS THIS COMPOSER (v1.180.0). Declared AFTER the
+  // thread-switch reset above and therefore applied after it, which is the
+  // whole gesture: Give-work opens the 1:1 thread with that agent AND sets the
+  // target in one click. The nonce makes a repeat click on the same agent a
+  // distinct value, so it still lands after a manual change in the options.
+  useEffect(() => {
+    if (assign) setTarget(wireTarget(assign.kind, assign.name));
+  }, [assign]);
 
   const messages = detail?.messages ?? [];
   const participants = detail?.participants ?? [];
@@ -829,7 +981,11 @@ export function RoundTable({
    *  mentioned participants. Blocks until the round ends; entries stream in
    *  live via agent_thread.updated, and the response is the reconciliation. */
   async function say(raw: string) {
-    if (speaking || !detail) return;
+    // `dispatching` too: the composer's text is the task of the job currently
+    // being started, and sending it as a round as well would spend a second
+    // set of provider calls on the same words with no way to tell the two
+    // acts apart afterwards.
+    if (speaking || dispatching || !detail) return;
     const message = raw.trim();
     const gen = genRef.current;
     const base = detail.messages.length;
@@ -1061,6 +1217,165 @@ export function RoundTable({
           : "Panel saved — reloading the thread to show who is seated.",
     );
     onRoundDone(); // the rail's panel avatars are now stale
+  }
+
+  /* ------------------------------------------------ dispatch the work ----- */
+
+  // WHO TAKES THE WORK. The thread's own answer is the default; the roster
+  // widens the choice (an agent who is not seated here can still be handed the
+  // job, which is what the rail's Give-work does).
+  const derivedTarget = dispatchTarget(participants);
+  const candidates = roster.filter((e) => e.delegable);
+  const targetOptions: { value: string; label: string; disabled: boolean }[] = [
+    { value: TEAM_TARGET, label: "Team — supervisor plans & delegates", disabled: false },
+    ...candidates.map((e) => {
+      const offline = e.kind === "remote" && !e.healthy;
+      return {
+        value: e.name,
+        // Offline remotes stay LISTED but unpickable — hiding one would look
+        // like it does not exist (RosterStrip's rule, and JobPostCard's).
+        label: `${bareRosterName(e.name)} — ${SOURCE_LABEL[e.kind] ?? e.kind}${
+          offline ? " (offline)" : ""
+        }`,
+        disabled: offline,
+      };
+    }),
+  ];
+  // The thread's own agent is ALWAYS pickable, even on a daemon that serves no
+  // roster at all: without this the select would render blank (selectedIndex
+  // -1) while the button posted to the invisible target — the UI showing one
+  // thing and dispatching another, JobPostCard's exact lesson.
+  if (
+    derivedTarget !== TEAM_TARGET &&
+    !targetOptions.some((o) => o.value === derivedTarget)
+  )
+    targetOptions.splice(1, 0, {
+      value: derivedTarget,
+      label: `${dispatchLabel(derivedTarget)} — in this thread`,
+      disabled: false,
+    });
+  // A choice is honoured only while it is a real, pickable option; anything
+  // else falls back to the thread's own agent VISIBLY (the select and the
+  // button both read the same value).
+  const jobTarget =
+    target !== null && targetOptions.some((o) => o.value === target && !o.disabled)
+      ? target
+      : derivedTarget;
+  const jobLabel = dispatchLabel(jobTarget);
+  /** The armed target is somebody the thread is not with — said out loud,
+   *  because "Give it to X" beside a panel of Y is otherwise a surprise. */
+  const targetIsForeign = jobTarget !== derivedTarget;
+  const stepsSupported = supportsMaxSteps(jobTarget);
+  const stepsText = maxSteps.trim();
+  // A value that WOULD BE DROPPED is refused up front rather than posted and
+  // silently ignored — JobPostCard's rule, for the same reason: the user would
+  // otherwise watch a big job stop at the default budget.
+  const stepsInvalid =
+    stepsSupported && stepsText !== "" && jobMaxSteps(stepsText) === null;
+
+  /** The grounding list. A failure sets an EMPTY list plus a reason: rendering
+   *  only "No project" with no explanation would state, silently, that the user
+   *  has no projects. */
+  async function loadProjects() {
+    const gen = genRef.current;
+    try {
+      const res = await get<{ projects?: Project[] }>("/projects");
+      if (genRef.current !== gen) return;
+      setProjects(
+        (res?.projects ?? [])
+          .filter((p) => p.status !== "archived")
+          .sort((a, b) => a.name.localeCompare(b.name)),
+      );
+      setProjectsError(null);
+    } catch (e) {
+      if (genRef.current !== gen) return;
+      setProjects([]);
+      setProjectsError(
+        failureText(e, "Daemon offline — the project list didn't load."),
+      );
+    }
+  }
+
+  /** THE RECENT-JOBS LIST, unchanged in substance: the same
+   *  `jobSessions(GET /sessions)` filter the job card uses, which works here
+   *  only because a dispatch from this thread carries the same `job:agents`
+   *  origin (jobRequest stamps it). It is the app's list of dispatched work,
+   *  not this thread's — said so on screen, because a thread-scoped claim would
+   *  be a lie: a session carries no thread id. */
+  async function loadJobs() {
+    const gen = genRef.current;
+    try {
+      const res = await get<{ sessions?: SessionView[] }>("/sessions");
+      if (genRef.current !== gen) return;
+      setJobs(jobSessions(res?.sessions ?? []));
+      setJobsError(null);
+    } catch (e) {
+      if (genRef.current !== gen) return;
+      setJobs([]);
+      setJobsError(failureText(e, "Daemon offline — the job list didn't load."));
+    }
+  }
+
+  function toggleJobOptions() {
+    const next = !jobOptions;
+    setJobOptions(next);
+    // Fetched per open so a project created (or a job dispatched elsewhere)
+    // since this thread opened is on the list.
+    if (next) {
+      void loadProjects();
+      void loadJobs();
+    }
+  }
+
+  /** GIVE THE WORK TO THE THREAD'S AGENT(S) — a real session, not a round.
+   *
+   *  The composer's text is the task: that is the user's point, that choosing
+   *  to start a thread with an agent already is posting a job. The request body
+   *  is `jobRequest`'s, verbatim — see the header note on why it is imported
+   *  rather than rebuilt.
+   *
+   *  ON FAILURE NOTHING IS STARTED AND NOTHING IS LOST: the typed task stays in
+   *  the box, the daemon's own reason is shown, and no receipt is rendered. On
+   *  success the receipt is the only claim made, and it is read off the request
+   *  body and the daemon's answer. */
+  async function dispatchWork() {
+    const task = input.trim();
+    if (dispatching || speaking || !task || stepsInvalid) return;
+    const gen = genRef.current;
+    setDispatching(true);
+    setDispatchError(null);
+    setDispatched(null);
+    try {
+      const req = jobRequest(jobTarget, task, projectId, maxSteps);
+      const session = await post<SessionView>(req.path, req.body);
+      if (genRef.current !== gen) return; // switched threads mid-dispatch
+      setDispatched({
+        id: typeof session?.id === "string" ? session.id : "",
+        label: jobLabel,
+        // WHAT THE DISPATCH CARRIED, off the body — not off the box, which is
+        // about to be cleared. Without it a user who typed 60 and later reads
+        // "reached max steps" cannot tell whether the budget was ignored.
+        steps: typeof req.body.max_steps === "number" ? req.body.max_steps : null,
+        // The project's NAME. An id the user never saw explains nothing, and
+        // when the list failed to load there is no name to show — so it says
+        // nothing rather than showing the raw id.
+        project: projects?.find((p) => p.id === projectId)?.name ?? "",
+      });
+      setInput("");
+      setMention(null);
+      // Sizing belongs to the job that was sized (JobPostCard's rule): a
+      // 200-step budget typed for one big job must not ride along on the next
+      // quick one. What it WAS is in the receipt above.
+      setMaxSteps("");
+      if (jobs !== null) void loadJobs(); // the list is open — keep it true
+    } catch (e) {
+      if (genRef.current !== gen) return;
+      setDispatchError(
+        failureText(e, "Daemon offline — no session was started."),
+      );
+    } finally {
+      if (genRef.current === gen) setDispatching(false);
+    }
   }
 
   /* -------------------------------------------------- @-autocomplete ------ */
@@ -1371,6 +1686,239 @@ export function RoundTable({
 
       {/* Composer */}
       <div className="border-t hairline p-3">
+        {/* JOB OPTIONS (v1.180.0) — everything the standalone form carried that
+            the composer alone cannot: what the work is grounded in, how much
+            room it gets, and what has already been dispatched. Behind a
+            disclosure because the complaint was clutter; one click away, and
+            whatever is set here REACHES the request (see dispatchWork). */}
+        {jobOptions && (
+          <section
+            id="thread-job-options"
+            aria-label="Job options"
+            className="mb-3 rounded-xl border border-white/[0.08] bg-white/[0.02] p-3"
+          >
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label
+                  htmlFor="thread-job-target"
+                  className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400"
+                >
+                  Who takes the job
+                </label>
+                <select
+                  id="thread-job-target"
+                  value={jobTarget}
+                  onChange={(e) => setTarget(e.target.value)}
+                  className="field"
+                >
+                  {targetOptions.map((o) => (
+                    <option key={o.value} value={o.value} disabled={o.disabled}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-zinc-500">
+                  {targetIsForeign
+                    ? "Not one of this thread's agents — the job still goes to them."
+                    : "Defaults to whoever this thread is with."}
+                </p>
+              </div>
+              <div>
+                <label
+                  htmlFor="thread-job-project"
+                  className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400"
+                >
+                  Project (optional)
+                </label>
+                <select
+                  id="thread-job-project"
+                  value={projectId}
+                  onChange={(e) => setProjectId(e.target.value)}
+                  className="field"
+                >
+                  <option value="">No project</option>
+                  {(projects ?? []).map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                {projectsError ? (
+                  // "The list didn't load" is not "you have no projects".
+                  <p className="mt-1 text-[11px] text-amber-300">{projectsError}</p>
+                ) : (
+                  <p className="mt-1 text-[11px] text-zinc-500">
+                    Grounds the session in that project&apos;s folder and notes.
+                  </p>
+                )}
+              </div>
+              <div>
+                <label
+                  htmlFor="thread-job-max-steps"
+                  className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400"
+                >
+                  Max steps (optional)
+                </label>
+                <input
+                  id="thread-job-max-steps"
+                  type="text"
+                  inputMode="numeric"
+                  value={maxSteps}
+                  disabled={!stepsSupported}
+                  onChange={(e) => setMaxSteps(e.target.value)}
+                  placeholder="blank = default"
+                  aria-invalid={stepsInvalid || undefined}
+                  aria-describedby="thread-job-steps-hint"
+                  className="field disabled:opacity-50"
+                />
+                <div
+                  id="thread-job-steps-hint"
+                  className={`mt-1 text-[11px] ${
+                    stepsInvalid ? "text-amber-300" : "text-zinc-500"
+                  }`}
+                >
+                  {!stepsSupported
+                    ? "A custom agent runs on the configured default — this route takes no step budget."
+                    : stepsInvalid
+                      ? `Enter a whole number from ${MIN_JOB_STEPS} to ${MAX_JOB_STEPS}, or leave it blank.`
+                      : `Room for a big job — ${MIN_JOB_STEPS}–${MAX_JOB_STEPS} steps.`}
+                </div>
+              </div>
+            </div>
+
+            {/* THE RECENT-JOBS LIST, in the thread context. Same origin stamp,
+                same filter, same destination — so a dispatch from here and one
+                from anywhere else land in one list. */}
+            <div className="mt-3 border-t hairline pt-2.5">
+              <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                Recent jobs
+                {jobs && jobs.length > 0 ? ` · ${jobs.length}` : ""}
+              </div>
+              {jobsError ? (
+                <p className="text-[11px] text-amber-300">{jobsError}</p>
+              ) : jobs === null ? (
+                <p className="text-[11px] text-zinc-500">Loading…</p>
+              ) : jobs.length === 0 ? (
+                <p className="text-[11px] text-zinc-500">
+                  No jobs have been dispatched yet.
+                </p>
+              ) : (
+                <>
+                  <div className="space-y-1">
+                    {jobs.slice(0, MAX_THREAD_JOBS).map((s) => (
+                      <Link
+                        key={s.id}
+                        href={`/sessions/${s.id}`}
+                        className="group flex items-center gap-2 rounded-lg px-1.5 py-1 transition-colors hover:bg-white/[0.04]"
+                        title={s.task || "Untitled job"}
+                      >
+                        <StatusDot status={s.status} />
+                        <span className="min-w-0 flex-1 truncate text-[12.5px] text-zinc-200 transition-colors group-hover:text-accent-soft">
+                          {s.task || "Untitled job"}
+                        </span>
+                        <Badge value={s.status} />
+                        <span className="shrink-0 text-[11px] text-zinc-500">
+                          {timeAgo(s.created_at)}
+                        </span>
+                        <ArrowUpRight
+                          size={12}
+                          className="shrink-0 text-zinc-600 opacity-0 transition-opacity group-hover:opacity-100"
+                          aria-hidden="true"
+                        />
+                      </Link>
+                    ))}
+                  </div>
+                  {jobs.length > MAX_THREAD_JOBS && (
+                    <div className="mt-1.5 text-[11px] text-zinc-600">
+                      showing the latest {MAX_THREAD_JOBS} of {jobs.length} jobs
+                    </div>
+                  )}
+                </>
+              )}
+              {/* A session carries no thread id, so this list cannot honestly
+                  claim to be this thread's — it is every dispatched job. */}
+              <p className="mt-1.5 text-[11px] text-zinc-600">
+                Every job dispatched from the app, newest first.
+              </p>
+            </div>
+          </section>
+        )}
+
+        {/* THE RECEIPT — a dispatch never reads like a round. It names the
+            session, links to it, states what the body carried, and says out
+            loud that nobody spoke in the thread. */}
+        {dispatched && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="mb-3 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.07] px-3 py-2.5 text-sm text-emerald-200"
+          >
+            <div className="flex items-center gap-2 font-medium">
+              <Briefcase size={14} aria-hidden="true" />
+              <span>Session started — {dispatched.label} is doing the work</span>
+            </div>
+            <p className="mt-1 text-[11px] leading-relaxed text-emerald-200/80">
+              This was a job, not a round: nobody spoke in the thread. It runs
+              with tools on its own session page.{" "}
+              {/* WHAT DID NOT GO WITH IT. The body's `task` is exactly the text
+                  that was in the composer — the thread's transcript is not
+                  attached to a session, and a user who has been talking here for
+                  ten messages would otherwise assume it was. Saying so is the
+                  difference between a limit and a silent one. */}
+              Only the text you typed went with it — not this thread&apos;s
+              conversation.
+            </p>
+            {dispatched.id ? (
+              <Link
+                href={`/sessions/${dispatched.id}`}
+                className="mt-1 inline-block text-[12px] font-medium text-emerald-100 underline underline-offset-2"
+              >
+                Watch it run
+              </Link>
+            ) : (
+              // The daemon accepted it but answered without an id — say exactly
+              // that rather than render a link to /sessions/undefined.
+              <p className="mt-1 text-[11px] text-emerald-200/80">
+                The daemon accepted the job but returned no session id — find it
+                on the Sessions page.
+              </p>
+            )}
+            <span className="mt-1 block text-[11px] text-emerald-200/70">
+              {dispatched.steps !== null
+                ? `Running with the ${dispatched.steps}-step budget you set.`
+                : "Running on the configured default step budget."}
+              {dispatched.project ? ` Grounded in ${dispatched.project}.` : ""}
+            </span>
+            <button
+              type="button"
+              onClick={() => setDispatched(null)}
+              className="btn-ghost mt-1.5 py-1 text-xs"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+        {/* A dispatch that never happened. The task is still in the box above,
+            so the retry is one click — and no receipt is faked around it. */}
+        {dispatchError && (
+          <div className="mb-3">
+            <ErrorNote>{dispatchError}</ErrorNote>
+          </div>
+        )}
+        {/* A DISABLED BUTTON MUST SAY WHY, WHERE THE USER IS STANDING. The
+            budget lives behind the disclosure, but `stepsInvalid` disables the
+            dispatch whether the disclosure is open or not — and when it is
+            closed the explaining hint is UNMOUNTED with it, leaving a dead
+            button whose only reason is a hover title. This is the same line the
+            panel shows, hoisted to where the blocked control is. */}
+        {stepsInvalid && !jobOptions && (
+          <p role="status" className="mb-2 text-[11px] text-amber-300">
+            The step budget in Job options is not a whole number from{" "}
+            {MIN_JOB_STEPS} to {MAX_JOB_STEPS} — fix or clear it before giving
+            out the job.
+          </p>
+        )}
+
         <div className="relative flex items-end gap-2">
           {mention && mentionMatches.length > 0 && !speaking && (
             <div
@@ -1421,20 +1969,43 @@ export function RoundTable({
             onKeyUp={(e) => updateMention(e.currentTarget)}
             onClick={(e) => updateMention(e.currentTarget)}
             rows={2}
-            disabled={speaking}
-            placeholder="Ask the panel…"
+            disabled={speaking || dispatching}
+            placeholder="Ask the panel, or describe the job…"
             aria-label="Message the panel"
             className="field min-w-0 flex-1 resize-none text-sm disabled:opacity-60"
           />
-          <button
-            type="button"
-            onClick={() => void say(input)}
-            disabled={speaking || !input.trim()}
-            className="btn-accent shrink-0"
-            title="Send — everyone answers unless you @-mention someone"
-          >
-            <Send size={14} /> Ask the panel
-          </button>
+          {/* TWO ACTS, ONE BOX (v1.180.0). The same text either starts a
+              conversation or starts a session — the choice sits where the
+              decision is made, and each button says which act it is. */}
+          <div className="flex shrink-0 flex-col gap-1.5">
+            <button
+              type="button"
+              onClick={() => void say(input)}
+              disabled={speaking || dispatching || !input.trim()}
+              className="btn-accent"
+              title="Send — everyone answers unless you @-mention someone"
+            >
+              <Send size={14} /> Ask the panel
+            </button>
+            <button
+              type="button"
+              onClick={() => void dispatchWork()}
+              disabled={speaking || dispatching || !input.trim() || stepsInvalid}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-40 disabled:hover:border-white/10 disabled:hover:text-zinc-300"
+              title={
+                stepsInvalid
+                  ? "Fix the step budget in Job options first"
+                  : `Start a real agent session — ${jobLabel} works with tools and produces files. This is not a round: nobody speaks in the thread.`
+              }
+            >
+              {dispatching ? (
+                <LoaderCircle size={13} className="animate-spin-slow" aria-hidden="true" />
+              ) : (
+                <Briefcase size={13} aria-hidden="true" />
+              )}
+              {dispatching ? "Starting…" : `Give it to ${jobLabel}`}
+            </button>
+          </div>
         </div>
         {/* The add's own outcomes live down here, beside the control that
             caused them: a catalog that never arrived (no picker is faked
@@ -1460,7 +2031,15 @@ export function RoundTable({
         )}
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
           <p className="text-[11px] text-zinc-600">
-            Each agent sees the replies before it — @name asks just them.
+            Each agent sees the replies before it — @name asks just them. Asking
+            is a conversation; giving it to {jobLabel} starts a session that uses
+            tools.
+            {targetIsForeign && (
+              <span className="text-amber-300/80">
+                {" "}
+                {jobLabel} is not in this thread — change it in Job options.
+              </span>
+            )}
           </p>
           {/* BOTTOM RIGHT OF THE ROOM (v1.179.0): bring somebody else in
               without leaving the conversation. Disabled mid-round — the
@@ -1468,6 +2047,21 @@ export function RoundTable({
               started, so reseating it now would change who answers halfway
               through and the screen would disagree with the transcript. */}
           <div className="flex flex-wrap items-center gap-2">
+            {/* The controls the standalone form used to hold, one click away
+                instead of always on screen — and the list of what has already
+                been dispatched. */}
+            <button
+              type="button"
+              onClick={toggleJobOptions}
+              aria-expanded={jobOptions}
+              // Only while the panel exists — pointing at an absent id is an
+              // invalid reference, not a hint.
+              aria-controls={jobOptions ? "thread-job-options" : undefined}
+              title="Project grounding, the step budget, and the jobs already dispatched"
+              className="btn-ghost py-1 text-xs"
+            >
+              <SlidersHorizontal size={13} aria-hidden="true" /> Job options
+            </button>
             <button
               type="button"
               onClick={() => void openAdd()}
@@ -1489,7 +2083,7 @@ export function RoundTable({
             <button
               type="button"
               onClick={() => void say("")}
-              disabled={speaking}
+              disabled={speaking || dispatching}
               title="Send no message — the agents take another round among themselves"
               className="btn-ghost py-1 text-xs"
             >

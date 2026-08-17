@@ -8,9 +8,21 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
  *  - the faces stand in a persistent LEFT RAIL: one per roster agent, drawn
  *    face or stored portrait, offline said in words and not just in colour;
  *  - clicking a face SELECTS that agent and the selection drives the page —
- *    the job-post card preselects it, and an existing 1:1 thread with exactly
- *    that agent opens ("continue working with"). It must never CREATE one: a
- *    click on a portrait is not consent to POST;
+ *    THE WORK IS AIMED AT IT, and an existing 1:1 thread with exactly that
+ *    agent opens ("continue working with"). It must never CREATE one: a click
+ *    on a portrait is not consent to POST;
+ *
+ * RETARGETED FOR v1.180.0. "The work is aimed at it" used to be read off the
+ * job-post card's "Who takes it" select, and that standalone surface is gone
+ * from this page — dispatch moved INTO the thread composer, because "if i
+ * choose to start a thread with an agent that would be the start of posting a
+ * new job". The BEHAVIOUR is unchanged and so are these tests' claims; only the
+ * place the answer is read from moved. The RoundTable double below reports the
+ * page's `assign` prop back onto the DOM as `data-assign="<kind>:<name>"`, the
+ * same idiom agents-layout-v1180.test.tsx uses, so "the composer is aimed at
+ * agent X" stays assertable from the page. The pre-rail (older daemon) path
+ * still renders JobPostCard, so the degradation test below still reads the
+ * card's own select — there, it is still the surface.
  *  - the selection is ANNOUNCED (aria-current), not just tinted;
  *  - the gear-with-a-face opens BOTH setup doors (local + remote) through the
  *    card's own disclosure, so its persisted state stays honest;
@@ -94,11 +106,27 @@ vi.mock("framer-motion", async () => {
   };
 });
 
-// The round-table is a live surface with its own polling; all these tests need
-// from it is WHICH thread the page told it to open.
+// The round-table is a live surface with its own polling; what these tests need
+// from it is WHICH thread the page told it to open and — since v1.180.0 — WHO
+// the page aimed the work at, because the dispatch target lives in the composer
+// now. Same double as agents-layout-v1180.test.tsx: one idiom, not two.
 vi.mock("@/components/agents/RoundTable", () => ({
-  RoundTable: ({ threadId }: { threadId: string }) => (
-    <div data-testid="round-table">{threadId}</div>
+  RoundTable: ({
+    threadId,
+    assign,
+    roster,
+  }: {
+    threadId: string;
+    assign?: { kind: string; name: string } | null;
+    roster?: unknown[];
+  }) => (
+    <div
+      data-testid="round-table"
+      data-assign={assign ? `${assign.kind}:${assign.name}` : ""}
+      data-roster={String(roster?.length ?? 0)}
+    >
+      {threadId}
+    </div>
   ),
 }));
 
@@ -175,6 +203,11 @@ const THREADS = [
 const rail = () => screen.getByTestId("roster-rail");
 const railButton = (name: RegExp | string) =>
   within(rail()).getByRole("button", { name });
+const table = () => screen.getByTestId("round-table");
+/** WHO THE WORK IS AIMED AT, as the page tells the composer (v1.180.0).
+ *  "" = nobody named yet, i.e. the thread's own agent decides. */
+const aimedAt = () => table().getAttribute("data-assign");
+/** Only the pre-rail composition still carries the standalone card. */
 const targetSelect = () =>
   screen.getByLabelText("Who takes it") as HTMLSelectElement;
 
@@ -302,45 +335,50 @@ describe("the rail — the selection is announced", () => {
 /* ------------------------------------------------- selection drives the page */
 
 describe("the page — clicking a face", () => {
-  it("preselects that agent in the job-post card", async () => {
+  it("aims the work at that agent", async () => {
+    // v1.180.0: the preselect that used to land in the job-post card's "Who
+    // takes it" select now lands in the thread composer. Same page state, same
+    // guarantee, new home — nothing is named until a face says so.
     render(<AgentsPage />);
-    expect(targetSelect().value).toBe("__team__");
+    await waitFor(() => expect(aimedAt()).toBe(""));
     fireEvent.click(railButton("analyst"));
-    await waitFor(() => expect(targetSelect().value).toBe("custom:analyst"));
+    await waitFor(() => expect(aimedAt()).toBe("dynamic:analyst"));
   });
 
-  it("never preselects an agent that cannot take the work", async () => {
+  it("never aims the work at an agent that cannot take it", async () => {
     render(<AgentsPage />);
     fireEvent.click(railButton(/down-box/));
-    // An unreachable remote (and the non-delegable supervisor) leave the
-    // target on Team rather than putting a name in the box the card would
-    // quietly fall back from at submit time.
-    await waitFor(() => expect(targetSelect().value).toBe("__team__"));
+    // An unreachable remote (and the non-delegable supervisor) leave the work
+    // aimed at the Team rather than naming a target the composer would quietly
+    // fall back from at dispatch time.
+    await waitFor(() => expect(aimedAt()).toBe("builtin:__team__"));
     fireEvent.click(railButton("supervisor"));
-    await waitFor(() => expect(targetSelect().value).toBe("__team__"));
+    await waitFor(() => expect(aimedAt()).toBe("builtin:__team__"));
   });
 
   it("leaves no STALE target behind when the next pick cannot take work", async () => {
     // ADVERSARIAL REVIEW. Skipping the preselect for an un-workable agent is
     // only half the job: pick a workable one FIRST and the old target survives
     // the next pick. Measured before the fix — rail ring + aria-current on
-    // "down-box", job card still reading "custom:analyst", so Post would have
-    // sent the job to the analyst while the page's own highlight named the
-    // offline box. The rail is the page's primary control now; it may never
-    // point at one agent while the work is aimed at another.
+    // "down-box", the work still aimed at "custom:analyst", so dispatching
+    // would have sent the job to the analyst while the page's own highlight
+    // named the offline box. The rail is the page's primary control now; it may
+    // never point at one agent while the work is aimed at another. (v1.180.0:
+    // read off the composer instead of the deleted card — the bug is the same
+    // wherever the target lives, which is exactly why it is still asserted.)
     render(<AgentsPage />);
     fireEvent.click(railButton("analyst"));
-    await waitFor(() => expect(targetSelect().value).toBe("custom:analyst"));
+    await waitFor(() => expect(aimedAt()).toBe("dynamic:analyst"));
     fireEvent.click(railButton(/down-box/));
     await waitFor(() => {
       expect(railButton(/down-box/).getAttribute("aria-current")).toBe("true");
-      expect(targetSelect().value).toBe("__team__");
+      expect(aimedAt()).toBe("builtin:__team__");
     });
     // Same for the non-delegable supervisor, reached from a live target.
     fireEvent.click(railButton("analyst"));
-    await waitFor(() => expect(targetSelect().value).toBe("custom:analyst"));
+    await waitFor(() => expect(aimedAt()).toBe("dynamic:analyst"));
     fireEvent.click(railButton("supervisor"));
-    await waitFor(() => expect(targetSelect().value).toBe("__team__"));
+    await waitFor(() => expect(aimedAt()).toBe("builtin:__team__"));
   });
 
   it("continues an existing 1:1 thread with exactly that agent", async () => {
@@ -358,20 +396,20 @@ describe("the page — clicking a face", () => {
   it("keeps the highlight through the re-render the click itself causes", async () => {
     // THE PAGE OWNS THE SELECTION. When the rail kept it internally, the
     // highlight was lost the moment the click's own state updates remounted
-    // the strip: the rail then pointed at one agent while the job card was
-    // aimed at another — the page disagreeing with itself, silently. (The
+    // the strip: the rail then pointed at one agent while the work was aimed
+    // at another — the page disagreeing with itself, silently. (The
     // framer-motion test double makes that remount happen every render, which
     // is exactly why this test can see it at all.)
     render(<AgentsPage />);
     fireEvent.click(railButton("analyst"));
     // BOTH assertions live INSIDE the waitFor. The highlight is page state and
-    // the target is a CHILD EFFECT one commit downstream of it; asserting the
-    // second one after the await is the exact shape that flaked CI in
+    // the target reaches the composer one commit downstream of it; asserting
+    // the second one after the await is the exact shape that flaked CI in
     // v1.177.1 — it happens to be synchronous under act() today, and "today"
     // is not a guarantee.
     await waitFor(() => {
       expect(railButton("analyst").getAttribute("aria-current")).toBe("true");
-      expect(targetSelect().value).toBe("custom:analyst");
+      expect(aimedAt()).toBe("dynamic:analyst");
     });
   });
 
@@ -382,17 +420,19 @@ describe("the page — clicking a face", () => {
     fireEvent.change(screen.getByLabelText("Choose an agent"), {
       target: { value: "custom:analyst" },
     });
-    await waitFor(() => expect(targetSelect().value).toBe("custom:analyst"));
-    expect(railButton("analyst").getAttribute("aria-current")).toBe("true");
+    await waitFor(() => {
+      expect(aimedAt()).toBe("dynamic:analyst");
+      expect(railButton("analyst").getAttribute("aria-current")).toBe("true");
+    });
   });
 
   it("creates nothing — an agent with no thread just becomes the selection", async () => {
     render(<AgentsPage />);
     fireEvent.click(railButton("builder"));
-    await waitFor(() => expect(targetSelect().value).toBe("builder"));
+    await waitFor(() => expect(aimedAt()).toBe("builtin:builder"));
     // The open thread is untouched and no POST went out: starting a
     // conversation stays behind the explicit Talk button.
-    expect(screen.getByTestId("round-table").textContent).toBe("t-other");
+    expect(table().textContent).toBe("t-other");
     expect(hooks.posts).toHaveLength(0);
   });
 });

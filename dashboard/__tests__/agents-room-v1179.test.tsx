@@ -23,12 +23,45 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
  *  - setup is NOT in the document until the gear-with-a-face is clicked — not
  *    even when the card's own persisted state says it was open before — and the
  *    gear folds it away again;
- *  - the job-post card is not a page header on first paint, and every
- *    capability that used to sit up there is still reachable: the TEAM case
- *    through the disclosure, one agent through the rail's Give-work button;
+ *  - giving work to ONE agent is still one click from the rail;
  *  - an older daemon with no /agents/roster keeps the pre-rail page: no rail,
  *    no gear, and — since there is no gear to hold them — Give work and Set up
  *    agents still standing in the flow.
+ *
+ * WHAT v1.180.0 TOOK OUT OF THIS FILE, and where each guarantee now lives.
+ * The "Post a job" disclosure this file guarded the POSITION of is gone: not
+ * the capability — the separate surface. "The post a job seems to be redundant
+ * because if i choose to start a thread with an agent that would be the start
+ * of posting a new job." Four tests here asserted that surface ITSELF, so they
+ * were removed rather than rewritten, each against a named replacement:
+ *   - "is not a form on first paint" → agents-layout-v1180.test.tsx
+ *     "has no standalone job-post disclosure left on the page" (a stronger
+ *     claim: the form is not on the page at all, folded or otherwise), and the
+ *     conversation-is-what-paints half by agent-rail-v1178.test.tsx
+ *     "continues an existing 1:1 thread with exactly that agent";
+ *   - "sits BELOW the conversation, never above it" → there is no panel to sit
+ *     anywhere; the surviving order claim is agents-layout-v1180.test.tsx
+ *     "renders the conversation after the roster in document order";
+ *   - "the TEAM case is one click away and defaults to the team" →
+ *     thread-dispatch-v1180.test.tsx "hands the job to the TEAM when the user
+ *     picks it in a 1:1 thread" (the reachability half — added by adversarial
+ *     review, because the two tests originally named here, "offers the team and
+ *     the roster's delegable agents" and "dispatches a multi-agent panel to the
+ *     team", assert only that the Team is LISTED and that a multi-agent thread
+ *     defaults to it: an inert target <select> passed both), plus
+ *     agents-layout-v1180.test.tsx "leaves no STALE target behind when the next
+ *     pick cannot take work" for the page-level reset;
+ *   - "folds by HIDING, so a half-typed job survives the collapse" → the job
+ *     form now lives in the composer, whose Job-options panel keeps its state
+ *     in the THREAD rather than in the DOM, so the equivalent guarantee is
+ *     thread-dispatch-v1180.test.tsx "still explains a blocked budget after Job
+ *     options is folded away": fold the panel and the budget you typed is still
+ *     in force (the dispatch button stays disabled and the reason is hoisted
+ *     out). Mutation-proven — clearing the inputs on collapse turns it red. The
+ *     roster's own fold is a HIDE and is asserted separately by
+ *     agents-layout-v1180.test.tsx "folds away and comes back".
+ * The rail's Give-work test below was RETARGETED, not removed: that behaviour
+ * is unchanged, it just aims the thread composer now.
  */
 
 const hooks = vi.hoisted(() => ({
@@ -116,9 +149,24 @@ vi.mock("framer-motion", async () => {
   };
 });
 
+// Since v1.180.0 the composer owns the dispatch target, so the double reports
+// the page's `assign` prop back onto the DOM — the same idiom as
+// agents-layout-v1180.test.tsx, so there is one way to ask "who is the work
+// aimed at" and not two.
 vi.mock("@/components/agents/RoundTable", () => ({
-  RoundTable: ({ threadId }: { threadId: string }) => (
-    <div data-testid="round-table">{threadId}</div>
+  RoundTable: ({
+    threadId,
+    assign,
+  }: {
+    threadId: string;
+    assign?: { kind: string; name: string } | null;
+  }) => (
+    <div
+      data-testid="round-table"
+      data-assign={assign ? `${assign.kind}:${assign.name}` : ""}
+    >
+      {threadId}
+    </div>
   ),
 }));
 
@@ -200,11 +248,11 @@ const pane = () => screen.getByTestId("roster-pane");
 const rail = () => screen.getByTestId("roster-rail");
 const railButton = (name: RegExp | string) =>
   within(rail()).getByRole("button", { name });
-// The disclosure's accessible name is its whole two-line header ("Give work
-// Post a job — …"); the rail's button is exactly "Give work". Two different
-// controls, and every query below has to say which one it means.
-const jobToggle = () => screen.getByRole("button", { name: /Post a job/ });
 const railGiveWork = () => screen.getByRole("button", { name: /^Give work$/ });
+const table = () => screen.getByTestId("round-table");
+/** WHO THE WORK IS AIMED AT, as the page tells the composer (v1.180.0). */
+const aimedAt = () => table().getAttribute("data-assign");
+/** Only the pre-rail composition still carries the standalone card. */
 const targetSelect = () =>
   screen.getByLabelText("Who takes it") as HTMLSelectElement;
 /** The narrow-width twin of the rail (below lg the column is display:none). */
@@ -346,73 +394,35 @@ describe("setup lives behind the gear and nowhere else", () => {
 /* ---------------------------------------------------------- give work ------ */
 
 describe("give work is reachable, but it is not the page header", () => {
-  it("is not a form on first paint — the conversation is", async () => {
-    render(<AgentsPage />);
-    // Folded: nothing of the form is on screen or in the a11y tree (the panel
-    // carries `hidden`, which is why these are queried and then asserted
-    // invisible rather than queried and expected absent — the card stays
-    // mounted so a half-typed job survives a collapse).
-    expect(screen.getByLabelText("Job")).not.toBeVisible();
-    expect(screen.getByLabelText("Who takes it")).not.toBeVisible();
-    expect(jobToggle().getAttribute("aria-expanded")).toBe("false");
-    // The thread with the selected agent is what the page opens on.
-    await waitFor(() =>
-      expect(screen.getByTestId("round-table").textContent).toBe("t-other"),
-    );
-  });
-
-  it("sits BELOW the conversation, never above it", () => {
-    // "The give work part at the top shouldnt be there." Position, asserted as
-    // position: the round-table comes first in the document, so no layout
-    // tweak can quietly float the job form back over the thread.
-    render(<AgentsPage />);
-    const panel = document.getElementById("job-post-panel") as HTMLElement;
-    const table = screen.getByTestId("round-table");
-    expect(
-      panel.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_PRECEDING,
-    ).toBeTruthy();
-  });
-
-  it("the TEAM case is one click away and defaults to the team", async () => {
-    render(<AgentsPage />);
-    fireEvent.click(jobToggle());
-    await waitFor(() => expect(targetSelect().value).toBe("__team__"));
-    expect(screen.getByLabelText("Job")).toBeTruthy();
-  });
-
-  it("the rail's Give-work button opens it with that agent selected", async () => {
+  it("the rail's Give-work button opens the thread with that agent, work armed", async () => {
+    // RETARGETED for v1.180.0. Give-work used to reveal the job-post
+    // disclosure with the agent preselected; it now opens the 1:1 THREAD with
+    // that agent and aims the composer at them — "if i choose to start a
+    // thread with an agent that would be the start of posting a new job". Same
+    // button, same one-click guarantee, one surface instead of two.
+    //
+    // ADVERSARIAL REVIEW (v1.180.0): the first retarget drove vr-assistant and
+    // asserted NOTHING. Give-work can only be reached after picking a face, and
+    // picking vr-assistant's face ALREADY opens its 1:1 thread (soloThreadWith)
+    // and ALREADY arms it — so with the whole `assignWork` body replaced by a
+    // no-op this test still passed. Measured, not reasoned about. The agent
+    // driven here therefore has NO existing 1:1 thread, which makes opening one
+    // something only the button can have done: the face click leaves t-other on
+    // screen, and t-new can only arrive through Give-work's POST.
     render(<AgentsPage />);
     fireEvent.click(railButton("analyst"));
+    // The selection alone changes nothing about which thread is open.
+    await waitFor(() => expect(table().textContent).toBe("t-other"));
+    expect(hooks.posts).toHaveLength(0);
     fireEvent.click(railGiveWork());
-    // BOTH assertions live inside the waitFor: revealing the panel and the
-    // card's own preselect effect are separate commits, and asserting the
-    // second one after awaiting the first is the shape that flaked CI twice.
-    // Visibility is asserted too — a preselected target inside a still-folded
-    // panel is a button that did nothing the user can see.
+    // ALL THREE assertions live inside the waitFor: the POST, opening the
+    // thread and arming the composer land in separate commits, and asserting
+    // the later ones after awaiting the first is the shape that flaked CI twice.
     await waitFor(() => {
-      expect(targetSelect()).toBeVisible();
-      expect(targetSelect().value).toBe("custom:analyst");
+      expect(hooks.posts.map((p) => p.path)).toEqual(["/agents/threads"]);
+      expect(table().textContent).toBe("t-new");
+      expect(aimedAt()).toBe("dynamic:analyst");
     });
-  });
-
-  it("folds by HIDING, so a half-typed job survives the collapse", async () => {
-    // Collapsing unmounts nothing once the card has been opened: an
-    // `unmount-on-collapse` disclosure throws away whatever is in the Job box,
-    // which is the one thing on this page a user cannot get back. `hidden`
-    // also takes the form out of the a11y tree, so a folded panel is not a set
-    // of controls a screen reader can still tab into.
-    //
-    // (The typed VALUE cannot be asserted here: the framer-motion double
-    // returns a fresh component identity on every render, so every child of a
-    // Reveal remounts constantly under test. What is assertable — and what the
-    // mechanism actually is — is that the form stays in the document.)
-    render(<AgentsPage />);
-    fireEvent.click(jobToggle());
-    expect(await screen.findByLabelText("Job")).toBeVisible();
-    fireEvent.click(jobToggle());
-    const panel = document.getElementById("job-post-panel") as HTMLElement;
-    await waitFor(() => expect(panel.hasAttribute("hidden")).toBe(true));
-    expect(within(panel).getByLabelText("Job")).toBeTruthy();
   });
 
   it("Talk still starts a thread the selection alone would not", async () => {

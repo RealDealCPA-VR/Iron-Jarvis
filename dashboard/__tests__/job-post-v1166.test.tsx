@@ -109,7 +109,6 @@ import {
   TEAM_TARGET,
 } from "@/components/agents/JobPostCard";
 import { RosterStrip, type RosterEntry } from "@/components/agents/RosterStrip";
-import AgentsPage from "@/app/agents/page";
 import type { SessionView } from "@/lib/types";
 
 const ROSTER: RosterEntry[] = [
@@ -178,7 +177,8 @@ beforeEach(() => {
   hooks.postResult = { id: "s-new", status: "active" };
   hooks.postFail = null;
   hooks.pollIntervals = [];
-  // jsdom has no scrollIntoView; the page's Give-work handler calls it.
+  // jsdom has no scrollIntoView, and these components are rendered inside
+  // pages that call it — stubbed so a stray call is never the failure.
   window.HTMLElement.prototype.scrollIntoView = vi.fn();
 });
 afterEach(cleanup);
@@ -562,17 +562,20 @@ describe("RosterStrip — the Give-work button", () => {
 
 /* -------------------------------------------- the page wires the two ends */
 
-describe("AgentsPage — Give work preselects the job-post target", () => {
-  it("roster click lands in the card's target select", async () => {
-    hooks.api["/agents/roster"] = { roster: ROSTER };
-    render(<AgentsPage />);
-    fireEvent.change(screen.getByLabelText("Choose an agent"), {
-      target: { value: "custom:analyst" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /Give work/ }));
-    await waitFor(() => expect(targetSelect().value).toBe("custom:analyst"));
-    expect(
-      window.HTMLElement.prototype.scrollIntoView,
-    ).toHaveBeenCalled();
-  });
-});
+// REMOVED IN v1.180.0: "roster click lands in the card's target select".
+//
+// It asserted the WIRING between the rail and a surface this page no longer
+// has: the standalone "Post a job" card was taken off the Agents page because
+// "the post a job seems to be redundant because if i choose to start a thread
+// with an agent that would be the start of posting a new job". The wiring
+// itself is very much alive and is asserted against the surface that replaced
+// it, in agents-layout-v1180.test.tsx:
+//   - "Give work opens the thread with that agent and arms the composer"
+//     (the same gesture this test drove, including the scroll onto the
+//     surface it opened), and
+//   - "the narrow-width picker aims the composer exactly as the faces do"
+//     (the <select> half, which is the control this test used).
+// Everything above in this file still holds: JobPostCard itself is unchanged
+// and still rendered by the page on daemons that serve no roster or no thread
+// routes — see agents-layout-v1180.test.tsx's two degradation describes, which
+// drive Give-work into this very card.

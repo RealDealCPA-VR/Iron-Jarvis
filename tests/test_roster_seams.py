@@ -800,6 +800,10 @@ def test_get_agents_roster_serializes_entries(tmp_path, monkeypatch):
             "name", "kind", "description", "delegable", "healthy", "stats", "line",
             # v1.171.0 identity fields (additive): activity preview + portrait.
             "last_active", "last_message", "avatar",
+            # v1.180.0 (additive): the user's chosen face, null to derive from
+            # the name. Declared here on purpose — this exact-set assertion is
+            # what makes a roster field a deliberate contract change.
+            "face",
         }
     assert roster[0]["stats"]["sessions"] == 23
     assert roster[1]["healthy"] is False

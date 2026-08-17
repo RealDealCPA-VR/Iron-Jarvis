@@ -6,6 +6,7 @@ reached through ``d`` (see the deps object built in create_app).
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import re
@@ -36,6 +37,12 @@ from ..schemas import (
 
 # Importing this registers the RemoteAgentRecord table on the shared metadata.
 from ...agents.remote import RemoteAgentRegistry
+
+# Face overrides (v1.180.0). Imported as a MODULE, never as loose names: the
+# route looks every helper up on `faces` at call time so a test can monkeypatch
+# one (the `_open_native` pattern from routes/documents, and how the
+# event-loop-offload test proves the file IO left the loop).
+from ...agents import faces
 
 # --- agent identity: portraits + roster activity (v1.171.0) -----------------
 # Storage is BY NAME under <home>/avatars/<slug>.png — the file's existence IS
@@ -393,6 +400,29 @@ def register(app: FastAPI, d) -> None:
             pass
         return None
 
+    # --- face overrides (v1.180.0): <home>/faces/<slug>.json ----------------
+    # THE SAME SLUG as the portrait above, by construction — an agent's
+    # portrait and its face key can never disagree because there is exactly one
+    # `_avatar_slug` and both paths are built from it here.
+
+    def _face_slug(name: str) -> str:
+        return _avatar_slug(name)
+
+    def _face_override(name: str) -> dict[str, str] | None:
+        """This agent's stored override, or None when it derives from its name.
+
+        None (not ``{}``) so the wire field reads exactly like ``avatar``: a
+        null means "no override — derive", which is what every surface did
+        before this feature existed. Never raises: a display field must not be
+        able to break the agents list or the roster.
+        """
+        try:
+            if not name:
+                return None
+            return faces.read_face(d.platform.config.home, _face_slug(name)) or None
+        except Exception:  # noqa: BLE001 — a display field never breaks the list
+            return None
+
     def _image_key() -> str | None:
         """Same key resolution as the creative routes: vault first, env second."""
         try:
@@ -432,6 +462,11 @@ def register(app: FastAPI, d) -> None:
                     # v1.171.0 additive: the portrait URL when one is stored
                     # (None otherwise) — the Setup card's avatar row reads it.
                     "avatar": _avatar_url(r.name),
+                    # v1.180.0 additive, exactly the same contract: the chosen
+                    # face when one is stored, null when the face derives from
+                    # the name. A client older than this field, or a daemon
+                    # older than it, both land on the derived face.
+                    "face": _face_override(r.name),
                 }
                 for r in d.platform.agents_registry.list()
             ],
@@ -497,6 +532,11 @@ def register(app: FastAPI, d) -> None:
                         "last_active": last[0] if last else None,
                         "last_message": last[1] if last else None,
                         "avatar": _avatar_url(bare),
+                        # v1.180.0 additive: the chosen face, or null to derive.
+                        # Keyed on the BARE name like the portrait, so a roster
+                        # entry ("custom:remy") and a thread seat ("dynamic:remy")
+                        # resolve to the same stored face.
+                        "face": _face_override(bare),
                     }
                 )
             except Exception:  # noqa: BLE001 — one bad entry must not drop the rest
@@ -913,6 +953,100 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="no stored portrait for this agent")
         p.unlink()
         return {"removed": name}
+
+    # --- Agent face overrides (v1.180.0) ------------------------------------
+    # The drawn face is seeded from the agent's NAME; these routes let the user
+    # choose the shape, the eyes and the colour instead. Each field is
+    # INDEPENDENT — one set field overrides that one aspect and the rest keep
+    # deriving — and an ABSENT field means "derive", never "empty".
+    #
+    # A stored PORTRAIT still wins over both (the client's precedence, unchanged
+    # since v1.171.0): a real picture is a stronger identity than a chosen
+    # geometry, and swapping that order would make an upload look like it failed.
+    #
+    # `async def` + `asyncio.to_thread` for every filesystem step: the daemon is
+    # ONE loop and a face read is real blocking IO (v1.153.1).
+
+    @app.get("/agents/faces")
+    async def list_agent_faces() -> dict[str, Any]:
+        """Every stored override at once, keyed by agent name, plus the allowed
+        sets a picker may offer.
+
+        ONE call instead of one per agent: the Setup card renders a face for
+        every built-in, dynamic and remote agent it lists, and per-row fetches
+        would be N round-trips for a card that is collapsed by default.
+        `options` is served rather than hardcoded client-side so the picker can
+        never offer a value this daemon would 400.
+        """
+        try:
+            stored = await asyncio.to_thread(faces.list_faces, d.platform.config.home)
+        except Exception:  # noqa: BLE001 — an empty map beats a 500; faces derive
+            stored = {}
+        return {"faces": stored, "options": faces.face_options()}
+
+    @app.get("/agents/{name}/face")
+    async def get_agent_face(name: str) -> dict[str, Any]:
+        """This agent's override, or ``face: null`` when it derives from its
+        name. 200 either way — "no override" is a normal state, not a 404."""
+        name = (name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="agent name is required")
+        stored = await asyncio.to_thread(
+            faces.read_face, d.platform.config.home, _face_slug(name)
+        )
+        return {"name": name, "face": stored or None, "options": faces.face_options()}
+
+    @app.put("/agents/{name}/face")
+    async def set_agent_face(name: str, body: dict) -> dict[str, Any]:
+        """Set a partial override. Every field is validated against the
+        daemon's allowed set and an invalid value is an HONEST 400 naming the
+        field and what it accepts — never a silent default, which would tell
+        the user they picked something they did not.
+
+        The write REPLACES the record, so a field left out of the body goes
+        back to deriving. That is the whole vocabulary of this endpoint: send
+        what should be pinned, DELETE to pin nothing.
+        """
+        name = (name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="agent name is required")
+        try:
+            override = faces.normalize_override(body or {})
+        except faces.FaceValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if not override:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "give at least one of shape, color or eyes — "
+                    f"DELETE /agents/{name}/face resets to the derived face"
+                ),
+            )
+        stored = await asyncio.to_thread(
+            faces.write_face,
+            d.platform.config.home,
+            _face_slug(name),
+            override,
+            name=name,
+        )
+        return {"name": name, "face": stored}
+
+    @app.delete("/agents/{name}/face")
+    async def delete_agent_face(name: str) -> dict[str, Any]:
+        """Back to the face the NAME draws.
+
+        Idempotent 200 (unlike the portrait's DELETE, which 404s): "reset" is a
+        state the user asked for, and a Reset button that errors on an
+        already-derived face reports a failure where nothing failed. `removed`
+        says whether a record actually existed, so the caller still knows.
+        """
+        name = (name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="agent name is required")
+        removed = await asyncio.to_thread(
+            faces.delete_face, d.platform.config.home, _face_slug(name)
+        )
+        return {"name": name, "removed": removed, "face": None}
 
     # --- Dynamic-agent edit / delete (catch-all {name} — keep AFTER remote) ---
 

@@ -13,6 +13,11 @@ import { SimulatedBanner } from "@/components/SimulatedBanner";
 import { FirstRunWizard } from "@/components/FirstRunWizard";
 import { MainContent } from "@/components/MainContent";
 import { DaemonProvider } from "@/lib/daemon";
+// Face overrides are read ONCE here so every AgentFace in the app draws the
+// user's chosen shape/colour/eyes — not only the picker that sets them
+// (v1.180.0 review finding). Silent + best-effort: no route, no overrides,
+// derived faces exactly as before.
+import { FaceStylesProvider } from "@/components/agents/FaceStyles";
 
 export const metadata: Metadata = {
   // Base title; NotificationBell mutates document.title at runtime to surface
@@ -61,6 +66,7 @@ export default function RootLayout({
           Skip to main content
         </a>
         <DaemonProvider>
+          <FaceStylesProvider>
           <div className="flex h-screen flex-col overflow-hidden">
             {/* Frontier-desktop chrome (v1.111.0): the TitleBar is the FIRST
                 child on purpose — in the frameless Electron window its drag
@@ -111,6 +117,7 @@ export default function RootLayout({
           {/* Blocking first-run overlay (skips /connections + /settings so
               the user can actually go wire a model). */}
           <FirstRunWizard />
+          </FaceStylesProvider>
         </DaemonProvider>
       </body>
     </html>
