@@ -24,6 +24,23 @@
 // 15rem rail at md left the transcript ~216px on a 768px window.
 // The gear-with-a-face at the foot of the rail is ONE door to both setup
 // surfaces (an agent of your own, or one on another computer).
+//
+// v1.179.0 — ONE RENDERING PER AGENT. Reported verbatim: "there seems to be a
+// redundant agent on the left pane for vr-assistant". The roster was NOT
+// serving a duplicate — the strip drew the rail AND then re-drew whichever
+// agent was selected in a DETAIL BLOCK underneath it, face, name, kind pill and
+// all. Two portraits of one agent, one above the other, is a duplicate as far
+// as the person looking at it is concerned. So in rail mode the detail moved
+// ONTO the selected row (a sub-line under that row's own button, outside it so
+// the button's accessible name stays the agent's name) and the block below is
+// gone. The standalone composition — no `onSelect`, no rail — keeps the block:
+// there is no row for the detail to live on there.
+// The same report also said the kind pill is worth keeping ("i do like that it
+// has a little remote indicator on it so any remote agents should come with
+// that"), so REMOTE rows carry it on every row, selected or not, alongside a
+// worded offline pill. Built-in/Yours stay off the rows on purpose: at 15rem a
+// pill on all five rows is noise, and their kind shows on the selected row's
+// detail line and in every row's title.
 
 import { type ReactElement, useState } from "react";
 import { Briefcase, MessageCircle, WifiOff } from "lucide-react";
@@ -171,6 +188,7 @@ export function RosterStrip({
   onAssign,
   onSelect,
   onConfigure,
+  configureOpen = false,
   selected: picked = null,
 }: {
   /** The page's OWN GET /agents/roster rows (v1.178.0). The page needs them
@@ -204,6 +222,10 @@ export function RosterStrip({
   /** The gear-with-a-face: open the create/connect surfaces. Omit it (a page
    *  with no setup surface to reveal) and no gear renders. */
   onConfigure?: () => void;
+  /** Whether the surface behind the gear is currently showing (v1.179.0). The
+   *  gear is a DISCLOSURE now — setup is not on the page until it is clicked —
+   *  so the button has to announce the state it controls, not just change it. */
+  configureOpen?: boolean;
 } = {}) {
   const [choice, setChoice] = useState("");
   // A supplied roster disables the fetch outright (path null) rather than
@@ -251,6 +273,14 @@ export function RosterStrip({
   // still previews entries[0] — it names the agent it is showing and claims
   // nothing about who the page is acting on.
   const isPick = Boolean(pickedEntry || choiceEntry);
+  /** Talk / Give-work may only act on an agent that can take the work AND —
+   *  in rail mode — one the user has actually picked (see the note by the
+   *  buttons). */
+  const actionable = (!onSelect || isPick) && selected.delegable && selected.healthy;
+  /** Is there anything IN the action row at lg? (Below lg the <select> is
+   *  always in it.) An empty padded strip between the rail and the gear is
+   *  just dead space, so at lg the row folds away until it has a button. */
+  const showActions = Boolean((onTalk || onAssign) && actionable);
   const offline = selected.kind === "remote" && !selected.healthy;
   const shown = bareName(selected.name);
   const kindLabel = SOURCE_LABEL[selected.kind] ?? (selected.kind || "agent");
@@ -267,245 +297,376 @@ export function RosterStrip({
 
   return (
     <Reveal>
-      <Card pad={false} className="overflow-hidden">
-        <div className="border-b hairline px-4 py-2.5">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-              Roster · {entries.length}
-            </span>
-            {!onSelect && (
-              <span className="text-[11px] text-zinc-600">
-                who can take delegated work
+      {/* The whole left pane, addressable as one thing (v1.179.0): the
+          redundancy the user reported was rail + a second portrait of the same
+          agent below it, and a test that only looks INSIDE the rail rows could
+          never see that. */}
+      <div data-testid="roster-pane">
+        <Card pad={false} className="overflow-hidden">
+          <div className="border-b hairline px-4 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                Roster · {entries.length}
               </span>
+              {!onSelect && (
+                <span className="text-[11px] text-zinc-600">
+                  who can take delegated work
+                </span>
+              )}
+            </div>
+            {onSelect && (
+              <p className="mt-0.5 text-[11px] text-zinc-600">
+                who can take delegated work
+              </p>
             )}
           </div>
-          {onSelect && (
-            <p className="mt-0.5 text-[11px] text-zinc-600">
-              who can take delegated work
-            </p>
-          )}
-        </div>
 
-        {/* THE RAIL (lg and up). A column of faces you scan, not a list you
-            read: name + face + health, and the detail for whichever one is
-            selected lives once, below. Capped height with its own scroll so a
-            30-agent roster can't push the gear off the bottom of the card. */}
-        {onSelect && (
-          <div
-            data-testid="roster-rail"
-            className="hidden max-h-[44vh] space-y-0.5 overflow-y-auto p-1.5 lg:block"
-          >
-            {entries.map((e) => {
-              const active = isPick && e.name === selected.name;
-              const off = e.kind === "remote" && !e.healthy;
-              const bare = bareName(e.name);
-              return (
-                <button
-                  key={e.name}
-                  type="button"
-                  // aria-current is how the selection is ANNOUNCED — the ring
-                  // and the accent tint say it to the eye only, and this rail
-                  // is the page's primary control now.
-                  aria-current={active ? "true" : undefined}
-                  onClick={() => choose(e)}
-                  title={`${bare} — ${SOURCE_LABEL[e.kind] ?? e.kind}${
-                    off ? " (offline)" : ""
-                  }${!e.delegable ? " (chat-only)" : ""}`}
-                  className={`flex w-full items-center gap-2 rounded-xl border px-2 py-1.5 text-left transition-colors ${
-                    active
-                      ? "border-accent/25 bg-accent/[0.08]"
-                      : "border-transparent hover:bg-white/[0.04]"
-                  }`}
-                >
-                  <AgentFace
-                    name={bare}
-                    mood="idle"
-                    size={26}
-                    // title="" = decorative: the visible name beside it is
-                    // already the accessible name of this button.
-                    title=""
-                    avatarUrl={e.avatar ? avatarSrc(e.avatar, e.last_active) : undefined}
-                    className={off ? "opacity-50" : ""}
-                  />
-                  <span
-                    className={`min-w-0 flex-1 truncate text-[12.5px] ${
-                      active ? "text-accent-soft" : "text-zinc-300"
+          {/* THE RAIL (lg and up). A column of faces you scan, not a list you
+              read: name + face + health, and the detail for the selected one on
+              the selected ROW — ONE rendering per agent, never a second portrait
+              of it below. Capped height with its own scroll so a 30-agent roster
+              can't push the gear off the bottom of the card. */}
+          {onSelect && (
+            <div
+              data-testid="roster-rail"
+              className="hidden max-h-[44vh] space-y-0.5 overflow-y-auto p-1.5 lg:block"
+            >
+              {entries.map((e) => {
+                const active = isPick && e.name === selected.name;
+                const off = e.kind === "remote" && !e.healthy;
+                const bare = bareName(e.name);
+                return (
+                  <div
+                    key={e.name}
+                    className={`rounded-xl border transition-colors ${
+                      active
+                        ? "border-accent/25 bg-accent/[0.08]"
+                        : "border-transparent hover:bg-white/[0.04]"
                     }`}
                   >
-                    {bare}
-                  </span>
-                  {off && (
-                    <>
-                      <WifiOff size={11} className="shrink-0 text-rose-300/80" aria-hidden />
-                      {/* The icon is colour+shape only; the word has to reach
-                          a screen reader too. */}
-                      <span className="sr-only">offline</span>
-                    </>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        )}
+                    <button
+                      type="button"
+                      // aria-current is how the selection is ANNOUNCED — the ring
+                      // and the accent tint say it to the eye only, and this rail
+                      // is the page's primary control now.
+                      aria-current={active ? "true" : undefined}
+                      onClick={() => choose(e)}
+                      title={`${bare} — ${SOURCE_LABEL[e.kind] ?? e.kind}${
+                        off ? " (offline)" : ""
+                      }${!e.delegable ? " (chat-only)" : ""}`}
+                      className="flex w-full items-center gap-1.5 rounded-xl px-2 py-1.5 text-left"
+                    >
+                      <AgentFace
+                        name={bare}
+                        mood="idle"
+                        size={26}
+                        // title="" = decorative: the visible name beside it is
+                        // already the accessible name of this button.
+                        title=""
+                        avatarUrl={e.avatar ? avatarSrc(e.avatar, e.last_active) : undefined}
+                        className={off ? "opacity-50" : ""}
+                      />
+                      <span
+                        className={`min-w-0 flex-1 truncate text-[12.5px] ${
+                          active ? "text-accent-soft" : "text-zinc-300"
+                        }`}
+                      >
+                        {bare}
+                      </span>
+                      {/* Offline BEFORE provenance, and in words: an unreachable
+                          agent is the more urgent fact, and a rose icon on its
+                          own reaches nobody using a screen reader. */}
+                      {off && (
+                        <span className="inline-flex shrink-0 items-center gap-0.5 rounded-md border border-rose-500/25 bg-rose-500/10 px-1 py-px text-[9.5px] font-medium text-rose-300">
+                          <WifiOff size={9} aria-hidden /> offline
+                        </span>
+                      )}
+                      {/* THE REMOTE INDICATOR (v1.179.0) — on the ROW now, for
+                          every remote whether it is selected or not. This is the
+                          pill the detail block used to carry and the one thing
+                          the user asked to keep: "any remote agents should come
+                          with that". An agent running on ANOTHER COMPUTER is the
+                          provenance that changes what a click means. */}
+                      {e.kind === "remote" && (
+                        <span
+                          data-testid={`roster-kind-${bare}`}
+                          className={`shrink-0 rounded-md border px-1 py-px text-[9.5px] font-medium ${KIND_PILL.remote}`}
+                        >
+                          {SOURCE_LABEL.remote}
+                        </span>
+                      )}
+                    </button>
 
-        <div className="flex flex-wrap items-center gap-2 px-4 pt-3 lg:pt-2.5">
-          {/* The narrow-width form of the rail above (and the whole picker on
-              a page that supplies no onSelect). `lg:hidden` keeps exactly one
-              of the two in the a11y tree — and it must stay in lock-step with
-              the column's `hidden lg:block` and with app/agents/page.tsx's
-              `lg:grid-cols-[15rem_...]`, or a viewport band gets either two
-              pickers or none. (Was `md` — see the page's comment: at 768px the
-              rail and the round-table's own 16rem rail engaged together and
-              left the transcript ~216px.) */}
-          <label className={`sr-only ${onSelect ? "lg:hidden" : ""}`} htmlFor="roster-pick">
-            Choose an agent
-          </label>
-          <select
-            id="roster-pick"
-            value={selected.name}
-            onChange={(ev) => {
-              const next = entries.find((e) => e.name === ev.target.value);
-              if (next) choose(next);
-            }}
-            className={`field min-w-0 flex-1 py-1.5 text-[12.5px] ${
-              onSelect ? "lg:hidden" : ""
+                    {/* THE DETAIL, ON THE ROW. Outside the button on purpose: a
+                        last message and a stats line inside it would be read out
+                        as part of the button's name. Renders for the selected row
+                        only, so nothing here is ever said twice. */}
+                    {active && (
+                      <div className="px-2 pb-2 pt-0.5">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                          {/* Remote already showed its pill on the row above. */}
+                          {e.kind !== "remote" && (
+                            <span
+                              data-testid={`roster-kind-${bare}`}
+                              className={`shrink-0 rounded-md border px-1 py-px text-[9.5px] font-medium ${
+                                KIND_PILL[e.kind] ?? KIND_PILL.remote
+                              }`}
+                            >
+                              {SOURCE_LABEL[e.kind] ?? e.kind}
+                            </span>
+                          )}
+                          {!e.delegable && (
+                            <span className="shrink-0 text-[10px] text-zinc-600">
+                              (chat-only for now)
+                            </span>
+                          )}
+                          {/* Honest stats, unchanged rule: a rate never renders
+                              without its sample count. */}
+                          <span className="ml-auto shrink-0 text-[10.5px] tabular-nums text-zinc-500">
+                            {statsText(e)}
+                          </span>
+                        </div>
+                        {e.last_message ? (
+                          <p
+                            data-testid="roster-preview"
+                            className="mt-1 flex items-baseline gap-1.5 text-[11px] leading-relaxed"
+                          >
+                            <span className="min-w-0 flex-1 truncate text-zinc-400">
+                              {e.last_message}
+                            </span>
+                            {e.last_active && (
+                              <span
+                                data-testid="roster-when"
+                                className="shrink-0 text-[10px] tabular-nums text-zinc-600"
+                              >
+                                {timeAgo(e.last_active)}
+                              </span>
+                            )}
+                          </p>
+                        ) : e.description ? (
+                          <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+                            {e.description}
+                          </p>
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ADVERSARIAL REVIEW (v1.179.0): the bottom padding used to come
+              from the detail block that sat under this row. With the block gone
+              in rail mode the buttons landed flush against the gear's divider,
+              so the row carries its own `pb-3` there — and folds at lg when it
+              has nothing to show, rather than leaving a padded blank strip. */}
+          <div
+            className={`flex flex-wrap items-center gap-2 px-4 pt-3 lg:pt-2.5 ${
+              !onSelect ? "" : showActions ? "pb-3" : "pb-3 lg:hidden"
             }`}
           >
-            {entries.map((e) => (
-              // Provenance and health ride IN the option text: a picker whose
-              // closed state hides whether an agent is a remote — or offline —
-              // is the wrong trade for a tidier page.
-              <option key={e.name} value={e.name}>
-                {bareName(e.name)} — {SOURCE_LABEL[e.kind] ?? e.kind}
-                {e.kind === "remote" && !e.healthy ? " (offline)" : ""}
-                {!e.delegable ? " (chat-only)" : ""}
-              </option>
-            ))}
-          </select>
-          {onTalk && selected.delegable && selected.healthy && (
-            <button
-              type="button"
-              onClick={() => onTalk(selected.kind, shown)}
-              title={`Talk with ${shown} at the round-table`}
-              className="btn-ghost shrink-0 px-2.5 py-1.5 text-[11.5px]"
+            {/* The narrow-width form of the rail above (and the whole picker on
+                a page that supplies no onSelect). `lg:hidden` keeps exactly one
+                of the two in the a11y tree — and it must stay in lock-step with
+                the column's `hidden lg:block` and with app/agents/page.tsx's
+                `lg:grid-cols-[15rem_...]`, or a viewport band gets either two
+                pickers or none. (Was `md` — see the page's comment: at 768px the
+                rail and the round-table's own 16rem rail engaged together and
+                left the transcript ~216px.) */}
+            <label className={`sr-only ${onSelect ? "lg:hidden" : ""}`} htmlFor="roster-pick">
+              Choose an agent
+            </label>
+            {/* ADVERSARIAL REVIEW (v1.179.0): in RAIL mode this select showed
+                `entries[0]` before anyone had picked — and `actionable` now
+                requires a REAL pick, so Talk/Give-work were hidden while the
+                box read "builder — Built-in". Below lg the rail is
+                display:none, so the select is the ONLY picker there, and
+                re-choosing the option a select is already showing fires no
+                `change` event: the roster's FIRST agent (builder on a real
+                daemon — delegable and healthy) could never be given work at a
+                narrow width at all. So in rail mode the unpicked select says
+                what is true — nobody is chosen yet — which also makes picking
+                entries[0] a genuine change. The standalone composition (no
+                rail, the select IS the selection) keeps its old default
+                exactly. */}
+            <select
+              id="roster-pick"
+              value={onSelect && !isPick ? "" : selected.name}
+              onChange={(ev) => {
+                const next = entries.find((e) => e.name === ev.target.value);
+                if (next) choose(next);
+              }}
+              className={`field min-w-0 flex-1 py-1.5 text-[12.5px] ${
+                onSelect ? "lg:hidden" : ""
+              }`}
             >
-              <MessageCircle size={12} /> Talk
-            </button>
-          )}
-          {onAssign && selected.delegable && selected.healthy && (
-            <button
-              type="button"
-              onClick={() => onAssign(selected.kind, shown)}
-              title={`Give ${shown} a job via the job-post card`}
-              className="btn-ghost shrink-0 px-2.5 py-1.5 text-[11.5px]"
-            >
-              <Briefcase size={12} /> Give work
-            </button>
-          )}
-        </div>
+              {onSelect && !isPick && (
+                <option value="" disabled>
+                  Choose an agent…
+                </option>
+              )}
+              {entries.map((e) => (
+                // Provenance and health ride IN the option text: a picker whose
+                // closed state hides whether an agent is a remote — or offline —
+                // is the wrong trade for a tidier page.
+                <option key={e.name} value={e.name}>
+                  {bareName(e.name)} — {SOURCE_LABEL[e.kind] ?? e.kind}
+                  {e.kind === "remote" && !e.healthy ? " (offline)" : ""}
+                  {!e.delegable ? " (chat-only)" : ""}
+                </option>
+              ))}
+            </select>
+            {/* THE ACTIONS FOR WHOEVER IS SELECTED. They sit here, below both
+                forms of the picker, so the narrow layout (where the face column
+                is display:none) can still reach them.
+                `actionable` (v1.179.0): in RAIL mode a button may only act on a
+                REAL pick. `selected` falls back to entries[0] as a preview, and
+                a "Give work" that quietly meant the supervisor because nobody had
+                clicked yet is the same lie the aria-current gate closed. The
+                standalone composition keeps its old behaviour exactly (it has no
+                rail, so its <select> IS the selection). */}
+            {onTalk && actionable && (
+              <button
+                type="button"
+                onClick={() => onTalk(selected.kind, shown)}
+                title={`Talk with ${shown} at the round-table`}
+                className="btn-ghost shrink-0 px-2.5 py-1.5 text-[11.5px]"
+              >
+                <MessageCircle size={12} /> Talk
+              </button>
+            )}
+            {onAssign && actionable && (
+              <button
+                type="button"
+                onClick={() => onAssign(selected.kind, shown)}
+                title={`Give ${shown} a job via the job-post card`}
+                className="btn-ghost shrink-0 px-2.5 py-1.5 text-[11.5px]"
+              >
+                <Briefcase size={12} /> Give work
+              </button>
+            )}
+          </div>
 
-        <div
-          className={`flex items-start gap-2.5 px-4 pb-3.5 pt-2.5 ${
-            offline ? "opacity-55" : ""
-          }`}
-        >
-          {/* v1.171.0: the deterministic face (portrait wins when stored).
-              Mood stays "idle" — the roster carries no live busy signal, and
-              an invented "work" scan would be the dishonest kind of warmth. */}
-          <AgentFace
-            name={shown}
-            mood="idle"
-            size={30}
-            avatarUrl={
-              selected.avatar
-                ? avatarSrc(selected.avatar, selected.last_active)
-                : undefined
-            }
-            className="mt-0.5"
-          />
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-              <span
-                className="truncate text-[13px] font-medium text-zinc-100"
-                title={selected.name}
-              >
-                {shown}
-              </span>
-              <span
-                className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${kindPill}`}
-              >
-                {kindLabel}
-              </span>
-              {offline && (
-                <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-rose-500/25 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-medium text-rose-300">
-                  <WifiOff size={10} /> offline
+          {/* THE STANDALONE COMPOSITION'S ROW (v1.171.0), and ONLY that one.
+              With a rail on screen this block was a SECOND portrait, name and
+              kind pill for the agent already drawn a few rows above — the
+              "redundant agent on the left pane" the user reported. In rail mode
+              every one of these lines now lives on the selected ROW. Without a
+              rail (no `onSelect`) there is no row to put them on, so the block
+              stays exactly as it shipped. */}
+          {!onSelect && (
+          <div
+            className={`flex items-start gap-2.5 px-4 pb-3.5 pt-2.5 ${
+              offline ? "opacity-55" : ""
+            }`}
+          >
+            {/* v1.171.0: the deterministic face (portrait wins when stored).
+                Mood stays "idle" — the roster carries no live busy signal, and
+                an invented "work" scan would be the dishonest kind of warmth. */}
+            <AgentFace
+              name={shown}
+              mood="idle"
+              size={30}
+              avatarUrl={
+                selected.avatar
+                  ? avatarSrc(selected.avatar, selected.last_active)
+                  : undefined
+              }
+              className="mt-0.5"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span
+                  className="truncate text-[13px] font-medium text-zinc-100"
+                  title={selected.name}
+                >
+                  {shown}
                 </span>
-              )}
-              {!selected.delegable && (
-                <span className="shrink-0 text-[10px] text-zinc-600">
-                  (chat-only for now)
+                <span
+                  className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${kindPill}`}
+                >
+                  {kindLabel}
                 </span>
-              )}
-              <span className="ml-auto shrink-0 text-[11px] tabular-nums text-zinc-500">
-                {statsText(selected)}
-              </span>
-            </div>
-            {/* Messenger-style preview (v1.171.0): the agent's REAL last
-                round-table line + when, from the daemon's join — falls back
-                to the static description exactly as before when this agent
-                has no recorded activity. Never both: the preview IS the more
-                current answer to "what is this agent about right now". */}
-            {selected.last_message ? (
-              <p
-                data-testid="roster-preview"
-                className="mt-1 flex items-baseline gap-1.5 text-[11.5px] leading-relaxed"
-              >
-                <span className="min-w-0 flex-1 truncate text-zinc-400">
-                  {selected.last_message}
-                </span>
-                {selected.last_active && (
-                  <span
-                    data-testid="roster-when"
-                    className="shrink-0 text-[10.5px] tabular-nums text-zinc-600"
-                  >
-                    {timeAgo(selected.last_active)}
+                {offline && (
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-rose-500/25 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-medium text-rose-300">
+                    <WifiOff size={10} /> offline
                   </span>
                 )}
-              </p>
-            ) : selected.description ? (
-              <p className="mt-1 text-[11.5px] leading-relaxed text-zinc-500">
-                {selected.description}
-              </p>
-            ) : null}
+                {!selected.delegable && (
+                  <span className="shrink-0 text-[10px] text-zinc-600">
+                    (chat-only for now)
+                  </span>
+                )}
+                <span className="ml-auto shrink-0 text-[11px] tabular-nums text-zinc-500">
+                  {statsText(selected)}
+                </span>
+              </div>
+              {/* Messenger-style preview (v1.171.0): the agent's REAL last
+                  round-table line + when, from the daemon's join — falls back
+                  to the static description exactly as before when this agent
+                  has no recorded activity. Never both: the preview IS the more
+                  current answer to "what is this agent about right now". */}
+              {selected.last_message ? (
+                <p
+                  data-testid="roster-preview"
+                  className="mt-1 flex items-baseline gap-1.5 text-[11.5px] leading-relaxed"
+                >
+                  <span className="min-w-0 flex-1 truncate text-zinc-400">
+                    {selected.last_message}
+                  </span>
+                  {selected.last_active && (
+                    <span
+                      data-testid="roster-when"
+                      className="shrink-0 text-[10.5px] tabular-nums text-zinc-600"
+                    >
+                      {timeAgo(selected.last_active)}
+                    </span>
+                  )}
+                </p>
+              ) : selected.description ? (
+                <p className="mt-1 text-[11.5px] leading-relaxed text-zinc-500">
+                  {selected.description}
+                </p>
+              ) : null}
+            </div>
           </div>
-        </div>
+          )}
 
-        {/* ONE DOOR at the foot of the rail (v1.178.0). Local or remote is a
-            question the setup surface itself asks — making the rail ask it
-            first would mean two gears for one job. It lives outside the
-            md-only column on purpose: the narrow layout needs it just as
-            much. */}
-        {onConfigure && (
-          <div className="border-t hairline p-1.5">
-            <button
-              type="button"
-              onClick={onConfigure}
-              data-testid="roster-gear"
-              title="Configure a new agent — one of your own, or one running on another computer"
-              className="flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-zinc-500 transition-colors hover:bg-white/[0.04] hover:text-accent-soft"
-            >
-              <GearFace size={26} />
-              <span className="min-w-0 flex-1 truncate text-[12.5px]">
-                New agent
-                {/* The button's job in full, for a screen reader that gets no
-                    tooltip: the gear is aria-hidden and "New agent" alone
-                    doesn't say that a REMOTE one lives behind the same door. */}
-                <span className="sr-only"> — configure a local or remote agent</span>
-              </span>
-            </button>
-          </div>
-        )}
-      </Card>
+          {/* ONE DOOR at the foot of the rail (v1.178.0). Local or remote is a
+              question the setup surface itself asks — making the rail ask it
+              first would mean two gears for one job. It lives outside the
+              md-only column on purpose: the narrow layout needs it just as
+              much.
+              v1.179.0: it is the ONLY door — setup is not on the page until this
+              is clicked ("the set up agents should all be contained in the new
+              agent gear face ... and not shown unless the user decided to
+              configure an agent") — so it announces what it controls. */}
+          {onConfigure && (
+            <div className="border-t hairline p-1.5">
+              <button
+                type="button"
+                onClick={onConfigure}
+                data-testid="roster-gear"
+                aria-expanded={configureOpen}
+                title="Configure a new agent — one of your own, or one running on another computer"
+                className={`flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left transition-colors hover:bg-white/[0.04] hover:text-accent-soft ${
+                  configureOpen ? "text-accent-soft" : "text-zinc-500"
+                }`}
+              >
+                <GearFace size={26} />
+                <span className="min-w-0 flex-1 truncate text-[12.5px]">
+                  New agent
+                  {/* The button's job in full, for a screen reader that gets no
+                      tooltip: the gear is aria-hidden and "New agent" alone
+                      doesn't say that a REMOTE one lives behind the same door. */}
+                  <span className="sr-only"> — configure a local or remote agent</span>
+                </span>
+              </button>
+            </div>
+          )}
+        </Card>
+      </div>
     </Reveal>
   );
 }

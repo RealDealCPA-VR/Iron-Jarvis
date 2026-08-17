@@ -205,13 +205,24 @@ describe("the rail — a face per agent", () => {
     render(<RosterStrip entries={ROSTER} onSelect={vi.fn()} />);
     const rows = within(rail()).getAllByRole("button");
     expect(rows).toHaveLength(ROSTER.length);
-    expect(rows.map((b) => b.textContent?.replace(/offline/, "").trim())).toEqual([
+    // v1.179.0: a remote row now also carries its "Remote" pill — the user
+    // asked for that indicator on every remote agent after it moved off the
+    // deleted detail block. Strip the provenance words too, so this still
+    // pins the NAMES and their order rather than being loosened away.
+    expect(
+      rows.map((b) =>
+        b.textContent?.replace(/offline/gi, "").replace(/remote/gi, "").trim(),
+      ),
+    ).toEqual([
       "supervisor",
       "builder",
       "analyst",
       "opus-box",
       "down-box",
     ]);
+    // ...and the pill is genuinely there, on the remote rows only.
+    const remoteRows = rows.filter((b) => /remote/i.test(b.textContent ?? ""));
+    expect(remoteRows).toHaveLength(2); // opus-box + down-box
     // Four drawn faces + the one agent with a stored portrait = five faces.
     expect(within(rail()).getAllByTestId("agent-face")).toHaveLength(4);
     // The portrait is queried by NODE, not by alt text: beside its own visible
@@ -411,13 +422,24 @@ describe("the gear with a face", () => {
     expect(drawn.getAttribute("role")).toBeNull();
   });
 
-  it("leaves an already-open setup card open", async () => {
+  it("keeps setup behind the gear even when it was left open before", async () => {
+    // REWRITTEN for v1.179.0, and the inversion is the point. In v1.178.0 the
+    // gear only REVEALED a card that the page already rendered, so a persisted
+    // "open" meant setup greeted you on arrival. The user asked for the
+    // opposite: "the set up agents should all be contained in the new agent
+    // gear face on the left pane and not shown unless the user decided to
+    // configure an agent." So a stored open flag no longer puts a form on the
+    // page — only the click does.
     window.localStorage.setItem("ij_agents_setup_open", "1");
     render(<AgentsPage />);
-    await waitFor(() => expect(screen.getByText("Create an agent")).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("roster-gear")).toBeTruthy());
+    expect(screen.queryByText("Create an agent")).toBeNull();
+
     fireEvent.click(screen.getByTestId("roster-gear"));
-    // The gear reveals; it is not a toggle that can slam the door on you.
     await waitFor(() => expect(screen.getByText("Create an agent")).toBeTruthy());
+    // ...and it folds away again, so the gear is a door, not a one-way reveal.
+    fireEvent.click(screen.getByTestId("roster-gear"));
+    await waitFor(() => expect(screen.queryByText("Create an agent")).toBeNull());
   });
 });
 

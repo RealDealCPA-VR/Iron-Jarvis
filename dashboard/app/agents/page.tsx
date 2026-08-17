@@ -17,9 +17,36 @@
 // promises. The rail column only appears when the roster does: an older
 // daemon that doesn't serve /agents/roster gets the plain stacked page it has
 // always had, with no empty column beside it.
+//
+// v1.179.0 — THE THREAD IS THE PAGE. Reported verbatim: "the give work part at
+// the top shouldnt be there because it should simply open when a specific agent
+// is selected and be treated more like a thread with that individual agent",
+// and "the set up agents should all be contained in the new agent gear face on
+// the left pane and not shown unless the user decided to configure an agent".
+// So the module beside the rail opens on the CONVERSATION. Two surfaces that
+// used to stand permanently above it moved behind their own doors:
+//   * GIVE WORK is a collapsed disclosure UNDER the round-table. Posting a job
+//     to the TEAM (a supervisor session that plans and delegates) is a real
+//     capability with no other home, so it is one click away — from the
+//     disclosure itself, or from the rail's Give-work button, which opens it
+//     and preselects the agent exactly as before. The fold is a HIDE, not an
+//     unmount: `hidden` takes the form out of the picture AND out of the a11y
+//     tree, while a job half typed into it survives a stray collapse, and the
+//     recent-jobs poll behaves exactly as it did when the card stood open.
+//   * SETUP is not in the page at all until the gear-with-a-face is clicked,
+//     and the gear collapses it again.
+// Both doors need a rail to hang on, so on an older daemon with no roster the
+// page keeps rendering them in the flow — the pre-rail page, unchanged.
 
 import { useEffect, useRef, useState } from "react";
-import { Check, MessagesSquare, Plus, Trash2 } from "lucide-react";
+import {
+  Briefcase,
+  Check,
+  ChevronDown,
+  MessagesSquare,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import { del, post, put, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import type { AgentsResponse, ModelOption } from "@/lib/types";
@@ -54,6 +81,23 @@ type PickerState =
   | { mode: "create" }
   | { mode: "edit"; thread: ThreadDetail }
   | null;
+
+/**
+ * SetupCard's own disclosure key, written here BEFORE the card mounts.
+ *
+ * The card owns an internal open state hydrated from localStorage; v1.178.0
+ * drove it by clicking its toggle through the DOM, deliberately avoiding this
+ * duplication. That stopped working when the page took over VISIBILITY
+ * (v1.179.0): the card is not rendered until the gear is clicked, so the click
+ * would land on a freshly-mounted card whose hydration `setOpen(true)` was
+ * still queued — the DOM would read `aria-expanded="false"`, the click would
+ * queue `setOpen(false)` after it, and a user who had opened setup before would
+ * get a collapsed card from a gear that says it opened. Writing the key first
+ * has no such race: whichever way the card hydrates, it hydrates OPEN.
+ * If SetupCard ever renames the key the failure is soft — the gear reveals a
+ * collapsed card the user can open with one more click, never an error.
+ */
+const SETUP_OPEN_KEY = "ij_agents_setup_open";
 
 /** "custom:slug" / "remote:name" → the bare registry name the thread routes
  *  accept (clean_participants stores source + bare name; the round engine
@@ -124,11 +168,19 @@ export default function AgentsPage() {
   const tableRef = useRef<HTMLDivElement>(null);
   const talkBusyRef = useRef(false);
   // The job-post card (v1.166.0): the roster's "Give work" preselects a
-  // target there and scrolls the card into view.
+  // target there and scrolls the card into view. v1.179.0 — it lives behind a
+  // disclosure now: `jobOpen` is whether it SHOWS (the card itself stays
+  // mounted and hidden, see the header note), and `jobFocus` counts DELIBERATE
+  // opens so the page only scrolls for those — clicking a face also sets
+  // `assign`, and yanking the page under someone reading a transcript is the
+  // opposite of what a rail is for.
   const jobRef = useRef<HTMLDivElement>(null);
   const [assign, setAssign] = useState<JobAssign | null>(null);
+  const [jobOpen, setJobOpen] = useState(false);
+  const [jobFocus, setJobFocus] = useState(0);
   // The rail's gear reveals the setup surfaces through this wrapper.
   const setupRef = useRef<HTMLDivElement>(null);
+  const [setupOpen, setSetupOpen] = useState(false);
   // WHO THE USER IS WORKING WITH (v1.178.0). This lives on the page, not
   // inside the rail, because it drives the page: the job card's target and
   // which thread is open. Kept as kind + BARE name, the shape every handler
@@ -274,13 +326,36 @@ export default function AgentsPage() {
     }
   }
 
-  /** The roster's Give-work button: preselect this agent in the job-post card
-   *  and bring the card into view. The nonce keeps a repeat click on the same
-   *  agent a distinct assign, so it still re-selects after a manual change. */
+  /** The roster's Give-work button: OPEN the job-post disclosure, preselect
+   *  this agent in it, and bring it into view. The nonce keeps a repeat click
+   *  on the same agent a distinct assign, so it still re-selects after a manual
+   *  change. The scroll waits for the effect below — on the first open the card
+   *  does not exist yet, so scrolling here would scroll nothing. */
   function assignWork(kind: AgentSource, name: string) {
     setAssign({ kind, name, nonce: Date.now() });
-    jobRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    openJob();
   }
+
+  /** Show the job-post card and scroll to it. */
+  function openJob() {
+    setJobOpen(true);
+    setJobFocus((n) => n + 1);
+  }
+
+  /** The disclosure's own header: reveal, or fold away again. */
+  function toggleJob() {
+    if (jobOpen) {
+      setJobOpen(false);
+      return;
+    }
+    openJob();
+  }
+
+  // Scroll only for a deliberate open — and only once the panel is in the DOM.
+  useEffect(() => {
+    if (jobFocus === 0) return;
+    jobRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [jobFocus]);
 
   /**
    * A face in the rail was clicked (v1.178.0): "this is who I'm working with".
@@ -330,25 +405,33 @@ export default function AgentsPage() {
   }
 
   /**
-   * The gear-with-a-face: reveal the create/connect surfaces (both doors).
+   * The gear-with-a-face: the ONE door to agent configuration (v1.179.0).
    *
-   * SetupCard owns its own open state — hydrated from localStorage on mount —
-   * and exposes no `open` prop, so the gear drives it through the disclosure
-   * button the card already renders. That is deliberate over duplicating its
-   * storage key here: clicking runs the card's OWN toggle, so the state
-   * persists exactly as a manual click would, and a card that is already open
-   * is not slammed shut by the gear. If its markup ever changes shape the
-   * worst case is that we only scroll there — never a thrown error on click.
+   * Setup is not in the page until this runs — "not shown unless the user
+   * decided to configure an agent" — and clicking again folds it away. The
+   * localStorage write is what makes the card mount OPEN rather than mounted
+   * and still collapsed; see SETUP_OPEN_KEY for why it is a write and not a
+   * click on the card's own toggle any more.
    */
-  function openSetup() {
-    const host = setupRef.current;
-    const toggle = host?.querySelector<HTMLButtonElement>("button[aria-expanded]");
-    if (toggle?.getAttribute("aria-expanded") === "false") toggle.click();
-    host?.scrollIntoView({ behavior: "smooth", block: "start" });
-    // Focus follows the reveal — otherwise a keyboard user activates the gear
-    // and their focus is still down in the rail, three sections away.
-    toggle?.focus();
+  function toggleSetup() {
+    const next = !setupOpen;
+    try {
+      localStorage.setItem(SETUP_OPEN_KEY, next ? "1" : "0");
+    } catch {
+      /* persistence is best-effort; the reveal below does not depend on it */
+    }
+    setSetupOpen(next);
   }
+
+  // Focus and the viewport follow the reveal — otherwise a keyboard user
+  // activates the gear and their focus is still down in the rail, a section
+  // away from the form that just appeared.
+  useEffect(() => {
+    if (!setupOpen) return;
+    const host = setupRef.current;
+    host?.scrollIntoView({ behavior: "smooth", block: "start" });
+    host?.querySelector<HTMLButtonElement>("button[aria-expanded]")?.focus();
+  }, [setupOpen]);
 
   // --- the participant picker's catalog ------------------------------------
   // Roster-fed when available: descriptions + live health, offline remotes
@@ -401,8 +484,19 @@ export default function AgentsPage() {
       entries={hasRoster ? rosterEntries : undefined}
       onTalk={threadsMissing ? undefined : talkWith}
       onAssign={assignWork}
-      onSelect={selectAgent}
-      onConfigure={openSetup}
+      // ADVERSARIAL REVIEW (v1.179.0): both of these are gated on `hasRoster`
+      // now. The strip falls back to fetching /agents/roster for ITSELF when
+      // the page has no rows, so the page's fetch failing while the strip's
+      // succeeds used to render a rail and a gear inside the STACKED (pre-rail)
+      // layout — and the gear was then a lie: `hasRoster && setupOpen` gates the
+      // reveal, so clicking it flipped aria-expanded to "true" and revealed
+      // nothing, while setup was already standing in the flow below. Tying both
+      // props to the same flag that decides the LAYOUT keeps the two halves of
+      // the page telling one story; in the normal case (`hasRoster`) nothing
+      // changes at all.
+      onSelect={hasRoster ? selectAgent : undefined}
+      onConfigure={hasRoster ? toggleSetup : undefined}
+      configureOpen={setupOpen}
       selected={picked}
     />
   );
@@ -473,29 +567,31 @@ export default function AgentsPage() {
               thread routes, so it's only offered when they exist. */}
           {!hasRoster && rail}
 
-          {/* Give work (v1.166.0) — post a job to the Team (a supervisor
-              session that plans & delegates) or straight to one delegable
-              roster agent. Dispatched sessions carry origin "job:agents". */}
-          <Reveal>
-            <div ref={jobRef}>
-              <JobPostCard roster={rosterEntries} assign={assign} />
-            </div>
-          </Reveal>
-
-          {/* Setup — collapsed by default; the round-table below is the star.
-              The rail's gear reaches it through this wrapper. */}
-          <Reveal>
-            <div ref={setupRef}>
-              <SetupCard
-                builtin={builtin}
-                dynamic={dynamic}
-                remotes={remotes}
-                models={models}
-                onAgentsChanged={reloadAgents}
-                onRemotesChanged={reloadRemotes}
-              />
-            </div>
-          </Reveal>
+          {/* THE PRE-RAIL PAGE (older daemon). No roster means no rail, which
+              means no gear and no disclosure to hold these — so they stay in
+              the flow exactly as they shipped. Hiding them here would delete
+              two capabilities from the daemons least able to spare them. */}
+          {!hasRoster && (
+            <>
+              <Reveal>
+                <div ref={jobRef}>
+                  <JobPostCard roster={rosterEntries} assign={assign} />
+                </div>
+              </Reveal>
+              <Reveal>
+                <div ref={setupRef}>
+                  <SetupCard
+                    builtin={builtin}
+                    dynamic={dynamic}
+                    remotes={remotes}
+                    models={models}
+                    onAgentsChanged={reloadAgents}
+                    onRemotesChanged={reloadRemotes}
+                  />
+                </div>
+              </Reveal>
+            </>
+          )}
 
           {tableError && (
             <Reveal>
@@ -634,6 +730,86 @@ export default function AgentsPage() {
                     </div>
                   </div>
                 )}
+              </div>
+            </Reveal>
+          )}
+
+          {/* GIVE WORK — BELOW the conversation, folded away (v1.179.0).
+              "The give work part at the top shouldnt be there." It is not
+              deleted: posting a job to the TEAM — a supervisor session that
+              plans and delegates across the roster — has no other home on this
+              page, and neither does the recent-jobs list. It is one click from
+              here, and the rail's Give-work button opens it with the agent
+              already selected. Dispatched sessions still carry origin
+              "job:agents". */}
+          {hasRoster && (
+            <Reveal>
+              <div>
+                {/* The closed state IS a card — one bar in the page's rhythm,
+                    not a form. Opening puts the real card below it rather than
+                    inside it: JobPostCard is a Card, and a card-surface nested
+                    in a card-surface draws two borders around one thing. */}
+                <button
+                  type="button"
+                  onClick={toggleJob}
+                  aria-expanded={jobOpen}
+                  aria-controls="job-post-panel"
+                  className="card-surface flex w-full items-center gap-3 px-5 py-3.5 text-left"
+                >
+                  <Briefcase size={15} className="shrink-0 text-accent-soft/80" />
+                  <span className="min-w-0 flex-1">
+                    {/* Deliberately NOT the words "Give work": that is the
+                        rail button's name and the card's own title, and three
+                        controls answering to one phrase is how a click lands on
+                        the wrong one — for a test query and for a screen-reader
+                        user picking from a list of buttons alike. */}
+                    <span className="block text-[13px] font-semibold tracking-wide text-zinc-200">
+                      Post a job
+                    </span>
+                    <span className="block text-[11.5px] text-zinc-500">
+                      The team plans and delegates, or one agent takes it
+                    </span>
+                  </span>
+                  <ChevronDown
+                    size={15}
+                    aria-hidden
+                    className={`shrink-0 text-zinc-500 motion-safe:transition-transform ${
+                      jobOpen ? "rotate-180" : ""
+                    }`}
+                  />
+                </button>
+                {/* A HIDE, not an unmount. `hidden` removes the panel from the
+                    picture and from the a11y tree — a folded disclosure is not
+                    a set of controls a screen reader can still tab into — while
+                    a job half typed into it survives a stray collapse, the
+                    preselect from a rail click is already applied when it
+                    opens, and the recent-jobs poll behaves exactly as it did
+                    when this card stood open at the top of the page. */}
+                <div
+                  id="job-post-panel"
+                  ref={jobRef}
+                  hidden={!jobOpen}
+                  className="mt-3"
+                >
+                  <JobPostCard roster={rosterEntries} assign={assign} />
+                </div>
+              </div>
+            </Reveal>
+          )}
+
+          {/* SETUP — only once the gear says so. Not rendered at all otherwise:
+              "not shown unless the user decided to configure an agent". */}
+          {hasRoster && setupOpen && (
+            <Reveal>
+              <div ref={setupRef}>
+                <SetupCard
+                  builtin={builtin}
+                  dynamic={dynamic}
+                  remotes={remotes}
+                  models={models}
+                  onAgentsChanged={reloadAgents}
+                  onRemotesChanged={reloadRemotes}
+                />
               </div>
             </Reveal>
           )}

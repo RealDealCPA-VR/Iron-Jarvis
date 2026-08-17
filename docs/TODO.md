@@ -264,3 +264,15 @@ sense once the existing capability reliably reaches the agent.
 - [ ] **`ListAgentsTool` (the agent-facing `list_agents`) does not emit
   `effective_tools`** — the HTTP route does. An agent asking what another agent
   holds still reads the stored list.
+
+## Carried from v1.179.0 (the agents-room pass)
+
+- [ ] **`PanelPicker` frames itself as "choose the panel", not "add one more".**
+  The thread's bottom-right Add-an-agent button promises "everyone already
+  here stays" (and the PUT is genuinely additive, tested), but the picker it
+  opens reads like a full re-seat. The fix belongs in the shared component,
+  which no v1.179.0 doer owned.
+- [ ] **The gear and SetupCard hold two independent open states over one
+  localStorage key** (`ij_agents_setup_open`). They agree today because the
+  page writes the key before mounting the card, but that is a handshake, not a
+  single source of truth. Give the card an `open` prop.

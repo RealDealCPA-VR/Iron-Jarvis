@@ -24,6 +24,19 @@
 // concluded to long-term memory — but only AFTER the user reads it. The first
 // POST is a preview that writes nothing; the commit sends the previewed text
 // back verbatim. See MemoryReviewCard for why both halves are load-bearing.
+//
+// ADD AN AGENT (v1.179.0): a thread is a ROOM, so bringing somebody else into
+// it belongs IN the room — bottom right of the composer, next to "Let them
+// continue" — not only behind the header's panel editor. The control reuses
+// THE picker (PanelPicker) rather than growing a second one, seeded with
+// everyone already seated, so the PUT it sends carries the FULL panel and
+// adding is additive by construction: a body of just the new agent would
+// REPLACE the panel, since PUT /agents/threads/{id}/participants sets the list
+// (daemon `update_participants`). Nothing is shown as added until the daemon
+// says so — the response (or a refetch) is what lands on screen, and a failed
+// add leaves the thread exactly as it was, with the daemon's reason in the
+// picker. The catalog is fetched on demand from the same roster the rail
+// shows, with the /agents + /agents/remote fallback older daemons need.
 
 import {
   createContext,
@@ -44,14 +57,16 @@ import {
   Send,
   TriangleAlert,
   UserRoundPen,
+  UserRoundPlus,
 } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ApiError, get, post } from "@/lib/api";
+import { ApiError, get, post, put } from "@/lib/api";
 import { useEvents } from "@/lib/useEvents";
 import { timeAgo } from "@/lib/format";
 import { Empty, ErrorNote, OfflineHint, SkeletonRows, SuccessNote } from "@/components/ui";
 import AgentFace, { faceIdentity } from "./AgentFace";
+import { PanelPicker, type PickerCatalog, type PickerOption } from "./PanelPicker";
 import {
   RolePill,
   SOURCE_LABEL,
@@ -59,6 +74,7 @@ import {
   nameColor,
   type AgentSource,
   type Participant,
+  type RemoteAgentInfo,
   type ThreadDetail,
   type ThreadEntry,
 } from "./identity";
@@ -545,6 +561,105 @@ function MemoryReviewCard({
   );
 }
 
+/* -------------------------------------------------------- add an agent --- */
+
+/** The roster rows this surface reads (GET /agents/roster). Deliberately a
+ *  LOCAL minimal shape rather than the rail's full RosterEntry: everything
+ *  here is optional-with-a-degrade, so a daemon that omits a field renders
+ *  less, never a lie — an absent `healthy` means "not reported", which must
+ *  not paint an agent offline. */
+interface RosterRow {
+  /** "builder" | "custom:<slug>" | "remote:<name>" — the delegation name. */
+  name: string;
+  kind: AgentSource;
+  description?: string;
+  healthy?: boolean;
+  avatar?: string | null;
+}
+
+/** "custom:slug" / "remote:name" → the bare registry name the thread routes
+ *  accept (`clean_participants` stores source + bare name, and the round
+ *  engine looks the bare name up in the matching registry). Builtins have no
+ *  prefix and pass through. Same transform the page applies for its own
+ *  picker — it lives there as a module-private function, so this is a second
+ *  copy on purpose rather than an import that would reach into a page. */
+function bareRosterName(name: string): string {
+  if (name.startsWith("custom:")) return name.slice("custom:".length);
+  if (name.startsWith("remote:")) return name.slice("remote:".length);
+  return name;
+}
+
+/** The full agent catalog for the add-picker: all three sources the app
+ *  supports, exactly as the rail sees them.
+ *
+ *  ROSTER FIRST (descriptions + live remote health + stored portraits), then
+ *  the raw lists a pre-roster daemon still serves. The fallback is not
+ *  belt-and-braces: on a daemon without /agents/roster an empty catalog would
+ *  tell the user they have no agents at all, while `/agents` answers happily.
+ *  A dead daemon (status 0) is re-thrown instead of quietly falling through —
+ *  the caller says "offline" rather than showing three empty groups. */
+async function loadCatalog(): Promise<PickerCatalog> {
+  try {
+    const res = await get<{ roster?: RosterRow[] }>("/agents/roster");
+    const rows = (res?.roster ?? []).filter(
+      (e): e is RosterRow => Boolean(e) && typeof e?.name === "string",
+    );
+    if (rows.length > 0) {
+      const options = (kind: AgentSource): PickerOption[] =>
+        rows
+          .filter((e) => e.kind === kind)
+          .map((e) => ({
+            source: kind,
+            name: bareRosterName(e.name),
+            description: e.description || undefined,
+            // Absent health is UNKNOWN, not offline (older daemons don't
+            // send it) — only an explicit false locks a remote out.
+            offline: kind === "remote" && e.healthy === false,
+            avatar: e.avatar ?? null,
+          }));
+      return {
+        builtin: options("builtin"),
+        dynamic: options("dynamic"),
+        remotes: options("remote"),
+      };
+    }
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 0) throw e;
+    /* 404/405 = a daemon older than the roster — fall through to the lists */
+  }
+  const agents = await get<{
+    builtin?: string[];
+    dynamic?: { name: string; description?: string }[];
+  }>("/agents");
+  // A daemon without the remote registry still has built-ins and dynamics;
+  // losing them over a missing route would be the worse failure.
+  const remote = await get<{ agents?: RemoteAgentInfo[]; remotes?: RemoteAgentInfo[] }>(
+    "/agents/remote",
+  ).catch(() => ({}) as { agents?: RemoteAgentInfo[]; remotes?: RemoteAgentInfo[] });
+  const remotes = remote?.agents ?? remote?.remotes ?? [];
+  return {
+    builtin: (agents?.builtin ?? []).map((name) => ({ source: "builtin" as const, name })),
+    dynamic: (agents?.dynamic ?? []).map((a) => ({
+      source: "dynamic" as const,
+      name: a.name,
+      description: a.description || undefined,
+    })),
+    remotes: remotes.map((r) => ({
+      source: "remote" as const,
+      name: r.name,
+      description: r.kind || undefined,
+      offline: r.enabled === false,
+    })),
+  };
+}
+
+/** Who is on the picker's list but was not on the thread before — used only
+ *  for the receipt ("Added X"), never to decide what is SENT. */
+function addedNames(before: Participant[], after: Participant[]): string[] {
+  const seated = new Set(before.map((p) => p.key));
+  return after.filter((p) => !seated.has(p.key)).map((p) => p.name);
+}
+
 /* ----------------------------------------------------------------- view --- */
 
 /** One round in flight: the message count when it started (everything after
@@ -590,6 +705,16 @@ export function RoundTable({
   const [memSaved, setMemSaved] = useState<RememberResult | null>(null);
   const [memBusy, setMemBusy] = useState<"preview" | "commit" | null>(null);
   const [memError, setMemError] = useState<string | null>(null);
+  // ADD AN AGENT (v1.179.0). `addCatalog !== null` is what opens the picker —
+  // one state instead of an open flag plus a catalog, so the dialog can never
+  // stand there claiming "no built-in agents available" while its fetch is
+  // still in flight. `addError` is the catalog fetch's failure (a failed PUT
+  // is shown inside the picker, where the user is standing); `addNote` is the
+  // receipt for an add that actually landed.
+  const [addCatalog, setAddCatalog] = useState<PickerCatalog | null>(null);
+  const [addLoading, setAddLoading] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+  const [addNote, setAddNote] = useState<string | null>(null);
   // The @-autocomplete popover: the partial after "@" and where it starts.
   const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
   const [mentionIdx, setMentionIdx] = useState(0);
@@ -625,6 +750,13 @@ export function RoundTable({
     setMemSaved(null);
     setMemBusy(null);
     setMemError(null);
+    // Same reason the preview is dropped: an open add-picker belongs to the
+    // thread it was opened on, and its Save PUTs to whatever thread is open —
+    // which would rewrite ANOTHER panel with this one's seating.
+    setAddCatalog(null);
+    setAddLoading(false);
+    setAddError(null);
+    setAddNote(null);
     get<ThreadDetail>(`/agents/threads/${encodeURIComponent(threadId)}`)
       .then((d) => {
         if (!cancelled) setDetail(d);
@@ -831,6 +963,104 @@ export function RoundTable({
     } finally {
       if (genRef.current === gen) setMemBusy(null);
     }
+  }
+
+  /* ------------------------------------------------- add an agent -------- */
+
+  /** Open the picker — but only once there is something real to show. The
+   *  catalog is fetched per open so an agent created (or a remote registered)
+   *  since this thread opened is on the list; a failure names itself here
+   *  instead of opening three empty groups that read as "you have no agents". */
+  async function openAdd() {
+    if (addLoading || addCatalog) return;
+    const gen = genRef.current;
+    setAddLoading(true);
+    setAddError(null);
+    setAddNote(null);
+    try {
+      const catalog = await loadCatalog();
+      if (genRef.current !== gen) return; // switched threads mid-fetch
+      // THE EMPTY-PICKER GUARD, for EVERY path (reviewer finding). The roster
+      // branch above refuses an empty `roster` array, but the older-daemon
+      // fallback has no such gate and a daemon answering `/agents` with `{}`
+      // (or a roster whose rows all carry an unknown kind) resolves to three
+      // empty groups — the picker then opens and states "No built-in agents
+      // available", "No agents of your own yet", "No remote agents connected",
+      // which reads as "you have no agents" when the truth is "this daemon
+      // told us nothing". A named failure beats three confident denials.
+      if (catalog.builtin.length + catalog.dynamic.length + catalog.remotes.length === 0) {
+        setAddError("This daemon listed no agents at all — there is nobody to add yet.");
+        return;
+      }
+      setAddCatalog(catalog);
+    } catch (e) {
+      if (genRef.current !== gen) return;
+      setAddError(failureText(e, "Daemon offline — couldn't load the agent list."));
+    } finally {
+      if (genRef.current === gen) setAddLoading(false);
+    }
+  }
+
+  /** Seat the picker's panel on this thread.
+   *
+   *  THE LIST IS SENT WHOLE. `PUT .../participants` SETS the panel, so a body
+   *  carrying only the newly-picked agent would silently evict everyone else.
+   *  The picker opens with the current panel preselected, so what comes back
+   *  here is "everyone seated, plus whoever was added" — additive because the
+   *  round-trip never drops what it started with, and a deliberate removal in
+   *  the picker is still honoured (the affordance is right there; ignoring it
+   *  would be its own lie).
+   *
+   *  NOTHING IS SHOWN AS ADDED UNTIL THE DAEMON AGREES: the PUT's own thread
+   *  view is applied when it carries one, otherwise the thread is refetched.
+   *  On failure this THROWS — PanelPicker renders the reason and stays open,
+   *  and the thread on screen is untouched. */
+  async function addToPanel(_title: string, next: Participant[]) {
+    const gen = genRef.current;
+    const before = detailRef.current?.participants ?? [];
+    // Defensive dedupe: the daemon rejects a repeated key outright ("X is
+    // already in this thread"), and no click in the picker can produce one —
+    // but a body it builds is not worth trusting blindly.
+    const seen = new Set<string>();
+    const body = next
+      .filter((p) => {
+        const key = `${p.source}:${p.name}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map(({ source, name, role }) => ({ source, name, role }));
+    const res = await put<ThreadDetail>(
+      `/agents/threads/${encodeURIComponent(threadId)}/participants`,
+      { participants: body },
+    );
+    if (genRef.current !== gen) return; // switched threads mid-save
+    // WHO JOINED IS READ OFF THE DAEMON'S ANSWER, never off the picker
+    // (reviewer finding). The picker holds what was ASKED for; naming somebody
+    // in the receipt on that basis is the same lie as an optimistic chip, only
+    // later and in words — and it survives even when the response seats
+    // somebody else, because nothing downstream re-checks it. When the response
+    // carries no panel we name NOBODY: the refetch below is what will say who
+    // is actually seated, and it has not answered yet.
+    const confirmed =
+      res && Array.isArray(res.participants) && Array.isArray(res.messages)
+        ? res.participants
+        : null;
+    if (confirmed) setDetail(res);
+    else void refetchLive(); // older/odd shape — ask the server rather than guess
+    const joined = confirmed ? addedNames(before, confirmed) : [];
+    setAddCatalog(null);
+    setAddError(null);
+    setAddNote(
+      joined.length > 0
+        ? `${joined.join(", ")} joined this thread — ${
+            joined.length === 1 ? "it answers" : "they answer"
+          } from the next message on.`
+        : confirmed
+          ? "Panel saved — nobody new was added."
+          : "Panel saved — reloading the thread to show who is seated.",
+    );
+    onRoundDone(); // the rail's panel avatars are now stale
   }
 
   /* -------------------------------------------------- @-autocomplete ------ */
@@ -1206,21 +1436,82 @@ export function RoundTable({
             <Send size={14} /> Ask the panel
           </button>
         </div>
+        {/* The add's own outcomes live down here, beside the control that
+            caused them: a catalog that never arrived (no picker is faked
+            around it) and the receipt for an add that landed. A failed PUT is
+            NOT here — it belongs inside the picker the user is still standing
+            in, which stays open with the panel unchanged. */}
+        {addError && (
+          <div className="mt-2">
+            <ErrorNote>{addError}</ErrorNote>
+          </div>
+        )}
+        {addNote && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <SuccessNote>{addNote}</SuccessNote>
+            <button
+              type="button"
+              onClick={() => setAddNote(null)}
+              className="btn-ghost py-1 text-xs"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
           <p className="text-[11px] text-zinc-600">
             Each agent sees the replies before it — @name asks just them.
           </p>
-          <button
-            type="button"
-            onClick={() => void say("")}
-            disabled={speaking}
-            title="Send no message — the agents take another round among themselves"
-            className="btn-ghost py-1 text-xs"
-          >
-            <MessagesSquare size={13} /> Let them continue
-          </button>
+          {/* BOTTOM RIGHT OF THE ROOM (v1.179.0): bring somebody else in
+              without leaving the conversation. Disabled mid-round — the
+              daemon is already speaking to the panel it read when the round
+              started, so reseating it now would change who answers halfway
+              through and the screen would disagree with the transcript. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void openAdd()}
+              disabled={addLoading || speaking}
+              title={
+                speaking
+                  ? "Wait for this round to finish — the panel can't change mid-round"
+                  : "Add another agent to this thread — everyone already here stays"
+              }
+              className="btn-ghost py-1 text-xs"
+            >
+              {addLoading ? (
+                <LoaderCircle size={13} className="animate-spin-slow" aria-hidden="true" />
+              ) : (
+                <UserRoundPlus size={13} aria-hidden="true" />
+              )}
+              Add an agent
+            </button>
+            <button
+              type="button"
+              onClick={() => void say("")}
+              disabled={speaking}
+              title="Send no message — the agents take another round among themselves"
+              className="btn-ghost py-1 text-xs"
+            >
+              <MessagesSquare size={13} /> Let them continue
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* THE picker — the same component the page uses for a new thread and
+          for editing a panel, seeded with everyone already seated so Save
+          sends the WHOLE panel (see addToPanel). Rendered only once its
+          catalog is in hand, so it never shows empty groups while loading. */}
+      {addCatalog && (
+        <PanelPicker
+          mode="edit"
+          catalog={addCatalog}
+          initialParticipants={participants}
+          onClose={() => setAddCatalog(null)}
+          onSubmit={addToPanel}
+        />
+      )}
     </div>
   );
 }
