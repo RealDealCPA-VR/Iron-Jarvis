@@ -263,12 +263,17 @@ afterEach(() => {
 
 /* ------------------------------------------------------------- the stack --- */
 
-describe("the round-table sits BELOW the roster", () => {
-  it("renders the conversation after the roster in document order", async () => {
+describe("the roster sits BELOW the round-table", () => {
+  it("renders the roster after the conversation in document order", async () => {
+    // INVERTED in v1.182.0, and the reason is the FOLD, not taste. With the
+    // roster above, expanding the list pushed the conversation DOWN the
+    // page — opening the roster moved the thing the user was reading, so
+    // the fold cost something every time it was used. Below, the list grows
+    // into empty space and the transcript never shifts.
     render(<AgentsPage />);
     await waitFor(() => expect(table()).toBeTruthy());
     expect(
-      pane().compareDocumentPosition(table()) & Node.DOCUMENT_POSITION_FOLLOWING,
+      table().compareDocumentPosition(pane()) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 

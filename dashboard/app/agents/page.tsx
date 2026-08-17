@@ -598,20 +598,6 @@ export default function AgentsPage() {
           rule v1.178.0 wrote at `lg` — it can move DOWN safely now because the
           roster no longer competes with the transcript for width. */}
       <div data-testid="agents-stack" className="space-y-6">
-        {hasRoster && (
-          // Not sticky: it used to be, because a rail BESIDE a transcript
-          // should stay put while the transcript scrolls. Stacked above it,
-          // "sticky" would mean pinning the roster over the conversation.
-          // REVIEW (v1.180.0): the cap is addressable, because it is the half
-          // of "the roster on the left" that stacking does NOT give you — drop
-          // it and the roster becomes a full-width banner over the transcript,
-          // which is the shape the user did not ask for and no other assertion
-          // on this page would notice.
-          <div data-testid="roster-column" className="md:w-[17rem]">
-            {rail}
-          </div>
-        )}
-
         <div className="min-w-0 space-y-6">
           {/* Roster (v1.139.0) — who can take delegated work. Renders nothing
               on daemons that predate GET /agents/roster (it carries its own
@@ -845,6 +831,27 @@ export default function AgentsPage() {
             </Reveal>
           )}
         </div>
+
+        {/* THE ROSTER SITS BELOW THE CONVERSATION (v1.182.0). It was above,
+            and the fold made that the wrong way round: expanding the list
+            pushed the chat DOWN the page, so opening the roster moved the
+            thing you were reading. Below it, the list grows into empty space
+            and the conversation never shifts — the fold costs nothing to
+            open. Not sticky, for the same reason as before: pinning a roster
+            over a transcript is worse than scrolling to it. */}
+        {hasRoster && (
+          // The width cap is what keeps this a ROSTER and not a full-width
+          // banner: it is the half of "the roster on the left" that stacking
+          // does not give you. REVIEW (v1.180.0): dropping it is the half
+          // of "the roster on the left" that stacking does NOT give you — drop
+          // it and the roster becomes a full-width banner over the transcript,
+          // which is the shape the user did not ask for and no other assertion
+          // on this page would notice.
+          <div data-testid="roster-column" className="md:w-[17rem]">
+            {rail}
+          </div>
+        )}
+
       </div>
 
       {/* New-thread / edit-panel modal */}
