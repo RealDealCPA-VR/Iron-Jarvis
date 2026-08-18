@@ -1056,14 +1056,83 @@ def _claimed_write_note(reply: str, tools_used: list[str]) -> str:
     )
 
 
-def _creation_honesty_note(body, armed: list[str], tools_used: list[str]) -> str:
-    """'' unless the user asked for a FILE and none was written this turn — a
-    model (local ones especially) narrating a save that never happened must
-    never go unflagged, and the note tells the user exactly how to fix it."""
+def _asked_for_a_file(body) -> bool:
+    """True when THIS turn's user message asks for a file to be produced.
+
+    ONE PREDICATE, TWO USERS (v1.186.0). The directive that tells the model to
+    write the file and the note that reports it did not are the same judgement
+    read at opposite ends of the turn, and they MUST agree: a turn that gets the
+    instruction but not the check goes unflagged when it fails, and a turn that
+    gets the check but not the instruction is scolded for missing an order it
+    was never given. Two copies of "did they ask for a file?" would drift the
+    first time either regex was tuned — the lesson v1.185.0 spent a release on.
+    """
     last_user = next(
         (m.content or "" for m in reversed(body.messages) if m.role == "user"), ""
     )
-    if not _CREATE_INTENT_RX.search(last_user) or _ADVICE_RX.match(last_user):
+    return bool(_CREATE_INTENT_RX.search(last_user)) and not _ADVICE_RX.match(last_user)
+
+
+def _write_directive(body, armed: list[str]) -> str:
+    """Tell the model to CALL the writer, before it answers instead of after.
+
+    THE FAILURE THIS EXISTS FOR, measured on the user's install (v1.184.0,
+    `brain (RTX)` — a local fleet node): "create very specific Excel
+    spreadsheets" armed the document tools, and the model called `file_search`
+    once, `read_document` NINE times, and answered in prose. Nothing was wrong
+    with the roster; `write_document` and `excel_edit` were both in front of it.
+    The app then printed an honest note saying no file was written and told the
+    user to ask again or switch models — it detected the failure and handed the
+    work back.
+
+    So the fix moves EARLIER. The generic "use them when they help" is a weak
+    instruction for a weak tool-caller, and reading is the path of least
+    resistance: every `read_document` call feels like progress. This says the
+    quiet part out loud, once, only on the turns where it applies.
+
+    IT NAMES THE TOOLS THAT ARE ACTUALLY ARMED. Telling the model to "call
+    write_document" when only `excel_edit` made the cut would be an instruction
+    it cannot follow, which is worse than no instruction — the same rule the
+    workflow sentences above follow, each gated on its own arming.
+
+    HONEST ABOUT WHAT IT IS: a nudge, not a guarantee. A model free to ignore
+    "use them when they help" is equally free to ignore this, which is exactly
+    why :func:`_creation_honesty_note` still runs at the end of the turn and
+    still tells the truth when the file never appeared. This makes the good
+    outcome likelier; the note makes the bad one visible. Neither replaces the
+    other.
+    """
+    if not _asked_for_a_file(body):
+        return ""
+    writers = [t for t in armed if t in _FILE_WRITING_TOOLS]
+    if not writers:
+        # Nothing armed can write. Saying "call write_document" here would name
+        # a tool absent from tool_specs — a lie the model relays to the user.
+        return ""
+    # Deterministic order so the prompt is stable across turns (a prompt that
+    # reshuffles for no reason defeats provider-side prefix caching).
+    writers = sorted(writers)
+    return (
+        "\nPRODUCE THE FILE: the user asked for a file to be created, so this"
+        " turn is not finished until you have CALLED one of: "
+        + ", ".join(writers)
+        + ". Reading and inspecting files does not create one, and describing"
+        " the file you would write is not the same as writing it — the user"
+        " gets nothing. Gather only what you actually need, then call the tool"
+        " with the full contents. If you cannot write it, say plainly why"
+        " instead of presenting a description as a finished file."
+    )
+
+
+def _creation_honesty_note(body, armed: list[str], tools_used: list[str]) -> str:
+    """'' unless the user asked for a FILE and none was written this turn — a
+    model (local ones especially) narrating a save that never happened must
+    never go unflagged, and the note tells the user exactly how to fix it.
+
+    Shares :func:`_asked_for_a_file` with the DIRECTIVE that tries to prevent
+    this outcome in the first place — see there for why that is one function.
+    """
+    if not _asked_for_a_file(body):
         return ""
     if set(tools_used) & _FILE_WRITING_TOOLS:
         return ""
@@ -1837,6 +1906,13 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                 if in_project_folder
                 else ""
             )
+            # LAST, so it is the final instruction before the model acts — and
+            # gated on this turn's intent, not on the roster, so an ordinary
+            # question never carries it. MIRROR NOTE (lock-step): the stream
+            # lane in routes/chat.py carries this same call. v1.167.0 shipped
+            # the PDF sentence to this lane ONLY and the dashboard — which
+            # STREAMS — went a whole wave without it.
+            + _write_directive(body, armed)
         )
     # Auto-allow keyed by BOTH the tool NAME and its perm_key(): the
     # permission engine authorizes on perm_key(), so for GROUPED tools

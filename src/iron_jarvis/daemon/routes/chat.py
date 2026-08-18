@@ -62,6 +62,7 @@ from ..chat_turn import (
     _resolve_persona,
     _sanitize_draft,
     _saved_workflows_block,
+    _write_directive,
     _validated_escalate_agent,
     run_chat_turn,
 )
@@ -1441,6 +1442,12 @@ def register(app: FastAPI, d) -> None:
                     if in_project_folder
                     else ""
                 )
+                # Lock-step with chat_turn.py (v1.186.0). THIS is the lane the
+                # dashboard uses, and the failure it was built from happened
+                # here: a local model read nine documents and wrote nothing.
+                # A directive that reached only the non-stream lane would have
+                # fixed the report without fixing the user's experience of it.
+                + _write_directive(body, armed)
             )
         overrides: dict[str, str] = {}
         for _name in armed:
