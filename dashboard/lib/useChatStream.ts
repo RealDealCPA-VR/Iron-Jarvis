@@ -5,6 +5,8 @@
 //
 //   token     {"text":"…"}
 //   tool_call {"id","name","status":"started"|"finished","ok"?,"args"?,"output"?}
+//   approval  {"id","call_id","tool","args"?,"timeout_s"?}   (v1.187.0)
+//   approval_resolved {"id","call_id","tool","decision"}     (v1.187.0)
 //   meta      {"provider","model"}
 //   round     {"round":n}
 //   done      {"reply","provider","model","tools_used","denied_tools","usage"}
@@ -32,6 +34,25 @@ export type SSEEvent =
       ok?: boolean;
       args?: Record<string, unknown>;
       output?: string;
+    }
+  | {
+      /** The turn is PAUSED on a tool that needs the user's approval
+       *  (v1.187.0). The daemon holds the call until POST
+       *  /chat/approvals/{id} answers or the wait times out. */
+      type: "approval";
+      id: string;
+      call_id: string;
+      tool: string;
+      args?: Record<string, unknown>;
+      timeout_s?: number;
+    }
+  | {
+      /** The pause above ended — by a click or by the timeout. */
+      type: "approval_resolved";
+      id: string;
+      call_id: string;
+      tool: string;
+      decision: "once" | "conversation" | "deny" | "timeout";
     }
   | { type: "meta"; provider: string; model: string }
   | { type: "round"; round: number }
@@ -175,6 +196,29 @@ export function sseEventFrom(
         ev.args = data.args as Record<string, unknown>;
       if (data.output !== undefined) ev.output = str(data.output);
       return ev;
+    }
+    case "approval": {
+      const ev: Extract<SSEEvent, { type: "approval" }> = {
+        type: "approval",
+        id: str(data.id),
+        call_id: str(data.call_id),
+        tool: str(data.tool),
+      };
+      if (data.args !== undefined && data.args !== null)
+        ev.args = data.args as Record<string, unknown>;
+      if (typeof data.timeout_s === "number") ev.timeout_s = data.timeout_s;
+      return ev;
+    }
+    case "approval_resolved": {
+      const d = str(data.decision);
+      return {
+        type: "approval_resolved",
+        id: str(data.id),
+        call_id: str(data.call_id),
+        tool: str(data.tool),
+        decision:
+          d === "once" || d === "conversation" || d === "deny" ? d : "timeout",
+      };
     }
     case "meta":
       return { type: "meta", provider: str(data.provider), model: str(data.model) };
@@ -401,6 +445,15 @@ export class StreamError extends ApiError {
   }
 }
 
+/** A mid-turn approval request the turn is currently PAUSED on (v1.187.0). */
+export interface PendingApproval {
+  id: string;
+  callId: string;
+  tool: string;
+  args?: Record<string, unknown>;
+  timeoutS?: number;
+}
+
 export interface UseChatStream {
   /** True while a turn is in flight. */
   streaming: boolean;
@@ -408,6 +461,10 @@ export interface UseChatStream {
   text: string;
   /** Live tool cards for this turn, keyed by call id. */
   tools: ToolCard[];
+  /** The approval the turn is paused on, or null. The page renders the card;
+   *  answering goes through POST /chat/approvals/{id} — this hook only holds
+   *  the state, so the decision has exactly one write path. */
+  approval: PendingApproval | null;
   /** Drive one chat turn. Accumulates tokens into `text`, upserts tool frames
    *  into `tools`, and resolves with the authoritative reply. Throws an
    *  ApiError on an `error` frame (matching the non-streaming POST /chat path). */
@@ -427,12 +484,16 @@ export function useChatStream(): UseChatStream {
   const [streaming, setStreaming] = useState(false);
   const [text, setText] = useState("");
   const [tools, setTools] = useState<ToolCard[]>([]);
+  const [approval, setApproval] = useState<PendingApproval | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const abort = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
     setStreaming(false);
+    // A card left up after its stream died would collect a click the daemon
+    // can only 404 — the pending entry is popped when the wait ends.
+    setApproval(null);
   }, []);
 
   const run = useCallback(
@@ -446,6 +507,7 @@ export function useChatStream(): UseChatStream {
       setStreaming(true);
       setText("");
       setTools([]);
+      setApproval(null);
 
       let acc = "";
       let done: ChatStreamResult | null = null;
@@ -467,6 +529,24 @@ export function useChatStream(): UseChatStream {
             case "tool_call":
               committed = true;
               setTools((prev) => upsertTool(prev, ev));
+              break;
+            case "approval":
+              // The turn is PAUSED server-side; render the card. Counts as
+              // committed work — the model has already chosen this call, so a
+              // silent re-POST would replay the turn.
+              committed = true;
+              setApproval({
+                id: ev.id,
+                callId: ev.call_id,
+                tool: ev.tool,
+                args: ev.args,
+                timeoutS: ev.timeout_s,
+              });
+              break;
+            case "approval_resolved":
+              // Clear only the card this frame answers — a stale resolution
+              // must not eat a NEWER question.
+              setApproval((prev) => (prev && prev.id === ev.id ? null : prev));
               break;
             case "meta":
               provider = ev.provider;
@@ -508,6 +588,8 @@ export function useChatStream(): UseChatStream {
       } finally {
         if (abortRef.current === controller) abortRef.current = null;
         setStreaming(false);
+        // A turn that ends however it ends leaves no live question behind.
+        setApproval(null);
       }
 
       // done.reply is authoritative; fall back to the accumulated text if the
@@ -517,5 +599,5 @@ export function useChatStream(): UseChatStream {
     [],
   );
 
-  return { streaming, text, tools, run, abort };
+  return { streaming, text, tools, approval, run, abort };
 }

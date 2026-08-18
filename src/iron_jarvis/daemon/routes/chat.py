@@ -27,8 +27,9 @@ from ..schemas import (
     PersonaSaveBody,
 )
 from ...core.db import CONVERSATION_WRITE_LOCK, session_scope
-from ...core.models import AgentState
+from ...core.models import AgentState, PermissionMode
 from ...memory import commit as _commit
+from ..approvals import APPROVAL_TIMEOUT_S, DECISIONS, ChatApprovals
 
 # The chat TURN lives in daemon/chat_turn.py (v1.136.0 messaging surfaces):
 # POST /chat is a thin wrapper over run_chat_turn so headless callers (the
@@ -299,6 +300,43 @@ def _clean_setup(raw: Any) -> str:
 
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
+
+    def _approvals() -> ChatApprovals:
+        """The shared mid-turn approval registry, created on first use.
+
+        On ``d`` (not module state) so two apps in one test process cannot
+        answer each other's questions — the capability-store lesson, applied
+        before it becomes a bug this time."""
+        ap = getattr(d, "chat_approvals", None)
+        if ap is None:
+            ap = ChatApprovals()
+            d.chat_approvals = ap
+        return ap
+
+    @app.post("/chat/approvals/{approval_id}")
+    async def resolve_chat_approval(approval_id: str, body: dict) -> dict[str, Any]:
+        """Answer a mid-turn tool approval (v1.187.0).
+
+        ``decision``: ``once`` runs this one call; ``conversation`` grants the
+        tool for the rest of the turn (the client re-arms it for later turns);
+        ``deny`` refuses — and the refusal reaches the ledger as the user's
+        decision, because the waiting turn still calls ``invoke`` with
+        ``deny_reason=``. 404 = unknown, expired, or already answered: a
+        double-click races the turn's cleanup and the second click must read
+        as "already answered", never as an error worth retrying.
+        """
+        decision = str((body or {}).get("decision") or "").strip().lower()
+        if decision not in DECISIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"decision must be one of: {', '.join(DECISIONS)}",
+            )
+        if not _approvals().resolve(approval_id, decision):
+            raise HTTPException(
+                status_code=404, detail="no such pending approval"
+            )
+        return {"ok": True, "decision": decision}
+
     @app.get("/chat/threads")
     def chat_threads(project_id: str = "") -> dict[str, Any]:
         """List saved threads (newest first). ``project_id`` (optional) scopes
@@ -1328,17 +1366,37 @@ def register(app: FastAPI, d) -> None:
             except Exception:  # noqa: BLE001 — resolution failures rout normally
                 text_only_pick = False
         if text_only_pick:
-            armed, auto_armed = [], []
+            armed, auto_armed, ask_armed = [], [], []
             tool_specs = []
         else:
             armed, auto_armed = _resolve_armed_tools(d, body)
             armed += [t for t in conn_tools if t not in armed]
-            tool_specs = (d.platform.registry.specs(armed) if armed else []) + [
+            # ASK-TIER ARMING (v1.187.0): show the model the host-reach verbs
+            # this message signals a need for — VISIBLE, never GRANTED. They
+            # join tool_specs so the model can call them, and deliberately
+            # never join `armed`/`overrides`/`armed_grant`, so a call pauses
+            # the turn for the user's approval (the mid-turn ask below). THIS
+            # LANE ONLY: the non-stream lane serves headless callers (the comm
+            # poller, the phone) where nobody is present to answer, and arming
+            # a question no one can hear just manufactures denials.
+            ask_armed = []
+            if bool(getattr(body, "auto_tools", True)):
+                from ...tools.autoselect import select_ask_tools
+
+                ask_armed = [
+                    t for t in select_ask_tools(_last_user_text(body.messages))
+                    if t not in armed
+                ]
+            tool_specs = (
+                d.platform.registry.specs(armed + ask_armed)
+                if (armed or ask_armed)
+                else []
+            ) + [
                 _ESCALATE_SPEC,
                 _WORKFLOW_DRAFT_SPEC,
             ]
         ctx = None
-        if armed:
+        if armed or ask_armed:
             from ...tools.base import ToolContext
 
             tool_ws = d.platform.config.home / "uploads"
@@ -1440,6 +1498,21 @@ def register(app: FastAPI, d) -> None:
                     "read, edit, and create files there directly, and use the absolute paths "
                     "that file_search returns."
                     if in_project_folder
+                    else ""
+                )
+                + (
+                    # ASK-TIER sentence (v1.187.0, THIS LANE ONLY — see the
+                    # arming above): the model must know these tools pause for
+                    # a human, or a denial reads to it as a broken tool and it
+                    # retries the exact call the user just refused.
+                    "\nAPPROVAL-GATED: "
+                    + ", ".join(sorted(ask_armed))
+                    + " will PAUSE this turn while the user is asked to"
+                    " approve the call — the user sees the exact command/code"
+                    " you pass. Use them when the task genuinely needs them;"
+                    " prefer the specialized tools when one fits, and if the"
+                    " user declines, do not retry the same call."
+                    if ask_armed
                     else ""
                 )
                 # Lock-step with chat_turn.py (v1.186.0). THIS is the lane the
@@ -1574,7 +1647,9 @@ def register(app: FastAPI, d) -> None:
                             d.platform, _esc_args.get("agent")
                         )
                         break
-                    if not calls or not armed:
+                    # ask_armed counts (v1.187.0): a turn whose ONLY armed
+                    # verbs are approval-gated still has real calls to run.
+                    if not calls or not (armed or ask_armed):
                         break
                     if _round == _MAX_TOOL_ROUNDS - 1:
                         # LAST allowed round (mirrors chat_complete): no round is
@@ -1600,14 +1675,106 @@ def register(app: FastAPI, d) -> None:
                         safe_args = (
                             _t.redact_args(tc.arguments) if _t is not None else tc.arguments
                         )
+                        # MID-TURN APPROVAL (v1.187.0). The two halves of this
+                        # mechanism predate it: `authorize` names the
+                        # interactive session grant as the sanctioned lift for
+                        # an ask-tier tool, and `invoke` has carried
+                        # `deny_reason=` since v1.155.0 for "a caller that
+                        # already asked a human and was refused". Nothing in
+                        # chat ever ASKED — an ask-tier call was silently
+                        # denied and the user learned from a footnote. Now the
+                        # turn pauses, the card renders, and the decision is
+                        # genuinely the user's — including the refusal, which
+                        # is why the deny path still calls `invoke`: the
+                        # refusal must reach the ledger as a decision a human
+                        # made, not vanish as a call that never happened.
+                        #
+                        # BEFORE the "started" frame, so the tool card never
+                        # spins while the app is waiting on a human.
+                        _deny_reason = ""
+                        _grant_extra: set[str] = set()
+                        _perm_name = _t.perm_key() if _t is not None else tc.name
+                        _mode = d.platform.permissions.mode_for(_perm_name, overrides)
+                        if (
+                            _mode is PermissionMode.ASK
+                            and _perm_name not in armed_grant
+                            and tc.name not in armed_grant
+                        ):
+                            _apr = _approvals()
+                            _ap_id, _fut = _apr.request(tc.name, safe_args)
+                            yield _sse("approval", {
+                                "id": _ap_id, "call_id": tc.id,
+                                "tool": tc.name, "args": safe_args,
+                                "timeout_s": int(APPROVAL_TIMEOUT_S),
+                            })
+                            _decision = "timeout"
+                            _aloop = asyncio.get_running_loop()
+                            _deadline = _aloop.time() + APPROVAL_TIMEOUT_S
+                            try:
+                                while True:
+                                    _left = _deadline - _aloop.time()
+                                    if _left <= 0:
+                                        break
+                                    try:
+                                        # shield: a keepalive slice expiring
+                                        # must not CANCEL the future — the
+                                        # user's click can land in the next
+                                        # slice.
+                                        _decision = await asyncio.wait_for(
+                                            asyncio.shield(_fut),
+                                            timeout=min(15.0, _left),
+                                        )
+                                        break
+                                    except asyncio.TimeoutError:
+                                        # SSE comment — keeps the connection
+                                        # alive through a slow human decision
+                                        # without inventing a frame type.
+                                        yield ": keepalive\n\n"
+                            finally:
+                                _apr.pop(_ap_id)
+                            yield _sse("approval_resolved", {
+                                "id": _ap_id, "call_id": tc.id,
+                                "tool": tc.name, "decision": _decision,
+                            })
+                            if _decision == "once":
+                                _grant_extra = {tc.name, _perm_name}
+                            elif _decision == "conversation":
+                                # Rest of THIS turn's rounds; the client
+                                # persists it for later turns by arming the
+                                # tool (the existing "+"-menu machinery — not
+                                # a second grant store). IN-PLACE update, not
+                                # `|=`: an augmented assignment would bind
+                                # `armed_grant` as a LOCAL of this generator
+                                # and unbind every earlier read of the
+                                # enclosing scope's set.
+                                armed_grant.update({tc.name, _perm_name})
+                            elif _decision == "deny":
+                                _deny_reason = (
+                                    "you declined this call when asked"
+                                )
+                            else:
+                                _deny_reason = (
+                                    "the approval request timed out with no"
+                                    " answer"
+                                )
                         yield _sse("tool_call", {
                             "id": tc.id, "name": tc.name,
                             "status": "started", "args": safe_args,
                         })
                         try:
+                            # deny_reason rides ONLY when a human actually
+                            # refused — the common path stays byte-identical
+                            # with every existing caller (and every test
+                            # double) of this five-argument invoke.
                             result = await d.platform.registry.invoke(
                                 tc.name, tc.arguments, ctx, d.platform.permissions,
-                                overrides, session_allow=armed_grant,
+                                overrides,
+                                session_allow=(armed_grant | _grant_extra),
+                                **(
+                                    {"deny_reason": _deny_reason}
+                                    if _deny_reason
+                                    else {}
+                                ),
                             )
                             if result.ok:
                                 content = result.output

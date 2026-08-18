@@ -533,6 +533,83 @@ def select_auto_tools(
     return [name for name, _ in ranked[:cap]]
 
 
+#: ASK-TIER candidates (v1.187.0): tools worth SHOWING the model in an
+#: interactive chat even though every call must be approved by the user first.
+#: Deliberately not merged into AUTO_SAFE_TOOLS — that set is the auto-ALLOW
+#: vocabulary and these must never ride it: they arm (join tool_specs) without
+#: joining the turn's grant, so calling one pauses the turn for an approval
+#: card. That gate is what makes visibility safe: before it, arming `shell`
+#: here would have handed a headless-style silent grant to the exact tool the
+#: deny floor exists to keep behind a human.
+ASK_TIER_TOOLS: frozenset[str] = frozenset({"shell", "repl"})
+
+#: Signals that a task genuinely wants host reach. CONSERVATIVE ON PURPOSE:
+#: a false arm costs schema context and — if the model bites — a click the
+#: user did not need to make, and the measured local-model failure mode is
+#: choosing `shell` while `read_file` sits beside it (the v1.178.0 lesson).
+#: Bare "run"/"start" are everyday office words ("run through the numbers"),
+#: so each rule needs a second word that names the HOST, not the errand.
+_ASK_RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
+    (
+        re.compile(
+            r"\b(?:run|execute|launch)\b.{0,40}\b(?:command|script|terminal|"
+            r"shell|\.(?:ps1|bat|cmd|sh|py|exe))",
+            re.IGNORECASE,
+        ),
+        {"shell": 8},
+    ),
+    (
+        re.compile(
+            r"\b(?:install|uninstall|pip|npm|winget|choco|git\s+(?:clone|pull|"
+            r"push|status|commit)|npx|pnpm|docker)\b",
+            re.IGNORECASE,
+        ),
+        {"shell": 8},
+    ),
+    (
+        re.compile(r"\b(?:command line|command prompt|powershell|cmd\.exe|bash)\b", re.IGNORECASE),
+        {"shell": 6},
+    ),
+    (
+        re.compile(
+            r"\b(?:python|pandas|dataframe|numpy)\b|\bcalculate\b.{0,40}\b(?:from|"
+            r"across|every|all)\b",
+            re.IGNORECASE,
+        ),
+        {"repl": 5},
+    ),
+]
+
+
+def select_ask_tools(text: str, *, cap: int = 2) -> list[str]:
+    """ASK-TIER counterpart of :func:`select_auto_tools` (v1.187.0).
+
+    Returns up to *cap* :data:`ASK_TIER_TOOLS` names the message signals a
+    genuine need for, best signal first — for the INTERACTIVE lane only. The
+    caller must arm these as visible-but-ungranted (in ``tool_specs``, never in
+    the turn's allow overrides), so a call pauses for the user's approval.
+
+    A SEPARATE FUNCTION rather than a flag on ``select_auto_tools``, because
+    the two answers go to different places: one list becomes grants, the other
+    becomes questions, and a caller that conflates them has silently armed the
+    host shell. Two return values with opposite security meaning deserve two
+    names.
+    """
+    if cap <= 0:
+        return []
+    scores: dict[str, int] = {}
+    msg = (text or "")[:4000]
+    for rx, weights in _ASK_RULES:
+        if rx.search(msg):
+            for name, w in weights.items():
+                scores[name] = scores.get(name, 0) + w
+    ranked = sorted(
+        ((n, s) for n, s in scores.items() if n in ASK_TIER_TOOLS),
+        key=lambda kv: (-kv[1], kv[0]),
+    )
+    return [name for name, _ in ranked[:cap]]
+
+
 def tools_named_in_playbook(
     instructions: str,
     *,

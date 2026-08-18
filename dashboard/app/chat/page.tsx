@@ -124,6 +124,7 @@ import {
   type UndoRowLike,
 } from "@/components/chat/ArtifactsRail";
 import { PreflightNote } from "@/components/chat/PreflightNote";
+import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { useProviderHealth } from "@/lib/useProviderHealth";
 import type { WorkflowDraft, WorkflowRun } from "@/lib/types";
 import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
@@ -4281,7 +4282,15 @@ export default function ChatPage() {
             // chaining below is identical.
             await post<SessionView>(
               `/agents/${encodeURIComponent(customSlug)}/spawn`,
-              { task: openingTask, wait: false },
+              {
+                task: openingTask,
+                wait: false,
+                // GRANTS RIDE THE ESCALATION (v1.187.0) — see the POST
+                // /sessions branch below for why this is the same consent.
+                ...(selectedTools.length
+                  ? { allow_tools: selectedTools.slice(0, MAX_TOOLS) }
+                  : {}),
+              },
             )
           : await post<SessionView>("/sessions", {
               task: openingTask,
@@ -4295,6 +4304,18 @@ export default function ChatPage() {
               // inherit it server-side, so only the opener needs the tag).
               ...(projectIdRef.current
                 ? { project_id: projectIdRef.current }
+                : {}),
+              // GRANTS RIDE THE ESCALATION (v1.187.0). The composer's armed
+              // set is explicit user consent — the "+"-menu, or an approval
+              // card's "Allow for this conversation" — and the chat lane
+              // already honours it as an allow override. An escalated run is
+              // the SAME conversation continuing in the agent lane; without
+              // this, granting shell in chat and then asking for anything
+              // multi-step got it silently re-denied by the headless
+              // resolver, and the user had no idea their grant had lapsed.
+              // A base `deny` still holds — session grants never lift it.
+              ...(selectedTools.length
+                ? { allow_tools: selectedTools.slice(0, MAX_TOOLS) }
                 : {}),
             });
       }
@@ -5595,6 +5616,23 @@ export default function ChatPage() {
                           )}
                           {stream.tools.length > 0 && (
                             <ToolCardList cards={stream.tools} />
+                          )}
+                          {/* MID-TURN APPROVAL (v1.187.0): the daemon paused
+                              this turn on an ask-tier tool and is waiting for
+                              a decision. "Allow for this conversation" also
+                              arms the tool here, so later turns grant it via
+                              the existing "+"-menu machinery — one store. */}
+                          {stream.approval && (
+                            <ApprovalCard
+                              approval={stream.approval}
+                              onConversation={(tool) =>
+                                setSelectedTools((prev) =>
+                                  prev.includes(tool) || prev.length >= MAX_TOOLS
+                                    ? prev
+                                    : [...prev, tool],
+                                )
+                              }
+                            />
                           )}
                         </Bubble>
                       </div>
