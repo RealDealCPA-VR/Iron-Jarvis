@@ -236,43 +236,45 @@ feel like a room you walk into. P3 and P4 are independent and can land in
 either order, but P4 should follow P1: proposing new capability only makes
 sense once the existing capability reliably reaches the agent.
 
-## Carried forward from the v1.178.0 wave (found by reviewers, not yet fixed)
+## Carried forward from the v1.178.0/v1.179.0 waves — **ALL CLOSED v1.185.0** ✔
 
-- [ ] **Chat's remember ladder is a closure, so it now exists twice.**
-  `remember_chat_thread` is defined inside `register(app, d)` in
-  `daemon/routes/chat.py` — there is no importable symbol. `agents/threads.py`
-  imports the two budget constants and calls the shared runtime pieces, but the
-  distill/verbatim DECISION LADDER and the distill system prompt are duplicated
-  and will drift. Lift chat's handler body into a shared module (e.g.
-  `memory/commit.py`) that both routes call, with the system prompt as a
-  PARAMETER — a panel prompt must attribute claims per agent and never resolve
-  a disagreement the panel left open, which is meaningless for a two-party chat.
-  It also removes a layering inversion: `agents/threads.py` currently reaches
-  into a route module for those constants.
-- [ ] **`_effective_tools` returns `[]` on its except branch**
-  (`daemon/routes/agents.py`), so `[]` doubles as "unknown" and as "genuinely
-  none". The card cannot tell the two apart. Return `None` for unknown.
-- [ ] **`LoaderInline`'s spinner ignores `prefers-reduced-motion`**
-  (`components/ui.tsx`, `animate-spin-slow`). Pre-existing, not from this wave;
-  surfaced by the P4 reviewer. Every other animation in the app guards it.
-- [ ] **`GET /capability/proposals` returns EVERY proposal ever filed**
-  (pending-first). Fine at today's volume; add a status filter before it grows.
-- [ ] **`approve()` is not atomic against a concurrent second approve**
-  (`capability/store.py`): the pending guard, `_apply`, and the APPROVED write
-  are three separate transactions. Two simultaneous clicks both pass the guard.
-  Not exploitable from one dashboard, but it is a real race.
-- [ ] **`ListAgentsTool` (the agent-facing `list_agents`) does not emit
-  `effective_tools`** — the HTTP route does. An agent asking what another agent
-  holds still reads the stored list.
+*Eight reviewer-found defects, diagnosed across two waves and carried through
+six releases. They shared a shape worth naming: each was a place where the app
+said something CONFIDENT about a fact it did not have, or kept one truth in two
+places that agreed only by handshake.*
 
-## Carried from v1.179.0 (the agents-room pass)
-
-- [ ] **`PanelPicker` frames itself as "choose the panel", not "add one more".**
-  The thread's bottom-right Add-an-agent button promises "everyone already
-  here stays" (and the PUT is genuinely additive, tested), but the picker it
-  opens reads like a full re-seat. The fix belongs in the shared component,
-  which no v1.179.0 doer owned.
-- [ ] **The gear and SetupCard hold two independent open states over one
-  localStorage key** (`ij_agents_setup_open`). They agree today because the
-  page writes the key before mounting the card, but that is a handshake, not a
-  single source of truth. Give the card an `open` prop.
+- [x] **Chat's remember ladder was a closure, so it existed twice.**
+  `remember_chat_thread` lived inside `register(app, d)` — no importable
+  symbol — so `agents/threads.py` re-derived the distill/verbatim ladder and
+  reached into a ROUTE module for the budgets (the layering upside down). Now
+  `memory/commit.py` owns the ladder and both routes call it, with the system
+  prompt as a PARAMETER: a panel prompt must attribute claims per agent and
+  never resolve a disagreement the panel left open, both meaningless for a
+  two-party chat.
+- [x] **`_effective_tools` returned `[]` on its except branch**
+  (`daemon/routes/agents.py`), so `[]` meant both "unknown" and "genuinely
+  none" — opposite instructions to the card. Returns `None` for unknown; the
+  clients already spoke that dialect (`effectiveOrNull`, `ToolOrigin`
+  "unreported").
+- [x] **`LoaderInline`'s spinner ignored `prefers-reduced-motion`.** Guarded on
+  the CLASS in `globals.css`, so all ~12 direct users of `animate-spin-slow`
+  are covered at once; `role="status"` + an always-present label is the other
+  half, since a stopped spinner with no text reads as an idle icon.
+- [x] **`GET /capability/proposals` returned EVERY proposal ever filed.** The
+  status filter shipped in v1.178.0 itself; the DEFAULT response was the
+  unbounded part. Capped at `LIST_LIMIT`, ordered so the cap only ever bites
+  into decided history, and `returned`/`truncated` report it.
+- [x] **`approve()` was not atomic against a concurrent second approve.** The
+  handlers are sync `def`, so FastAPI runs them in worker THREADS and the race
+  was real: both clicks passed the guard and `_apply` ran twice. A claim now
+  spans the whole sequence, with the PENDING check re-read inside it.
+- [x] **`ListAgentsTool` did not emit `effective_tools`** — and the fix had to
+  land in `output`, not `data`: the runtime hands the model `result.output` and
+  nothing else.
+- [x] **`PanelPicker` framed itself as "choose the panel", not "add one more".**
+  Derived from `initialParticipants` rather than a new prop, because it is true
+  of both edit call sites. A pending eviction is now named before the click.
+- [x] **The gear and SetupCard held two independent open states over one
+  localStorage key.** Split into the two questions they actually were —
+  visibility (this visit, never persisted) and disclosure (the card's chevron,
+  remembered) — with the page owning both and the card taking `open` as a prop.

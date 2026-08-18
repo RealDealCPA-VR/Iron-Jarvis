@@ -70,13 +70,25 @@ def register(app, d) -> None:
         ``can_apply`` / ``kind_note`` / ``blocked`` come from the LIVE platform,
         so the card can say "Iron Jarvis can't add an MCP server for you" BEFORE
         the user clicks rather than after.
+
+        BOUNDED, AND IT SAYS SO (v1.185.0). ``store.list`` caps the rows and
+        drops only decided history; ``truncated``/``returned`` make that visible
+        rather than leaving a short list to read as the whole table. ``stats``
+        has always counted every row, so the two together are the honest answer.
         """
         store = _store()
-        proposals = [proposal_view(row, store) for row in store.list(status)]
+        rows = store.list(status)
+        proposals = [proposal_view(row, store) for row in rows]
+        stats = store.stats()
+        total = stats.get("total", 0) if status is None else stats.get(status, 0)
         return {
             "proposals": proposals,
             "pending": sum(1 for p in proposals if p["status"] == "pending"),
-            "stats": store.stats(),
+            "stats": stats,
+            "returned": len(proposals),
+            # A cap that does not report itself is the failure this guards: a
+            # silently short listing reads as complete.
+            "truncated": isinstance(total, int) and total > len(proposals),
         }
 
     @app.post("/capability/proposals/{proposal_id}/approve")

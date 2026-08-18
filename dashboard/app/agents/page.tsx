@@ -103,19 +103,24 @@ type PickerState =
   | null;
 
 /**
- * SetupCard's own disclosure key, written here BEFORE the card mounts.
+ * SetupCard's disclosure key — read and written HERE, and nowhere else.
  *
- * The card owns an internal open state hydrated from localStorage; v1.178.0
- * drove it by clicking its toggle through the DOM, deliberately avoiding this
- * duplication. That stopped working when the page took over VISIBILITY
- * (v1.179.0): the card is not rendered until the gear is clicked, so the click
- * would land on a freshly-mounted card whose hydration `setOpen(true)` was
- * still queued — the DOM would read `aria-expanded="false"`, the click would
- * queue `setOpen(false)` after it, and a user who had opened setup before would
- * get a collapsed card from a gear that says it opened. Writing the key first
- * has no such race: whichever way the card hydrates, it hydrates OPEN.
- * If SetupCard ever renames the key the failure is soft — the gear reveals a
- * collapsed card the user can open with one more click, never an error.
+ * TWO STATES, ONE OWNER EACH (v1.185.0). Setup has genuinely two questions and
+ * they are not the same question:
+ *
+ *   `setupOpen`      is the card ON SCREEN this visit? — the gear's answer,
+ *                    deliberately NOT persisted ("not shown unless the user
+ *                    decided to configure an agent" means this visit, not a
+ *                    visit last week).
+ *   `setupExpanded`  is its body disclosed? — the card's own chevron, and the
+ *                    only half worth remembering across visits.
+ *
+ * The second used to be answered in two places: the card hydrated it from this
+ * key while the page WROTE the key just before mounting the card. That worked,
+ * and the reason it worked was an ordering — v1.179.0's comment here described
+ * writing-before-mount as a race fix, which is an accurate description of a
+ * handshake and not of a source of truth. The card now takes `open` as a prop,
+ * so there is one value, held here, and nothing to keep in step.
  */
 const SETUP_OPEN_KEY = "ij_agents_setup_open";
 
@@ -213,6 +218,17 @@ export default function AgentsPage() {
   // The rail's gear reveals the setup surfaces through this wrapper.
   const setupRef = useRef<HTMLDivElement>(null);
   const [setupOpen, setSetupOpen] = useState(false);
+  // The card's DISCLOSURE, hydrated after mount so SSR and the first client
+  // render agree — the same idiom the roster fold above uses. Default open:
+  // the gear reveals a usable form, never a second thing to click.
+  const [setupExpanded, setSetupExpanded] = useState(true);
+  useEffect(() => {
+    try {
+      setSetupExpanded(localStorage.getItem(SETUP_OPEN_KEY) !== "0");
+    } catch {
+      /* storage unavailable — the default stands */
+    }
+  }, []);
   // WHO THE USER IS WORKING WITH (v1.178.0). This lives on the page, not
   // inside the rail, because it drives the page: the job card's target and
   // which thread is open. Kept as kind + BARE name, the shape every handler
@@ -467,19 +483,27 @@ export default function AgentsPage() {
    * The gear-with-a-face: the ONE door to agent configuration (v1.179.0).
    *
    * Setup is not in the page until this runs — "not shown unless the user
-   * decided to configure an agent" — and clicking again folds it away. The
-   * localStorage write is what makes the card mount OPEN rather than mounted
-   * and still collapsed; see SETUP_OPEN_KEY for why it is a write and not a
-   * click on the card's own toggle any more.
+   * decided to configure an agent" — and clicking again folds it away.
+   *
+   * REVEALING ALSO EXPANDS, and that is a decision rather than a side effect:
+   * a gear that produces a collapsed card has asked for two clicks to do one
+   * thing. It is the same guarantee v1.179.0 got from writing storage before
+   * mounting the card, now made directly instead of through a key.
    */
   function toggleSetup() {
     const next = !setupOpen;
-    try {
-      localStorage.setItem(SETUP_OPEN_KEY, next ? "1" : "0");
-    } catch {
-      /* persistence is best-effort; the reveal below does not depend on it */
-    }
     setSetupOpen(next);
+    if (next) setSetupExpanded(true);
+  }
+
+  /** The card's own chevron — the half that is remembered across visits. */
+  function setSetupDisclosure(open: boolean) {
+    setSetupExpanded(open);
+    try {
+      localStorage.setItem(SETUP_OPEN_KEY, open ? "1" : "0");
+    } catch {
+      /* persistence is best-effort; the card on screen does not depend on it */
+    }
   }
 
   // Focus and the viewport follow the reveal — otherwise a keyboard user
@@ -640,6 +664,8 @@ export default function AgentsPage() {
                   models={models}
                   onAgentsChanged={reloadAgents}
                   onRemotesChanged={reloadRemotes}
+                  open={setupExpanded}
+                  onOpenChange={setSetupDisclosure}
                 />
               </div>
             </Reveal>
@@ -859,6 +885,8 @@ export default function AgentsPage() {
                   models={models}
                   onAgentsChanged={reloadAgents}
                   onRemotesChanged={reloadRemotes}
+                  open={setupExpanded}
+                  onOpenChange={setSetupDisclosure}
                 />
               </div>
             </Reveal>

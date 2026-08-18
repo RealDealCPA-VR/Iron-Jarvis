@@ -195,6 +195,43 @@ describe("the thread offers a way to bring somebody in", () => {
     expect(panel.getByText("Yours")).toBeInTheDocument();
     expect(panel.getByText("Remote")).toBeInTheDocument();
   });
+
+  /* v1.185.0. THE BUTTON'S PROMISE HAS TO SURVIVE THE CLICK. The control says
+   * "everyone already here stays" (asserted above) and the PUT genuinely is
+   * additive (asserted below) — but the picker in between said "Edit the
+   * panel", listed the seated agents as if they were fresh choices, and
+   * offered "Save panel". A promise contradicted by the surface it opens is
+   * the promise the user believes second, and the fix belongs in the shared
+   * component rather than in the caller that happens to have noticed. */
+  it("frames itself as adding to a panel, not re-seating one", async () => {
+    const { dialog } = await openAdd();
+    const panel = within(dialog);
+
+    expect(panel.getByRole("heading", { name: /add to the panel/i })).toBeInTheDocument();
+    expect(panel.queryByRole("heading", { name: /^edit the panel$/i })).toBeNull();
+    // The count is the claim: two are seated and they stay.
+    expect(panel.getByText(/2 agents are already on this panel and stay/i)).toBeInTheDocument();
+    // …and the exception is named in the same breath, because unpicking IS a
+    // real removal and a surface that only promised "everyone stays" would be
+    // lying the moment somebody used the × that is right there.
+    expect(panel.getByText(/unpicking someone already seated removes them/i)).toBeInTheDocument();
+  });
+
+  it("says which agents are new, and warns before a save would evict anyone", async () => {
+    const { dialog } = await openAdd();
+    const panel = within(dialog);
+    fireEvent.click(panel.getByTitle("Add planner to the panel"));
+
+    // Only the newcomer is badged — the footer's job is "what am I changing?"
+    expect(panel.getByText("new")).toBeInTheDocument();
+    expect(panel.getByRole("button", { name: /add 1 agent/i })).toBeInTheDocument();
+    expect(panel.queryByText(/saving also removes/i)).toBeNull();
+
+    // Unpick a SEATED agent and the removal is stated BEFORE the click, rather
+    // than discovered as a missing face in the thread afterwards.
+    fireEvent.click(panel.getByTitle("Remove builder from the panel"));
+    expect(panel.getByText(/saving also removes builder from this thread/i)).toBeInTheDocument();
+  });
 });
 
 /* -------------------------------------------------------------- additive */
@@ -203,7 +240,7 @@ describe("adding is additive", () => {
   it("PUTs the whole panel — everyone seated plus the newcomer", async () => {
     const { dialog } = await openAdd();
     fireEvent.click(within(dialog).getByTitle("Add planner to the panel"));
-    fireEvent.click(within(dialog).getByRole("button", { name: /save panel/i }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /add 1 agent/i }));
     await waitFor(() => {
       const call = api.puts.find((p) => p.path === PARTICIPANTS_PATH);
       expect(call).toBeTruthy();
@@ -221,7 +258,7 @@ describe("adding is additive", () => {
   it("shows the newcomer only once the daemon has it, and says who joined", async () => {
     const { dialog } = await openAdd();
     fireEvent.click(within(dialog).getByTitle("Add planner to the panel"));
-    fireEvent.click(within(dialog).getByRole("button", { name: /save panel/i }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /add 1 agent/i }));
     await waitFor(() => {
       // The header chip carries the participant's own title — proof this is
       // the THREAD's panel and not a leftover card in the picker.
@@ -243,7 +280,7 @@ describe("adding is additive", () => {
     api.onPut = () => ({ ...THREAD, participants: SEATED });
     const { dialog } = await openAdd();
     fireEvent.click(within(dialog).getByTitle("Add planner to the panel"));
-    fireEvent.click(within(dialog).getByRole("button", { name: /save panel/i }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /add 1 agent/i }));
     await waitFor(() => {
       expect(screen.getByText(/panel saved/i)).toBeInTheDocument();
     });
@@ -263,7 +300,7 @@ describe("adding is additive", () => {
     expect(seated).toHaveAttribute("aria-pressed", "true");
 
     fireEvent.click(panel.getByTitle("Add planner to the panel"));
-    fireEvent.click(panel.getByRole("button", { name: /save panel/i }));
+    fireEvent.click(panel.getByRole("button", { name: /add 1 agent/i }));
     await waitFor(() => {
       const call = api.puts.find((p) => p.path === PARTICIPANTS_PATH);
       expect(call).toBeTruthy();
@@ -283,7 +320,7 @@ describe("a failed add changes nothing", () => {
     };
     const { dialog } = await openAdd();
     fireEvent.click(within(dialog).getByTitle("Add planner to the panel"));
-    fireEvent.click(within(dialog).getByRole("button", { name: /save panel/i }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /add 1 agent/i }));
     await waitFor(() => {
       expect(screen.getByText(/unknown agent source/i)).toBeInTheDocument();
     });
@@ -324,7 +361,7 @@ describe("a failed add changes nothing", () => {
     expect(panel.queryByTitle("Add remy to the panel")).toBeNull();
 
     fireEvent.click(panel.getByTitle("Add vr-assistant to the panel"));
-    fireEvent.click(panel.getByRole("button", { name: /save panel/i }));
+    fireEvent.click(panel.getByRole("button", { name: /add 1 agent/i }));
     await waitFor(() => {
       const call = api.puts.find((p) => p.path === PARTICIPANTS_PATH);
       expect(call).toBeTruthy();

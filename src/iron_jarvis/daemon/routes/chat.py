@@ -28,6 +28,7 @@ from ..schemas import (
 )
 from ...core.db import CONVERSATION_WRITE_LOCK, session_scope
 from ...core.models import AgentState
+from ...memory import commit as _commit
 
 # The chat TURN lives in daemon/chat_turn.py (v1.136.0 messaging surfaces):
 # POST /chat is a thin wrapper over run_chat_turn so headless callers (the
@@ -165,9 +166,30 @@ _SHARE_COMPACT_INPUT = 24_000
 #: Distill-mode input budget (chars) for committing a thread to memory —
 #: clipped head+tail with an EXPLICIT omission marker (same contract as share
 #: compact: the model must never present a silent clip as the whole thread).
-_REMEMBER_INPUT = 24_000
+#: Both budgets now live in ``memory.commit`` with the ladder that spends them
+#: (v1.185.0); these names are kept as ALIASES because ``crystallize`` below
+#: reuses the input budget and because a re-declared copy is exactly how the
+#: two remember surfaces drifted apart in the first place.
+_REMEMBER_INPUT = _commit.REMEMBER_INPUT
 #: Verbatim-excerpt budget when a thread is committed without a model.
-_REMEMBER_VERBATIM = 8_000
+_REMEMBER_VERBATIM = _commit.REMEMBER_VERBATIM
+
+#: Distill instruction for a two-party CHAT. A parameter of the shared ladder
+#: rather than a constant inside it, because the panel's prompt must attribute
+#: every claim to the agent that made it and must never resolve a disagreement
+#: the panel left open — instructions that are meaningless here, where there is
+#: one user and one assistant and nobody to attribute anything to.
+CHAT_DISTILL_SYSTEM = (
+    "You distill chat conversations into durable memory notes."
+    " Extract ONLY what is worth remembering long-term: decisions"
+    " made, facts established, user preferences, project details,"
+    " exact names/numbers/dates as written, and open action items"
+    " — as compact markdown bullets under short headings. Skip"
+    " pleasantries and transient back-and-forth. NEVER invent"
+    " content that is not in the transcript; if the transcript"
+    " notes an omitted middle, say the note covers the shared"
+    " parts. No preamble, no sign-off."
+)
 
 
 #: Generated-document paths remembered per thread (the preview chips).
@@ -696,79 +718,22 @@ def register(app: FastAPI, d) -> None:
         title = (r.title or "Chat").strip() or "Chat"
         transcript = _share_transcript(title, r.persona or "", r.updated_at, msgs)
 
-        def _verbatim() -> str:
-            clipped = transcript
-            if len(clipped) > _REMEMBER_VERBATIM:
-                head, tail = _REMEMBER_VERBATIM // 3, _REMEMBER_VERBATIM * 2 // 3
-                clipped = (
-                    clipped[:head]
-                    + "\n\n[… middle of the conversation omitted for length …]\n\n"
-                    + clipped[-tail:]
-                )
-            return clipped
-
-        distilled = False
-        used_provider = None
-        note = None
-        if mode == "distill":
-            from ...providers.adapters.base import LLMMessage
-            from ...providers.adapters.mock import MockLLMAdapter
-
-            provider = body.provider or d.platform.config.default_provider
-            model = body.model or d.platform.config.default_model
-            adapter = None
-            try:
-                adapter = d.platform.providers.get(provider, model)
-            except Exception:  # noqa: BLE001 — fall through to the verbatim path
-                adapter = None
-            # A mock adapter would FABRICATE a memory of a real conversation —
-            # never acceptable. Route to a real provider; with none connected,
-            # store an honest verbatim excerpt instead of refusing (memory must
-            # keep working offline).
-            if adapter is not None and isinstance(adapter, MockLLMAdapter):
-                adapter, provider = d._failover_adapter("mock")
-            if adapter is not None:
-                clipped = transcript
-                if len(clipped) > _REMEMBER_INPUT:
-                    head, tail = _REMEMBER_INPUT // 3, _REMEMBER_INPUT * 2 // 3
-                    clipped = (
-                        clipped[:head]
-                        + "\n\n[… middle of the conversation omitted for length —"
-                        " note this in the memory …]\n\n"
-                        + clipped[-tail:]
-                    )
-                system = (
-                    "You distill chat conversations into durable memory notes."
-                    " Extract ONLY what is worth remembering long-term: decisions"
-                    " made, facts established, user preferences, project details,"
-                    " exact names/numbers/dates as written, and open action items"
-                    " — as compact markdown bullets under short headings. Skip"
-                    " pleasantries and transient back-and-forth. NEVER invent"
-                    " content that is not in the transcript; if the transcript"
-                    " notes an omitted middle, say the note covers the shared"
-                    " parts. No preamble, no sign-off."
-                )
-                try:
-                    resp, used_provider, _m = await d._one_shot_complete(
-                        provider, adapter, system=system,
-                        messages=[LLMMessage(role="user", content=clipped)],
-                    )
-                    digest = (resp.text or "").strip()
-                except Exception as exc:  # noqa: BLE001 — degrade, don't lose the memory
-                    digest = ""
-                    note = f"distillation failed ({exc}) — stored a verbatim excerpt"
-                if digest:
-                    content_body = digest
-                    distilled = True
-                else:
-                    if note is None:
-                        note = "the model returned nothing — stored a verbatim excerpt"
-                    content_body = _verbatim()
-            else:
-                note = "no model connected — stored a verbatim excerpt"
-                content_body = _verbatim()
-        else:
-            content_body = _verbatim()
+        # THE LADDER IS SHARED (v1.185.0). It used to live right here, inline in
+        # this closure, which is precisely why the round table could not call it
+        # and grew a second copy instead. See ``memory/commit.py``.
+        outcome = await _commit.distill_or_excerpt(
+            d,
+            transcript=transcript,
+            mode=mode,
+            system=CHAT_DISTILL_SYSTEM,
+            subject="conversation",
+            provider=body.provider or "",
+            model=body.model or "",
+        )
+        content_body = outcome.body
+        distilled = outcome.distilled
+        used_provider = outcome.provider
+        note = outcome.note
 
         stamp = ""
         try:

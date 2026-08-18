@@ -244,12 +244,27 @@ export function Skeleton({ className = "" }: { className?: string }) {
   return <div className={`skeleton ${className}`} />;
 }
 
-/** Inline spinner + label for use inside buttons. */
+/**
+ * Inline spinner + label for use inside buttons.
+ *
+ * REDUCED MOTION (v1.185.0). `animate-spin-slow` is stopped under
+ * `prefers-reduced-motion: reduce` by one rule in `globals.css` — every
+ * spinner in the app, not this component alone, because the class is used
+ * directly in a dozen places and a per-component guard is a rule the next
+ * component forgets. Every other animation in the app already guards it; this
+ * family was the exception.
+ *
+ * WHICH LEAVES A STILL CIRCLE, so the state has to be carried by something
+ * other than the motion. `role="status"` announces it either way, and a
+ * caller that passes no visible label still gets one for assistive tech —
+ * a frozen icon with no text is indistinguishable from an idle one, which is
+ * a worse failure than the spin it replaced.
+ */
 export function LoaderInline({ label }: { label?: string }) {
   return (
-    <span className="inline-flex items-center gap-2">
-      <LoaderCircle size={14} className="animate-spin-slow" />
-      {label}
+    <span className="inline-flex items-center gap-2" role="status">
+      <LoaderCircle size={14} className="animate-spin-slow" aria-hidden="true" />
+      {label ?? <span className="sr-only">Working…</span>}
     </span>
   );
 }

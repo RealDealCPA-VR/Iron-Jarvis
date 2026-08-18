@@ -222,6 +222,28 @@ export function PanelPicker({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // WHO WAS ALREADY SEATED WHEN THIS OPENED (v1.185.0).
+  //
+  // The thread's bottom-right button promises "everyone already here stays" and
+  // the round-trip genuinely is additive — the picker opens preselected and
+  // `PUT /participants` is sent WHOLE, so nothing is dropped unless the user
+  // unpicks it. The picker then said "Edit the panel", listed the seated agents
+  // as if they were fresh choices, and offered "Save panel": a full re-seat.
+  // A promise made on the button and contradicted by the surface it opens is
+  // the promise the user believes second.
+  //
+  // Derived from `initialParticipants` rather than taken as a new prop, because
+  // this is true of BOTH edit call sites — adding one agent from a thread and
+  // editing an existing thread's panel from the page are the same operation on
+  // the same endpoint. A prop would let one caller tell the truth and the other
+  // not, which is the class of bug this fix is in.
+  const [seatedKeys] = useState<ReadonlySet<string>>(
+    () => new Set(initialParticipants.map((p) => p.key)),
+  );
+  const editingSeated = mode === "edit" && seatedKeys.size > 0;
+  const leaving = initialParticipants.filter((p) => !selected.some((s) => s.key === p.key));
+  const joining = selected.filter((p) => !seatedKeys.has(p.key));
+
   // Portrait lookup for the footer chips — a seated participant keeps the
   // portrait its catalog row carries; absent from the catalog → geometric face.
   const avatarByKey = new Map<string, string | null>();
@@ -301,7 +323,13 @@ export function PanelPicker({
       <div
         role="dialog"
         aria-modal="true"
-        aria-label={mode === "create" ? "New agent thread" : "Edit the panel"}
+        aria-label={
+          mode === "create"
+            ? "New agent thread"
+            : editingSeated
+              ? "Add an agent to the panel"
+              : "Edit the panel"
+        }
         onClick={(e) => e.stopPropagation()}
         className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-ink-850/95 shadow-card-hover backdrop-blur-xl"
       >
@@ -309,7 +337,11 @@ export function PanelPicker({
         <header className="flex shrink-0 items-center gap-2 border-b hairline px-4 py-3">
           <Users size={16} className="text-accent-soft/80" />
           <h2 className="text-[13px] font-semibold tracking-wide text-zinc-200">
-            {mode === "create" ? "New thread — assemble the panel" : "Edit the panel"}
+            {mode === "create"
+              ? "New thread — assemble the panel"
+              : editingSeated
+                ? "Add to the panel"
+                : "Edit the panel"}
           </h2>
           <button
             type="button"
@@ -337,11 +369,26 @@ export function PanelPicker({
             </div>
           )}
 
+          {editingSeated && (
+            // The additive promise, said WHERE THE PICKING HAPPENS. It also has
+            // to name the exception in the same breath: unpicking is a real
+            // removal (the × is right there on every chip), and a surface that
+            // only says "everyone stays" would be lying by omission the moment
+            // somebody uses it.
+            <p className="rounded-lg border border-white/[0.07] bg-white/[0.02] px-3 py-2 text-[11px] leading-relaxed text-zinc-400">
+              <span className="text-zinc-200">
+                {seatedKeys.size} {seatedKeys.size === 1 ? "agent is" : "agents are"} already
+                on this panel and stay.
+              </span>{" "}
+              Pick anyone else to add them. Unpicking someone already seated
+              removes them from the thread.
+            </p>
+          )}
+
           <p className="text-[11px] leading-relaxed text-zinc-500">
-            Pick who sits at this round-table and give each a role. Every agent
-            answers in the order you pick them, seeing the replies before it —
-            so a critic picked after a builder critiques what the builder just
-            said.
+            {editingSeated
+              ? "Give anyone you add a role. New agents answer after the ones already seated, seeing the replies before them — so a critic added to a running thread critiques what has already been said."
+              : "Pick who sits at this round-table and give each a role. Every agent answers in the order you pick them, seeing the replies before it — so a critic picked after a builder critiques what the builder just said."}
           </p>
 
           <SourceGroup
@@ -377,7 +424,11 @@ export function PanelPicker({
           {selected.length > 0 ? (
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="mr-1 text-[10px] font-medium uppercase tracking-[0.12em] text-zinc-500">
-                Panel · speaks in this order
+                {editingSeated
+                  ? joining.length > 0
+                    ? `Panel after saving · ${joining.length} joining`
+                    : "Panel after saving · speaks in this order"
+                  : "Panel · speaks in this order"}
               </span>
               {selected.map((p) => (
                 <span
@@ -395,6 +446,15 @@ export function PanelPicker({
                     />
                   </span>
                   <span className="text-xs text-zinc-200">{p.name}</span>
+                  {editingSeated && !seatedKeys.has(p.key) && (
+                    // Which of these are NEW, said in a word rather than a
+                    // colour — the chips are otherwise identical, and "what am
+                    // I actually about to change?" is the only question this
+                    // footer exists to answer.
+                    <span className="rounded-full bg-accent-soft/15 px-1.5 text-[9px] font-medium uppercase tracking-wide text-accent-soft">
+                      new
+                    </span>
+                  )}
                   <RolePill role={p.role.trim() || "participant"} />
                   <button
                     type="button"
@@ -412,6 +472,18 @@ export function PanelPicker({
               Pick at least one agent to form the panel.
             </p>
           )}
+          {editingSeated && leaving.length > 0 && (
+            // A REMOVAL IS NOT A SIDE EFFECT OF ADDING. The unpick is honoured
+            // by design, but the button that opened this said everyone stays —
+            // so if this save is about to evict somebody, it says their name
+            // BEFORE the click rather than leaving the user to notice a missing
+            // face in the thread afterwards.
+            <p className="text-[11px] leading-relaxed text-amber-200/90">
+              Saving also removes {leaving.map((p) => p.name).join(", ")} from this
+              thread. Re-pick {leaving.length === 1 ? "them" : "any of them"} to keep{" "}
+              them seated.
+            </p>
+          )}
           {error && <ErrorNote>{error}</ErrorNote>}
           <div className="flex items-center justify-end gap-2">
             <button type="button" onClick={onClose} disabled={busy} className="btn-ghost text-xs">
@@ -424,10 +496,17 @@ export function PanelPicker({
               className="btn-accent text-xs"
             >
               {busy ? (
-                <LoaderInline label={mode === "create" ? "Creating…" : "Saving…"} />
+                <LoaderInline
+                  label={mode === "create" ? "Creating…" : editingSeated ? "Adding…" : "Saving…"}
+                />
               ) : mode === "create" ? (
                 <>
                   <Plus size={14} /> Create thread
+                </>
+              ) : editingSeated && joining.length > 0 ? (
+                <>
+                  <Plus size={14} /> Add {joining.length}{" "}
+                  {joining.length === 1 ? "agent" : "agents"}
                 </>
               ) : (
                 <>

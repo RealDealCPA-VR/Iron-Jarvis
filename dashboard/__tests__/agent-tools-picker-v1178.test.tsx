@@ -48,6 +48,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import { SetupCard } from "@/components/agents/SetupCard";
+import { SetupCardHarness } from "./helpers/setupCardHarness";
 import type { DynamicAgentFull } from "@/components/agents/SetupCard";
 
 /** The default case this feature exists for: nothing stored, so the daemon
@@ -63,7 +64,7 @@ const INHERITING: DynamicAgentFull = {
 
 function renderCard(agent: DynamicAgentFull) {
   return render(
-    <SetupCard
+    <SetupCardHarness
       builtin={[]}
       dynamic={[agent]}
       remotes={[]}

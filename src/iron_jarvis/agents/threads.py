@@ -41,6 +41,7 @@ from ..core.db import CONVERSATION_WRITE_LOCK, session_scope
 from ..core.events import EventType
 from ..core.ids import new_id, utcnow
 from ..core.logging import get_logger
+from ..memory import commit as _commit
 
 log = get_logger("agents.threads")
 
@@ -162,45 +163,27 @@ def clean_participants(raw: Any) -> list[dict[str, str]]:
 
 # -- committing a panel to long-term memory (v1.178.0) ----------------------- #
 #
-# WHAT IS SHARED WITH CHAT AND WHAT IS NOT. ``POST /chat/threads/{id}/remember``
-# (daemon/routes/chat.py) already owns the ladder this surface needs, and two
-# notions of "what mattered here" WILL drift — the draftFromFence lesson. So the
-# budgets are IMPORTED from that module (never re-declared), the clip contract
-# is one function used for both budgets, the mock refusal is the same class
-# check plus the same ``d._failover_adapter("mock")`` hop, the model call is the
-# same ``d._one_shot_complete``, and the write is the same ``ltm.append`` front
-# door. What is NOT shared is the transcript renderer and the distill prompt,
-# because a panel's data shape forbids it — see :func:`panel_transcript` and
-# :data:`PANEL_DISTILL_SYSTEM`. Chat's ladder itself lives INLINE inside its
-# route handler (a closure inside ``register``), so it cannot be called from
-# here at all; lifting it into a shared module is a follow-up that has to touch
-# daemon/routes/chat.py.
+# WHAT IS SHARED WITH CHAT AND WHAT IS NOT. Both surfaces now call ONE ladder,
+# :func:`memory.commit.distill_or_excerpt` — the budgets, the clip contract, the
+# mock refusal, the failover hop, the one-shot call and the degrade-don't-refuse
+# outcome. v1.178.0 could only share the BUDGETS (by importing them out of a
+# route module — the layering upside down) because chat's ladder lived inline in
+# its handler as a closure, with no symbol to call; v1.185.0 lifted it out.
+# What is NOT shared is the transcript renderer and the distill prompt, because
+# a panel's data shape forbids it — see :func:`panel_transcript` and
+# :data:`PANEL_DISTILL_SYSTEM`. The write is still the same ``ltm.append`` front
+# door.
+
+#: Re-exported so this module's own callers (and its tests) keep one import
+#: site for the clip contract. The definition lives with the ladder.
+clip_with_marker = _commit.clip_with_marker
 
 
 def _remember_budgets() -> tuple[int, int]:
-    """(distill input budget, verbatim excerpt budget) in chars — CHAT's.
-
-    Imported rather than re-declared so the two surfaces can never disagree
-    about how much conversation a model is shown or how long an offline excerpt
-    may be. Lazy: ``daemon.routes.chat`` imports this package, so a module-level
-    import would be a cycle.
-    """
-    from ..daemon.routes.chat import _REMEMBER_INPUT, _REMEMBER_VERBATIM
-
-    return _REMEMBER_INPUT, _REMEMBER_VERBATIM
-
-
-def clip_with_marker(text: str, budget: int, marker: str) -> str:
-    """Head+tail clip with an EXPLICIT omission marker (chat's contract).
-
-    A silently truncated transcript is the one thing that must never happen
-    here: the model would present a digest of the last third as the whole
-    panel, and a memory note is read back later as authoritative.
-    """
-    if len(text) <= budget:
-        return text
-    head, tail = budget // 3, budget * 2 // 3
-    return text[:head] + marker + text[-tail:]
+    """(distill input budget, verbatim excerpt budget) in chars — the SHARED
+    ones, so the two surfaces can never disagree about how much conversation a
+    model is shown or how long an offline excerpt may be."""
+    return _commit.REMEMBER_INPUT, _commit.REMEMBER_VERBATIM
 
 
 #: Distill instruction for a PANEL. Deliberately not chat's prompt text: a round
@@ -891,62 +874,22 @@ class AgentThreads:
                 raise RuntimeError(f"could not write to '{src}': {exc}")
             return out
 
-        input_budget, verbatim_budget = _remember_budgets()
         transcript = await asyncio.to_thread(
             panel_transcript, title, participants, msgs, getattr(rec, "updated_at", None)
         )
-        verbatim = clip_with_marker(
-            transcript,
-            verbatim_budget,
-            "\n\n[… middle of the panel omitted for length …]\n\n",
+        outcome = await _commit.distill_or_excerpt(
+            d,
+            transcript=transcript,
+            mode=mode,
+            system=PANEL_DISTILL_SYSTEM,
+            subject="panel",
+            provider=provider,
+            model=model,
         )
-
-        distilled = False
-        used_provider = ""
-        note = ""
-        content_body = verbatim
-        if mode == "distill":
-            from ..providers.adapters.base import LLMMessage
-            from ..providers.adapters.mock import MockLLMAdapter
-
-            want_provider = provider or d.platform.config.default_provider
-            want_model = model or d.platform.config.default_model
-            try:
-                adapter = d.platform.providers.get(want_provider, want_model)
-            except Exception:  # noqa: BLE001 — unreachable provider == offline
-                adapter = None
-            if adapter is not None and isinstance(adapter, MockLLMAdapter):
-                adapter, want_provider = d._failover_adapter("mock")
-            if adapter is None:
-                note = (
-                    "no real model connected — this is a verbatim excerpt, not a"
-                    " distillation"
-                )
-            else:
-                clipped = clip_with_marker(
-                    transcript,
-                    input_budget,
-                    "\n\n[… middle of the panel omitted for length —"
-                    " note this in the memory …]\n\n",
-                )
-                try:
-                    resp, used_provider, _m = await d._one_shot_complete(
-                        want_provider,
-                        adapter,
-                        system=PANEL_DISTILL_SYSTEM,
-                        messages=[LLMMessage(role="user", content=clipped)],
-                    )
-                    digest = (resp.text or "").strip()
-                except Exception as exc:  # noqa: BLE001 — degrade, don't lose it
-                    digest = ""
-                    note = f"distillation failed ({exc}) — verbatim excerpt instead"
-                if digest:
-                    content_body = digest
-                    distilled = True
-                else:
-                    note = note or (
-                        "the model returned nothing — verbatim excerpt instead"
-                    )
+        content_body = outcome.body
+        distilled = outcome.distilled
+        used_provider = outcome.provider
+        note = outcome.note
 
         content = (
             _panel_header(rec, title, participants, msgs)

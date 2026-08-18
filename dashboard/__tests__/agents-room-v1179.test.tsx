@@ -380,6 +380,44 @@ describe("setup lives behind the gear and nowhere else", () => {
     await waitFor(() => expect(screen.getByText("Create an agent")).toBeTruthy());
   });
 
+  it("reveals it OPEN even when it was left COLLAPSED last visit", async () => {
+    /* v1.185.0, and the case the sibling above cannot reach: it seeds "1", so
+     * the disclosure is already open and a gear that failed to expand would
+     * look identical. Seeding "0" is the only state that tells the two apart —
+     * a user who folded the card away, then came back and pressed the gear.
+     *
+     * The guarantee itself is v1.179.0's ("the gear reveals it OPEN rather than
+     * mounted-but-collapsed"); what changed is where it comes from. It used to
+     * be a side effect of the page writing localStorage BEFORE mounting the
+     * card, which the card then hydrated — the ordering was the mechanism. The
+     * page now holds the value and sets it directly, so this asserts the
+     * promise rather than the handshake that used to deliver it. */
+    window.localStorage.setItem("ij_agents_setup_open", "0");
+    render(<AgentsPage />);
+    expect(screen.queryByText("Create an agent")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("roster-gear"));
+    await waitFor(() => expect(screen.getByText("Create an agent")).toBeTruthy());
+  });
+
+  it("keeps the card's own fold, and remembers it", async () => {
+    /* The other half of one-source-of-truth: the gear and the card's chevron
+     * are different controls over different things (on screen at all / body
+     * disclosed), and folding the body must not evict the card — otherwise the
+     * chevron is a second Close button and the header it sits on vanishes with
+     * the click that used it. */
+    render(<AgentsPage />);
+    fireEvent.click(screen.getByTestId("roster-gear"));
+    await waitFor(() => expect(screen.getByText("Create an agent")).toBeTruthy());
+
+    const header = screen.getByRole("button", { name: /set up agents/i });
+    fireEvent.click(header);
+    await waitFor(() => expect(screen.queryByText("Create an agent")).toBeNull());
+    // Folded, NOT removed — the card is still there to unfold.
+    expect(screen.getByRole("button", { name: /set up agents/i })).toBeTruthy();
+    expect(window.localStorage.getItem("ij_agents_setup_open")).toBe("0");
+  });
+
   it("announces the state it controls", () => {
     render(<AgentsPage />);
     const gear = screen.getByTestId("roster-gear");

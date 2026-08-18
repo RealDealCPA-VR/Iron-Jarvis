@@ -43,7 +43,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import weakref
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -295,6 +297,50 @@ def _run_blocking(coro):
     )
 
 
+#: Rows one listing may return. Pending sorts first, so the cap only ever bites
+#: into decided history — the part of this table nothing is waiting on.
+LIST_LIMIT = 200
+
+#: Proposal ids with an approval IN FLIGHT, and the lock guarding the set.
+#:
+#: THE GUARD IS PROCESS-LOCAL BECAUSE THE RACE IS (v1.185.0). ``approve`` used
+#: to do its work in three separate transactions — read-and-check-PENDING, then
+#: ``_apply``, then the APPROVED write — so two clicks arriving together both
+#: read PENDING, both created the capability, and both stamped the row. The
+#: capability routes are SYNC ``def`` handlers, which FastAPI runs in worker
+#: THREADS, so "together" is genuinely concurrent rather than theoretical; the
+#: daemon is a single process by construction (one FastAPI app owning one SQLite
+#: file), which is exactly the scope this closes and no more.
+#:
+#: A claim rather than a status flip: the failure path REQUIRES the row to stay
+#: PENDING so the user can fix the request and try again, and a state written
+#: before ``_apply`` would strand the row as approved-with-nothing-created if
+#: the process died mid-apply. The claim lives only in memory, so a restart
+#: releases it — which is the correct behaviour for a lock whose whole job is to
+#: order two clicks a second apart.
+_CLAIMS: set[str] = set()
+_CLAIMS_LOCK = threading.Lock()
+
+
+@contextmanager
+def _claimed(proposal_id: str):
+    """Hold the only approval claim on *proposal_id*, or raise.
+
+    ``ValueError`` so the route maps it to the same 409 an already-decided
+    proposal gets — from the second clicker's side those are the same event, and
+    "it is already being approved" is the truthful version of it.
+    """
+    with _CLAIMS_LOCK:
+        if proposal_id in _CLAIMS:
+            raise ValueError("proposal already being approved")
+        _CLAIMS.add(proposal_id)
+    try:
+        yield
+    finally:
+        with _CLAIMS_LOCK:
+            _CLAIMS.discard(proposal_id)
+
+
 class CapabilityProposalStore:
     """Persist / list / decide capability proposals.
 
@@ -398,8 +444,29 @@ class CapabilityProposalStore:
 
     # -- read side (never raises) ---------------------------------------------
 
-    def list(self, status: str | None = None) -> list[CapabilityProposalRecord]:
-        """Proposals for the review card: pending first, newest first within."""
+    def list(
+        self, status: str | None = None, *, limit: int | None = None
+    ) -> list[CapabilityProposalRecord]:
+        """Proposals for the review card: pending first, newest first within.
+
+        BOUNDED (v1.185.0). ``status`` has filtered since v1.178.0, but the
+        card calls this with no filter, so the default response grew without
+        limit — every proposal ever filed, each carrying its spec and rationale,
+        rebuilt on every poll. The cap is ordered-then-sliced, so what it drops
+        is the OLDEST DECIDED rows and never a pending one: PENDING sorts first
+        by construction, and a request waiting on the user is the only thing
+        here that still needs an answer.
+
+        Truncation is REPORTED, never silent — :meth:`stats` counts the whole
+        table, so a capped listing beside a larger total is visible rather than
+        reading as "this is all of them". That is the same rule the file walker
+        and the OCR page cap follow.
+
+        ``limit=None`` resolves :data:`LIST_LIMIT` at CALL time, not in the
+        signature: a default argument binds once at import, so a test (or a
+        future caller) that sets the module constant would be silently ignored —
+        the app's established pattern for exactly this reason.
+        """
         try:
             with session_scope(self.engine) as db:
                 query = select(CapabilityProposalRecord)
@@ -415,7 +482,11 @@ class CapabilityProposalStore:
                 -(r.created_at.timestamp() if r.created_at else 0.0),
             )
         )
-        return rows
+        try:
+            cap = LIST_LIMIT if limit is None else int(limit)
+        except (TypeError, ValueError):
+            cap = LIST_LIMIT
+        return rows[:cap] if cap > 0 else rows
 
     def get(self, proposal_id: str) -> CapabilityProposalRecord | None:
         try:
@@ -518,38 +589,56 @@ class CapabilityProposalStore:
         (or satisfy it themselves) and try again. Raises ``ValueError`` for an
         unknown (404) or already-decided (409) proposal, mirroring
         ``MemoryProposalStore.approve``.
+
+        ONE APPROVAL PER PROPOSAL, EVEN FROM TWO CLICKS (v1.185.0). The whole
+        sequence runs under :func:`_claimed`, and the PENDING check is re-read
+        INSIDE it — see :data:`_CLAIMS` for why the claim is process-local and
+        why it is a claim rather than an early status flip. Checking before the
+        claim would not have helped: the second thread's read can land before
+        the first thread's write, so a guard outside the claim proves only that
+        the row was pending a moment ago.
         """
-        with session_scope(self.engine) as db:
-            row = db.get(CapabilityProposalRecord, proposal_id)
-            if row is None:
-                raise ValueError(f"no such proposal: {proposal_id}")
-            if row.status != PENDING:
-                raise ValueError(f"proposal already {row.status}")
-            kind, name = row.kind, row.name
-            spec = row.decoded_spec()
-            scope, rationale = row.scope, row.rationale
+        with _claimed(proposal_id):
+            with session_scope(self.engine) as db:
+                row = db.get(CapabilityProposalRecord, proposal_id)
+                if row is None:
+                    raise ValueError(f"no such proposal: {proposal_id}")
+                if row.status != PENDING:
+                    raise ValueError(f"proposal already {row.status}")
+                kind, name = row.kind, row.name
+                spec = row.decoded_spec()
+                scope, rationale = row.scope, row.rationale
 
-        result = self._apply(
-            kind=kind, name=name, spec=spec, scope=scope, rationale=rationale
-        )
-        if not result.ok:
-            # Leave it PENDING and stamp WHY on the row, so a card refreshed
-            # later still explains the refusal instead of silently offering the
-            # same button again.
-            self._stamp(proposal_id, result, status=None)
-            return self.get(proposal_id) or row, result
+            result = self._apply(
+                kind=kind, name=name, spec=spec, scope=scope, rationale=rationale
+            )
+            if not result.ok:
+                # Leave it PENDING and stamp WHY on the row, so a card refreshed
+                # later still explains the refusal instead of silently offering
+                # the same button again.
+                self._stamp(proposal_id, result, status=None)
+                return self.get(proposal_id) or row, result
 
-        with session_scope(self.engine) as db:
-            row = db.get(CapabilityProposalRecord, proposal_id)
-            if row is None:  # deleted underneath us — the tool still exists
-                raise ValueError(f"no such proposal: {proposal_id}")
-            row.status = APPROVED
-            row.decided_at = utcnow()
-            row.applied_json = json.dumps({**result.to_dict(), "at": utcnow().isoformat()})
-            db.add(row)
-            db.commit()
-            db.refresh(row)
-            return row, result
+            with session_scope(self.engine) as db:
+                row = db.get(CapabilityProposalRecord, proposal_id)
+                if row is None:  # deleted underneath us — the tool still exists
+                    raise ValueError(f"no such proposal: {proposal_id}")
+                # Belt AND braces: the claim already excludes a second approver,
+                # so a row that is no longer PENDING here was decided by
+                # something outside this path entirely (a direct DB edit, a
+                # future caller). Stamping over that would erase a real
+                # decision, so it is reported rather than overwritten.
+                if row.status != PENDING:
+                    raise ValueError(f"proposal already {row.status}")
+                row.status = APPROVED
+                row.decided_at = utcnow()
+                row.applied_json = json.dumps(
+                    {**result.to_dict(), "at": utcnow().isoformat()}
+                )
+                db.add(row)
+                db.commit()
+                db.refresh(row)
+                return row, result
 
     def reject(self, proposal_id: str) -> CapabilityProposalRecord:
         """Take a pending request off the queue for good.

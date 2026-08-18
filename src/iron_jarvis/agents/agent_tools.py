@@ -105,6 +105,13 @@ class CreateAgentTool(Tool):
         )
 
 
+#: Tool names shown per agent before the listing switches to "… +N more".
+#: A supervisor deciding who to delegate to needs the SHAPE of a roster, not a
+#: transcript of it: spelling out ~50 names per agent would cost more context
+#: than the decision is worth, and the full list still rides in ``data``.
+_ROSTER_PREVIEW = 12
+
+
 class ListAgentsTool(Tool):
     name = "list_agents"
     description = (
@@ -118,24 +125,67 @@ class ListAgentsTool(Tool):
         self.platform = platform
         self.registry = registry
 
+    def _effective_tools(self, name: str) -> list[str] | None:
+        """What this agent ACTUALLY holds, inheritance resolved (v1.185.0).
+
+        The HTTP route has reported this since v1.178.0 and this tool did not,
+        so an AGENT asking what a teammate holds saw only the base type — while
+        the human looking at the same agent in the dashboard saw the resolved
+        roster. Whoever is deciding whether to delegate needs the same answer,
+        and here that decision is made by the caller most likely to act on it.
+
+        `None` means UNKNOWN and `[]` means genuinely none, the same dialect the
+        route speaks: an unknown must never be relayed to a model as "this agent
+        can do nothing", because that reads as a reason not to delegate.
+        """
+        try:
+            definition = self.registry.definition(name)
+        except Exception:  # noqa: BLE001 — a listing never fails on one row
+            return None
+        return list(definition.tools) if definition is not None else None
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         builtin = sorted(t.value for t in _DEFINITIONS)
-        dynamic = [
-            {
+        dynamic = []
+        for r in self.registry.list():
+            row: dict[str, Any] = {
                 "name": r.name,
                 "base_type": r.base_type,
                 "description": r.description,
             }
-            for r in self.registry.list()
-        ]
+            tools = self._effective_tools(r.name)
+            if tools is not None:
+                row["effective_tools"] = tools
+            dynamic.append(row)
         lines = ["Built-in agents: " + ", ".join(builtin)]
         if dynamic:
-            lines.append(
-                "Dynamic agents: "
-                + ", ".join(
-                    f"{d['name']} (base={d['base_type']})" for d in dynamic
-                )
-            )
+            # THE ROSTER GOES IN THE TEXT, not only in `data` (v1.185.0). The
+            # runtime hands the model `result.output` and nothing else, so a
+            # field added to `data` alone would satisfy the letter of "the tool
+            # reports effective tools" while the model — the only caller that
+            # acts on it — still could not see it.
+            lines.append("Dynamic agents:")
+            for row in dynamic:
+                head = f"  - {row['name']} (base={row['base_type']})"
+                tools = row.get("effective_tools")
+                if tools is None:
+                    # UNKNOWN, said as unknown. "no tools" here would read as a
+                    # reason not to delegate to a perfectly capable agent.
+                    lines.append(f"{head} — roster unavailable")
+                elif not tools:
+                    lines.append(f"{head} — holds no tools")
+                else:
+                    shown = tools[: _ROSTER_PREVIEW]
+                    tail = (
+                        f" … +{len(tools) - len(shown)} more"
+                        if len(tools) > len(shown)
+                        else ""
+                    )
+                    # Cap, then SAY SO — a silently short roster reads as
+                    # complete and the model concludes a tool is absent.
+                    lines.append(
+                        f"{head} — {len(tools)} tools: " + ", ".join(shown) + tail
+                    )
         else:
             lines.append("Dynamic agents: (none)")
         return ToolResult(

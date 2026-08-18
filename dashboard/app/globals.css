@@ -249,6 +249,16 @@ body::before {
   body::before {
     animation: none;
   }
+  /* SPINNERS STOP TOO (v1.185.0). `animate-spin-slow` is applied directly in a
+     dozen components (LoaderInline, Spinner, the RoundTable's live chips), so
+     the guard belongs on the CLASS rather than on any one of them — a
+     per-component check is a rule the next component forgets, and this family
+     was already the one exception to a convention the rest of the app keeps.
+     The spinners carry a `role="status"` label, so stopping the rotation
+     removes the motion without removing the message. */
+  .animate-spin-slow {
+    animation: none;
+  }
 }
 
 /* App-wide arc-reactor aura: a faint cyan bloom anchored top-left/right. */

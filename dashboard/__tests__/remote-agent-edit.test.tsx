@@ -43,6 +43,7 @@ vi.mock("@/lib/api", () => ({
 
 import { SetupCard } from "@/components/agents/SetupCard";
 
+import { SetupCardHarness } from "./helpers/setupCardHarness";
 const REMOTE = {
   name: "my-hermes",
   base_url: "http://192.168.1.20:8080",
@@ -55,7 +56,7 @@ const REMOTE = {
 
 function renderCard(over: Partial<typeof REMOTE> = {}) {
   return render(
-    <SetupCard
+    <SetupCardHarness
       builtin={[]}
       dynamic={[]}
       remotes={[{ ...REMOTE, ...over }]}

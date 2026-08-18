@@ -46,7 +46,8 @@ import AgentFace, {
 } from "./AgentFace";
 import type { RemoteAgentInfo } from "./identity";
 
-const OPEN_KEY = "ij_agents_setup_open";
+// The disclosure key lives on the PAGE now (v1.185.0) — one owner, one write,
+// one read. See the `open` prop on SetupCard for what that replaced.
 
 /** Dynamic-agent rows carry their editable config (GET /agents includes it).
  *  `system_prompt` / `tools` / `effective_tools` / `base_type` all live on
@@ -1619,6 +1620,8 @@ export function SetupCard({
   models,
   onAgentsChanged,
   onRemotesChanged,
+  open,
+  onOpenChange,
 }: {
   builtin: string[];
   dynamic: DynamicAgentFull[];
@@ -1626,17 +1629,22 @@ export function SetupCard({
   models: ModelOption[];
   onAgentsChanged: () => void;
   onRemotesChanged: () => void;
+  /**
+   * Whether the card's body is disclosed. OWNED BY THE PAGE (v1.185.0).
+   *
+   * This used to be internal state hydrated from `OPEN_KEY`, while the page
+   * WROTE that same key before mounting the card — two independent states over
+   * one string. They agreed, but only because of the ordering: the page had to
+   * write storage first so the card's hydration would come up open (see the
+   * page's SETUP_OPEN_KEY comment, which documents that handshake as a race
+   * fix). A handshake is not a source of truth; it is a thing that holds until
+   * somebody reorders two lines. Now the page holds the value and the card
+   * renders it, so there is nothing left to keep in step.
+   */
+  open: boolean;
+  /** The card's own chevron. Visibility stays the page's call, not this one's. */
+  onOpenChange: (open: boolean) => void;
 }) {
-  // Collapsed by default; hydrated from localStorage after mount so the
-  // server-rendered markup always matches the first client render.
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    try {
-      setOpen(localStorage.getItem(OPEN_KEY) === "1");
-    } catch {
-      /* storage unavailable — stays collapsed */
-    }
-  }, []);
 
   // --- stored faces (v1.180.0) -------------------------------------------
   // ONE fetch for every agent's override instead of one per row: this card
@@ -1676,13 +1684,7 @@ export function SetupCard({
   }, [open, loadFaces]);
 
   function toggle() {
-    const next = !open;
-    setOpen(next);
-    try {
-      localStorage.setItem(OPEN_KEY, next ? "1" : "0");
-    } catch {
-      /* persistence is best-effort */
-    }
+    onOpenChange(!open);
   }
 
   return (

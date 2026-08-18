@@ -378,17 +378,30 @@ def register(app: FastAPI, d) -> None:
     def _avatar_path(name: str) -> Path:
         return d.platform.config.home / "avatars" / f"{_avatar_slug(name)}.png"
 
-    def _effective_tools(name: str) -> list[str]:
+    def _effective_tools(name: str) -> list[str] | None:
         """What this agent ACTUALLY holds, inheritance resolved (v1.178.0).
 
-        Never raises: a card that cannot show the effective roster falls back to
-        showing none, which is what it displayed before this field existed.
+        Never raises: a display field must not be able to break the agents list.
+
+        NONE MEANS UNKNOWN, `[]` MEANS GENUINELY NONE (v1.185.0). It used to
+        return `[]` from both the failure branch and the real-empty case, so the
+        card could not tell "the registry would not answer" from "this agent
+        holds nothing" — and it renders those two as opposite sentences: the
+        first is "this daemon does not report it, fall back to the stored list",
+        the second is a claim about the agent. Collapsing them meant a registry
+        hiccup displayed as a confident, wrong roster — the same shape as the
+        v1.178.0 bug this field was ADDED to fix, one level up.
+
+        The clients already speak this dialect: `effectiveOrNull` in SetupCard
+        maps a non-array to `null` and its `ToolOrigin` carries "unreported",
+        because the field is absent on a pre-v1.178.0 daemon. An unknown is
+        indistinguishable from that older daemon, which is exactly right.
         """
         try:
             definition = d.platform.agents_registry.definition(name)
         except Exception:  # noqa: BLE001 — a display field never breaks the list
-            return []
-        return list(definition.tools) if definition is not None else []
+            return None
+        return list(definition.tools) if definition is not None else None
 
     def _avatar_url(name: str) -> str | None:
         """The serve URL — ONLY when a stored portrait actually exists.

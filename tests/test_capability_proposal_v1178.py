@@ -321,6 +321,11 @@ def test_the_DAEMON_mounts_the_queue(tmp_path):
         "proposals": [],
         "pending": 0,
         "stats": {"pending": 0, "approved": 0, "rejected": 0, "total": 0, "by_kind": {}},
+        # v1.185.0 bounded the listing; an empty queue is not truncated, and
+        # saying so on EVERY response is what stops a capped list from reading
+        # as the whole table.
+        "returned": 0,
+        "truncated": False,
     }
 
 

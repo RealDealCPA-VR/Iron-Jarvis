@@ -83,6 +83,7 @@ import AgentFace, {
 } from "@/components/agents/AgentFace";
 import { SetupCard, faceFor, type DynamicAgentFull } from "@/components/agents/SetupCard";
 
+import { SetupCardHarness } from "./helpers/setupCardHarness";
 afterEach(() => {
   cleanup();
   api.calls = [];
@@ -238,7 +239,7 @@ const AGENT: DynamicAgentFull = {
 
 function renderCard(over: Partial<React.ComponentProps<typeof SetupCard>> = {}) {
   return render(
-    <SetupCard
+    <SetupCardHarness
       builtin={["builder"]}
       dynamic={[AGENT]}
       remotes={[]}

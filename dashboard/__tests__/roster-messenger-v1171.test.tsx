@@ -95,6 +95,7 @@ import { faceShape } from "@/components/agents/AgentFace";
 import { RosterStrip, type RosterEntry } from "@/components/agents/RosterStrip";
 import { SetupCard, type DynamicAgentFull } from "@/components/agents/SetupCard";
 
+import { SetupCardHarness } from "./helpers/setupCardHarness";
 const ROSTER: RosterEntry[] = [
   {
     name: "builder",
@@ -258,7 +259,12 @@ function dynamicAgent(over: Partial<DynamicAgentFull> = {}): DynamicAgentFull {
 
 function renderSetup(agent = dynamicAgent(), onAgentsChanged = vi.fn()) {
   render(
-    <SetupCard
+    <SetupCardHarness
+      // These cases reach straight for a row without pressing the header, so
+      // the card must start open. It used to get that from the seeded
+      // `ij_agents_setup_open` in beforeEach; since v1.185.0 the disclosure is
+      // a prop the page owns, so the harness states it outright.
+      initialOpen
       builtin={["builder"]}
       dynamic={[agent]}
       remotes={[]}
