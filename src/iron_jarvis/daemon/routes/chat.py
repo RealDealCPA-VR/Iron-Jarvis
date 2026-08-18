@@ -64,6 +64,8 @@ from ..chat_turn import (
     _sanitize_draft,
     _saved_workflows_block,
     _write_directive,
+    STRICT_ASK_TOOLS,
+    normalize_approval_mode,
     _validated_escalate_agent,
     run_chat_turn,
 )
@@ -295,6 +297,14 @@ def _clean_setup(raw: Any) -> str:
         val = raw.get(key)
         if isinstance(val, str) and val.strip():
             out[key] = val.strip()
+    # The approval POSTURE persists with the thread (v1.188.0) — vocabulary-
+    # checked, and the DEFAULT is stored as nothing at all: a stray string
+    # here would otherwise reload as a posture the user never picked.
+    mode = raw.get("approval_mode")
+    if isinstance(mode, str):
+        mode = normalize_approval_mode(mode)
+        if mode != "approve_for_me":
+            out["approval_mode"] = mode
     return json.dumps(out, separators=(",", ":")) if out else ""
 
 
@@ -1395,6 +1405,20 @@ def register(app: FastAPI, d) -> None:
                 _ESCALATE_SPEC,
                 _WORKFLOW_DRAFT_SPEC,
             ]
+        # THE POSTURE (v1.188.0): how the mid-turn ask behaves this turn.
+        # Resolved ONCE, for BOTH branches above (a text-only pick still runs
+        # the loop, and the loop reads it), so the prompt sentence below and
+        # the card predicate can never read two different answers.
+        approval_mode = normalize_approval_mode(
+            getattr(body, "approval_mode", "")
+        )
+        # Card-grants made THIS conversation (an approval card's
+        # "conversation" answer). Deliberately separate from `armed_grant`,
+        # which starts as EVERY armed tool — strict mode must card a
+        # write_document that auto-arming granted a moment ago, and a set
+        # that begins full would make strict mode a no-op on exactly the
+        # common case.
+        card_grants: set[str] = set()
         ctx = None
         if armed or ask_armed:
             from ...tools.base import ToolContext
@@ -1504,8 +1528,18 @@ def register(app: FastAPI, d) -> None:
                     # ASK-TIER sentence (v1.187.0, THIS LANE ONLY — see the
                     # arming above): the model must know these tools pause for
                     # a human, or a denial reads to it as a broken tool and it
-                    # retries the exact call the user just refused.
+                    # retries the exact call the user just refused. The
+                    # posture rewrites it (v1.188.0) because each mode makes a
+                    # DIFFERENT promise and the prompt must not claim a pause
+                    # that will not happen (yolo) or stay silent about ones
+                    # that will (always_ask).
                     "\nAPPROVAL-GATED: "
+                    + ", ".join(sorted(ask_armed))
+                    + " are pre-approved for this conversation (the user"
+                    " chose auto-approve) — they run without pausing. Still"
+                    " prefer the specialized tools when one fits."
+                    if ask_armed and approval_mode == "yolo"
+                    else "\nAPPROVAL-GATED: "
                     + ", ".join(sorted(ask_armed))
                     + " will PAUSE this turn while the user is asked to"
                     " approve the call — the user sees the exact command/code"
@@ -1513,6 +1547,16 @@ def register(app: FastAPI, d) -> None:
                     " prefer the specialized tools when one fits, and if the"
                     " user declines, do not retry the same call."
                     if ask_armed
+                    else ""
+                )
+                + (
+                    "\nSTRICT APPROVAL: the user chose to approve every file"
+                    " edit and internet call — document/file-writing tools"
+                    " and web_search/web_fetch also pause for approval."
+                    " One approval per call unless the user grants the tool"
+                    " for the conversation; if they decline, do not retry"
+                    " the same call."
+                    if approval_mode == "always_ask"
                     else ""
                 )
                 # Lock-step with chat_turn.py (v1.186.0). THIS is the lane the
@@ -1695,11 +1739,38 @@ def register(app: FastAPI, d) -> None:
                         _grant_extra: set[str] = set()
                         _perm_name = _t.perm_key() if _t is not None else tc.name
                         _mode = d.platform.permissions.mode_for(_perm_name, overrides)
-                        if (
+                        # THE POSTURE DECIDES WHETHER A CARD RENDERS
+                        # (v1.188.0). The engine's answer is unchanged in
+                        # every mode — the posture only chooses when to put a
+                        # human between an *askable* call and its execution:
+                        #   approve_for_me  engine-ask only (v1.187.0);
+                        #   always_ask      engine-ask PLUS file edits + web,
+                        #                   unless a card already granted the
+                        #                   tool this conversation;
+                        #   yolo            never — an engine-ask is granted
+                        #                   because the user pre-approved it
+                        #                   from the dropdown. A base `deny`
+                        #                   never reaches this branch (it is
+                        #                   not ASK) and `invoke` refuses it
+                        #                   in yolo exactly as everywhere.
+                        _engine_asks = (
                             _mode is PermissionMode.ASK
                             and _perm_name not in armed_grant
                             and tc.name not in armed_grant
-                        ):
+                        )
+                        if approval_mode == "yolo":
+                            if _engine_asks:
+                                _grant_extra = {tc.name, _perm_name}
+                            _needs_card = False
+                        elif approval_mode == "always_ask":
+                            _needs_card = _engine_asks or (
+                                tc.name in STRICT_ASK_TOOLS
+                                and tc.name not in card_grants
+                                and _mode is not PermissionMode.DENY
+                            )
+                        else:
+                            _needs_card = _engine_asks
+                        if _needs_card:
                             _apr = _approvals()
                             _ap_id, _fut = _apr.request(tc.name, safe_args)
                             yield _sse("approval", {
@@ -1746,8 +1817,11 @@ def register(app: FastAPI, d) -> None:
                                 # `|=`: an augmented assignment would bind
                                 # `armed_grant` as a LOCAL of this generator
                                 # and unbind every earlier read of the
-                                # enclosing scope's set.
+                                # enclosing scope's set. `card_grants` is what
+                                # stops strict mode re-carding this tool —
+                                # armed_grant alone cannot say WHO granted.
                                 armed_grant.update({tc.name, _perm_name})
+                                card_grants.update({tc.name, _perm_name})
                             elif _decision == "deny":
                                 _deny_reason = (
                                     "you declined this call when asked"

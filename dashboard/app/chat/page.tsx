@@ -530,6 +530,40 @@ interface ThreadSetup {
   workspace_dir?: string;
   provider?: string;
   model?: string;
+  /** Permission posture for the mid-turn ask (v1.188.0). Absent = the
+   *  default ("approve_for_me") — the daemon stores nothing for the default
+   *  so a stray string never reloads as a posture nobody picked. */
+  approval_mode?: string;
+}
+
+/** The three approval postures (v1.188.0). Order = the dropdown's order,
+ *  strictest first. The VALUE strings are the wire vocabulary the daemon
+ *  validates — rename a label freely, never a value. */
+const APPROVAL_MODES = [
+  {
+    value: "always_ask",
+    label: "Ask for approval",
+    hint: "Always ask before editing files or using the internet",
+  },
+  {
+    value: "approve_for_me",
+    label: "Approve for me",
+    hint: "Only ask for actions detected as potentially unsafe",
+  },
+  {
+    value: "yolo",
+    label: "Auto-approve",
+    hint: "YOLO — run everything it can without asking",
+  },
+] as const;
+type ApprovalMode = (typeof APPROVAL_MODES)[number]["value"];
+
+const APPROVAL_MODE_KEY = "ij_chat_approval_mode";
+
+function asApprovalMode(raw: unknown): ApprovalMode {
+  return APPROVAL_MODES.some((m) => m.value === raw)
+    ? (raw as ApprovalMode)
+    : "approve_for_me";
 }
 
 /** GET /chat/threads/{id}. */
@@ -1316,6 +1350,18 @@ export default function ChatPage() {
   // `connectors` on every /chat turn. An MCP connector arms its whole tool
   // group server-side; a memory connector grounds the turn with its store.
   const [selectedConnectors, setSelectedConnectors] = useState<string[]>([]);
+  // APPROVAL POSTURE (v1.188.0): how the mid-turn ask behaves. Hydrated from
+  // the localStorage DEFAULT after mount (SSR parity — the roster-fold idiom);
+  // a thread's saved setup overrides it on open; New chat returns to the
+  // default. Changing it in an open thread persists with that thread.
+  const [approvalMode, setApprovalMode] = useState<ApprovalMode>("approve_for_me");
+  useEffect(() => {
+    try {
+      setApprovalMode(asApprovalMode(localStorage.getItem(APPROVAL_MODE_KEY)));
+    } catch {
+      /* storage unavailable — the default stands */
+    }
+  }, []);
   // Bumped on every USER edit to the thread setup (tools/skill/workspace/model)
   // — drives the persist-on-change effect below. Restores never bump it, so
   // merely opening a thread can't churn its updated_at with an echo save.
@@ -2321,6 +2367,7 @@ export default function ChatPage() {
       workspace_dir: workspaceDir ?? "",
       provider: provider ?? "",
       model: model ?? "",
+      approval_mode: approvalMode,
     };
   }
 
@@ -2404,6 +2451,14 @@ export default function ChatPage() {
     setAttachments([]);
     setSelectedTools([]); // armed tools are per-conversation
     setSelectedConnectors([]); // so are connector toggles
+    // New chat returns to the user's DEFAULT posture (the localStorage one),
+    // not the previous thread's — a YOLO grant is per-conversation consent
+    // and must never leak into a conversation that never made it.
+    try {
+      setApprovalMode(asApprovalMode(localStorage.getItem(APPROVAL_MODE_KEY)));
+    } catch {
+      setApprovalMode("approve_for_me");
+    }
     setPreviewPath(null); // the preview belongs to the previous conversation
     setThreadDocs([]); // until this thread's setup (if any) restores its own
     // Clear the chip AND orphan any in-flight compaction fetch: a bare state
@@ -2487,6 +2542,12 @@ export default function ChatPage() {
             : [],
         );
         setActiveSkill(typeof setup.skill === "string" ? setup.skill : "");
+        // Thread-local posture restore (v1.188.0): absent = the stored
+        // default IS "approve_for_me" (the daemon never stores the default),
+        // and a reopened thread must come back with the posture it was left
+        // on — a YOLO thread reopening as ask-everything would re-card work
+        // the user already waved through.
+        setApprovalMode(asApprovalMode(setup.approval_mode));
         // Thread-local restore: the panel points at this conversation's folder
         // without touching the localStorage default (New chat returns to it).
         setWorkspaceDir(setup.workspace_dir ? setup.workspace_dir : null);
@@ -3436,6 +3497,11 @@ export default function ChatPage() {
       // Seamless arming: the daemon reads the request and fills the free tool
       // slots from its curated safe set (explicit picks above always first).
       ...(autoTools ? { auto_tools: true } : {}),
+      // The approval posture (v1.188.0) — only the non-default rides, so a
+      // pre-v1.188.0 daemon sees a body it already understands.
+      ...(approvalMode !== "approve_for_me"
+        ? { approval_mode: approvalMode }
+        : {}),
     };
   }
 
@@ -6624,6 +6690,47 @@ export default function ChatPage() {
                 >
                   <Share2 size={12} />
                 </button>
+                {/* APPROVAL POSTURE (v1.188.0): how the mid-turn ask behaves
+                    for this conversation. A native select at the footer's
+                    quiet weight — one control, three positions, the current
+                    one readable at a glance. YOLO reads amber because a
+                    conversation running without asks should look like one. */}
+                <select
+                  value={approvalMode}
+                  onChange={(e) => {
+                    const mode = asApprovalMode(e.target.value);
+                    setApprovalMode(mode);
+                    // The pick is BOTH this conversation's posture (persists
+                    // with the thread via the setup snapshot) and the user's
+                    // new default for future chats — one dial, not two.
+                    try {
+                      localStorage.setItem(APPROVAL_MODE_KEY, mode);
+                    } catch {
+                      /* best-effort */
+                    }
+                    markSetupChanged();
+                  }}
+                  aria-label="Approval mode"
+                  title={
+                    APPROVAL_MODES.find((m) => m.value === approvalMode)?.hint
+                  }
+                  className={`cursor-pointer rounded-lg border border-white/10 bg-transparent px-1.5 py-0.5 text-[11.5px] transition-colors hover:border-white/20 ${
+                    approvalMode === "yolo"
+                      ? "text-amber-300"
+                      : "text-zinc-500 hover:text-zinc-300"
+                  }`}
+                >
+                  {APPROVAL_MODES.map((m) => (
+                    <option
+                      key={m.value}
+                      value={m.value}
+                      title={m.hint}
+                      className="bg-ink-900 text-zinc-200"
+                    >
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
                 {/* Context headroom (v1.146.0). Deliberately quiet until it
                     matters: nobody needs a gauge at 12% of a 200k window, and
                     a permanent meter is the kind of chrome that gets ignored

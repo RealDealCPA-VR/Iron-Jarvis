@@ -981,6 +981,41 @@ _ADVICE_RX = _re.compile(
     r"\s*(?:how|what|why|when|where|can|could|should|would|does|do|is|are)\b",
     _re.IGNORECASE,
 )
+#: The chat's per-conversation permission POSTURE (v1.188.0) — how the
+#: v1.187.0 mid-turn ask behaves. Three positions, defaulting to the middle:
+#:
+#:   always_ask      cards for the ask tier AND for file edits + internet —
+#:                   the "show me everything before it happens" posture;
+#:   approve_for_me  cards only for what the permission engine itself marks
+#:                   unsafe (the ask tier: shell/repl/custom) — v1.187.0's
+#:                   behaviour, unchanged, and the default;
+#:   yolo            no cards — ask-tier calls are auto-granted, because the
+#:                   user said so up front. The DENY FLOOR IS NOT A MODE and
+#:                   no posture touches it: a base `deny` is refused in yolo
+#:                   exactly as everywhere else, engine-level.
+APPROVAL_MODES = ("always_ask", "approve_for_me", "yolo")
+
+
+def normalize_approval_mode(raw: object) -> str:
+    """Coerce a client-sent mode to the vocabulary; unknown → the DEFAULT.
+
+    The default (not the strictest, not yolo): a newer client's future mode
+    name must degrade to today's behaviour, never to auto-approve — and
+    punishing an unknown string with maximum friction would make every
+    client upgrade a UX regression.
+    """
+    mode = str(raw or "").strip().lower()
+    return mode if mode in APPROVAL_MODES else "approve_for_me"
+
+
+#: What `always_ask` cards ON TOP of the ask tier: everything that writes a
+#: file plus the two internet tools. Derived from `_FILE_WRITING_TOOLS` (one
+#: vocabulary — a writer added there is strict-gated for free) plus the
+#: writers that create NEW files without editing documents, plus the web.
+#: Memory appends stay out: strictly additive, revert cleanly, and are not
+#: what "ask before file edits and internet" means to the person reading it.
+STRICT_ASK_TOOLS: frozenset[str] = frozenset()  # filled below _FILE_WRITING_TOOLS
+
 _FILE_WRITING_TOOLS = frozenset(
     {
         "write_document",
@@ -994,6 +1029,13 @@ _FILE_WRITING_TOOLS = frozenset(
         "convert_document",
         "batch_documents",
     }
+)
+
+# (declared above _FILE_WRITING_TOOLS; assigned here because it derives from it)
+STRICT_ASK_TOOLS = (
+    _FILE_WRITING_TOOLS
+    | {"pdf_arrange", "pdf_split", "rename_file", "edit_file"}
+    | {"web_search", "web_fetch"}
 )
 
 #: An assertive claim that a file now EXISTS, followed by a filename. Used to

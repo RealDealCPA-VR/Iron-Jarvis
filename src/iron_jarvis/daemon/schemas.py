@@ -184,6 +184,12 @@ class ChatBody(BaseModel):
     #: documents, web retrieval, local image tools. Explicit ``tools`` always
     #: come first; the reply's tools_used stays the honest record of what RAN.
     auto_tools: bool = False
+    #: Per-conversation permission POSTURE for the mid-turn ask (v1.188.0):
+    #: "always_ask" | "approve_for_me" | "yolo". "" / unknown = approve_for_me
+    #: (v1.187.0's behaviour). Honoured by the STREAM lane only — the headless
+    #: lane has nobody present to answer a card, and yolo from a caller that
+    #: never showed the user a dropdown would be a grant nobody made.
+    approval_mode: str = ""
     #: Connectors the user TOGGLED ON for this conversation (the "+" menu).
     #: An MCP connector arms its whole tool group (additive to ``tools``,
     #: separately bounded); a memory connector (an LTM source, e.g. an
