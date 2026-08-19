@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import { ApiError, get, post, wsUrl } from "@/lib/api";
+import { waitForStableSize } from "@/lib/layout";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 import type { AiCli, ModelOption, Skill, TerminalInfo } from "@/lib/types";
 
@@ -336,6 +337,18 @@ export function TerminalPane({
         setState("open");
         doFit();
         sendResize();
+        // Full repaint once the replay window closes (v1.190.0): the replay
+        // lands as one burst and any cell painted from transitional metrics
+        // stays stale until SOMETHING repaints it — which used to be "the
+        // user drags the box". Timed just past the replay guard so it sweeps
+        // the whole viewport exactly once per (re)attach.
+        setTimeout(() => {
+          try {
+            term?.refresh(0, Math.max(0, (term?.rows ?? 1) - 1));
+          } catch {
+            /* disposed mid-wait — nothing to repaint */
+          }
+        }, 850);
         if (!focusedOnce) {
           focusedOnce = true;
           term?.focus();
@@ -444,6 +457,20 @@ export function TerminalPane({
       });
       ro.observe(holder);
       window.addEventListener("resize", onWinResize);
+
+      // FIT BEFORE CONNECT (v1.190.0). The server replays the session's whole
+      // scrollback the moment the socket opens, at whatever size this terminal
+      // has RIGHT THEN — and on a RETURN visit the xterm module is cached, so
+      // this code used to win the race against the pane's own layout: the
+      // replay wrapped into a default 80×24 buffer, the history came back
+      // malformed, and no later fit could re-wrap it (dragging re-fits and
+      // triggers the server's repaint wiggle, which fixes only the live
+      // screen — the user's exact report). On the FIRST visit the module
+      // download gave layout time to settle, which is why the original pane
+      // looked right. Capped wait: a hidden pane proceeds rather than hangs.
+      await waitForStableSize(holder);
+      if (disposed) return;
+      doFit();
 
       setState("connecting");
       connect();
