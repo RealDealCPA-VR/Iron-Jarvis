@@ -49,3 +49,28 @@ export function num(v: number | null | undefined, digits = 2): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
   return Number(v).toFixed(digits);
 }
+
+/**
+ * A dead engine's exit code, in words (v1.191.0). The raw number is kept —
+ * it is the searchable fact — but it must never be the WHOLE sentence.
+ * Windows reports a signed -1 as unsigned 4294967295, and -1/terminated is
+ * what a process reads when something killed it from outside: most commonly
+ * the app itself restarting underneath the session (an update's
+ * restart-to-apply kills the daemon's ConPTY children), sometimes a crash.
+ */
+export function describeEngineExit(code: number | null): string {
+  if (code === null) return "The engine exited.";
+  if (code === 0) return "The engine exited normally (code 0).";
+  if (code === 4294967295 || code === -1) {
+    return (
+      "The engine was terminated (code -1) — usually the app restarted " +
+      "underneath it (an update applying, or the daemon restarting), " +
+      "occasionally a crash in the engine itself."
+    );
+  }
+  if (code === 3221225786) {
+    return "The engine was interrupted (Ctrl+C / console closed, code 0xC000013A).";
+  }
+  return `The engine exited with an error (code ${code}).`;
+}
+

@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import Link from "next/link";
+import { describeEngineExit } from "@/lib/format";
 import {
   Sparkles,
   Image as ImageIcon,
@@ -1686,6 +1687,7 @@ function AssistantBubble({ children }: { children: ReactNode }) {
 
 type TurnState = "working" | "done" | "ready" | "exited";
 
+
 /**
  * The assistant's turn for one brief — a status line (working / done / ready /
  * exited) plus the media it produced, rendered INLINE as tiles that open the
@@ -1698,6 +1700,9 @@ function AssistantTurn({
   exitCode,
   statusText,
   onOpenMedia,
+  onRestart,
+  restartBusy = false,
+  terminalHref,
 }: {
   state: TurnState;
   media: LibraryFile[];
@@ -1705,6 +1710,11 @@ function AssistantTurn({
   /** Live daemon status_line shown while working (e.g. "Rendering shot 3/5…"). */
   statusText?: string | null;
   onOpenMedia: (f: LibraryFile) => void;
+  /** Relaunch the SAME setup (engine/skill/folder) after an exit (v1.191.0). */
+  onRestart?: () => void;
+  restartBusy?: boolean;
+  /** Deep link to the dead session's terminal — the last screen is evidence. */
+  terminalHref?: string;
 }) {
   const count = media.length;
   return (
@@ -1718,9 +1728,43 @@ function AssistantTurn({
           </span>
         </div>
       ) : state === "exited" ? (
-        <p className="text-[13px] text-zinc-400">
-          The engine exited{exitCode !== null ? ` (code ${exitCode})` : ""}.
-        </p>
+        // The exit is EXPLAINED and RECOVERABLE (v1.191.0). This used to be
+        // one sentence ending in a raw unsigned exit code — the user's actual
+        // report was "The engine exited (code 4294967295)", which is -1 in
+        // Windows clothing and means nothing to anyone. Say what the code
+        // means in words, point at the evidence (the terminal's last screen
+        // survives on Build), and offer the way forward in one click.
+        <div className="space-y-2.5">
+          <p className="text-[13px] text-zinc-300">{describeEngineExit(exitCode)}</p>
+          <p className="text-[11.5px] leading-relaxed text-zinc-500">
+            Anything it already saved is safe in your folder
+            {terminalHref ? (
+              <>
+                {" "}— and its last screen is on the{" "}
+                <Link href={terminalHref} className="text-accent-soft hover:underline">
+                  Build page
+                </Link>
+                .
+              </>
+            ) : (
+              "."
+            )}
+          </p>
+          {onRestart && (
+            <button
+              type="button"
+              onClick={onRestart}
+              disabled={restartBusy}
+              className="btn-accent text-xs"
+            >
+              {restartBusy ? (
+                <LoaderInline label="Starting…" />
+              ) : (
+                "Start a new session — same engine, same folder"
+              )}
+            </button>
+          )}
+        </div>
       ) : state === "done" ? (
         <p className="flex items-center gap-1.5 text-[13px] text-zinc-300">
           <Check size={14} className="shrink-0 text-emerald-400" />
@@ -2702,6 +2746,16 @@ function StudioView({
                         exitCode={exitCode}
                         statusText={isLast ? statusLine : null}
                         onOpenMedia={setStudioSelected}
+                        // Relaunch with the SAME setup — `start()` snapshots a
+                        // fresh baseline, resets the live state and replaces
+                        // the session, so the dead one needs no cleanup first.
+                        onRestart={isLast ? () => void start() : undefined}
+                        restartBusy={startBusy}
+                        terminalHref={
+                          session
+                            ? `/terminals?focus=${encodeURIComponent(session.terminalId)}`
+                            : undefined
+                        }
                       />
                     </div>
                   );
