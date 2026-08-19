@@ -159,6 +159,28 @@ def fs_path_allowed(path: str | Path) -> bool:
     return False
 
 
+def usable_workspace_root(path: str | Path) -> bool:
+    """May a session/turn run DIRECTLY in this folder? (v1.189.0)
+
+    The one predicate behind every "work in the user's own folder" door —
+    chat's workspace pick, ``POST /sessions``' ``workspace_root``, the dynamic
+    spawn's. Absolute + an existing directory + allowlist-clean + not a
+    protected root. One definition, because the measured failure mode of this
+    area is two doors answering differently and a job losing its folder on
+    the way through the second one.
+    """
+    try:
+        p = Path(path)
+        return bool(
+            p.is_absolute()
+            and p.is_dir()
+            and fs_path_allowed(str(p))
+            and not is_protected_path(str(p))
+        )
+    except Exception:  # noqa: BLE001 — an unparseable path is not a workspace
+        return False
+
+
 def fs_read_ok(path: str | Path) -> tuple[bool, str]:
     """Combined read gate for agent file tools.
 

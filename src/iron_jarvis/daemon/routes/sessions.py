@@ -27,6 +27,25 @@ def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.post("/sessions")
     async def create_session(body: SessionCreate) -> dict[str, Any]:
+        # THE FOLDER RIDES THE ESCALATION (v1.189.0). Validated with the SAME
+        # tests the chat lane applies to its workspace — and unlike chat's
+        # silent fallback, an EXPLICIT folder that fails them is an honest 400:
+        # the caller named a folder on purpose, and running the job in a
+        # scratch dir instead would reproduce the exact failure this field
+        # exists to close (every write refused as outside-workspace, in a
+        # workspace the user never chose).
+        workspace_root = (body.workspace_root or "").strip() or None
+        if workspace_root:
+            from ...core.fs_policy import usable_workspace_root
+
+            if not usable_workspace_root(workspace_root):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "workspace_root must be an existing, absolute, "
+                        "non-protected folder this app may write in"
+                    ),
+                )
         try:
             session = await d.orchestrator.create_session(
                 body.task,
@@ -36,6 +55,7 @@ def register(app: FastAPI, d) -> None:
                 self_dev=body.self_dev,
                 project_id=body.project_id or None,
                 allow_tools=body.allow_tools or None,
+                workspace_root=workspace_root,
                 origin=body.origin,
                 # Contract 4 (v1.174.0): the caller's per-session step budget.
                 # Already range-validated by SessionCreate (a 422 outside

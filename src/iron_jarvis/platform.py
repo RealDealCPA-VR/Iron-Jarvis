@@ -235,6 +235,12 @@ class Platform:
     #: and the review routes cannot diverge. Optional: every reader treats
     #: ``None`` as "this build cannot take requests", never as a failure.
     capabilities: "object | None" = None
+    #: Mid-turn tool approvals (v1.187.0 chat, v1.189.0 sessions) — the pending
+    #: asks a human can answer while a turn or run is PAUSED on them. ONE
+    #: registry here so the chat route and the agent runtime share it, and
+    #: ``POST /chat/approvals/{id}`` answers a pause wherever it happened.
+    #: Optional for bare-platform tests; build_platform always attaches one.
+    approvals: "object | None" = None
 
 
 def build_platform(
@@ -930,6 +936,13 @@ def build_platform(
         fabric=fabric,
         search_index=search_index,
     )
+
+    # Mid-turn approvals (v1.189.0): built HERE so the chat route and the
+    # agent runtime share one registry — a pause answered on the wrong copy
+    # would leave the waiting side waiting forever.
+    from .core.approvals import ChatApprovals as _Approvals
+
+    platform.approvals = _Approvals()
 
     # Phase 6: the delegate tool needs the assembled platform.
     platform.registry.register(DelegateTool(platform))

@@ -3272,6 +3272,47 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [events, awaitingId]);
 
+  // MID-RUN APPROVALS (v1.189.0): a PAUSED escalated run's ask renders HERE —
+  // under the turn the user is actually watching — via approval.requested/
+  // approval.resolved events tagged with this session's id. The measured
+  // failure: the run's shell asks died on the headless resolver and the only
+  // visible artifact was a capability proposal on the Tools page. Same card,
+  // same POST /chat/approvals/{id} route as chat's own mid-turn ask — the
+  // registry is shared platform-side, so one answer path serves both pauses.
+  const [sessionApproval, setSessionApproval] = useState<{
+    id: string;
+    tool: string;
+    args?: Record<string, unknown>;
+  } | null>(null);
+  useEffect(() => {
+    if (!awaitingId) {
+      setSessionApproval(null);
+      return;
+    }
+    const boundary = sinceRef.current;
+    // Newest-first scan: the latest approval state for THIS session wins —
+    // a request that already resolved must not resurrect its card.
+    for (const e of events) {
+      if (e.id === boundary) break;
+      if (e.session_id !== awaitingId) continue;
+      if (e.type === "approval.resolved") {
+        const rid = String(e.payload?.approval_id ?? "");
+        setSessionApproval((prev) => (prev && prev.id === rid ? null : prev));
+        break;
+      }
+      if (e.type === "approval.requested") {
+        setSessionApproval({
+          id: String(e.payload?.approval_id ?? ""),
+          tool: String(e.payload?.tool ?? ""),
+          args: (e.payload?.args ?? undefined) as
+            | Record<string, unknown>
+            | undefined,
+        });
+        break;
+      }
+    }
+  }, [events, awaitingId]);
+
   // FALLBACK: if the /events socket is down, poll the session until it finishes.
   // The interval is torn down whenever the turn ends or the component unmounts.
   useEffect(() => {
@@ -4356,6 +4397,10 @@ export default function ChatPage() {
                 ...(selectedTools.length
                   ? { allow_tools: selectedTools.slice(0, MAX_TOOLS) }
                   : {}),
+                // THE FOLDER RIDES TOO (v1.189.0) — see below.
+                ...(workspaceDir ? { workspace_root: workspaceDir } : {}),
+                // Presence asserted — see the POST /sessions branch below.
+                origin: "chat",
               },
             )
           : await post<SessionView>("/sessions", {
@@ -4383,6 +4428,19 @@ export default function ChatPage() {
               ...(selectedTools.length
                 ? { allow_tools: selectedTools.slice(0, MAX_TOOLS) }
                 : {}),
+              // THE FOLDER RIDES THE ESCALATION (v1.189.0). Chat's own tools
+              // operate in this folder; the session the turn escalates into
+              // used to lose it and work in a scratch dir instead — measured:
+              // rename_file refusing all 27 tax documents as outside a
+              // workspace the user never chose, and the agent filing a
+              // capability request for a tool it already had.
+              ...(workspaceDir ? { workspace_root: workspaceDir } : {}),
+              // PRESENCE IS ASSERTED, never assumed (v1.189.0): "chat" is what
+              // lets the run PAUSE on an ask-tier tool and render its card
+              // here — an unattributed session keeps the instant denial,
+              // because "somebody is watching" is a fact only the watching
+              // surface can state.
+              origin: "chat",
             });
       }
       // ALWAYS chain forward to the returned session id: `continue` spawns a NEW
@@ -5737,6 +5795,29 @@ export default function ChatPage() {
                                 </li>
                               ))}
                             </ul>
+                          )}
+                          {/* MID-RUN APPROVAL (v1.189.0): the escalated run is
+                              PAUSED on an ask-tier tool. Same card, same
+                              answer route as chat's own mid-turn ask —
+                              "conversation" also arms the tool here so later
+                              turns (and their escalations, via allow_tools)
+                              carry the grant. */}
+                          {sessionApproval && (
+                            <ApprovalCard
+                              approval={{
+                                id: sessionApproval.id,
+                                callId: "",
+                                tool: sessionApproval.tool,
+                                args: sessionApproval.args,
+                              }}
+                              onConversation={(tool) =>
+                                setSelectedTools((prev) =>
+                                  prev.includes(tool) || prev.length >= MAX_TOOLS
+                                    ? prev
+                                    : [...prev, tool],
+                                )
+                              }
+                            />
                           )}
                         </div>
                       </Bubble>

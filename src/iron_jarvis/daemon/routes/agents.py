@@ -1646,6 +1646,20 @@ def register(app: FastAPI, d) -> None:
         # wins; the dynamic record's pinned pair is the fallback.
         provider = body.provider or (rec.provider if (rec and rec.provider) else None)
         model = body.model or (rec.model if (rec and rec.model) else None)
+        # The folder rides the spawn too (v1.189.0) — same contract, same
+        # honest 400, same single predicate as POST /sessions.
+        workspace_root = (body.workspace_root or "").strip() or None
+        if workspace_root:
+            from ...core.fs_policy import usable_workspace_root
+
+            if not usable_workspace_root(workspace_root):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "workspace_root must be an existing, absolute, "
+                        "non-protected folder this app may write in"
+                    ),
+                )
         session = await d.orchestrator.create_session(
             body.task,
             definition.type,
@@ -1653,6 +1667,7 @@ def register(app: FastAPI, d) -> None:
             model=model,
             project_id=body.project_id or None,
             allow_tools=body.allow_tools or None,
+            workspace_root=workspace_root,
             origin=body.origin,
         )
         # Run through the orchestrator (with the dynamic definition override) so

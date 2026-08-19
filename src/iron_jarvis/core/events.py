@@ -61,6 +61,14 @@ class EventType:
     PLAN_CREATED = "plan.created"
     PLAN_STEP_STARTED = "plan.step_started"
     PLAN_STEP_COMPLETED = "plan.step_completed"
+    # Mid-run tool approvals (v1.189.0): a RUNNING agent session paused on an
+    # ask-tier tool and is waiting for the user. requested: {approval_id, tool,
+    # args (redacted), timeout_s}; resolved adds {decision}. Tagged session_id
+    # so the chat page can render the card under the escalated turn the user
+    # is actually watching — the measured failure was an approval surfacing on
+    # the Tools page while the user stared at chat.
+    APPROVAL_REQUESTED = "approval.requested"
+    APPROVAL_RESOLVED = "approval.resolved"
     REVIEW_REQUESTED = "review.requested"
     PROVIDER_FAILED = "provider.failed"
     PROVIDER_FAILOVER = "provider.failover"

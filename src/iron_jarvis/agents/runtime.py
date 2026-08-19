@@ -16,11 +16,17 @@ from types import SimpleNamespace
 from ..core.db import session_scope
 from ..core.events import EventType
 from ..core.ids import utcnow
-from ..core.models import AgentRun, AgentState, AgentType, Session
+from ..core.models import AgentRun, AgentState, AgentType, PermissionMode, Session
 from ..providers.adapters.base import LLMMessage
 from ..tools.base import ToolContext
 from . import decompose as _decompose
 from .types import AgentDefinition
+
+#: How long a PAUSED run holds for a mid-run approval before denying honestly
+#: (v1.189.0). Longer than chat's (the user may be on another page — the event
+#: reaches the bell and the chat thread), still bounded: a run must never hang
+#: forever on a question nobody will answer.
+SESSION_APPROVAL_TIMEOUT_S = 300.0
 
 _TERMINAL = {AgentState.COMPLETED, AgentState.FAILED, AgentState.CANCELLED}
 
@@ -706,6 +712,99 @@ class AgentRuntime:
             sink.done(ok=True, result=run.result)
         return run
 
+    async def _pause_for_approval(
+        self,
+        session: Session,
+        tc,
+        agent_def: AgentDefinition,
+        session_allow: set[str],
+    ) -> tuple[str, set[str]]:
+        """PAUSE this run on an ask-tier call and let the USER answer
+        (v1.189.0) — the session half of chat's v1.187.0 mid-turn ask.
+
+        Returns ``(deny_reason, grant_extra)``: ``("", set())`` means proceed
+        (nothing needed asking, or the user granted it), a non-empty reason
+        means the user (or the clock) refused and ``invoke`` must record that
+        refusal through its ``deny_reason`` seam.
+
+        THE MEASURED FAILURE THIS CLOSES: session_a63b0a4f, the rename
+        acceptance job escalated from chat. `shell` hit the headless resolver
+        three times ("nothing here could ask"), the blocked agent filed a
+        capability request for a tool it already had, and the user found THAT
+        on the Tools page while staring at the chat where the work was
+        happening. The runtime now asks the human through the SAME registry
+        and the SAME answer route as chat — the pause is published as
+        ``approval.requested`` tagged with this session's id, so the chat page
+        renders the same card under the escalated turn.
+
+        WHO PAUSES: only runs whose ORIGIN ASSERTS a watching human — a chat
+        escalation ("chat"), an Agents-page job ("job:…"), a Projects task
+        ("project…"). An ALLOWLIST, not a denylist, and the first cut got
+        this backwards: treating "unattributed" as "somebody is watching"
+        parked every origin-less session — headless API callers and the
+        entire offline test suite included — for five silent minutes per
+        ask. Presence is a fact a caller states, never a default; an
+        unattributed run keeps the instant honest denial, whose message
+        already names ``allow_tools`` as the up-front grant path.
+
+        'conversation' widens ``session_allow`` IN PLACE (never rebinds — the
+        v1.187.0 generator-scoping lesson) so the rest of the run is covered;
+        'once' covers exactly this call via ``grant_extra``.
+        """
+        approvals = getattr(self.p, "approvals", None)
+        if approvals is None:  # bare-platform tests: no registry, no pause
+            return "", set()
+        origin = getattr(session, "origin", None) or ""
+        if not origin.startswith(("chat", "job", "project", "user")):
+            return "", set()
+        tool = self.p.registry.get(tc.name)
+        perm = tool.perm_key() if tool is not None else tc.name
+        mode = self.p.permissions.mode_for(perm, agent_def.permission_overrides)
+        if (
+            mode is not PermissionMode.ASK
+            or perm in session_allow
+            or tc.name in session_allow
+        ):
+            return "", set()
+        safe = tool.redact_args(tc.arguments) if tool is not None else tc.arguments
+        approval_id, fut = approvals.request(tc.name, safe)
+        await self.p.event_bus.publish(
+            EventType.APPROVAL_REQUESTED,
+            {
+                "approval_id": approval_id,
+                "tool": tc.name,
+                "args": safe,
+                "timeout_s": int(SESSION_APPROVAL_TIMEOUT_S),
+            },
+            session_id=session.id,
+        )
+        decision = "timeout"
+        try:
+            decision = await asyncio.wait_for(
+                fut, timeout=SESSION_APPROVAL_TIMEOUT_S
+            )
+        except asyncio.TimeoutError:
+            decision = "timeout"
+        finally:
+            approvals.pop(approval_id)
+        await self.p.event_bus.publish(
+            EventType.APPROVAL_RESOLVED,
+            {"approval_id": approval_id, "tool": tc.name, "decision": decision},
+            session_id=session.id,
+        )
+        if decision == "conversation":
+            session_allow.update({tc.name, perm})
+            return "", set()
+        if decision == "once":
+            return "", {tc.name, perm}
+        if decision == "deny":
+            return "the user declined this call when asked", set()
+        return (
+            "the approval request timed out with no answer — ask the user to"
+            " re-run, or grant the tool up front with allow_tools",
+            set(),
+        )
+
     async def perceive_act(
         self,
         run: AgentRun,
@@ -939,24 +1038,38 @@ class AgentRuntime:
             # ledger, and a refusal that never reached it would make the run's
             # own history disagree with the transcript.
             async def _invoke(tc):
+                deny_reason = broken_calls.get(
+                    call_signature(tc.name, tc.arguments), ""
+                )
+                # The breaker's refusal is NOT a permission denial (v1.174.0
+                # review): labelling it so makes the model tell the user it
+                # lacks permission. A USER's refusal from the approval pause
+                # below IS one — that is exactly what happened.
+                deny_label = "refused"
+                grant_extra: set[str] = set()
+                if not deny_reason:
+                    # MID-RUN APPROVAL (v1.189.0): an ask-tier call PAUSES for
+                    # the user instead of dying on the headless resolver — the
+                    # session half of chat's v1.187.0 ask. Per CALL, inside the
+                    # gather, so parallel asks each get their own card.
+                    deny_reason, grant_extra = await self._pause_for_approval(
+                        session, tc, agent_def, session_allow
+                    )
+                    if deny_reason:
+                        deny_label = "permission denied"
                 return await self.p.registry.invoke(
                     tc.name,
                     tc.arguments,
                     ctx,
                     self.p.permissions,
                     agent_def.permission_overrides,
-                    session_allow=session_allow,
-                    deny_reason=broken_calls.get(
-                        call_signature(tc.name, tc.arguments), ""
+                    session_allow=(
+                        (session_allow | grant_extra)
+                        if grant_extra
+                        else session_allow
                     ),
-                    # ...but NOT as a permission denial (v1.174.0 review). The
-                    # breaker is the app's own circuit breaker; labelling it
-                    # "permission denied" makes the model tell the user it lacks
-                    # permission, and both chat lanes string-match that phrase to
-                    # list a turn's user-refused tools. The ledger row and the
-                    # tool.denied event are unchanged — only the wording the
-                    # model reads.
-                    deny_label="refused",
+                    deny_reason=deny_reason,
+                    deny_label=deny_label,
                 )
 
             # FX-01: announce each tool call BEFORE the fan-out, with args redacted

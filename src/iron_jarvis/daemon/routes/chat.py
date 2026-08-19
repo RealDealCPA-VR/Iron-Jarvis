@@ -29,7 +29,7 @@ from ..schemas import (
 from ...core.db import CONVERSATION_WRITE_LOCK, session_scope
 from ...core.models import AgentState, PermissionMode
 from ...memory import commit as _commit
-from ..approvals import APPROVAL_TIMEOUT_S, DECISIONS, ChatApprovals
+from ...core.approvals import APPROVAL_TIMEOUT_S, DECISIONS, ChatApprovals
 
 # The chat TURN lives in daemon/chat_turn.py (v1.136.0 messaging surfaces):
 # POST /chat is a thin wrapper over run_chat_turn so headless callers (the
@@ -312,11 +312,16 @@ def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
 
     def _approvals() -> ChatApprovals:
-        """The shared mid-turn approval registry, created on first use.
+        """THE shared approval registry — the platform's (v1.189.0).
 
-        On ``d`` (not module state) so two apps in one test process cannot
-        answer each other's questions — the capability-store lesson, applied
-        before it becomes a bug this time."""
+        Since sessions pause too, chat and the runtime must share one registry
+        or a pause answered on the wrong copy waits forever; the platform owns
+        it. The ``d`` fallback keeps test doubles (a bare SimpleNamespace
+        platform) working — never two live copies in one real app, because
+        build_platform always attaches one."""
+        ap = getattr(d.platform, "approvals", None)
+        if ap is not None:
+            return ap
         ap = getattr(d, "chat_approvals", None)
         if ap is None:
             ap = ChatApprovals()

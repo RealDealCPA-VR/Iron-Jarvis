@@ -1,4 +1,12 @@
-"""Mid-turn tool approvals for INTERACTIVE chat (v1.187.0).
+"""Mid-turn tool approvals — ONE registry for every asking surface.
+
+Born in the daemon (v1.187.0) for chat's mid-turn ask; moved to ``core``
+(v1.189.0) when agent SESSIONS gained the same pause, because the runtime
+lives in the platform layer and a platform module importing from ``daemon``
+is the layering inversion v1.185.0 spent a release removing. The instance
+lives on the platform; the chat route and the agent runtime share it, so ONE
+route — ``POST /chat/approvals/{id}`` — answers a pause wherever it happened.
+
 
 The missing half of a mechanism the app has carried for two releases. The
 permission engine names "the interactive per-session grant (``session_allow``)"

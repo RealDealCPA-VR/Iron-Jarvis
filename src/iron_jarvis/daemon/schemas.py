@@ -92,6 +92,15 @@ class SessionCreate(BaseModel):
     # Per-session bundled tool grant (perm_keys) the user approved up front —
     # "ask" tools in this list run without re-prompting for THIS session only.
     allow_tools: list[str] = []
+    # THE FOLDER THE WORK IS ABOUT (v1.189.0). When set (and valid — see the
+    # route's guard), the session runs DIRECTLY in this folder instead of a
+    # scratch workspace, exactly like a project-folder task. This is the field
+    # a CHAT ESCALATION rides: chat's own tools operate in the grounded folder,
+    # and the session the turn escalates into must not lose it — measured
+    # (session_a63b0a4f): 27 tax documents, rename_file refusing every path as
+    # outside a scratch workspace the user had never heard of, and the agent
+    # filing a capability request for a tool it already had.
+    workspace_root: str = ""
     # TX-01 provenance the CALLER asserts ("job:agents", …). None/blank =
     # unattributed; validated (see _clean_origin) so the audit timeline stays
     # clean.
@@ -1104,6 +1113,9 @@ class SpawnBody(BaseModel):
     model: str | None = None
     project_id: str = ""
     allow_tools: list[str] = []
+    # Same contract as SessionCreate.workspace_root (v1.189.0) — a spawned
+    # dynamic agent escalated from a folder-grounded chat works IN that folder.
+    workspace_root: str = ""
     origin: str | None = None
 
     @field_validator("origin")
