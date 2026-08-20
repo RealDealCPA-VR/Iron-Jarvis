@@ -7,10 +7,16 @@ let a user *or* an agent extend the platform at runtime:
 * ``list_agents``  — enumerate built-in agent types and dynamic agents.
 * ``spawn_agent``  — run a built-in OR dynamic agent as a child subagent.
 
-``spawn_agent`` mirrors the ``delegate`` tool: it creates a child session with an
-isolated, disposable workspace, runs the agent runtime to completion, links the
-child ``AgentRun`` to the caller via ``parent_id``, and returns the summarized
-result. That mirror now includes ``delegate``'s anti-fork-bomb guards — no
+``spawn_agent`` mirrors the ``delegate`` tool: it creates a child session, runs
+the agent runtime to completion, links the child ``AgentRun`` to the caller via
+``parent_id``, and returns the summarized result. Since v1.193.0 the mirror also
+covers the three team behaviors delegate gained — the child inherits a DIRECT
+workspace (the user's real folder) and is otherwise isolated as before, its
+fan-out is bounded by the same per-parent cap, and the handoff is announced as
+``delegation.started``/``delegation.completed`` with the child's address in the
+tool output — and, because the child now works in the user's real folder, the
+always-settle guard too (a crashed child left ACTIVE would block every later
+turn in that folder). That mirror already included ``delegate``'s anti-fork-bomb guards — no
 supervisor target, no target that can itself hand work out, and the shared
 ``_MAX_DELEGATION_DEPTH`` parent-chain cap. Orchestrator / runtime / definition
 lookups are imported lazily inside ``execute`` to avoid an agents-package import
@@ -19,12 +25,14 @@ cycle at module load.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 
 from ..core.ids import utcnow
 from ..core.models import AgentState, AgentType, SessionStatus
 from ..tools.base import Tool, ToolContext, ToolResult
+from .roster import canonical_roster_name
 from .types import _DEFINITIONS
 
 if TYPE_CHECKING:  # type-only; avoids importing at module load
@@ -212,8 +220,10 @@ class SpawnAgentTool(Tool):
     name = "spawn_agent"
     description = (
         "Launch a built-in OR dynamic agent as a subagent. The subagent runs "
-        "independently in its own isolated workspace and returns a summarized "
-        "result. Args: agent (a built-in type like 'builder' or the name of a "
+        "independently and returns a summarized result plus its agent_run_id "
+        "(usable with message_agent); when you are working in the user's folder "
+        "it works in that same folder. "
+        "Args: agent (a built-in type like 'builder' or the name of a "
         "dynamic agent created with `create_agent`) and task (the self-contained "
         "instruction)."
     )
@@ -233,8 +243,20 @@ class SpawnAgentTool(Tool):
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         # Lazy imports: avoid an agents-package import cycle at module load.
-        from .delegate_tool import _MAX_DELEGATION_DEPTH, DelegateTool
-        from .orchestrator import Orchestrator
+        from .delegate_tool import (
+            _MAX_DELEGATION_DEPTH,
+            DelegateTool,
+            _with_handle,
+            delegation_handle,
+            publish_delegation_completed,
+            publish_delegation_started,
+        )
+        from .orchestrator import (
+            Orchestrator,
+            child_fanout_key,
+            child_slot,
+            inherited_workspace_root,
+        )
         from .runtime import AgentRuntime
         from .types import get_agent_definition
 
@@ -305,45 +327,154 @@ class SpawnAgentTool(Tool):
         provider = parent.provider if parent else None
         model = parent.model if parent else None
         project_id = parent.project_id if parent else None
-        child_session = await orch.create_session(
-            task, base_type, provider=provider, model=model, project_id=project_id
-        )
-        run = await AgentRuntime(self.platform).run(
-            child_session, definition, parent_id=ctx.agent_run_id
-        )
+        # …and the FOLDER (v1.193.0), on the same terms as `delegate`: a parent
+        # working directly in the user's real folder hands that folder to its
+        # child, so the team's output lands in one place; a managed/worktree
+        # parent keeps the child isolated. One predicate, both doors.
+        workspace_root = inherited_workspace_root(self.platform.config, parent)
 
-        # Reflect the run's outcome onto the child session and persist it.
-        child_session.status = (
-            SessionStatus.COMPLETED
-            if run.state is AgentState.COMPLETED
-            else SessionStatus.FAILED
-        )
-        child_session.provider, child_session.model = run.provider, run.model
-        child_session.summary = run.result
-        child_session.finished_at = utcnow()
-        orch._save(child_session)
+        # BOUNDED FAN-OUT (v1.193.0), the same cap `delegate` takes — spawn is
+        # the other door onto the identical hazard. Deliberately NOT
+        # `spawn_managed`: this caller is blocked awaiting the child, so parking
+        # the child behind the session governor deadlocks it (`child_slot`).
+        async with child_slot(
+            self.platform.config,
+            child_fanout_key(ctx.agent_run_id, ctx.session_id),
+        ):
+            child_session = await orch.create_session(
+                task,
+                base_type,
+                provider=provider,
+                model=model,
+                project_id=project_id,
+                workspace_root=workspace_root,
+                # Credit the run to the teammate that actually ran (v1.193.0) —
+                # the same stamp `delegate` makes, so attribution survives a
+                # dropped or renamed event instead of falling back to the base
+                # type. FOLDED FIRST: spawn is called with the BARE slug
+                # ("tax-reader") while delegate publishes the roster name
+                # ("custom:tax-reader"), and stamping the raw slug would split
+                # one teammate's history across two keys — the exact defect
+                # canonical_roster_name exists to prevent.
+                agent_name=canonical_roster_name(self.platform, agent_name),
+            )
+            await publish_delegation_started(
+                self.platform,
+                session_id=ctx.session_id,
+                parent_run_id=ctx.agent_run_id,
+                child_session_id=child_session.id,
+                target=agent_name,
+                task=task,
+            )
+            # THE CHILD MUST ALWAYS SETTLE — the same guard `delegate` grew in
+            # v1.167.0, and since v1.193.0 spawn cannot go without it. A bare
+            # await left a crashed child ACTIVE forever; that used to strand a
+            # disposable scratch dir and block nothing, but now the child
+            # INHERITS the user's real folder, and
+            # `Orchestrator.continue_session`'s busy check refuses every later
+            # turn in a workspace that holds an ACTIVE session — so one provider
+            # refusal (the v1.162.0 case) would wedge the user's own chat/continue
+            # lane in that folder until a daemon restart ran reconcile. Worse, it
+            # is SILENT: `registry.invoke` traps this exception, so the parent run
+            # carries on and nothing surfaces the wedge. It would also leave
+            # `delegation.started` with no `delegation.completed`.
+            try:
+                run = await AgentRuntime(self.platform).run(
+                    child_session, definition, parent_id=ctx.agent_run_id
+                )
+            except asyncio.CancelledError:
+                await orch._finalize_cancelled(child_session)
+                try:
+                    await publish_delegation_completed(
+                        self.platform,
+                        session_id=ctx.session_id,
+                        parent_run_id=ctx.agent_run_id,
+                        child_run_id=None,
+                        child_session_id=child_session.id,
+                        target=agent_name,
+                        ok=False,
+                        result="cancelled",
+                    )
+                except Exception:  # noqa: BLE001 - never block the unwind
+                    pass
+                raise  # the caller's cancellation keeps propagating
+            except Exception as exc:  # noqa: BLE001
+                error = (
+                    f"spawned agent '{agent_name}' crashed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                await orch._finalize_failed(child_session, exc)
+                await publish_delegation_completed(
+                    self.platform,
+                    session_id=ctx.session_id,
+                    parent_run_id=ctx.agent_run_id,
+                    child_run_id=None,  # the runtime raised before minting one
+                    child_session_id=child_session.id,
+                    target=agent_name,
+                    ok=False,
+                    result=error,
+                )
+                return ToolResult(
+                    ok=False,
+                    output="",
+                    error=error,
+                    data={
+                        "agent": agent_name,
+                        "dynamic": self.registry.get(agent_name) is not None,
+                        "child_session_id": child_session.id,
+                        "state": "failed",
+                    },
+                )
 
-        # Close the learning loop for the child: spawned work teaches the system
-        # too (evaluate -> record outcome -> reflect). Best-effort so a learning
-        # failure never breaks the spawn.
-        try:
-            orch._post_run_learning(child_session)
-        except Exception:  # noqa: BLE001
-            pass
+            # Reflect the run's outcome onto the child session and persist it.
+            child_session.status = (
+                SessionStatus.COMPLETED
+                if run.state is AgentState.COMPLETED
+                else SessionStatus.FAILED
+            )
+            child_session.provider, child_session.model = run.provider, run.model
+            child_session.summary = run.result
+            child_session.finished_at = utcnow()
+            orch._save(child_session)
 
-        ok = run.state is AgentState.COMPLETED
-        return ToolResult(
-            ok=ok,
-            output=run.result,
-            error=None if ok else (run.result or "subagent failed"),
-            data={
-                "agent": agent_name,
-                "dynamic": self.registry.get(agent_name) is not None,
-                "child_run_id": run.id,
-                "child_session_id": child_session.id,
-                "state": run.state.value,
-            },
-        )
+            # Close the learning loop for the child: spawned work teaches the system
+            # too (evaluate -> record outcome -> reflect). Best-effort so a learning
+            # failure never breaks the spawn.
+            try:
+                orch._post_run_learning(child_session)
+            except Exception:  # noqa: BLE001
+                pass
+
+            ok = run.state is AgentState.COMPLETED
+            await publish_delegation_completed(
+                self.platform,
+                session_id=ctx.session_id,
+                parent_run_id=ctx.agent_run_id,
+                child_run_id=run.id,
+                child_session_id=child_session.id,
+                target=agent_name,
+                ok=ok,
+                result=run.result,
+            )
+            return ToolResult(
+                ok=ok,
+                # The child's address rides in the OUTPUT, not only in `data` —
+                # the runtime shows the model `output` and nothing else, so a
+                # handle in `data` is a handle the caller can never use.
+                output=_with_handle(
+                    run.result,
+                    delegation_handle(agent_name, run.id, child_session.id),
+                ),
+                error=None if ok else (run.result or "subagent failed"),
+                data={
+                    "agent": agent_name,
+                    "dynamic": self.registry.get(agent_name) is not None,
+                    "child_run_id": run.id,
+                    "child_session_id": child_session.id,
+                    "state": run.state.value,
+                    "workspace": child_session.workspace_path,
+                },
+            )
 
 
 def agent_management_tools(

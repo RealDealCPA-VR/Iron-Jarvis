@@ -126,7 +126,20 @@ _DOCUMENT_TOOLS = [
 _LEARNING_TOOLS = ["remember_preference", "recall_lessons"]
 # Departments: the shared blackboard lets sibling agents post findings and
 # address each other instead of only summarizing upward. Low-risk + allowed.
-_COLLAB_TOOLS = ["blackboard_post", "blackboard_read", "message_agent"]
+#
+# `consult` (v1.193.0) belongs on EVERY definition, including the two narrow
+# ones. The reviewer and the memory agent are deliberately kept away from
+# `shell`, `mcp:*` and `delegate` because each of those widens what a run can
+# DO; consult widens nothing — it asks a named teammate one question, writes
+# nothing, reaches no host resource, opens no session and hands over no work.
+# It is a read-only advisor door, the same tier as `blackboard_read`, and the
+# two narrow agents are precisely the ones who need it: a reviewer checking a
+# tax figure it cannot verify alone has, today, no way to ask the custom
+# tax-reader anything short of `delegate` — which those definitions rightly do
+# not carry. It also cannot recurse: the consulted agent answers with
+# `tools=[]`, so a consult chain is one hop deep by construction, and
+# `consult_tool._MAX_CONSULTS_PER_RUN` bounds the caller's side.
+_COLLAB_TOOLS = ["blackboard_post", "blackboard_read", "message_agent", "consult"]
 # External capability: "mcp:*" is a sentinel the registry expands to every
 # connected external MCP tool (Gmail/Drive/GitHub/...), so an agent can reach
 # integrations the user configured without each dynamic tool name being known

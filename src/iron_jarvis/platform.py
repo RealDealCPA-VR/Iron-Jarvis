@@ -42,6 +42,7 @@ from .tools.registry import ToolRegistry
 
 # Subsystem imports. Importing the model-bearing packages at module load time
 # registers their SQLModel tables on the shared metadata BEFORE init_db runs.
+from .agents.consult_tool import ConsultTool
 from .agents.delegate_tool import DelegateTool
 from .artifacts.store import ArtifactStore
 from .eval.evaluation import Evaluator
@@ -946,6 +947,30 @@ def build_platform(
 
     # Phase 6: the delegate tool needs the assembled platform.
     platform.registry.register(DelegateTool(platform))
+
+    # ASK A TEAMMATE WITHOUT SPAWNING ONE (v1.193.0). `delegate` above is the
+    # only other agent-to-agent door and it is a whole SESSION — workspace,
+    # AgentRun, budget, learning loop — held open while the parent blocks.
+    # `consult` is one question and one answer: no session, no files, and no
+    # recursion (the consulted agent answers with tools=[], so it cannot
+    # consult back). Same assembled platform for the same reason delegate needs
+    # it — the roster, the registries and the router all hang off it.
+    platform.registry.register(ConsultTool(platform))
+    # Declared beside the registration exactly as the worklist keys are below,
+    # and for the identical fail-closed reason: the permission engine resolves
+    # an unknown key to "ask", and a headless "ask" (no resolver) is a DENY, so
+    # without a default no agent run and no scheduled run could ever consult —
+    # and the user's existing config.toml, dumped from an older default set,
+    # will never carry the key. "allow" is the right tier: consulting reads a
+    # teammate's opinion, writes nothing, touches no host resource, and is
+    # capped per run — strictly below `delegate` ("ask"), which spends a whole
+    # session. BOTH copies are seeded because PermissionEngine snapshots the
+    # mapping at construction; `setdefault` keeps a user-set value winning.
+    # The canonical home is `core/config.py`'s default permissions (owned
+    # elsewhere this wave) — this seeding is what makes the tool reachable on
+    # an install whose config predates it.
+    platform.permissions._base.setdefault("consult", "allow")
+    platform.config.permissions.setdefault("consult", "allow")
 
     # Departments: the shared, session-scoped blackboard. Sibling sub-agents of
     # one task resolve to ONE board (their root session id) so they can post

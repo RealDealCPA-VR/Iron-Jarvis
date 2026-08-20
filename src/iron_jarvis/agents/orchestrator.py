@@ -14,8 +14,10 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 from sqlmodel import select
 
@@ -72,6 +74,133 @@ def is_managed_workspace(config, workspace_path: str | Path | None) -> bool:
     except (OSError, ValueError):  # unresolvable path -> not provably ours
         return False
     return managed in ws.parents
+
+
+def inherited_workspace_root(config, parent: Session | None) -> str | None:
+    """The folder a DELEGATED/SPAWNED child should work in, or None for the
+    disposable scratch dir it has always had (v1.193.0).
+
+    ``delegate``/``spawn_agent`` forwarded provider, model and project to the
+    child and never the WORKSPACE, so a Projects in-folder task — the one lane
+    that runs directly in the user's real folder — had a parent reading the
+    user's files while every child it handed work to got an empty scratch dir
+    somewhere under ``workspaces_dir``. The child could not see what it was
+    asked to work on, and anything it wrote landed where neither the parent nor
+    the user ever looks: a delegated deliverable was effectively lost unless the
+    child inlined it into its summary string.
+
+    Only a DIRECT workspace is forwarded (``is_direct_workspace`` — the one
+    honest signal that the user chose this folder). A managed scratch dir or a
+    git worktree keeps today's isolation: a worktree is a review-gated branch
+    whose whole point is that the work is separable, and handing a second agent
+    the same worktree would fold two agents' changes into one review.
+
+    THE CONSEQUENCE IS REAL AND IS NOT PAPERED OVER: two agents can now write
+    the same folder. There is no file locking here on purpose — the primitive
+    that fits is the durable worklist CLAIM (``worklist_next``), which
+    ``supervisor.WORKLIST_PATTERN`` already describes as "what stops two
+    subagents doing the same file".
+    """
+    if parent is None:
+        return None
+    path = getattr(parent, "workspace_path", None)
+    if not path or not is_direct_workspace(config, path):
+        return None
+    return str(path)
+
+
+#: Default cap on how many children ONE delegating parent may run AT ONCE
+#: (v1.193.0). Config-overridable with ``max_concurrent_children``; <= 0 means
+#: unlimited, i.e. exactly the pre-v1.193.0 behavior.
+_DEFAULT_MAX_CONCURRENT_CHILDREN = 4
+
+
+@dataclass
+class _FanoutSlot:
+    """One parent's child-concurrency semaphore plus a live user count, so the
+    registry entry is dropped when the last child of that parent is done
+    (a semaphore per run id would otherwise accumulate for the process's life)."""
+
+    sem: asyncio.Semaphore
+    users: int = 0
+
+
+#: (loop id, fan-out key) -> slot. Keyed by LOOP too: a semaphore is only ever
+#: awaited on the loop that created it.
+_child_slots: dict[tuple[int, str], _FanoutSlot] = {}
+
+
+def max_concurrent_children(config) -> int:
+    """``config.max_concurrent_children``, defaulted and sanitized (0 = off)."""
+    raw = getattr(config, "max_concurrent_children", None)
+    if raw is None:
+        return _DEFAULT_MAX_CONCURRENT_CHILDREN
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_MAX_CONCURRENT_CHILDREN
+    return max(value, 0)
+
+
+def child_fanout_key(agent_run_id: str | None, session_id: str | None) -> str:
+    """The bucket a delegating caller's children are counted in.
+
+    PER CALLER, never per department — that distinction is what makes the cap
+    deadlock-free (see :func:`child_slot`). A caller with no persisted run
+    (chat-origin tool calls) falls back to its session id, and only then to a
+    shared root bucket.
+    """
+    if agent_run_id:
+        return f"run:{agent_run_id}"
+    return f"session:{session_id or 'root'}"
+
+
+@asynccontextmanager
+async def child_slot(config, key: str) -> AsyncIterator[None]:
+    """Hold one of ``key``'s bounded child slots for the duration of a child run.
+
+    WHY NOT ``spawn_managed`` (deliberate, v1.193.0). The obvious fix for
+    "delegate bypasses the concurrency governor" is to route children through
+    the governor — and it deadlocks. The delegating parent is BLOCKED awaiting
+    its child while itself occupying a governed slot, so a child parked by the
+    governor waits for a slot that only its own parent can free. The codebase
+    already knows this hazard: ``spawn_managed`` exempts non-session work for
+    exactly this reason ("a parked workflow that itself spawns sessions could
+    deadlock the queue"). So delegation gets its own cap, and it is bounded on
+    a key nobody can wait on transitively:
+
+    * a waiter on key K is a child of the run K names;
+    * the slot holders on key K are siblings of that waiter, and a sibling's
+      OWN children wait on a different key (their parent's run id, minted per
+      run and never reused);
+    * therefore no holder of K can ever be blocked on K, and the wait graph has
+      no cycle. Progress is guaranteed by the parent chain, never by the queue.
+
+    ``limit <= 0`` yields immediately (unlimited). With no running loop the
+    context manager is a no-op rather than an error — a bare sync caller has no
+    concurrency to bound.
+    """
+    limit = max_concurrent_children(config)
+    if limit <= 0:
+        yield
+        return
+    try:
+        slot_key = (id(asyncio.get_running_loop()), key)
+    except RuntimeError:  # pragma: no cover - tools always run on a loop
+        yield
+        return
+    slot = _child_slots.get(slot_key)
+    if slot is None:
+        slot = _FanoutSlot(asyncio.Semaphore(limit))
+        _child_slots[slot_key] = slot
+    slot.users += 1
+    try:
+        async with slot.sem:
+            yield
+    finally:
+        slot.users -= 1
+        if slot.users <= 0:
+            _child_slots.pop(slot_key, None)
 
 
 def _stored_allow_tools(session: Session) -> list[str]:
@@ -386,7 +515,23 @@ class Orchestrator:
         workspace_root: str | None = None,
         origin: str | None = None,
         max_steps: int | None = None,
+        agent_name: str | None = None,
     ) -> Session:
+        """Create (never start) a session row.
+
+        ``agent_name`` (v1.193.0) is the ROSTER NAME this run must be CREDITED
+        to — ``"custom:tax-reader"`` / ``"remote:hermes"`` / a bare builtin type
+        — passed by whichever door resolved it (``POST /agents/{name}/spawn``,
+        ``delegate``, ``spawn_agent``). It is the strongest attribution signal
+        there is, because it does not depend on an event having been published;
+        omitted (the normal case for a plain ``POST /sessions``) the readers
+        fall back to the delegation ledger and then to ``agent_type``.
+
+        DELIBERATELY NOT CLONED BY ``rerun_session`` / ``continue_session``:
+        both re-run through ``run_session`` with NO definition, i.e. with the
+        BASE builtin prompt, so stamping the custom teammate's name on them
+        would manufacture a track record for a prompt that never ran.
+        """
         import json as _json
 
         repo_for_worktree: Path | None = None
@@ -408,6 +553,9 @@ class Orchestrator:
         session = Session(
             task=task,
             agent_type=agent_type,
+            # WHO ran (v1.193.0) — see the docstring. "" = not recorded, which
+            # readers resolve exactly as they did before this column existed.
+            agent_name=" ".join(str(agent_name or "").split()),
             provider=provider or self.p.config.default_provider,
             model=model or self.p.config.default_model,
             status=SessionStatus.ACTIVE,

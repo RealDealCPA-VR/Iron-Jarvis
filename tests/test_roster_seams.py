@@ -398,7 +398,16 @@ async def test_delegate_builtin_works_even_with_a_broken_roster(
     assert res.ok is True
     assert res.data["agent_type"] == "researcher"
     assert res.data["target"] == "researcher"
-    assert res.output == "child done"
+    # REWRITTEN in v1.193.0: the output is the child's report PLUS the child's
+    # address. `data` never reaches the model (the runtime hands it only
+    # `output`), so pinning output == the bare summary pinned the very thing
+    # that made a supervisor unable to message_agent its own child.
+    assert "child done" in res.output
+    # The handle leads the output, so a supervisor reading only `output` can
+    # address the child it just created.
+    assert res.output.startswith("[researcher agent_run_id=")
+    assert res.data["child_run_id"] in res.output
+    assert res.data["child_run_id"] in res.output
 
 
 async def test_delegate_supervisor_refusal_unchanged(platform, tmp_path, monkeypatch):
@@ -454,7 +463,10 @@ async def test_delegate_dynamic_target_runs_its_stored_definition(
         _tool_ctx(platform, tmp_path),
     )
     assert res.ok is True
-    assert res.output == "helper did it"
+    # The handle leads, the child's report follows (v1.193.0).
+    assert res.output.startswith("[custom:helper agent_run_id=")
+    assert "helper did it" in res.output
+    assert res.data["child_run_id"] in res.output
     assert res.data["target"] == "custom:helper"
     # The child ran the DYNAMIC definition, not a generic builder prompt.
     assert any("MARKER-HELPER-PROMPT" in s for s in router.systems)
@@ -804,7 +816,14 @@ def test_get_agents_roster_serializes_entries(tmp_path, monkeypatch):
             # the name. Declared here on purpose — this exact-set assertion is
             # what makes a roster field a deliberate contract change.
             "face",
+            # v1.193.0 (additive): liveness, so the rail reads a value instead
+            # of string-parsing `line`. Declared deliberately, per above.
+            "activity",
         }
+    # A duck-typed entry with no `activity` still SERIALIZES (as "unknown")
+    # rather than vanishing: the loop's `except: continue` would otherwise turn
+    # one missing field into an empty roster for every entry.
+    assert all(e["activity"] == "unknown" for e in roster)
     assert roster[0]["stats"]["sessions"] == 23
     assert roster[1]["healthy"] is False
     assert roster[0]["line"] == "builder — hands-on work"

@@ -29,5 +29,15 @@ class BlackboardRecord(SQLModel, table=True):
     author: str = ""  # the agent_run_id of the posting agent
     kind: BlackboardKind = BlackboardKind.NOTE
     to_agent: str | None = None  # recipient agent_run_id, for directed messages
+    #: IDENTITY alongside the run ids (v1.193.0). ``author``/``to_agent`` hold
+    #: agent_run_ids: precise, but a value the model is never shown and can only
+    #: guess at. These hold the ROSTER-STYLE name the same teammate is
+    #: addressable by ("builder", "custom:tax-reader", "remote:hermes"), stamped
+    #: at write time by :class:`~iron_jarvis.blackboard.store.BlackboardStore`.
+    #: Additive nullable columns (``_reconcile_additive_columns`` adds them), so
+    #: rows written before this release read back ``None`` — every consumer
+    #: coerces with ``or ""`` rather than assuming a string.
+    author_name: str = ""
+    to_name: str | None = None
     text: str = ""
     created_at: datetime = Field(default_factory=utcnow)

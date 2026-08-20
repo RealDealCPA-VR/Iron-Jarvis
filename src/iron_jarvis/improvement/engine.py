@@ -6,7 +6,10 @@ scores. It does four things, ordered from cheapest/always-on to gated:
 1. :meth:`record_outcome` — runs on EVERY session completion (the orchestrator
    hook, right after scoring). Cheap, pure-DB, NEVER raises, never changes
    observable behaviour: it records an :class:`OutcomeRecord` and updates rolling
-   per-lesson + per-agent stats.
+   per-lesson + per-agent stats. Per-agent stats are keyed by the ROSTER NAME
+   (v1.193.0) so a teammate the USER created earns a real track record instead
+   of dissolving into its base type; :meth:`record_agent_outcome` is the
+   session-less door for work that never opens a ``Session`` (remote asks).
 2. lesson weighting — each lesson gets an effective weight = its static ``weight``
    plus a ``weight_bonus`` this engine maintains: lessons whose sessions score
    BELOW the global baseline decay, those that score ABOVE are rewarded. The
@@ -68,6 +71,40 @@ def _clamp_bonus(value: float) -> float:
     return round(max(-_MAX_BONUS, min(_MAX_BONUS, value)), 2)
 
 
+def _session_roster_name(sess) -> str:
+    """The roster name a session row can prove, via the ONE shared predicate.
+
+    ``agents.roster.session_roster_name`` is the single owner of that rule (the
+    roster READS it, this engine WRITES it — two copies would drift). Imported
+    lazily: ``agents`` pulls in the orchestrator, and improvement is imported
+    from the platform build long before that graph is settled.
+    """
+    try:
+        from ..agents.roster import session_roster_name
+
+        return session_roster_name(sess)
+    except Exception:  # noqa: BLE001 - no name provable is not an error
+        return ""
+
+
+def _ledger_roster_name(platform, session_id: str) -> str:
+    """The roster name the DELEGATION LEDGER proves for this session, or "".
+
+    THE ONLY THING THAT MAKES THE RE-KEY REAL. ``Session`` carries no field for
+    who a run was handed to — only the builtin type it executed as — so without
+    this read every ``custom:<slug>`` teammate is credited to its base type and
+    the roster says "(no runs yet)" about it forever, which is the exact defect
+    keying stats by name exists to remove. ``agents.roster`` owns the rule (see
+    its "WHO RAN" section); this is the lazy call site.
+    """
+    try:
+        from ..agents.roster import ledger_roster_name
+
+        return ledger_roster_name(platform, session_id)
+    except Exception:  # noqa: BLE001 - an unreadable ledger is not an error
+        return ""
+
+
 def _loads(text: str) -> list:
     try:
         data = json.loads(text or "[]")
@@ -94,22 +131,39 @@ class ImprovementEngine:
     # -- 1 + 2: per-session outcome attribution + lesson weighting ----------
 
     def record_outcome(
-        self, session_id: str, *, lessons_applied: list[str] | None = None
+        self,
+        session_id: str,
+        *,
+        lessons_applied: list[str] | None = None,
+        agent_name: str | None = None,
     ) -> OutcomeRecord | None:
         """Record a session's outcome + update rolling stats. NEVER raises.
 
         Called on every session completion (cheap, pure-DB). ``lessons_applied``
         defaults to the lessons currently injected into prompts, i.e. the ones
         that were in effect for this run; callers may pass an explicit set.
+
+        ``agent_name`` is the ROSTER NAME the run should be attributed to
+        (``"builder"`` / ``"custom:tax-reader"`` / ``"remote:hermes"``) — pass
+        the roster entry's own ``name`` verbatim. OMITTED IS THE NORMAL CASE —
+        ``Orchestrator._post_run_learning`` passes only the session id — and it
+        is then resolved from the session row plus the DELEGATION LEDGER
+        (:func:`~iron_jarvis.agents.roster.ledger_roster_name`), which is what
+        lets a ``custom:<slug>`` teammate earn a history at all. A session no
+        handoff created (a user's own run) degrades to the bare builtin type,
+        exactly the pre-v1.193.0 behaviour.
         """
         try:
-            return self._record_outcome(session_id, lessons_applied)
+            return self._record_outcome(session_id, lessons_applied, agent_name)
         except Exception:  # noqa: BLE001 - the hook must never break a session
             log.exception("record_outcome failed for session %s", session_id)
             return None
 
     def _record_outcome(
-        self, session_id: str, lessons_applied: list[str] | None
+        self,
+        session_id: str,
+        lessons_applied: list[str] | None,
+        agent_name: str | None = None,
     ) -> OutcomeRecord | None:
         # Idempotent: re-scoring the same session (a retry/resume) must not
         # double-count agent/lesson stats.
@@ -123,7 +177,10 @@ class ImprovementEngine:
                 is not None
             ):
                 return None
-        score, success, agent_type = self._score_session(session_id)
+        score, success, agent_type, session_name = self._score_session(session_id)
+        # Attribution key: the caller's explicit roster name wins, else whatever
+        # the session row itself can prove, else the bare builtin type.
+        name = str(agent_name or "").strip() or session_name or agent_type
         tools = self._tools_used(session_id)
         if lessons_applied is None:
             lessons_applied = self._active_lesson_ids()
@@ -133,6 +190,7 @@ class ImprovementEngine:
         record = OutcomeRecord(
             session_id=session_id,
             agent_type=agent_type,
+            agent_name=name,
             score=score,
             success=success,
             lessons_applied=json.dumps(lessons_applied),
@@ -141,18 +199,10 @@ class ImprovementEngine:
         with self._stats_lock, session_scope(self.engine) as db:
             db.add(record)
 
-            # Per-agent rolling stats.
-            a = db.get(AgentStatRecord, agent_type) or AgentStatRecord(
-                agent_type=agent_type
-            )
-            a.session_count += 1
-            a.score_sum += score
-            a.success_count += int(success)
-            recent = _loads(a.recent_json)
-            recent.append(round(score, 4))
-            a.recent_json = json.dumps(recent[-_RECENT_MAX:])
-            a.last_at = now
-            db.add(a)
+            # Per-agent rolling stats, keyed by the ROSTER NAME (v1.193.0) —
+            # identical to the type string for builtins, so their existing rows
+            # keep accumulating and no migration is owed.
+            self._bump_agent_stat(db, name, score, success, now)
 
             # Per-lesson rolling stats.
             for lid in lessons_applied:
@@ -188,18 +238,81 @@ class ImprovementEngine:
             db.refresh(record)
             return record
 
-    def _score_session(self, session_id: str) -> tuple[float, bool, str]:
-        """Composite quality in [0,1] from the Evaluation + any FeedbackRecord."""
+    @staticmethod
+    def _bump_agent_stat(db, name: str, score: float, success: bool, now) -> None:
+        """Fold one run into a roster name's rolling record (inside ``db``)."""
+        a = db.get(AgentStatRecord, name) or AgentStatRecord(agent_type=name)
+        a.session_count += 1
+        a.score_sum += score
+        a.success_count += int(success)
+        recent = _loads(a.recent_json)
+        recent.append(round(score, 4))
+        a.recent_json = json.dumps(recent[-_RECENT_MAX:])
+        a.last_at = now
+        db.add(a)
+
+    def record_agent_outcome(
+        self, name: str, *, success: bool, score: float | None = None
+    ) -> bool:
+        """Give a SESSION-LESS run a track record. NEVER raises.
+
+        A remote agent's ask (``RemoteAgentRegistry.run``) creates no ``Session``
+        and therefore no ``OutcomeRecord`` — there is nothing to evaluate — so
+        ``record_outcome`` cannot reach it and ``remote:<name>`` would show "(no
+        runs yet)" forever. This folds one finished run straight into the rolling
+        per-name stats, scoring it 1.0/0.0 from ``success`` when no ``score`` is
+        supplied — the SAME degradation ``_score_session`` already applies to a
+        session with no evaluation row. It deliberately writes NO
+        ``OutcomeRecord``: that table is the per-session attribution substrate,
+        and a row with no session would break every reader that joins on one.
+        """
+        try:
+            key = str(name or "").strip()
+            if not key:
+                return False
+            value = float(score) if isinstance(score, (int, float)) else (
+                1.0 if success else 0.0
+            )
+            value = round(max(0.0, min(1.0, value)), 4)
+            with self._stats_lock, session_scope(self.engine) as db:
+                self._bump_agent_stat(db, key, value, bool(success), utcnow())
+                db.commit()
+            return True
+        except Exception:  # noqa: BLE001 - a track record is never worth a crash
+            log.exception("record_agent_outcome failed for %s", name)
+            return False
+
+    def _score_session(self, session_id: str) -> tuple[float, bool, str, str]:
+        """Composite quality in [0,1] from the Evaluation + any FeedbackRecord.
+
+        Returns ``(score, success, agent_type, roster_name)`` — the last being
+        WHO ran: the session row's own name if it carries one, else the name the
+        delegation ledger proves this session was handed off as, else empty (the
+        caller then falls back to ``agent_type``).
+        """
         agent_type = "builder"
+        roster_name = ""
+        explicit_name = ""
         status_value = ""
         with session_scope(self.engine) as db:
             sess = db.get(Session, session_id)
             if sess is None:
                 # Unknown session: do NOT call evaluator.evaluate() (it would
                 # synthesize a phantom Evaluation row); score it as a clean miss.
-                return 0.0, False, agent_type
+                return 0.0, False, agent_type, roster_name
             agent_type = getattr(sess.agent_type, "value", str(sess.agent_type))
+            roster_name = _session_roster_name(sess)
+            explicit_name = str(getattr(sess, "agent_name", "") or "").strip()
             status_value = getattr(sess.status, "value", str(sess.status))
+
+        # The ledger read runs OUTSIDE the scope above: ``sess`` is expired the
+        # moment it closes, and nesting a second session_scope inside a live one
+        # is a lock shape this hook has no reason to take. Skipped entirely when
+        # the row named itself — an explicit name is the stronger claim.
+        if not explicit_name:
+            handed_to = _ledger_roster_name(self.p, session_id)
+            if handed_to:
+                roster_name = handed_to
 
         ev = None
         evaluator = getattr(self.p, "evaluator", None)
@@ -229,7 +342,7 @@ class ImprovementEngine:
             elif "up" in ratings:
                 score = min(1.0, score + 0.1)
 
-        return round(max(0.0, min(1.0, score)), 4), bool(success), agent_type
+        return round(max(0.0, min(1.0, score)), 4), bool(success), agent_type, roster_name
 
     def _tools_used(self, session_id: str) -> list[str]:
         with session_scope(self.engine) as db:
@@ -305,6 +418,11 @@ class ImprovementEngine:
             recent = _loads(a.recent_json)
             agent_views.append(
                 {
+                    # Both keys carry the SAME roster-name string: "name" is what
+                    # the roster joins on (v1.193.0), "agent_type" is the pinned
+                    # wire key the dashboard already reads — and for a builtin
+                    # the two are identical anyway.
+                    "name": a.agent_type,
                     "agent_type": a.agent_type,
                     "sessions": n,
                     "avg_score": round(a.score_sum / n, 4) if n else None,
@@ -375,6 +493,8 @@ class ImprovementEngine:
                 {
                     "session_id": o.session_id,
                     "agent_type": o.agent_type,
+                    # WHO ran, not just what shape it was (v1.193.0).
+                    "agent": getattr(o, "agent_name", "") or o.agent_type,
                     "score": o.score,
                     "success": o.success,
                     "tools_used": _loads(o.tools_used),
@@ -469,7 +589,9 @@ class ImprovementEngine:
     def _heuristic_suggestions(low: list[OutcomeRecord]) -> list[dict]:
         """Deterministic offline fallback when the model gives nothing usable."""
         suggestions: list[dict] = []
-        for agent in sorted({o.agent_type for o in low}):
+        for agent in sorted(
+            {(getattr(o, "agent_name", "") or o.agent_type) for o in low}
+        ):
             suggestions.append(
                 {
                     "kind": "lesson",

@@ -20,6 +20,12 @@ DIRECTED with @-mentions (see :meth:`AgentThreads.run_round`), and a remote
 participant whose registration is disabled or gone is skipped with an honest
 entry instead of a doomed network call.
 
+A PANELIST IS THE AGENT IT CLAIMS TO BE (v1.193.0): a local speaker carries the
+real system prompt of the agent behind the seat — ``types._DEFINITIONS`` for a
+builtin, the registry's COMPOSED definition (identity anchor included) for a
+dynamic one — plus :data:`PANEL_NO_TOOLS`, because a panelist speaks with
+``tools=[]`` and a real agent prompt talks about tools it cannot reach here.
+
 A round's WORTH OUTLIVES THE ROUND (v1.178.0): :meth:`AgentThreads.remember`
 commits a panel to long-term memory the way ``POST /chat/threads/{id}/remember``
 commits a chat — same distill/verbatim ladder, same honest-mock refusal, same
@@ -56,6 +62,29 @@ SOURCES = ("builtin", "dynamic", "remote")
 
 _MAX_MESSAGES = 400  # per thread; oldest trimmed (matches chat's cap spirit)
 _TRANSCRIPT_CHARS = 24_000  # context handed to each speaker, newest kept
+
+#: THE PANELIST IS THE REAL AGENT, AND THE REAL AGENT HAS NO HANDS HERE
+#: (v1.193.0). A local panelist now carries the SAME system prompt its agent
+#: sessions run on (builtin: ``types._DEFINITIONS``; dynamic: the registry's
+#: COMPOSED definition, identity anchor included) — before this, a "reviewer"
+#: seat was a model told to sound like one, and a named custom agent was never
+#: told who it was. But a panelist speaks through ``d._one_shot_complete``,
+#: which calls the adapter with ``tools=[]``: those real prompts instruct the
+#: agent to read files, run shell, delegate. Handing them to a tool-less
+#: speaker without saying so invites it to CLAIM it acted, and a fabricated
+#: action is the one thing this codebase refuses. So the identity arrives WITH
+#: this correction, always last in :meth:`AgentThreads._system_for` so it is
+#: the final word on what the prompt above it asked for.
+PANEL_NO_TOOLS = (
+    "IN THIS ROOM YOU HAVE NO TOOLS. The instructions above describe the tools "
+    "you use in a normal working session — reading and writing files, running "
+    "commands, delegating, searching memory. NONE of them are available in this "
+    "panel and nothing you write here is executed. You ADVISE; you do not act. "
+    "So never say or imply that you read, wrote, ran, delegated, checked or "
+    "looked anything up while answering: say what you would do, what you would "
+    "need, and what you already know. If the question can only be settled by "
+    "actually running something, say so plainly and hand it back."
+)
 
 #: An @-mention in the user's message: ``@"quoted name"`` (for names with
 #: spaces) or a bare token of letters/digits/``._-`` — so ``@hermes-mac-mini``
@@ -537,7 +566,70 @@ class AgentThreads:
             "agree or disagree, and keep it under ~200 words. Never speak for "
             "the others or fabricate their views."
         )
-        return f"{base_prompt.strip()}\n\n{role_line}" if base_prompt.strip() else role_line
+        # Order is load-bearing: identity → seat → NO TOOLS. The base prompt is
+        # the agent's real working prompt and it talks about tools; the
+        # correction has to come after it, never before. See PANEL_NO_TOOLS.
+        parts = [base_prompt.strip(), role_line, PANEL_NO_TOOLS]
+        return "\n\n".join(part for part in parts if part)
+
+    @staticmethod
+    def _builtin_prompt(name: str) -> str:
+        """The REAL definition prompt behind a builtin panelist (v1.193.0).
+
+        The round table used to synthesize "You are a {name} agent: answer with
+        the judgement and focus of a {name}" — so the reviewer at the table was
+        not the Reviewer, just a model told to sound like one. Panels are for
+        HANDOFF AND TEAM SHAPE, which only means something if the seat carries
+        the judgement its agent actually runs on.
+
+        An unknown name keeps the old one-liner ON PURPOSE. ``types
+        .get_agent_definition`` falls back to BUILDER for anything it does not
+        know, and a seat named "designer" answering with the Builder's identity
+        would be exactly the impersonation this method exists to end.
+        """
+        from ..core.models import AgentType
+        from .types import _DEFINITIONS
+
+        try:
+            agent_type = AgentType(str(name or "").strip().lower())
+        except ValueError:
+            agent_type = None
+        definition = _DEFINITIONS.get(agent_type) if agent_type is not None else None
+        prompt = (getattr(definition, "system_prompt", "") or "").strip()
+        if prompt:
+            return prompt
+        return (
+            f"You are a {name} agent: answer with the judgement and "
+            f"focus of a {name}."
+        )
+
+    @staticmethod
+    def _dynamic_prompt(registry: Any, name: str, row: Any) -> str:
+        """A dynamic panelist's COMPOSED prompt — identity anchor included.
+
+        ``_speak_local`` read ``row.system_prompt`` raw, which bypasses
+        :meth:`DynamicAgentRegistry.definition` — and the anchor ("You are
+        {name}, a persistent named agent on this machine", v1.171.0) is applied
+        at COMPOSITION time inside that method. So in the one room where agents
+        address each other by name, a named agent was never told its own.
+
+        Falls back to composing the anchor by hand when the registry has no
+        usable ``definition`` (an injected or older registry): a panelist with
+        no identity at all is the defect, and the fallback must not reintroduce
+        it.
+        """
+        try:
+            definition = registry.definition(name)
+        except Exception:  # noqa: BLE001 — fall through to the hand-composed anchor
+            definition = None
+        prompt = (getattr(definition, "system_prompt", "") or "").strip()
+        if prompt:
+            return prompt
+        from .dynamic import identity_anchor
+
+        stored = (getattr(row, "system_prompt", "") or "").strip()
+        anchor = identity_anchor(name)
+        return f"{anchor}\n\n{stored}" if stored else anchor
 
     @staticmethod
     def _mentioned(user_message: str, participants: list[dict]) -> list[dict]:
@@ -684,17 +776,18 @@ class AgentThreads:
         provider = p.get("provider") or ""
         model = p.get("model") or ""
         if p["source"] == "dynamic":
-            row = d.platform.agents_registry.get(p["name"])
+            registry = d.platform.agents_registry
+            row = registry.get(p["name"])
             if row is None:
                 raise RuntimeError(f"dynamic agent {p['name']!r} no longer exists")
-            base_prompt = row.system_prompt or ""
+            # The COMPOSED definition, not the raw row — the identity anchor is
+            # applied at composition time (v1.193.0). ``row`` is still read for
+            # the pinned provider/model, which the definition does not carry.
+            base_prompt = self._dynamic_prompt(registry, p["name"], row)
             provider = provider or row.provider or ""
             model = model or row.model or ""
         else:
-            base_prompt = (
-                f"You are a {p['name']} agent: answer with the judgement and "
-                f"focus of a {p['name']}."
-            )
+            base_prompt = self._builtin_prompt(p["name"])
         provider = provider or d.platform.config.default_provider
         model = model or d.platform.config.default_model
         adapter = d.platform.providers.get(provider, model)

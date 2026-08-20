@@ -69,6 +69,20 @@ class EventType:
     # the Tools page while the user stared at chat.
     APPROVAL_REQUESTED = "approval.requested"
     APPROVAL_RESOLVED = "approval.resolved"
+    # THE TEAM ANNOUNCES ITSELF (v1.193.0). Delegation had NO event of its own:
+    # the only trace of a coordinator handing work out was a
+    # tool.executed{tool:"delegate"} plus a session.created that read like an
+    # orphan, and rebuilding the tree meant querying AgentRun.parent_id.
+    # started: {parent_run_id, child_session_id, agent, task}; completed adds
+    # {child_run_id, ok, result} (result is a SHORT summary — the full text is
+    # on the run). Both are tagged with the PARENT's session_id: the delegation
+    # is an act of the session the user is watching, and the child's own id
+    # rides in the payload, so one event carries the whole edge.
+    # ``delegation.started`` deliberately carries NO child_run_id — the child's
+    # AgentRun row is minted inside AgentRuntime.run, i.e. after this fires, and
+    # an empty string that looks like an id is worse than an absent field.
+    DELEGATION_STARTED = "delegation.started"
+    DELEGATION_COMPLETED = "delegation.completed"
     REVIEW_REQUESTED = "review.requested"
     PROVIDER_FAILED = "provider.failed"
     PROVIDER_FAILOVER = "provider.failover"

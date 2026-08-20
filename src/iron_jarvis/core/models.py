@@ -118,6 +118,19 @@ class Session(SQLModel, table=True):
     project_id: str | None = Field(default=None, index=True)
     task: str = ""
     agent_type: AgentType = AgentType.BUILDER
+    #: WHO ran, not merely WHAT SHAPE it ran as (v1.193.0). ``agent_type`` is the
+    #: builtin the run EXECUTED as, so nothing on this row could tell
+    #: ``custom:tax-reader`` apart from the ``builder`` it is based on — a user
+    #: pressing Run on their OWN agent left it reading "(no runs yet)" forever
+    #: while its runs were credited to the base type. This carries the ROSTER
+    #: NAME verbatim (``"builder"`` | ``"custom:<name>"`` | ``"remote:<name>"``)
+    #: and is stamped by every door that KNOWS it: ``POST /agents/{name}/spawn``,
+    #: ``delegate``, ``spawn_agent``. EMPTY means "not recorded" — readers
+    #: (:func:`iron_jarvis.agents.roster.resolve_roster_name`) then fall back to
+    #: the delegation ledger and finally to ``agent_type``, i.e. exactly the
+    #: pre-v1.193.0 behaviour, so every existing row keeps reading correctly.
+    #: Additive column (auto-reconciled).
+    agent_name: str = ""
     provider: str = "mock"
     model: str = "claude-opus-4-8"
     status: SessionStatus = SessionStatus.ACTIVE

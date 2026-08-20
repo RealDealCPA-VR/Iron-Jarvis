@@ -22,6 +22,25 @@
 // showing the WRONG team's notes. Backlogged for the coordinator: either grow
 // the blackboard endpoint to resolve a child id to its root board, or accept
 // root-page-only visibility.
+//
+// v1.193.0 — NAMES, NOT RUN IDS. The board became name-addressed this release
+// (`blackboard/tools.py`: an agent posts to "researcher" and an unknown name is
+// REFUSED with the addressable list), and `_to_view` — which THIS endpoint
+// serves verbatim — now carries `author_name` / `to_name` alongside the run
+// ids. The panel was rendering `shortId(run_id)` for both, i.e. the one
+// identity nobody in the conversation uses. It shows the name when there is
+// one and falls back to the clipped id otherwise; the id stays in the `title`,
+// so nothing is lost.
+//
+// STILL POLLING, ON PURPOSE. Checked `core/events.py` in this tree: v1.193.0
+// added DELEGATION_STARTED / DELEGATION_COMPLETED and nothing else touching
+// this board — there is NO blackboard event, and `blackboard/tools.py`
+// publishes none. So the 5s poll stays exactly as it was. A delegation event is
+// NOT a substitute: it fires when a coordinator hands out work, which is not a
+// claim that anyone wrote on the board, and subscribing to it here would light
+// this panel up for something that did not touch it. Reported upward instead —
+// the fix is a backend `blackboard.posted` event, after which this poll becomes
+// the fallback floor rather than the only signal.
 
 import { useEffect, useState } from "react";
 import { StickyNote, MessageSquare } from "lucide-react";
@@ -36,11 +55,32 @@ export interface BlackboardRecordView {
   to_agent: string | null;
   text: string;
   created_at: string;
+  /** v1.193.0 additive (blackboard/tools.py::_to_view, served by
+   *  GET /blackboard/{id}): the ROSTER-STYLE name the same teammate is
+   *  addressable by — "builder", "custom:tax-reader", "remote:hermes". The
+   *  board is NAME-ADDRESSED now, so this is the identity the agents
+   *  themselves used. Empty/absent on every row written before the columns
+   *  landed, and on any row the store could not name. */
+  author_name?: string | null;
+  to_name?: string | null;
 }
 
 export interface BlackboardResponse {
   board_id: string;
   records: BlackboardRecordView[];
+}
+
+/** Who a row is FROM / TO, in the vocabulary the team itself uses.
+ *
+ * v1.193.0: the board is name-addressed — an agent posts to "researcher", and
+ * the daemon's own text renderer (`blackboard/tools.py::_render`) prefers the
+ * name for exactly the reason the UI should: `author`/`to_agent` are
+ * agent_run_ids, precise and unreadable. Falls back to the clipped run id, so
+ * legacy rows (and rows the store could not name) read exactly as they did
+ * before. NEVER invents a name — an unnamed row says the id, not "agent". */
+function who(name: string | null | undefined, runId: string | null): string {
+  const named = (name ?? "").trim();
+  return named || shortId(runId);
 }
 
 export function BlackboardPanel({
@@ -101,10 +141,15 @@ export function BlackboardPanel({
                   <StickyNote size={11} /> note
                 </span>
               )}
-              <span className="font-mono text-zinc-500">{shortId(r.author)}</span>
-              {r.kind === "message" && r.to_agent && (
-                <span className="font-mono text-zinc-500">
-                  → {shortId(r.to_agent)}
+              <span className="font-mono text-zinc-500" title={r.author}>
+                {who(r.author_name, r.author)}
+              </span>
+              {r.kind === "message" && (r.to_agent || r.to_name) && (
+                <span
+                  className="font-mono text-zinc-500"
+                  title={r.to_agent ?? undefined}
+                >
+                  → {who(r.to_name, r.to_agent)}
                 </span>
               )}
               <span className="ml-auto text-zinc-600">{clockTime(r.created_at)}</span>

@@ -63,6 +63,22 @@
 // column and `md:hidden` <select>, and the page's `md:w-[17rem]` cap — and all
 // three must move together or a viewport band gets two pickers, or none.
 
+// v1.193.0 — WHO IS BUSY, AND WHOSE HISTORY IS REAL. Two things the daemon
+// only started knowing this release:
+//   * LIVENESS. `RosterEntry.activity` ("busy" | "queued" | "idle" |
+//     "unknown") reports which agents are TAKEN right now. It renders as a
+//     dot-plus-word pill on EVERY rail row — form first, so a busy teammate
+//     reads without being read — and NOTHING at all for idle/unknown, because
+//     the daemon's signal cannot see delegate/spawn_agent children and absence
+//     was never a claim that anyone is free (agents/roster.py states that
+//     limit at length). The pill also had to be SPLIT OUT of the stats slot:
+//     the daemon packs liveness and the track record into one parenthetical
+//     ("busy, 87% over 23 runs"), which this file was rendering verbatim as
+//     the stats line.
+//   * REAL STATS FOR `custom:` AND `remote:` AGENTS. Outcomes are keyed by
+//     roster name now, so a teammate the user created finally has a history.
+//     Nothing here filtered by kind (checked — statsText never did), and the
+//     dict fallback stays kind-blind on purpose so it cannot start to.
 import { type ReactElement, useState } from "react";
 import { Briefcase, ChevronDown, MessageCircle, WifiOff } from "lucide-react";
 import { API_BASE, ijToken } from "@/lib/api";
@@ -101,6 +117,14 @@ export interface RosterEntry {
   last_message?: string | null;
   /** Serve path for a stored portrait — present ONLY when one exists. */
   avatar?: string | null;
+  /** v1.193.0 LIVENESS, additive and optional — "busy" | "queued" | "idle" |
+   *  "unknown" (agents/roster.py::RosterEntry.activity). A daemon that predates
+   *  it, or one whose /agents/roster serializer does not forward it yet, sends
+   *  nothing and `livenessOf` falls back to the composed `line` (which carries
+   *  the same word). "idle"/"unknown" render NOTHING on purpose: the daemon
+   *  reports who is TAKEN and never asserts that anyone is free — it cannot see
+   *  delegate/spawn_agent children at all. */
+  activity?: string | null;
 }
 
 /** <img> can't send the Authorization header — the token rides as ?token=,
@@ -128,14 +152,99 @@ function bareName(name: string): string {
   return name;
 }
 
+export type Liveness = "busy" | "queued";
+const LIVE_STATES = new Set<string>(["busy", "queued"]);
+
+/** The trailing parenthetical of the daemon's composed `line`, with any
+ *  LIVENESS prefix removed — `_suffix()` (agents/roster.py) puts liveness and
+ *  the track record inside ONE pair of parens ("busy, 87% over 23 runs"), and
+ *  the stats slot must not say "busy". Returns null when the line carries no
+ *  usable stats parenthetical ("(offline)" is health, not stats). */
+function statsParen(e: RosterEntry): string | null {
+  const paren = /\(([^()]+)\)\s*$/.exec(e.line ?? "")?.[1]?.trim();
+  if (!paren || paren.toLowerCase() === "offline") return null;
+  const lead = /^(busy|queued),\s*/i.exec(paren);
+  const rest = lead ? paren.slice(lead[0].length).trim() : paren;
+  return rest || null;
+}
+
+/** Is this agent working right now? "busy" | "queued" | null (v1.193.0).
+ *
+ *  TWO SOURCES, ONE MEANING, both the daemon's own word — never inferred from
+ *  anything else the UI happens to know:
+ *    1. `activity`, the roster field itself;
+ *    2. the liveness prefix the daemon already bakes into `line`'s suffix,
+ *       which is what a daemon whose /agents/roster serializer does not forward
+ *       `activity` still sends today (see the report for that gap).
+ *  An OFFLINE remote reports nothing: the daemon's own `_suffix()` drops
+ *  liveness for an unhealthy entry, the row already shows the more urgent
+ *  offline pill, and "busy" about an unreachable box is noise.
+ *  null is NOT "free" — it is "no claim" (idle, unknown, and every delegated
+ *  child, which this signal structurally cannot see). Nothing renders for it. */
+export function livenessOf(e: RosterEntry): Liveness | null {
+  if (!e.healthy) return null;
+  const direct = String(e.activity ?? "").trim().toLowerCase();
+  if (LIVE_STATES.has(direct)) return direct as Liveness;
+  const paren = /\(([^()]+)\)\s*$/.exec(e.line ?? "")?.[1] ?? "";
+  const head = paren.split(",")[0]?.trim().toLowerCase() ?? "";
+  // The comma is required: the daemon only ever prefixes liveness ONTO a stats
+  // phrase, so a bare "(queued)" from anywhere else is not this signal.
+  if (paren.includes(",") && LIVE_STATES.has(head)) return head as Liveness;
+  return null;
+}
+
+/** The liveness marker: a DOT plus the word, so it reads at a glance without
+ *  being parsed — and stays legible to a screen reader, which a dot alone
+ *  would not be. Deliberately says nothing about agents with no marker. */
+function LivePill({
+  state,
+  bare,
+  testId,
+}: {
+  state: Liveness;
+  bare: string;
+  testId: string;
+}): ReactElement {
+  const busy = state === "busy";
+  return (
+    <span
+      data-testid={testId}
+      data-activity={state}
+      title={
+        busy
+          ? `${bare} is running a session right now`
+          : `${bare} has a session waiting for a free slot`
+      }
+      className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-1 py-px text-[9.5px] font-medium ${
+        busy
+          ? "border-amber-400/25 bg-amber-400/10 text-amber-200"
+          : "border-sky-400/20 bg-sky-400/[0.07] text-sky-200/90"
+      }`}
+    >
+      <span
+        aria-hidden
+        data-testid={`${testId}-dot`}
+        className={`h-1.5 w-1.5 rounded-full ${
+          busy ? "bg-amber-300 motion-safe:animate-pulse" : "bg-sky-300/80"
+        }`}
+      />
+      {state}
+    </span>
+  );
+}
+
 /** The honest stats text. Prefer the daemon's own wording — the trailing
- *  parenthetical of its composed `line` ("87% over 23 runs", "no runs yet").
+ *  parenthetical of its composed `line` ("87% over 23 runs", "no runs yet"),
+ *  minus any liveness prefix (that renders as its own pill).
  *  "(offline)" is health, not stats — the row already shows an offline pill,
  *  so it falls through to the stats dict. Sample counts are ALWAYS visible;
- *  a percentage never renders bare. */
+ *  a percentage never renders bare. The dict fallback is KIND-BLIND on purpose:
+ *  since v1.193.0 `custom:` and `remote:` agents finally accumulate a real
+ *  track record, and a builtin-only shortcut here would keep reading
+ *  "no runs yet" about exactly the agents that release exists for. */
 function statsText(e: RosterEntry): string {
-  const paren = /\(([^()]+)\)\s*$/.exec(e.line ?? "")?.[1];
-  if (paren && paren.trim().toLowerCase() !== "offline") return paren.trim();
+  const paren = statsParen(e);
+  if (paren) return paren;
   const s = e.stats;
   const runs = typeof s?.sessions === "number" ? s.sessions : 0;
   if (!s || runs <= 0) return "no runs yet";
@@ -319,6 +428,7 @@ export function RosterStrip({
    *  just dead space, so at md the row folds away until it has a button. */
   const showActions = Boolean((onTalk || onAssign) && actionable);
   const offline = selected.kind === "remote" && !selected.healthy;
+  const selectedLive = livenessOf(selected);
   const shown = bareName(selected.name);
   const kindLabel = SOURCE_LABEL[selected.kind] ?? (selected.kind || "agent");
   const kindPill = KIND_PILL[selected.kind] ?? KIND_PILL.remote;
@@ -433,6 +543,11 @@ export function RosterStrip({
                 const active = isPick && e.name === selected.name;
                 const off = e.kind === "remote" && !e.healthy;
                 const bare = bareName(e.name);
+                // v1.193.0: liveness is on EVERY row, not just the selected
+                // one — "who is busy" is a question you ask while scanning the
+                // rail for someone to hand work to, and a marker you have to
+                // click a face to see answers it too late.
+                const live = livenessOf(e);
                 return (
                   <div
                     key={e.name}
@@ -471,6 +586,17 @@ export function RosterStrip({
                       >
                         {bare}
                       </span>
+                      {/* WORKING RIGHT NOW (v1.193.0), before provenance and
+                          after health: a taken teammate is the fact that
+                          changes who you pick. Nothing renders when the daemon
+                          makes no claim — see livenessOf. */}
+                      {live && (
+                        <LivePill
+                          state={live}
+                          bare={bare}
+                          testId={`roster-activity-${bare}`}
+                        />
+                      )}
                       {/* Offline BEFORE provenance, and in words: an unreachable
                           agent is the more urgent fact, and a rose icon on its
                           own reaches nobody using a screen reader. */}
@@ -671,8 +797,11 @@ export function RosterStrip({
             }`}
           >
             {/* v1.171.0: the deterministic face (portrait wins when stored).
-                Mood stays "idle" — the roster carries no live busy signal, and
-                an invented "work" scan would be the dishonest kind of warmth. */}
+                Mood stays "idle". There IS a live busy signal since v1.193.0,
+                but it rides in the pill beside the name, in words: a mood swap
+                would encode it only in a drawing, and a drawing has no way to
+                say "no claim" — which is what this signal reports for every
+                idle agent AND for every delegated child it cannot see. */}
             <AgentFace
               name={shown}
               mood="idle"
@@ -697,6 +826,15 @@ export function RosterStrip({
                 >
                   {kindLabel}
                 </span>
+                {/* Same liveness marker as the rail rows (v1.193.0) — this
+                    composition has no rail to carry it. */}
+                {selectedLive && (
+                  <LivePill
+                    state={selectedLive}
+                    bare={shown}
+                    testId={`roster-activity-${shown}`}
+                  />
+                )}
                 {offline && (
                   <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-rose-500/25 bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-medium text-rose-300">
                     <WifiOff size={10} /> offline

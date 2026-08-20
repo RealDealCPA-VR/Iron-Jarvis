@@ -112,6 +112,10 @@ def default_permissions() -> dict[str, str]:
         "blackboard_post": "allow",
         "blackboard_read": "allow",
         "message_agent": "allow",
+        # Asking a named teammate for its judgement (v1.193.0). Read-only by
+        # construction — the consulted agent answers with tools=[], so it can
+        # advise but cannot act, and it cannot consult back (no fan-out).
+        "consult": "allow",
         # Agents authoring their own reusable tools. Listing is read-only; creating
         # or deleting a tool (it runs commands) asks for approval like create_agent.
         # Each created tool runs under "custom:<name>", which defaults to ASK.

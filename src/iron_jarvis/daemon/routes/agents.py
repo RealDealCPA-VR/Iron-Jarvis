@@ -540,6 +540,19 @@ def register(app: FastAPI, d) -> None:
                         "healthy": e.healthy,
                         "stats": e.stats,
                         "line": e.line(),
+                        # v1.193.0 additive: liveness as its own field, so the
+                        # rail reads a value instead of string-parsing `line`.
+                        # "busy" | "queued" | "idle" | "unknown" — and "unknown"
+                        # is honest: delegated children never enter the
+                        # orchestrator registries, so a quiet agent is not a
+                        # promise that it is free (see roster.py LIVENESS).
+                        # getattr, not e.activity: the loop below turns ANY
+                        # attribute error into `continue`, so an entry missing
+                        # one field would drop that entry from the rail
+                        # entirely — and an older or duck-typed entry missing
+                        # this one would empty the WHOLE roster. "unknown" is
+                        # already the honest value for "we cannot tell".
+                        "activity": getattr(e, "activity", "unknown"),
                         # v1.171.0 additive (frozen contract): real activity or
                         # honest nulls — never an invented "just now".
                         "last_active": last[0] if last else None,
@@ -1620,9 +1633,22 @@ def register(app: FastAPI, d) -> None:
 
         definition = d.platform.agents_registry.definition(name)
         rec = d.platform.agents_registry.get(name)
+        # WHO RAN (v1.193.0). THIS IS THE MOST COMMON WAY A USER RUNS THEIR OWN
+        # AGENT (the Agents page's Run button) and it published no
+        # ``delegation.started``, so the ledger had nothing to read back and the
+        # run was credited to ``definition.type`` — i.e. a user running their own
+        # tax-reader left ``custom:tax-reader`` reading "(no runs yet)" forever
+        # while ``builder`` absorbed the history. The name is taken from the
+        # RECORD (``rec.name``, the registry key's own casing), never from the
+        # URL segment, which ``definition()``/``get()`` may have matched
+        # differently.
+        agent_name = ""
+        if definition is not None and rec is not None:
+            agent_name = f"custom:{rec.name}"
         if definition is None:
             try:
                 definition = get_agent_definition(AgentType(name))
+                agent_name = definition.type.value  # a builtin IS its roster name
             except ValueError:
                 raise HTTPException(status_code=404, detail="unknown agent")
         elif definition.type is AgentType.SUPERVISOR:
@@ -1669,6 +1695,7 @@ def register(app: FastAPI, d) -> None:
             allow_tools=body.allow_tools or None,
             workspace_root=workspace_root,
             origin=body.origin,
+            agent_name=agent_name,
         )
         # Run through the orchestrator (with the dynamic definition override) so
         # a crashed run is finalized FAILED instead of stranded ACTIVE, and

@@ -190,6 +190,166 @@ def arm_for_task(platform, task: str, roster: list[str], *, cap: int = _AUTO_ARM
     return [*roster, *extra] if extra else roster
 
 
+#: Bounds for the `# Team` block (v1.193.0). A department is a TEAM, not a
+#: directory: a deep delegation tree can hold dozens of runs, and listing them
+#: all would spend more prompt budget than the block earns back. The roster is
+#: already bounded at the store (`_MAX_ROSTER_RUNS`); this is the prompt's own
+#: ceiling, and the overflow is REPORTED rather than silently dropped.
+_TEAM_LIST_CAP = 10
+#: Distinct sender names named in the mail line before it collapses to "+N more".
+_TEAM_SENDERS_CAP = 4
+
+
+def board_tool_names() -> frozenset[str]:
+    """The blackboard tool names, taken from the tool CLASSES that serve them.
+
+    The gate below and the instruction inside the block must both name the same
+    tools the registry actually holds — a `# Team` block telling an agent to
+    call `blackboard_read` when the tool has been renamed is worse than no block
+    at all. Reading the names off the classes makes that drift impossible.
+    """
+    from ..blackboard.tools import (
+        BlackboardPostTool,
+        BlackboardReadTool,
+        MessageAgentTool,
+    )
+
+    return frozenset(
+        {BlackboardPostTool.name, BlackboardReadTool.name, MessageAgentTool.name}
+    )
+
+
+def holds_board_tools(tool_specs) -> bool:
+    """True when THIS run is actually carrying a blackboard tool.
+
+    WHO SEES THE TEAM BLOCK is derived from the specs the model is about to be
+    offered, never from the agent type. `_COLLAB_TOOLS` is on every builtin
+    definition (builder, reviewer, researcher, memory, maintainer, automation —
+    not just the two coordinator types that get `roster_block`), so an agent-type
+    allowlist here would repeat the exact defect this unit exists to close: six
+    agent types carrying `blackboard_post`/`blackboard_read`/`message_agent`
+    while being told nothing about any teammate existing. Deriving from the
+    specs also means the block cannot outlive the capability — a definition that
+    drops the tools, or an install whose registry never registered them, renders
+    nothing.
+    """
+    try:
+        wanted = board_tool_names()
+        return any(str(s.get("name") or "") in wanted for s in tool_specs)
+    except Exception:  # noqa: BLE001 — an unreadable spec list is just "no"
+        return False
+
+
+def teammates_block(platform, session_id: str, agent_run_id: str) -> str:
+    """The `# Team` block: who I am, who is with me, and whether I have mail.
+
+    THE BLACKBOARD WAS NEVER IN A PROMPT. An agent learned a board existed only
+    from a tool description, was never told its own run id (so it could not tell
+    a teammate how to reach it), and a directed message sat unread forever
+    unless the recipient spontaneously polled. This is the missing half of the
+    substrate: presence + an unread signal, stated once where the model reads.
+
+    SYNCHRONOUS ON PURPOSE, and therefore only ever called through
+    `asyncio.to_thread` — it does three SQLite reads (the department walk, the
+    roster, the directed rows) and a wave-1 reviewer measured `roster()` alone
+    at up to 47ms in a pathological tree. On the daemon's single event loop that
+    is 47ms of every request in the app.
+
+    ONCE PER RUN, at prompt assembly — not per step. That is what keeps it cheap
+    (one read per run, not one per model call), and it also makes "unread"
+    exactly true rather than approximately true: a run that has not started has
+    read NOTHING, so every message addressed to it is genuinely unread. There is
+    no read-receipt anywhere in the app, so any per-step count would be a number
+    we cannot honestly define. HONEST LIMIT: mail that arrives mid-run is not
+    announced here; `blackboard_read` is how a running agent checks again.
+
+    A SOLO RUN RENDERS NOTHING. No teammates and no mail means no board worth
+    mentioning, and a lone agent must not grow a "Team" section advertising a
+    feature it is not using — the same rule the dashboard's TeamTree follows
+    ("a solo session must not grow an empty Team box").
+
+    Bounded and NEVER RAISES, exactly like `roster_block` / `memory_index_block`
+    beside it: a failure omits the block, it never fails the run.
+    """
+    try:
+        store = getattr(platform, "blackboard", None)
+        if store is None or not agent_run_id:
+            return ""
+        # `resolve_board_id` is the ONE department walk (shared with the
+        # worklist). Never re-derive it here.
+        board_id = store.board_id_for(session_id, agent_run_id)
+        roster = store.roster(board_id)
+        mine = next(
+            (e for e in roster if e.get("agent_run_id") == agent_run_id), None
+        )
+        my_name = str((mine or {}).get("handle") or "") or store.name_for(agent_run_id)
+        teammates = [e for e in roster if e.get("agent_run_id") != agent_run_id]
+        # "Addressed to me" is the same predicate `blackboard_read(to_me=true)`
+        # uses — the run id, or my name on a row carrying no id — so the count
+        # here and what the tool returns can never disagree. A row I wrote to
+        # myself is not mail.
+        mail = [
+            r
+            for r in store.list(
+                board_id,
+                to_agent=agent_run_id,
+                to_name=my_name or None,
+            )
+            if getattr(r, "author", "") != agent_run_id
+        ]
+        if not teammates and not mail:
+            return ""
+        lines = [
+            "# Team",
+            f"You are `{my_name or 'agent'}` and your agent run id is "
+            f"`{agent_run_id}`, on department board `{board_id}`. Teammates "
+            "reach you by that name or that run id.",
+        ]
+        if teammates:
+            shown = teammates[:_TEAM_LIST_CAP]
+            lines.append(
+                "On this board with you (address one by NAME — or by run id when "
+                "two share a name):"
+            )
+            for t in shown:
+                state = str(t.get("state") or "")
+                lines.append(
+                    f"- {t.get('handle') or 'agent'} (run id "
+                    f"{t.get('agent_run_id')}{', ' + state if state else ''})"
+                )
+            if len(teammates) > len(shown):
+                lines.append(
+                    f"- ...and {len(teammates) - len(shown)} more — "
+                    "blackboard_read lists the full roster."
+                )
+        if mail:
+            senders: list[str] = []
+            for r in mail:
+                who = str(getattr(r, "author_name", "") or "") or str(
+                    getattr(r, "author", "") or ""
+                )
+                if who and who not in senders:
+                    senders.append(who)
+            named = ", ".join(senders[:_TEAM_SENDERS_CAP])
+            if len(senders) > _TEAM_SENDERS_CAP:
+                named += f" +{len(senders) - _TEAM_SENDERS_CAP} more"
+            read_tool = "blackboard_read"
+            try:
+                from ..blackboard.tools import BlackboardReadTool
+
+                read_tool = BlackboardReadTool.name
+            except Exception:  # noqa: BLE001
+                pass
+            lines.append(
+                f"YOU HAVE MAIL: {len(mail)} message(s) on this board are "
+                f"addressed to you{f' (from {named})' if named else ''}. Call "
+                f"`{read_tool}` with to_me=true and read them before you start."
+            )
+        return "\n".join(lines)
+    except Exception:  # noqa: BLE001 — presence must never break a run
+        return ""
+
+
 def call_signature(name: str, arguments: dict | None) -> str:
     """A canonical identity for "the same call again".
 
@@ -597,6 +757,23 @@ class AgentRuntime:
                 if _roster:
                     system_prompt += "\n\n" + _roster
             except Exception:  # noqa: BLE001 — the roster must never break a run
+                pass
+        # TEAMMATES + MAIL (v1.193.0): the roster block above says which agent
+        # TYPES exist to delegate to; this says who is on MY board right now,
+        # what MY own run id is (an agent was never told it, so it could not
+        # tell a teammate how to reach it), and whether a directed message is
+        # sitting unread. Gated on the run's own tool specs, not on agent type —
+        # every builtin carries the collab tools, so a type allowlist would
+        # recreate the defect. Off the event loop: three SQLite reads, once per
+        # run, and this is the ONE asyncio loop the whole daemon shares.
+        if holds_board_tools(tool_specs):
+            try:
+                _team = await asyncio.to_thread(
+                    teammates_block, self.p, session.id, run.id
+                )
+                if _team:
+                    system_prompt += "\n\n" + _team
+            except Exception:  # noqa: BLE001 — presence must never break a run
                 pass
         # CONTEXT SPINE: a session tagged into a project carries the project's
         # brief + recent activity, so chat/terminals/workflows share one thread
