@@ -410,9 +410,20 @@ describe("project grounding and the step budget reach the request", () => {
 
   it("carries the chosen project and budget into the body", async () => {
     await openOptions();
+    // Wait for the OPTION, not just the select. The project list arrives from
+    // an async fetch, and setting a <select> to a value with no matching
+    // <option> is a silent no-op in jsdom — so on a contended runner the change
+    // did nothing, the body omitted project_id, and this went red on CI while
+    // passing everywhere else (2026-08-20). Waiting for the label was waiting
+    // for a proxy; the option is the thing being acted on.
+    await screen.findByRole("option", { name: "Tax season" });
     fireEvent.change(screen.getByLabelText("Project (optional)"), {
       target: { value: "p1" },
     });
+    // The select really holds it before we dispatch.
+    expect(
+      (screen.getByLabelText("Project (optional)") as HTMLSelectElement).value,
+    ).toBe("p1");
     fireEvent.change(screen.getByLabelText("Max steps (optional)"), {
       target: { value: "40" },
     });
