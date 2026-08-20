@@ -217,7 +217,7 @@ def _complete(adapter):
 def test_a_paid_passthrough_model_is_refused_without_running_anything():
     spawned = []
 
-    def _spy(argv, **_kw):
+    def _spy(argv, _stdin=None, **_kw):
         spawned.append(argv)
         return 0, "", ""
 
@@ -240,7 +240,7 @@ def test_blank_model_uses_the_first_LOCAL_model_not_opencodes_default():
     """OpenCode's own default could be a paid model; ours never is."""
     seen = {}
 
-    def _run(argv, **_kw):
+    def _run(argv, _stdin=None, **_kw):
         seen["argv"] = argv
         return 0, json.dumps(
             {"type": "text", "part": {"type": "text", "text": "ok"}}

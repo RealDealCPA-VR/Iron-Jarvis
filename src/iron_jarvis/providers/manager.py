@@ -359,6 +359,64 @@ class ProviderManager:
             for key in [k for k in self._cache if k[0] == provider]:
                 self._cache.pop(key, None)
 
+    #: Fleet-sampler reachability keys for the CONFIG-SEEDED local endpoints.
+    #: ``ollama_base_url`` / ``custom_base_url`` are rendered by the fleet
+    #: registry as nodes whose ids are exactly ``ollama``/``custom``
+    #: (``fleet/registry.seeded``), and the sampler records their live
+    #: reachability there — so the oracle that answers for every ``fleet-*``
+    #: provider also holds an observation about these two.
+    #:
+    #: ONLY ``custom`` is listed, and that asymmetry is the whole point: the
+    #: sampler's verdict is only admissible here when its probe asks the SAME
+    #: question the router will ask. The registry seeds the ollama slot with
+    #: ``kind="ollama"`` (``fleet/registry.py``), so ``fleet/probes._probe_ollama``
+    #: demands ``GET /api/ps`` — Ollama's NATIVE api, which this manager never
+    #: uses: the slot's adapter is an ``OpenAIAdapter`` on
+    #: ``/v1/chat/completions``, and LM Studio / llama.cpp / vLLM answer that
+    #: happily while 404ing ``/api/ps``. A False there would refuse a WORKING
+    #: endpoint on every turn, forever. The custom slot has no ``kind``, so it is
+    #: probed as OpenAI-compatible (``GET /v1/models``) — the same protocol
+    #: surface the adapter uses — which makes its verdict admissible, but only
+    #: for a KEYLESS endpoint (see ``available``). The plain provider name is
+    #: still tried first, so an oracle that measures these slots DIRECTLY (a real
+    #: chat round-trip rather than a fleet probe) wins over anything here.
+    _ENDPOINT_ORACLE_ALIAS = {"custom": "fleet-custom"}
+
+    def _endpoint_reachable(self, name: str) -> bool | None:
+        """Last-known reachability of a configured local endpoint, or ``None``.
+
+        ``None`` means UNKNOWN (no oracle wired, sampling off, never probed) and
+        the caller then keeps the historic config-presence answer — so a bare
+        ``ProviderManager()`` and the whole offline suite are byte-for-byte
+        unchanged. NEVER a network call: like ``dynamic_available`` itself this
+        is a cached dict read, because ``available()`` runs per provider per
+        request on the event loop.
+
+        A ``False`` IS NOT FRESH, and callers must weigh that before refusing on
+        it. The fleet sampler arms a backoff ladder after 3 consecutive failures
+        (``fleet/sampler._BACKOFF_STEPS``, topping out at 600s), so an endpoint
+        the user has just restarted can keep reading unreachable for up to TEN
+        MINUTES. That is tolerable only because the run-stage guard
+        (``ModelRouter._refuses_failover``) is what actually enforces the
+        no-silent-failover rule: it measures the real request, with the real
+        credential, against the real endpoint, and so cannot be stale or wrong.
+        This oracle only lets the UI/router refuse a little earlier — never let
+        it become the sole basis for telling the user their server is down.
+        """
+        oracle = self._dynamic_available
+        if oracle is None:
+            return None
+        for key in (name, self._ENDPOINT_ORACLE_ALIAS.get(name)):
+            if not key:
+                continue
+            try:
+                verdict = oracle(key)
+            except Exception:  # noqa: BLE001 — a bad oracle never breaks routing
+                continue
+            if verdict is not None:
+                return bool(verdict)
+        return None
+
     def available(self, name: str) -> bool:
         if name in API_PROVIDERS:
             if self._present(name):
@@ -367,12 +425,37 @@ class ProviderManager:
             alias = self._INHERIT_ALIAS.get(name) if self._inherit_cli else None
             return bool(alias and self.available(alias))
         if name == "ollama":
-            # Local provider: available only once a base_url is configured.
-            return self._ollama_base_url is not None
+            # Local provider: available only once a base_url is configured —
+            # plus, when the oracle has a DIRECT opinion about this slot, the
+            # server must actually be up. CONFIGURED IS NOT CONNECTED: a dead
+            # Ollama read "available", so v1.162.0's refusal never fired for it;
+            # the connect then raised httpx.ConnectError, which classifies
+            # transient by TYPE, and failover shipped the whole conversation to
+            # a cloud API. The FLEET-PROBE verdict is deliberately NOT consulted
+            # for this slot (see _ENDPOINT_ORACLE_ALIAS: it probes Ollama's
+            # native /api/ps, which an LM Studio / llama.cpp / vLLM server this
+            # slot works fine with does not serve). The run-stage guard
+            # ModelRouter._refuses_failover is what closes the leak either way.
+            if self._ollama_base_url is None:
+                return False
+            return self._endpoint_reachable(name) is not False
         if name == "custom":
             # Custom endpoint: gated on the base_url, NOT a key (keyless local
             # servers are the common case; a vault key is used when present).
-            return self._custom_base_url is not None
+            if self._custom_base_url is None:
+                return False
+            # A KEYED endpoint's unreachable verdict is NOT evidence: the fleet
+            # sampler probes with no Authorization header (fleet/sampler passes
+            # the default probe_node getter), and fleet/probes._fetch turns ANY
+            # non-2xx — a 401 included — into "unreachable". Ollama Cloud and
+            # every keyed aggregator would therefore read as down on every turn,
+            # permanently, and a credentialed verify from the Connections page
+            # is undone by the next sampler pass. A false "your endpoint isn't
+            # connected" is exactly as dishonest as the leak this gate exists
+            # for, so the probe never gets to speak about a keyed slot.
+            if self._present("custom"):
+                return True
+            return self._endpoint_reachable(name) is not False
         if name == "grok-cli":
             # Locally-installed Grok CLI: live on-disk session check.
             return self._grok_cli_available()

@@ -45,6 +45,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -708,6 +709,122 @@ async def ocr_image(
     return pages[0], f"image file — {OCR_MARK} (vision transcription)"
 
 
+# --------------------------------------------------- merge (mixed documents) ---
+#
+# A MIXED document is native text with scanned page(s) stapled into it, and
+# :func:`ocr_pdf` transcribes ONLY the scanned pages — so its transcript answers
+# for PART of the file and must be MERGED back into the extraction, never
+# substituted for it. Substitution is what v1.176.0 actually shipped
+# (``return (text or extracted_text), note``) and it was strictly worse than the
+# blindness it replaced: a 20-page return with one scanned K-1 came back AS that
+# K-1, so ``read_document``, ``convert_document``, batch extraction and — worst
+# — ``redact_scan`` never saw the SSN on page 1, with nothing saying 19 pages
+# had been dropped. Same asymmetry rule as :func:`needs_ocr`: the classifier may
+# make the app read MORE of a client's document, never less.
+
+#: The label :func:`ocr_pdf` writes in front of each transcribed PDF page.
+#: Parsing it back is what tells the merge WHICH pages the transcript answers
+#: for — and it reads identically for a fresh transcription and for a contract-5
+#: cache hit, which carries the same labels and no plan.
+_PAGE_LABEL_RE = re.compile(r"^\[page (\d+)\]$", re.MULTILINE)
+
+
+def transcript_pages(ocr_text: str) -> "dict[int, str]":
+    """``{1-indexed page number: that page's transcript}`` from an OCR result.
+
+    ``{}`` for an UNLABELED transcript (an image file, or any shape this does
+    not recognise) — the caller then keeps the pre-merge behaviour rather than
+    guessing where the text belongs.
+    """
+    text = ocr_text or ""
+    marks = list(_PAGE_LABEL_RE.finditer(text))
+    out: dict[int, str] = {}
+    for i, mark in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        body = text[mark.end() : end].strip()
+        number = int(mark.group(1))
+        out[number] = f"{out[number]}\n{body}".strip() if number in out else body
+    return out
+
+
+def merge_transcript(
+    path: Path, extracted_text: str, ocr_text: str
+) -> "tuple[str, int]":
+    """``(merged_text, native_pages_kept)`` — the transcript put back IN PLACE.
+
+    Every page contributes its own text: the OCR transcript for a page that was
+    transcribed, the native text layer for every page that was not.
+
+    Returns ``("", 0)`` whenever there is nothing to merge — an unlabeled
+    transcript, an unreadable PDF, a label naming a page the file does not have,
+    or a document with no native text to keep — so the caller falls back to
+    returning the transcript unchanged. A merge fault must never cost the caller
+    the text OCR just recovered.
+
+    Blocking (pypdf parses the file), so callers run it off the event loop.
+    """
+    transcribed = transcript_pages(ocr_text)
+    if not transcribed:
+        return "", 0
+    natives: list[str] = []
+    try:
+        from pypdf import PdfReader
+
+        for page in PdfReader(str(path)).pages:
+            try:
+                natives.append(page.extract_text() or "")
+            except Exception:  # noqa: BLE001 — a malformed page contributes nothing
+                natives.append("")
+    except Exception:  # noqa: BLE001 — an unreadable PDF simply cannot be merged
+        return "", 0
+    total = len(natives)
+    if not total or any(n < 1 or n > total for n in transcribed):
+        return "", 0
+    parts: list[str] = []
+    # The reader's own "[NOTE: ...]" line (a file whose extension lies) is about
+    # the FILE, not about a page, and rides along at the top as it did before.
+    lead = "\n".join(
+        line
+        for line in (extracted_text or "").splitlines()
+        if line.startswith("[NOTE:")
+    )
+    if lead:
+        parts.append(lead)
+    kept = 0
+    for number in range(1, total + 1):
+        native = (natives[number - 1] or "").strip()
+        chunk = transcribed.get(number)
+        if chunk is not None:
+            parts.append(f"[page {number}]\n{chunk}")
+            # A transcribed page that ALSO carries a real text layer keeps it.
+            # Duplication is cheap; losing a page of a client's document because
+            # a classifier called it a picture is the thing this module may
+            # never do.
+            if len(native) >= _SCANNED_TEXT_THRESHOLD:
+                parts.append(native)
+            continue
+        if native:
+            parts.append(native)
+            kept += 1
+    if not kept:
+        return "", 0
+    return "\n\n".join(parts), kept
+
+
+def merged_note(note: str, kept: int) -> str:
+    """*note* with an honest account of the merge appended.
+
+    The existing wording is preserved byte for byte and only ADDED to:
+    ``ocr_pdf``'s ``"(N of M page(s) transcribed"`` prefix is a contract
+    ``attachment_rag`` parses for the vision spend, and ``ocr_document``'s
+    cache suffix has to stay recognisable in the same string.
+    """
+    return (
+        f"{note} — merged into the document's own text: the {kept} page(s) that "
+        "were not scanned kept their native text"
+    )
+
+
 # ------------------------------------------------------------- entry points ---
 
 
@@ -783,6 +900,12 @@ async def ocr_if_unreadable(
     this unconditionally and behave exactly as before when there is nothing to
     recover. Never raises: an OCR fault becomes a note, because failing to
     transcribe a scan must not turn a successful read into a failed one.
+
+    A MIXED document's transcript is MERGED into the extraction rather than
+    replacing it (see :func:`merge_transcript`): the transcript answers only for
+    the pages that were scans, and handing it back alone deleted every
+    native-text page from ``read_document``, ``convert_document``, batch
+    extraction and ``redact_scan``.
     """
     if router_resolver is None:
         return extracted_text, ""
@@ -802,4 +925,19 @@ async def ocr_if_unreadable(
         return extracted_text, (
             f"scanned document — OCR fallback failed ({type(exc).__name__}: {exc})"
         )
-    return (text or extracted_text), note
+    if not text:
+        return extracted_text, note
+    if not _text_body(extracted_text):
+        # Wholly-scanned or an image: there is no native text to keep and the
+        # transcript IS the document. Byte-identical to the pre-merge behaviour,
+        # which is the common case and the one every existing test pins.
+        return text, note
+    try:
+        merged, kept = await asyncio.to_thread(
+            merge_transcript, p, extracted_text, text
+        )
+    except Exception:  # noqa: BLE001 — a merge fault must not cost the transcript
+        return text, note
+    if not kept:
+        return text, note
+    return merged, merged_note(note, kept)

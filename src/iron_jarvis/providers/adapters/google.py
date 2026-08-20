@@ -17,11 +17,29 @@ from .base import (
     LLMAdapter,
     LLMMessage,
     LLMResponse,
+    ProviderError,
     ToolCall,
     provider_error_from_response,
 )
 
 _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+
+#: ``candidates[].finishReason`` values that mean the model produced NO answer
+#: because the request/response was REFUSED or filtered — not a completion.
+#: ``STOP`` and ``MAX_TOKENS`` are normal endings and deliberately absent.
+_REFUSAL_FINISH_REASONS: frozenset[str] = frozenset(
+    {
+        "SAFETY",
+        "RECITATION",
+        "BLOCKLIST",
+        "PROHIBITED_CONTENT",
+        "SPII",
+        "IMAGE_SAFETY",
+        "MALFORMED_FUNCTION_CALL",
+        "LANGUAGE",
+        "OTHER",
+    }
+)
 
 
 class GoogleAdapter(LLMAdapter):
@@ -126,8 +144,59 @@ class GoogleAdapter(LLMAdapter):
 
     # -- response parsing ---------------------------------------------------
     @staticmethod
+    def _no_content_error(
+        candidates: list[dict[str, Any]] | None,
+        feedback: dict[str, Any] | None,
+    ) -> ProviderError | None:
+        """Typed error for a 200 body that carries NO usable candidate.
+
+        Gemini answers HTTP 200 when it REFUSES: ``promptFeedback.blockReason``
+        with ``candidates`` absent, or a candidate whose ``finishReason`` is
+        SAFETY/RECITATION/... and whose ``content.parts`` is empty. Parsing that
+        into ``text=""``/``finish_reason="stop"`` hands back a blank reply that
+        reads as SUCCESS — the router records health, chat renders an empty
+        bubble, and an agent step ends as if the model chose to say nothing,
+        while the reason sat in the body and was discarded. Both the complete
+        and the stream path raise this instead (lock-step).
+
+        It is PERMANENT (``transient=False``, ``status_code=200`` so the
+        router's status check can never read it as retryable): a content block
+        is deterministic, so retry/failover would only replay it. Returns
+        ``None`` when nothing in the body explains the emptiness — the caller
+        then keeps the old blank-response behaviour rather than inventing a
+        reason.
+        """
+        fb = feedback or {}
+        cands = candidates or []
+        block = str(fb.get("blockReason") or "").strip()
+        finish = str((cands[0] if cands else {}).get("finishReason") or "").strip()
+        # A real block is deterministic; a merely empty body may be transport
+        # noise, and the stream path still degrades to non-streaming for it.
+        blocked = True
+        if block:
+            why = f"blockReason={block}"
+            note = str(fb.get("blockReasonMessage") or "").strip()
+            if note:
+                why = f"{why}: {note[:200]}"
+        elif finish.upper() in _REFUSAL_FINISH_REASONS:
+            why = f"finishReason={finish}"
+        elif not cands:
+            why = "the response carried no candidates"
+            blocked = False
+        else:
+            return None
+        err = ProviderError(
+            f"google returned no usable content ({why})",
+            status_code=200,
+            transient=False,
+        )
+        err.blocked = blocked
+        return err
+
+    @staticmethod
     def _parse(data: dict[str, Any]) -> LLMResponse:
-        candidate = (data.get("candidates") or [{}])[0]
+        candidates = data.get("candidates") or []
+        candidate = candidates[0] if candidates else {}
         parts = ((candidate.get("content") or {}).get("parts")) or []
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
@@ -140,6 +209,13 @@ class GoogleAdapter(LLMAdapter):
                 tool_calls.append(
                     ToolCall(id=name, name=name, arguments=dict(fc.get("args") or {}))
                 )
+        text = "".join(text_parts)
+        if not text and not tool_calls:
+            # No usable candidate: refuse honestly instead of returning a blank
+            # reply that every layer above reads as a successful answer.
+            err = GoogleAdapter._no_content_error(candidates, data.get("promptFeedback"))
+            if err is not None:
+                raise err
         finish = "tool_use" if tool_calls else "stop"
         meta = data.get("usageMetadata") or {}
         usage_dict = {
@@ -147,7 +223,7 @@ class GoogleAdapter(LLMAdapter):
             "output_tokens": int(meta.get("candidatesTokenCount", 0) or 0),
         }
         return LLMResponse(
-            text="".join(text_parts),
+            text=text,
             tool_calls=tool_calls,
             finish_reason=finish,
             usage=usage_dict,
@@ -223,7 +299,10 @@ class GoogleAdapter(LLMAdapter):
         transport having no streaming surface — we degrade to the base
         (non-streaming) stream, so a hiccup honestly falls back to a single-shot
         completion instead of fabricating output. A failure MID-stream re-raises
-        honestly rather than re-running and double-emitting the answer.
+        honestly rather than re-running and double-emitting the answer. The ONE
+        exception to the degrade is a CONTENT BLOCK (``err.blocked``): a safety
+        refusal is deterministic, so re-running it non-streaming would only
+        spend a second call to be refused again — it re-raises immediately.
         """
         started = False
         try:
@@ -233,8 +312,8 @@ class GoogleAdapter(LLMAdapter):
                 started = True
                 yield frame
             return
-        except Exception:  # noqa: BLE001 — degrade to the honest non-streaming path
-            if started:
+        except Exception as exc:  # noqa: BLE001 — degrade to the non-streaming path
+            if started or getattr(exc, "blocked", False):
                 raise
         async for frame in super().stream(
             system=system, messages=messages, tools=tools
@@ -268,6 +347,9 @@ class GoogleAdapter(LLMAdapter):
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
         usage_dict = {"input_tokens": 0, "output_tokens": 0}
+        # Kept so a stream that produced nothing can say WHY (mirrors _parse).
+        last_candidates: list[dict[str, Any]] = []
+        prompt_feedback: dict[str, Any] = {}
 
         async with self._client().stream(
             "POST", self._stream_url(), headers=headers, json=body
@@ -301,7 +383,13 @@ class GoogleAdapter(LLMAdapter):
                     chunk = json.loads(payload)
                 except json.JSONDecodeError:
                     continue
-                candidate = (chunk.get("candidates") or [{}])[0]
+                candidates = chunk.get("candidates") or []
+                if candidates:
+                    last_candidates = candidates
+                fb = chunk.get("promptFeedback")
+                if isinstance(fb, dict) and fb.get("blockReason"):
+                    prompt_feedback = fb
+                candidate = candidates[0] if candidates else {}
                 for part in ((candidate.get("content") or {}).get("parts")) or []:
                     text = part.get("text")
                     if text:
@@ -324,10 +412,19 @@ class GoogleAdapter(LLMAdapter):
                         "output_tokens": int(meta.get("candidatesTokenCount", 0) or 0),
                     }
 
+        text = "".join(text_parts)
+        if not text and not tool_calls:
+            # Same refusal as _parse: a blocked stream emits no text frames, and
+            # a final frame of text="" finish_reason="stop" is a blank reply
+            # presented as success.
+            err = self._no_content_error(last_candidates, prompt_feedback)
+            if err is not None:
+                raise err
+
         yield {
             "type": "final",
             "response": LLMResponse(
-                text="".join(text_parts),
+                text=text,
                 tool_calls=tool_calls,
                 finish_reason="tool_use" if tool_calls else "stop",
                 usage=usage_dict,

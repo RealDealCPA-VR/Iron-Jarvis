@@ -324,15 +324,22 @@ _CLAIMS_LOCK = threading.Lock()
 
 @contextmanager
 def _claimed(proposal_id: str):
-    """Hold the only approval claim on *proposal_id*, or raise.
+    """Hold the only DECISION claim on *proposal_id*, or raise.
 
     ``ValueError`` so the route maps it to the same 409 an already-decided
     proposal gets — from the second clicker's side those are the same event, and
-    "it is already being approved" is the truthful version of it.
+    "it is already being decided" is the truthful version of it.
+
+    REJECT HOLDS THE SAME CLAIM AS APPROVE, and the wording says "decided" for
+    that reason: a reject that landed between ``approve``'s first transaction
+    closing and its second one opening committed REJECTED while ``_apply`` had
+    already persisted and registered the tool — the approver then got a 409 and
+    the user was left with a live capability they had just turned down. One
+    claim over both decisions makes that window unreachable.
     """
     with _CLAIMS_LOCK:
         if proposal_id in _CLAIMS:
-            raise ValueError("proposal already being approved")
+            raise ValueError("proposal is already being decided")
         _CLAIMS.add(proposal_id)
     try:
         yield
@@ -648,19 +655,28 @@ class CapabilityProposalStore:
         same gap every run would otherwise file it again tomorrow and read its
         own success message as progress. Raises ``ValueError`` for unknown /
         already-decided.
+
+        IT TAKES THE SAME CLAIM AS ``approve``. Without it, a reject that
+        committed while an approval was inside ``_apply`` left the capability
+        CREATED AND REGISTERED — ``_apply`` runs before the APPROVED stamp — with
+        the row reading "rejected" and the approver told the approval failed: a
+        live tool the user had explicitly turned down. Under the claim the loser
+        of that race gets the same honest 409 a second approver already got, and
+        the row is decided exactly once.
         """
-        with session_scope(self.engine) as db:
-            row = db.get(CapabilityProposalRecord, proposal_id)
-            if row is None:
-                raise ValueError(f"no such proposal: {proposal_id}")
-            if row.status != PENDING:
-                raise ValueError(f"proposal already {row.status}")
-            row.status = REJECTED
-            row.decided_at = utcnow()
-            db.add(row)
-            db.commit()
-            db.refresh(row)
-            return row
+        with _claimed(proposal_id):
+            with session_scope(self.engine) as db:
+                row = db.get(CapabilityProposalRecord, proposal_id)
+                if row is None:
+                    raise ValueError(f"no such proposal: {proposal_id}")
+                if row.status != PENDING:
+                    raise ValueError(f"proposal already {row.status}")
+                row.status = REJECTED
+                row.decided_at = utcnow()
+                db.add(row)
+                db.commit()
+                db.refresh(row)
+                return row
 
     def _stamp(self, proposal_id: str, result: ApplyResult, status: str | None) -> None:
         """Record an attempt's outcome. Best-effort; never raises."""

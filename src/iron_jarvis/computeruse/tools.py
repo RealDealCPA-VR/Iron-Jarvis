@@ -176,6 +176,13 @@ class WebExtractTool(_GatedTool):
         if refusal:
             return refusal
         selector = _selector_from_args(args)
+        # Extraction IS an action kind — respect the action allowlist like every
+        # sibling tool. "extract" is on the DEFAULT allowlist, so this only bites
+        # installs that deliberately narrowed it; skipping it made that narrowing
+        # silently ineffective on this one path.
+        decision = self.cu.policy.check(Action(kind="extract", selector=selector), None)
+        if not decision.allowed:
+            return ToolResult(ok=False, error=f"policy denied: {decision.reason}")
         try:
             text = await self.cu.browser.extract(selector)
         except Exception as exc:  # noqa: BLE001

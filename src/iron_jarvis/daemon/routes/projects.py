@@ -557,6 +557,18 @@ def register(app: FastAPI, d) -> None:
                 project_id=project.id,
                 allow_tools=body.allow_tools or None,
                 workspace_root=str(root) if in_folder else None,
+                # PRESENCE IS ASSERTED, NEVER ASSUMED (v1.189.0). A Projects
+                # task is posted by a user standing on the project page, so it
+                # states that: `project:<id>` is the origin the runtime's
+                # `_pause_for_approval` allowlist already names but that
+                # NOTHING ever stamped — so an ask-tier tool call in the user's
+                # own folder was denied headlessly instead of asking. The
+                # project id is carried IN the origin (not just `project`) so
+                # the audit timeline can say WHICH project started the run.
+                # Paired with `ProjectApprovals` on the project page, which
+                # renders the pause; without a renderer this stamp would turn
+                # an instant honest denial into a silent timeout-deny.
+                origin=f"project:{project.id}",
                 max_steps=body.max_steps,
             )
         except (PermissionError, RuntimeError) as exc:

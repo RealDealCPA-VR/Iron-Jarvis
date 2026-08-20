@@ -8,6 +8,8 @@ No network and no DB — we assert on `_resolve`'s routing decision directly.
 
 from __future__ import annotations
 
+import pytest
+
 from iron_jarvis.core.events import EventBus
 from iron_jarvis.providers.manager import ProviderManager
 from iron_jarvis.providers.router import ModelRouter
@@ -73,8 +75,8 @@ def test_oracle_exception_never_breaks_routing() -> None:
     assert adapter.provider == "mock"
 
 
-# --- swarm-review fix: a DOWN self-tuned local pick falls back to the real
-#     default provider, never to a fabricated mock answer --------------------
+# --- a DOWN self-tuned local pick REFUSES: never a fabricated mock answer,
+#     and (2026-08-20) never a silent hand-off to the cloud default either ---
 from iron_jarvis.providers.adapters.base import LLMResponse  # noqa: E402
 
 
@@ -83,8 +85,10 @@ class _Adapter:
         self.provider = provider
         self.model = "m"
         self._ok = ok
+        self.calls = 0
 
     async def complete(self, *, system, messages, tools) -> LLMResponse:
+        self.calls += 1
         if not self._ok:
             raise ConnectionError(f"{self.provider} down")
         return LLMResponse(text=f"hi from {self.provider}")
@@ -102,14 +106,35 @@ class _FakeManager:
         return bool(self._avail.get(provider, False))
 
 
-async def test_failed_local_pick_falls_back_to_default_not_mock() -> None:
+async def test_failed_local_pick_refuses_and_never_answers_from_the_cloud() -> None:
+    """REWRITTEN 2026-08-20 (finding 13). This test used to assert the opposite
+    — that a DOWN self-tuned LOCAL pick falls back to the cloud default — and
+    that expectation was wrong, not merely outdated. Its point was "never a
+    fabricated mock answer", which still holds; but the fallback it pinned is
+    the privacy leak itself: the local pick is unreachable, so the ENTIRE
+    conversation (this box holds client tax documents) went to a cloud API with
+    no consent, disclosed only afterwards as an amber "failover" chip. That is
+    exactly the substitution the v1.162.0 refusal exists to prevent — "moving a
+    chat from a local endpoint to a cloud API is the user's privacy decision,
+    not a routing fallback" (asked and confirmed 2026-08-11) — and the refusal
+    had been implemented only as the PRE-RUN availability check, which a
+    configured-but-dead endpoint sails straight through.
+
+    Cloud→cloud failover is untouched (test_router_honest_failure.py::
+    test_fallback_to_default_uses_defaults_own_model), and a local endpoint
+    that ANSWERED (429/500) still fails over — see
+    tests/test_local_endpoint_refusal.py.
+    """
+    cloud = _Adapter("anthropic", ok=True)
     adapters = {
         "ollama": _Adapter("ollama", ok=False),  # self-tuned local pick is DOWN
-        "anthropic": _Adapter("anthropic", ok=True),  # healthy cloud default
+        "anthropic": cloud,  # healthy cloud default
         "mock": _Adapter("mock", ok=True),
     }
     mgr = _FakeManager(adapters, {"ollama": True, "anthropic": True, "mock": True})
     r = ModelRouter(mgr, "anthropic", EventBus(), local_oracle=lambda tc: ("ollama", "llama3.1"))
-    res = await r.complete(system="s", messages=[], tools=[], task_class="coder")
-    assert res.provider == "anthropic"  # fell back to the healthy default, NOT mock
-    assert "anthropic" in res.response.text
+    with pytest.raises(Exception, match="ollama isn't connected"):
+        await r.complete(system="s", messages=[], tools=[], task_class="coder")
+    assert cloud.calls == 0  # the conversation never left the machine
+    # ...and no fabricated mock answer either (the original point of this test).
+    assert adapters["mock"].calls == 0

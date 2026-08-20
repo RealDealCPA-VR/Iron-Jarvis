@@ -53,7 +53,13 @@ describe("the exited state offers the way forward (source-pinned)", () => {
   });
 
   it("offers a one-click relaunch of the same setup", () => {
-    expect(page).toMatch(/onRestart=\{isLast \? \(\) => void start\(\) : undefined\}/);
+    // v1.192.0 REWRITE: this used to pin `void start()`, which was the defect
+    // (finding #21) — start() reads the SETUP FORM, whose folder comes from a
+    // single mount-time /fs/list that never retries, so the button silently
+    // no-opped whenever that listing had failed, and otherwise relaunched
+    // whatever the form currently held rather than "the same engine, same
+    // folder" the label promises. The relaunch now reads the dead SESSION.
+    expect(page).toMatch(/onRestart=\{isLast \? \(\) => void relaunch\(\) : undefined\}/);
     expect(page).toContain("Start a new session — same engine, same folder");
   });
 

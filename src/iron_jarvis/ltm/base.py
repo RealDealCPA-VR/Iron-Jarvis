@@ -21,6 +21,16 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _SNIPPET_LEN = 200
 
 
+class LTMWriteRefused(ValueError):
+    """An LTM write that would MISPLACE or DESTROY the user's notes, refused.
+
+    Subclasses :class:`ValueError` on purpose: every append caller already
+    handles that (``LTMAppendTool.execute`` -> ``ok=False``, ``POST /ltm/append``
+    and ``/ltm/ingest-document`` -> HTTP 400), so the refusal surfaces as an
+    honest error everywhere instead of a 500 or a swallowed exception.
+    """
+
+
 def slugify(title: str) -> str:
     """Filesystem-safe slug for a note title (``My Note!`` -> ``my-note``)."""
     slug = re.sub(r"[^\w\s-]", "", title.strip().lower())
@@ -190,10 +200,37 @@ class MarkdownDirConnector(LTMConnector):
         return [hit for _, hit in scored[:k]]
 
     def append(self, title: str, content: str) -> str:
-        self.dir.mkdir(parents=True, exist_ok=True)
+        # REFUSE, DON'T RECREATE — ON THE WRITE PATH TOO. v1.172.0 put that
+        # invariant in __init__ only, and this mkdir stayed UNCONDITIONAL: an
+        # append against a user vault that had moved, been renamed, or sat on an
+        # unmounted/de-synced drive re-created it EMPTY at the old path, filed
+        # the note there, split the vault across two folders — and because
+        # `missing` then went False, health() flipped back to available:True and
+        # masked the breakage permanently. Only the app's OWN store (create=True,
+        # the built-in brain under the state home) still self-creates.
+        if self.create:
+            self.dir.mkdir(parents=True, exist_ok=True)
+        elif self.missing:
+            raise LTMWriteRefused(f"cannot append: {self.health()['detail']}")
         path = self.dir / f"{slugify(title)}.md"
         if path.exists():
-            existing = self._read(path).rstrip()
+            # AN APPEND-ONLY TOOL MUST NEVER DELETE. This rewrites the WHOLE
+            # file, so the prior text has to be read in full first — and `_read`
+            # swallows OSError AND UnicodeDecodeError to "" (right for search,
+            # catastrophic here): a cp1252/ANSI note written by Notepad, or one
+            # momentarily locked by antivirus, was silently replaced by the new
+            # paragraph alone. Unrecoverably: LTMAppendTool.capture_undo hits the
+            # same error and journals reversible=False, so no pre-image exists.
+            # Distinguish ABSENT (write a new note) from UNREADABLE (refuse).
+            try:
+                existing = path.read_text(encoding="utf-8").rstrip()
+            except (OSError, UnicodeDecodeError) as exc:
+                raise LTMWriteRefused(
+                    f"cannot append to {path}: its existing contents could not be "
+                    f"read ({exc}). An append rewrites the whole note, so this "
+                    "would have destroyed it — nothing was written. Check the "
+                    "file's encoding (UTF-8 expected) or whether it is locked."
+                ) from exc
             body = f"{existing}\n\n{content.rstrip()}\n"
         else:
             body = f"# {title}\n\n{content.rstrip()}\n"

@@ -29,7 +29,14 @@ import { useApi } from "@/lib/useApi";
 import { post, put, ApiError } from "@/lib/api";
 import { PageShell, Reveal } from "@/components/motion";
 import { PageHeader } from "@/components/PageHeader";
-import { Card, ErrorNote, SuccessNote, Spinner, SectionLabel } from "@/components/ui";
+import {
+  Card,
+  ErrorNote,
+  OfflineHint,
+  SuccessNote,
+  Spinner,
+  SectionLabel,
+} from "@/components/ui";
 
 interface Profile {
   enabled: boolean;
@@ -247,6 +254,23 @@ export default function YouPage() {
   const opts = options.data;
   const overBudget = (preview?.preview_chars ?? 0) > (preview?.preview_limit ?? 1);
 
+  /* THE PROFILE IS EITHER KNOWN OR IT IS NOT — there is no third face.
+   *
+   * `useApi` CAPTURES a failed GET (it never throws), and this page used to
+   * read only `loaded.data`: a failed load left `preview` null, the spinner
+   * gone, and the EMPTY form on screen over whatever is really saved. Worse,
+   * `dirty` opens with `if (!preview) return false`, so Save stayed disabled
+   * no matter what was typed — a fully interactive form whose only action was
+   * dead, and everything typed lost on navigation. (The layout's DaemonBanner
+   * and the global 5xx banner only partly signal this: both are transient, a
+   * status-0 network error fires neither, and neither explains the dead Save.)
+   *
+   * So: when the profile is not known, the form does not render at all, and
+   * the failure is stated here with a way to retry. */
+  const known = preview !== null;
+  const loadError = loaded.error;
+  const offline = loadError?.status === 0;
+
   return (
     <PageShell>
       <Reveal>
@@ -254,6 +278,7 @@ export default function YouPage() {
           title="You"
           subtitle="How Iron Jarvis writes to you — applied to every model it uses, local or cloud, in chat and in agent runs."
           actions={
+            !known ? undefined : (
             <div className="flex items-center gap-2">
               {dirty && (
                 <button
@@ -273,14 +298,38 @@ export default function YouPage() {
                 <Save size={14} /> {saving ? "Saving…" : "Save"}
               </button>
             </div>
+            )
           }
         />
       </Reveal>
 
-      {loaded.loading && !preview && <Spinner label="Loading your profile…" />}
+      {loaded.loading && !known && <Spinner label="Loading your profile…" />}
+      {loadError && !known && (
+        <Reveal>
+          <div className="space-y-3">
+            {offline ? (
+              <OfflineHint detail="your profile could not be loaded, so nothing here can be edited yet." />
+            ) : (
+              <ErrorNote>
+                Could not load your profile — {loadError.message}. Nothing here is editable
+                until it loads, so what is already saved is not overwritten by a blank form.
+              </ErrorNote>
+            )}
+            <button
+              type="button"
+              onClick={() => loaded.reload()}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-sm font-medium text-zinc-400 transition-colors hover:border-white/20 hover:text-zinc-100"
+            >
+              <RotateCcw size={14} /> Try again
+            </button>
+          </div>
+        </Reveal>
+      )}
       {error && <ErrorNote>{error}</ErrorNote>}
       {saved && !dirty && <SuccessNote>Saved — it applies from your next message.</SuccessNote>}
 
+      {known && (
+      <>
       <Reveal>
         <Card
           title="Use my profile"
@@ -472,6 +521,8 @@ export default function YouPage() {
           )}
         </Card>
       </Reveal>
+      </>
+      )}
     </PageShell>
   );
 }

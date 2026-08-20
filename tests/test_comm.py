@@ -27,19 +27,44 @@ from iron_jarvis.tools.base import ToolContext
 
 
 class RecordingPost:
-    """Injected ``http_post`` that records (url, payload) and returns a 200."""
+    """Injected ``http_post`` that records (url, payload, headers), returns 200."""
 
     def __init__(self, response: Any = None) -> None:
-        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.calls: list[tuple[str, dict[str, Any], dict[str, str] | None]] = []
         self.response = response if response is not None else {"status_code": 200}
 
-    def __call__(self, url: str, payload: dict[str, Any]) -> Any:
-        self.calls.append((url, payload))
+    def __call__(
+        self, url: str, payload: dict[str, Any], headers: dict[str, str] | None = None
+    ) -> Any:
+        self.calls.append((url, payload, headers))
         return self.response
 
     @property
     def last(self) -> tuple[str, dict[str, Any]]:
-        return self.calls[-1]
+        url, payload, _headers = self.calls[-1]
+        return url, payload
+
+    @property
+    def last_headers(self) -> dict[str, str] | None:
+        return self.calls[-1][2]
+
+
+class FakeHttpResponse:
+    """An httpx-shaped response: ``.status_code`` + ``.text`` + ``.json()``.
+
+    ``data=None`` means the body is not JSON (a Slack incoming webhook answers
+    the literal text ``ok``), so ``.json()`` raises exactly like httpx's does.
+    """
+
+    def __init__(self, status_code: int, data: Any = None, text: str = "") -> None:
+        self.status_code = status_code
+        self.text = text
+        self._data = data
+
+    def json(self) -> Any:
+        if self._data is None:
+            raise ValueError("response body is not valid JSON")
+        return self._data
 
 
 # --------------------------------------------------------------------------- #
@@ -101,18 +126,105 @@ def test_slack_webhook_posts_text_payload():
     assert payload == {"text": "deploy done"}
 
 
-def test_slack_postmessage_uses_token_and_channel():
-    post = RecordingPost()
-    ch = SlackChannel(
-        {"token_secret": "slack_bot", "channel": "#general"},
+def _slack_token_channel(post: Any, config: dict[str, Any] | None = None) -> SlackChannel:
+    cfg = {"token_secret": "slack_bot", "channel": "#general"}
+    cfg.update(config or {})
+    return SlackChannel(
+        cfg,
         http_post=post,
         secret_resolver=lambda name: "xoxb-123" if name == "slack_bot" else None,
     )
-    res = ch.send("hi team")
+
+
+def test_slack_postmessage_sends_token_as_bearer_header_never_in_payload():
+    """Slack's Web API REFUSES a token passed as a JSON body field — it answers
+    HTTP 200 with {"ok": false, "error": "not_authed"}. (This test used to pin
+    the token-in-payload shape, which is why every bot-token send being dropped
+    was invisible offline.)"""
+    post = RecordingPost()
+    res = _slack_token_channel(post).send("hi team")
     assert res["ok"] is True
     url, payload = post.last
     assert url == SLACK_POST_MESSAGE_URL
-    assert payload == {"channel": "#general", "text": "hi team", "token": "xoxb-123"}
+    assert payload == {"channel": "#general", "text": "hi team"}
+    assert "token" not in payload
+    assert (post.last_headers or {})["Authorization"] == "Bearer xoxb-123"
+
+
+def test_slack_reply_to_chat_id_carries_the_bearer_header():
+    """Every Socket-Mode DM reply takes the token path (chat_id forces it)."""
+    post = RecordingPost()
+    ch = _slack_token_channel(post, {"webhook_url": "https://hooks.slack.com/services/X"})
+    res = ch.send("your answer", chat_id="U123")
+    assert res["ok"] is True
+    url, payload = post.last
+    assert url == SLACK_POST_MESSAGE_URL
+    assert payload == {"channel": "U123", "text": "your answer"}
+    assert (post.last_headers or {})["Authorization"] == "Bearer xoxb-123"
+
+
+def test_slack_mixed_config_broadcast_still_goes_through_the_webhook():
+    """webhook + token configured, no chat_id -> unchanged webhook delivery."""
+    post = RecordingPost()
+    ch = _slack_token_channel(post, {"webhook_url": "https://hooks.slack.com/services/X"})
+    res = ch.send("deploy done")
+    assert res["ok"] is True
+    assert post.last == ("https://hooks.slack.com/services/X", {"text": "deploy done"})
+    assert post.last_headers is None
+
+
+def test_slack_200_with_error_envelope_is_reported_as_a_failure():
+    """A 200 carrying {"ok": false} is a DROPPED message, not a delivery."""
+    post = RecordingPost(
+        response=FakeHttpResponse(200, {"ok": False, "error": "not_authed"})
+    )
+    res = _slack_token_channel(post).send("hi team", chat_id="U123")
+    assert res["ok"] is False
+    assert "not_authed" in res["detail"]
+
+
+def test_2xx_envelope_ok_true_and_non_json_bodies_stay_delivered():
+    """The envelope check only fires on an EXPLICIT falsey `ok`."""
+    good = RecordingPost(response=FakeHttpResponse(200, {"ok": True, "ts": "1.2"}))
+    assert _slack_token_channel(good).send("hi")["ok"] is True
+    # A Slack incoming webhook replies with the plain text "ok" (not JSON).
+    plain = RecordingPost(response=FakeHttpResponse(200, None, text="ok"))
+    assert SlackChannel({"webhook_url": "u"}, http_post=plain).send("m")["ok"] is True
+    # Discord's webhook answers 204 with an empty body.
+    empty = RecordingPost(response=FakeHttpResponse(204, None))
+    assert DiscordChannel({"webhook_url": "u"}, http_post=empty).send("m")["ok"] is True
+
+
+def test_slack_fails_closed_when_the_transport_cannot_take_headers():
+    """A two-arg transport must NOT get an unauthenticated send instead."""
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def legacy_post(url: str, payload: dict[str, Any]) -> Any:
+        calls.append((url, payload))
+        return {"status_code": 200}
+
+    res = _slack_token_channel(legacy_post).send("hi team")
+    assert res["ok"] is False
+    assert "headers" in res["detail"] and "TypeError" not in res["detail"]
+    assert calls == []  # never posted without the Authorization header
+
+
+def test_httpx_post_puts_headers_on_the_wire(monkeypatch):
+    """The production transport must actually forward the header it is given."""
+    import httpx
+
+    from iron_jarvis.comm.base import httpx_post
+
+    seen: dict[str, Any] = {}
+
+    def fake_post(url: str, **kw: Any) -> Any:
+        seen.update({"url": url, **kw})
+        return FakeHttpResponse(200, {"ok": True})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    httpx_post("https://slack.test/x", {"text": "m"}, {"Authorization": "Bearer T"})
+    assert seen["headers"] == {"Authorization": "Bearer T"}
+    assert seen["json"] == {"text": "m"}
 
 
 def test_discord_posts_content_payload():

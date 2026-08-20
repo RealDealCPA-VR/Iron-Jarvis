@@ -116,7 +116,10 @@ def _apply_edits(path: Path, sheet: "str | None", edits: list[dict[str, Any]],
                  add_sheets: list[str]) -> dict[str, Any]:
     from openpyxl import load_workbook
 
-    wb = load_workbook(str(path))  # keep_vba not needed for .xlsx; .xlsm noted
+    # keep_vba MUST track the extension: this saves back over the SAME path, and
+    # openpyxl drops the vbaProject part when keep_vba is False — a .xlsm saved
+    # that way loses every macro and Excel often refuses to open it at all.
+    wb = load_workbook(str(path), keep_vba=path.suffix.lower() == ".xlsm")
     for name in add_sheets:
         if name not in wb.sheetnames:
             wb.create_sheet(title=name)
@@ -826,7 +829,9 @@ class ExcelApplySpecTool(Tool):
                 or str(spec.get("sheet") or "").strip() or "Sheet1"
             )
             if target.is_file():
-                wb = load_workbook(str(target))
+                # Same in-place save hazard as _apply_edits: without keep_vba an
+                # existing .xlsm comes back macro-free (and often unopenable).
+                wb = load_workbook(str(target), keep_vba=target.suffix.lower() == ".xlsm")
             else:
                 wb = Workbook()
                 wb.active.title = sheet_name

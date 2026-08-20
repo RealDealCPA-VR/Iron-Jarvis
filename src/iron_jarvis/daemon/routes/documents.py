@@ -43,6 +43,38 @@ _APP_LABEL = {
 }
 
 
+def _gated_source(raw: str, base: Path | None = None) -> Path:
+    """Resolve a caller-supplied SOURCE path first, then gate the RESOLVED path.
+
+    The order is the whole point. ``fs_read_ok``/``is_protected_path`` resolve
+    what they are handed, but ``Path.resolve()`` does NOT expand ``~`` and
+    cannot know about a join that happens afterwards — so gating the RAW
+    request string and then opening the ``expanduser()``-ed / ``base``-joined
+    path checks one file and reads another. Both forms were live bypasses:
+    ``~/.ironjarvis/ironjarvis.db`` gated as a literal ``~`` folder under the
+    cwd, and a relative ``../secrets/<file>`` gated against the cwd, while the
+    read landed inside a registered protected root (the Fernet key material,
+    the SQLite DB holding inline undo pre-images of the user's real files).
+
+    *base* is the directory a RELATIVE path is joined to; ``None`` means the
+    caller must pass an absolute path, as the sibling creative.py file routes
+    and ``_preview_path`` above already require.
+    """
+    text = (raw or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="a path is required")
+    src = Path(text).expanduser()
+    if not src.is_absolute():
+        if base is None:
+            raise HTTPException(status_code=400, detail="an absolute path is required")
+        src = base / src
+    src = src.resolve()
+    ok, reason = fs_read_ok(str(src))
+    if not ok:
+        raise HTTPException(status_code=403, detail=reason)
+    return src
+
+
 def _open_native(path: str) -> None:
     """Launch *path* with the OS-associated application (Word/Excel/…).
     Module-level so tests monkeypatch it instead of really launching apps."""
@@ -445,10 +477,9 @@ def register(app: FastAPI, d) -> None:
 
         from ...core.fs_policy import is_protected_path
 
-        ok, reason = fs_read_ok(body.source)
-        if not ok:
-            raise HTTPException(status_code=403, detail=reason)
-        src = Path(body.source).expanduser()
+        # Resolve BEFORE gating — see _gated_source. The old order checked the
+        # raw string and copied the expanduser()'d file.
+        src = _gated_source(body.source)
         if not src.is_file():
             raise HTTPException(status_code=404, detail=f"not a file: {body.source}")
         dest_dir = Path(body.dest_dir).expanduser()
@@ -487,12 +518,10 @@ def register(app: FastAPI, d) -> None:
     # user picked. No model in the loop, so the step cannot be skipped.
 
     def _redact_source(path: str) -> Path:
-        ok, reason = fs_read_ok(path)
-        if not ok:
-            raise HTTPException(status_code=403, detail=reason)
-        src = Path(path).expanduser()
-        if not src.is_absolute():
-            src = (d.platform.config.home / "documents" / path).resolve()
+        # Resolve (expanduser + documents-join) BEFORE gating — see
+        # _gated_source. Checking the raw string let '~/…' and '../secrets/…'
+        # name a protected store the gate never saw.
+        src = _gated_source(path, d.platform.config.home / "documents")
         if not src.is_file():
             raise HTTPException(status_code=404, detail=f"not a file: {path}")
         return src

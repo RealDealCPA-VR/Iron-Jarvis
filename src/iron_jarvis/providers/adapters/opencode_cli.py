@@ -28,10 +28,12 @@ log = logging.getLogger(__name__)
 _TIMEOUT_S = 300.0
 
 
-def _run(argv: list[str], timeout: float = _TIMEOUT_S) -> tuple[int, str, str]:
+def _run(
+    argv: list[str], stdin: str | None = None, timeout: float = _TIMEOUT_S
+) -> tuple[int, str, str]:
     proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
         argv, capture_output=True, text=True, timeout=timeout,
-        encoding="utf-8", errors="replace",
+        input=stdin, encoding="utf-8", errors="replace",
     )
     return proc.returncode, proc.stdout or "", proc.stderr or ""
 
@@ -150,9 +152,17 @@ class OpencodeCliAdapter(LLMAdapter):
         prompt = _flatten(system, messages)
         if not prompt.strip():
             raise RuntimeError("opencode-cli: nothing to send")
-        argv = [exe, "run", "--format", "json", "-m", model, prompt]
+        # The prompt rides STDIN, never argv: Windows caps a command line at
+        # 32,767 chars (8,191 when the CLI resolves to an npm .cmd shim, which
+        # spawns through cmd.exe), and one extracted PDF plus the identity/skills
+        # system prompt clears that easily — the request then dies before the CLI
+        # starts (raw OSError WinError 206, or "The command line is too long").
+        # Same live-hit that moved the codex/claude adapters to stdin on
+        # 2026-07-20; `opencode run` with no positional message reads its prompt
+        # from piped stdin.
+        argv = [exe, "run", "--format", "json", "-m", model]
         try:
-            code, out, err = await asyncio.to_thread(self._runner, argv)
+            code, out, err = await asyncio.to_thread(self._runner, argv, prompt)
         except subprocess.TimeoutExpired as exc:
             raise ProviderError(
                 f"opencode-cli: CLI timed out after {_TIMEOUT_S:.0f}s", transient=True

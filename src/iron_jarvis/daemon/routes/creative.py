@@ -182,6 +182,23 @@ def studio_ready(full: str, *, raw: bytes | None = None, command: str = "") -> b
     )
 
 
+def _output_age(session) -> float | None:
+    """Seconds since this terminal last printed anything (``None`` = never).
+
+    The freshness input :func:`derive_phase` needs. EVERY caller of
+    ``derive_phase`` on a live session must pass it: the tail is APPEND-ONLY, so
+    a CLI that crashed mid-turn leaves its last "esc to interrupt" repaint
+    sitting in the phase window right next to the shell prompt that replaced it,
+    and without this the marker is trusted FOREVER (v1.192.0 — the studio_say
+    safety gate read "thinking" for an exited engine and pasted the brief into a
+    BARE SHELL, where it ran as a command).
+    """
+    import time as _time
+
+    loa = getattr(session, "last_output_at", 0.0)
+    return max(0.0, _time.monotonic() - loa) if loa else None
+
+
 def derive_phase(
     full: str, *, ready: bool, output_age: float | None = None
 ) -> tuple[str, str | None]:
@@ -337,6 +354,17 @@ def _type_and_submit(session, text: str) -> None:
     duplicates/corrupts the brief."""
     import time
 
+    # BASELINE THE MARKER BEFORE TYPING. The tail is APPEND-ONLY, so after any
+    # previous turn it still holds hundreds of THAT turn's "esc to interrupt"
+    # repaints. A bare ``marker in tail`` confirmation is therefore vacuously
+    # true on the first poll of every brief after the first, and the recovery
+    # below could never fire — the swallowed brief just sat in the composer and
+    # the generation silently never started. Only a marker count ABOVE what was
+    # already there proves a NEW turn began. (If more than the 32KB decode
+    # window rolls past, old markers scroll out and the count can fall instead
+    # of rise; the recovery then sends its one extra Enter, which is a harmless
+    # empty submit on a turn that is genuinely running.)
+    before = session.output_tail().lower().count(_WORKING_MARKER)
     session.write(_PASTE_BEGIN + text + _PASTE_END)
     time.sleep(_SUBMIT_SETTLE_SECONDS)
     session.write("\r")
@@ -347,7 +375,7 @@ def _type_and_submit(session, text: str) -> None:
         time.sleep(0.25)
         if not session.alive:
             return
-        if _WORKING_MARKER in session.output_tail().lower():
+        if session.output_tail().lower().count(_WORKING_MARKER) > before:
             return
     session.write("\r")
 
@@ -853,7 +881,15 @@ def register(app: FastAPI, d) -> None:
         # never came up at all (launch error, prompt still waiting).
         tail_now = session.output_tail()
         if getattr(session, "_studio_ready", False):
-            ph, _ = derive_phase(tail_now, ready=True)
+            # output_age is NOT optional here — it is the whole gate. The tail is
+            # append-only, so a CLI that died mid-turn leaves its last
+            # "esc to interrupt" repaint inside derive_phase's window alongside
+            # the shell prompt that replaced it; with age unknown the marker wins
+            # forever, the phase reads "thinking", and the brief gets pasted into
+            # a bare shell. Same computation studio_tail does — see _output_age.
+            ph, _ = derive_phase(
+                tail_now, ready=True, output_age=_output_age(session)
+            )
             if ph == "exited":
                 raise HTTPException(
                     status_code=409,
@@ -919,8 +955,6 @@ def register(app: FastAPI, d) -> None:
         session = d.platform.terminals.get(terminal_id)
         if session is None:
             raise HTTPException(status_code=404, detail="no such terminal")
-        import time as _time
-
         chars = max(200, min(int(chars), 32_000))
         full = session.output_tail()
         mode = latest_claude_mode(full)
@@ -944,9 +978,9 @@ def register(app: FastAPI, d) -> None:
             setattr(session, "_studio_automode", mode in _AUTO_MODES)
         automode = bool(getattr(session, "_studio_automode", False))
         # Live lifecycle phase from the CLI's own output (freshness-guarded).
-        loa = getattr(session, "last_output_at", 0.0)
-        age = max(0.0, _time.monotonic() - loa) if loa else None
-        phase, status_line = derive_phase(full, ready=ready, output_age=age)
+        phase, status_line = derive_phase(
+            full, ready=ready, output_age=_output_age(session)
+        )
         if not session.alive:
             phase = "exited"
         return {

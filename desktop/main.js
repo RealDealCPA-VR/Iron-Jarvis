@@ -157,11 +157,21 @@ let keepRunningPref = null;
 // Set once both children pass their health gates — lets a second launch (or the
 // tray) reopen the window after a --hidden boot that never created one.
 let bootComplete = false;
+// A second launch DURING a --hidden boot has nothing to show: there is no main
+// window, no splash, and bootComplete is still false (a packaged cold boot can
+// take up to 90s while AV scans the frozen daemon). Record the intent here so
+// startup() opens the window as soon as the health gate passes, instead of
+// silently dropping the user's explicit launch.
+let showWindowWhenReady = false;
 // before-quit runs async teardown (graceful daemon stop) exactly once.
 let quitProcessed = false;
 // {version} once an update has finished downloading and is ready to install —
 // surfaced as a clickable notification + a top-of-tray "Restart to update" item.
 let pendingUpdateInfo = null;
+// True between the start of an install handoff and either the app quitting or
+// abortUpdateInstall() putting everything back. Guards against a second click
+// (tray item, notification, Updates page) re-entering mid-teardown.
+let updateInstallInFlight = false;
 
 // --- Per-install auth token ---------------------------------------------
 // The local daemon is RCE-by-design; a token blocks drive-by requests from any
@@ -1243,10 +1253,11 @@ function installSpotlightIpc() {
       });
       note.on("click", () => {
         try {
-          if (mainWin && !mainWin.isDestroyed()) {
-            mainWin.show();
-            mainWin.focus();
-          }
+          // showMainWindow(), not a guarded show(): hideToTray() DESTROYS the
+          // window (mainWin = null), which is the most common state a toast is
+          // clicked in — a bare show/focus made the "invitation back in" a
+          // no-op there. Matches the Spotlight notification's handler.
+          showMainWindow();
         } catch {}
       });
       note.show();
@@ -1485,26 +1496,104 @@ function safeAppVersion() {
   }
 }
 
-// Install a downloaded update: kill the daemon+dashboard SYNCHRONOUSLY first
-// (shutdown() blocks until the process tree is dead) so NSIS can overwrite the
-// locked frozen exe — do NOT pre-set shuttingDown (that would make shutdown()
-// early-return and ORPHAN the children, the very bug that bricks the update) —
-// then quit + install + relaunch. Shared by the notification click, the tray
-// item, and the in-app "Restart to update" affordance.
+// Install a downloaded update. TWO invariants, and they used to be in the wrong
+// order:
+//   1. The daemon+dashboard must die SYNCHRONOUSLY (shutdown() blocks on
+//      taskkill) before NSIS extracts, or it hits a file lock on the running
+//      frozen exe and CORRUPTS the upgrade. Do NOT pre-set shuttingDown —
+//      shutdown() would early-return and ORPHAN the children.
+//   2. Nothing may be torn down until the installer handoff is CONFIRMED.
+//      quitAndInstall never throws to us: electron-updater's install() returns
+//      false and routes every failure through its 'error' event (the real
+//      trigger is a cached download that went away — e.g. the 30-min re-check
+//      invalidated it while pendingUpdateInfo stayed set). Killing first meant
+//      that failure left the app RESIDENT with dead children, shuttingDown
+//      permanently true (the crash supervisor disabled for the session),
+//      schedules/webhooks silently off, and no dialog anywhere.
+// Both hold because the failure surfaces SYNCHRONOUSLY, inside the
+// quitAndInstall call, while a success only QUEUES app.quit() on setImmediate —
+// so the teardown below still runs ahead of the quit and long before NSIS
+// reaches the extraction step.
+// Shared by the notification click, the tray item, and the in-app
+// "Restart to update" affordance.
 function applyPendingUpdate() {
-  if (!pendingUpdateInfo || !_autoUpdater) return;
+  if (!pendingUpdateInfo || !_autoUpdater || updateInstallInFlight) return;
+  updateInstallInFlight = true;
   isQuitting = true; // allow the window to actually close
   markUpdatePending(pendingUpdateInfo.version); // recovery marker for a bad update
-  shutdown();
-  // Our own children are dead (shutdown() blocks on taskkill), but an ORPHANED
-  // daemon from an earlier crashed session still locks resources/daemon and
-  // makes NSIS extract a partial install. Sweep them before handing off.
-  sweepOrphanDaemons();
+  let failure = null;
+  const onInstallError = (err) => {
+    failure = err || new Error("the installer did not start");
+  };
+  _autoUpdater.once("error", onInstallError);
   try {
     _autoUpdater.quitAndInstall(false, true);
   } catch (err) {
-    console.error("[update] quitAndInstall failed:", err && err.message);
+    failure = err;
   }
+  try {
+    _autoUpdater.removeListener("error", onInstallError);
+  } catch {
+    /* listener already gone */
+  }
+  if (failure) {
+    abortUpdateInstall(failure);
+    return;
+  }
+  // Handoff accepted: the installer is launching and app.quit() is queued. Kill
+  // our children now. An ORPHANED daemon from an earlier crashed session also
+  // locks resources/daemon, so sweep by image name too.
+  shutdown();
+  sweepOrphanDaemons();
+}
+
+// The installer never started, so the app is staying on this version. Put
+// everything back the way it was and SAY SO — silence here is what stranded the
+// user with a dead-looking app.
+function abortUpdateInstall(err) {
+  const raw = (err && err.message) || String(err || "the installer did not start");
+  console.error("[update] install did not start:", raw);
+  updateInstallInFlight = false;
+  clearUpdatePending(); // no install happened; the marker would misreport the next boot
+  // Ordering above means the children are normally still alive and the crash
+  // supervisor was never disabled — so we simply stay resident. If a teardown
+  // DID already run, there is nothing left to be resident for (dead children,
+  // shuttingDown latched, so the supervisor cannot bring them back): tell the
+  // user, then quit cleanly so a relaunch restores a working app. Never leave
+  // the half-torn-down zombie this function exists to prevent.
+  const childrenGone = shuttingDown;
+  if (!childrenGone) isQuitting = false; // a close must hide to the tray again
+  // The update is NOT ready — stop the tray claiming it is. The next 30-min
+  // check re-downloads it if it is still available.
+  pendingUpdateInfo = null;
+  refreshTrayMenu();
+  try {
+    if (tray) tray.setToolTip("Iron Jarvis — running");
+  } catch {
+    /* tray may be gone */
+  }
+  const friendly = friendlyUpdateError(raw);
+  _emitUpdateState({ status: "error", error: friendly });
+  try {
+    // Sync, like the other update/install dialogs here: an error the user must
+    // see, and no promise rejection to leak.
+    dialog.showMessageBoxSync({
+      type: "error",
+      buttons: ["OK"],
+      defaultId: 0,
+      noLink: true,
+      title: "Iron Jarvis — update did not install",
+      message: "The update could not be started, so Iron Jarvis is still running the current version.",
+      detail:
+        `${friendly}\n\n` +
+        "Nothing was changed and your data is untouched. Iron Jarvis will look for " +
+        "the update again shortly; you can also install it manually from the " +
+        "Releases page.",
+    });
+  } catch (dlgErr) {
+    console.error("[update] could not show the abort dialog:", dlgErr && dlgErr.message);
+  }
+  if (childrenGone) app.quit();
 }
 
 // A checkForUpdates 404 on latest.yml is the PUBLISHING WINDOW, not a fault: CI
@@ -1814,7 +1903,10 @@ async function startup() {
 
   clearUpdatePending(); // a clean, healthy boot means the current version is good
   bootComplete = true;
-  if (START_HIDDEN) {
+  // showWindowWhenReady: a second launch arrived DURING this boot with no
+  // window and no splash to focus (the --hidden case) — that launch was the
+  // user asking for the app, so open it now rather than staying invisible.
+  if (START_HIDDEN && !showWindowWhenReady) {
     // Login boot: stay in the tray — the window is created on demand (tray
     // click / hotkey / second launch). Close the splash if one exists.
     if (loadingWin && !loadingWin.isDestroyed()) loadingWin.close();
@@ -1822,6 +1914,7 @@ async function startup() {
   } else {
     createMainWindow();
   }
+  showWindowWhenReady = false;
   checkForUpdates();
   // Long-lived tray apps must keep looking for updates, not just at boot.
   setInterval(checkForUpdates, UPDATE_RECHECK_MS);
@@ -2225,8 +2318,14 @@ if (!gotLock) {
       // Hidden in the tray with no window (e.g. --hidden login boot, or the
       // window was destroyed on hide) — a second launch means "show me the app".
       showMainWindow();
+    } else {
+      // Still booting with NOTHING to focus. This is the --hidden login boot:
+      // startup() skips the splash and its START_HIDDEN branch deliberately
+      // creates no window, so the in-flight startup would NOT open one and the
+      // launch used to vanish. Record the intent; startup() honours it once the
+      // health gate passes.
+      showWindowWhenReady = true;
     }
-    // else still booting: the in-flight startup will open the window itself.
   });
 
   app.whenReady().then(startup);
@@ -2261,9 +2360,16 @@ if (!gotLock) {
     quitProcessed = true;
     requestDaemonShutdown(2000).finally(() => {
       shutdown(); // force-kills whatever is still alive (incl. the dashboard)
-      // autoInstallOnAppQuit runs NSIS after this quit — clear any orphaned
-      // daemons' file locks first, exactly like the explicit-update path.
-      if (pendingUpdateInfo) sweepOrphanDaemons();
+      // autoInstallOnAppQuit runs NSIS after this quit — so this IS an update
+      // install, exactly like the explicit-update path, and it gets the same
+      // two preparations: the failed-update recovery marker (without it the
+      // whole readAndBumpUpdatePending -> handleStartupFailure recovery is
+      // bypassed for every quit-installed update) and the orphan sweep that
+      // frees resources/daemon's file locks before the installer extracts.
+      if (pendingUpdateInfo) {
+        markUpdatePending(pendingUpdateInfo.version);
+        sweepOrphanDaemons();
+      }
       app.quit(); // re-enters before-quit; falls through this time
     });
   });

@@ -183,6 +183,30 @@ def _is_exempt(path: str) -> bool:
     return False
 
 
+def token_matches(candidate: str | None, token: str) -> bool:
+    """Constant-time token compare that CANNOT RAISE on client input.
+
+    ``hmac.compare_digest`` refuses non-ASCII ``str`` arguments with
+    ``TypeError`` ("comparing strings with non-ASCII characters is not
+    supported"), and ``candidate`` comes straight off the wire (an
+    ``Authorization`` header or ``?token=``). Passing it in raw meant
+    ``Authorization: Bearer café`` raised INSIDE the middleware, which sits
+    inside CORSMiddleware — but CORS only wraps ``send`` and catches nothing, so
+    the TypeError was served by Starlette's outermost ``ServerErrorMiddleware``:
+    a 500 with NO ``access-control-allow-origin``, which ``lib/api.ts`` maps to
+    status 0 and every page renders as "daemon offline". An attacker (or a
+    mistyped accented token) could trigger that at will. Comparing BYTES makes
+    every candidate comparable, so a wrong token is a plain 401 again.
+
+    Both sides are UTF-8 encoded (not stripped/ASCII-filtered) so the comparison
+    stays constant-time over the encoded forms and a legitimately non-ASCII
+    configured token still matches itself.
+    """
+    if candidate is None:
+        return False
+    return hmac.compare_digest(candidate.encode("utf-8"), token.encode("utf-8"))
+
+
 def _present_token(request: Request) -> str | None:
     """Extract a candidate token from the header or query string."""
     header = request.headers.get("authorization") or ""
@@ -210,7 +234,7 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         candidate = _present_token(request)
-        if candidate is not None and hmac.compare_digest(candidate, token):
+        if token_matches(candidate, token):
             return await call_next(request)
 
         return JSONResponse({"detail": "missing or invalid token"}, status_code=401)

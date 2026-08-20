@@ -52,6 +52,32 @@ _CHATGPT_FALLBACK_MODELS = ("gpt-5.5", "gpt-5.5-codex", "gpt-5.6", "gpt-5.4")
 _CHATGPT_REJECTED: set[str] = set()
 _CHATGPT_KNOWN_GOOD: list[str] = []
 
+#: The chat-completions token-limit field. api.openai.com REJECTS ``max_tokens``
+#: for the reasoning families (o-series, gpt-5…) with a permanent 400
+#: ("Unsupported parameter: 'max_tokens' … use 'max_completion_tokens' instead"),
+#: while OpenAI-compatible LOCAL servers accept (or ignore) ``max_tokens`` and
+#: often do NOT know the newer name. A hardcoded model list would rot exactly
+#: like the retired ChatGPT ids above, so the swap is ERROR-DRIVEN: send
+#: ``max_tokens``, and if THAT server says it wants the other name, retry once
+#: with the field renamed and remember the endpoint+model for the process life
+#: (adapters are rebuilt per request).
+_MAX_TOKENS_FIELD = "max_tokens"
+_COMPLETION_TOKENS_FIELD = "max_completion_tokens"
+_COMPLETION_TOKENS_MODELS: set[tuple[str, str]] = set()
+
+
+def _wants_completion_tokens(detail: str) -> bool:
+    """True when a 400 body is the 'use max_completion_tokens instead' error."""
+    return _COMPLETION_TOKENS_FIELD in (detail or "").lower()
+
+
+def _swap_token_limit(body: dict[str, Any]) -> dict[str, Any]:
+    """A copy of ``body`` with ``max_tokens`` renamed to ``max_completion_tokens``."""
+    out = dict(body)
+    if _MAX_TOKENS_FIELD in out:
+        out[_COMPLETION_TOKENS_FIELD] = out.pop(_MAX_TOKENS_FIELD)
+    return out
+
 
 def _is_chatgpt_token(credential: str) -> bool:
     """True when the credential is a ChatGPT OAuth JWT (not an sk- API key)."""
@@ -122,6 +148,15 @@ class OpenAIAdapter(LLMAdapter):
         needs no key. The hosted-OpenAI no-key case is enforced in ``complete``.
         """
         return self._api_key or (self._credential() if self._credential else None)
+
+    def _token_limit_field(self) -> str:
+        """Which token-limit field this endpoint+model has proven it accepts."""
+        if (self._endpoint, self.model) in _COMPLETION_TOKENS_MODELS:
+            return _COMPLETION_TOKENS_FIELD
+        return _MAX_TOKENS_FIELD
+
+    def _remember_completion_tokens(self) -> None:
+        _COMPLETION_TOKENS_MODELS.add((self._endpoint, self.model))
 
     def _client(self) -> Any:
         if self._http is None:
@@ -498,7 +533,7 @@ class OpenAIAdapter(LLMAdapter):
             )
         body: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": self.max_tokens,
+            self._token_limit_field(): self.max_tokens,
             "messages": self._to_openai_messages(system, messages),
         }
         if tools:
@@ -512,6 +547,22 @@ class OpenAIAdapter(LLMAdapter):
         # a wrong key / bad model / rate-limit / expired token must raise so the
         # router emits provider.failed + falls back (never a silent empty reply).
         status = getattr(resp, "status_code", 200)
+        if (
+            status == 400
+            and _MAX_TOKENS_FIELD in body
+            and _wants_completion_tokens(_error_detail(resp))
+        ):
+            # The reasoning families (o-series/gpt-5…) refuse `max_tokens` and
+            # name the field they want. Swap it, remember it, retry ONCE — no
+            # model list to keep current.
+            self._remember_completion_tokens()
+            body = _swap_token_limit(body)
+            resp = await self._client().post(
+                self._endpoint,
+                headers=headers,
+                json=body,
+            )
+            status = getattr(resp, "status_code", 200)
         if status >= 400:
             # Typed error (status + Retry-After) so the router fails over on a
             # transient 429/5xx and raises honestly on a permanent 4xx — never a
@@ -564,7 +615,7 @@ class OpenAIAdapter(LLMAdapter):
             )
         body: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": self.max_tokens,
+            self._token_limit_field(): self.max_tokens,
             "messages": self._to_openai_messages(system, messages),
             "stream": True,
             "stream_options": {"include_usage": True},
@@ -580,7 +631,12 @@ class OpenAIAdapter(LLMAdapter):
             slim = dict(body)
             slim.pop("stream_options", None)
             attempts.append(slim)
-        for i, attempt_body in enumerate(attempts):
+        # `attempts` GROWS: a "use max_completion_tokens" 400 splices a swapped
+        # retry in ahead of any remaining attempt (which is swapped too — the
+        # server has told us which name it speaks).
+        i = 0
+        while i < len(attempts):
+            attempt_body = attempts[i]
             async with self._client().stream(
                 "POST", self._endpoint, headers=headers, json=attempt_body
             ) as resp:
@@ -591,8 +647,19 @@ class OpenAIAdapter(LLMAdapter):
                     # transient 429/5xx and raises honestly on a permanent 4xx
                     # — never a blank reply.
                     await resp.aread()
+                    if (
+                        status == 400
+                        and _MAX_TOKENS_FIELD in attempt_body
+                        and _wants_completion_tokens(_error_detail(resp))
+                    ):
+                        self._remember_completion_tokens()
+                        attempts[i + 1 :] = [
+                            _swap_token_limit(b)
+                            for b in (attempt_body, *attempts[i + 1 :])
+                        ]
                     if status == 400 and i + 1 < len(attempts):
-                        continue  # retry without stream_options
+                        i += 1
+                        continue  # retry (swapped field / without stream_options)
                     raise provider_error_from_response(
                         self.provider, resp, _error_detail(resp)
                     )

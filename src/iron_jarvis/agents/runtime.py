@@ -739,7 +739,10 @@ class AgentRuntime:
 
         WHO PAUSES: only runs whose ORIGIN ASSERTS a watching human — a chat
         escalation ("chat"), an Agents-page job ("job:…"), a Projects task
-        ("project…"). An ALLOWLIST, not a denylist, and the first cut got
+        ("project:<project id>", stamped by ``routes/projects.py`` — this
+        branch was DEAD until v1.192.0 because nothing produced a
+        project-prefixed origin, so in-folder Projects tasks were denied
+        headlessly). An ALLOWLIST, not a denylist, and the first cut got
         this backwards: treating "unattributed" as "somebody is watching"
         parked every origin-less session — headless API callers and the
         entire offline test suite included — for five silent minutes per

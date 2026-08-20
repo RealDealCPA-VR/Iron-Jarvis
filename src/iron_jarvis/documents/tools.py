@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import io
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,7 @@ from ..tools.base import Reversibility, Tool, ToolContext, ToolResult, safe_path
 from ..tools.undo import make_file_descriptor, revert_workspace_file, sha256_bytes
 from .lint import lint_document
 from .pdf_markdown import MARKITDOWN_SUFFIXES, document_to_markdown
-from .readers import SUPPORTED_READ, extract_text
+from .readers import SUPPORTED_READ, _decode_bytes, extract_text
 from .writers import SUPPORTED_WRITE, write_document
 
 #: Cap on tool output to keep large documents from flooding the context window.
@@ -503,6 +504,15 @@ class ExtractPdfTool(Tool):
         from .ocr import is_pdf_file
 
         path = _resolve_read_path(args["path"], ctx)
+        # POLICY FIRST, then the sniff — fail closed, like every sibling tool
+        # here. ``is_pdf_file`` opens OOXML-suffixed files to read their magic
+        # bytes, so sniffing first read bytes of a policy-DENIED file before the
+        # deny, and answered "not a PDF file" vs the denial reason depending on
+        # what those bytes said (an oracle for "is this denied .xlsx really a
+        # PDF"). The gate must decide before anything touches the file.
+        allowed, reason = fs_read_ok(path)
+        if not allowed:
+            return ToolResult(ok=False, error=reason)
         # CONTENT, not extension (v1.174.0). The acceptance folder's "ORGANIZED
         # NUMBERS FOR HOUSES 2025.xlsx" IS a 71 KB PDF — the file this sniff was
         # written for — and this gate refused it while read_document read it
@@ -510,9 +520,6 @@ class ExtractPdfTool(Tool):
         # which of two interchangeable tools the model happened to name.
         if not await asyncio.to_thread(is_pdf_file, path):
             return ToolResult(ok=False, error=f"not a PDF file: {args['path']}")
-        allowed, reason = fs_read_ok(path)
-        if not allowed:
-            return ToolResult(ok=False, error=reason)
         try:
             text = await asyncio.to_thread(  # CPU-bound parse off the loop
                 extract_text, path, page_range=args.get("page_range")
@@ -546,8 +553,13 @@ def _load_for_conversion(source: Path, src_suffix: str, tgt_suffix: str) -> Any:
     """Read ``source`` as the richest content shape the target can accept."""
     if src_suffix in _TABULAR and tgt_suffix in _TABULAR:
         if src_suffix == ".csv":  # real csv parsing, not text lines
-            with open(source, newline="", encoding="utf-8", errors="replace") as f:
-                return [list(row) for row in csv.reader(f)]
+            # Encoding-DETECTED, exactly like readers._read_csv: Excel/Windows
+            # CSVs are frequently UTF-8-BOM or cp1252, and the old hard-coded
+            # utf-8 read turned every accented byte into U+FFFD inside the
+            # produced workbook (and glued the BOM to the first header cell).
+            # newline="" so csv sees line terminators untranslated.
+            text = _decode_bytes(source.read_bytes())
+            return [list(row) for row in csv.reader(io.StringIO(text, newline=""))]
         return _xlsx_content(source, keep_sheets=(tgt_suffix == ".xlsx"))
     # PDF/office/HTML -> Markdown: preserve real structure (headings, lists,
     # tables) instead of flattening to plain text. Written verbatim into the

@@ -613,9 +613,27 @@ def redact_file(
     elif suffix == ".pdf":
         counts, note = _redact_pdf(src, dst, spans_for)
     elif suffix in _TEXT_SUFFIXES or suffix == "":
-        text = src.read_text(encoding="utf-8", errors="replace")
+        # Decode the way every other reader in this package does (utf-8-sig →
+        # strict cp1252 → charset-normalizer → latin-1) instead of hard-coding
+        # utf-8 with errors="replace". That old read turned EVERY non-UTF-8
+        # character of a legacy Windows/office export into U+FFFD and then wrote
+        # it into the deliverable, so a copy whose only advertised change was
+        # the PII differed from the original everywhere — and `read_document`
+        # on the same file rendered it correctly, because it decodes properly.
+        # Detection is unaffected (the patterns are ASCII), so this was purely
+        # collateral corruption of a file the user then shares.
+        from .readers import _decode_bytes
+
+        raw = src.read_bytes()
+        text = _decode_bytes(raw)
         masked, counts = _apply_spans(text, spans_for(text))
-        dst.write_text(masked, encoding="utf-8")
+        # newline="" — the bytes decode carries the source's own CRLF/CR through
+        # verbatim, and the default translation would re-expand each "\n" into
+        # os.linesep (CR CR LF on Windows). Keep a UTF-8 BOM if the source had
+        # one: Excel opens a BOM-less CSV in the legacy codepage, so dropping it
+        # would mojibake the very file this fix exists to keep intact.
+        enc = "utf-8-sig" if raw.startswith(b"\xef\xbb\xbf") else "utf-8"
+        dst.write_text(masked, encoding=enc, newline="")
     else:
         raise ValueError(
             f"unsupported format for redaction: {suffix or '(no extension)'} — "

@@ -9,14 +9,17 @@ defaults to permission ``ask`` and real isolation lands with the Sandbox Manager
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import subprocess
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .base import Reversibility, Tool, ToolContext, ToolResult, safe_path
 from .undo import (
     make_file_descriptor,
+    read_envelope,
     revert_workspace_file,
     sha256_bytes,
 )
@@ -362,39 +365,58 @@ class WriteFileTool(Tool):
             target = safe_path(ctx.workspace, args["path"])
         except Exception:
             return None
-        post = _text_sha(args["content"])
-        if target.is_file():
-            try:
-                prior = target.read_text(encoding="utf-8").encode("utf-8")
-                mode = "text"
-            except (UnicodeDecodeError, OSError):
-                prior = target.read_bytes()
-                mode, post = "raw", None  # can't predict text-write bytes for binary
+
+        # OFF THE EVENT LOOP (v1.153.1's rule, applied here at last). This hook
+        # is awaited by ``registry.invoke`` BEFORE ``execute`` runs, so its
+        # stat + full read of the prior file blocks every other request in the
+        # daemon exactly like ``read_file`` used to — and then ``execute``
+        # blocks on the same file a second time.
+        def _capture() -> "dict[str, Any] | None":
+            post = _text_sha(args["content"])
+            if target.is_file():
+                try:
+                    prior = target.read_text(encoding="utf-8").encode("utf-8")
+                    mode = "text"
+                except (UnicodeDecodeError, OSError):
+                    prior = target.read_bytes()
+                    mode, post_ = "raw", None  # can't predict text bytes for binary
+                else:
+                    post_ = post
+                return make_file_descriptor(
+                    ctx.config.home,
+                    kind="file_restore",
+                    path=args["path"],
+                    mode=mode,
+                    prior_bytes=prior,
+                    pre_sha256=sha256_bytes(prior),
+                    post_sha256=post_,
+                )
             return make_file_descriptor(
                 ctx.config.home,
-                kind="file_restore",
+                kind="file_delete",
                 path=args["path"],
-                mode=mode,
-                prior_bytes=prior,
-                pre_sha256=sha256_bytes(prior),
+                mode="text",
                 post_sha256=post,
             )
-        return make_file_descriptor(
-            ctx.config.home,
-            kind="file_delete",
-            path=args["path"],
-            mode="text",
-            post_sha256=post,
-        )
+
+        return await asyncio.to_thread(_capture)
 
     async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
         return await revert_workspace_file(undo, ctx)
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = safe_path(ctx.workspace, args["path"])
-        path.parent.mkdir(parents=True, exist_ok=True)
         content = args["content"]
-        path.write_text(content, encoding="utf-8")
+
+        # mkdir + write are BOTH filesystem calls, and a write onto an
+        # unhydrated OneDrive path or a dead network share stalls for as long
+        # as the OS takes — on the loop that presents as "Daemon offline"
+        # (v1.153.1), not as a slow write.
+        def _write() -> None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+
+        await asyncio.to_thread(_write)
         return ToolResult(
             ok=True,
             output=f"wrote {len(content)} bytes to {args['path']}",
@@ -431,38 +453,129 @@ class EditFileTool(Tool):
             target = safe_path(ctx.workspace, args["path"])
         except Exception:
             return None
-        if not target.is_file():
-            return None
-        try:
-            text = target.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            return None
-        if args["old"] not in text:
-            return None
-        new_text = text.replace(args["old"], args["new"], 1)
-        return make_file_descriptor(
-            ctx.config.home,
-            kind="file_restore",
-            path=args["path"],
-            mode="text",
-            prior_bytes=text.encode("utf-8"),
-            pre_sha256=_text_sha(text),
-            post_sha256=_text_sha(new_text),
-        )
+
+        # Offloaded for the same reason WriteFileTool's hook is: the pre-image
+        # read happens on the loop, before execute, on the very file execute is
+        # about to read again.
+        def _capture() -> "dict[str, Any] | None":
+            if not target.is_file():
+                return None
+            try:
+                text = target.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                return None
+            if args["old"] not in text:
+                return None
+            new_text = text.replace(args["old"], args["new"], 1)
+            return make_file_descriptor(
+                ctx.config.home,
+                kind="file_restore",
+                path=args["path"],
+                mode="text",
+                prior_bytes=text.encode("utf-8"),
+                pre_sha256=_text_sha(text),
+                post_sha256=_text_sha(new_text),
+            )
+
+        return await asyncio.to_thread(_capture)
 
     async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
         return await revert_workspace_file(undo, ctx)
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         path = safe_path(ctx.workspace, args["path"])
-        reason = unreadable_reason(path, str(args["path"]))
+        # Stat walk, read and write ALL go to a worker thread — read_file was
+        # brought in line in v1.153.1 and edit_file, which does both halves,
+        # was not. On a stalled path this froze the whole daemon.
+        reason = await asyncio.to_thread(unreadable_reason, path, str(args["path"]))
         if reason is not None:
             return ToolResult(ok=False, error=reason)
-        text = path.read_text(encoding="utf-8")
+        text = await asyncio.to_thread(path.read_text, encoding="utf-8")
         if args["old"] not in text:
             return ToolResult(ok=False, error="`old` text not found")
-        path.write_text(text.replace(args["old"], args["new"], 1), encoding="utf-8")
+        await asyncio.to_thread(
+            path.write_text, text.replace(args["old"], args["new"], 1), encoding="utf-8"
+        )
         return ToolResult(ok=True, output=f"edited {args['path']}")
+
+
+def _case_only_rename(src: Path, dst: Path) -> bool:
+    """True when ``dst`` is ``src`` respelled with different CAPITALIZATION.
+
+    On Windows the filesystem folds case, so equal ``os.path.normcase`` strings
+    mean both names denote the SAME on-disk entry: the caller is fixing
+    capitalization ("2025_w2.pdf" -> "2025_W2.pdf"), which is a legitimate
+    rename that the plain ``dst.exists()`` clobber guard would refuse. On a
+    case-SENSITIVE filesystem ``normcase`` is the identity, so this is never
+    taken and such a rename stays an ordinary one. Pure string work — no I/O,
+    so it is safe to call on the event loop.
+    """
+    return (
+        str(src) != str(dst)
+        and os.path.normcase(str(src)) == os.path.normcase(str(dst))
+    )
+
+
+def _denotes_a_different_file(src: Path, dst: Path) -> bool:
+    """True when ``dst`` is a SEPARATE on-disk file from ``src``.
+
+    ``_case_only_rename`` is a string test, and ``os.path.normcase`` folds case
+    on Windows REGARDLESS of whether the directory actually is case-insensitive
+    — per-directory case sensitivity on NTFS, and a mounted Samba/NAS share with
+    ``case sensitive = yes``, both make ``foo.pdf`` and ``FOO.pdf`` two distinct
+    files while the string test still says "same entry". Taking the case-only
+    branch there would rename straight over the other file with no
+    ``overwrite=true``, so the string test is CONFIRMED against the filesystem
+    before the clobber refusal is allowed to stand down.
+
+    ``OSError`` answers "different" on purpose: not knowing must land on the
+    refusal, never on the silent overwrite (permissions FAIL CLOSED). Does real
+    I/O — call it from a worker thread.
+    """
+    try:
+        if not dst.exists():
+            return False
+        return not os.path.samefile(str(src), str(dst))
+    except OSError:
+        return True
+
+
+def _with_requested_case(resolved: Path, wanted: str) -> Path:
+    """Put the SPELLING the caller asked for back onto a resolved path.
+
+    ``safe_path`` calls ``.resolve()``, and on Windows that answers with the
+    ON-DISK spelling whenever a case variant of the name already exists — so
+    "2025_W2.pdf" comes back as "2025_w2.pdf" and the capitalization the caller
+    asked for is destroyed before anyone looks at it. Only a PURE case
+    difference is restored (same parent, same letters), so anything else
+    ``resolve()`` decided (symlinks, "..") and the containment ``safe_path``
+    just proved are both left exactly as they are. One predicate, because the
+    forward rename and its undo must agree about what was asked for.
+    """
+    if wanted and resolved.name != wanted and resolved.name.lower() == wanted.lower():
+        return resolved.with_name(wanted)
+    return resolved
+
+
+def _rename_via_temp(src: Path, dst: Path) -> None:
+    """Do a capitalization-only rename in TWO steps, through a unique temporary
+    name, which is what a case-folding filesystem requires: renaming straight
+    onto a name the OS considers identical to the source is not portable (it can
+    report success and leave the old spelling on disk). After step one no entry
+    with ``dst``'s name exists, so step two writes the exact spelling asked for.
+    A failing second step rolls the first one back, so a failure never leaves
+    the user's file parked under the temporary name.
+    """
+    tmp = dst.with_name(f"{dst.name}.ij-case-{uuid4().hex[:8]}")
+    src.replace(tmp)
+    try:
+        tmp.replace(dst)
+    except OSError:
+        try:
+            tmp.replace(src)
+        except OSError:  # nothing more we can do; report the real failure
+            pass
+        raise
 
 
 class RenameFileTool(Tool):
@@ -518,6 +631,10 @@ class RenameFileTool(Tool):
             dst = safe_path(ctx.workspace, str(Path(args["path"]).parent / raw_new))
         else:
             dst = safe_path(ctx.workspace, raw_new)
+        # THE REQUESTED CASING SURVIVES RESOLUTION (see _with_requested_case) —
+        # without this the capitalization fix the user asked for is gone before
+        # the tool ever looks at it.
+        dst = _with_requested_case(dst, Path(raw_new).name)
         return src, dst
 
     async def capture_undo(
@@ -552,6 +669,65 @@ class RenameFileTool(Tool):
         return descriptor
 
     async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        """A CASE-ONLY RENAME MUST UNDO LIKE ANY OTHER (v1.192.0).
+
+        This tool declares ``Reversibility.REVERSIBLE`` and the undo-journal
+        entry is one of the three reasons it exists as a tool rather than a
+        shell call, so the new capability may NOT quietly exempt itself from
+        that contract on a folder of client documents. The shared
+        ``file_rename`` branch cannot serve it: it does
+        ``back = safe_path(ctx.workspace, origin)``, and on Windows that
+        resolves the OLD spelling straight back to the NEW on-disk one — so
+        ``back.exists()`` is True and the revert refuses with "…already exists
+        again", naming the NEW spelling as the obstacle to restoring the old
+        one. That is not a cautious refusal, it is a refusal that describes the
+        wrong file.
+
+        So the case-only pair is handled HERE, in the same terms the forward
+        rename used, and everything else falls through unchanged.
+        """
+        if undo.get("kind") == "file_rename":
+            meta = read_envelope(undo)
+            rel, origin = meta.get("path"), meta.get("rename_from")
+            if rel and origin:
+                try:
+                    target = safe_path(ctx.workspace, str(rel))
+                    back = safe_path(ctx.workspace, str(origin))
+                except Exception as exc:  # noqa: BLE001 — never write outside it
+                    return ToolResult(ok=False, error=f"undo: unsafe path: {exc}")
+                # Same restoration _targets does. Without it ``back`` comes back
+                # spelled like ``target`` and the case-only branch below could
+                # never be taken.
+                back = _with_requested_case(back, Path(str(origin)).name)
+                # CONFIRMED against the filesystem, exactly as execute does it:
+                # this branch deliberately skips the ``back.exists()`` clobber
+                # guard, so on a case-SENSITIVE directory an unconfirmed match
+                # would destroy a genuinely different file DURING AN UNDO. When
+                # the two are not one entry, fall through to
+                # ``revert_workspace_file`` and let it refuse.
+                if _case_only_rename(target, back) and not await asyncio.to_thread(
+                    _denotes_a_different_file, target, back
+                ):
+                    # The "no longer there" check still applies; the clobber
+                    # guard does not — it would be answering about the very
+                    # file being renamed.
+                    if not await asyncio.to_thread(target.exists):
+                        return ToolResult(
+                            ok=False,
+                            error=(
+                                f"undo: {rel} is no longer there "
+                                "(renamed or removed since)"
+                            ),
+                        )
+                    try:
+                        await asyncio.to_thread(_rename_via_temp, target, back)
+                    except OSError as exc:
+                        return ToolResult(
+                            ok=False, error=f"undo: could not rename back: {exc}"
+                        )
+                    return ToolResult(
+                        ok=True, output=f"undo: renamed {rel} back to {origin}"
+                    )
         return await revert_workspace_file(undo, ctx)
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -562,29 +738,47 @@ class RenameFileTool(Tool):
         reason = await asyncio.to_thread(unreadable_reason, src, str(args["path"]))
         if reason is not None:
             return ToolResult(ok=False, error=reason)
-        if src == dst:
+        # Compared as STRINGS: on Windows ``Path`` equality folds case, so
+        # ``src == dst`` was True for a case variant and a capitalization fix
+        # was rejected as "the same name" — which it is not.
+        if str(src) == str(dst):
             return ToolResult(
                 ok=False, error=f"the new name is the same as the old one: {src.name}"
             )
-        if not await asyncio.to_thread(lambda: dst.parent.is_dir()):
-            return ToolResult(
-                ok=False,
-                error=f"the destination folder does not exist: {dst.parent}",
-            )
-        if await asyncio.to_thread(dst.exists) and not args.get("overwrite"):
-            # NEVER silently. Two documents whose contents suggest the same name
-            # is the NORMAL case on a tax folder (two 1099-NECs from one payer),
-            # and a clobber there destroys a client's file.
-            return ToolResult(
-                ok=False,
-                error=(
-                    f"'{dst.name}' already exists in that folder — refusing to "
-                    "overwrite it. Choose a different name (add a distinguishing "
-                    "detail), or pass overwrite=true if replacing it is intended."
-                ),
-            )
+        # A CASE-ONLY RENAME IS A REAL RENAME. Its destination is by definition
+        # the source itself, so neither the folder check nor the clobber refusal
+        # applies (both would answer about the file being renamed), and the
+        # rename has to go through a temporary name. But the name test alone may
+        # NOT disarm the clobber refusal — ``normcase`` folds case even where the
+        # directory does not (see ``_denotes_a_different_file``), so the pair is
+        # confirmed to be ONE on-disk entry first. When it is not, this stays an
+        # ordinary rename and the checks below give the normal refusal.
+        case_only = _case_only_rename(src, dst) and not await asyncio.to_thread(
+            _denotes_a_different_file, src, dst
+        )
+        if not case_only:
+            if not await asyncio.to_thread(lambda: dst.parent.is_dir()):
+                return ToolResult(
+                    ok=False,
+                    error=f"the destination folder does not exist: {dst.parent}",
+                )
+            if await asyncio.to_thread(dst.exists) and not args.get("overwrite"):
+                # NEVER silently. Two documents whose contents suggest the same
+                # name is the NORMAL case on a tax folder (two 1099-NECs from
+                # one payer), and a clobber there destroys a client's file.
+                return ToolResult(
+                    ok=False,
+                    error=(
+                        f"'{dst.name}' already exists in that folder — refusing to "
+                        "overwrite it. Choose a different name (add a distinguishing "
+                        "detail), or pass overwrite=true if replacing it is intended."
+                    ),
+                )
         try:
-            await asyncio.to_thread(src.replace, dst)
+            if case_only:
+                await asyncio.to_thread(_rename_via_temp, src, dst)
+            else:
+                await asyncio.to_thread(src.replace, dst)
         except OSError as exc:
             return ToolResult(ok=False, error=f"could not rename: {exc}")
         # ABSOLUTE paths (the v1.153.2 rule): a workspace-relative answer is a

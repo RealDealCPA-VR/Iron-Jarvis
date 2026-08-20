@@ -319,14 +319,27 @@ class PosixPtyBackend:
             return False
         try:
             pid, status = os.waitpid(self._pid, os.WNOHANG)
-        except (ChildProcessError, OSError):  # pragma: no cover
+        except (ChildProcessError, OSError):
+            # Not our child any more (already reaped, or never was) — the pid is
+            # not ours to signal, so forget it for the same reason as below.
+            self._pid = None
             return False
         if pid == 0:
-            return True
-        if os.WIFEXITED(status):  # pragma: no cover - reaping path
+            return True  # still running: KEEP the pid, it is still valid
+        if os.WIFEXITED(status):
             self._exit_code = os.WEXITSTATUS(status)
         elif os.WIFSIGNALED(status):  # pragma: no cover
             self._exit_code = -os.WTERMSIG(status)
+        # THIS reap frees the pid, exactly like the one in `kill()`, and it is
+        # the COMMON path: a shell that exits by itself is reaped here by the
+        # session's background drain thread, `purge_dead` RETAINS the dead
+        # session, and `kill_all()` at daemon shutdown calls `kill()` on it with
+        # no aliveness check. Forget the pid so that call signals nothing — the
+        # OS may have handed it to an unrelated process by then, and the group
+        # guard (`pgid == self._pid`) accepts exactly the process-group LEADERS,
+        # so a stray killpg would SIGKILL a whole unrelated group the user owns.
+        # `exit_code` reads `_exit_code`, which is already recorded above.
+        self._pid = None
         return False
 
     def kill(self) -> None:
@@ -334,18 +347,195 @@ class PosixPtyBackend:
             return
         import signal
 
-        try:  # pragma: no cover - exercised only on POSIX
-            os.kill(self._pid, signal.SIGKILL)
+        # Snapshot the pid ONCE. `is_alive()` runs on the session's background
+        # drain thread and now clears `_pid` too, so re-reading `self._pid` on
+        # each line below could hand `os.getpgid` a None mid-call — a TypeError,
+        # which the `except OSError` handlers do NOT catch and which would
+        # escape `kill()` and abort `kill_all()`'s loop over the other sessions.
+        pid = self._pid
+        # `pty.fork` calls setsid, so the child LEADS its own session/group and
+        # everything it launched is in that group — signal the group so a shell's
+        # children die with it instead of orphaning. Only ever when the child is
+        # confirmed the group leader: otherwise the group is the DAEMON's own and
+        # killpg would take the daemon down with it.
+        killed_group = False
+        try:
+            pgid = os.getpgid(pid)
+            if pgid == pid and pgid != os.getpgid(0):
+                os.killpg(pgid, signal.SIGKILL)
+                killed_group = True
         except OSError:
             pass
-        try:  # pragma: no cover - reap so we don't leak a zombie
-            os.waitpid(self._pid, 0)
+        try:
+            if not killed_group:
+                os.kill(pid, signal.SIGKILL)
         except OSError:
             pass
+        try:  # reap so we don't leak a zombie
+            os.waitpid(pid, 0)
+        except OSError:
+            pass
+        # The pid is FREED by that reap and the OS may hand it to an unrelated
+        # process — and `kill()` is called twice for real on every session (the
+        # manager kills a closed pane, `purge_dead` RETAINS the dead session and
+        # `kill_all` kills it again at shutdown, possibly hours later). Forget it
+        # so the second call returns at the guard above and signals nothing:
+        # `os.getpgid` on a recycled pid would otherwise pass the
+        # `pgid == self._pid` test for exactly the process-group LEADERS and
+        # SIGKILL a whole unrelated group the user owns. `is_alive()` already
+        # reports False on None and `exit_code` reads `_exit_code`, which this
+        # method never set.
+        self._pid = None
 
     @property
     def exit_code(self) -> int | None:
         return self._exit_code
+
+
+# --------------------------------------------------------------------------- #
+# Windows process-TREE teardown (used by the pipe fallback)                   #
+# --------------------------------------------------------------------------- #
+# ``Popen.kill`` is ``TerminateProcess`` on Windows: it kills exactly ONE
+# process. A pipe shell's children — an AI CLI launched by Creative Studio,
+# ffmpeg, a build — survive as orphans with no pane, no tail and no way to stop
+# them from the app; a daemon restart-to-update in degraded mode leaves them
+# running unattended. ConPTY has no such hole (closing the pseudoconsole tears
+# down the whole attached console tree), so the pipe fallback is the one path
+# that must tear the tree down itself.
+#
+# Preferred mechanism: put the shell in a Job object created with
+# KILL_ON_JOB_CLOSE — every descendant it spawns joins the job automatically,
+# ``TerminateJobObject`` kills them all at once, and if the daemon dies without
+# calling ``kill`` at all the handle closes with the process and the tree still
+# goes down. Fallback (a job could not be created): ``taskkill /T /F /PID``.
+
+_WINDOWS = sys.platform == "win32"
+
+_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+_JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9  # JOBOBJECTINFOCLASS
+
+
+def _win_job_for(process_handle: int) -> int | None:
+    """Create a kill-on-close Job and assign ``process_handle`` to it.
+
+    Returns the job handle, or ``None`` when jobs are unavailable (old Windows
+    refusing a nested job, a locked-down container) — callers fall back to
+    ``taskkill``.
+    """
+    try:  # pragma: no cover - exercised only on a real Windows spawn
+        import ctypes
+
+        class _BASIC(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_int64),
+                ("PerJobUserTimeLimit", ctypes.c_int64),
+                ("LimitFlags", ctypes.c_uint32),
+                ("MinimumWorkingSetSize", ctypes.c_void_p),
+                ("MaximumWorkingSetSize", ctypes.c_void_p),
+                ("ActiveProcessLimit", ctypes.c_uint32),
+                ("Affinity", ctypes.c_void_p),
+                ("PriorityClass", ctypes.c_uint32),
+                ("SchedulingClass", ctypes.c_uint32),
+            ]
+
+        class _IO(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_uint64) for n in (
+                "ReadOperationCount",
+                "WriteOperationCount",
+                "OtherOperationCount",
+                "ReadTransferCount",
+                "WriteTransferCount",
+                "OtherTransferCount",
+            )]
+
+        class _EXTENDED(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _BASIC),
+                ("IoInfo", _IO),
+                ("ProcessMemoryLimit", ctypes.c_void_p),
+                ("JobMemoryLimit", ctypes.c_void_p),
+                ("PeakProcessMemoryUsed", ctypes.c_void_p),
+                ("PeakJobMemoryUsed", ctypes.c_void_p),
+            ]
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        # HANDLE is pointer-sized: the default c_int restype would truncate it.
+        k32.CreateJobObjectW.restype = ctypes.c_void_p
+        k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
+        job = k32.CreateJobObjectW(None, None)
+        if not job:
+            return None
+        info = _EXTENDED()
+        info.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        ok = k32.SetInformationJobObject(
+            ctypes.c_void_p(job),
+            _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+        )
+        if ok:
+            ok = k32.AssignProcessToJobObject(
+                ctypes.c_void_p(job), ctypes.c_void_p(process_handle)
+            )
+        if not ok:
+            k32.CloseHandle(ctypes.c_void_p(job))
+            return None
+        return int(job)
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _win_terminate_job(job: int) -> bool:
+    """``TerminateJobObject`` + close the handle. True when the job was killed."""
+    try:  # pragma: no cover - exercised only on a real Windows spawn
+        import ctypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        ok = bool(k32.TerminateJobObject(ctypes.c_void_p(job), 1))
+        k32.CloseHandle(ctypes.c_void_p(job))
+        return ok
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
+def _win_taskkill_tree(pid: int) -> bool:
+    """Fallback tree kill: ``taskkill /T /F /PID <pid>`` (bounded, never raises)."""
+    try:
+        proc = subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return proc.returncode == 0
+    except Exception:  # pragma: no cover - taskkill missing / timed out
+        return False
+
+
+def _tree_kill(proc: subprocess.Popen, job: int | None, alive: bool = True) -> bool:
+    """Kill ``proc`` AND everything it launched. No-op off Windows.
+
+    POSIX callers tear the tree down with ``killpg`` instead (see
+    :meth:`PosixPtyBackend.kill`).
+
+    ``alive`` must be False once the shell has exited. The job is handle-based
+    and so immune to pid reuse, but the ``taskkill /T /F /PID`` fallback is NOT:
+    Windows RECYCLES pids, and ``kill()`` is routinely called twice on the same
+    session (a pane closed via ``DELETE /terminals/{id}`` is retained by
+    ``purge_dead`` and killed again by ``kill_all`` at shutdown), so taskkilling
+    a pid freed hours ago would force-kill an unrelated process TREE the user
+    owns. Nothing is lost by skipping it: ``/T`` walks LIVE parent-pid links, so
+    once the shell is gone its orphaned grandchildren are unreachable that way
+    anyway — only the job can still reach them.
+    """
+    if not _WINDOWS:
+        return False
+    if job is not None and _win_terminate_job(job):
+        return True
+    if not alive:
+        return False
+    return _win_taskkill_tree(proc.pid)
 
 
 # --------------------------------------------------------------------------- #
@@ -362,6 +552,8 @@ class PipeBackend:
         self._proc: subprocess.Popen | None = None
         self._queue: "queue.Queue[bytes]" = queue.Queue()
         self._thread: threading.Thread | None = None
+        #: Windows Job handle owning the shell + every process it spawns.
+        self._job: int | None = None
 
     def start(
         self,
@@ -380,6 +572,13 @@ class PipeBackend:
             stderr=subprocess.STDOUT,
             bufsize=0,
         )
+        if _WINDOWS:
+            # Assign immediately: a shell takes far longer to reach its prompt
+            # than this takes, so nothing it launches escapes the job. The
+            # taskkill fallback in `kill` covers a job we could not create.
+            handle = getattr(self._proc, "_handle", None)
+            if handle is not None:
+                self._job = _win_job_for(int(handle))
         self._thread = threading.Thread(target=self._reader, daemon=True)
         self._thread.start()
 
@@ -426,6 +625,20 @@ class PipeBackend:
     def kill(self) -> None:
         if self._proc is None:
             return
+        # Tear down the TREE first — `Popen.kill` alone leaves every process the
+        # shell launched running with no pane and no way to stop it. The
+        # pid-based fallback only ever fires while the shell is STILL RUNNING:
+        # this method is called again at shutdown on sessions killed long ago
+        # and Windows recycles pids (see `_tree_kill`).
+        try:
+            alive = self._proc.poll() is None
+        except Exception:  # pragma: no cover - defensive
+            alive = False
+        try:
+            _tree_kill(self._proc, self._job, alive)
+        except Exception:  # pragma: no cover - defensive
+            pass
+        self._job = None  # handle closed by _win_terminate_job
         try:
             self._proc.kill()
         except Exception:  # pragma: no cover - defensive

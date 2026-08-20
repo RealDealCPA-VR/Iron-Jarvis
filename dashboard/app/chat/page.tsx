@@ -1767,6 +1767,15 @@ export default function ChatPage() {
   // extraction reads it once per turn.
   const streamToolsRef = useRef<readonly ToolCard[]>(stream.tools);
   streamToolsRef.current = stream.tools;
+  // Latest ARMED TOOL SET. A mid-turn approval card's "Allow for this
+  // conversation" arms a tool DURING a turn, while the escalation body and the
+  // turn's own queueSave both run inside the send's pre-turn closure — reading
+  // the `selectedTools` binding there silently drops the grant the user just
+  // made (the threadDocsRef lesson, v1.166.0). Anything that reads the armed
+  // set AFTER a turn has begun reads it here; `armFromApproval` also writes it
+  // synchronously so a grant is visible before React re-renders.
+  const selectedToolsRef = useRef<string[]>(selectedTools);
+  selectedToolsRef.current = selectedTools;
   // THREAD SETUP persistence guard: saves include a `setup` snapshot only once
   // it was restored from the open thread or the user actually armed/changed
   // something — a plain reply on a thread whose setup wasn't restored (older
@@ -2357,7 +2366,11 @@ export default function ChatPage() {
   function currentSetup(): ThreadSetup {
     const { provider, model } = splitChoice(choice);
     return {
-      tools: selectedTools.slice(0, MAX_TOOLS),
+      // Via the ref for the same reason the documents are (below): a tool
+      // granted mid-turn on an approval card must ride the very save that
+      // turn queues, or the grant lives only in live state and is gone when
+      // the thread is reopened.
+      tools: selectedToolsRef.current.slice(0, MAX_TOOLS),
       connectors: selectedConnectors.slice(0, MAX_CONNECTORS),
       // Via the ref, not the closure: queueSave runs at turn COMPLETION inside
       // the send's stale closure, and the docs merged during the turn
@@ -2377,6 +2390,27 @@ export default function ChatPage() {
   function markSetupChanged() {
     sendSetupRef.current = true;
     setSetupVersion((v) => v + 1);
+  }
+
+  /** "Allow for this conversation" on an approval card (chat's mid-turn ask and
+   *  an escalated run's mid-run ask both land here): arm the tool for the rest
+   *  of this conversation, exactly as the "+"-menu does.
+   *
+   *  Two things beyond `setSelectedTools`, both load-bearing:
+   *  (1) the REF is written synchronously, because the state update is visible
+   *      only to LATER renders while the same turn may escalate before then —
+   *      the grant would then be missing from the escalation's `allow_tools`
+   *      and the run would re-ask for what the user just approved;
+   *  (2) `markSetupChanged`, because a card grant is user consent like any
+   *      other arming path — without it a never-otherwise-marked thread saves
+   *      `setup: null` forever and the grant is gone on reopen, breaking the
+   *      card's own "stops asking here" promise. */
+  function armFromApproval(tool: string) {
+    const prev = selectedToolsRef.current;
+    if (prev.includes(tool) || prev.length >= MAX_TOOLS) return;
+    selectedToolsRef.current = [...prev, tool];
+    setSelectedTools(selectedToolsRef.current);
+    markSetupChanged();
   }
 
   // Persist USER setup edits to the open thread even without a new turn. Runs
@@ -4380,6 +4414,12 @@ export default function ChatPage() {
         // the agent inherits the conversation instead of starting cold.
         const { provider, model } = splitChoice(choice);
         const openingTask = recap ? `${recap}\n\n---\n\n${task}` : task;
+        // The armed set as of NOW, via the ref: this function belongs to the
+        // render where the turn STARTED, so a tool granted mid-turn on the
+        // approval card (setSelectedTools → a later render) is invisible to
+        // the `selectedTools` binding here — the escalation would then have to
+        // re-ask for the grant the user made seconds earlier.
+        const armedNow = selectedToolsRef.current;
         session = customSlug
           ? // The escalating turn picked one of YOUR agents (v1.139.0): spawn
             // its stored definition — prompt, tool allowlist, and its OWN
@@ -4394,8 +4434,8 @@ export default function ChatPage() {
                 wait: false,
                 // GRANTS RIDE THE ESCALATION (v1.187.0) — see the POST
                 // /sessions branch below for why this is the same consent.
-                ...(selectedTools.length
-                  ? { allow_tools: selectedTools.slice(0, MAX_TOOLS) }
+                ...(armedNow.length
+                  ? { allow_tools: armedNow.slice(0, MAX_TOOLS) }
                   : {}),
                 // THE FOLDER RIDES TOO (v1.189.0) — see below.
                 ...(workspaceDir ? { workspace_root: workspaceDir } : {}),
@@ -4425,8 +4465,10 @@ export default function ChatPage() {
               // multi-step got it silently re-denied by the headless
               // resolver, and the user had no idea their grant had lapsed.
               // A base `deny` still holds — session grants never lift it.
-              ...(selectedTools.length
-                ? { allow_tools: selectedTools.slice(0, MAX_TOOLS) }
+              // Read from the ref (`armedNow`) so a grant made on THIS turn's
+              // approval card rides too, not just ones armed before it began.
+              ...(armedNow.length
+                ? { allow_tools: armedNow.slice(0, MAX_TOOLS) }
                 : {}),
               // THE FOLDER RIDES THE ESCALATION (v1.189.0). Chat's own tools
               // operate in this folder; the session the turn escalates into
@@ -4633,6 +4675,18 @@ export default function ChatPage() {
       setSelectedTools([]);
     }
     setSelectedConnectors([]); // connector toggles are per-conversation
+    // New chat returns to the user's DEFAULT posture (the localStorage one),
+    // not the previous thread's — a YOLO grant is per-conversation consent and
+    // must never leak into a conversation that never made it. The thread-open
+    // reset does exactly this; without the same line here, opening a saved
+    // YOLO thread and then clicking New chat left the fresh pane silently
+    // auto-approving the whole ask tier (and a restored always_ask left it
+    // over-carding). Deleting the open thread routes through here too.
+    try {
+      setApprovalMode(asApprovalMode(localStorage.getItem(APPROVAL_MODE_KEY)));
+    } catch {
+      setApprovalMode("approve_for_me");
+    }
     setPreviewPath(null); // a fresh conversation starts without a preview
     setThreadDocs([]); // document chips belong to their conversation
     // The standing summary belongs to its thread — and clearing it must ALSO
@@ -5749,13 +5803,7 @@ export default function ChatPage() {
                           {stream.approval && (
                             <ApprovalCard
                               approval={stream.approval}
-                              onConversation={(tool) =>
-                                setSelectedTools((prev) =>
-                                  prev.includes(tool) || prev.length >= MAX_TOOLS
-                                    ? prev
-                                    : [...prev, tool],
-                                )
-                              }
+                              onConversation={armFromApproval}
                             />
                           )}
                         </Bubble>
@@ -5810,13 +5858,7 @@ export default function ChatPage() {
                                 tool: sessionApproval.tool,
                                 args: sessionApproval.args,
                               }}
-                              onConversation={(tool) =>
-                                setSelectedTools((prev) =>
-                                  prev.includes(tool) || prev.length >= MAX_TOOLS
-                                    ? prev
-                                    : [...prev, tool],
-                                )
-                              }
+                              onConversation={armFromApproval}
                             />
                           )}
                         </div>

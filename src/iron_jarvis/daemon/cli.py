@@ -326,13 +326,23 @@ def serve(
     uvicorn.run(create_app(resolved_root), host=host, port=port)
 
 
+# The packaged daemon requires a bearer token. DaemonClient discovers it
+# (IRONJARVIS_TOKEN, then the desktop app's token.txt); --token overrides for a
+# daemon started with some other token.
+_TOKEN_OPT = typer.Option(
+    None, "--token", help="Daemon bearer token (default: IRONJARVIS_TOKEN / token.txt)."
+)
+
+
 @app.command()
 def cancel(
-    session_id: str, url: str = typer.Option("http://127.0.0.1:8787")
+    session_id: str,
+    url: str = typer.Option("http://127.0.0.1:8787"),
+    token: str = _TOKEN_OPT,
 ) -> None:
     """Stop a running session on a daemon."""
     try:
-        info = DaemonClient(url).cancel(session_id)
+        info = DaemonClient(url, token=token).cancel(session_id)
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]cancel failed[/red]: {exc}")
         raise typer.Exit(code=1)
@@ -341,11 +351,13 @@ def cancel(
 
 @app.command()
 def rerun(
-    session_id: str, url: str = typer.Option("http://127.0.0.1:8787")
+    session_id: str,
+    url: str = typer.Option("http://127.0.0.1:8787"),
+    token: str = _TOKEN_OPT,
 ) -> None:
     """Re-run a past session with the same inputs (on a daemon)."""
     try:
-        info = DaemonClient(url).rerun(session_id)
+        info = DaemonClient(url, token=token).rerun(session_id)
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]rerun failed[/red]: {exc}")
         raise typer.Exit(code=1)
@@ -354,11 +366,13 @@ def rerun(
 
 @app.command("delete-session")
 def delete_session(
-    session_id: str, url: str = typer.Option("http://127.0.0.1:8787")
+    session_id: str,
+    url: str = typer.Option("http://127.0.0.1:8787"),
+    token: str = _TOKEN_OPT,
 ) -> None:
     """Delete a session from a daemon."""
     try:
-        info = DaemonClient(url).delete(session_id)
+        info = DaemonClient(url, token=token).delete(session_id)
     except Exception as exc:  # noqa: BLE001
         console.print(f"[red]delete failed[/red]: {exc}")
         raise typer.Exit(code=1)

@@ -50,6 +50,49 @@ from .types import AgentDefinition, get_agent_definition
 log = get_logger("orchestrator")
 
 
+def is_managed_workspace(config, workspace_path: str | Path | None) -> bool:
+    """True only when a workspace is PROVABLY a disposable dir the app made,
+    i.e. strictly inside ``config.workspaces_dir``.
+
+    The counterpart of ``is_direct_workspace`` — and deliberately NOT its
+    negation, because deletion is irreversible and the two default in opposite
+    directions. ``is_direct_workspace`` answers "should this rerun land in the
+    user's folder?", so an unresolvable path (or the managed dir itself)
+    safely answers False there. Here the same False would mean "safe to
+    ``rmtree``", which is the wrong way to be wrong: a session whose
+    ``workspace_path`` is the managed ROOT would take every other session's
+    workspace with it, and an unresolvable path is not evidence of anything.
+    So this asserts membership positively and refuses to guess.
+    """
+    if not workspace_path:
+        return False
+    try:
+        ws = Path(workspace_path).resolve()
+        managed = Path(config.workspaces_dir).resolve()
+    except (OSError, ValueError):  # unresolvable path -> not provably ours
+        return False
+    return managed in ws.parents
+
+
+def _stored_allow_tools(session: Session) -> list[str]:
+    """The up-front tool grant a session was created with, as a clean list.
+
+    Shared by ``rerun_session`` and ``continue_session`` so a follow-up run can
+    never disagree with a rerun about what the user already approved. Junk in
+    the column (hand-edited, older shape) reads as NO grant — the fail-closed
+    direction.
+    """
+    import json as _json
+
+    try:
+        raw = _json.loads(getattr(session, "allow_tools_json", "") or "[]")
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [str(t) for t in raw if t]
+
+
 def normalize_max_steps(value: Any) -> int | None:
     """A per-session step budget as it may be STORED (v1.174.0, Contract 4).
 
@@ -727,16 +770,10 @@ class Orchestrator:
         re-runs THERE — cloning only task/model used to dump the rerun's
         deliverable into a throwaway scratch workspace — and its bundle-approved
         tool grant carries over so the pre-approved tools don't fail closed."""
-        import json as _json
-
         prev = self.get_session(session_id)
         if prev is None:
             raise KeyError(f"unknown session '{session_id}'")
-        try:  # the up-front tool grant the user approved for THIS task
-            raw = _json.loads(prev.allow_tools_json or "[]")
-            allow_tools = [str(t) for t in raw if t] if isinstance(raw, list) else []
-        except (ValueError, TypeError):
-            allow_tools = []
+        allow_tools = _stored_allow_tools(prev)
         return await self.create_session(
             prev.task,
             prev.agent_type,
@@ -746,6 +783,13 @@ class Orchestrator:
             project_id=prev.project_id,  # a rerun stays in its project (spine)
             allow_tools=allow_tools or None,
             workspace_root=self._rerun_direct_root(prev),
+            # …and so does its ORIGIN. Provenance is not decoration: a rerun of a
+            # chat escalation / Agents-page job / Projects task is still being
+            # WATCHED by the same human, and ``runtime._pause_for_approval`` will
+            # only pause on an ask-tier tool for an origin that asserts presence.
+            # Dropping it made the rerun unattributed, so the ask it would have
+            # raised became an instant headless denial.
+            origin=getattr(prev, "origin", None),
             # The step budget is part of the session's INPUTS (v1.174.0): a big
             # job re-run on the default 12 steps would fail exactly the way the
             # raised budget was set to prevent, and the user never touched a
@@ -774,7 +818,16 @@ class Orchestrator:
 
     async def continue_session(self, session_id: str, message: str) -> Session:
         """Start a follow-up run that reuses the finished session's workspace and
-        a compact recap of the prior task/result, enabling multi-turn work."""
+        a compact recap of the prior task/result, enabling multi-turn work.
+
+        A continuation is the SAME piece of work, so it inherits the same inputs
+        a rerun does — including the user's up-front tool GRANT and the ORIGIN
+        that says a human is watching. See the comments on the Session below:
+        both used to drop here, which quietly fail-closed every turn after the
+        first of an escalated chat.
+        """
+        import json as _json
+
         prev = self.get_session(session_id)
         if prev is None:
             raise KeyError(f"unknown session '{session_id}'")
@@ -794,6 +847,22 @@ class Orchestrator:
             # job is the SAME job, so silently dropping back to the configured
             # default would strand the continuation the user just asked for.
             max_steps=normalize_max_steps(getattr(prev, "max_steps", None)),
+            # …and so does the GRANT. The tools the user bundle-approved for run 1
+            # are part of the session's inputs (``rerun_session`` says the same):
+            # starting the follow-up with an empty ``session_allow`` makes the very
+            # command that ran minutes ago in this workspace fail closed.
+            allow_tools_json=_json.dumps(_stored_allow_tools(prev)),
+            # …and so does the ORIGIN — the PARENT's, never "continuation".
+            # ``runtime._pause_for_approval`` pauses only for an origin that
+            # asserts a watching human (chat/job/project/user); the continuation
+            # is being watched by exactly the person who watched run 1, so their
+            # presence carries. Stamping the literal "continuation" here (a value
+            # ``core.models`` lists) would be WORSE than leaving it None: it is
+            # not in that allowlist, so it could not restore the pause, and the
+            # dashboard chat page's agent lane posts /continue for every turn
+            # after the first — turning an honest instant denial into a silent
+            # 300s pause that ends in timeout-deny.
+            origin=getattr(prev, "origin", None),
         )
         # Reuse the prior workspace so the follow-up sees the earlier files — but
         # ONLY for non-git sessions. A git worktree can be discarded by the
@@ -925,7 +994,18 @@ class Orchestrator:
             db.commit()
         # Remove a plain (non-git) workspace dir, unless another session (e.g. a
         # continuation) still reuses it. Git worktrees were already discarded above.
-        if gs is None and ws_path:
+        #
+        # ONLY a workspace THIS APP CREATED is ever deleted (``is_managed_workspace``).
+        # A session created with ``workspace_root=`` — every Projects in-folder task,
+        # every chat escalation carrying its folder, any ``POST /sessions`` with a
+        # workspace_root — stores the USER'S REAL FOLDER as ``workspace_path``, and the
+        # "is it shared?" query below cannot protect it: this session's own row was
+        # already deleted in the transaction above, so the LAST session pointing at the
+        # folder finds no sharer and the folder gets rmtree'd. Bulk "clear completed"
+        # (``POST /sessions/clear``) walks every finished session through here one by
+        # one, which guarantees that last delete eventually happens. Cleaning up after
+        # ourselves must never mean deleting the user's documents.
+        if gs is None and is_managed_workspace(self.p.config, ws_path):
             try:
                 with session_scope(self.p.engine) as db:
                     shared = db.exec(

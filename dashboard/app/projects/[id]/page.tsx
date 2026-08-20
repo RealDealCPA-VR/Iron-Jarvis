@@ -42,6 +42,7 @@ import { patch, post, del, ApiError, API_BASE, ijToken } from "@/lib/api";
 import { useReviews } from "@/lib/useReviews";
 import { KanbanBoard } from "@/components/kanban/KanbanBoard";
 import { ProjectTasks } from "@/components/project/ProjectTasks";
+import { ProjectApprovals } from "@/components/project/ProjectSurfaces";
 import { KnowledgePanel } from "@/components/project/KnowledgePanel";
 import { FilePickerModal } from "@/components/FilePickerModal";
 import { ConfirmButton } from "@/components/ui";
@@ -112,6 +113,21 @@ function ProjectMedia({ projectId }: { projectId: string }) {
         <SkeletonRows rows={3} />
       ) : error && error.status === 0 ? (
         <p className="py-2 text-sm text-zinc-500">Media unavailable — the daemon looks offline.</p>
+      ) : !data ? (
+        // The same unknown-guard the Board and Activity carry, and for the same
+        // reason: `items` is `data?.items ?? []`, so a 500/404 fell straight
+        // past the loading branch and the status-0 branch into "No media in
+        // this project yet" — a claim about the PROJECT made from a failed
+        // request. No response in hand means UNKNOWN, never "you have nothing".
+        // The error is named only when there IS one; otherwise this is still
+        // honestly loading-shaped.
+        error ? (
+          <p className="py-2 text-sm text-zinc-500">
+            Media unavailable — the daemon returned an error (HTTP {error.status}).
+          </p>
+        ) : (
+          <SkeletonRows rows={3} />
+        )
       ) : items.length === 0 ? (
         <Empty icon={<Images size={22} />}>
           No media in this project yet — generate something in Creative (or run a media task) while
@@ -201,7 +217,7 @@ function ProjectBoard({ projectId }: { projectId: string }) {
   // paused while the tab is hidden. Null path stops the poll but keeps the last
   // data, so the board renders identically on return.
   const visible = useDocumentVisible();
-  const { data, error, reload } = usePolledApi<{ sessions: SessionView[] }>(
+  const { data, error, loading, reload } = usePolledApi<{ sessions: SessionView[] }>(
     visible ? `/sessions?project_id=${encodeURIComponent(projectId)}` : null,
     4000,
   );
@@ -220,6 +236,28 @@ function ProjectBoard({ projectId }: { projectId: string }) {
     return (
       <Card title="Board" icon={<SquareKanban size={15} />}>
         <p className="py-2 text-sm text-zinc-500">Board unavailable — the daemon looks offline.</p>
+      </Card>
+    );
+  // "No sessions in this project yet" is a CLAIM about the project, and it may
+  // only be made once a response has landed. `usePolledApi`'s data is null
+  // until the first /sessions round-trip resolves — and this component mounts
+  // on every Board-tab activation — so the old unguarded `mine.length === 0`
+  // asserted an empty project while the truth was still UNKNOWN. Same rule the
+  // workflows page states verbatim: loading or errored is not "you have nothing".
+  // And an ERROR is only claimed when there IS one: the poll path is null while
+  // the tab is hidden, so `useApi` sits at data=null/error=null/loading=false —
+  // gating the sentence on `!loading` alone fabricated an HTTP failure that
+  // never happened, which is the same lie in a different coat.
+  if (!data)
+    return (
+      <Card title="Board" icon={<SquareKanban size={15} />}>
+        {loading || !error ? (
+          <SkeletonRows rows={3} />
+        ) : (
+          <p className="py-2 text-sm text-zinc-500">
+            Board unavailable — the daemon returned an error (HTTP {error.status}).
+          </p>
+        )}
       </Card>
     );
   if (mine.length === 0)
@@ -247,7 +285,7 @@ function ProjectBoard({ projectId }: { projectId: string }) {
 function ActivityList({ projectId }: { projectId: string }) {
   // Same scoped + visibility-paused poll as the Board so the two never diverge.
   const visible = useDocumentVisible();
-  const { data } = usePolledApi<{ sessions: SessionView[] }>(
+  const { data, error, loading } = usePolledApi<{ sessions: SessionView[] }>(
     visible ? `/sessions?project_id=${encodeURIComponent(projectId)}` : null,
     4000,
   );
@@ -259,7 +297,24 @@ function ActivityList({ projectId }: { projectId: string }) {
       title={sessions.length ? `Recent activity · ${sessions.length}` : "Recent activity"}
       icon={<History size={15} />}
     >
-      {sessions.length === 0 ? (
+      {/* Same honesty guard as the Board — and this one never even looked at
+          `error`, so it asserted an empty project while OFFLINE too. No error
+          is claimed unless one exists: a hidden tab nulls the path, leaving
+          data/error null with loading false. */}
+      {!data ? (
+        loading || !error ? (
+          <SkeletonRows rows={3} />
+        ) : error.status === 0 ? (
+          <p className="py-2 text-sm text-zinc-500">
+            Recent activity unavailable — the daemon looks offline.
+          </p>
+        ) : (
+          <p className="py-2 text-sm text-zinc-500">
+            Recent activity unavailable — the daemon returned an error (HTTP{" "}
+            {error.status}).
+          </p>
+        )
+      ) : sessions.length === 0 ? (
         <Empty icon={<History size={22} />}>
           No sessions in this project yet — run a task or start a chat.
         </Empty>
@@ -979,6 +1034,13 @@ function ProjectWorkspaceInner({
               </div>
             </div>
           </Reveal>
+
+          {/* --------------------------------- paused tasks waiting on you.
+              A run in this project stopped on an ask-tier tool and is holding
+              (bounded, then denied). It sits ABOVE the tabs because the wait
+              belongs to the project, not to whichever tab is open — and
+              without a renderer here the ask reached nobody at all. */}
+          <ProjectApprovals projectId={id} />
 
           {/* -------------------------------------------------- tab bar */}
           <Reveal>

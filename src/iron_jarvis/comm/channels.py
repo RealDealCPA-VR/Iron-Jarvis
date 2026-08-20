@@ -27,8 +27,11 @@ class SlackChannel(Channel):
     config:
       * ``{"webhook_url": "..."}`` — posts ``{"text": message}`` to the webhook, or
       * ``{"token_secret": "...", "channel": "#general"}`` — resolves the bot
-        token by name and calls ``chat.postMessage`` (token carried in payload so
-        it works with the (url, json)-only transport contract).
+        token by name and calls ``chat.postMessage`` with the token in an
+        ``Authorization: Bearer`` HEADER. Slack's Web API does not accept a
+        token as a JSON body field: it answers HTTP **200** with
+        ``{"ok": false, "error": "not_authed"}``, so a body token means every
+        send is silently dropped while the status code says delivered.
     """
 
     name = "slack"
@@ -53,8 +56,15 @@ class SlackChannel(Channel):
             channel = reply_target or kw.get("channel") or self.config.get("channel")
             if not channel:
                 return self._fail("slack: chat.postMessage requires a `channel`")
-            payload = {"channel": channel, "text": message, "token": token}
-            return self._post(SLACK_POST_MESSAGE_URL, payload)
+            payload = {"channel": channel, "text": message}
+            # The token rides the Authorization header (never the JSON body),
+            # and `interpret_response` reads Slack's {"ok": false, "error": …}
+            # envelope so a 200-with-error is reported as the failure it is.
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json; charset=utf-8",
+            }
+            return self._post(SLACK_POST_MESSAGE_URL, payload, headers)
 
         webhook = self.config.get("webhook_url")
         if webhook:

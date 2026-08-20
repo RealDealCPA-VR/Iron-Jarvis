@@ -16,7 +16,6 @@ import {
   Radio,
   Search,
   FolderOpen,
-  FileText,
   HardDrive,
   GitBranch,
   FileArchive,
@@ -26,6 +25,8 @@ import {
   Server,
   Lightbulb,
   ChevronRight,
+  ShieldAlert,
+  RefreshCw,
 } from "lucide-react";
 import { post, patch, del, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
@@ -294,10 +295,74 @@ function strParam(name: string, description: string): ToolParam {
   return { name, type: "string", required: true, description };
 }
 
+/** Programs that PARSE an argument as a script. The daemon fills a {param} by
+ *  PLAIN TEXTUAL substitution into one argv element (`CommandTool._render` in
+ *  src/iron_jarvis/tools/dynamic.py) and runs `shell=False` — which keeps a
+ *  value from becoming a new argv WORD, but does nothing once the program on
+ *  the other end re-parses that word as code. Matched on the bare program name
+ *  (path + ".exe" stripped). */
+const SHELL_PROGRAMS = new Set([
+  "powershell",
+  "pwsh",
+  "cmd",
+  "command",
+  "bash",
+  "sh",
+  "zsh",
+  "wsl",
+  "mshta",
+  "cscript",
+  "wscript",
+  "node",
+  "python",
+  "python3",
+  "perl",
+  "ruby",
+]);
+
+const PLACEHOLDER_TOKEN_RE = /\{[A-Za-z_][A-Za-z0-9_]*\}/;
+
+/** True when an argv hands a {placeholder} to a program that re-parses it as a
+ *  script — the shape that made four curated tools injectable before v1.192.0.
+ *  A shell command with NO placeholder (a fixed script like `disk_free`) is not
+ *  flagged: nothing untrusted reaches it. */
+function interpolatesIntoShell(command: string[]): boolean {
+  const program = (command[0] ?? "")
+    .trim()
+    .toLowerCase()
+    .split(/[\\/]/)
+    .pop()!
+    .replace(/\.(exe|com|cmd|bat)$/, "");
+  if (!SHELL_PROGRAMS.has(program)) return false;
+  return command.slice(1).some((element) => PLACEHOLDER_TOKEN_RE.test(element));
+}
+
 /**
- * The curated gallery. Commands are argv (no shell), so {placeholder} tokens —
- * which the daemon fills from the declared parameters — are injection-safe.
- * Everything here targets Windows (PowerShell / cmd built-ins).
+ * The curated gallery. Every command is argv and the daemon runs it with
+ * `shell=False`, so a value can never become an extra argv word — but that is
+ * only the WHOLE safety story when the program does not itself interpret its
+ * argument. NOTHING HERE MAY HAND A {placeholder} TO A SHELL.
+ *
+ * Four entries did until v1.192.0. They wrapped the placeholder in a PowerShell
+ * script string (`powershell -NoProfile -Command "Get-ChildItem -Force
+ * '{path}'"`), and `powershell.exe -Command` IS an interpreter: a value with a
+ * single quote closed the literal and everything after it ran. MEASURED on this
+ * machine (Windows PowerShell 5.1), not assumed:
+ *   - inline form, path = `C:\x'; Write-Output INJECTED; '` → INJECTED ran;
+ *     and the innocent path `C:\Users\O'Brien` failed to parse at all.
+ *   - THE OBVIOUS FIX DOES NOT WORK. Giving the value its own argv element
+ *     (`-Command Get-ChildItem -Force -LiteralPath <value>`) is still injectable:
+ *     powershell.exe strips the process-level quoting and rejoins the tail into
+ *     ONE script string, so `C:\x; Write-Output INJECTED` ran and
+ *     `$(Write-Output INJECTED)` expanded. There is no safe way to pass an
+ *     untrusted value to `-Command` under a textual substitution.
+ * So these tools now run NATIVE executables (attrib / tar / rundll32), which
+ * take their arguments from argv and never re-parse them. `word_count` was
+ * REMOVED rather than escaped: Windows ships no native word counter, and a
+ * fragile escape that merely looks safe is worse than a missing convenience
+ * (the built-in `read_document` tool still reads text files).
+ * `disk_free` keeps PowerShell on purpose — it has no parameters, so its script
+ * is a constant.
  */
 const TOOL_SUITE: SuiteTool[] = [
   {
@@ -333,27 +398,16 @@ const TOOL_SUITE: SuiteTool[] = [
   {
     name: "list_dir",
     title: "List what's in a folder",
-    description: "List a directory.",
+    description: "List the files and folders (with attributes) inside a folder.",
     blurb: "See the files and folders inside any folder on your computer.",
     parameters: [strParam("path", "Directory path to list.")],
-    command: ["powershell", "-NoProfile", "-Command", "Get-ChildItem -Force '{path}'"],
+    // attrib.exe is a native program: it takes this one argv element as a
+    // literal filespec and never re-parses it, so a path holding a quote, a
+    // ';' or an '&' lists correctly instead of executing (verified). The
+    // trailing \* is what makes it list the CONTENTS; /D includes folders.
+    command: ["attrib", "/D", "{path}\\*"],
     timeout_seconds: 20,
     icon: <FolderOpen size={16} className="text-accent-soft" />,
-  },
-  {
-    name: "word_count",
-    title: "Count words in a document",
-    description: "Count words in a text file.",
-    blurb: "Count how many words are in a text document.",
-    parameters: [strParam("file", "Path to the text file.")],
-    command: [
-      "powershell",
-      "-NoProfile",
-      "-Command",
-      "(Get-Content '{file}' -Raw | Measure-Object -Word).Words",
-    ],
-    timeout_seconds: 30,
-    icon: <FileText size={16} className="text-accent-soft" />,
   },
   {
     name: "disk_free",
@@ -383,18 +437,21 @@ const TOOL_SUITE: SuiteTool[] = [
   {
     name: "zip_folder",
     title: "Zip up a folder",
-    description: "Zip a folder.",
+    description: "Zip a folder's contents into a .zip file.",
     blurb: "Bundle a folder into a single .zip file, ready to share.",
     parameters: [
-      strParam("source", "Folder (or path) to compress."),
+      strParam("source", "Folder to compress."),
       strParam("dest", "Destination .zip path."),
     ],
-    command: [
-      "powershell",
-      "-NoProfile",
-      "-Command",
-      "Compress-Archive -Path '{source}' -DestinationPath '{dest}' -Force",
-    ],
+    // Windows 10 1803+ ships bsdtar as tar.exe; `-a` picks zip from the .zip
+    // suffix. BOTH values are OPTION ARGUMENTS (-f, -C), never operands, so a
+    // value can be neither re-parsed as script (tar is native, not a shell) nor
+    // read as an option — a bare `--use-compress-program=…` operand would
+    // otherwise run a program of its own. The one operand is the constant ".",
+    // which also keeps the archive relative to the folder instead of storing
+    // the whole absolute path. A box without tar.exe fails honestly with
+    // "command not found".
+    command: ["tar", "-a", "-c", "-f", "{dest}", "-C", "{source}", "."],
     timeout_seconds: 120,
     icon: <FileArchive size={16} className="text-accent-soft" />,
   },
@@ -404,7 +461,12 @@ const TOOL_SUITE: SuiteTool[] = [
     description: "Open a URL in the default browser.",
     blurb: "Pop a link open in your default browser.",
     parameters: [strParam("url", "The URL to open.")],
-    command: ["powershell", "-NoProfile", "-Command", "Start-Process '{url}'"],
+    // rundll32 is native and hands the value to the Windows shell's
+    // FileProtocolHandler (a ShellExecute, NOT a command interpreter), so the
+    // value is opened, never executed as script. Same reach as the old
+    // Start-Process — it opens whatever the URL's handler is — minus the
+    // parser that turned a quote into arbitrary PowerShell.
+    command: ["rundll32", "url.dll,FileProtocolHandler", "{url}"],
     timeout_seconds: 15,
     icon: <ExternalLink size={16} className="text-accent-soft" />,
   },
@@ -532,11 +594,17 @@ export default function ToolsPage() {
 
   // Tool suite (one-click add) --------------------------------------------
   const installed = new Set(tools.map((t) => t.name));
+  // The SAVED argv per name. A suite tool the daemon already holds with a
+  // DIFFERENT command (every install that added the pre-v1.192.0 PowerShell
+  // versions) is offered as an Update — POST /tools/custom upserts by name, so
+  // one click replaces the injectable definition. Without this the card just
+  // says "Added" forever and the rewrite never reaches the daemon that has it.
+  const savedCommands = new Map(tools.map((t) => [t.name, t.command] as const));
   const [adding, setAdding] = useState<string | null>(null);
   const [suiteError, setSuiteError] = useState<string | null>(null);
   const [suiteOk, setSuiteOk] = useState<string | null>(null);
 
-  async function addFromSuite(t: SuiteTool) {
+  async function addFromSuite(t: SuiteTool, replacing = false) {
     setAdding(t.name);
     setSuiteError(null);
     setSuiteOk(null);
@@ -548,7 +616,7 @@ export default function ToolsPage() {
         command: t.command,
         timeout_seconds: t.timeout_seconds,
       });
-      setSuiteOk(`Tool "${t.name}" added.`);
+      setSuiteOk(`Tool "${t.name}" ${replacing ? "updated" : "added"}.`);
       reload();
     } catch (err) {
       setSuiteError(err instanceof ApiError ? err.message : String(err));
@@ -1077,6 +1145,19 @@ export default function ToolsPage() {
                         <span className="inline-flex items-center gap-1 text-[11px] text-zinc-500">
                           <Clock size={11} /> {tool.timeout_seconds}s
                         </span>
+                        {/* A saved command that pastes a parameter into a shell
+                            script is an injection (v1.192.0). The page cannot
+                            fix a stored record, but it must not stay quiet
+                            about one — this reaches user-written and
+                            model-generated tools too, not just the gallery. */}
+                        {interpolatesIntoShell(tool.command) && (
+                          <span
+                            title="This command pastes a parameter value into a shell script, so a value containing a quote or a ';' can run commands of its own. Re-add it from Ready-made tools, or delete it."
+                            className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/[0.1] px-1.5 py-0.5 text-[11px] font-medium text-amber-300"
+                          >
+                            <ShieldAlert size={11} /> value goes into a shell
+                          </span>
+                        )}
                       </div>
                       {tool.description && (
                         <p className="mt-1.5 text-sm text-zinc-400">
@@ -1169,11 +1250,18 @@ export default function ToolsPage() {
 
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {TOOL_SUITE.map((t) => {
+              const saved = savedCommands.get(t.name);
               const added = installed.has(t.name);
+              // Saved under this name, but not THIS command (an install that
+              // still holds a pre-v1.192.0 definition).
+              const stale =
+                saved !== undefined && JSON.stringify(saved) !== JSON.stringify(t.command);
               const isAdding = adding === t.name;
               return (
                 <div
                   key={t.name}
+                  data-suite-tool={t.name}
+                  data-argv={JSON.stringify(t.command)}
                   className="flex flex-col rounded-xl border border-white/[0.06] bg-white/[0.015] p-4 transition-colors hover:border-white/10 hover:bg-white/[0.03]"
                 >
                   <div className="flex items-start justify-between gap-2">
@@ -1188,20 +1276,32 @@ export default function ToolsPage() {
                         </div>
                       </div>
                     </div>
-                    {added ? (
+                    {added && !stale ? (
                       <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-500/[0.1] px-2 py-1 text-[11px] font-medium text-emerald-300">
                         <Check size={12} /> Added
                       </span>
                     ) : (
                       <button
                         type="button"
-                        onClick={() => addFromSuite(t)}
+                        onClick={() => addFromSuite(t, stale)}
                         disabled={isAdding}
-                        title={`Add "${t.name}"`}
-                        className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-accent/30 bg-accent/[0.08] px-2 py-1 text-[11px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
+                        title={
+                          stale
+                            ? `Replace the saved "${t.name}" with this command`
+                            : `Add "${t.name}"`
+                        }
+                        className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 ${
+                          stale
+                            ? "border-amber-500/30 bg-amber-500/[0.1] text-amber-300 hover:bg-amber-500/[0.16]"
+                            : "border-accent/30 bg-accent/[0.08] text-accent-soft hover:bg-accent/[0.14]"
+                        }`}
                       >
                         {isAdding ? (
-                          <LoaderInline label="Adding…" />
+                          <LoaderInline label={stale ? "Updating…" : "Adding…"} />
+                        ) : stale ? (
+                          <>
+                            <RefreshCw size={12} /> Update
+                          </>
                         ) : (
                           <>
                             <Plus size={12} /> Add
@@ -1212,6 +1312,11 @@ export default function ToolsPage() {
                   </div>
 
                   <p className="mt-2 text-[13px] text-zinc-400">{t.blurb}</p>
+                  {stale && (
+                    <p className="mt-2 text-[11px] text-amber-300/90">
+                      The saved copy runs an older command. Update replaces it.
+                    </p>
+                  )}
 
                   {/* Command tucked away — the use-case leads, the jargon hides. */}
                   <details className="group mt-3">

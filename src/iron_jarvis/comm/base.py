@@ -15,13 +15,18 @@ the platform stays testable **offline**:
 
 from __future__ import annotations
 
+import inspect
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-#: (url, json_payload) -> response-ish. Response may be an ``httpx.Response``,
-#: a ``{"status_code": int, "text"?: str}`` dict, or a ``{"ok": bool}`` dict.
-HttpPost = Callable[[str, dict[str, Any]], Any]
+#: ``(url, json_payload[, headers])`` -> response-ish. The third argument is
+#: OPTIONAL — a channel that needs request headers (Slack's
+#: ``Authorization: Bearer``) passes them, everything else calls the two-arg
+#: form, so legacy two-arg transports keep working. Response may be an
+#: ``httpx.Response``, a ``{"status_code": int, "text"?: str}`` dict, or a
+#: ``{"ok": bool}`` dict.
+HttpPost = Callable[..., Any]
 
 #: (url, query_params) -> response-ish carrying JSON (for inbound long-poll).
 #: Response may be an ``httpx.Response`` (``.json()``) or a plain ``dict``.
@@ -95,8 +100,15 @@ def _no_get(url: str, params: dict[str, Any]) -> Any:  # pragma: no cover
     raise RuntimeError("no http_get transport configured for this channel")
 
 
-def httpx_post(url: str, payload: dict[str, Any]) -> Any:
+def httpx_post(
+    url: str, payload: dict[str, Any], headers: dict[str, str] | None = None
+) -> Any:
     """Default production transport — POST ``payload`` as JSON via httpx.
+
+    ``headers`` is optional and carries per-request headers a channel needs on
+    the wire (Slack's ``Authorization: Bearer <bot token>``; the Slack Web API
+    REFUSES a token passed as a JSON body field and answers ``200`` with
+    ``{"ok": false, "error": "not_authed"}``).
 
     Imported lazily so the comm package imports cleanly even where httpx is
     unavailable; tests never reach this path (they inject their own callable).
@@ -105,7 +117,12 @@ def httpx_post(url: str, payload: dict[str, Any]) -> Any:
 
     # Short connect timeout so an unreachable/offline destination fails fast
     # (~2s) instead of stalling its worker thread for the full window.
-    return httpx.post(url, json=payload, timeout=httpx.Timeout(15.0, connect=2.0))
+    return httpx.post(
+        url,
+        json=payload,
+        headers=dict(headers) if headers else None,
+        timeout=httpx.Timeout(15.0, connect=2.0),
+    )
 
 
 def httpx_get(url: str, params: dict[str, Any]) -> Any:
@@ -123,6 +140,24 @@ def httpx_get(url: str, params: dict[str, Any]) -> Any:
         params=params,
         timeout=httpx.Timeout(server_timeout + 15.0, connect=2.0),
     )
+
+
+def _accepts_headers(transport: Any) -> bool:
+    """Whether ``transport`` can be called as ``(url, payload, headers)``.
+
+    The ``http_post`` contract grew an optional third argument, and channels are
+    handed transports built elsewhere (tests inject two-arg recorders). A
+    signature that cannot be inspected at all (a C builtin) is given the benefit
+    of the doubt — the production transport is :func:`httpx_post`, which takes
+    them.
+    """
+    try:
+        inspect.signature(transport).bind("", {}, {})
+    except TypeError:  # inspectable, and three arguments don't fit
+        return False
+    except Exception:  # noqa: BLE001 — uninspectable (C builtin) => try it
+        return True
+    return True
 
 
 def interpret_json(resp: Any) -> dict[str, Any] | None:
@@ -149,11 +184,37 @@ def interpret_json(resp: Any) -> dict[str, Any] | None:
     return None
 
 
+def envelope_error(resp: Any) -> str | None:
+    """The error inside a **2xx** body that says the call FAILED, or ``None``.
+
+    Slack (and Telegram) answer HTTP 200 for application-level failures and put
+    the verdict in the body: ``{"ok": false, "error": "not_authed"}``. Judging
+    such a response by status code alone reports a dropped message as delivered.
+
+    Deliberately conservative — only an EXPLICIT falsey ``ok`` key counts as a
+    failure. A body that is absent, empty, non-JSON (a Slack incoming webhook
+    replies with the literal text ``ok``), not a dict, or simply carries no
+    ``ok`` key leaves a 2xx a success.
+    """
+    getter = getattr(resp, "json", None)
+    if not callable(getter):
+        return None
+    try:
+        data = getter()
+    except Exception:  # noqa: BLE001 — a non-JSON 2xx body is not a failure
+        return None
+    if not isinstance(data, dict) or "ok" not in data or bool(data.get("ok")):
+        return None
+    err = data.get("error") or data.get("description") or data.get("detail")
+    return str(err) if err else "ok=false"
+
+
 def interpret_response(resp: Any) -> tuple[bool, str]:
     """Normalise a ``http_post`` return value into ``(ok, detail)``.
 
-    Supports httpx-style responses (``.status_code`` / ``.text``) and the two
-    plain-dict contracts above. Unknown shapes are treated as success.
+    Supports httpx-style responses (``.status_code`` / ``.text``, plus the
+    :func:`envelope_error` check on a 2xx body) and the two plain-dict contracts
+    above. Unknown shapes are treated as success.
     """
     if resp is None:
         return True, "sent"
@@ -170,6 +231,9 @@ def interpret_response(resp: Any) -> tuple[bool, str]:
     if status is not None:
         ok = 200 <= int(status) < 300
         if ok:
+            failed = envelope_error(resp)
+            if failed is not None:
+                return False, f"HTTP {status}: {failed}"
             return True, f"HTTP {status}"
         text = getattr(resp, "text", "") or ""
         return False, f"HTTP {status}: {text[:200]}".rstrip(": ")
@@ -230,10 +294,33 @@ class Channel(ABC):
             return None
         return interpret_json(resp)
 
-    def _post(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """POST via the injected transport and normalise the result."""
+    def _post(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """POST via the injected transport and normalise the result.
+
+        ``headers`` (Slack's ``Authorization: Bearer``) are only passed on when
+        the caller supplies them, so a two-arg transport keeps working for every
+        other channel. A transport that CANNOT take them fails closed: sending
+        an auth header the channel asked for is not optional, and posting the
+        request without it would be a request we already know is unauthorised.
+        """
         try:
-            resp = self._http_post(url, payload)
+            if headers:
+                if not _accepts_headers(self._http_post):
+                    return {
+                        "ok": False,
+                        "detail": (
+                            "http transport does not accept headers; "
+                            f"{self.name or 'this channel'} needs them to authenticate"
+                        ),
+                    }
+                resp = self._http_post(url, payload, headers)
+            else:
+                resp = self._http_post(url, payload)
         except Exception as exc:  # transport failure must not raise to caller
             return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
         ok, detail = interpret_response(resp)

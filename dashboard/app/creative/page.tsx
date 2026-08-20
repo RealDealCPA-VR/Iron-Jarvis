@@ -435,6 +435,19 @@ function ShareRow({
 }
 
 /**
+ * THE consent gate for publishing — one function, every surface (v1.192.0).
+ * Publishing is OUTWARD-FACING: a permanent public CDN link anyone can open.
+ * Never do that on a single click without saying so. The tile popover asked
+ * and the lightbox did not, which is exactly the kind of divergence a shared
+ * prompt makes impossible.
+ */
+function confirmPublish(): boolean {
+  return window.confirm(
+    "Publish this file to Pixio's public CDN? Anyone with the link can view it, and the URL is permanent.",
+  );
+}
+
+/**
  * Per-tile Share affordance — a corner button on every media tile that publishes
  * the item (same /creative/publish endpoint + 424 handling as the lightbox) then
  * opens a compact popover of the SAME ShareMenu destinations, WITHOUT opening the
@@ -463,14 +476,7 @@ function TileShare({
   const dlRef = useRef<HTMLAnchorElement | null>(null);
 
   const publish = useCallback(async () => {
-    // Publishing is OUTWARD-FACING: a permanent public CDN link anyone can
-    // open. Never do that on a single click without saying so.
-    if (
-      !window.confirm(
-        "Publish this file to Pixio's public CDN? Anyone with the link can view it, and the URL is permanent.",
-      )
-    )
-      return;
+    if (!confirmPublish()) return;
     setBusy(true);
     setErr(null);
     try {
@@ -1117,6 +1123,9 @@ function MediaLightbox({
   const [pubUrl, setPubUrl] = useState<string | null>(null);
   const [pubErr, setPubErr] = useState<{ detail: string; notConnected: boolean } | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
+  // Publishing FOR a share — separate from pubBusy so the spinner sits on the
+  // button that was actually clicked (shareOpen now only opens after consent).
+  const [shareBusy, setShareBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
   const [delBusy, setDelBusy] = useState(false);
   const [delErr, setDelErr] = useState<string | null>(null);
@@ -1209,24 +1218,43 @@ function MediaLightbox({
     }
   };
 
-  const publish = async () => {
+  /** Returns true only when a public URL now exists. The consent gate is the
+   *  SAME one the tile popover uses (v1.192.0): this surface used to upload to
+   *  a public CDN on a single click, which is the one action on this dialog
+   *  that cannot be taken back. */
+  const publish = async (): Promise<boolean> => {
+    if (!confirmPublish()) return false;
     setPubBusy(true);
     setPubErr(null);
     try {
       const res = await post<{ url: string }>("/creative/publish", publishBody);
       setPubUrl(res.url);
+      return true;
     } catch (e) {
       const err = e instanceof ApiError ? e : new ApiError(String(e), 0);
       setPubErr({ detail: err.message, notConnected: err.status === 424 });
+      return false;
     } finally {
       setPubBusy(false);
     }
   };
 
-  /** Sharing needs the PUBLIC url — publish on first click, same 424 handling. */
+  /** Sharing needs the PUBLIC url — publish on first click, same 424 handling.
+   *  The destinations only open once publishing actually happened: declining
+   *  the prompt (or a failed publish) must not present a share row with no
+   *  link behind it. */
   const share = async () => {
-    setShareOpen(true);
-    if (!pubUrl && !pubBusy) await publish();
+    if (pubUrl) {
+      setShareOpen(true);
+      return;
+    }
+    if (pubBusy) return;
+    setShareBusy(true);
+    try {
+      if (await publish()) setShareOpen(true);
+    } finally {
+      setShareBusy(false);
+    }
   };
 
   return (
@@ -1318,7 +1346,7 @@ function MediaLightbox({
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={publish}
+                onClick={() => void publish()}
                 disabled={pubBusy}
                 className="inline-flex items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.08] px-3 py-1.5 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
               >
@@ -1334,13 +1362,16 @@ function MediaLightbox({
                 type="button"
                 onClick={() => void share()}
                 disabled={pubBusy}
+                title="Publishes the file to a public link first, then offers the destinations"
                 className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/[0.04] disabled:opacity-50"
               >
-                {pubBusy && shareOpen ? (
-                  <LoaderInline label="Preparing…" />
+                {shareBusy ? (
+                  <LoaderInline label="Publishing…" />
                 ) : (
                   <>
-                    <Share2 size={13} /> Share
+                    {/* The label NAMES the outcome: this button uploads. It
+                     *  used to read "Share", which sounds like opening a menu. */}
+                    <Share2 size={13} /> Publish &amp; share
                   </>
                 )}
               </button>
@@ -1498,11 +1529,42 @@ const STUDIO_IDLE_MS = 8000;
  *  while there is still time to look at what the CLI is printing. */
 const BOOT_SLOW_SECONDS = 12;
 
+/**
+ * Whole-TERMINAL death, in words (v1.192.0). `describeEngineExit` stays the one
+ * source of truth for what a code MEANS — this only changes the SUBJECT: here
+ * the terminal itself died (the restart-to-update case), not the engine running
+ * inside a terminal that is still open. Two surfaces kept printing the raw
+ * "(code 4294967295)" that v1.191.0 existed to eliminate, and when no turn has
+ * been sent yet the ErrorNote is the only explanation the user gets.
+ */
+function describeTerminalExit(code: number | null): string {
+  return describeEngineExit(code)
+    .replace(/^The engine was terminated/, "This terminal was closed from outside")
+    .replace(/^The engine /, "This terminal ");
+}
+
+/** The same translation, compressed for the live/exited status footer — where
+ *  the raw code used to be the ENTIRE sentence. The full one rides as `title`. */
+function shortTerminalExit(code: number | null): string {
+  return describeTerminalExit(code)
+    .split(" — ")[0]
+    .replace(/\.$/, "")
+    .replace(/^This terminal /, "");
+}
+
 /** A live studio session, persisted so a page unmount doesn't lose the terminal. */
 interface StudioSession {
   terminal_id: string;
   dest: string;
   cli_label: string;
+  /** Engine ID this session actually launched with — what a relaunch replays
+   *  (v1.192.0). ABSENT on sessions stored before that: the relaunch then
+   *  resolves the id from `cli_label`, and refuses if it cannot. */
+  cli_id?: string;
+  /** The skill VALUE passed to /start ("" = Auto); absent on legacy records. */
+  skill_value?: string;
+  /** The autopilot choice this session launched with; absent on legacy records. */
+  autopilot?: boolean;
   /** The skill chosen at start ("Auto" when the agent picks) — shown in the live header. */
   skill?: string;
   command: string;
@@ -1636,6 +1698,13 @@ interface LiveSession {
   terminalId: string;
   dest: string;
   cliLabel: string;
+  /** The SETUP this session ran with, carried on the session itself so the
+   *  one-click relaunch replays it instead of reading the setup form, which
+   *  the user may have browsed elsewhere since (v1.192.0). `cliId` is "" for
+   *  a legacy stored session whose label no longer resolves to an engine. */
+  cliId: string;
+  skillValue: string;
+  autopilot: boolean;
   /** Skill chosen at start ("Auto" when the agent picks); null for legacy stored sessions. */
   skillLabel: string | null;
   command: string;
@@ -1781,6 +1850,33 @@ function AssistantTurn({
         </div>
       )}
     </AssistantBubble>
+  );
+}
+
+/** A failed launch, in ONE renderer so both phases say the same thing: the
+ *  setup form's "Start creating" and the live phase's one-click relaunch. */
+function StartErrorNote({
+  err,
+}: {
+  err: { detail: string; installUrl: string | null };
+}) {
+  return (
+    <ErrorNote>
+      {err.detail}
+      {err.installUrl && (
+        <>
+          {" "}
+          <a
+            href={err.installUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium text-accent-soft underline underline-offset-2 hover:text-accent"
+          >
+            Install it →
+          </a>
+        </>
+      )}
+    </ErrorNote>
   );
 }
 
@@ -2255,8 +2351,19 @@ function StudioView({
     setNowTick(now);
   }, []);
 
-  const start = async () => {
-    if (!cli || !chosenDir || startBusy) return;
+  /** Launch a studio session from an EXPLICIT setup. Both entry points funnel
+   *  through here: the setup form's "Start creating" (which passes the form's
+   *  current state) and the relaunch of a dead session (which passes what THAT
+   *  session ran with). Every failure lands in `startErr`, which both phases
+   *  render — a launch triggered from the live phase used to set an error only
+   *  the hidden setup UI could show. */
+  const launch = async (opts: {
+    cliId: string;
+    dir: string;
+    skillValue: string;
+    autopilot: boolean;
+  }) => {
+    if (startBusy) return;
     setStartBusy(true);
     setStartErr(null);
     // Snapshot the destination BEFORE launching — anything after this counts
@@ -2264,7 +2371,7 @@ function StudioView({
     let baseline: string[] = [];
     try {
       const d = await get<{ files: StudioMediaFile[] }>(
-        `/creative/studio-media?path=${encodeURIComponent(chosenDir)}`,
+        `/creative/studio-media?path=${encodeURIComponent(opts.dir)}`,
         { timeoutMs: 10000 },
       );
       baseline = d.files.map((f) => f.name).slice(0, STUDIO_BASELINE_CAP);
@@ -2273,17 +2380,20 @@ function StudioView({
     }
     try {
       const res = await post<StudioStartResult>("/creative/studio/start", {
-        cli,
-        cwd: chosenDir,
-        ...(skill ? { skill } : {}),
-        autopilot,
+        cli: opts.cliId,
+        cwd: opts.dir,
+        ...(opts.skillValue ? { skill: opts.skillValue } : {}),
+        autopilot: opts.autopilot,
       });
-      const engine = clis.find((c) => c.id === cli);
-      const skillLabel = skill || "Auto";
+      const engine = clis.find((c) => c.id === opts.cliId);
+      const skillLabel = opts.skillValue || "Auto";
       const live: LiveSession = {
         terminalId: res.terminal_id,
-        dest: res.cwd || chosenDir,
-        cliLabel: engine?.label ?? cli,
+        dest: res.cwd || opts.dir,
+        cliId: opts.cliId,
+        cliLabel: engine?.label ?? opts.cliId,
+        skillValue: opts.skillValue,
+        autopilot: opts.autopilot,
         skillLabel,
         command: res.command,
         startedAt: Date.now(),
@@ -2293,7 +2403,7 @@ function StudioView({
         // brief during boot / the flag's acceptance screen, where the CLI eats
         // it (the "only a partial of one word reached the terminal" failure).
         awaitsAutomode:
-          cli === "claude" || res.automode_method === "shift-tab",
+          opts.cliId === "claude" || res.automode_method === "shift-tab",
       };
       baselineRef.current = new Set(baseline);
       resetLive(false);
@@ -2304,6 +2414,9 @@ function StudioView({
           terminal_id: live.terminalId,
           dest: live.dest,
           cli_label: live.cliLabel,
+          cli_id: live.cliId,
+          skill_value: live.skillValue,
+          autopilot: live.autopilot,
           skill: skillLabel,
           command: live.command,
           sent_first: false,
@@ -2314,7 +2427,7 @@ function StudioView({
       });
     } catch (e) {
       const err = e instanceof ApiError ? e : new ApiError(String(e), 0);
-      const engine = clis.find((c) => c.id === cli);
+      const engine = clis.find((c) => c.id === opts.cliId);
       setStartErr({
         detail: err.status === 0 ? "Daemon offline — could not start the session." : err.message,
         installUrl: err.status === 424 ? (engine?.url ?? null) : null,
@@ -2322,6 +2435,44 @@ function StudioView({
     } finally {
       setStartBusy(false);
     }
+  };
+
+  /** SETUP-phase launch: the form's current engine/skill/folder. */
+  const start = async () => {
+    if (!cli || !chosenDir) return; // the button is disabled in this state
+    await launch({ cliId: cli, dir: chosenDir, skillValue: skill, autopilot });
+  };
+
+  /**
+   * One-click relaunch of a DEAD session (v1.191.0; made honest in v1.192.0).
+   * It replays what THAT session ran — its engine and its folder — because
+   * that is what the button says. It used to call `start()`, which read the
+   * setup form: `chosenDir` comes from a single mount-time /fs/list that never
+   * retries, so a stored folder that no longer lists left the guard failing
+   * and the click did NOTHING — no spinner, no error; and after a visit where
+   * the user browsed elsewhere it would have launched a different engine or
+   * folder than the label promised. The session's own record needs no listing.
+   */
+  const relaunch = async () => {
+    if (!session) return;
+    // Legacy stored sessions predate `cli_id` — recover the engine from the
+    // label rather than falling back to the form's current pick, which would
+    // launch something other than "same engine".
+    const engineId =
+      session.cliId || clis.find((c) => c.label === session.cliLabel)?.id || "";
+    if (!engineId || !session.dest) {
+      setStartErr({
+        detail: `Couldn't relaunch — this session's engine (${session.cliLabel}) isn't available here. Set up a new session below.`,
+        installUrl: null,
+      });
+      return;
+    }
+    await launch({
+      cliId: engineId,
+      dir: session.dest,
+      skillValue: session.skillValue,
+      autopilot: session.autopilot,
+    });
   };
 
   const resume = () => {
@@ -2339,6 +2490,15 @@ function StudioView({
       terminalId: resumeOffer.terminal_id,
       dest: resumeOffer.dest,
       cliLabel: resumeOffer.cli_label,
+      // The recorded setup rides the resume, so a relaunch after this session
+      // dies replays THIS session and not the setup form (v1.192.0). Legacy
+      // records carry none of it: the id is recovered from the label at
+      // relaunch time, the skill from its label ("Auto" = none).
+      cliId: resumeOffer.cli_id ?? "",
+      skillValue:
+        resumeOffer.skill_value ??
+        (resumeOffer.skill && resumeOffer.skill !== "Auto" ? resumeOffer.skill : ""),
+      autopilot: resumeOffer.autopilot ?? autopilot,
       skillLabel: resumeOffer.skill ?? null, // legacy stored sessions predate the field
       command: resumeOffer.command,
       startedAt: resumeOffer.started_at,
@@ -2675,7 +2835,7 @@ function StudioView({
               {gone
                 ? "This terminal no longer exists on the daemon."
                 : !alive
-                  ? `Terminal exited (code ${exitCode ?? "?"}).`
+                  ? describeTerminalExit(exitCode)
                   : "The engine exited in this terminal — its shell is still open on Build."}{" "}
               <button
                 type="button"
@@ -2685,6 +2845,15 @@ function StudioView({
                 Set up a new session
               </button>
             </ErrorNote>
+          </Reveal>
+        )}
+
+        {/* A relaunch that failed says so HERE. This state used to render only
+         *  in the setup phase, which is hidden while a session is on screen —
+         *  so a failed one-click relaunch looked exactly like a dead button. */}
+        {startErr && (
+          <Reveal>
+            <StartErrorNote err={startErr} />
           </Reveal>
         )}
 
@@ -2746,10 +2915,12 @@ function StudioView({
                         exitCode={exitCode}
                         statusText={isLast ? statusLine : null}
                         onOpenMedia={setStudioSelected}
-                        // Relaunch with the SAME setup — `start()` snapshots a
-                        // fresh baseline, resets the live state and replaces
-                        // the session, so the dead one needs no cleanup first.
-                        onRestart={isLast ? () => void start() : undefined}
+                        // Relaunch with THIS session's setup — `relaunch()`
+                        // snapshots a fresh baseline, resets the live state and
+                        // replaces the session, so the dead one needs no
+                        // cleanup first. It reads the session, never the setup
+                        // form (v1.192.0), and reports its failures below.
+                        onRestart={isLast ? () => void relaunch() : undefined}
                         restartBusy={startBusy}
                         terminalHref={
                           session
@@ -2948,8 +3119,11 @@ function StudioView({
                     live
                   </span>
                 ) : (
-                  <span className="text-[11px] text-zinc-500">
-                    exited{exitCode !== null ? ` (code ${exitCode})` : ""}
+                  <span
+                    className="text-[11px] text-zinc-500"
+                    title={describeTerminalExit(exitCode)}
+                  >
+                    {shortTerminalExit(exitCode)}
                   </span>
                 )}
               </div>
@@ -3376,24 +3550,7 @@ function StudioView({
                 : "Pick a destination folder to continue."}
             </p>
           )}
-          {startErr && (
-            <ErrorNote>
-              {startErr.detail}
-              {startErr.installUrl && (
-                <>
-                  {" "}
-                  <a
-                    href={startErr.installUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="font-medium text-accent-soft underline underline-offset-2 hover:text-accent"
-                  >
-                    Install it →
-                  </a>
-                </>
-              )}
-            </ErrorNote>
-          )}
+          {startErr && <StartErrorNote err={startErr} />}
         </div>
       </Reveal>
     </>

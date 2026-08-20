@@ -19,7 +19,12 @@ Reliability spine (best-in-class routing):
   latency on every request.
 * **Failover** — a transient primary failure fans out across the OTHER connected
   providers (CLI-first arbitrage), deduped by resolved-adapter IDENTITY so the
-  inherited alias (anthropic→claude-cli) isn't retried twice.
+  inherited alias (anthropic→claude-cli) isn't retried twice. ONE EXCEPTION, and
+  it is a privacy rule rather than a reliability one: a LOCAL endpoint that
+  never ANSWERED — never reached, or reached and silent past the timeout —
+  refuses instead of failing over (:meth:`ModelRouter._refuses_failover`,
+  :func:`local_failure_kind`) — see v1.162.0 and
+  :meth:`ModelRouter._unavailable_error`.
 """
 
 from __future__ import annotations
@@ -42,6 +47,7 @@ from .adapters.base import (
     TRANSIENT_STATUS,
 )
 from .adapters.prompted_tools import PromptedToolsAdapter
+from .local import is_local_provider
 from .manager import ProviderManager
 
 #: httpx is an adapter dependency, but guard the import so a stripped-down
@@ -132,6 +138,96 @@ def is_transient_error(exc: Exception) -> bool:
         return True
     # 3) Word-boundary phrase fallback (NO bare 3-digit status matching).
     return bool(_TRANSIENT_PHRASE_RE.search(str(exc)))
+
+
+#: Message shapes meaning the request NEVER REACHED the endpoint — nothing was
+#: sent to a server, because no server answered the socket. Deliberately WIDER
+#: than :data:`_TRANSIENT_PHRASE_RE` is precise, since the only consumer is
+#: :func:`is_unreachable_error` under a LOCAL primary, where a false positive
+#: means "refuse instead of substituting a cloud provider" — the fail-closed
+#: direction. httpx words a refused local port as "All connection attempts
+#: failed"; Windows words it "actively refused it".
+_UNREACHABLE_PHRASE_RE = re.compile(
+    r"(?:"
+    r"connection refused|actively refused|"
+    r"all connection attempts failed|"
+    r"(?:failed|unable|could not|couldn't|cannot|can't) to? ?connect|"
+    r"\bconnect(?:ion)? (?:error|timed? ?out)|"
+    r"no route to host|network is unreachable|"
+    r"name or service not known|nodename nor servname|getaddrinfo failed|"
+    r"\bnot running\b|\bis down\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def is_unreachable_error(exc: Exception) -> bool:
+    """True when *exc* says we never reached the endpoint at all.
+
+    The distinction that matters for a LOCAL model (v1.162.0): a server that
+    ANSWERED — even with 429/500 — is up, and failing that request over is
+    ordinary reliability work. A server that never answered is simply not
+    running, and substituting a different provider for it moves the user's
+    conversation off their own hardware. A typed :class:`ProviderError` carrying
+    a status therefore always reads as REACHED (that status came from the
+    server); everything else is judged by exception type, then by message.
+    """
+    if isinstance(exc, ProviderError) and exc.status_code is not None:
+        return False
+    # ConnectionRefusedError/ConnectionResetError/ConnectionAbortedError all
+    # land here, as does anything an adapter raises as a bare ConnectionError.
+    if isinstance(exc, ConnectionError):
+        return True
+    if _httpx is not None and isinstance(
+        exc, (_httpx.ConnectError, _httpx.ConnectTimeout)
+    ):
+        return True
+    return bool(_UNREACHABLE_PHRASE_RE.search(str(exc)))
+
+
+def local_failure_kind(exc: Exception) -> str | None:
+    """Why a LOCAL primary's failure REFUSES instead of failing over — or None.
+
+    ``is_unreachable_error`` alone is not enough, and the gap is the more common
+    local failure of the two. It is scoped to "never reached" (connect-shaped
+    errors), while ``OpenAIAdapter._client()`` builds its ``httpx.AsyncClient``
+    with a 60s timeout and that ONE adapter serves the ``ollama`` AND ``custom``
+    slots. A local box that is UP but SLOW — cold-loading a 30B/70B into VRAM,
+    a long prefill, a long generation — blows 60s and raises
+    ``httpx.ReadTimeout``: transient BY TYPE, not unreachable, so the guard did
+    not fire and fallback (A) handed the whole conversation to the cloud
+    default. A dead server is a one-time ConnectError the user notices; a
+    cold-loading one times out silently and repeatedly.
+
+    Three kinds, because the refusal message must not claim more than we know:
+
+    * ``"unreachable"`` — nothing ever answered the socket (not running);
+    * ``"timeout"`` — the endpoint took the request and did not answer in time;
+    * ``"interrupted"`` — the transport broke mid-request (``ReadError``,
+      ``RemoteProtocolError``: the server died while we were talking to it).
+
+    ``None`` means fail over exactly as before. THE "IT ANSWERED, SO IT IS UP"
+    RULE IS UNCHANGED and is checked first: a ``ProviderError`` carrying a
+    status (429/500/…) came FROM the server, so it is ordinary reliability
+    arbitrage. :func:`is_unreachable_error` itself is deliberately NOT widened —
+    it is also the cloud-side predicate, and this broadening is local-only.
+    """
+    if isinstance(exc, ProviderError) and exc.status_code is not None:
+        return None
+    if is_unreachable_error(exc):
+        return "unreachable"
+    # asyncio.TimeoutError IS TimeoutError on 3.11+; both listed for clarity.
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError, subprocess.TimeoutExpired)):
+        return "timeout"
+    if _httpx is not None:
+        if isinstance(exc, _httpx.TimeoutException):
+            return "timeout"
+        # TransportError is the base of NetworkError/ProtocolError/ProxyError —
+        # every way httpx says "the connection itself failed", as opposed to a
+        # response the server actually sent.
+        if isinstance(exc, _httpx.TransportError):
+            return "interrupted"
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -397,7 +493,9 @@ class ModelRouter:
             return self.manager.get("mock"), wanted, True
         return self.manager.get(wanted, model), wanted, False
 
-    def _unavailable_error(self, wanted: str, pinned: bool) -> ProviderError:
+    def _unavailable_error(
+        self, wanted: str, pinned: bool, *, kind: str = "unreachable"
+    ) -> ProviderError:
         """The honest refusal for a REAL provider that isn't connected (v1.162.0).
 
         WHY THIS REPLACED A MOCK ANSWER. The old default route handed the turn to
@@ -417,8 +515,20 @@ class ModelRouter:
         local endpoint to a cloud API is a privacy decision the user makes, not
         a fallback the router picks. Explicitly choosing another model in the UI
         still works exactly as before.
+
+        *kind* (:func:`local_failure_kind`) keeps the wording HONEST about what
+        actually happened. "isn't connected right now" is true of a server that
+        never answered the socket and a FABRICATION for one that accepted the
+        connection and then ran past the adapter's 60s read timeout — the router
+        knows it connected, and telling the user their endpoint is disconnected
+        sends them to debug the wrong thing (they restart a server that was
+        never down instead of waiting out a model load).
         """
-        detail = f"{wanted} isn't connected right now, so this turn was not answered."
+        lead = {
+            "timeout": f"{wanted} didn't respond in time",
+            "interrupted": f"the connection to {wanted} dropped mid-request",
+        }.get(kind, f"{wanted} isn't connected right now")
+        detail = f"{lead}, so this turn was not answered."
         if pinned:
             detail += " No substitute was tried because strict model pin is on."
         else:
@@ -426,21 +536,72 @@ class ModelRouter:
                 " No substitute was used on purpose — a stand-in answer would"
                 " look like real work that never happened."
             )
-        return ProviderError(
-            detail + " Bring that endpoint back up, or pick another model for"
-            " this chat, and retry."
+        fix = {
+            # It IS up — the honest advice is time (a cold 30B/70B load), not a
+            # restart of something that never went down.
+            "timeout": (
+                " Give it time to finish loading, or pick another model for"
+                " this chat, and retry."
+            ),
+            "interrupted": (
+                " Check that endpoint, or pick another model for this chat,"
+                " and retry."
+            ),
+        }.get(
+            kind,
+            " Bring that endpoint back up, or pick another model for this"
+            " chat, and retry.",
         )
+        return ProviderError(detail + fix)
 
-    async def _publish_not_connected(self, wanted: str, session_id: str | None) -> None:
+    def _refuses_failover(self, provider: str, exc: Exception) -> str | None:
+        """The refusal KIND when *provider* is LOCAL and *exc* is transport-shaped.
+
+        THE RUN-STAGE HALF OF THE v1.162.0 REFUSAL. That guarantee was
+        implemented only as the PRE-RUN availability check, which can refuse
+        just what it already knows is down — and "a base_url is configured" was
+        the whole of ``available("ollama")``, so a dead Ollama/LM-Studio read as
+        connected. The connect then raised ``httpx.ConnectError``, which
+        :func:`is_transient_error` classifies transient by TYPE, and the
+        failover ladder handed the ENTIRE conversation to the next connected
+        CLOUD provider — this box holds client tax documents, and moving a chat
+        off the user's own hardware is their privacy decision, not a routing
+        fallback (asked and confirmed 2026-08-11). Disclosure came only after
+        the data had left the machine.
+
+        Narrow on purpose, so cloud→cloud arbitrage is untouched: the primary
+        must be LOCAL (``providers/local.is_local_provider`` — the one
+        definition), and the failure must be TRANSPORT-shaped
+        (:func:`local_failure_kind` — never reached, no answer in time, or the
+        connection broke mid-request). A local endpoint that ANSWERED — 429,
+        500, "model not found" — still fails over exactly as before, and
+        :func:`is_unreachable_error` is left alone so the cloud side is
+        untouched. Returns the kind (truthy) so the refusal can say which of
+        the three actually happened.
+        """
+        if not is_local_provider(provider):
+            return None
+        return local_failure_kind(exc)
+
+    async def _publish_not_connected(
+        self, wanted: str, session_id: str | None, *, kind: str = "unreachable"
+    ) -> None:
         """Banner event for an unconnected provider. Published BEFORE the raise so
-        the dashboard still shows "connect a model" alongside the error."""
+        the dashboard still shows "connect a model" alongside the error.
+
+        The reason follows the same honesty rule as :meth:`_unavailable_error`:
+        an endpoint that connected and then timed out is not "not connected",
+        and the banner is read as a diagnosis. ``used`` stays ``"none"`` in every
+        case — nothing answered, and nothing stood in."""
+        reason = {
+            "timeout": "no answer in time — that endpoint accepted the"
+            " connection but never replied",
+            "interrupted": "the connection dropped mid-request — that endpoint"
+            " stopped answering",
+        }.get(kind, "not connected — connect a model on the Connections page")
         await self.event_bus.publish(
             EventType.PROVIDER_DOWNGRADED,
-            {
-                "requested": wanted,
-                "used": "none",
-                "reason": "not connected — connect a model on the Connections page",
-            },
+            {"requested": wanted, "used": "none", "reason": reason},
             session_id=session_id,
         )
 
@@ -631,7 +792,11 @@ class ModelRouter:
         # provider (the user selected Auto). Any other path is byte-for-byte the
         # prior behaviour — an explicit provider/model is always honoured as-is.
         routed_payload: dict | None = None
-        if (provider or self.default_provider) == "auto":
+        #: Captured HERE (not off ``reason``, which the capability block below
+        #: rewrites): Auto is the ONE case where the user delegated the choice of
+        #: model to the router, so an unreachable local pick may be replaced.
+        auto_selected = (provider or self.default_provider) == "auto"
+        if auto_selected:
             adapter, wanted, downgraded, routed_payload = await self._resolve_auto(
                 system, messages, tools, task_class
             )
@@ -744,9 +909,22 @@ class ModelRouter:
             # verbatim rather than answering from a different provider.
             if pinned:
                 raise
+            # A LOCAL ENDPOINT THAT NEVER ANSWERED REFUSES — it never fails
+            # over, whether it was never reached or merely never replied in
+            # time. Same refusal, same event as the pre-run check (v1.162.0),
+            # worded for what actually happened; see _refuses_failover for why
+            # substituting here would be a privacy decision the router is not
+            # allowed to make.
+            # MIRROR NOTE (lock-step): stream() carries the identical guard
+            # immediately after its own pin check — edit both or neither.
+            refusal = None if auto_selected else self._refuses_failover(adapter.provider, exc)
+            if refusal:
+                await self._publish_not_connected(adapter.provider, session_id, kind=refusal)
+                raise self._unavailable_error(adapter.provider, pinned, kind=refusal) from exc
             # (A) DEFAULT-PROVIDER FALLBACK — runs even for a NON-transient primary
-            # failure: a self-tuned LOCAL pick (or an explicit provider) that's
-            # down must fall back to the healthy cloud default. IMPORTANT: use the
+            # failure: an explicit provider that ANSWERED WITH AN ERROR must
+            # still reach the healthy default. (A local pick that was never
+            # reached refused above and never gets here.) IMPORTANT: use the
             # default provider's OWN default model (passing the failed provider's
             # model id across — anthropic asked to run "gpt-4o" — just fails
             # again). Deduped by resolved-adapter IDENTITY so the inherited alias
@@ -990,7 +1168,8 @@ class ModelRouter:
         offline/mock-default path may fall through to mock's scripted stream)."""
         # ---- resolve (identical to complete's preflight) --------------------
         routed_payload: dict | None = None
-        if (provider or self.default_provider) == "auto":
+        auto_selected = (provider or self.default_provider) == "auto"
+        if auto_selected:
             adapter, wanted, downgraded, routed_payload = await self._resolve_auto(
                 system, messages, tools, task_class
             )
@@ -1096,10 +1275,21 @@ class ModelRouter:
             # verbatim rather than streaming from a different provider.
             if pinned:
                 raise
+            # A LOCAL ENDPOINT THAT NEVER ANSWERED REFUSES — it never fails over.
+            # MIRROR NOTE (lock-step): complete() carries the identical guard.
+            # This lane matters MORE, not less: it is the one chat streams, so
+            # it is the lane that shipped the conversation to a cloud API — and
+            # `committed` is still False when the FIRST TOKEN never arrives,
+            # which is exactly what a slow local box does.
+            refusal = None if auto_selected else self._refuses_failover(adapter.provider, exc)
+            if refusal:
+                await self._publish_not_connected(adapter.provider, session_id, kind=refusal)
+                raise self._unavailable_error(adapter.provider, pinned, kind=refusal) from exc
 
         # (A) DEFAULT-PROVIDER FALLBACK — runs for transient AND permanent primary
-        # failures (a down local/explicit pick must reach the healthy default),
-        # deduped by resolved-adapter identity so an inherited alias isn't retried.
+        # failures (an explicit pick that ANSWERED WITH AN ERROR must reach the
+        # healthy default; an unreached local pick refused above and never gets
+        # here), deduped by resolved-adapter identity so an alias isn't retried.
         dp = self.default_provider
         if (
             dp != "mock"

@@ -10,8 +10,11 @@ let a user *or* an agent extend the platform at runtime:
 ``spawn_agent`` mirrors the ``delegate`` tool: it creates a child session with an
 isolated, disposable workspace, runs the agent runtime to completion, links the
 child ``AgentRun`` to the caller via ``parent_id``, and returns the summarized
-result. Orchestrator / runtime / definition lookups are imported lazily inside
-``execute`` to avoid an agents-package import cycle at module load.
+result. That mirror now includes ``delegate``'s anti-fork-bomb guards — no
+supervisor target, no target that can itself hand work out, and the shared
+``_MAX_DELEGATION_DEPTH`` parent-chain cap. Orchestrator / runtime / definition
+lookups are imported lazily inside ``execute`` to avoid an agents-package import
+cycle at module load.
 """
 
 from __future__ import annotations
@@ -195,6 +198,16 @@ class ListAgentsTool(Tool):
         )
 
 
+#: A spawn target holding ANY of these can hand work out again — the
+#: generalized anti-fork-bomb rule ``delegate_tool.py`` documents, read for this
+#: door. ``spawn_agent`` is in the set as well as ``delegate``: this tool is the
+#: literal recursion, so leaving it out would guard the other door only. Nothing
+#: is lost by it — a coordinator that legitimately wants an ``automation`` (the
+#: one non-supervisor builtin carrying ``spawn_agent``) child still reaches it
+#: through ``delegate``, which does not treat it as a coordinator.
+_SPAWN_COORDINATOR_TOOLS = ("delegate", "spawn_agent")
+
+
 class SpawnAgentTool(Tool):
     name = "spawn_agent"
     description = (
@@ -220,6 +233,7 @@ class SpawnAgentTool(Tool):
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         # Lazy imports: avoid an agents-package import cycle at module load.
+        from .delegate_tool import _MAX_DELEGATION_DEPTH, DelegateTool
         from .orchestrator import Orchestrator
         from .runtime import AgentRuntime
         from .types import get_agent_definition
@@ -240,6 +254,47 @@ class SpawnAgentTool(Tool):
                     ok=False, error=f"unknown agent '{agent_name}'"
                 )
             definition = get_agent_definition(base_type)
+
+        # ANTI-FORK-BOMB. The module docstring says "spawn_agent mirrors the
+        # delegate tool" and it mirrored everything EXCEPT the safety: it
+        # accepted agent='supervisor' (whose own roster carries `delegate` AND
+        # `spawn_agent`), never walked the parent chain, and is auto-approved
+        # headlessly — so a prompt-injected coordinator could recurse
+        # supervisors into supervisors without any bound. Same three guards as
+        # DelegateTool, in the same order.
+        #
+        # A dynamic agent BASED on the supervisor type counts as a supervisor
+        # even when its own stored tool list is empty.
+        if base_type is AgentType.SUPERVISOR:
+            return ToolResult(
+                ok=False,
+                output="",
+                error="cannot spawn a 'supervisor' — spawn a specialist agent "
+                "(builder/researcher/reviewer) instead",
+            )
+        if any(t in (definition.tools or []) for t in _SPAWN_COORDINATOR_TOOLS):
+            return ToolResult(
+                ok=False,
+                output="",
+                error=f"cannot spawn '{agent_name}' — it can hand work out "
+                "itself, and coordinator-to-coordinator spawning could fan out "
+                "without bound; spawn a specialist agent "
+                "(builder/researcher/reviewer) instead",
+            )
+        # ONE chain, ONE cap: spawn and delegate both link the child by
+        # parent_id, so the walk DelegateTool already implements counts a mixed
+        # delegate→spawn→delegate chain correctly. Imported rather than copied —
+        # two copies of a safety limit drift.
+        if (
+            DelegateTool(self.platform)._delegation_depth(ctx.agent_run_id)
+            >= _MAX_DELEGATION_DEPTH
+        ):
+            return ToolResult(
+                ok=False,
+                output="",
+                error=f"delegation depth limit ({_MAX_DELEGATION_DEPTH}) reached — "
+                "do this subtask directly instead of spawning further",
+            )
 
         orch = Orchestrator(self.platform)
         # Subagents INHERIT the parent session's provider/model (like `delegate`)

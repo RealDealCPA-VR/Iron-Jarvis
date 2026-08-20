@@ -13,7 +13,6 @@ at the bottom of create_app). Request models live in schemas.py.
 from __future__ import annotations
 
 import asyncio
-import hmac
 import os
 from contextlib import asynccontextmanager
 from typing import Any
@@ -30,6 +29,7 @@ from ..core.models import AgentType
 from ..personas.builtins import BUILTIN_PERSONAS
 from ..platform import build_platform
 from ..tools.permissions import headless_ask_resolver
+from .auth import token_matches as _token_matches
 
 log = get_logger("daemon")
 
@@ -51,12 +51,18 @@ _MAX_UPLOAD_BYTES = _max_upload_bytes()
 
 
 def _ws_token_ok(ws: WebSocket) -> bool:
-    """Constant-time WebSocket bearer-token check (matches the HTTP middleware)."""
+    """Constant-time WebSocket bearer-token check (matches the HTTP middleware).
+
+    Shares ``auth.token_matches`` with that middleware precisely so both stay
+    non-raising: a non-ASCII ``?token=`` used to blow up inside the handshake of
+    /events, /terminals/{id}/ws and /voice/stream (an unhandled exception —
+    FastAPI's Exception handler is HTTP-only) instead of the intended 1008
+    policy close the callers already perform on a False.
+    """
     token = os.environ.get("IRONJARVIS_TOKEN", "").strip()
     if not token:
         return True
-    candidate = ws.query_params.get("token") or ""
-    return hmac.compare_digest(candidate, token)
+    return _token_matches(ws.query_params.get("token") or "", token)
 
 
 _CODE_BLOCK_RE = None  # compiled lazily in _first_code_block
@@ -1463,6 +1469,36 @@ def create_app(project_root: str | None = None) -> FastAPI:
             )
             return resp, provider, getattr(adapter, "model", None)
         except Exception as exc:  # noqa: BLE001 — classified below
+            # A LOCAL ENDPOINT THAT NEVER ANSWERED REFUSES — it never fails over.
+            # The v1.162.0 privacy rule was enforced only inside ModelRouter,
+            # but these one-shot utilities (terminal assist, the workflow
+            # builder, livedoc, skill distill, compaction) call the adapter
+            # DIRECTLY and then walk _failover_candidates — so a down Ollama /
+            # LM-Studio / fleet node still shipped the payload to the first
+            # connected CLOUD provider. Every transport-shaped local failure
+            # reads TRANSIENT by type, so the guard has to sit ABOVE the
+            # transient branch. It delegates to the router's OWN predicate
+            # (_refuses_failover -> local_failure_kind: unreachable / timeout /
+            # interrupted) rather than re-deriving one here: is_unreachable_error
+            # alone would catch only connect-shaped errors and let the MORE
+            # COMMON local failure — a box that is up but cold-loading a 30B/70B
+            # past the adapter's 60s read timeout — fall through to the cloud.
+            # The kind rides along so the refusal cannot claim "isn't connected"
+            # about an endpoint that demonstrably accepted the connection.
+            # Same predicate, same event and same wording as the router
+            # (router.py complete()/stream()), so all three paths behave
+            # identically.
+            router = platform.router
+            primary = getattr(adapter, "provider", "") or provider
+            refusal = router._refuses_failover(primary, exc)
+            if refusal:
+                await router._publish_not_connected(primary, None, kind=refusal)
+                raise HTTPException(
+                    status_code=502,
+                    detail=str(
+                        router._unavailable_error(primary, False, kind=refusal)
+                    ),
+                ) from exc
             if not _is_transient_provider_error(exc):
                 raise _provider_error_http(exc)
             for alt, alt_provider in _failover_candidates(provider):
@@ -1664,8 +1700,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
         from ..providers.adapters.mock import MockLLMAdapter
 
         if isinstance(adapter, MockLLMAdapter):
-            _alt_adapter, _alt_provider = _failover_adapter("mock")
-            if _alt_adapter is None:
+            # ADOPT the failover adapter, don't merely test for one. This copy
+            # used to bind the pair to ``_alt_*`` and then call the MOCK anyway,
+            # so an install with a real provider connected but ``default_provider
+            # = "mock"`` fed the request to the mock, whose non-JSON reply 422s
+            # with "try rephrasing" — blaming the user while a working provider
+            # sat unused. The sibling routes (share_chat_thread /
+            # crystallize_chat_thread / _skill_distill_complete /
+            # _compaction_complete) all reassign; this one had drifted.
+            adapter, provider = _failover_adapter("mock")
+            if adapter is None:
                 raise HTTPException(
                     status_code=400,
                     detail="connect a model on the Connections page to build workflows",

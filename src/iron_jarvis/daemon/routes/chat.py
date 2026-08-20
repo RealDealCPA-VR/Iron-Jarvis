@@ -1603,17 +1603,30 @@ def register(app: FastAPI, d) -> None:
             # default route) so even an errored turn reports what was asked.
             route_requested = provider_choice or ""
             route_reason = ""
+            # USAGE LEDGER, EXACTLY ONE TERMINAL ROW. Every terminal path below
+            # goes through this helper, so the cancellation guards can run
+            # unconditionally without ever writing a second row for the same
+            # turn. It reads the live counters/route by closure, which is what
+            # makes it correct from an exception handler.
+            persisted = False
+
+            def _persist_once(state: AgentState) -> None:
+                nonlocal persisted
+                if persisted or not completions:
+                    return
+                persisted = True
+                _persist_chat_usage(
+                    d, provider=route_provider, model=route_model,
+                    state=state, completions=completions,
+                    usage_in=usage_in, usage_out=usage_out,
+                )
+
             try:
                 for _round in range(_MAX_TOOL_ROUNDS):
                     if await request.is_disconnected():
                         # The completed rounds were billed even though the
                         # client walked away — keep the ledger honest.
-                        if completions:
-                            _persist_chat_usage(
-                                d, provider=route_provider, model=route_model,
-                                state=AgentState.CANCELLED, completions=completions,
-                                usage_in=usage_in, usage_out=usage_out,
-                            )
+                        _persist_once(AgentState.CANCELLED)
                         return
                     yield _sse("round", {"round": _round})
                     final_resp = None
@@ -1657,12 +1670,7 @@ def register(app: FastAPI, d) -> None:
                     if final_resp is None:
                         # The stream ended without an aggregate — honest error, not
                         # a fabricated reply. Completed rounds still get counted.
-                        if completions:
-                            _persist_chat_usage(
-                                d, provider=route_provider, model=route_model,
-                                state=AgentState.FAILED, completions=completions,
-                                usage_in=usage_in, usage_out=usage_out,
-                            )
+                        _persist_once(AgentState.FAILED)
                         yield _sse(
                             "error",
                             {"detail": "stream ended without a final response"},
@@ -1950,14 +1958,22 @@ def register(app: FastAPI, d) -> None:
                 # Completed rounds were still billed — persist BEFORE the error
                 # frame (mirrors chat_complete's failure path); the client sees
                 # the same error either way.
-                if completions:
-                    _persist_chat_usage(
-                        d, provider=route_provider, model=route_model,
-                        state=AgentState.FAILED, completions=completions,
-                        usage_in=usage_in, usage_out=usage_out,
-                    )
+                _persist_once(AgentState.FAILED)
                 yield _sse("error", {"detail": str(exc)})
                 return
+            except BaseException:
+                # STOP MID-GENERATION. When the client aborts DURING a round,
+                # Starlette cancels this generator at its current await
+                # (CancelledError) or, if it is parked at a yield, at
+                # finalization (GeneratorExit). Both are BaseException-shaped:
+                # they skip the round-TOP disconnect check above AND the
+                # handler above, so every COMPLETED earlier round — already
+                # counted at its `final` frame and already billed by the
+                # provider — used to vanish from the ledger entirely. No frame
+                # is emitted here (the connection is gone) and the exception is
+                # re-raised unchanged, so cancellation still means cancellation.
+                _persist_once(AgentState.CANCELLED)
+                raise
 
             # LANGUAGE GUARD (v1.144.0) — the lock-step copy of chat_turn's, and
             # like it, run BEFORE the ledger so a rewrite is billed.
@@ -1970,26 +1986,30 @@ def register(app: FastAPI, d) -> None:
             # corrected reply. The user may see the wrong-language text flicker
             # during generation; that is honest (it IS what the model produced)
             # and needs no client change. MIRROR NOTE (lock-step): chat_turn.
-            reply_text, lang_note, _l_in, _l_out, _l_n = await _enforce_language(
-                d.platform,
-                text=reply_text or "",
-                user_text=_last_user_text(body.messages),
-                system=system,
-                messages=msgs,
-                provider=provider_choice,
-                model=model_choice,
-            )
+            try:
+                reply_text, lang_note, _l_in, _l_out, _l_n = await _enforce_language(
+                    d.platform,
+                    text=reply_text or "",
+                    user_text=_last_user_text(body.messages),
+                    system=system,
+                    messages=msgs,
+                    provider=provider_choice,
+                    model=model_choice,
+                )
+            except BaseException:
+                # The one remaining await between the last billed round and the
+                # COMPLETED row below (it calls a model when it rewrites): a
+                # Stop delivered HERE drops exactly the same already-billed
+                # tokens as one delivered inside the loop.
+                _persist_once(AgentState.CANCELLED)
+                raise
             usage_in += _l_in
             usage_out += _l_out
             completions += _l_n
 
             # USAGE LEDGER — persist the run row exactly as chat_complete does so a
             # streamed turn counts the same on the Usage page.
-            _persist_chat_usage(
-                d, provider=route_provider, model=route_model,
-                state=AgentState.COMPLETED, completions=completions,
-                usage_in=usage_in, usage_out=usage_out,
-            )
+            _persist_once(AgentState.COMPLETED)
 
             # Reply honesty (mirrors chat_complete): synthesize from the last tool
             # output when the model returned no final text; note denied tools.
