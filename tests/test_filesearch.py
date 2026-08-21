@@ -10,7 +10,11 @@ import pytest
 
 from iron_jarvis.core.db import init_db, make_engine
 from iron_jarvis.core.events import EventBus
-from iron_jarvis.filesearch.service import FileSearchService, list_drives
+from iron_jarvis.filesearch.service import (
+    BadSearchPattern,
+    FileSearchService,
+    list_drives,
+)
 from iron_jarvis.filesearch.tools import filesearch_tools
 from iron_jarvis.memory.embeddings import MockEmbedder
 from iron_jarvis.tools.base import ToolContext
@@ -105,8 +109,16 @@ def test_ignored_dirs_are_skipped(service: FileSearchService):
         assert ".git" not in hit["path"]
 
 
-def test_bad_regex_returns_empty(service: FileSearchService):
-    assert service.search_content(r"(unclosed") == []
+def test_bad_regex_is_raised_not_answered_with_empty(service: FileSearchService):
+    """This test used to assert ``== []`` — i.e. it PINNED the defect.
+
+    An empty list for a pattern that never compiled is indistinguishable from
+    "this text is nowhere in your files", so the model tells the user the text
+    does not exist. See ``tests/test_search_honesty_v1195.py`` for the full
+    contract; kept here so the old assertion can never come back.
+    """
+    with pytest.raises(BadSearchPattern):
+        service.search_content(r"(unclosed")
 
 
 # -- index + size/binary guard ---------------------------------------------

@@ -163,30 +163,39 @@ class PdfArrangeTool(Tool):
         self, args: dict[str, Any], ctx: ToolContext
     ) -> "dict[str, Any] | None":
         """Same inverse as ``write_document``: restore prior bytes when the
-        output path already exists, else delete the created file."""
+        output path already exists, else delete the created file.
+
+        OFF THE EVENT LOOP, exactly as ``tools/builtins.py:369-402`` does for
+        write_file: this hook is awaited by ``registry.invoke`` BEFORE execute,
+        and a scanned return's read + sha256 + pre-image spill (over 8 KB, so
+        always) blocked every other request in the daemon."""
         try:
             target = safe_path(ctx.workspace, str(args.get("output") or ""))
         except Exception:
             return None
-        if target.is_file():
-            try:
-                prior = target.read_bytes()
-            except OSError:
-                return None
+
+        def _capture() -> "dict[str, Any] | None":
+            if target.is_file():
+                try:
+                    prior = target.read_bytes()
+                except OSError:
+                    return None
+                return make_file_descriptor(
+                    ctx.config.home,
+                    kind="file_restore",
+                    path=str(args.get("output") or ""),
+                    mode="raw",
+                    prior_bytes=prior,
+                    pre_sha256=sha256_bytes(prior),
+                )
             return make_file_descriptor(
                 ctx.config.home,
-                kind="file_restore",
+                kind="file_delete",
                 path=str(args.get("output") or ""),
                 mode="raw",
-                prior_bytes=prior,
-                pre_sha256=sha256_bytes(prior),
             )
-        return make_file_descriptor(
-            ctx.config.home,
-            kind="file_delete",
-            path=str(args.get("output") or ""),
-            mode="raw",
-        )
+
+        return await asyncio.to_thread(_capture)
 
     async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
         return await revert_workspace_file(undo, ctx)
@@ -337,38 +346,51 @@ class PdfSplitTool(Tool):
         ``out_dir`` (the engine never clobbers) — snapshot which such files
         already exist, then let ``execute`` record the exact files it wrote
         (plus their hashes) so ``revert`` removes exactly this run's outputs
-        and refuses to delete one the user has since edited."""
-        try:
-            src = _resolve_read_path(str(args.get("path") or ""), ctx)
-            out_dir = self._out_dir(args, ctx)
-            rel = _workspace_rel(out_dir, ctx) or "."
-        except Exception:
-            return None
-        prefix = f"{src.stem}-part"
-        existing = (
-            sorted(
-                p.name
-                for p in out_dir.iterdir()
-                if p.name.startswith(prefix) and p.suffix.lower() == ".pdf"
+        and refuses to delete one the user has since edited.
+
+        The snapshot is a DIRECTORY LISTING plus two stats, and it is awaited
+        before execute — on an unhydrated OneDrive path or a network share an
+        ``iterdir`` is bounded only by the OS, so it goes to a worker thread for
+        the same reason the read-based hooks do (v1.153.1)."""
+
+        def _capture() -> "dict[str, Any] | None":
+            try:
+                src = _resolve_read_path(str(args.get("path") or ""), ctx)
+                out_dir = self._out_dir(args, ctx)
+                rel = _workspace_rel(out_dir, ctx) or "."
+            except Exception:
+                return None
+            prefix = f"{src.stem}-part"
+            existing = (
+                sorted(
+                    p.name
+                    for p in out_dir.iterdir()
+                    if p.name.startswith(prefix) and p.suffix.lower() == ".pdf"
+                )
+                if out_dir.is_dir()
+                else []
             )
-            if out_dir.is_dir()
-            else []
-        )
-        desc = {
-            "kind": "pdf_split_delete",
-            "reversible": True,
-            "pre_ref": None,
-            "pre_inline": json.dumps(
-                {
-                    "dir": rel,
-                    "prefix": prefix,
-                    "existing": existing,
-                    "dir_existed": out_dir.is_dir(),
-                }
-            ),
-            "pre_sha256": None,
-            "post_sha256": None,
-        }
+            return {
+                "kind": "pdf_split_delete",
+                "reversible": True,
+                "pre_ref": None,
+                "pre_inline": json.dumps(
+                    {
+                        "dir": rel,
+                        "prefix": prefix,
+                        "existing": existing,
+                        "dir_existed": out_dir.is_dir(),
+                    }
+                ),
+                "pre_sha256": None,
+                "post_sha256": None,
+            }
+
+        desc = await asyncio.to_thread(_capture)
+        if desc is None:
+            return None
+        # Stays on the loop: execute() reads this back by ``id(args)`` to record
+        # the run's ACTUAL outputs, so the handoff must not race a thread hop.
         self._pending[id(args)] = desc
         return desc
 
@@ -402,65 +424,77 @@ class PdfSplitTool(Tool):
         desc["pre_inline"] = json.dumps(meta)
 
     async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        meta = read_envelope(undo)
-        prefix = str(meta.get("prefix") or "")
-        if undo.get("kind") != "pdf_split_delete" or not prefix:
-            return ToolResult(
-                ok=False, error=f"undo: unknown file undo kind {undo.get('kind')!r}"
-            )
-        try:
-            out_dir = safe_path(ctx.workspace, str(meta.get("dir") or "."))
-        except Exception as exc:  # path escaped the workspace — never touch it
-            return ToolResult(ok=False, error=f"undo: unsafe path: {exc}")
-        existing = set(meta.get("existing") or [])
-        # The run's ACTUAL outputs (recorded by execute). Scoping deletion to
-        # this set is what makes the undo per-run: a snapshot-diff alone also
-        # matches the outputs of a LATER split into the same dir. Hashes arm
-        # the anti-clobber refusal (same discipline as guard_unchanged).
-        recorded = meta.get("outputs")
-        allowed = set(recorded) if isinstance(recorded, list) else None
-        hashes = meta.get("hashes") if isinstance(meta.get("hashes"), dict) else {}
-        removed = 0
-        if out_dir.is_dir():
-            targets: list[Path] = []
-            for p in sorted(out_dir.iterdir()):
-                if (
-                    not p.name.startswith(prefix)
-                    or p.suffix.lower() != ".pdf"
-                    or p.name in existing
-                    or (allowed is not None and p.name not in allowed)
-                ):
-                    continue
-                targets.append(p)
-            # Refuse BEFORE deleting anything: an all-or-nothing check so a
-            # user-edited part never gets destroyed and no partial undo runs.
-            for p in targets:
-                want = hashes.get(p.name)
-                if not want:
-                    continue
-                try:
-                    have = sha256_bytes(p.read_bytes())
-                except OSError:
-                    continue
-                if have != want:
-                    raise RevertConflict(
-                        f"{p.name} changed since the split — refusing to undo "
-                        "(it would delete a newer change)"
-                    )
-            for p in targets:
-                try:
-                    p.unlink()
-                    removed += 1
-                except OSError as exc:
-                    return ToolResult(
-                        ok=False, error=f"undo: could not remove {p.name}: {exc}"
-                    )
-            if not meta.get("dir_existed") and not any(out_dir.iterdir()):
-                try:
-                    out_dir.rmdir()  # we created it — leave no empty husk
-                except OSError:
-                    pass
-        return ToolResult(ok=True, output=f"undo: removed {removed} split output(s)")
+        """Remove exactly this run's split outputs — off the loop.
+
+        One hop for the whole body: it lists the output directory TWICE and
+        re-hashes every part (a full read of each) before deleting, which is the
+        heaviest undo in the tree. ``RevertConflict`` is RAISED and
+        ``asyncio.to_thread`` re-raises it unchanged in the awaiting coroutine,
+        so the /undo route's 409 mapping and the all-or-nothing refusal below are
+        untouched."""
+
+        def _revert() -> ToolResult:
+            meta = read_envelope(undo)
+            prefix = str(meta.get("prefix") or "")
+            if undo.get("kind") != "pdf_split_delete" or not prefix:
+                return ToolResult(
+                    ok=False, error=f"undo: unknown file undo kind {undo.get('kind')!r}"
+                )
+            try:
+                out_dir = safe_path(ctx.workspace, str(meta.get("dir") or "."))
+            except Exception as exc:  # path escaped the workspace — never touch it
+                return ToolResult(ok=False, error=f"undo: unsafe path: {exc}")
+            existing = set(meta.get("existing") or [])
+            # The run's ACTUAL outputs (recorded by execute). Scoping deletion to
+            # this set is what makes the undo per-run: a snapshot-diff alone also
+            # matches the outputs of a LATER split into the same dir. Hashes arm
+            # the anti-clobber refusal (same discipline as guard_unchanged).
+            recorded = meta.get("outputs")
+            allowed = set(recorded) if isinstance(recorded, list) else None
+            hashes = meta.get("hashes") if isinstance(meta.get("hashes"), dict) else {}
+            removed = 0
+            if out_dir.is_dir():
+                targets: list[Path] = []
+                for p in sorted(out_dir.iterdir()):
+                    if (
+                        not p.name.startswith(prefix)
+                        or p.suffix.lower() != ".pdf"
+                        or p.name in existing
+                        or (allowed is not None and p.name not in allowed)
+                    ):
+                        continue
+                    targets.append(p)
+                # Refuse BEFORE deleting anything: an all-or-nothing check so a
+                # user-edited part never gets destroyed and no partial undo runs.
+                for p in targets:
+                    want = hashes.get(p.name)
+                    if not want:
+                        continue
+                    try:
+                        have = sha256_bytes(p.read_bytes())
+                    except OSError:
+                        continue
+                    if have != want:
+                        raise RevertConflict(
+                            f"{p.name} changed since the split — refusing to undo "
+                            "(it would delete a newer change)"
+                        )
+                for p in targets:
+                    try:
+                        p.unlink()
+                        removed += 1
+                    except OSError as exc:
+                        return ToolResult(
+                            ok=False, error=f"undo: could not remove {p.name}: {exc}"
+                        )
+                if not meta.get("dir_existed") and not any(out_dir.iterdir()):
+                    try:
+                        out_dir.rmdir()  # we created it — leave no empty husk
+                    except OSError:
+                        pass
+            return ToolResult(ok=True, output=f"undo: removed {removed} split output(s)")
+
+        return await asyncio.to_thread(_revert)
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from . import pdf_pages as _pages  # lazy: pure engine, heavy import

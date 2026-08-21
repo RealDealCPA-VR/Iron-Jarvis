@@ -67,6 +67,28 @@ _MAX_GREP_FILE_BYTES = 2_000_000
 _WALK_DEADLINE_S = 10.0
 
 
+#: Bound ONCE on first use to ``documents/readers._decode_bytes`` — this project's
+#: single text decoder (utf-8-sig → strict cp1252 → charset-normalizer → latin-1),
+#: written so "cp1252/latin-1 office exports survive instead of turning into
+#: replacement characters". `grep` hard-coded ``encoding="utf-8"`` and swallowed
+#: the UnicodeDecodeError, so an Excel/QuickBooks/Lacerte CSV was invisible to
+#: search with no signal. LAZY AND CACHED because importing it pulls in the whole
+#: ``iron_jarvis.documents`` package and this runs once per file across up to
+#: ``_MAX_GREP_FILES`` files. Same helper as ``filesearch/service._decode_text``;
+#: the two live apart because ``tools/`` must not depend on ``filesearch/``.
+_DECODER: Any = None
+
+
+def _decode_text(data: bytes) -> str:
+    """Decode arbitrary text bytes with the project's shared decoder."""
+    global _DECODER
+    if _DECODER is None:
+        from ..documents.readers import _decode_bytes
+
+        _DECODER = _decode_bytes
+    return _DECODER(data)
+
+
 def _is_under(path: Path, root: Path) -> bool:
     """True when *path* really sits under *root*.
 
@@ -859,6 +881,10 @@ class GrepTool(Tool):
             root = ctx.workspace.resolve()
             started = time.monotonic()
             hits: list[str] = []
+            # Files we opened and could NOT turn into text. Counted, not dropped:
+            # the truncation note below already proves this tool reports what it
+            # could not cover, and a skipped file is the same kind of hole.
+            unreadable = 0
             if base.is_file():
                 files, truncated = [base], ""
             else:
@@ -873,28 +899,59 @@ class GrepTool(Tool):
                     # a slow search into an unresponsive app.
                     if fp.stat().st_size > _MAX_GREP_FILE_BYTES:
                         continue
-                    for i, line in enumerate(
-                        fp.read_text(encoding="utf-8").splitlines(), 1
-                    ):
+                    raw = fp.read_bytes()
+                except (OSError, ValueError):
+                    unreadable += 1
+                    continue
+                # The decoder below is TOTAL (latin-1 maps all 256 bytes), so it
+                # can no longer be the thing that keeps binaries out — the
+                # UnicodeDecodeError used to do that by accident. Sniff for NUL
+                # explicitly instead, exactly as `filesearch/service._read_text`
+                # does; without it every .png and .exe in the tree would be
+                # scanned as latin-1 mojibake and could produce junk matches.
+                if b"\x00" in raw:
+                    continue
+                try:
+                    text = _decode_text(raw)
+                except Exception:  # noqa: BLE001 — the decoder is total; this
+                    # only fires if the documents package fails to import, which
+                    # must degrade to a REPORTED skip, not a silent miss.
+                    unreadable += 1
+                    continue
+                try:
+                    for i, line in enumerate(text.splitlines(), 1):
                         if rx.search(line):
                             rel = str(fp.relative_to(root)).replace("\\", "/")
                             hits.append(f"{rel}:{i}: {line.strip()}")
                             if len(hits) >= _MAX_GREP_HITS:
-                                return hits, f"stopped at {_MAX_GREP_HITS} matches"
-                except (UnicodeDecodeError, OSError, ValueError):
+                                return (
+                                    hits,
+                                    f"stopped at {_MAX_GREP_HITS} matches",
+                                    unreadable,
+                                )
+                except ValueError:  # a path outside root -> relative_to
                     continue
-            return hits, truncated
+            return hits, truncated, unreadable
 
         # Offloaded: unlike the old inline version, a pathological tree can now
         # only ever slow down THIS request instead of the whole daemon.
-        hits, truncated = await asyncio.to_thread(_search)
+        hits, truncated, unreadable = await asyncio.to_thread(_search)
         out = "\n".join(hits)
         if truncated:
             out += f"\n\n[search truncated — {truncated}. Narrow `path` or the pattern.]"
+        if unreadable:
+            out += (
+                f"\n\n[{unreadable} file(s) skipped — unreadable encoding or "
+                f"denied access. This search did NOT cover them.]"
+            )
         return ToolResult(
             ok=True,
             output=out,
-            data={"matches": len(hits), "truncated": bool(truncated)},
+            data={
+                "matches": len(hits),
+                "truncated": bool(truncated),
+                "skipped_unreadable": unreadable,
+            },
         )
 
 

@@ -146,7 +146,7 @@ _COLLECTION_NOUNS = frozenset(
         "entries", "attachment", "attachments", "email", "emails", "message",
         "messages", "row", "rows", "sheet", "sheets", "form", "forms",
         "spreadsheet", "spreadsheets", "report", "reports", "note", "notes",
-        "contract", "contracts", "return", "returns", "photo", "screenshot",
+        "contract", "contracts", "return", "returns", "screenshot",
         "screenshots",
     }
 )

@@ -179,16 +179,26 @@ class ExcelEditTool(Tool):
             target = safe_path(ctx.workspace, args["path"])
         except Exception:
             return None
-        if not target.is_file():
-            return None
-        try:
-            prior = target.read_bytes()
-        except OSError:
-            return None
-        return make_file_descriptor(
-            ctx.config.home, kind="file_restore", path=args["path"],
-            mode="raw", prior_bytes=prior, pre_sha256=sha256_bytes(prior),
-        )
+
+        # OFF THE EVENT LOOP — the same hop `tools/builtins.py:369-402` applies
+        # to write_file's hook, copied here. `registry.invoke` awaits
+        # capture_undo BEFORE execute, so the full read of a client workbook,
+        # its sha256, AND the pre-image spill (anything over INLINE_MAX_BYTES —
+        # 8 KB — is written to <home>/undo/, i.e. every real workbook) all ran
+        # on the daemon's one loop, and then execute read the same file again.
+        def _capture() -> "dict[str, Any] | None":
+            if not target.is_file():
+                return None
+            try:
+                prior = target.read_bytes()
+            except OSError:
+                return None
+            return make_file_descriptor(
+                ctx.config.home, kind="file_restore", path=args["path"],
+                mode="raw", prior_bytes=prior, pre_sha256=sha256_bytes(prior),
+            )
+
+        return await asyncio.to_thread(_capture)
 
     async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
         return await revert_workspace_file(undo, ctx)
@@ -793,16 +803,23 @@ class ExcelApplySpecTool(Tool):
             target = safe_path(ctx.workspace, args["path"])
         except Exception:  # noqa: BLE001
             return None
-        if not target.is_file():
-            return None
-        try:
-            prior = target.read_bytes()
-        except OSError:
-            return None
-        return make_file_descriptor(
-            ctx.config.home, kind="file_restore", path=args["path"],
-            mode="raw", prior_bytes=prior, pre_sha256=sha256_bytes(prior),
-        )
+
+        # Offloaded for the same reason ExcelEditTool's hook is (see there):
+        # read + sha256 + pre-image spill of a whole workbook, awaited before
+        # execute, on the daemon's single event loop.
+        def _capture() -> "dict[str, Any] | None":
+            if not target.is_file():
+                return None
+            try:
+                prior = target.read_bytes()
+            except OSError:
+                return None
+            return make_file_descriptor(
+                ctx.config.home, kind="file_restore", path=args["path"],
+                mode="raw", prior_bytes=prior, pre_sha256=sha256_bytes(prior),
+            )
+
+        return await asyncio.to_thread(_capture)
 
     async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
         return await revert_workspace_file(undo, ctx)

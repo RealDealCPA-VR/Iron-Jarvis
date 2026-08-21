@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
@@ -94,6 +95,7 @@ _MAX_CONTEXT_CHARS = 2000
 
 #: Bound on the per-run counter map. The tool instance lives for the daemon's
 #: whole life, so an unbounded dict would grow one entry per run forever.
+#: Eviction is LEAST-RECENTLY-CHARGED, not oldest-inserted — see :meth:`_prune`.
 _MAX_TRACKED_RUNS = 512
 
 
@@ -166,8 +168,11 @@ class ConsultTool(Tool):
     def __init__(self, platform) -> None:
         self.platform = platform
         #: budget key -> (consults made, monotonic start). See
-        #: :data:`_MAX_CONSULTS_PER_RUN` and :meth:`_charge`.
-        self._consults: dict[str, tuple[int, float]] = {}
+        #: :data:`_MAX_CONSULTS_PER_RUN` and :meth:`_charge`. ORDERED because
+        #: :meth:`_prune` evicts the least-recently-CHARGED entry, and a plain
+        #: dict cannot express that: re-assigning an existing key leaves it
+        #: where it was first inserted.
+        self._consults: "OrderedDict[str, tuple[int, float]]" = OrderedDict()
 
     # -- the cap ------------------------------------------------------------
 
@@ -204,15 +209,36 @@ class ConsultTool(Tool):
                 "`delegate` the piece you cannot settle yourself."
             )
         self._consults[key] = (used + 1, started)
+        # LIVENESS, NOT AGE. Re-assigning an EXISTING key does not move it in a
+        # dict's insertion order, so before v1.195.0 a run that kept consulting
+        # stayed pinned at the FRONT of the map — exactly where :meth:`_prune`
+        # evicts — and its counter was dropped while it was still asking. The
+        # next consult then started from zero, so the cap this method IS could
+        # be walked straight past by a long-lived run under churn. Touching the
+        # key on every charge makes the map an LRU keyed on last USE, which is
+        # what "still live" actually means here.
+        #
+        # `started` is deliberately CARRIED, never refreshed: it is the ad-hoc
+        # rolling window's origin (:data:`_ADHOC_WINDOW_S`), and re-stamping it
+        # on each charge would make the window slide forward forever and never
+        # roll over — the permanent lockout that branch exists to prevent.
+        self._consults.move_to_end(key)
         self._prune()
         return ""
 
     def _prune(self) -> None:
-        """Keep the counter map bounded (oldest keys first — dicts are ordered)."""
+        """Keep the counter map bounded, dropping the LEAST-RECENTLY-CHARGED key.
+
+        Same shape as ``tools/registry.py``'s ``_read_cache``
+        (``move_to_end`` on use + ``popitem(last=False)`` here), copied rather
+        than re-invented so both bounded maps age entries the same way. Evicting
+        a counter is always a budget RESET for that key, so the one entry it
+        must never pick is the one still being charged.
+        """
         while len(self._consults) > _MAX_TRACKED_RUNS:
             try:
-                self._consults.pop(next(iter(self._consults)))
-            except (StopIteration, KeyError):  # pragma: no cover — race-proofing
+                self._consults.popitem(last=False)
+            except KeyError:  # pragma: no cover — race-proofing
                 break
 
     # -- resolution (all of it off the event loop) --------------------------

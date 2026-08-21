@@ -85,6 +85,78 @@ def resolve_board_id(engine: Engine, session_id: str, agent_run_id: str) -> str:
         return run.session_id
 
 
+#: One node's parent link: ``(parent_id, session_id)``, ``None`` when the row
+#: does not exist. ``parent_id`` is normalised to ``""`` for "no parent" so the
+#: in-memory walk tests exactly the same truthiness ``resolve_board_id`` does.
+_Link = tuple[str, str] | None
+
+
+def _link_of(db: Session, links: dict[str, _Link], run_id: str) -> _Link:
+    """``run_id``'s parent link, fetched at most ONCE per ``links`` cache.
+
+    The cache is what turns the roster's membership test from an N+1 into a
+    single walk: every candidate row is already in it before the walk starts,
+    and each ancestor outside the board's own session is read once and then
+    shared by every chain that passes through it.
+    """
+    if run_id not in links:
+        run = db.get(AgentRun, run_id)
+        links[run_id] = None if run is None else (run.parent_id or "", run.session_id)
+    return links[run_id]
+
+
+def _root_session_id(
+    db: Session, links: dict[str, _Link], resolved: dict[str, str], run_id: str
+) -> str:
+    """:func:`resolve_board_id`'s parent walk, done in memory. Same answer.
+
+    Step for step this is the loop in :func:`resolve_board_id` — stop at a run
+    with no parent, at a parent row that has vanished, or at a parent already
+    ``seen`` (the cycle guard), and answer with the CURRENT run's session id.
+    The only thing that changed is where the rows come from: one shared session
+    and one shared cache, instead of one ``session_scope`` per candidate.
+
+    ``resolved`` memoises whole chains, and ONLY for a walk that ended without
+    tripping the cycle guard. That restriction is load-bearing: in a cycle the
+    answer genuinely depends on where you started (A→B→C→B answers B's session
+    from C and C's session from B), so caching one start's answer for another
+    would change behaviour. A walk that never tripped the guard shares its
+    answer with every node on its path, because a walk starting at any of them
+    is a suffix of the same chain.
+    """
+    seen: set[str] = set()
+    path: list[str] = []
+    cur = run_id
+    cyclic = False
+    while True:
+        cached = resolved.get(cur)
+        if cached is not None:
+            root = cached
+            break
+        link = _link_of(db, links, cur)
+        if link is None:
+            # Only reachable for an id with no row at all. `resolve_board_id`
+            # answers with the CALLER's session id there, which this walk has no
+            # business guessing — `_seed_runs` never asks, since every id it
+            # passes came from a row it just read.
+            return ""
+        parent_id, session_id = link
+        if not parent_id or parent_id in seen:
+            root, cyclic = session_id, bool(parent_id)
+            break
+        seen.add(cur)
+        if _link_of(db, links, parent_id) is None:
+            root = session_id  # the `parent is None: break` arm, verbatim
+            break
+        path.append(cur)
+        cur = parent_id
+    if not cyclic:
+        resolved[cur] = root
+        for node in path:
+            resolved[node] = root
+    return root
+
+
 class BlackboardStore:
     """Post/read/list over the department-scoped :class:`BlackboardRecord` table."""
 
@@ -180,6 +252,15 @@ class BlackboardStore:
 
         ``_LEDGER_BOARDS`` is skipped: those sessions hold accounting rows, not
         agents, and treating them as members is worse than having no roster.
+
+        ONE WALK, ONE SESSION. This used to read up to ``_MAX_ROSTER_RUNS`` rows
+        and then call :func:`resolve_board_id` once per row — 200 nested
+        ``session_scope``s, a fresh connection each, re-reading the same handful
+        of ancestors over and over. :func:`_root_session_id` runs the identical
+        walk against a shared link cache inside the session already open here.
+        Membership is still decided by that walk (never a re-derivation), the
+        ``(created_at, id)`` order and the ``_MAX_ROSTER_RUNS`` bound are the
+        same query, and the returned ids are in the same order as before.
         """
         if board_id in _LEDGER_BOARDS:
             return []
@@ -192,13 +273,17 @@ class BlackboardStore:
                     .limit(_MAX_ROSTER_RUNS)
                 )
             )
-            candidates = [(r.id, r.session_id) for r in rows]
-        # Outside the scope above: resolve_board_id opens its own session.
-        return [
-            run_id
-            for run_id, session_id in candidates
-            if resolve_board_id(self.engine, session_id, run_id) == board_id
-        ]
+            # Seed the cache with every candidate BEFORE walking, so a chain
+            # that climbs through a sibling candidate costs no extra read.
+            links: dict[str, _Link] = {
+                r.id: (r.parent_id or "", r.session_id) for r in rows
+            }
+            resolved: dict[str, str] = {}
+            return [
+                r.id
+                for r in rows
+                if _root_session_id(db, links, resolved, r.id) == board_id
+            ]
 
     def _department_runs(self, db: Session, board_id: str) -> dict[str, dict]:
         """Every run on this board — the seeds plus their whole delegation

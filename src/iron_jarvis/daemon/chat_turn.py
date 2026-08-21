@@ -699,6 +699,51 @@ def _resolve_armed_tools(d, body) -> tuple[list[str], list[str]]:
     return explicit + auto, auto
 
 
+def _resolve_tool_workspace(
+    default_ws: Path, workspace_dir: str, project_root: str
+) -> tuple[Path, bool]:
+    """Pick the folder this turn's tools run in — ``(workspace, in_project)``.
+
+    Precedence: an explicit chat WORKSPACE folder (the Build-like panel) wins,
+    then the grounded project root, then the caller's ``default_ws`` scratch dir
+    (``home/uploads``). Callers pass ``""`` for a value they don't have.
+
+    SYNCHRONOUS ON PURPOSE, and therefore only ever called through
+    ``asyncio.to_thread`` — the same contract ``_vision_unavailable_reason``
+    carries above, and the v1.153.1 rule ("NOTHING BLOCKING RUNS ON THE EVENT
+    LOOP"). Every line here touches the filesystem: ``is_dir()`` stats,
+    ``fs_path_allowed``/``is_protected_path`` each ``resolve()`` (and ``_within``
+    may stat every ancestor), and ``mkdir`` writes. ``workspace_dir`` is a folder
+    the USER picked — routinely a network share or an unhydrated OneDrive path,
+    where one stat stalls for as long as the OS takes and the whole app presents
+    as "Daemon offline" (the documented v1.153.1 failure shape).
+
+    ONE hop, not four: the checks are individually cheap and the point is to
+    leave the loop once, not to pay four context switches for four stats.
+
+    The explicit pick is gated by ``fs_policy.usable_workspace_root`` — the same
+    absolute + is_dir + allowlist + not-protected conjunction the two lanes used
+    to spell out inline, and whose docstring already named "chat's workspace
+    pick" as one of its callers (v1.189.0: "one definition, because the measured
+    failure mode of this area is two doors answering differently"). The lanes
+    were simply never migrated onto it.
+    """
+    tool_ws, in_project_folder = default_ws, False
+    ws = (workspace_dir or "").strip()
+    root = (project_root or "").strip()
+    if ws:
+        from ..core.fs_policy import usable_workspace_root
+
+        if usable_workspace_root(ws):
+            tool_ws, in_project_folder = Path(ws), True
+    elif root:
+        proot = Path(root)
+        if proot.is_dir():
+            tool_ws, in_project_folder = proot, True
+    tool_ws.mkdir(parents=True, exist_ok=True)
+    return tool_ws, in_project_folder
+
+
 #: The one surface (v1.108.0). Chat and Agent used to be a toggle the user had
 #: to get right BEFORE typing — and getting it wrong produced the worst possible
 #: outcome: a model that answers "you need to be in agent mode for that", which
@@ -1849,27 +1894,20 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         # to a throwaway scratch dir and every read of a project file fails
         # with "escapes the session workspace". Confinement still holds — the
         # tools cannot escape the chosen folder.
-        tool_ws = d.platform.config.home / "uploads"
-        in_project_folder = False
         # Precedence: an explicit chat WORKSPACE folder (the Build-like panel)
         # wins, then the grounded project root, then the uploads scratch dir.
-        ws = (body.workspace_dir or "").strip()
-        if ws:
-            from ..core.fs_policy import fs_path_allowed, is_protected_path
-
-            wp = Path(ws)
-            if (
-                wp.is_absolute()
-                and wp.is_dir()
-                and fs_path_allowed(str(wp))
-                and not is_protected_path(str(wp))
-            ):
-                tool_ws, in_project_folder = wp, True
-        elif resolved_proj is not None and (resolved_proj.root or "").strip():
-            proot = Path(resolved_proj.root)
-            if proot.is_dir():
-                tool_ws, in_project_folder = proot, True
-        tool_ws.mkdir(parents=True, exist_ok=True)
+        # OFF THE EVENT LOOP (v1.195.0, finding 7) — the whole resolution is
+        # stats + resolve()s + a mkdir on a folder the USER picked, and a
+        # network share or unhydrated OneDrive path stalls the entire daemon.
+        # ONE hop for the lot; see _resolve_tool_workspace's docstring.
+        # MIRROR NOTE (lock-step): same call in routes/chat.py's /chat/stream —
+        # edit both or neither.
+        tool_ws, in_project_folder = await asyncio.to_thread(
+            _resolve_tool_workspace,
+            d.platform.config.home / "uploads",
+            body.workspace_dir or "",
+            (resolved_proj.root or "") if resolved_proj is not None else "",
+        )
         ctx = ToolContext(
             workspace=tool_ws, session_id="chat", agent_run_id="chat",
             config=d.platform.config, event_bus=d.platform.event_bus,

@@ -10,10 +10,22 @@ standing team instead of only summarizing upward:
 Board scope and author are derived from the running :class:`ToolContext`:
 ``board_id`` from the agent's root session (so siblings share one board) and
 ``author`` from ``agent_run_id``.
+
+EVERY STORE CALL GOES THROUGH ``asyncio.to_thread`` (v1.153.1's rule; the shape
+is copied verbatim from the sibling substrate in ``worklist/tools.py``). The
+store is synchronous SQLite: ``roster()`` alone is a department walk that
+``agents/runtime.teammates_block`` measured at up to 47ms in a pathological tree
+— which is why THAT caller already offloads it — and the cost grows linearly
+with the department (measured 2.5ms at 3 children, 35.9ms at 100). A tool runs
+once per model step, far more often than prompt assembly, and
+``tools/registry.invoke`` awaits ``execute`` with no offload of its own, so
+anything left inline here is that many milliseconds subtracted from EVERY
+request the daemon serves.
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any
 
@@ -85,6 +97,13 @@ def _resolve_recipient(
     resolver and :func:`_addressable` must agree on who "the teammates" are, or
     a refusal lists a run id that resolves back to the sender. The roster is
     fetched ONCE and reused for both the resolution and the refusal text.
+
+    SYNCHRONOUS ON PURPOSE, and therefore only ever called through ONE
+    ``asyncio.to_thread`` — same contract as ``agents/runtime.teammates_block``.
+    Offloading its two store calls separately would hop threads twice AND (worse)
+    invite a future edit to let ``resolve_addressee`` fetch its own roster, which
+    would walk the whole department a second time on the refusal path and break
+    the single-fetch property documented above.
     """
     roster = store.roster(board_id)
     run_id, name, candidates = store.resolve_addressee(
@@ -139,19 +158,23 @@ class BlackboardPostTool(Tool):
         if not text:
             return ToolResult(ok=False, error="`text` is required")
         wanted = (args.get("to_agent") or "").strip()
-        board_id = self.store.board_id_for(ctx.session_id, ctx.agent_run_id)
+        board_id = await asyncio.to_thread(
+            self.store.board_id_for, ctx.session_id, ctx.agent_run_id
+        )
         to_agent: str | None = None
         to_name: str | None = None
         if wanted:
             # Same rule as message_agent: a direction nobody can read is worse
             # than a refusal, so an unresolvable name bounces WITH the roster.
-            to_agent, to_name, error = _resolve_recipient(
-                self.store, board_id, wanted, ctx.agent_run_id
+            # ONE hop for the whole resolution — see _resolve_recipient.
+            to_agent, to_name, error = await asyncio.to_thread(
+                _resolve_recipient, self.store, board_id, wanted, ctx.agent_run_id
             )
             if error:
                 return ToolResult(ok=False, error=error)
-        author_name = self.store.name_for(ctx.agent_run_id)
-        record = self.store.post(
+        author_name = await asyncio.to_thread(self.store.name_for, ctx.agent_run_id)
+        record = await asyncio.to_thread(
+            self.store.post,
             board_id,
             ctx.agent_run_id,
             text,
@@ -195,14 +218,17 @@ class BlackboardReadTool(Tool):
         self.store = store
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        board_id = self.store.board_id_for(ctx.session_id, ctx.agent_run_id)
+        board_id = await asyncio.to_thread(
+            self.store.board_id_for, ctx.session_id, ctx.agent_run_id
+        )
         since = _parse_since(args.get("since"))
-        my_name = self.store.name_for(ctx.agent_run_id)
+        my_name = await asyncio.to_thread(self.store.name_for, ctx.agent_run_id)
         to_me = bool(args.get("to_me"))
         # "Addressed to me" means EITHER handle: the run id, or my name on a row
         # that carries no run id. A message sent to "builder" must reach the
         # builder.
-        records = self.store.list(
+        records = await asyncio.to_thread(
+            self.store.list,
             board_id,
             since=since,
             to_agent=ctx.agent_run_id if to_me else None,
@@ -210,8 +236,10 @@ class BlackboardReadTool(Tool):
         )
         # The roster lets a sibling DISCOVER teammates (by name + id) so it can
         # `message_agent` one directly — the headline "address each other" needs
-        # this, and it now lists teammates who have NEVER POSTED.
-        roster = self.store.roster(board_id)
+        # this, and it now lists teammates who have NEVER POSTED. It is also the
+        # most expensive call in the module (the department walk), so it is the
+        # one that most needs the thread.
+        roster = await asyncio.to_thread(self.store.roster, board_id)
         teammates = [r for r in roster if r["agent_run_id"] != ctx.agent_run_id]
         out = _render(records)
         if teammates:
@@ -260,14 +288,19 @@ class MessageAgentTool(Tool):
             return ToolResult(ok=False, error="`to_agent` is required")
         if not text:
             return ToolResult(ok=False, error="`text` is required")
-        board_id = self.store.board_id_for(ctx.session_id, ctx.agent_run_id)
-        run_id, to_name, error = _resolve_recipient(
-            self.store, board_id, to_agent, ctx.agent_run_id
+        board_id = await asyncio.to_thread(
+            self.store.board_id_for, ctx.session_id, ctx.agent_run_id
+        )
+        # ONE hop: roster + resolution together, so the refusal path still walks
+        # the department exactly once (see _resolve_recipient).
+        run_id, to_name, error = await asyncio.to_thread(
+            _resolve_recipient, self.store, board_id, to_agent, ctx.agent_run_id
         )
         if error:
             return ToolResult(ok=False, error=error)
-        author_name = self.store.name_for(ctx.agent_run_id)
-        record = self.store.post(
+        author_name = await asyncio.to_thread(self.store.name_for, ctx.agent_run_id)
+        record = await asyncio.to_thread(
+            self.store.post,
             board_id,
             ctx.agent_run_id,
             text,

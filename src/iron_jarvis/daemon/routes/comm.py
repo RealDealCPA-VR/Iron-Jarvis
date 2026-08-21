@@ -535,7 +535,17 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=403, detail="bad slack timestamp")
         base = f"v0:{ts}:".encode() + raw
         expected = "v0=" + _hmac.new(signing.encode(), base, hashlib.sha256).hexdigest()
-        if not _hmac.compare_digest(expected, sig):
+        # Compare BYTES, never str. ``hmac.compare_digest`` refuses non-ASCII
+        # ``str`` arguments with TypeError, and ``sig`` is a header straight off
+        # the wire on a route that is deliberately TOKEN-EXEMPT — so
+        # "X-Slack-Signature: v0=caf\xc3\xa9" turned this fail-closed 403 into an
+        # unhandled 500 that any unauthenticated caller could trigger at will
+        # (and per this repo's history a 500 is what the dashboard renders as
+        # "daemon offline"). Same defect, same fix as daemon/auth.py:
+        # token_matches — read its docstring: encode BOTH sides UTF-8 rather than
+        # stripping or ASCII-filtering the candidate, so every candidate is
+        # comparable and the compare stays constant-time over the encoded forms.
+        if not _hmac.compare_digest(expected.encode("utf-8"), sig.encode("utf-8")):
             raise HTTPException(status_code=403, detail="invalid slack signature")
 
         body = json.loads(raw or b"{}")

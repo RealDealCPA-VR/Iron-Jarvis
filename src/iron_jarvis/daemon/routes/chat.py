@@ -61,6 +61,7 @@ from ..chat_turn import (
     _resolve_armed_tools,
     _resolve_connectors,
     _resolve_persona,
+    _resolve_tool_workspace,
     _sanitize_draft,
     _saved_workflows_block,
     _write_directive,
@@ -1428,25 +1429,18 @@ def register(app: FastAPI, d) -> None:
         if armed or ask_armed:
             from ...tools.base import ToolContext
 
-            tool_ws = d.platform.config.home / "uploads"
-            in_project_folder = False
-            ws = (body.workspace_dir or "").strip()
-            if ws:
-                from ...core.fs_policy import fs_path_allowed, is_protected_path
-
-                wp = Path(ws)
-                if (
-                    wp.is_absolute()
-                    and wp.is_dir()
-                    and fs_path_allowed(str(wp))
-                    and not is_protected_path(str(wp))
-                ):
-                    tool_ws, in_project_folder = wp, True
-            elif resolved_proj is not None and (resolved_proj.root or "").strip():
-                proot = Path(resolved_proj.root)
-                if proot.is_dir():
-                    tool_ws, in_project_folder = proot, True
-            tool_ws.mkdir(parents=True, exist_ok=True)
+            # OFF THE EVENT LOOP (v1.195.0, finding 7) — MIRROR NOTE
+            # (lock-step): same call in chat_turn.run_chat_turn, edit both or
+            # neither. The resolution is stats + resolve()s + a mkdir against a
+            # folder the USER picked (network share, unhydrated OneDrive), and
+            # THIS is the lane the user is watching when the app goes "Daemon
+            # offline". One hop for the whole block, not four.
+            tool_ws, in_project_folder = await asyncio.to_thread(
+                _resolve_tool_workspace,
+                d.platform.config.home / "uploads",
+                body.workspace_dir or "",
+                (resolved_proj.root or "") if resolved_proj is not None else "",
+            )
             ctx = ToolContext(
                 workspace=tool_ws, session_id="chat", agent_run_id="chat",
                 config=d.platform.config, event_bus=d.platform.event_bus,

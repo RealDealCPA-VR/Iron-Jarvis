@@ -30,6 +30,26 @@ def sign(payload: bytes, secret: str) -> str:
     return hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
 
 
+def _sig_equal(expected: str, candidate: str) -> bool:
+    """Constant-time signature compare that CANNOT RAISE on caller input.
+
+    ``hmac.compare_digest`` refuses non-ASCII ``str`` arguments with
+    ``TypeError`` ("comparing strings with non-ASCII characters is not
+    supported"), and ``candidate`` arrives straight off the wire (the
+    ``X-IronJarvis-Signature``/``X-Signature`` header on ``/webhooks/{slug}``).
+    Passed in raw, a header holding any byte >= 0x80 raised INSIDE the verifier
+    instead of returning the intended "invalid webhook signature" refusal — an
+    unhandled exception where the contract promises a boolean.
+
+    Both sides are UTF-8 encoded (never stripped or ASCII-filtered) so every
+    candidate is comparable and the comparison stays constant-time over the
+    encoded forms. Copied from ``daemon/auth.py:token_matches``, which diagnosed
+    and fixed this identical class for the bearer token; its docstring carries
+    the full incident.
+    """
+    return hmac.compare_digest(expected.encode("utf-8"), candidate.encode("utf-8"))
+
+
 def verify(payload: bytes, secret: str, signature: str | None) -> bool:
     """Constant-time signature check.
 
@@ -45,7 +65,7 @@ def verify(payload: bytes, secret: str, signature: str | None) -> bool:
     if candidate.startswith("sha256="):
         candidate = candidate.split("=", 1)[1]
     expected = sign(payload, secret)
-    return hmac.compare_digest(expected, candidate)
+    return _sig_equal(expected, candidate)
 
 
 # --- v2: timestamped signatures with replay/skew protection (opt-in) ----------
@@ -91,4 +111,4 @@ def verify_signed(
     if candidate.startswith("sha256="):
         candidate = candidate.split("=", 1)[1]
     expected = sign_v2(ts, payload, secret)
-    return hmac.compare_digest(expected, candidate)
+    return _sig_equal(expected, candidate)

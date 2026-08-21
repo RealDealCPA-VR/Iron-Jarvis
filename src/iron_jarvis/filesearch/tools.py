@@ -12,7 +12,7 @@ from typing import Any
 
 from ..core.fs_policy import fs_path_allowed, is_protected_path
 from ..tools.base import Tool, ToolContext, ToolResult
-from .service import FileSearchService
+from .service import BadSearchPattern, FileSearchService, SearchNotes
 
 
 class FileSearchTool(Tool):
@@ -56,13 +56,36 @@ class FileSearchTool(Tool):
                     error="root is protected or outside IRONJARVIS_FS_ALLOWLIST",
                 )
         roots = [Path(root)] if root else None
+        # What the search could not cover. Reported below rather than dropped —
+        # a skipped file is a hole in the answer, and this codebase's rule is that
+        # a hole is always said out loud (see ListFilesTool's truncation note).
+        notes = SearchNotes()
         try:
             # Offload the os.walk + byte reads over up to 20k files to a thread so a
             # content search doesn't freeze the daemon's single event loop.
             import asyncio
 
             results = await asyncio.to_thread(
-                self.service.search, args["query"], mode=mode, limit=limit, roots=roots
+                self.service.search,
+                args["query"],
+                mode=mode,
+                limit=limit,
+                roots=roots,
+                notes=notes,
+            )
+        except BadSearchPattern as exc:
+            # GREP'S SHAPE (`tools/builtins.GrepTool` -> "bad regex: ..."). This
+            # used to come back ok=True / count=0 / output="", which the model
+            # reads as "that text is nowhere on your disk" — a confident wrong
+            # answer for the everyday literals 'read_file(', 'C:\\Users', 'a[b'.
+            # The escaped form is NAMED, never silently substituted.
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"bad regex: {exc.reason} — mode 'content' treats the query as "
+                    f"a REGULAR EXPRESSION. Nothing was searched. To match it "
+                    f"literally, re-run with query: {exc.literal}"
+                ),
             )
         except Exception as exc:  # never crash the runtime
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
@@ -81,10 +104,19 @@ class FileSearchTool(Tool):
                 lines.append(f"{r['path']}:{r['line']}: {r.get('text', '')}")
             else:  # name hit
                 lines.append(r["path"])
+        out = "\n".join(lines)
+        skipped = notes.note()
+        if skipped:
+            out = f"{out}\n\n{skipped}" if out else skipped
         return ToolResult(
             ok=True,
-            output="\n".join(lines),
-            data={"results": results, "count": len(results), "mode": mode},
+            output=out,
+            data={
+                "results": results,
+                "count": len(results),
+                "mode": mode,
+                "skipped_unreadable": notes.unreadable,
+            },
         )
 
 

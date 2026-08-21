@@ -27,7 +27,7 @@ import os
 from urllib.parse import urlparse
 
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
+from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
 
 # --- Host / Origin guard (anti drive-by RCE + DNS rebinding) ----------------
@@ -133,29 +133,170 @@ def _max_body_bytes() -> int:
 
 
 class BodyLimitMiddleware:
-    """Pure-ASGI guard: reject an HTTP request whose Content-Length exceeds the cap
-    (413) BEFORE the body is buffered, so an oversized JSON/base64 body (e.g. to
-    /documents/write or /documents/upload) can't OOM/fill-disk the daemon."""
+    """Pure-ASGI guard: reject an HTTP request whose body exceeds the cap (413),
+    so an oversized JSON/base64 body (e.g. to /documents/write or
+    /documents/upload) can't OOM/fill-disk the daemon.
+
+    TWO layers, because neither is sufficient alone:
+
+    (a) the ``content-length`` pre-check refuses BEFORE a single byte is
+        buffered — the cheapest possible refusal, and the property this class
+        was written for, so it stays first;
+    (b) a wrapper around ``receive`` counts bytes as they actually stream in.
+        An HTTP/1.1 request using ``Transfer-Encoding: chunked`` carries NO
+        content-length, so (a) found nothing, ``break``ed, and the body passed
+        through UNLIMITED. Measured end to end against a real uvicorn with the
+        cap at 1 MB — the SAME valid 2 MB JSON body: with ``Content-Length`` ->
+        413, chunked -> **200 OK, accepted and written to disk** (v1.195.0).
+
+    The counter never buffers: it adds ``len(body)`` and hands the message on
+    unchanged, so the inner app still does its own reading and an under-cap
+    request (including a multi-chunk one, and one with no body at all) is
+    byte-for-byte unaffected.
+
+    Only ``http`` scopes are wrapped — a websocket has no request body and
+    lifespan carries no bytes, so both are passed straight through, the same
+    scope-type discipline ``HostOriginGuardMiddleware`` above uses.
+    """
 
     def __init__(self, app) -> None:
         self.app = app
+        # Read ONCE at construction (unchanged): the cap is process-wide config,
+        # and re-reading os.environ on every request is per-request work for a
+        # value that cannot legitimately change mid-run.
         self.max_bytes = _max_body_bytes()
 
     async def __call__(self, scope, receive, send) -> None:
-        if scope.get("type") == "http":
-            for k, v in scope.get("headers") or []:
-                if k == b"content-length":
-                    try:
-                        if int(v) > self.max_bytes:
-                            await JSONResponse(
-                                {"detail": f"request body too large (limit {self.max_bytes} bytes)"},
-                                status_code=413,
-                            )(scope, receive, send)
-                            return
-                    except ValueError:
-                        pass
-                    break
-        await self.app(scope, receive, send)
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        for k, v in scope.get("headers") or []:
+            if k == b"content-length":
+                try:
+                    if int(v) > self.max_bytes:
+                        await self._too_large(scope, send)
+                        return
+                except ValueError:
+                    pass
+                break
+
+        seen = 0
+        stop = False  # body cut short: stop pulling bytes off the wire
+        refused = False  # WE answered 413; the inner app's response must not escape
+        refusal_sent = False  # the 413 actually reached the transport
+        started = False  # the inner app already sent http.response.start
+
+        async def counting_receive():
+            nonlocal seen, stop, refused, refusal_sent
+            if stop:
+                # Never touch the real receive again once we've cut the body off:
+                # it would block waiting for bytes we just said we will not read.
+                return {"type": "http.disconnect"}
+            message = await receive()
+            if message.get("type") == "http.request":
+                seen += len(message.get("body") or b"")
+                if seen > self.max_bytes:
+                    stop = True
+                    if not started:
+                        # `refused` must be set BEFORE the send: if _too_large
+                        # gets the response START out and then fails, the inner
+                        # app must still be barred from sending a second one.
+                        # The cost of that ordering is that a failed refusal
+                        # would look identical to a successful one, so
+                        # _too_large REPORTS its own failure (see there) and
+                        # tells us with `refusal_sent` whether the client was
+                        # actually answered.
+                        refused = True
+                        refusal_sent = await self._too_large(scope, send)
+                    else:
+                        # A response was already in flight, so we cannot retract
+                        # it with a 413 — but the truncation must not be silent
+                        # (this codebase's central rule; see the _walk_files
+                        # truncation note in CLAUDE.md).
+                        import logging
+
+                        logging.getLogger("iron_jarvis.daemon").warning(
+                            "request body exceeded %s bytes after the response had "
+                            "already started; body truncated on %s %s",
+                            self.max_bytes,
+                            scope.get("method", "?"),
+                            scope.get("path", "?"),
+                        )
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def guarded_send(message):
+            nonlocal started
+            if refused:
+                # We already sent the 413. A SECOND http.response.start on one
+                # scope is an ASGI protocol error, so whatever the inner app
+                # produces after the cut (usually a ClientDisconnect 500) is
+                # dropped here rather than written to the wire.
+                return
+            if message.get("type") == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, counting_receive, guarded_send)
+        except Exception as exc:
+            # Cutting the body short makes Starlette raise ClientDisconnect, and
+            # a route parsing a truncated body can raise anything. Once we have
+            # answered 413 that exception is OUR doing, so it must not reach
+            # ServerErrorMiddleware and be logged/served as a 500.
+            if not refused:
+                raise
+            import logging
+
+            # The swallow is deliberate but never silent. The EXPECTED case (we
+            # refused, the app then hit our http.disconnect) is DEBUG: it happens
+            # on every single refusal, and a WARNING there would re-create the
+            # log-amplification this class is supposed to prevent. The case that
+            # actually costs the caller an answer — the 413 never made it out —
+            # is already reported at WARNING inside _too_large, which is the only
+            # place that sees it in the real stack (ErrorEnvelopeMiddleware sits
+            # INSIDE us and catches such an exception before it can reach here).
+            logging.getLogger("iron_jarvis.daemon").debug(
+                "swallowed %s after refusing %s %s with 413 (refusal delivered: %s)",
+                type(exc).__name__,
+                scope.get("method", "?"),
+                scope.get("path", "?"),
+                refusal_sent,
+            )
+
+    async def _too_large(self, scope, send) -> bool:
+        """Send the 413. Returns True iff it actually reached the transport.
+
+        A failure here means the caller gets NO response at all, which is the
+        one thing this codebase never lets happen quietly (same rule as the
+        truncation note in ``_walk_files``), so it is logged with the method and
+        path rather than raised: the exception would unwind through the inner
+        app, where ``ErrorEnvelopeMiddleware`` would catch it and produce a 500
+        that ``guarded_send`` then drops — reported nowhere.
+        """
+
+        async def _closed():  # Response.__call__ never reads it; ASGI wants one
+            return {"type": "http.disconnect"}
+
+        try:
+            await JSONResponse(
+                {"detail": f"request body too large (limit {self.max_bytes} bytes)"},
+                status_code=413,
+            )(scope, _closed, send)
+        except Exception as exc:  # noqa: BLE001 — transport gone mid-refusal
+            import logging
+
+            logging.getLogger("iron_jarvis.daemon").warning(
+                "could not deliver the 413 refusal on %s %s (%s: %s); the client "
+                "received NO response",
+                scope.get("method", "?"),
+                scope.get("path", "?"),
+                type(exc).__name__,
+                exc,
+            )
+            return False
+        return True
 
 
 def _configured_token() -> str:
@@ -267,6 +408,31 @@ class ErrorEnvelopeMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):  # noqa: ANN001
         try:
             return await call_next(request)
+        except ClientDisconnect:
+            # NOT a server error, so it must not be logged as one. The request
+            # body stream ended early: either the peer really went away, or WE
+            # ended it on purpose — BodyLimitMiddleware answers 413 and then
+            # feeds the route an ``http.disconnect``, which is exactly what
+            # Starlette raises this for. Logging that with ``.exception()``
+            # wrote an ERROR plus a ~50-line traceback saying "unhandled error
+            # on POST /documents/upload" for a request we handled deliberately —
+            # the same wrong-diagnosis trap this class's docstring was written
+            # about, and worse: it turned the DoS guard into a log-amplifier
+            # (~2 KB of ERROR per refused upload, where before there was none).
+            # One INFO line, no traceback: reported, never silent, never a false
+            # alarm. The response below is a formality — by definition nobody is
+            # reading it (and after a 413 the guard drops it outright).
+            import logging
+
+            logging.getLogger("iron_jarvis.daemon").info(
+                "client disconnected during %s %s (request body ended early)",
+                request.method,
+                request.url.path,
+            )
+            return JSONResponse(
+                status_code=499,  # nginx's "client closed request"; never a 5xx
+                content={"detail": "client disconnected"},
+            )
         except Exception as exc:  # noqa: BLE001 — this IS the catch-all
             # Same shape app.py's handler produces, so clients see one contract.
             import logging

@@ -372,26 +372,34 @@ class WriteDocumentTool(Tool):
             target = safe_path(ctx.workspace, args["path"])
         except Exception:
             return None
-        if target.is_file():
-            try:
-                # Off the loop: the pre-image of a big workbook is a real read.
-                prior = await asyncio.to_thread(target.read_bytes)
-            except OSError:
-                return None
+
+        # ONE hop for the whole hook, not just the read. The read was already
+        # offloaded here, but `make_file_descriptor` sha256s the same payload and
+        # — above INLINE_MAX_BYTES (8 KB, so every real document) — WRITES the
+        # pre-image to <home>/undo/, both of which stayed on the loop. Same shape
+        # as tools/builtins.py:369-402.
+        def _capture() -> "dict[str, Any] | None":
+            if target.is_file():
+                try:
+                    prior = target.read_bytes()
+                except OSError:
+                    return None
+                return make_file_descriptor(
+                    ctx.config.home,
+                    kind="file_restore",
+                    path=args["path"],
+                    mode="raw",
+                    prior_bytes=prior,
+                    pre_sha256=sha256_bytes(prior),
+                )
             return make_file_descriptor(
                 ctx.config.home,
-                kind="file_restore",
+                kind="file_delete",
                 path=args["path"],
                 mode="raw",
-                prior_bytes=prior,
-                pre_sha256=sha256_bytes(prior),
             )
-        return make_file_descriptor(
-            ctx.config.home,
-            kind="file_delete",
-            path=args["path"],
-            mode="raw",
-        )
+
+        return await asyncio.to_thread(_capture)
 
     async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
         return await revert_workspace_file(undo, ctx)
@@ -939,27 +947,38 @@ class RedactPiiTool(Tool):
         self, args: dict[str, Any], ctx: ToolContext
     ) -> "dict[str, Any] | None":
         """The ONLY side effect is the new output file — undo deletes it (or
-        restores prior bytes if the target already existed)."""
-        try:
-            source = _resolve_read_path(str(args.get("path", "")), ctx)
-            target = self._output_target(source, args, ctx)
-            rel = str(target.relative_to(Path(ctx.workspace).resolve())).replace("\\", "/")
-        except Exception:
-            return None
-        if target.is_file():
+        restores prior bytes if the target already existed).
+
+        OFF THE EVENT LOOP (tools/builtins.py:369-402's shape). Awaited by
+        `registry.invoke` BEFORE execute, and the target here is a tax document:
+        path resolution stats, the pre-image is a full read + sha256, and above
+        8 KB it is also written back out to <home>/undo/."""
+
+        def _capture() -> "dict[str, Any] | None":
             try:
-                prior = target.read_bytes()
-            except OSError:
+                source = _resolve_read_path(str(args.get("path", "")), ctx)
+                target = self._output_target(source, args, ctx)
+                rel = str(target.relative_to(Path(ctx.workspace).resolve())).replace("\\", "/")
+            except Exception:
                 return None
+            if target.is_file():
+                try:
+                    prior = target.read_bytes()
+                except OSError:
+                    return None
+                return make_file_descriptor(
+                    ctx.config.home,
+                    kind="file_restore",
+                    path=rel,
+                    mode="raw",
+                    prior_bytes=prior,
+                    pre_sha256=sha256_bytes(prior),
+                )
             return make_file_descriptor(
-                ctx.config.home,
-                kind="file_restore",
-                path=rel,
-                mode="raw",
-                prior_bytes=prior,
-                pre_sha256=sha256_bytes(prior),
+                ctx.config.home, kind="file_delete", path=rel, mode="raw"
             )
-        return make_file_descriptor(ctx.config.home, kind="file_delete", path=rel, mode="raw")
+
+        return await asyncio.to_thread(_capture)
 
     async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
         return await revert_workspace_file(undo, ctx)

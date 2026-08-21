@@ -22,6 +22,7 @@ the bytes are text or raw) is packed into a small JSON envelope carried in
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -209,108 +210,121 @@ async def revert_workspace_file(
     Re-hashes the CURRENT target and refuses on drift, then either restores the
     prior bytes (``file_restore``) or unlinks the path we created
     (``file_delete``). Resolution goes through :func:`safe_path`, so the revert
-    obeys the SAME workspace-only fs policy as the forward write."""
-    meta = read_envelope(undo)
-    rel = meta.get("path")
-    mode = meta.get("mode", "raw")
-    kind = undo.get("kind")
-    home = ctx.config.home
+    obeys the SAME workspace-only fs policy as the forward write.
 
-    if kind == "files_delete":
-        # Multi-file creation envelope (v1.166.0): unlink every path we created.
-        # No pre-image was captured (these are post-hoc creations), so there is
-        # nothing to restore — a path already gone is reported, not an error.
-        paths = meta.get("paths")
-        if not isinstance(paths, list) or not paths:
-            return ToolResult(ok=False, error="undo: no target paths recorded")
-        removed: list[str] = []
-        missing: list[str] = []
-        for p in paths:
+    OFF THE EVENT LOOP (v1.153.1's rule; the capture half was brought in line in
+    ``tools/builtins.py:369-402`` and this — the shared inverse for write_file /
+    edit_file / write_document / excel_edit / pdf_merge / redact_pii — was not).
+    One hop covers the whole body because every branch is filesystem work: the
+    re-hash of the CURRENT target, the pre-image load (a blob file for anything
+    over 8 KB, i.e. every real document), and the full write-back. ``RevertConflict``
+    is RAISED, not returned, and ``asyncio.to_thread`` re-raises it in the awaiting
+    coroutine unchanged — the ``/undo`` route's 409 mapping is untouched."""
+
+    def _revert() -> ToolResult:
+        meta = read_envelope(undo)
+        rel = meta.get("path")
+        mode = meta.get("mode", "raw")
+        kind = undo.get("kind")
+        home = ctx.config.home
+
+        if kind == "files_delete":
+            # Multi-file creation envelope (v1.166.0): unlink every path we created.
+            # No pre-image was captured (these are post-hoc creations), so there is
+            # nothing to restore — a path already gone is reported, not an error.
+            paths = meta.get("paths")
+            if not isinstance(paths, list) or not paths:
+                return ToolResult(ok=False, error="undo: no target paths recorded")
+            removed: list[str] = []
+            missing: list[str] = []
+            for p in paths:
+                try:
+                    target = safe_path(ctx.workspace, str(p))
+                except Exception as exc:  # path escaped the workspace
+                    return ToolResult(ok=False, error=f"undo: unsafe path: {exc}")
+                try:
+                    if target.exists():
+                        target.unlink()
+                        removed.append(str(p))
+                    else:
+                        missing.append(str(p))
+                except OSError as exc:
+                    return ToolResult(
+                        ok=False, error=f"undo: could not remove {p}: {exc}"
+                    )
+            note = f"undo: removed {len(removed)} created file(s)"
+            if missing:
+                note += f" ({len(missing)} already gone)"
+            return ToolResult(ok=True, output=note)
+
+        if not rel:
+            return ToolResult(ok=False, error="undo: no target path recorded")
+        try:
+            target = safe_path(ctx.workspace, rel)
+        except Exception as exc:  # path escaped the workspace — never write outside it
+            return ToolResult(ok=False, error=f"undo: unsafe path: {exc}")
+
+        if kind == "file_rename":
+            # The inverse of a rename is a rename back (v1.177.2). No pre-image and
+            # no content hash: the BYTES never changed, so `guard_unchanged` has
+            # nothing to compare and running it would refuse every undo. What must
+            # be checked instead is that the two ends still look like a rename —
+            # the file is where we left it, and putting it back would not clobber
+            # something that has since taken the old name.
+            origin = meta.get("rename_from")
+            if not origin:
+                return ToolResult(ok=False, error="undo: no original path recorded")
             try:
-                target = safe_path(ctx.workspace, str(p))
-            except Exception as exc:  # path escaped the workspace
+                back = safe_path(ctx.workspace, str(origin))
+            except Exception as exc:  # noqa: BLE001 — never write outside the workspace
                 return ToolResult(ok=False, error=f"undo: unsafe path: {exc}")
+            if not target.exists():
+                return ToolResult(
+                    ok=False,
+                    error=f"undo: {rel} is no longer there (renamed or removed since)",
+                )
+            if back.exists():
+                return ToolResult(
+                    ok=False,
+                    error=(
+                        f"undo: {back.name} already exists again — restoring the old "
+                        "name would overwrite it"
+                    ),
+                )
+            try:
+                target.replace(back)
+            except OSError as exc:
+                return ToolResult(ok=False, error=f"undo: could not rename back: {exc}")
+            return ToolResult(ok=True, output=f"undo: renamed {rel} back to {origin}")
+
+        conflict = guard_unchanged(sha256_target(target, mode), undo.get("post_sha256"))
+        if conflict is not None:
+            raise RevertConflict(conflict)
+
+        if kind == "file_delete":
             try:
                 if target.exists():
                     target.unlink()
-                    removed.append(str(p))
-                else:
-                    missing.append(str(p))
             except OSError as exc:
-                return ToolResult(
-                    ok=False, error=f"undo: could not remove {p}: {exc}"
-                )
-        note = f"undo: removed {len(removed)} created file(s)"
-        if missing:
-            note += f" ({len(missing)} already gone)"
-        return ToolResult(ok=True, output=note)
+                return ToolResult(ok=False, error=f"undo: could not remove {rel}: {exc}")
+            delete_preimage(home, undo.get("pre_ref"))
+            return ToolResult(ok=True, output=f"undo: removed created file {rel}")
 
-    if not rel:
-        return ToolResult(ok=False, error="undo: no target path recorded")
-    try:
-        target = safe_path(ctx.workspace, rel)
-    except Exception as exc:  # path escaped the workspace — never write outside it
-        return ToolResult(ok=False, error=f"undo: unsafe path: {exc}")
+        if kind == "file_restore":
+            prior = resolve_prior_bytes(home, undo, meta)
+            if prior is None:
+                return ToolResult(ok=False, error="undo: pre-image unavailable")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                if mode == "text":
+                    target.write_text(prior.decode("utf-8"), encoding="utf-8")
+                else:
+                    target.write_bytes(prior)
+            except OSError as exc:
+                return ToolResult(ok=False, error=f"undo: could not restore {rel}: {exc}")
+            delete_preimage(home, undo.get("pre_ref"))
+            return ToolResult(ok=True, output=f"undo: restored prior content of {rel}")
 
-    if kind == "file_rename":
-        # The inverse of a rename is a rename back (v1.177.2). No pre-image and
-        # no content hash: the BYTES never changed, so `guard_unchanged` has
-        # nothing to compare and running it would refuse every undo. What must
-        # be checked instead is that the two ends still look like a rename —
-        # the file is where we left it, and putting it back would not clobber
-        # something that has since taken the old name.
-        origin = meta.get("rename_from")
-        if not origin:
-            return ToolResult(ok=False, error="undo: no original path recorded")
-        try:
-            back = safe_path(ctx.workspace, str(origin))
-        except Exception as exc:  # noqa: BLE001 — never write outside the workspace
-            return ToolResult(ok=False, error=f"undo: unsafe path: {exc}")
-        if not target.exists():
-            return ToolResult(
-                ok=False,
-                error=f"undo: {rel} is no longer there (renamed or removed since)",
-            )
-        if back.exists():
-            return ToolResult(
-                ok=False,
-                error=(
-                    f"undo: {back.name} already exists again — restoring the old "
-                    "name would overwrite it"
-                ),
-            )
-        try:
-            target.replace(back)
-        except OSError as exc:
-            return ToolResult(ok=False, error=f"undo: could not rename back: {exc}")
-        return ToolResult(ok=True, output=f"undo: renamed {rel} back to {origin}")
+        return ToolResult(ok=False, error=f"undo: unknown file undo kind {kind!r}")
 
-    conflict = guard_unchanged(sha256_target(target, mode), undo.get("post_sha256"))
-    if conflict is not None:
-        raise RevertConflict(conflict)
-
-    if kind == "file_delete":
-        try:
-            if target.exists():
-                target.unlink()
-        except OSError as exc:
-            return ToolResult(ok=False, error=f"undo: could not remove {rel}: {exc}")
-        delete_preimage(home, undo.get("pre_ref"))
-        return ToolResult(ok=True, output=f"undo: removed created file {rel}")
-
-    if kind == "file_restore":
-        prior = resolve_prior_bytes(home, undo, meta)
-        if prior is None:
-            return ToolResult(ok=False, error="undo: pre-image unavailable")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            if mode == "text":
-                target.write_text(prior.decode("utf-8"), encoding="utf-8")
-            else:
-                target.write_bytes(prior)
-        except OSError as exc:
-            return ToolResult(ok=False, error=f"undo: could not restore {rel}: {exc}")
-        delete_preimage(home, undo.get("pre_ref"))
-        return ToolResult(ok=True, output=f"undo: restored prior content of {rel}")
-
-    return ToolResult(ok=False, error=f"undo: unknown file undo kind {kind!r}")
+    return await asyncio.to_thread(_revert)

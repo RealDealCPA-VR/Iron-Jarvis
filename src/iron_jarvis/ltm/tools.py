@@ -11,6 +11,7 @@ injected:
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -60,8 +61,6 @@ class LTMSearchTool(Tool):
             # and the multi-term fallback can spend several passes. This tool
             # is on every agent definition now (the shared brain), so a slow
             # base here would stall the whole daemon, not just this session.
-            import asyncio
-
             hits = await asyncio.to_thread(
                 self.manager.search, args["query"], k, source
             )
@@ -114,7 +113,13 @@ class LTMAppendTool(Tool):
         post-append content so a later edit is caught on undo. Connectors with no
         local file (Notion / cloud / SSH / HTTP-RAG) have no safe delete primitive,
         so the inverse is journaled ``reversible=False`` — an HONEST 'cannot undo'
-        rather than a fake one."""
+        rather than a fake one.
+
+        The filesystem half runs OFF THE EVENT LOOP — the same hop
+        ``tools/builtins.py:369-402`` applies to write_file's hook. An Obsidian
+        vault routinely lives on a synced folder, and this is awaited by
+        ``registry.invoke`` BEFORE execute, so the stat + full note read + sha256
+        (+ a pre-image spill past 8 KB) blocked every other daemon request."""
         source = self._resolve_source(args)
         conn = self.manager.get(source) if source else None
         directory = getattr(conn, "dir", None) if conn is not None else None
@@ -123,65 +128,93 @@ class LTMAppendTool(Tool):
             return {"kind": "memory_external", "reversible": False, "tool": self.name}
         path = Path(directory) / f"{slugify(args['title'])}.md"
         content = args["content"]
-        if path.is_file():
-            try:
-                prior = path.read_text(encoding="utf-8").encode("utf-8")
-            except (UnicodeDecodeError, OSError):
-                return {"kind": "memory_external", "reversible": False, "tool": self.name}
-            # Mirror MarkdownDirConnector.append's body construction so post_sha256
-            # matches the file the append will leave behind.
-            post_body = f"{prior.decode('utf-8').rstrip()}\n\n{content.rstrip()}\n"
+
+        def _capture() -> "dict[str, Any] | None":
+            if path.is_file():
+                try:
+                    prior = path.read_text(encoding="utf-8").encode("utf-8")
+                except (UnicodeDecodeError, OSError):
+                    return {
+                        "kind": "memory_external",
+                        "reversible": False,
+                        "tool": self.name,
+                    }
+                # Mirror MarkdownDirConnector.append's body construction so post_sha256
+                # matches the file the append will leave behind.
+                post_body = f"{prior.decode('utf-8').rstrip()}\n\n{content.rstrip()}\n"
+                return make_file_descriptor(
+                    ctx.config.home,
+                    kind="memory_restore",
+                    path=str(path),
+                    mode="text",
+                    prior_bytes=prior,
+                    pre_sha256=sha256_bytes(prior),
+                    post_sha256=sha256_bytes(post_body.encode("utf-8")),
+                )
+            post_body = f"# {args['title']}\n\n{content.rstrip()}\n"
             return make_file_descriptor(
                 ctx.config.home,
-                kind="memory_restore",
+                kind="memory_delete_file",
                 path=str(path),
                 mode="text",
-                prior_bytes=prior,
-                pre_sha256=sha256_bytes(prior),
                 post_sha256=sha256_bytes(post_body.encode("utf-8")),
             )
-        post_body = f"# {args['title']}\n\n{content.rstrip()}\n"
-        return make_file_descriptor(
-            ctx.config.home,
-            kind="memory_delete_file",
-            path=str(path),
-            mode="text",
-            post_sha256=sha256_bytes(post_body.encode("utf-8")),
-        )
+
+        return await asyncio.to_thread(_capture)
 
     async def revert(self, undo: dict[str, Any], ctx: ToolContext) -> ToolResult:
         """Undo a markdown-store append: refuse on drift, then restore the prior
         note bytes or delete the note we created. The note lives in the trusted LTM
-        store (not the session workspace), so it is addressed by its absolute path."""
+        store (not the session workspace), so it is addressed by its absolute path.
+
+        One worker-thread hop for the whole body, like the shared
+        ``tools/undo.revert_workspace_file``: the drift check re-reads and hashes
+        the note, the pre-image may come from a blob file, and the restore writes
+        it back. ``RevertConflict`` is RAISED and ``asyncio.to_thread`` re-raises
+        it unchanged, so the /undo route's 409 mapping is untouched."""
         meta = read_envelope(undo)
         raw = meta.get("path")
         if not raw:
             return ToolResult(ok=False, error="undo: no memory target recorded")
         path = Path(raw)
         home = ctx.config.home
-        conflict = guard_unchanged(sha256_target(path, "text"), undo.get("post_sha256"))
-        if conflict is not None:
-            raise RevertConflict(conflict)
-        kind = undo.get("kind")
-        if kind == "memory_delete_file":
-            try:
-                if path.exists():
-                    path.unlink()
-            except OSError as exc:
-                return ToolResult(ok=False, error=f"undo: could not remove note: {exc}")
-            delete_preimage(home, undo.get("pre_ref"))
-            return ToolResult(ok=True, output=f"undo: removed memory note {path.name}")
-        if kind == "memory_restore":
-            prior = resolve_prior_bytes(home, undo, meta)
-            if prior is None:
-                return ToolResult(ok=False, error="undo: pre-image unavailable")
-            try:
-                path.write_text(prior.decode("utf-8"), encoding="utf-8")
-            except OSError as exc:
-                return ToolResult(ok=False, error=f"undo: could not restore note: {exc}")
-            delete_preimage(home, undo.get("pre_ref"))
-            return ToolResult(ok=True, output=f"undo: restored memory note {path.name}")
-        return ToolResult(ok=False, error=f"undo: unknown memory undo kind {kind!r}")
+
+        def _revert() -> ToolResult:
+            conflict = guard_unchanged(
+                sha256_target(path, "text"), undo.get("post_sha256")
+            )
+            if conflict is not None:
+                raise RevertConflict(conflict)
+            kind = undo.get("kind")
+            if kind == "memory_delete_file":
+                try:
+                    if path.exists():
+                        path.unlink()
+                except OSError as exc:
+                    return ToolResult(
+                        ok=False, error=f"undo: could not remove note: {exc}"
+                    )
+                delete_preimage(home, undo.get("pre_ref"))
+                return ToolResult(
+                    ok=True, output=f"undo: removed memory note {path.name}"
+                )
+            if kind == "memory_restore":
+                prior = resolve_prior_bytes(home, undo, meta)
+                if prior is None:
+                    return ToolResult(ok=False, error="undo: pre-image unavailable")
+                try:
+                    path.write_text(prior.decode("utf-8"), encoding="utf-8")
+                except OSError as exc:
+                    return ToolResult(
+                        ok=False, error=f"undo: could not restore note: {exc}"
+                    )
+                delete_preimage(home, undo.get("pre_ref"))
+                return ToolResult(
+                    ok=True, output=f"undo: restored memory note {path.name}"
+                )
+            return ToolResult(ok=False, error=f"undo: unknown memory undo kind {kind!r}")
+
+        return await asyncio.to_thread(_revert)
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         source = args.get("source") or self.manager.default_source()

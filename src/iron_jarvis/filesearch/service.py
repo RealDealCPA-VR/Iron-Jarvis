@@ -16,7 +16,10 @@ Hard guarantees:
 * **Respects ignore patterns.** Directories named in ``ignore`` (``.git``,
   ``node_modules`` …) are pruned during the walk.
 * **Skips unreadable / binary / oversized files gracefully** — they are ignored,
-  never crash a search.
+  never crash a search, and the ones we could not decode are COUNTED and handed
+  back in :class:`SearchNotes` so the caller can say so out loud.
+* **Never answers a broken query with an empty result.** An uncompilable regex
+  raises :class:`BadSearchPattern`; it is not reported as "no matches".
 """
 
 from __future__ import annotations
@@ -24,6 +27,8 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -42,6 +47,91 @@ _CHUNK_LINES = 40
 #: Default cap on the number of files visited per search (keeps a walk of a huge
 #: drive like ``C:\`` responsive rather than open-ended).
 DEFAULT_MAX_WALK = 20_000
+
+
+class BadSearchPattern(ValueError):
+    """A content-search regex that never compiled — RAISED, never answered ``[]``.
+
+    ``search_content`` used to swallow ``re.error`` and return an empty list, so
+    a caller could not tell "that pattern is invalid" from "this text is nowhere
+    in your files" — and the model then told the user the text does not exist.
+    That is the same failure the v1.153.1 truncation rule exists to prevent
+    ("a silently short listing reads as complete"), here in the one tool meant to
+    reach OUTSIDE the workspace. The sibling ``grep`` has always had this right
+    (``tools/builtins.GrepTool`` returns ``bad regex: ...``); this brings the
+    broader search onto the same contract.
+
+    ``literal`` is OFFERED, never applied: silently falling back to an escaped
+    literal search would answer a different question than the one asked, which is
+    the same class of bug as the empty list it replaces.
+
+    **The ``ValueError`` base is load-bearing, not decoration.** The other two
+    callers of ``search_content`` are ``GET /filesearch`` and the ``file-search``
+    CLI, and neither can be edited from here. ``daemon/app.py`` registers a
+    ``ValueError`` handler that answers **400** with the message, and Starlette
+    walks ``type(exc).__mro__`` to find it — so the dashboard's search box gets a
+    readable "bad regex" instead of a 500, which this project's history says the
+    UI reads as "daemon offline". Re-basing this on ``Exception`` would turn a
+    typo in the search box into an outage-shaped error.
+    """
+
+    def __init__(self, pattern: str, exc: re.error) -> None:
+        self.pattern = pattern
+        self.reason = str(exc)
+        self.literal = re.escape(pattern)
+        super().__init__(f"bad regex: {exc}")
+
+
+@dataclass
+class SearchNotes:
+    """What a search could NOT cover, carried back to the caller.
+
+    A file we failed to decode or extract is a HOLE in the answer, and a hole the
+    caller cannot see is indistinguishable from a genuine miss — the cp1252 CSV
+    that Excel/QuickBooks/Lacerte exported simply is not in the results. Passing
+    one of these into ``search``/``search_content`` opts the caller into being
+    told; the count then rides back out in the tool's own output note, next to
+    grep's truncation note, rather than in a second reporting mechanism.
+
+    Only files we genuinely TRIED and failed to turn into text are counted. A
+    binary blob (NUL sniff) and an oversized file are deliberate, well-understood
+    exclusions — counting them would put a scary note on every search of a real
+    folder and drown the signal this exists to carry.
+    """
+
+    unreadable: int = 0
+
+    def note(self) -> str:
+        """The one line to append to a tool's output, or ``""`` when clean."""
+        if not self.unreadable:
+            return ""
+        return (
+            f"[{self.unreadable} file(s) skipped — unreadable encoding or failed "
+            f"extraction. This search did NOT cover them.]"
+        )
+
+
+#: Bound ONCE on first use to ``documents/readers._decode_bytes`` — this project's
+#: single text decoder (utf-8-sig → strict cp1252 → charset-normalizer → latin-1),
+#: written precisely so "cp1252/latin-1 office exports survive instead of turning
+#: into replacement characters". Both search paths hard-coded ``decode("utf-8")``
+#: and dropped everything else on the floor.
+#:
+#: LAZY AND CACHED for a measured reason: importing it pulls in the whole
+#: ``iron_jarvis.documents`` package (writers, markitdown, tools), and this runs
+#: once per file across a walk of up to ``DEFAULT_MAX_WALK`` files. The lazy
+#: private import mirrors ``documents/redact.py``'s.
+_DECODER: Callable[[bytes], str] | None = None
+
+
+def _decode_text(data: bytes) -> str:
+    """Decode arbitrary text bytes with the project's shared decoder."""
+    global _DECODER
+    if _DECODER is None:
+        from ..documents.readers import _decode_bytes
+
+        _DECODER = _decode_bytes
+    return _DECODER(data)
 
 
 def list_drives() -> list[dict]:
@@ -185,9 +275,19 @@ class FileSearchService:
     # -- reading ------------------------------------------------------------
 
     def _read_text(
-        self, path: Path, roots: list[Path] | None = None
+        self,
+        path: Path,
+        roots: list[Path] | None = None,
+        notes: SearchNotes | None = None,
     ) -> str | None:
-        """Return decoded text, or None if outside roots / oversized / binary / unreadable."""
+        """Return decoded text, or None if outside roots / oversized / binary / unreadable.
+
+        Every ``None`` that means "we tried to read this file and could not" bumps
+        ``notes.unreadable`` so the caller can report the hole. The three that mean
+        "this was never a text file to begin with" (outside the roots, over the
+        size cap, binary by NUL sniff) stay silent on purpose — see
+        :class:`SearchNotes`.
+        """
         if self._root_for(path, roots) is None:
             return None
         try:
@@ -203,16 +303,30 @@ class FileSearchService:
 
                 return extract_text(path)
             except Exception:
+                # An encrypted, corrupt or truncated document. It carries text we
+                # simply could not reach — the user's search did not cover it.
+                if notes is not None:
+                    notes.unreadable += 1
                 return None
         try:
             data = path.read_bytes()
         except (OSError, PermissionError, ValueError):
+            # A locked handle or a denied ACL is a hole in the answer too.
+            if notes is not None:
+                notes.unreadable += 1
             return None
         if b"\x00" in data:  # cheap binary sniff
             return None
         try:
-            return data.decode("utf-8")
-        except UnicodeDecodeError:
+            # NOT ``decode("utf-8")``. That silently dropped every cp1252/latin-1
+            # file — an Excel/QuickBooks/Lacerte CSV with a curly apostrophe or an
+            # accented client name was invisible to search with no signal at all.
+            return _decode_text(data)
+        except Exception:  # noqa: BLE001 — the decoder is total; this covers a
+            # failed import of the documents package, which must degrade to a
+            # REPORTED skip rather than an unexplained miss.
+            if notes is not None:
+                notes.unreadable += 1
             return None
 
     # -- helpers ------------------------------------------------------------
@@ -267,12 +381,20 @@ class FileSearchService:
         globs: list[str] | None = None,
         roots: list[Path] | None = None,
         max_walk: int = DEFAULT_MAX_WALK,
+        notes: SearchNotes | None = None,
     ) -> list[dict]:
-        """Regex-search file contents. Returns ``{path, line, text}`` dicts."""
+        """Regex-search file contents. Returns ``{path, line, text}`` dicts.
+
+        Raises :class:`BadSearchPattern` for a regex that does not compile, and
+        counts undecodable files into ``notes`` when one is supplied.
+        """
         try:
             rx = re.compile(regex)
-        except re.error:
-            return []
+        except re.error as exc:
+            # NOT ``return []``. See BadSearchPattern: an empty list here is a
+            # confident wrong answer, and 'read_file(' / 'C:\\Users' / 'a[b' are
+            # exactly the literals a model reaches for.
+            raise BadSearchPattern(regex, exc) from exc
         eff_roots = self._effective_roots(roots)
         results: list[dict] = []
         for path in self._candidate_files(roots, max_walk):
@@ -281,7 +403,7 @@ class FileSearchService:
                 continue
             if globs and not self._matches_globs(path.name, self._rel(path, root), globs):
                 continue
-            text = self._read_text(path, eff_roots)
+            text = self._read_text(path, eff_roots, notes)
             if text is None:
                 continue
             for i, line in enumerate(text.splitlines(), 1):
@@ -359,15 +481,21 @@ class FileSearchService:
         limit: int = 50,
         roots: list[Path] | None = None,
         max_walk: int = DEFAULT_MAX_WALK,
+        notes: SearchNotes | None = None,
     ) -> list[dict]:
         """Dispatch to name / content / semantic search by ``mode``.
 
         ``roots`` overrides the configured roots for this call only (a bounded
         walk capped at ``max_walk`` files), letting a search target an arbitrary
         local drive while still never escaping the provided root.
+
+        ``notes`` collects what the search could not cover (content mode only —
+        a name search never opens a file, so it has nothing to skip).
         """
         if mode == "name":
             return self.search_name(query, limit=limit, roots=roots, max_walk=max_walk)
         if mode == "semantic":
             return self.search_semantic(query, k=limit)
-        return self.search_content(query, limit=limit, roots=roots, max_walk=max_walk)
+        return self.search_content(
+            query, limit=limit, roots=roots, max_walk=max_walk, notes=notes
+        )

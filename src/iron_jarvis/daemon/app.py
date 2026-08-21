@@ -1060,6 +1060,21 @@ def create_app(project_root: str | None = None) -> FastAPI:
     app.add_middleware(ErrorEnvelopeMiddleware)
 
     app.add_middleware(TokenAuthMiddleware)  # inner: token check
+    # Reject an oversized request body (413) before it is buffered — DoS guard.
+    # ADDED HERE, INSIDE CORS, DELIBERATELY (v1.195.0). It used to be added after
+    # the CORS block, which made it OUTERMOST-but-one, so its 413 went back to the
+    # browser with NO access-control-allow-origin — the browser then refuses to
+    # let the page read the response at all, `fetch` rejects, and `lib/api.ts`
+    # maps that to `ApiError(status=0)`, which every page renders as "daemon
+    # offline". That is the identical failure ErrorEnvelopeMiddleware above was
+    # written to fix, and it went unnoticed because the guard only ever fired on
+    # a content-length the dashboard never sent. Now that the chunked path is
+    # covered too, a user dropping an oversized file would have been told their
+    # daemon was down instead of that the file is too big.
+    # Still OUTSIDE TokenAuthMiddleware, so an unauthenticated oversized body is
+    # refused before the token check and before the body is buffered — the DoS
+    # property this guard exists for is unchanged.
+    app.add_middleware(BodyLimitMiddleware)
     # CORS: default to loopback dashboard origins ONLY (never wildcard, since the
     # daemon is RCE-by-design); a public deployment sets IRONJARVIS_CORS_ORIGINS.
     _origins = os.environ.get("IRONJARVIS_CORS_ORIGINS", "").strip()
@@ -1083,8 +1098,6 @@ def create_app(project_root: str | None = None) -> FastAPI:
             allow_methods=_methods,
             allow_headers=["*"],
         )
-    # Reject an oversized request body (413) before it is buffered — DoS guard.
-    app.add_middleware(BodyLimitMiddleware)
     # OUTERMOST (added last): reject non-loopback Host (DNS rebinding) + untrusted
     # cross-origin browser requests (drive-by RCE) before anything — covers WS.
     app.add_middleware(HostOriginGuardMiddleware)
