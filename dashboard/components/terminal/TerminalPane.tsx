@@ -4,7 +4,7 @@
 // to one daemon shell session. xterm itself is imported dynamically inside the
 // effect so it never runs during SSR / `next build`.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import "@xterm/xterm/css/xterm.css";
 import {
@@ -12,8 +12,10 @@ import {
   ClipboardCopy,
   CornerDownLeft,
   ExternalLink,
+  Image as ImageIcon,
   Layers,
   Loader2,
+  Paperclip,
   Play,
   Plug,
   PlugZap,
@@ -25,6 +27,13 @@ import {
 } from "lucide-react";
 import { ApiError, get, post, wsUrl } from "@/lib/api";
 import { waitForStableSize } from "@/lib/layout";
+import {
+  CLI_IMAGE_BUDGET_BYTES,
+  fileToBase64,
+  imageFilesFromDrop,
+  imageItemsFromPaste,
+  shrinkToFit,
+} from "@/lib/snippet";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 import type { AiCli, ModelOption, Skill, TerminalInfo } from "@/lib/types";
 
@@ -38,6 +47,181 @@ type AIResult = {
 };
 
 type ConnState = "connecting" | "open" | "reconnecting" | "closed";
+
+// --- Screen snippets (v1.194.0) -------------------------------------------
+// A ConPTY pane is a BYTE STREAM: there is no image channel to paste into. But
+// every AI CLI we launch reads images OFF DISK from a path in the prompt, and
+// the daemon runs on this same machine as the CLI child — so a path is genuinely
+// shared. Capture → shrink to fit (lib/snippet) → POST the bytes → type the
+// returned REFERENCE into the shell. No synthesized paste keystroke: Ctrl+V
+// after Win+Shift+S is documented to do nothing in Claude Code on Windows.
+
+/** One image waiting on the pane. It is ALWAYS visible as a chip — including
+ *  when it failed, so a refusal can never read as "attached". */
+type PendingSnip = {
+  id: string;
+  name: string;
+  /** Byte size of what would actually be sent (post-shrink when ready). */
+  bytes: number;
+  /** Object URL for the thumbnail; "" until the shrink pipeline finishes. */
+  url: string;
+  /** True when the shrink pipeline re-encoded the image to fit the budget —
+   *  surfaced on the chip, because quietly shrinking a screenshot is a lie. */
+  recompressed: boolean;
+  status: "preparing" | "ready" | "sending" | "failed";
+  error?: string;
+  /** The exact bytes that will be POSTed (post-shrink), once ready. */
+  file?: File;
+};
+
+/** Compact human size for a chip. */
+export function formatSnipBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0 KB";
+  if (n < 1024) return `${Math.round(n)} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** What the desktop clipboard bridge is telling us about the clipboard's image
+ *  flavour. `unreadable` is a REPORTABLE outcome, not an absence — see
+ *  `clipImageOutcome`. */
+export type ClipImage =
+  | { kind: "image"; file: File }
+  | { kind: "unreadable" }
+  | { kind: "none" };
+
+/**
+ * THE Ctrl+V DECISION, as a testable seam.
+ *
+ * TEXT WINS WHENEVER THE CLIPBOARD CARRIES TEXT. This ordering is the whole
+ * point and it is NOT the obvious one: copying a range in Excel (or Word, or an
+ * Outlook body) puts a BITMAP on the Windows clipboard ALONGSIDE the text —
+ * that is exactly why Paste Special offers "Bitmap"/"Picture". Probing the
+ * image side first would turn every "copy some cells, paste into the terminal"
+ * into an image chip and the text would never arrive, which is a regression in
+ * the thing people do all day. It would also force a synchronous multi-megapixel
+ * `toPNG()` on the Electron MAIN process before any text could paste.
+ *
+ * A Win+Shift+S snip has NO text flavour, so the feature loses nothing: an
+ * empty text read falls straight through to the image probe.
+ *
+ * A failure ANYWHERE (either probe throwing) must still leave the other path
+ * working — a broken bridge that swallowed ordinary pasting would be far worse
+ * than the missing feature.
+ */
+export async function resolvePaste(
+  readText: () => Promise<string>,
+  readImage: () => Promise<ClipImage>,
+  onText: (text: string) => void,
+  onImage: (file: File) => void,
+  onUnreadable: () => void,
+): Promise<"image" | "text" | "unreadable" | "nothing"> {
+  let text = "";
+  try {
+    text = await readText();
+  } catch {
+    text = ""; // clipboard blocked — still worth probing the image side
+  }
+  if (text) {
+    onText(text);
+    return "text";
+  }
+  let image: ClipImage = { kind: "none" };
+  try {
+    image = await readImage();
+  } catch {
+    image = { kind: "none" }; // no image path available — nothing to paste
+  }
+  if (image.kind === "image") {
+    onImage(image.file);
+    return "image";
+  }
+  if (image.kind === "unreadable") {
+    // The bridge told us there WAS an image and it could not encode it. Doing
+    // nothing here is the silent failure this codebase refuses: the user pressed
+    // Ctrl+V on a snip and would see no chip, no message, and no keystroke.
+    onUnreadable();
+    return "unreadable";
+  }
+  return "nothing";
+}
+
+/**
+ * Decide whether a NATIVE paste event belongs to the snippet feature.
+ *
+ * Same rule as `resolvePaste`, enforced on the browser path: Chromium exposes an
+ * Excel/Word copy as `text/plain` + `text/html` + the bitmap as a FILE item, so
+ * claiming every paste that carries an image file would eat that text paste.
+ * Only a paste with NO text flavour is ours.
+ */
+export function snipFilesFromPaste(e: ClipboardEvent): File[] {
+  let text = "";
+  try {
+    text = e.clipboardData?.getData?.("text/plain") ?? "";
+  } catch {
+    text = ""; // hostile/absent clipboardData — fall through to the image check
+  }
+  if (text) return []; // TEXT WINS — xterm pastes it exactly as before
+  return imageItemsFromPaste(e);
+}
+
+/** True when a drag carries files. ONE predicate shared by dragover and drop:
+ *  the pane must never advertise a drop (ring + preventDefault) that it then
+ *  hands back to the browser default — in the packaged app that reaches
+ *  `will-navigate` → `shell.openExternal(file://…)` and the OS OPENS the file. */
+export function dragCarriesFiles(dt: DataTransfer | null | undefined): boolean {
+  return Array.from(dt?.types ?? []).includes("Files");
+}
+
+/**
+ * Normalize whatever the desktop clipboard bridge hands back for an image into
+ * a File, or null when the clipboard holds no image.
+ *
+ * Deliberately shape-tolerant: this crosses the Electron preload boundary
+ * (`window.ironjarvis.clipboardReadImage`), which is untyped, and a mismatch
+ * here must degrade to "no image, paste text as usual" rather than throw
+ * inside a keydown handler and break ordinary pasting.
+ */
+export function snipFromClipboardImage(value: unknown, name?: string): File | null {
+  if (!value) return null;
+  const raw =
+    typeof value === "string"
+      ? value
+      : ((value as Record<string, unknown>).png_b64 ??
+        (value as Record<string, unknown>).base64 ??
+        (value as Record<string, unknown>).b64 ??
+        (value as Record<string, unknown>).data);
+  if (typeof raw !== "string" || !raw) return null;
+  // Tolerate a data: URL as well as bare base64.
+  const b64 = raw.includes(",") ? raw.slice(raw.indexOf(",") + 1) : raw;
+  try {
+    const bin = atob(b64);
+    if (!bin.length) return null;
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+    return new File([bytes], name || `snip-${Date.now()}.png`, { type: "image/png" });
+  } catch {
+    return null; // not base64 — treat as "no image"
+  }
+}
+
+/**
+ * The bridge's answer, classified into the three things it can actually mean.
+ *
+ * `desktop/main.js` deliberately returns `{error:"unreadable"}` when the
+ * clipboard HELD an image that would not encode, with a comment saying it must
+ * never be reported as "nothing copied". Collapsing that to `null` (which is
+ * what a bare `snipFromClipboardImage` does) throws away the only signal that
+ * distinguishes "you copied nothing" from "I couldn't read what you copied".
+ */
+export function clipImageOutcome(value: unknown, name?: string): ClipImage {
+  if (!value) return { kind: "none" };
+  const file = snipFromClipboardImage(value, name);
+  if (file) return { kind: "image", file };
+  const err = typeof value === "object" ? (value as Record<string, unknown>).error : undefined;
+  if (typeof err === "string" && err) return { kind: "unreadable" };
+  return { kind: "none" };
+}
 
 // Terminal REPORT/answerback replies xterm auto-generates for control QUERIES
 // (Primary/Secondary Device Attributes "\x1b[?1;2c", cursor-position reports
@@ -203,6 +387,12 @@ export function TerminalPane({
   // --- Launch an installed AI CLI (claude / codex / …) in THIS shell --------
   const [launchOpen, setLaunchOpen] = useState(false);
   const [launchHint, setLaunchHint] = useState<string | null>(null);
+  // WHICH CLI THIS PANE IS RUNNING. launchCli has always known it and threw it
+  // away after a 5s toast; the snippet route needs it to format the image
+  // reference the way that CLI wants to be handed a path (mirrors Creative
+  // Studio's `_studio_cli`). "" = a plain shell — the server falls back to a
+  // bare quoted path.
+  const [paneCli, setPaneCli] = useState("");
   const installedClis = aiClis.filter((c) => c.installed);
   const notInstalledClis = aiClis.filter((c) => !c.installed);
 
@@ -212,9 +402,201 @@ export function TerminalPane({
     // Type the launch command WITHOUT a newline — the user presses Enter to
     // actually start it (a last look, same as the AI "Run" suggestion).
     ws.send(cli.command);
+    setPaneCli(cli.id); // remember it for snippet delivery
     termRef.current?.focus();
     setLaunchHint(cli.label);
     window.setTimeout(() => setLaunchHint(null), 5000);
+  }
+
+  // --- Pending screen snippets ---------------------------------------------
+  const [snips, setSnips] = useState<PendingSnip[]>([]);
+  const [expandedSnip, setExpandedSnip] = useState<string | null>(null);
+  const [snipSending, setSnipSending] = useState(false);
+  const [snipNote, setSnipNote] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  // Every object URL we minted, so unmount can revoke them all.
+  const snipUrls = useRef<Set<string>>(new Set());
+  useEffect(
+    () => () => {
+      snipUrls.current.forEach((u) => URL.revokeObjectURL(u));
+      snipUrls.current.clear();
+    },
+    [],
+  );
+
+  const dropSnipUrl = (url: string) => {
+    if (!url) return;
+    snipUrls.current.delete(url);
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      /* already gone */
+    }
+  };
+
+  /** Put a FAILED chip on the strip for something that never became a snippet
+   *  at all (a clipboard image the app could not read, a non-image drop). The
+   *  chip is the honest half of the feature: an attempt that produced nothing
+   *  must still be visible and dismissable, not silence. */
+  const pushFailedSnip = useCallback((name: string, error: string) => {
+    const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    setSnips((prev) => [
+      ...prev,
+      { id, name, bytes: 0, url: "", recompressed: false, status: "failed", error },
+    ]);
+  }, []);
+
+  /** Take images the user pasted or dropped: chip them immediately (so nothing
+   *  happens invisibly), then shrink each to fit the CLI budget. A refusal
+   *  stays on screen as a FAILED chip — never a silent disappearance. */
+  const acceptSnips = useCallback((files: File[]) => {
+    if (!files.length) return;
+    for (const file of files) {
+      const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const name = file.name || `snip-${Date.now()}.png`;
+      setSnips((prev) => [
+        ...prev,
+        { id, name, bytes: file.size, url: "", recompressed: false, status: "preparing" },
+      ]);
+      void (async () => {
+        try {
+          const res = await shrinkToFit(file, CLI_IMAGE_BUDGET_BYTES);
+          if (!res.ok) {
+            // The two outcomes are different facts and are reported differently:
+            // a budget refusal names the limit, a decode failure says it could
+            // not READ the image. Either way nothing was attached, and we say so.
+            const why =
+              res.reason === "too-large"
+                ? `Too big to attach — ${res.detail} Nothing was attached.`
+                : `Couldn't read this image — ${res.detail} Nothing was attached.`;
+            setSnips((prev) =>
+              prev.map((s) => (s.id === id ? { ...s, status: "failed", error: why } : s)),
+            );
+            return;
+          }
+          const url = URL.createObjectURL(res.file);
+          snipUrls.current.add(url);
+          setSnips((prev) =>
+            prev.map((s) =>
+              s.id === id
+                ? {
+                    ...s,
+                    status: "ready",
+                    file: res.file,
+                    name: res.file.name || s.name,
+                    url,
+                    bytes: res.bytes,
+                    recompressed: res.recompressed,
+                  }
+                : s,
+            ),
+          );
+        } catch (err) {
+          setSnips((prev) =>
+            prev.map((s) =>
+              s.id === id
+                ? { ...s, status: "failed", error: `Couldn't prepare this image: ${String(err)}` }
+                : s,
+            ),
+          );
+        }
+      })();
+    }
+  }, []);
+
+  function removeSnip(id: string) {
+    setSnips((prev) => {
+      const hit = prev.find((s) => s.id === id);
+      if (hit) dropSnipUrl(hit.url);
+      return prev.filter((s) => s.id !== id);
+    });
+    setExpandedSnip((cur) => (cur === id ? null : cur));
+  }
+
+  /** Send the ready snippets: POST the bytes to the daemon (which writes them
+   *  next to this pane's work and formats a per-CLI reference), then TYPE that
+   *  reference into the shell over the pane's own WebSocket. Deliberately NO
+   *  trailing "\r" — the user types their sentence around the path. */
+  async function sendSnips() {
+    if (snipSending) return;
+    const ready = snips.filter((s) => s.status === "ready" && s.file);
+    if (!ready.length) return;
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setSnips((prev) =>
+        prev.map((s) =>
+          s.status === "ready"
+            ? { ...s, status: "failed", error: "Terminal isn't connected — nothing was attached." }
+            : s,
+        ),
+      );
+      return;
+    }
+    setSnipSending(true);
+    try {
+      for (const snip of ready) {
+        setSnips((prev) =>
+          prev.map((s) => (s.id === snip.id ? { ...s, status: "sending", error: undefined } : s)),
+        );
+        try {
+          const content_b64 = await fileToBase64(snip.file as File);
+          const res = await post<{
+            path: string;
+            name: string;
+            bytes: number;
+            reference: string;
+            location?: string;
+            note?: string;
+          }>(`/terminals/${info.id}/snippet`, {
+            filename: snip.name,
+            content_b64,
+            cli: paneCli,
+          });
+          const live = wsRef.current;
+          if (!live || live.readyState !== WebSocket.OPEN) {
+            setSnips((prev) =>
+              prev.map((s) =>
+                s.id === snip.id
+                  ? {
+                      ...s,
+                      status: "failed",
+                      error: `Saved to ${res.path}, but the terminal dropped — the path was NOT typed in.`,
+                    }
+                  : s,
+              ),
+            );
+            continue;
+          }
+          const reference = res.reference || res.path;
+          // NO trailing carriage return: typed in, not submitted.
+          live.send(reference.endsWith(" ") ? reference : `${reference} `);
+          // The daemon prefers the pane's own folder and SAYS SO when it had to
+          // fall back to the uploads dir — a CLI confined to its workspace may
+          // not be able to read that file, so the user has to know.
+          if (res.note) {
+            setSnipNote(res.note);
+            window.setTimeout(() => setSnipNote(null), 10000);
+          }
+          dropSnipUrl(snip.url);
+          setSnips((prev) => prev.filter((s) => s.id !== snip.id));
+          termRef.current?.focus();
+        } catch (err) {
+          setSnips((prev) =>
+            prev.map((s) =>
+              s.id === snip.id
+                ? {
+                    ...s,
+                    status: "failed",
+                    error: err instanceof ApiError ? err.message : String(err),
+                  }
+                : s,
+            ),
+          );
+        }
+      }
+    } finally {
+      setSnipSending(false);
+    }
   }
 
   function runSuggested() {
@@ -256,6 +638,8 @@ export function TerminalPane({
         ironjarvis?: {
           clipboardReadText?: () => Promise<string>;
           clipboardWriteText?: (t: string) => Promise<unknown>;
+          /** PNG bytes of a clipboard IMAGE, or null (desktop app only). */
+          clipboardReadImage?: () => Promise<unknown>;
         };
       }
     ).ironjarvis;
@@ -267,15 +651,53 @@ export function TerminalPane({
       ijBridge?.clipboardWriteText
         ? ijBridge.clipboardWriteText(t)
         : navigator.clipboard?.writeText?.(t) ?? Promise.resolve();
+    // Image side of the same bridge. Absent in a plain browser tab (there the
+    // native paste EVENT carries the bytes, with no permission prompt), and it
+    // must never reject — a throw here would take ordinary text paste with it.
+    // Only reached when the clipboard has NO text (see `resolvePaste`), so an
+    // Excel copy never pays for a multi-megapixel toPNG() on the main process.
+    const readClipImage = (): Promise<ClipImage> =>
+      ijBridge?.clipboardReadImage
+        ? ijBridge
+            .clipboardReadImage()
+            .then((v) => clipImageOutcome(v))
+            // A REJECTED probe is not an empty clipboard. Mapping it to "none"
+            // would make a broken bridge (handler unregistered, or the main
+            // process refusing an untrusted sender) look exactly like "you
+            // didn't copy an image" — the user presses Ctrl+V, nothing happens,
+            // and nothing says why. "unreadable" routes it to the same honest
+            // chip a corrupt image gets. Text paste is unaffected either way:
+            // this probe only runs on a text-LESS clipboard.
+            .catch(() => ({ kind: "unreadable" }) as ClipImage)
+        : Promise.resolve({ kind: "none" } as ClipImage);
 
     const pasteFromClipboard = () => {
-      readClip()
-        .then((t) => {
-          if (t && term) term.paste(t);
-        })
-        .catch(() => {
-          /* clipboard blocked / empty — nothing to paste */
-        });
+      // TEXT FIRST, image only on a TEXT-LESS clipboard (v1.194.0) — see
+      // `resolvePaste`. Ordinary pasting is byte-for-byte what it always was.
+      void resolvePaste(
+        readClip,
+        readClipImage,
+        (t) => {
+          if (term) term.paste(t);
+        },
+        (img) => acceptSnips([img]),
+        () =>
+          pushFailedSnip(
+            "clipboard image",
+            "There was an image on the clipboard but it couldn't be read — nothing was attached.",
+          ),
+      );
+    };
+    // A native paste that DOES carry image data (plain browser, right-click
+    // paste, Shift+Insert). Capture phase on the holder so we run before
+    // xterm's own textarea handler; a paste carrying ANY text is left completely
+    // alone — `snipFilesFromPaste` enforces that.
+    const onPaste = (e: ClipboardEvent) => {
+      const imgs = snipFilesFromPaste(e);
+      if (!imgs.length) return; // text (or no image) — xterm handles it as before
+      e.preventDefault();
+      e.stopPropagation();
+      acceptSnips(imgs);
     };
     const onContextMenu = (e: MouseEvent) => {
       // Right-click copies a selection if you have one, else pastes — the
@@ -423,9 +845,23 @@ export function TerminalPane({
         if (e.type !== "keydown") return true;
         const mod = e.ctrlKey || e.metaKey;
         if (mod && (e.key === "v" || e.key === "V")) {
-          e.preventDefault();
-          pasteFromClipboard();
-          return false; // don't also send the literal control char
+          // THE IMAGE CASE HAS TO BE REACHABLE AT ALL (v1.194.0). This handler
+          // used to preventDefault() unconditionally, which suppresses the
+          // browser's native `paste` event entirely — so image bytes never
+          // reached the pane no matter what else we wired up. (Which flavour
+          // WINS is decided in `resolvePaste`/`snipFilesFromPaste`: text does.)
+          if (ijBridge?.clipboardReadImage) {
+            // Desktop app: the native clipboard is only reachable over IPC
+            // (navigator.clipboard is permission-gated here). Text first, image
+            // only when there is no text — see `resolvePaste`.
+            e.preventDefault();
+            pasteFromClipboard();
+            return false; // don't also send the literal control char
+          }
+          // Plain browser: let the default paste proceed so `onPaste` above
+          // sees the image bytes; a text-only paste falls through to xterm's
+          // own paste handling (same term.paste, same bracketed-paste mode).
+          return false; // xterm must still not emit the literal ^V
         }
         if (mod && e.shiftKey && (e.key === "c" || e.key === "C")) {
           const sel = term?.getSelection();
@@ -450,6 +886,7 @@ export function TerminalPane({
       });
       holder.addEventListener("contextmenu", onContextMenu);
       holder.addEventListener("wheel", onWheel, { passive: false, capture: true });
+      holder.addEventListener("paste", onPaste, true);
 
       ro = new ResizeObserver(() => {
         doFit();
@@ -484,6 +921,7 @@ export function TerminalPane({
       window.removeEventListener("resize", onWinResize);
       holder.removeEventListener("contextmenu", onContextMenu);
       holder.removeEventListener("wheel", onWheel, { capture: true } as EventListenerOptions);
+      holder.removeEventListener("paste", onPaste, true);
       ro?.disconnect();
       try {
         ws?.close();
@@ -503,10 +941,52 @@ export function TerminalPane({
   return (
     <div
       onMouseDown={onFocus}
+      // Drop a screenshot anywhere on the pane. A drag carrying no FILES is left
+      // entirely alone (no preventDefault), so nothing else changes.
+      onDragOver={(e) => {
+        if (!dragCarriesFiles(e.dataTransfer)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setDragOver(true);
+      }}
+      onDragLeave={(e) => {
+        // Only when the pointer actually LEAVES the pane. Keying on target-vs-
+        // currentTarget identity left the accept ring stuck on forever whenever
+        // the drag exited over a CHILD — and the terminal fills the pane, so
+        // that is the normal case, not the edge one.
+        const to = e.relatedTarget as Node | null;
+        if (!to || !e.currentTarget.contains(to)) setDragOver(false);
+      }}
+      onDrop={(e) => {
+        setDragOver(false);
+        // WE ADVERTISED THIS DROP, SO WE CONSUME IT. Same predicate as
+        // onDragOver above: it preventDefaulted and rang the pane for any drag
+        // carrying files, and handing such a drop back to the browser default
+        // reaches Electron's `will-navigate` → `shell.openExternal(file://…)`,
+        // i.e. a dropped PDF/exe gets OPENED by the OS. preventDefault comes
+        // BEFORE the non-image bail-out for exactly that reason.
+        if (!dragCarriesFiles(e.dataTransfer)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const files = imageFilesFromDrop(e.nativeEvent);
+        if (!files.length) {
+          const dropped = Array.from(e.dataTransfer?.files ?? []);
+          pushFailedSnip(
+            dropped[0]?.name || "dropped file",
+            dropped.length > 1
+              ? "Those aren't images — nothing was attached."
+              : "That isn't an image — nothing was attached.",
+          );
+          return;
+        }
+        acceptSnips(files);
+      }}
       className={`group relative flex h-full flex-col overflow-hidden rounded-2xl border bg-[#0a0c11] shadow-card transition-colors ${
-        focused
-          ? "border-accent/50 shadow-glow-sm ring-1 ring-accent/30"
-          : "border-white/[0.07] hover:border-white/[0.14]"
+        dragOver
+          ? "border-accent shadow-glow-sm ring-2 ring-accent/40"
+          : focused
+            ? "border-accent/50 shadow-glow-sm ring-1 ring-accent/30"
+            : "border-white/[0.07] hover:border-white/[0.14]"
       }`}
     >
       {/* Pane header: shell · cwd · connection state · close. The `ij-term-drag`
@@ -658,6 +1138,112 @@ export function TerminalPane({
         <div className="flex shrink-0 items-center gap-2 border-b border-accent/20 bg-accent/[0.06] px-3 py-1 text-[11px] text-accent-soft">
           <CornerDownLeft size={12} /> Press <span className="font-semibold">Enter</span> in the
           terminal to start {launchHint}.
+        </div>
+      )}
+
+      {snipNote && (
+        <div
+          role="status"
+          className="flex shrink-0 items-center gap-2 border-b border-amber-500/20 bg-amber-500/[0.06] px-3 py-1 text-[11px] text-amber-200"
+        >
+          <ImageIcon size={12} /> Saved outside this folder — {snipNote}
+        </div>
+      )}
+
+      {/* Pending snippets. Renders ONLY when something is pending — a pane with
+          no snippet looks exactly as it did before this feature existed. */}
+      {snips.length > 0 && (
+        <div
+          data-testid="snip-strip"
+          className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-white/[0.06] bg-ink-900/40 px-3 py-1.5"
+        >
+          {snips.map((s) => (
+            <div
+              key={s.id}
+              className={`flex items-center gap-1.5 rounded-lg border px-1.5 py-1 ${
+                s.status === "failed"
+                  ? "border-rose-500/30 bg-rose-500/[0.07]"
+                  : "border-white/10 bg-white/[0.03]"
+              }`}
+            >
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (s.url) setExpandedSnip(s.id);
+                }}
+                title={s.url ? "See it full size before you send it" : s.name}
+                aria-label={`Preview ${s.name}`}
+                className="shrink-0 overflow-hidden rounded border border-white/10"
+              >
+                {s.url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={s.url} alt={s.name} className="h-8 w-12 object-cover" />
+                ) : (
+                  <span className="grid h-8 w-12 place-items-center bg-black/40">
+                    <ImageIcon size={12} className="text-zinc-600" />
+                  </span>
+                )}
+              </button>
+              <span className="flex min-w-0 flex-col leading-tight">
+                <span className="max-w-[12rem] truncate font-mono text-[10px] text-zinc-300">
+                  {s.name}
+                </span>
+                <span className="text-[9px] text-zinc-500">
+                  {s.status === "preparing"
+                    ? "preparing…"
+                    : s.status === "sending"
+                      ? "attaching…"
+                      : formatSnipBytes(s.bytes)}
+                  {s.status === "ready" && s.recompressed && (
+                    <span
+                      title={`Re-encoded to fit under ${formatSnipBytes(CLI_IMAGE_BUDGET_BYTES)} — the CLI would reject the original.`}
+                      className="ml-1 text-amber-300"
+                    >
+                      · recompressed to fit
+                    </span>
+                  )}
+                </span>
+                {s.error && (
+                  <span role="alert" className="max-w-[16rem] text-[9px] text-rose-300">
+                    {s.error}
+                  </span>
+                )}
+              </span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removeSnip(s.id);
+                }}
+                title="Remove this snippet"
+                aria-label={`Remove ${s.name}`}
+                className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-rose-500/15 hover:text-rose-300"
+              >
+                <X size={11} />
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              void sendSnips();
+            }}
+            disabled={snipSending || state !== "open" || !snips.some((s) => s.status === "ready")}
+            title="Saves the image next to this terminal's work and TYPES its path in — press Enter yourself"
+            className="btn-accent shrink-0 px-2 py-1 text-[11px]"
+          >
+            {snipSending ? (
+              <Loader2 size={11} className="animate-spin" />
+            ) : (
+              <Paperclip size={11} />
+            )}
+            {snipSending ? "Attaching…" : "Insert path"}
+          </button>
+          {paneCli && (
+            <span className="text-[9px] text-zinc-600">for {paneCli}</span>
+          )}
         </div>
       )}
 
@@ -837,6 +1423,29 @@ export function TerminalPane({
             </div>
           </div>
         )}
+        {/* Full-size look before you send it. */}
+        {(() => {
+          const shown = snips.find((s) => s.id === expandedSnip && s.url);
+          if (!shown) return null;
+          return (
+            <div
+              role="dialog"
+              aria-label={`Snippet ${shown.name}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setExpandedSnip(null);
+              }}
+              className="absolute inset-0 z-50 grid cursor-zoom-out place-items-center bg-black/85 p-3 backdrop-blur-sm"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={shown.url}
+                alt={shown.name}
+                className="max-h-full max-w-full rounded-lg border border-white/10 object-contain"
+              />
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

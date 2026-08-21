@@ -9,12 +9,108 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from typing import Any
 
 from ..app import _first_code_block, _ws_token_ok
 from ..schemas import TerminalAIBody, TerminalCreate, TerminalWorkflowBody
+
+#: Screen-snippet uploads (Win+Shift+S -> a Build pane). Both Claude Code and
+#: Codex cap an attached image around 5MB, so accepting more would only hand
+#: the CLI a file it refuses; the Build page shrinks to fit before posting.
+_SNIPPET_MAX_BYTES = 5 * 1024 * 1024
+
+#: mime -> extension, and the SAFE EXTENSION ALLOWLIST. The extension comes
+#: from the sniffed CONTENT, never from the pasted filename: the clipboard
+#: hands us whatever the source app called it (often nothing at all).
+_SNIPPET_MIME_EXT: dict[str, str] = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
+_SNIPPET_ALLOWED_EXT = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp"})
+
+#: Dotted subfolder of the PANE'S OWN cwd — see ``_store_snippet``.
+_SNIPPET_DIR = ".ironjarvis/snippets"
+
+
+def _sniff_snippet_mime(data: bytes) -> str | None:
+    """Magic-byte sniff, reusing the avatar route's sniffer (one implementation
+    of "is this an image", not two) and adding GIF, which the CLIs accept."""
+    from .agents import _sniff_image  # lazy: sibling route module
+
+    kind = _sniff_image(data)  # png / jpeg / webp
+    if kind is None and data[:6] in (b"GIF87a", b"GIF89a"):
+        kind = "gif"
+    return f"image/{kind}" if kind else None
+
+
+def _snippet_reference(cli: str, path) -> str:
+    """How THIS cli wants an on-disk image named in its prompt.
+
+    The per-CLI formatter lives in ``terminals/ai_clis.py`` (owned elsewhere).
+    Until it lands we fall back to the bare absolute path — the one form
+    documented to work on every CLI and every platform."""
+    try:
+        from ...terminals.ai_clis import image_reference  # type: ignore[attr-defined]
+    except ImportError:
+        image_reference = None  # type: ignore[assignment]
+    if image_reference is not None:
+        try:
+            return str(image_reference(cli, str(path)))
+        except Exception:  # noqa: BLE001 — a formatter must never lose the file
+            pass
+    text = str(path)
+    return f'"{text}"' if " " in text else text
+
+
+def _store_snippet(cwd: str, uploads, name: str, blob: bytes):
+    """Write the snippet and say WHERE it landed. Blocking — call in a thread.
+
+    Preference is the PANE'S OWN FOLDER: an AI CLI started with workspace
+    confinement refuses to read a file outside its directory, which would break
+    this feature in exactly the case it exists for. ``<home>/uploads`` is the
+    fallback for a pane whose cwd is missing, protected, or unwritable, and the
+    caller reports which of the two happened.
+
+    A pane's cwd is normally a GIT REPO with an AI CLI running in it, and these
+    snippets are screenshots of client material — so the dotted folder carries
+    its own ``.gitignore`` (``*``) and can never be swept into a commit by a
+    ``git add -A``. It is written before the snippet: if it cannot be written
+    we take the uploads fallback rather than drop an untracked screenshot into
+    the user's worktree.
+    """
+    from ...core.fs_policy import is_protected_path
+
+    note = ""
+    if (cwd or "").strip():
+        base = Path(cwd)
+        if not base.is_dir():
+            note = f"the pane's folder does not exist ({cwd})"
+        elif is_protected_path(str(base)):
+            note = f"the pane's folder is protected ({cwd})"
+        else:
+            parts = _SNIPPET_DIR.split("/")
+            folder = base.joinpath(*parts)
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+                ignore = base / parts[0] / ".gitignore"
+                if not ignore.exists():
+                    ignore.write_text("*\n", encoding="utf-8")
+                target = folder / name
+                target.write_bytes(blob)
+                return target, "pane", ""
+            except OSError as exc:
+                note = f"the pane's folder is not writable ({exc.__class__.__name__})"
+    else:
+        note = "this terminal has no working directory"
+    uploads.mkdir(parents=True, exist_ok=True)
+    target = uploads / name
+    target.write_bytes(blob)
+    return target, "uploads", note
 
 
 def register(app: FastAPI, d) -> None:
@@ -270,6 +366,94 @@ def register(app: FastAPI, d) -> None:
             f"{tail.strip() or '(no output yet)'}"
         )
         return {"text": text, "chars": len(text)}
+
+    @app.post("/terminals/{term_id}/snippet")
+    async def terminal_snippet(term_id: str, body: dict) -> dict[str, Any]:
+        """Land a pasted screen snippet (Win+Shift+S) on disk FOR this pane.
+
+        A ConPTY pane is a byte stream — there is no image channel to paste
+        into. But every supported AI CLI reads images OFF DISK given a path,
+        and the daemon runs on the same machine as the CLI child, so a path is
+        genuinely shared state. So: decode -> sniff -> write -> hand back the
+        path plus the `reference` string this CLI wants in its prompt. We do
+        NOT synthesize a paste keystroke: that is CLI- and platform-specific,
+        and Ctrl+V after Win+Shift+S is the documented no-op on Windows.
+        """
+        import base64
+        import hashlib
+        import re
+
+        session = d.platform.terminals.get(term_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="no such terminal")
+
+        content_b64 = str(body.get("content_b64") or "")
+        if not content_b64:
+            raise HTTPException(status_code=400, detail="content_b64 is required")
+        limit_mb = _SNIPPET_MAX_BYTES // (1024 * 1024)
+        # Reject on the base64 LENGTH first (4/3 expansion) so an oversized
+        # body is never buffered as bytes at all.
+        approx = (len(content_b64) * 3) // 4
+        if approx > _SNIPPET_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    # One decimal, never floored: "too large (~5 MB); limit is
+                    # 5 MB" is a refusal that states a size inside its own
+                    # limit, which reads as a bug rather than an honest error.
+                    f"snippet too large (~{approx / (1024 * 1024):.1f} MB); "
+                    f"limit is {limit_mb} MB"
+                ),
+            )
+        # Decoding megabytes on the event loop presents to the whole app as
+        # "Daemon offline" — off the loop it goes.
+        try:
+            blob = await asyncio.to_thread(base64.b64decode, content_b64, validate=False)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"invalid base64: {exc}")
+        if not blob:
+            raise HTTPException(status_code=400, detail="empty snippet")
+        if len(blob) > _SNIPPET_MAX_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"snippet too large ({len(blob) / (1024 * 1024):.1f} MB); "
+                    f"limit is {limit_mb} MB"
+                ),
+            )
+
+        mime = _sniff_snippet_mime(blob)
+        ext = _SNIPPET_MIME_EXT.get(mime or "", "")
+        if mime is None or ext not in _SNIPPET_ALLOWED_EXT:
+            raise HTTPException(
+                status_code=415,
+                detail="not an image — snippets must be PNG, JPEG, GIF or WebP",
+            )
+
+        # UNIQUE NAMES: a content digest suffix (the /creative/upload
+        # convention). Two snippets both called "image.png" must never clobber
+        # each other — the second one is usually the one the user just took.
+        raw = str(body.get("filename") or "")
+        stem = re.sub(r"[^A-Za-z0-9._-]", "_", Path(raw).name).strip("._")
+        stem = Path(stem).stem[:40] or "snippet"
+        digest = hashlib.sha1(blob).hexdigest()[:8]
+        name = f"{stem}-{digest}{ext}"
+
+        uploads = d.platform.config.home / "uploads"
+        path, location, note = await asyncio.to_thread(
+            _store_snippet, session.cwd, uploads, name, blob
+        )
+        out: dict[str, Any] = {
+            "path": str(path),
+            "name": name,
+            "bytes": len(blob),
+            "mime": mime,
+            "reference": _snippet_reference(str(body.get("cli") or ""), path),
+            "location": location,  # "pane" (its own folder) or "uploads"
+        }
+        if note:  # a fallback always SAYS why it fell back
+            out["note"] = note
+        return out
 
     @app.post("/terminals/{term_id}/workflow")
     async def terminal_to_workflow(

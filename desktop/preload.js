@@ -56,6 +56,12 @@ contextBridge.exposeInMainWorld("ironjarvis", {
   // paste/copy inside Electron (navigator.clipboard can be permission-gated).
   clipboardReadText: () => ipcRenderer.invoke("clipboard:read"),
   clipboardWriteText: (text) => ipcRenderer.invoke("clipboard:write", String(text ?? "")),
+  // Image paste (v1.194.0): a screen snip (Win+Shift+S) lands on the clipboard
+  // as a bitmap, and navigator.clipboard.read() is permission-gated in the
+  // packaged app. Resolves null when the clipboard holds no image, otherwise
+  // { base64, bytes, width, height } (PNG), or { error: "unreadable", ... } when
+  // an image was there but would not encode. Consumed by the Build page paste.
+  clipboardReadImage: () => ipcRenderer.invoke("clipboard:readImage"),
   // Rich copy: html + plain in ONE write, so a pasted draft keeps its
   // formatting. Consumed by components/chat/DraftCard.tsx.
   clipboardWriteHtml: (html, text) =>

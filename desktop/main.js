@@ -1277,6 +1277,41 @@ function installSpotlightIpc() {
       return "";
     }
   });
+  // Image clipboard (v1.194.0): Win+Shift+S puts a BITMAP on the clipboard, and
+  // in the packaged app `navigator.clipboard.read()` is permission-gated — the
+  // same reason the text read above goes through IPC. Without this, pasting a
+  // snip into the Build page works in a browser tab and silently does nothing in
+  // the app the user actually runs. Sender-checked exactly like clipboard:read
+  // (a screenshot is at least as sensitive as copied text); refusal returns the
+  // same `null` as an empty clipboard, which callers already handle.
+  // Shape: null = the clipboard holds no image; `{error:"unreadable"}` = there
+  // WAS one and it would not encode (never reported as "nothing copied" — a
+  // silent downgrade reads as user error); otherwise PNG base64 + its size.
+  ipcMain.handle("clipboard:readImage", (event) => {
+    if (!isTrustedDashboardSender(event)) return null;
+    let size = { width: 0, height: 0 };
+    try {
+      const img = clipboard.readImage();
+      if (!img || img.isEmpty()) return null;
+      size = img.getSize() || size;
+      const png = img.toPNG();
+      if (png && png.length)
+        return {
+          base64: png.toString("base64"),
+          bytes: png.length,
+          width: size.width | 0,
+          height: size.height | 0,
+        };
+    } catch {
+      /* falls through to the honest unreadable report */
+    }
+    return {
+      error: "unreadable",
+      bytes: 0,
+      width: size.width | 0,
+      height: size.height | 0,
+    };
+  });
   ipcMain.handle("clipboard:write", (_e, text) => {
     try {
       clipboard.writeText(String(text ?? ""));
