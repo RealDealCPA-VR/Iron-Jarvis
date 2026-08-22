@@ -91,6 +91,25 @@ _WRITE_TIER: frozenset[str] = frozenset(
         "write_file",
         "write_document",
         "excel_edit",
+        # v1.196.0, LOCK-STEP WITH `tools/autoselect.AUTO_SAFE_TOOLS`. This name
+        # used to live only in `_ROSTER_WRITERS` below, and the reason was
+        # ARCHAEOLOGY rather than tier: `excel_apply_spec` was not auto-armable,
+        # so it could never be *gained* from a task and only ever needed to be
+        # RECOGNISED on a roster. It is armable now, and this set is what stops a
+        # READ-ONLY definition (REVIEWER, SUPERVISOR) from gaining a writer off
+        # its task text — so the two edits are one edit. Landing the autoselect
+        # half alone armed `excel_apply_spec` onto the reviewer roster for
+        # "review the workbook and apply the firm's standard layout to it" while
+        # `set(armed) & _WRITE_TIER` stayed EMPTY: the gate saw nothing, and
+        # every assertion in `tests/test_agent_auto_arm_v1178.py` is phrased as
+        # "no member of `_WRITE_TIER`", so the whole file stayed green.
+        #
+        # It belongs here on its merits, not merely for symmetry: it re-saves an
+        # EXISTING workbook in place (`safe_path(ctx.workspace, args["path"])`),
+        # is `Reversibility.REVERSIBLE` with a real pre-image
+        # (`capture_undo` spills the prior bytes + sha256), and defaults to
+        # permission "allow" — the same three facts that put `excel_edit` here.
+        "excel_apply_spec",
         "redact_pii",
         "pdf_arrange",
         "pdf_split",
@@ -105,11 +124,13 @@ _WRITE_TIER: frozenset[str] = frozenset(
 #: reviewer's own "DELIBERATELY NO `mcp:*`" note in `agents/types.py`, which
 #: reasons about exactly this blast radius) — so the gate costs the feature
 #: nothing on the six types that do the work.
+#: (``excel_apply_spec`` moved UP into `_WRITE_TIER` in v1.196.0; the union
+#: keeps it here, so a definition carrying it is still recognised as a writing
+#: agent and this gate stays a no-op for it exactly as before.)
 _ROSTER_WRITERS: frozenset[str] = _WRITE_TIER | {
     "edit_file",
     "rename_file",
     "memory_write",
-    "excel_apply_spec",
 }
 
 
@@ -133,7 +154,7 @@ def arm_for_task(platform, task: str, roster: list[str], *, cap: int = _AUTO_ARM
     (that module enforces it), so no run can pick up `shell`, `edit_file`,
     `browse`, `web_action` or `mcp_call` this way — arming those stays a
     definition-time/consent decision. That frozenset is not the whole safety
-    argument though: it also carries eight tools that WRITE (see `_WRITE_TIER`),
+    argument though: it also carries nine tools that WRITE (see `_WRITE_TIER`),
     which is a per-turn consent decision in chat and would be an unwitnessed
     capability grant here, so a definition holding no writer never gains one.
 
@@ -143,10 +164,17 @@ def arm_for_task(platform, task: str, roster: list[str], *, cap: int = _AUTO_ARM
     Every extra schema in the prompt is another wrong door, so a run gets the
     few tools its task actually argues for, never the whole safe set.
 
-    Cheap and offline: `select_auto_tools` is pure regex scoring over the task
-    string — no model call, no I/O, nothing to offload — and returns ``[]`` for
-    a task with no signal, which leaves the armed list byte-identical to the
-    roster that shipped before.
+    Offline: `select_auto_tools` is pure regex scoring over the task string —
+    no model call, no I/O — and returns ``[]`` for a task with no signal, which
+    leaves the armed list byte-identical to the roster that shipped before.
+
+    NOT CHEAP ANY MORE, AND IT IS OFFLOADED (v1.196.0). This docstring used to
+    end "nothing to offload", and that stopped being true when the scorer gained
+    the imperative-position test in front of fourteen rules: a task string with a
+    long run of whitespace measured ~200ms, and `Runner.run` is `async`, so that
+    was the whole daemon parked. The caller hops this to a worker thread — the
+    same treatment both chat lanes give their own scorer calls. Once per RUN
+    rather than per turn, so the frequency is low; the cost when it lands is not.
     """
     # An EMPTY roster is not a roster to widen: a definition that grants no
     # tools is a text-only run, and arming file/document tools onto it would be
@@ -689,8 +717,12 @@ class AgentRuntime:
         # roster for the life of the process (the `_spec_with_store_as`
         # deep-copy lesson). Both lanes below consume this one `tool_specs`, so
         # the decomposed run is armed identically to the flat one.
+        # OFF THE EVENT LOOP (v1.196.0): `arm_for_task` runs the same CPU-bound
+        # regex scorer both chat lanes hop to a thread for. See its docstring.
         tool_specs = self.p.registry.specs(
-            arm_for_task(self.p, session.task, agent_def.tools)
+            await asyncio.to_thread(
+                arm_for_task, self.p, session.task, agent_def.tools
+            )
         )
 
         system_prompt = agent_def.system_prompt

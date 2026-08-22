@@ -1299,6 +1299,14 @@ def register(app: FastAPI, d) -> None:
             d, body,
             inline_budget=_inline_budget, rag_budget=_rag_budget, rag_k=_rag_k,
             provider_choice=provider_choice, model_choice=model_choice,
+            # MIRROR NOTE (lock-step): same argument in chat_turn.run_chat_turn.
+            # The grounded project's folder, which the preparer needs to decide
+            # whether an IN-PLACE edit of an attachment can actually reach it —
+            # everything else about the live-file handoff lives INSIDE
+            # `_prepare_attachments`, so this lane inherits it (v1.196.0).
+            project_root=(
+                (resolved_proj.root or "") if resolved_proj is not None else ""
+            ),
         )
         if attach_block:
             system += "\n\n# Attachments (provided by the user this turn)" + attach_block
@@ -1385,7 +1393,11 @@ def register(app: FastAPI, d) -> None:
             armed, auto_armed, ask_armed = [], [], []
             tool_specs = []
         else:
-            armed, auto_armed = _resolve_armed_tools(d, body)
+            # OFF THE EVENT LOOP (v1.196.0) — the lock-step twin of the hop in
+            # `chat_turn.run_chat_turn`; see the reasoning there. This lane
+            # matters more, not less: it is the one the user watches token by
+            # token, so a parked loop here reads as the app having died.
+            armed, auto_armed = await asyncio.to_thread(_resolve_armed_tools, d, body)
             armed += [t for t in conn_tools if t not in armed]
             # ASK-TIER ARMING (v1.187.0): show the model the host-reach verbs
             # this message signals a need for — VISIBLE, never GRANTED. They

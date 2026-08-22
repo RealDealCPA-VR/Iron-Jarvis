@@ -653,7 +653,14 @@ def _resolve_armed_tools(d, body) -> tuple[list[str], list[str]]:
     draws only from a curated safe set: file/document tools (fs-policy
     confined), read-only web retrieval, local image tools — never shell,
     computeruse, MCP, or paid generative media, which stay behind explicit
-    arming. Returns ``(armed, auto_armed)`` with ``auto_armed ⊆ armed``."""
+    arming. Returns ``(armed, auto_armed)`` with ``auto_armed ⊆ armed``.
+
+    Three sources, in precedence order: the user's "+" picks, then a
+    "/"-invoked skill's playbook, then the sentence (``select_auto_tools``) —
+    and since v1.196.0 the ATTACHMENT'S OWN TYPE fills whatever is left, so the
+    verbs ``_prepare_attachments`` names in the prompt are verbs the model can
+    actually call. Called by BOTH chat lanes (``routes/chat.py`` imports it), so
+    this is one implementation, not a mirrored pair."""
     explicit = [
         t for t in (body.tools or [])[:_MAX_ARMED_TOOLS] if d.platform.registry.get(t)
     ]
@@ -679,23 +686,95 @@ def _resolve_armed_tools(d, body) -> tuple[list[str], list[str]]:
                 )
                 if d.platform.registry.get(t)
             ]
+    # The request, read ONCE: both passes below score the same sentence, and the
+    # attachment pass's consent gate must be asking about the same words the
+    # sentence pass scored.
+    last_user = next(
+        (m.content or "" for m in reversed(body.messages) if m.role == "user"),
+        "",
+    )
+    attach_names = [Path(a).name for a in (body.attachments or [])]
     if getattr(body, "auto_tools", False) and len(explicit) + len(auto) < _MAX_ARMED_TOOLS:
         from ..tools.autoselect import select_auto_tools
 
-        last_user = next(
-            (m.content or "" for m in reversed(body.messages) if m.role == "user"),
-            "",
-        )
         auto += [
             t
             for t in select_auto_tools(
                 last_user,
-                attachments=[Path(a).name for a in (body.attachments or [])],
+                attachments=attach_names,
                 exclude=set(explicit) | set(auto),
                 cap=_MAX_ARMED_TOOLS - len(explicit) - len(auto),
             )
             if d.platform.registry.get(t)
         ]
+    # THE ATTACHMENT'S OWN TOOLS (v1.196.0). Everything above scores the
+    # SENTENCE; the only thing an attachment contributes to `select_auto_tools`
+    # is `bump({"read_document": 9})`, keyed on a doc-extension regex and blind
+    # to WHICH document it is. Measured against the live ledger's actual
+    # phrasings, with a workbook attached:
+    #   "what do these fees add up to?"      -> ['read_document']
+    #   "update the fee for Belmont to 3000" -> ['read_document']
+    # ...while `_prepare_attachments` had just told the model "Work on it
+    # directly: excel_profile, excel_query, excel_read." That is the "prompt
+    # claims a runnable tool the model cannot call" lie `_write_directive`
+    # already refuses to tell in the other direction (see its comment: "Saying
+    # 'call write_document' here would name a tool absent from tool_specs"), and
+    # it is why the ledger's zero excel_* calls stayed zero: naming the tools
+    # louder cannot help a turn whose `tool_specs` does not hold them.
+    #
+    # The names come from the type table in `attachment_rag` — THE SAME TABLE
+    # the prompt line is rendered from — so the promise and the tool list cannot
+    # drift. Guards: the auto_tools gate (arming without it would be consent the
+    # user did not give), FREE SLOTS ONLY and appended LAST so the verb the user
+    # actually typed keeps its slots, `AUTO_SAFE_TOOLS` (the curated auto-allow
+    # vocabulary — this must never widen it from here), and `registry.get` for
+    # tools a build did not register.
+    #
+    # READ ARMS ON TYPE; CHANGE NEEDS INTENT (the v1.196.0 round-3 repair). The
+    # first cut of this pass armed `live_tool_names(suffix)` WHOLE, so the
+    # attachment's SUFFIX alone armed its mutators. Measured here, on this
+    # function:
+    #   "thanks!"             + client_fees.xlsx -> ... excel_edit, excel_apply_spec
+    #   "thanks!"             + summary.docx     -> ... convert_document, write_document
+    #   "summarize this"      + report.pdf       -> ... pdf_arrange, pdf_split
+    #   "what does this say?" + notes.txt        -> ... convert_document, write_document
+    # Four read-only requests arming file MUTATORS — and arming is not merely
+    # OFFERING here: this list is passed as the turn's `session_allow` (see the
+    # `_MAX_ARMED_TOOLS` note and the runtime's `_WRITE_TIER` comment, which
+    # quotes this module on exactly that), so each of those would have run with
+    # NO approval card. Attaching a file is consent to have it READ.
+    #
+    # So the READ half still arms on type alone — that is this wave's whole
+    # point and its measured repair — while the CHANGE half goes through
+    # `change_verbs_wanted`, which asks `select_auto_tools` (the app's ONE
+    # deterministic intent scorer, already used two blocks up) whether this
+    # request asked for that verb. `excel_apply_spec` is no longer explicit-only:
+    # it joined `AUTO_SAFE_TOOLS` this wave, so it arms here EXACTLY when the
+    # request asks for it, like every other change verb.
+    if getattr(body, "auto_tools", False) and len(explicit) + len(auto) < _MAX_ARMED_TOOLS:
+        from ..documents.attachment_rag import change_verbs_wanted, live_tool_names
+        from ..tools.autoselect import AUTO_SAFE_TOOLS
+
+        seen = set(explicit) | set(auto)
+        for raw in (body.attachments or [])[:_MAX_ATTACHMENTS]:
+            suffix = Path(raw).suffix
+            for name in (
+                live_tool_names(suffix, kind="read")
+                + change_verbs_wanted(
+                    suffix,
+                    last_user,
+                    attachments=attach_names,
+                    explicit=set(explicit),
+                )
+            ):
+                if len(explicit) + len(auto) >= _MAX_ARMED_TOOLS:
+                    break
+                if name in seen or name not in AUTO_SAFE_TOOLS:
+                    continue
+                if d.platform.registry.get(name) is None:
+                    continue
+                auto.append(name)
+                seen.add(name)
     return explicit + auto, auto
 
 
@@ -1380,6 +1459,7 @@ async def _prepare_attachments(
     rag_k: int,
     provider_choice: str = "",
     model_choice: str = "",
+    project_root: str = "",
 ) -> "tuple[list[dict[str, str]], str]":
     """This turn's attachments → ``(images, attach_block)``.
 
@@ -1409,9 +1489,32 @@ async def _prepare_attachments(
     * SILENCE IS DISCLOSED. Every way an attachment fails to reach the model —
       too big, unreadable, a scan with no OCR, an image with no vision — puts
       a note in the prompt saying so.
+    * THE FILE IS LIVE, NOT A TEXT DUMP (v1.196.0). Every document attachment
+      also hands over its ABSOLUTE path and the tool verbs for its type — see
+      ``attachment_rag.live_file_line`` for the measured reason (96
+      read_document calls, ZERO excel_* calls, because the model was handed a
+      BARE FILENAME that no tool could resolve from the project workspace).
+      THE CHANGE VERBS ARE NAMED ONLY WHEN THE REQUEST ASKS FOR A CHANGE, from
+      the same ``change_verbs_wanted`` call ``_resolve_armed_tools`` arms from —
+      so the line cannot promise a tool this turn withheld, and a read-only turn
+      is TOLD that nothing can write rather than left to guess either way.
+
+    ``project_root`` is the grounded project's folder, which each lane already
+    resolved; it is needed here — and only here — to answer whether an
+    IN-PLACE edit of an attachment can actually reach it. Passing the root
+    rather than the resolved workspace keeps the resolution itself in this ONE
+    shared function instead of hoisting a second copy into each lane.
     """
-    from ..documents.attachment_rag import extract_for_rag_async, rag_block
-    from ..documents.ocr import ocr_settings
+    from ..documents.attachment_rag import (
+        change_verbs_wanted,
+        extract_for_rag_async,
+        live_file_line,
+        rag_block,
+    )
+    # `is_image` is the ONE accessor over `readers._IMAGE_SUFFIXES` (ocr.py:121)
+    # — re-listing the suffixes here is the drift `live_verbs_for` already
+    # refuses to introduce.
+    from ..documents.ocr import is_image, ocr_settings
 
     cfg = getattr(d.platform, "config", None)
     # ONE reading of the OCR config for the whole app: `ocr_settings` treats 0
@@ -1428,11 +1531,121 @@ async def _prepare_attachments(
         "",
     )
 
+    # WHICH CHANGE VERBS THIS TURN MAY NAME — the same question, asked of the
+    # same function with the same arguments, that `_resolve_armed_tools` asks
+    # when it decides which to ARM. Not a second detector and not a second rule:
+    # if the two ever disagree the block is back to promising a tool the model
+    # cannot call. `auto_tools`/`tools` are read here as well because the answer
+    # is "what did the user consent to", and that is a property of the request
+    # both passes have in hand.
+    #
+    # A LIST, not a flag, because the gate is per verb: "update cell B2 to 500"
+    # arms `excel_edit` and not `excel_apply_spec`, and a clause naming both
+    # would name a tool absent from `tool_specs`.
+    _auto_on = bool(getattr(body, "auto_tools", False))
+    _picked = set(getattr(body, "tools", None) or ())
+    _attach_names = [Path(a).name for a in (body.attachments or [])]
+
+    # OFF THE EVENT LOOP, AND ONCE (v1.196.0). `change_verbs_wanted` asks
+    # `select_auto_tools` — the same CPU-bound regex scorer `_resolve_armed_tools`
+    # hops to a thread for in both lanes. This is the app's SECOND caller of it,
+    # and it ran per ATTACHMENT inside the loop below, so a three-file turn paid
+    # the cost three more times ON THE LOOP. Offloading only the first caller
+    # would have left the pathological-paste stall reachable through this one
+    # and made the comment at the other site a lie.
+    #
+    # Resolved for every distinct suffix in ONE hop before the loop rather than
+    # a hop per attachment: the answer depends only on (suffix, query,
+    # attachment names, picks, auto) — all fixed for the turn — so N calls with
+    # the same suffix always agreed anyway, and N executor round-trips to
+    # rediscover that is the wrong trade.
+    _suffixes = {Path(a).suffix.lower() for a in (body.attachments or [])}
+
+    def _resolve_changes() -> dict[str, list[str]]:
+        return {
+            s: change_verbs_wanted(
+                s, query, attachments=_attach_names,
+                explicit=_picked, auto=_auto_on,
+            )
+            for s in _suffixes
+        }
+
+    _changes = await asyncio.to_thread(_resolve_changes)
+
+    def _may_change(suffix: str) -> list[str]:
+        # A suffix the pre-pass did not see cannot arm anything: the pre-pass
+        # covers every attachment this turn, so an unknown one is not an
+        # attachment. Empty is the fail-CLOSED answer.
+        return _changes.get((suffix or "").lower(), [])
+
     images: list[dict[str, str]] = []
     # Parts, not one growing string, so an unseen-image note can be spliced back
     # NEXT TO its own attachment instead of after every file block.
     parts: list[str] = []
     image_slots: list[tuple[int, str]] = []
+
+    # THE TURN'S TOOL WORKSPACE, resolved AT MOST ONCE and only when a document
+    # attachment actually needs it (v1.196.0). It decides whether the live-file
+    # line may promise an in-place edit: `excel_edit` resolves its path through
+    # `safe_path`, which refuses anything outside the workspace.
+    #
+    # LAZY on purpose. `_resolve_tool_workspace` stats a folder the USER picked
+    # — routinely a network share or an unhydrated OneDrive path — so a turn
+    # with no document attachment must not pay for it, and the one that does
+    # pays through `asyncio.to_thread` like every other caller (the v1.153.1
+    # rule; see `_resolve_tool_workspace`'s docstring for why it is sync).
+    # One slot holding the answer (None = "we could not find out"), so a
+    # FAILURE is cached too and an unreachable share is stat'ed once, not once
+    # per attachment.
+    _ws_cache: "list[Path | None]" = []
+
+    # THE TURN'S VISION VERDICT, on the same lazy one-slot pattern and for the
+    # same reason: `_vision_unavailable_reason` walks the provider fleet and
+    # BUILDS adapters (it touches PATH/disk — its own docstring requires a
+    # thread), so only a turn that actually attaches a reader-supported IMAGE on
+    # the document path pays for it. It is the SAME question the inline-image
+    # branch below asks, answered by the SAME function, so the block cannot say
+    # "this image was NOT seen" in one place and offer `view_image` in another.
+    _vision_cache: "list[bool]" = []
+
+    async def _has_vision() -> bool:
+        if not _vision_cache:
+            try:
+                blind = await asyncio.to_thread(
+                    _vision_unavailable_reason, d, provider_choice, model_choice
+                )
+            except Exception:  # noqa: BLE001 — a probe must never break a turn
+                blind = ""
+            # CONSERVATIVE, exactly like the note: only a POSITIVE "no vision
+            # anywhere" withdraws `view_image`. An empty reason (the offline /
+            # mock path, an unreadable fleet) leaves the verb named — the tool's
+            # own honest error is a better answer than hiding a capability, and
+            # under-exposure is the failure mode this whole wave is about.
+            _vision_cache.append(not blind)
+        return _vision_cache[0]
+
+    # "The text above is a flat rendering, not the file." is true of the BLOCK,
+    # not of one file, so it is emitted with the FIRST rendered attachment and
+    # not repeated for the rest — the `LIVE FILE` marker still leads every line.
+    _reminded: "list[bool]" = []
+
+    async def _tool_workspace() -> "Path | None":
+        if not _ws_cache:
+            try:
+                ws, _in_project = await asyncio.to_thread(
+                    _resolve_tool_workspace,
+                    d.platform.config.home / "uploads",
+                    getattr(body, "workspace_dir", "") or "",
+                    project_root or "",
+                )
+            except Exception:  # noqa: BLE001 — resolving it MKDIRs a folder the
+                # user picked; that can fail, and an attachment must still be
+                # described. `None` makes the line claim nothing either way
+                # rather than guess (see live_file_line).
+                ws = None
+            _ws_cache.append(ws)
+        return _ws_cache[0]
+
     for raw in (body.attachments or [])[:_MAX_ATTACHMENTS]:
         p = Path(raw)
         if not p.is_absolute():
@@ -1483,9 +1696,27 @@ async def _prepare_attachments(
             )
             ocr_budget = max(0, ocr_budget - got.ocr_pages)
             text, note = got.text, got.note
+            # The handoff rides LAST in the part, so it is the final thing the
+            # model reads about this file before it acts — the same placement
+            # `_write_directive` earns in the tools block. It never replaces the
+            # excerpt: "what's in this?" is still answered from the text.
+            live = live_file_line(
+                p,
+                workspace=await _tool_workspace(),
+                rendered=bool(text),
+                # Only an IMAGE that took the document path can be affected by
+                # the verdict, so only that case pays for the probe.
+                vision=(await _has_vision()) if is_image(p) else True,
+                remind=not _reminded,
+                change=_may_change(suffix),
+            )
+            if bool(text):
+                _reminded.append(True)
             if len(text) <= inline_budget:
                 head = f"\n\n## Attached file: {p.name}\n"
-                parts.append(head + (f"[{note}]\n{text}" if note else text))
+                parts.append(
+                    head + (f"[{note}]\n{text}" if note else text) + live
+                )
             else:
                 # RETRIEVAL, not a head-clip: ground on the chunks
                 # relevant to THIS question, with location refs — the
@@ -1494,9 +1725,22 @@ async def _prepare_attachments(
                     p.name, text, query,
                     getattr(d.platform, "embedder", None),
                     k=rag_k, char_budget=rag_budget, note=note,
-                ))
+                ) + live)
         except Exception as exc:  # noqa: BLE001
-            parts.append(f"\n\n## Attached file: {p.name}\n(could not read: {exc})")
+            # A file we could not PARSE is still a file the tools can open —
+            # a workbook openpyxl choked on is exactly what excel_profile
+            # exists for — so the handoff is most valuable in this branch, not
+            # least. `rendered=False`: there is no text above it to disclaim.
+            parts.append(
+                f"\n\n## Attached file: {p.name}\n(could not read: {exc})"
+                + live_file_line(
+                    p,
+                    workspace=await _tool_workspace(),
+                    rendered=False,
+                    vision=(await _has_vision()) if is_image(p) else True,
+                    change=_may_change(suffix),
+                )
+            )
     if images:
         blind = await asyncio.to_thread(
             _vision_unavailable_reason, d, provider_choice, model_choice
@@ -1776,6 +2020,12 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         d, body,
         inline_budget=_inline_budget, rag_budget=_rag_budget, rag_k=_rag_k,
         provider_choice=provider_choice, model_choice=model_choice,
+        # The grounded project's folder — the same value the tool workspace is
+        # resolved from below. The preparer needs it to say whether an IN-PLACE
+        # edit of an attachment can reach it (v1.196.0); without it a
+        # project-grounded chat promised excel_edit on a file in <home>/uploads
+        # that excel_edit refuses. MIRROR NOTE (lock-step): routes/chat.py.
+        project_root=(resolved_proj.root or "") if resolved_proj is not None else "",
     )
     if attach_block:
         system += "\n\n# Attachments (provided by the user this turn)" + attach_block
@@ -1875,7 +2125,19 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         armed, auto_armed = [], []
         tool_specs = []
     else:
-        armed, auto_armed = _resolve_armed_tools(d, body)
+        # OFF THE EVENT LOOP (v1.196.0). `_resolve_armed_tools` is pure regex
+        # scoring — it was ~2 ms and nobody minded. v1.196.0 fronted fourteen
+        # rules with the imperative test, and a pasted document full of blank
+        # lines drove a 4,000-newline input to SEVENTEEN SECONDS of quadratic
+        # backtracking on this one synchronous call. Possessive quantifiers took
+        # that to ~190 ms, but ~190 ms is still ~190 ms of the whole daemon
+        # stopped — and the loop it stops is the one serving every other
+        # request, which is why v1.153.1's outage presented as "Daemon offline"
+        # rather than as a slow reply. The scorer is CPU-bound and pure, so a
+        # worker thread is the honest home for it; the mirror in
+        # `routes/chat.py` gets the same hop, because these two lanes are
+        # LOCK-STEP and the streaming one is the lane the user watches.
+        armed, auto_armed = await asyncio.to_thread(_resolve_armed_tools, d, body)
         armed += [t for t in conn_tools if t not in armed]
         tool_specs = (d.platform.registry.specs(armed) if armed else []) + [
             _ESCALATE_SPEC,

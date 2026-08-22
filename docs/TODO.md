@@ -5,6 +5,66 @@ the deep-review wow track, deferred backlogs across waves, and known limits.
 The deep review's 11 confirmed bugs are all FIXED (v1.166.2–v1.167.0) — this
 file is what remains.*
 
+## Carried out of the v1.195.0 / v1.196.0 document waves (all MEASURED)
+
+Each of these was reproduced during those waves and deliberately left out of
+scope. None is speculative.
+
+- [ ] **UTF-16 files are invisible to both search tools.** They contain NUL
+  bytes, so they hit the binary sniff in `filesearch/service._read_text` and
+  `GrepTool` and are skipped silently and uncounted. This matters on THIS
+  machine specifically: PowerShell 5.1's `>` redirect writes UTF-16LE, so a log
+  the user redirected cannot be found. A BOM check before the NUL sniff fixes
+  it in ~3 lines. Same class as the cp1252 defect fixed in v1.195.0.
+- [ ] **The file-size caps skip silently.** `file_search` (1 MiB) and `grep`
+  (2 MB) drop oversized files with no count and no note, while the
+  undecodable-file count added in v1.195.0 IS reported. Truncation is reported;
+  these two were missed.
+- [ ] **`undo.finalize_post_hash` re-hashes on the event loop.** Called from
+  `tools/registry.py` after every raw write. Same class as the v1.195.0
+  capture_undo fix, roughly half the cost (one read+hash, no write); it was left
+  because the caller is synchronous by signature.
+- [ ] **`convert_document`, `image_convert` and `image_resize` are IRREVERSIBLE
+  writers absent from `agents/runtime._WRITE_TIER`.** The forward guard only
+  catches REVERSIBLE tools, so a read-only agent roster can still gain all
+  three. Pinned by name in `tests/test_change_intent_guard_v1196.py` so closing
+  one forces the list to be updated rather than quietly shrunk.
+- [ ] **`excel_edit` / `excel_apply_spec` report a workspace-RELATIVE path with
+  no `abs_path`,** against the v1.153.2 rule ("a tool that writes a file says
+  WHERE, absolutely"). In chat the workspace is the grounded project root, so a
+  saved workbook is announced as a bare filename — the exact scenario that rule
+  was written for. Pre-existing; fix both together.
+- [ ] **A refused chat workspace pick is silent.** When `body.workspace_dir`
+  fails the policy check the turn quietly runs in `home/uploads` and the user is
+  never told their chosen folder was rejected. Pre-existing, and a real instance
+  of the never-silently-degrade rule.
+- [ ] **`ironjarvis file-search` surfaces a bad regex as a Typer traceback.**
+  `daemon/cli.py` calls `platform.filesearch.search` bare; the HTTP route
+  returns a clean 400. One `try/except BadSearchPattern`.
+- [ ] **Change-intent scorer: remaining known gaps.** Verb-list limits, not
+  position limits — "this needs converting to pdf", "the fee should be changed
+  to 3000", "this spreadsheet needs fixing". Closing them means adding
+  inflections, which widens every sentence those rules see; that sweep was not
+  run. Live list: `tests/test_autoselect_gaps_v1196.py::_STILL_OPEN`.
+- [ ] **The attachment block can NAME a verb the 6-tool cap then drops.**
+  `live_file_line` renders what the gate wanted; `_resolve_armed_tools`
+  truncates afterwards. Always the safe direction (over-naming, never
+  over-arming) but still a residual inaccuracy. Closing it needs
+  `_prepare_attachments` to see the resolved armed list.
+- [ ] **With Auto OFF the block still names the READ verbs without arming
+  them.** Same safe direction as above; the CHANGE half is honest.
+- [x] **Scorer cost — CLOSED in v1.196.0, recorded for the history.** Fronting
+  fourteen rules with the imperative test made a whitespace-heavy paste
+  backtrack quadratically (~17 s on 4,000 newlines). Possessive quantifiers
+  cut it ~90x to ~200 ms, and every caller — both chat lanes, the attachment
+  consent gate, and `agents/runtime.arm_for_task` — now hops to a worker
+  thread. It is NO LONGER on the event loop; the residual ~200 ms is paid off
+  it. Pinned by `tests/test_arming_offload_v1196.py`.
+- [ ] **`batch_documents` is deliberately NOT auto-armed** (it fans out one
+  model call per document and keeps an IRREVERSIBLE default; it stays one click
+  away in the "+" menu). Recorded as a DECISION so it is not re-filed as an
+  oversight — see the note in `tools/autoselect.py`.
+
 ## Needs validation before any fix (found, never reproduced)
 
 - [ ] **DocPreview save-copy busy flicker** — the 409-overwrite confirm
