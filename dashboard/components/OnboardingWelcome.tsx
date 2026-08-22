@@ -21,9 +21,18 @@ const DISMISS_KEY = "ij_onboarding_dismissed";
 /** Map a checklist step to the page that completes it. */
 const STEP_LINK: Record<string, { href: string; cta: string }> = {
   connect_ai: { href: "/connections", cta: "Connect a model" },
-  first_session: { href: "/sessions", cta: "New session" },
+  // v1.197.0: the first task happens in CHAT — one surface that escalates
+  // itself; a chat thread now counts as the first session, so don't send a
+  // brand-new user to the empty Sessions list.
+  first_session: { href: "/chat", cta: "Open Chat" },
   work_with_document: { href: "/documents", cta: "Open Documents" },
-  teach_style: { href: "/memory?scope=lessons", cta: "Review lessons" },
+  // v1.197.0: the teach-style signal is CREATED by asking Chat to remember a
+  // preference (e.g. "remember: I like short answers" — the chat-armable
+  // remember_preference tool writes the LessonRecord). Thumbs feedback exists
+  // only on session detail pages, so "rate a reply" would be an impossible
+  // instruction here; /memory?scope=lessons is a dead end for a user with
+  // zero lessons.
+  teach_style: { href: "/chat", cta: "Teach it in Chat" },
   set_up_voice: { href: "/connections", cta: "Enable voice" },
 };
 

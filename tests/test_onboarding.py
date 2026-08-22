@@ -19,6 +19,9 @@ from iron_jarvis.onboarding.checklist import voice_backend_present
 def _no_real_provider(monkeypatch):
     # A fresh install must look offline-only regardless of the host environment.
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # …and voice-less: a dev machine pointing at a bundled Vosk model must not
+    # make a fresh test platform report local voice.
+    monkeypatch.delenv("IRONJARVIS_VOSK_MODEL", raising=False)
 
 
 # --- doctor ---------------------------------------------------------------
@@ -165,3 +168,120 @@ async def test_optional_voice_step_never_keeps_first_run_true(platform):
     assert report["first_run"] is False
     voice_step = next(s for s in report["checklist"] if s["key"] == "set_up_voice")
     assert voice_step["done"] is False  # voice still not set up, yet not blocking
+
+
+# --- bundled offline Vosk voice (v1.197.0) ---------------------------------
+
+
+def _make_vosk_dir(root, name="vosk-model"):
+    """A directory that QUALIFIES as a Vosk model (has the `am` subdir)."""
+    model = root / name
+    (model / "am").mkdir(parents=True)
+    return model
+
+
+def test_voice_backend_present_detects_local_vosk_v1197(platform, tmp_path):
+    """A configured Vosk model dir means voice works offline — reported as
+    "local", and the checklist voice step is done (matching /voice/status)."""
+    platform.config.voice_vosk_model_path = str(_make_vosk_dir(tmp_path))
+
+    assert voice_backend_present(platform) == (True, "local")
+
+    report = readiness(platform)
+    assert report["voice"] == {"available": True, "backend": "local"}
+    voice_step = next(s for s in report["checklist"] if s["key"] == "set_up_voice")
+    assert voice_step["done"] is True
+    assert voice_step["optional"] is True
+
+
+def test_openai_key_outranks_local_vosk_v1197(platform, tmp_path):
+    """Precedence mirrors /voice/status: an explicit OpenAI key (higher
+    accuracy, user-configured) wins over the bundled offline model."""
+    platform.config.voice_vosk_model_path = str(_make_vosk_dir(tmp_path))
+    platform.secrets.set("openai_api_key", "sk-test-voice")
+
+    assert voice_backend_present(platform) == (True, "openai")
+
+
+def test_vosk_model_path_env_pin_wins_v1197(platform, tmp_path, monkeypatch):
+    """The IRONJARVIS_VOSK_MODEL env pin (set by the desktop app) outranks the
+    config path — same resolution order as the daemon."""
+    from iron_jarvis.voice import vosk_model_path
+
+    env_dir = _make_vosk_dir(tmp_path, "env-model")
+    cfg_dir = _make_vosk_dir(tmp_path, "cfg-model")
+    platform.config.voice_vosk_model_path = str(cfg_dir)
+    monkeypatch.setenv("IRONJARVIS_VOSK_MODEL", str(env_dir))
+
+    assert vosk_model_path(platform.config) == str(env_dir)
+
+
+def test_vosk_model_path_requires_am_subdir_v1197(platform, tmp_path):
+    """A directory WITHOUT the `am` subdir is not a real model and never
+    qualifies — an empty folder must not make voice look ready."""
+    from iron_jarvis.voice import vosk_model_path
+
+    bare = tmp_path / "not-a-model"
+    bare.mkdir()
+    platform.config.voice_vosk_model_path = str(bare)
+
+    assert vosk_model_path(platform.config) is None
+    assert voice_backend_present(platform) == (False, None)
+
+
+def test_dedicated_stt_endpoint_detected_and_outranks_vosk_v1197(platform, tmp_path):
+    """A dedicated speech-to-text endpoint (voice_transcribe_base_url) is a
+    backend _voice_backend ranks FIRST — the checklist must report it, and
+    rank it above the bundled Vosk model, or /voice/status says available
+    while the checklist says voice isn't set up."""
+    platform.config.voice_vosk_model_path = str(_make_vosk_dir(tmp_path))
+    platform.config.voice_transcribe_base_url = "http://localhost:9000/v1"
+
+    assert voice_backend_present(platform) == (True, "stt")
+
+    report = readiness(platform)
+    assert report["voice"] == {"available": True, "backend": "stt"}
+    voice_step = next(s for s in report["checklist"] if s["key"] == "set_up_voice")
+    assert voice_step["done"] is True
+
+
+def test_stt_endpoint_outranks_openai_key_v1197(platform):
+    """Matches _voice_backend's ordering: the dedicated STT endpoint wins even
+    when an OpenAI key is also present."""
+    platform.config.voice_transcribe_base_url = "http://localhost:9000/v1"
+    platform.secrets.set("openai_api_key", "sk-test-voice")
+
+    assert voice_backend_present(platform) == (True, "stt")
+
+
+def test_checklist_calls_shared_vosk_locator_v1197(platform, monkeypatch):
+    """Mutation guard: the checklist must reach voice through the SHARED
+    iron_jarvis.voice.vosk_model_path — patch the source module and the
+    checklist must see it, proving there is no second copy of the logic."""
+    import iron_jarvis.voice as voice_mod
+
+    monkeypatch.setattr(voice_mod, "vosk_model_path", lambda config: "/fake/model")
+
+    assert voice_backend_present(platform) == (True, "local")
+
+
+# --- chat counts as first value (v1.197.0) ----------------------------------
+
+
+def test_chat_thread_flips_first_session_and_first_run_v1197(platform):
+    """Chat is the hero surface: a chat thread alone completes the
+    "first task" step AND ends first-run, with no Session row anywhere."""
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.models import ChatThreadRecord
+
+    assert is_first_run(platform) is True
+    before = {s["key"]: s["done"] for s in getting_started(platform)}
+    assert before["first_session"] is False
+
+    with session_scope(platform.engine) as db:
+        db.add(ChatThreadRecord(title="my first chat"))
+        db.commit()
+
+    after = {s["key"]: s["done"] for s in getting_started(platform)}
+    assert after["first_session"] is True
+    assert is_first_run(platform) is False

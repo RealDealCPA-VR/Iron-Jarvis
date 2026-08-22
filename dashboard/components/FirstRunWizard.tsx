@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowLeft,
@@ -40,6 +41,36 @@ const KEY_PROVIDERS: { id: KeyProvider; label: string; placeholder: string }[] =
   { id: "anthropic", label: "Anthropic", placeholder: "sk-ant-…" },
   { id: "openai", label: "OpenAI", placeholder: "sk-…" },
   { id: "custom", label: "Custom endpoint", placeholder: "sk-… (optional)" },
+];
+
+/**
+ * Step-1 doors (v1.197.0). The old step 1 led with "CLIs", "rescan" and an
+ * API-key form — vocabulary that assumes the user already knows what those
+ * are. A non-technical first-runner's real question is "which of these am I?",
+ * so the not-yet-connected branch now opens with three plain-language doors
+ * and only reveals the mechanics of the one they picked. NOTE: Google Gemini
+ * is deliberately NOT a key door — its connection is OAuth-only (the daemon
+ * 400s a posted key), so it appears as a pointer to the Connections page
+ * inside the key door instead of a form that could never work.
+ */
+type Door = "subscription" | "local" | "key";
+
+const DOORS: { id: Door; label: string; hint: string }[] = [
+  {
+    id: "subscription",
+    label: "I already pay for Claude or ChatGPT",
+    hint: "Use the login you already have on this PC",
+  },
+  {
+    id: "local",
+    label: "Free & private on this PC",
+    hint: "Run a local model with Ollama — nothing leaves the machine",
+  },
+  {
+    id: "key",
+    label: "I have an API key",
+    hint: "Paste it here — about 30 seconds",
+  },
 ];
 
 /** One-tap magic tasks — small, fast, and unmistakably real when they run. */
@@ -100,23 +131,36 @@ function ArcMark() {
  * real task — so the user goes from download to working in minutes without ever
  * ejecting to another page.
  *
- * Show contract (ALL must hold):
- *  - `GET /onboarding` resolved AND reports `first_run: true`
- *  - localStorage `ij_first_run_choice` is unset (nothing renders until the key
- *    has actually been read, so there is no flash)
+ * Show contract:
+ *  - the wizard OPENS when `GET /onboarding` reports `first_run: true` while
+ *    localStorage `ij_first_run_choice` is unset (nothing renders until the
+ *    key has actually been read, so there is no flash);
+ *  - once open it is LATCHED (v1.197.0): `first_run` flips false the moment
+ *    the wizard SUCCEEDS at its own steps (a provider connects, a first
+ *    session row exists) and every success path reloads /onboarding — so the
+ *    show condition must not re-evaluate `first_run` mid-flow or the modal
+ *    unmounts out from under the user right as things start working. Only
+ *    finish() — the finale button, "View full session", or the skip link —
+ *    closes it.
  *
  * Three steps, reconciled onto the /onboarding checklist so its titles/done
  * states match OnboardingWelcome exactly (no hardcoded drift):
- *  1. Connect a model INLINE — inherited CLIs show as an instant fast path; a
- *     rescan button re-detects logged-in CLIs / Ollama; a compact API-key form
- *     (anthropic / openai / custom endpoint) connects + tests without leaving.
+ *  1. Connect a model INLINE. Since v1.197.0 the not-yet-connected branch is
+ *     three plain-language DOORS — "I already pay for Claude or ChatGPT"
+ *     (inherit the signed-in CLI), "Free & private on this PC" (Ollama), and
+ *     "I have an API key" (the compact anthropic / openai / custom form) —
+ *     because the old copy led with jargon a first-runner may not know.
+ *     Gemini is OAuth-only, so it is a link to /connections, never a key form.
  *  2. Optional VOICE — test the mic through useDictation (greens on a non-empty
  *     transcript) or skip; voice NEVER blocks.
  *  3. First MAGIC task — one-tap suggestions or free text; the streaming
  *     transcript + final result render in the modal, ending on an honest
  *     "it works" celebration. Real errors are shown, never fabricated.
+ *     "Start using Iron Jarvis" finishes AND navigates to /chat (v1.197.0) —
+ *     the hero surface — rather than closing onto an arbitrary page.
  */
 export function FirstRunWizard() {
+  const router = useRouter();
   const { health, refresh: refreshHealth } = useDaemon();
   const { data: onboarding, reload: reloadOnboarding } = useApi<Onboarding>("/onboarding");
   const { data: voice, reload: reloadVoice } = useApi<VoiceStatus>("/voice/status");
@@ -135,12 +179,27 @@ export function FirstRunWizard() {
     setChoice(localStorage.getItem(CHOICE_KEY) ?? "");
   }, []);
 
+  /* LATCH (v1.197.0). Eligibility is only ever checked to OPEN the wizard,
+     never to keep it open: `first_run` flips false the moment the wizard
+     succeeds at its own steps (a key connects → a provider exists; the first
+     task runs → a session row exists) and refreshAll() reloads /onboarding on
+     every one of those successes. Deriving `show` from first_run directly
+     unmounted the modal mid-flow — the finale was unreachable in production. */
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (choice === "" && onboarding?.first_run) setOpen(true);
+  }, [choice, onboarding]);
+
   const [step, setStep] = useState<1 | 2 | 3>(1);
 
   // --- Step 1: connect a model -------------------------------------------
   const availableProviders = (health?.providers ?? []).filter((p) => p.available);
   const providerReady = availableProviders.length > 0;
   const inheritedReady = availableProviders.filter((p) => INHERITED.has(p.provider));
+
+  /* Which door is open. Local state ONLY (v1.197.0): remembering it would
+     resurrect a stale pick on the next visit, and re-picking costs one click. */
+  const [door, setDoor] = useState<Door | null>(null);
 
   const [keyProvider, setKeyProvider] = useState<KeyProvider>("anthropic");
   const [keyValue, setKeyValue] = useState("");
@@ -160,6 +219,34 @@ export function FirstRunWizard() {
     } finally {
       refreshAll();
       setRescanBusy(false);
+    }
+  }
+
+  /* Ollama door (v1.197.0). Rescan does NOT detect Ollama: POST
+     /providers/rescan only enumerates CLIs, and the provider only reports
+     available once `ollama_base_url` is CONFIGURED — nothing configures it
+     from detection. Without this button the door was a dead end: install,
+     pull, rescan… and stay red forever. Saving the default local URL is the
+     real mechanism — the daemon normalizes any host form to its
+     /v1/chat/completions endpoint (providers/manager._normalize_ollama_url)
+     and PUT /settings live-reconfigures the manager. Availability still
+     requires the server to actually be REACHABLE, so this cannot fake a
+     green. */
+  const [ollamaBusy, setOllamaBusy] = useState(false);
+  const [ollamaSaved, setOllamaSaved] = useState(false);
+  const [ollamaError, setOllamaError] = useState<string | null>(null);
+
+  async function connectOllama() {
+    setOllamaBusy(true);
+    setOllamaError(null);
+    try {
+      await put("/settings", { values: { ollama_base_url: "http://localhost:11434" } });
+      setOllamaSaved(true);
+      refreshAll(); // immediate re-check — don't wait for the 5s health poll
+    } catch (e) {
+      setOllamaError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOllamaBusy(false);
     }
   }
 
@@ -296,7 +383,8 @@ export function FirstRunWizard() {
     { n: 3 as const, label: "First task", title: sessionStep?.title ?? "Run your first task", done: runStatus === "completed" },
   ];
 
-  const show = choice === "" && onboarding !== null && onboarding.first_run;
+  /* Latched open; only finish() (or the skip link) closes it — see above. */
+  const show = open && choice === "";
 
   return (
     <AnimatePresence>
@@ -410,29 +498,136 @@ export function FirstRunWizard() {
                     ) : (
                       <>
                         <p className="mt-2 text-xs leading-relaxed text-zinc-500">
-                          Without a real model every reply is fabricated by an offline mock.
-                          If you&apos;re logged into a CLI (Claude Code, Codex, Grok) or run
-                          Ollama, Iron Jarvis can inherit it — just rescan. Otherwise paste a key.
+                          Until a real model is connected, replies come from an offline demo
+                          that makes things up. Pick whichever sounds like you:
                         </p>
 
-                        {/* Rescan inherited CLIs / Ollama */}
-                        <button
-                          onClick={rescan}
-                          disabled={rescanBusy}
-                          className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-50"
-                        >
-                          {rescanBusy ? (
-                            <Loader2 size={13} className="animate-spin" aria-hidden="true" />
-                          ) : (
-                            <RefreshCw size={13} aria-hidden="true" />
-                          )}
-                          Rescan for logged-in CLIs / Ollama
-                        </button>
+                        {/* The three doors (v1.197.0) — plain-language first, mechanics
+                            revealed only for the picked one. */}
+                        <div className="mt-3 grid gap-1.5">
+                          {DOORS.map((d) => {
+                            const active = door === d.id;
+                            return (
+                              <button
+                                key={d.id}
+                                onClick={() => setDoor(d.id)}
+                                aria-pressed={active}
+                                className={`rounded-xl border px-3.5 py-2.5 text-left transition-colors ${
+                                  active
+                                    ? "border-accent/40 bg-accent/[0.08]"
+                                    : "border-white/[0.06] bg-white/[0.02] hover:bg-white/[0.04]"
+                                }`}
+                              >
+                                <span
+                                  className={`block text-xs font-semibold ${
+                                    active ? "text-accent-soft" : "text-zinc-200"
+                                  }`}
+                                >
+                                  {d.label}
+                                </span>
+                                <span className="mt-0.5 block text-[11px] text-zinc-500">
+                                  {d.hint}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
 
-                        {/* Compact API-key entry */}
-                        <div className="mt-4 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3.5">
+                        {/* Door: inherit an existing Claude / ChatGPT login.
+                            The rescan claim is TRUE here — claude/codex
+                            presence is a live per-poll /health check. */}
+                        {door === "subscription" && (
+                          <div className="mt-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3.5">
+                            <p className="text-xs leading-relaxed text-zinc-400">
+                              If the Claude app/CLI (
+                              <code className="font-mono text-zinc-300">claude</code>) or the
+                              Codex CLI (
+                              <code className="font-mono text-zinc-300">codex</code>) is signed
+                              in on this PC, Iron Jarvis inherits that login automatically —
+                              nothing to paste, and it never logs in for you.
+                            </p>
+                            <button
+                              onClick={rescan}
+                              disabled={rescanBusy}
+                              className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-white/[0.06] disabled:opacity-50"
+                            >
+                              {rescanBusy ? (
+                                <Loader2 size={13} className="animate-spin" aria-hidden="true" />
+                              ) : (
+                                <RefreshCw size={13} aria-hidden="true" />
+                              )}
+                              Rescan now
+                            </button>
+                            <p className="mt-2 text-[11px] text-zinc-600">
+                              Iron Jarvis also re-checks by itself every few seconds — this
+                              step turns green on its own once it finds a signed-in CLI.
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Door: free local model via Ollama. Deliberately NO
+                            rescan button here (v1.197.0): rescan only
+                            enumerates CLIs and cannot detect Ollama — the
+                            honest mechanism is the Connect button above,
+                            which configures the URL and lets the health poll
+                            prove reachability. */}
+                        {door === "local" && (
+                          <div className="mt-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3.5">
+                            <ol className="space-y-2 text-xs leading-relaxed text-zinc-400">
+                              <li>
+                                1.{" "}
+                                <a
+                                  href="https://ollama.com/download"
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="font-medium text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:text-accent"
+                                >
+                                  Download Ollama
+                                </a>{" "}
+                                and install it.
+                              </li>
+                              <li>
+                                2. Pull a model — copy this into a terminal:
+                                <code className="mt-1 block w-fit rounded-lg border border-white/[0.06] bg-black/30 px-2.5 py-1 font-mono text-xs text-zinc-300">
+                                  ollama pull llama3.2
+                                </code>
+                              </li>
+                              <li>3. Tell Iron Jarvis to use it:</li>
+                            </ol>
+                            <button
+                              onClick={() => void connectOllama()}
+                              disabled={ollamaBusy}
+                              className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-ink-950 shadow-glow-sm transition-colors hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              {ollamaBusy && (
+                                <Loader2 size={13} className="animate-spin" aria-hidden="true" />
+                              )}
+                              Connect to Ollama on this PC
+                            </button>
+                            {ollamaError && (
+                              <p role="alert" className="mt-2 text-xs text-rose-300">
+                                {ollamaError}
+                              </p>
+                            )}
+                            {ollamaSaved && !ollamaError && (
+                              <p className="mt-2 text-[11px] text-zinc-600">
+                                Iron Jarvis re-checks by itself every few seconds — this step
+                                turns green on its own once Ollama is reachable. If it stays
+                                grey, check that Ollama is actually running.
+                              </p>
+                            )}
+                            <p className="mt-2.5 text-[11px] leading-relaxed text-zinc-500">
+                              Honest note: a small local model is less capable than a frontier
+                              one — but it costs nothing and nothing leaves this machine.
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Door: paste an API key (the pre-v1.197.0 form, unchanged) */}
+                        {door === "key" && (
+                        <div className="mt-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3.5">
                           <div className="mb-2.5 flex items-center gap-1.5 text-xs font-medium text-zinc-300">
-                            <KeyRound size={13} className="text-accent-soft" /> Or paste an API key
+                            <KeyRound size={13} className="text-accent-soft" /> Paste an API key
                           </div>
                           <div className="flex flex-wrap gap-1.5">
                             {KEY_PROVIDERS.map((p) => (
@@ -516,7 +711,22 @@ export function FirstRunWizard() {
                               {keyError}
                             </p>
                           )}
+
+                          {/* Gemini is OAuth-only — POSTing a key to the google
+                              connection 400s — so it is a POINTER, never a form
+                              entry here (v1.197.0). */}
+                          <p className="mt-2.5 text-[11px] text-zinc-500">
+                            Google Gemini connects with account login on the{" "}
+                            <Link
+                              href="/connections"
+                              className="text-zinc-400 underline decoration-zinc-700 underline-offset-2 transition-colors hover:text-zinc-200"
+                            >
+                              Connections page
+                            </Link>
+                            .
+                          </p>
                         </div>
+                        )}
                       </>
                     )}
                   </div>
@@ -720,7 +930,13 @@ export function FirstRunWizard() {
                         {runStatus === "completed" && (
                           <div className="mt-3 flex items-center gap-3">
                             <button
-                              onClick={() => finish("done")}
+                              onClick={() => {
+                                /* v1.197.0: finishing lands on /chat — the product's
+                                   hero surface — instead of dead-ending on whatever
+                                   page happened to sit under the modal. */
+                                finish("done");
+                                router.push("/chat");
+                              }}
                               className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-ink-950 shadow-glow-sm transition-colors hover:bg-accent-soft"
                             >
                               <Sparkles size={13} /> Start using Iron Jarvis

@@ -17,15 +17,20 @@ from .doctor import doctor
 
 
 def is_first_run(platform) -> bool:
-    """True for a brand-new install: zero sessions AND no real provider connected.
+    """True for a brand-new install: no sessions, no chat threads, AND no real
+    provider connected.
 
     A fresh checkout with only the offline mock model and no history is a first
-    run; running any session or wiring a real model flips it to False.
+    run; running any session, chatting, or wiring a real model flips it to
+    False. Chatting IS using the app (one-surface thesis), so a chat thread
+    ends first-run just like an agent session does.
     """
-    from ..core.models import Session
+    from ..core.models import ChatThreadRecord, Session
 
-    has_sessions = _has_any(platform.engine, Session)
-    return not has_sessions and not _provider_connected(platform)
+    has_history = _has_any(platform.engine, Session) or _has_any(
+        platform.engine, ChatThreadRecord
+    )
+    return not has_history and not _provider_connected(platform)
 
 
 def readiness(platform) -> dict:

@@ -1257,24 +1257,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
     def _vosk_model_path() -> str | None:
         """Directory of the bundled/configured Vosk model, or None.
 
-        Resolution order: ``IRONJARVIS_VOSK_MODEL`` env (the desktop app points
-        this at the bundled model) > ``config.voice_vosk_model_path`` >
-        ``<home>/vosk-model``. A directory qualifies only if it looks like a real
-        model (has an ``am`` subdir)."""
-        from pathlib import Path as _Path
+        Delegates to :func:`iron_jarvis.voice.vosk_model_path` — the single
+        source of truth shared with the onboarding checklist (v1.197.0). The
+        logic used to live inline here, which let the checklist's own copy
+        drift into telling desktop users to buy an OpenAI key for a voice
+        feature that already worked offline. One function, two callers, no
+        second copy to shadow it."""
+        from ..voice import vosk_model_path
 
-        home = getattr(platform.config, "home", None)
-        for cand in (
-            os.environ.get("IRONJARVIS_VOSK_MODEL"),
-            (getattr(platform.config, "voice_vosk_model_path", "") or "").strip() or None,
-            (str(_Path(home) / "vosk-model") if home else None),
-        ):
-            if not cand:
-                continue
-            p = _Path(cand)
-            if p.is_dir() and (p / "am").is_dir():
-                return str(p)
-        return None
+        return vosk_model_path(platform.config)
 
     def _vosk_model() -> Any:
         """Lazily load + cache the Vosk model (~1s, ~40 MB RAM). None when

@@ -299,6 +299,33 @@ function setKeepRunningPref(value) {
   refreshMenus(); // reflect the new state in the tray + app-menu checkboxes
 }
 
+// One-time "where did it go?" hint (v1.197.0). The close prompt explains WHAT
+// keep-running means, but after the window vanishes nothing says WHERE the app
+// went — a non-technical user reads the empty taskbar as "it quit" and
+// relaunches (or reinstalls). Shown once per install, on the first real hide,
+// and never again: it is a signpost, not a nag.
+function maybeShowTrayHint() {
+  let shown = false;
+  try {
+    const raw = JSON.parse(fs.readFileSync(desktopSettingsFile(), "utf8"));
+    shown = !!(raw && raw.trayHintShown);
+  } catch {
+    /* no settings file yet -> not shown */
+  }
+  if (shown) return;
+  writeDesktopSetting("trayHintShown", true);
+  try {
+    new Notification({
+      title: "Iron Jarvis is still running",
+      body:
+        "Find it in the system tray (near the clock). Press Ctrl+Shift+J to reopen " +
+        "the window; to stop it completely use the tray icon → Quit Iron Jarvis.",
+    }).show();
+  } catch {
+    /* notifications unavailable — the tray tooltip still carries the truth */
+  }
+}
+
 // Hide the window to the tray, keeping the daemon + dashboard alive.
 // MEMORY: a hidden BrowserWindow keeps its whole renderer tree resident
 // (~hundreds of MB) — destroy it after hiding and let showMainWindow() rebuild
@@ -306,6 +333,7 @@ function setKeepRunningPref(value) {
 // close()) skips the 'close' handler, so no prompt/recursion.
 function hideToTray() {
   if (!mainWin || mainWin.isDestroyed()) return;
+  maybeShowTrayHint();
   flushWindowState();
   if (mainWin.isFullScreen()) mainWin.setFullScreen(false);
   const win = mainWin;
