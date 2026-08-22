@@ -93,8 +93,12 @@ def test_store_round_trips_project_pin(tmp_path):
     assert wf.project_id == "project_x"
     assert [s.name for s in wf.steps] == ["s1"]
 
-    # Each save rewrites the whole def: omitting project_id UNPINS.
+    # v1.200.0 three-intent semantics (the v1.164.0 token lesson): OMITTING
+    # project_id KEEPS the pin — the old omit-to-clear meant every pin-unaware
+    # re-save silently unpinned the def. Explicit "" is the CLEAR intent.
     store.save("pinned", steps, description="d")
+    assert store.get_project_id("pinned") == "project_x"
+    store.save("pinned", steps, description="d", project_id="")
     assert store.get_project_id("pinned") is None
     assert store.load_def("pinned").project_id is None
     assert store.pins() == {}

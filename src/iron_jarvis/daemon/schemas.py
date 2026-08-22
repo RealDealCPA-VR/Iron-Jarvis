@@ -498,6 +498,9 @@ class CreativeUploadBody(BaseModel):
     filename: str
     content_b64: str
     publish: bool = False
+    #: v1.200.0: scope the saved artifact to a project (Media view). Optional —
+    #: the Studio has no project picker yet, so callers may omit it.
+    project_id: str | None = None
 
 
 #: File deliverables the project-task composer may request — each maps to a
@@ -561,6 +564,9 @@ class CreativeIngestBody(BaseModel):
     durable gallery (artifact store)."""
 
     path: str
+    #: v1.200.0: scope the saved artifact to a project (Media view). Optional —
+    #: the Studio has no project picker yet, so callers may omit it.
+    project_id: str | None = None
 
 
 class FsMkdirBody(BaseModel):
@@ -976,10 +982,22 @@ class ReflexRuleBody(BaseModel):
     target: str = ""              # workflow name / remote agent name
     task_template: str = ""
     enabled: bool = True
+    #: Context spine (v1.200.0): ground this rule's work in a project. A
+    #: session action spawns carrying it; a workflow action uses it only when
+    #: the def has no pin of its own. None/"" = ungrounded.
+    project_id: str | None = None
 
 
 class ReflexToggleBody(BaseModel):
-    enabled: bool
+    """Partial update. ``enabled`` flips the rule; ``project_id`` re-grounds it.
+
+    Three intents, kept distinct (the remote-agent-token lesson): omit the
+    field (None) = UNCHANGED, ``""`` = CLEAR the grounding, non-empty = set it.
+    An unedited form that never mentions ``project_id`` must not clear one.
+    """
+
+    enabled: bool | None = None
+    project_id: str | None = None
 
 
 class McpServerBody(BaseModel):

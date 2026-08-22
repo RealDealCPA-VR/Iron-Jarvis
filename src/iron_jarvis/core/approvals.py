@@ -88,3 +88,11 @@ class ChatApprovals:
 
     def pending_count(self) -> int:
         return len(self._pending)
+
+    def pending_ids(self) -> list[str]:
+        """Snapshot of the ids currently awaiting an answer (read-only).
+
+        Only IDS — tool/args deliberately never live here (see ``request``),
+        so a listing surface reconstructs display metadata from the
+        ``approval.requested`` event log instead."""
+        return list(self._pending)

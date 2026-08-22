@@ -47,6 +47,8 @@ def register(app: FastAPI, d) -> None:
             target=body.target,
             task_template=body.task_template,
             enabled=body.enabled,
+            # Context spine (v1.200.0): the project this rule's work runs in.
+            project_id=body.project_id,
         )
         return rule.model_dump()
 
@@ -58,9 +60,15 @@ def register(app: FastAPI, d) -> None:
 
     @app.patch("/reflex/rules/{rule_id}")
     def toggle_reflex_rule(rule_id: str, body: ReflexToggleBody) -> dict[str, Any]:
-        rule = d.platform.reflex.set_enabled(rule_id, body.enabled)
+        rule = d.platform.reflex.get(rule_id)
         if rule is None:
             raise HTTPException(status_code=404, detail="no such reflex rule")
+        if body.enabled is not None:
+            rule = d.platform.reflex.set_enabled(rule_id, body.enabled) or rule
+        # Three intents (see ReflexToggleBody): omitted/None = unchanged,
+        # "" = clear the grounding, non-empty = re-ground in that project.
+        if body.project_id is not None:
+            rule = d.platform.reflex.set_project(rule_id, body.project_id) or rule
         return rule.model_dump()
 
     @app.post("/reflex/rules/{rule_id}/test")

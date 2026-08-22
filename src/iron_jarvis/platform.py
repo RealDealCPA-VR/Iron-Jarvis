@@ -522,16 +522,19 @@ def build_platform(
 
     code_artifacts = CodeArtifactStore(engine)
 
-    def _code_sink(name, language, code, session_id, exit_code, output, purpose=""):  # noqa: ANN001
-        """Persist an executed script. Resolves the producing session's project
-        so a script written during project work is scoped to it (context spine),
-        and settles the one-line USE CASE shown on the gallery tile: what the
-        agent stated, else what the code's own header says, else nothing (never
-        invented)."""
+    def _code_sink(
+        name, language, code, session_id, exit_code, output, purpose="", project_id=None
+    ):  # noqa: ANN001
+        """Persist an executed script. An EXPLICIT ``project_id`` wins
+        (v1.200.0 — chat runs as session_id="chat", not a Session row, so
+        inheritance can't cover it); otherwise resolves the producing session's
+        project so a script written during project work is scoped to it
+        (context spine). Also settles the one-line USE CASE shown on the
+        gallery tile: what the agent stated, else what the code's own header
+        says, else nothing (never invented)."""
         from .codelab.purpose import purpose_for
 
-        project_id = None
-        if session_id:
+        if project_id is None and session_id:
             try:
                 from .core.models import Session as _Session
 
@@ -808,11 +811,21 @@ def build_platform(
     # a key (a clear "not configured" error, never a crash).
     from .tools.pixio import pixio_tools
 
-    def _creative_sink(name, blob, filename, kind, session_id=None):  # noqa: ANN001
+    def _creative_sink(name, blob, filename, kind, session_id=None, project_id=None):  # noqa: ANN001
         """Every generation lands DURABLY in the Creative gallery (artifacts) —
         the workspace copy dies with the session. save() fires artifact.generated,
-        so the gallery updates live."""
-        artifacts.save(name, blob, kind=kind, filename=filename, session_id=session_id)
+        so the gallery updates live. v1.200.0: an explicit ``project_id`` is
+        forwarded so chat/Studio generations reach the project's Media view —
+        chat runs as session_id="chat" (not a Session row), so the store's
+        session inheritance can never scope those on its own."""
+        artifacts.save(
+            name,
+            blob,
+            kind=kind,
+            filename=filename,
+            session_id=session_id,
+            project_id=project_id,
+        )
 
     for tool in pixio_tools(
         key_resolver=lambda: secrets.get("pixio") or os.environ.get("PIXIO_API_KEY"),

@@ -1084,7 +1084,11 @@ def register(app: FastAPI, d) -> None:
         existing = d.platform.artifacts.versions(name)
         if existing:
             return {"name": name, "version": existing[-1], "media": kind, "ingested": False}
-        artifact = d.platform.artifacts.save(name, blob, kind=kind, filename=p.name)
+        # v1.200.0: an optional project_id in the body scopes the artifact to a
+        # project's Media view — the Studio has no picker yet, so it's opt-in.
+        artifact = d.platform.artifacts.save(
+            name, blob, kind=kind, filename=p.name, project_id=body.project_id
+        )
         return {
             "name": artifact.name,
             "version": artifact.version,
@@ -1123,12 +1127,15 @@ def register(app: FastAPI, d) -> None:
 
         digest = hashlib.sha1(blob).hexdigest()[:8]
         # save() writes the blob to disk synchronously — keep it off the loop.
+        # v1.200.0: an optional project_id in the body scopes the artifact to a
+        # project's Media view — the Studio has no picker yet, so it's opt-in.
         artifact = await asyncio.to_thread(
             d.platform.artifacts.save,
             f"upload-{Path(name).stem[:60]}-{digest}",
             blob,
             kind=media_kind(name) or "file",
             filename=name,
+            project_id=body.project_id,
         )
         out: dict[str, Any] = {
             "name": artifact.name,

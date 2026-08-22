@@ -354,6 +354,96 @@ def register(app: FastAPI, d) -> None:
             )
         return {"ok": True, "decision": decision}
 
+    @app.get("/chat/approvals/pending")
+    async def pending_chat_approvals() -> dict[str, Any]:
+        """List pending mid-turn approvals so ANY surface can see the ask
+        (v1.200.0).
+
+        A job-origin agent run (the Agents page posts origin ``job:agents``)
+        genuinely pauses on an ask-tier tool and publishes
+        ``approval.requested`` — but only the chat stream renders an approval
+        card, so the job-poster never saw the question and the pause timed out
+        into a silent degrade. The NotificationBell polls this endpoint and
+        renders each pending ask with Approve/Deny buttons that hit the
+        existing ``POST /chat/approvals/{id}``.
+
+        ONLY ANNOUNCED ASKS ARE LISTED: a registry id with NO matching
+        ``approval.requested`` event row is a CHAT-lane mid-turn ask — the
+        stream lane files into the same registry but deliberately announces
+        via its SSE frame only ("the SSE frame carries them to the one client
+        that can answer"), so its one answering surface is the chat card
+        already in front of the user. A metadata-less "unknown" row here would
+        mislabel the user's own question as an agent run and double-surface it
+        on every page (reviewer-confirmed, v1.200.0). The runtime lane always
+        publishes the event, so real agent asks are never dropped by this
+        filter.
+
+        NEVER ARGS: the registry deliberately stores only ``{id: future}`` —
+        "a registry holding argument payloads would just be a second place
+        secrets could linger" (core/approvals.py) — and this listing keeps the
+        same posture. The ``approval.requested`` event payload carries
+        (redacted) args for the one chat card watching that stream; this
+        response fans out to EVERY dashboard page on a 15s poll, so metadata
+        is copied key-by-key and args are dropped even when present.
+        """
+        ids = _approvals().pending_ids()
+        if not ids:
+            return {"approvals": []}
+
+        def _recent_requests() -> list[tuple[str, str, str]]:
+            # Bounded by construction: a pending approval is at most one
+            # timeout window old (<=300s), so the newest 200 rows of an
+            # indexed-type query are more than enough to cover every live id.
+            from ...core.events import EventType
+            from ...core.models import EventRecord
+
+            with session_scope(d.platform.engine) as db:
+                rows = list(
+                    db.exec(
+                        select(EventRecord)
+                        .where(EventRecord.type == EventType.APPROVAL_REQUESTED)
+                        .order_by(EventRecord.created_at.desc())  # type: ignore[arg-type]
+                        .limit(200)
+                    )
+                )
+            return [
+                (r.payload_json or "{}", r.session_id or "",
+                 r.created_at.isoformat())
+                for r in rows
+            ]
+
+        # Query OFF the event loop — the daemon is ONE asyncio loop and a
+        # sync DB read on it stalls every request (the v1.153.1 rule).
+        rows = await asyncio.to_thread(_recent_requests)
+        pending = set(ids)
+        meta: dict[str, dict[str, Any]] = {}
+        for payload_json, event_session, created_at in rows:
+            try:
+                payload = json.loads(payload_json)
+            except Exception:  # noqa: BLE001 - a corrupt row is not this list's problem
+                continue
+            if not isinstance(payload, dict):
+                continue
+            aid = payload.get("approval_id")
+            if not isinstance(aid, str) or aid not in pending or aid in meta:
+                continue  # newest-first scan: the first hit per id wins
+            # ONLY these keys, copied explicitly — never the payload itself,
+            # so args (or anything else that rides the event) cannot leak.
+            meta[aid] = {
+                "id": aid,
+                "tool": str(payload.get("tool") or "unknown"),
+                "session_id": event_session,
+                "requested_at": created_at,
+            }
+        # Ids with no event row are DROPPED, not padded with "unknown": the
+        # chat stream lane files into this same registry but announces via
+        # its SSE frame only — that ask's one answering surface is the chat
+        # card already in front of the user, and listing it here would
+        # mislabel the user's own question as an agent run and double-surface
+        # it on every page. The runtime lane always publishes the event, so a
+        # real agent ask can never be dropped by this filter.
+        return {"approvals": [meta[a] for a in ids if a in meta]}
+
     @app.get("/chat/threads")
     def chat_threads(project_id: str = "") -> dict[str, Any]:
         """List saved threads (newest first). ``project_id`` (optional) scopes
@@ -1458,6 +1548,9 @@ def register(app: FastAPI, d) -> None:
                 workspace=tool_ws, session_id="chat", agent_run_id="chat",
                 config=d.platform.config, event_bus=d.platform.event_bus,
                 engine=d.platform.engine,
+                # v1.200.0: resolved-project tag for artifact sinks. MIRROR
+                # NOTE (lock-step): non-stream copy in daemon/chat_turn.py.
+                project_id=(pid if resolved_proj is not None else None),
             )
             explicit_armed = [
                 t for t in armed if t not in auto_armed and t not in conn_tools

@@ -45,8 +45,15 @@ from .models import InboundOffsetRecord
 from .prompts import (
     ALREADY_ANSWERED_REPLY,
     ANSWER_USAGE_REPLY,
+    APPROVAL_DECISIONS,
+    APPROVAL_GONE_REPLY,
+    APPROVAL_KIND,
+    APPROVAL_USAGE_REPLY,
+    APPROVAL_WORDS,
     NOTHING_WAITING_REPLY,
     answer_echo,
+    approval_echo,
+    approval_reminder,
     pending_reminder,
     prompt_options,
 )
@@ -485,15 +492,38 @@ class InboundPoller:
                     )
             elif gone_status:
                 # The newest prompt just expired ON THIS LOOK (the run un-parked
-                # elsewhere): this integer was aimed at the dead gate — reply
-                # honestly instead of misfiring a chat turn on "1".
+                # elsewhere, or an approval outlived its answer window): this
+                # integer was aimed at the dead gate — reply honestly instead
+                # of misfiring a chat turn on "1".
                 reply = (
-                    ALREADY_ANSWERED_REPLY
+                    APPROVAL_GONE_REPLY
+                    if gone_status == "approval_gone"
+                    else ALREADY_ANSWERED_REPLY
                     if gone_status in ("resuming", "running", "completed")
                     else NOTHING_WAITING_REPLY
                 )
                 return await self._answer_reply(
                     name, ch, msg, display, chat_on, text, reply, "answer_expired"
+                )
+
+        # MID-RUN APPROVALS (v1.200.0): while an APPROVAL prompt is open, a
+        # bare "approve"/"deny" — the alert's exact vocabulary, nothing looser
+        # (see APPROVAL_WORDS) — is the one-tap answer the alert promised.
+        # Approval prompts ONLY: a workflow gate keeps the
+        # free-text-never-resolves rule, so "approve" aimed at a workflow ask
+        # stays a normal chat turn.
+        if self.prompt_store is not None and low in APPROVAL_WORDS:
+            prompt, gone_status = self._fresh_open_prompt_ex(name, msg.sender_id)
+            if prompt is not None and getattr(prompt, "kind", "") == APPROVAL_KIND:
+                return await self._resolve_prompt(
+                    name, ch, msg, display, chat_on, prompt, low, text
+                )
+            if gone_status == "approval_gone":
+                # Aimed at a pause that already ended (dashboard answer or the
+                # runtime's timeout) — honesty beats a chat misfire on "deny".
+                return await self._answer_reply(
+                    name, ch, msg, display, chat_on, text,
+                    APPROVAL_GONE_REPLY, "approval_expired",
                 )
 
         # REFLEX: a non-command message that matches a keyword rule fires that
@@ -817,6 +847,18 @@ class InboundPoller:
             prompt = self.prompt_store.newest_open(channel, str(sender_id))
             if prompt is None:
                 return None, ""
+            if getattr(prompt, "kind", "") == APPROVAL_KIND:
+                # An approval pause has a HARD deadline (the runtime denies at
+                # SESSION_APPROVAL_TIMEOUT_S) and approval.resolved normally
+                # expires the row (prompts.handle_workflow_waiting dispatch);
+                # this age check is the belt for a missed event, so a dead
+                # gate is never nagged about or "answered" forever. The
+                # registry's resolve() stays the real arbiter — a failed
+                # resolve expires the prompt too (_resolve_approval_prompt).
+                if self._approval_prompt_stale(prompt):
+                    self.prompt_store.expire(prompt.id, status="expired")
+                    return None, "approval_gone"
+                return prompt, ""
             status = self._run_state(prompt.ref_id)
             if status != "waiting":
                 self.prompt_store.expire(prompt.id, status="expired")
@@ -826,12 +868,43 @@ class InboundPoller:
             log.warning("pending prompt lookup failed on %r", channel, exc_info=True)
             return None, ""
 
+    @staticmethod
+    def _approval_ttl() -> float:
+        """The runtime's approval answer window, imported lazily (comm must
+        not pull the agents package at module load); its documented 300s as
+        the fallback."""
+        try:
+            from ..agents.runtime import SESSION_APPROVAL_TIMEOUT_S
+
+            return float(SESSION_APPROVAL_TIMEOUT_S)
+        except Exception:  # noqa: BLE001
+            return 300.0
+
+    def _approval_prompt_stale(self, prompt: Any) -> bool:
+        """Whether an approval prompt outlived the runtime's answer window.
+        On any read quirk say fresh — the registry's resolve() is the real
+        arbiter, and a flaky timestamp must not expire a live gate."""
+        try:
+            created = getattr(prompt, "created_at", None)
+            if created is None:
+                return False
+            now = utcnow()
+            if created.tzinfo is None:
+                # SQLite round-trips naive; the store stamps UTC (core.ids).
+                created = created.replace(tzinfo=now.tzinfo)
+            return (now - created).total_seconds() > self._approval_ttl()
+        except Exception:  # noqa: BLE001
+            return False
+
     def _pending_reminder(self, channel: str, sender_id: Any) -> str:
-        """The '(A workflow is still waiting…)' suffix for the outbound phone
-        copy of a normal chat reply — '' when nothing fresh is open."""
+        """The '(… still waiting …)' suffix for the outbound phone copy of a
+        normal chat reply — '' when nothing fresh is open. Kind-aware: an
+        approval gate must not be announced in a workflow's words."""
         prompt = self._fresh_open_prompt(channel, sender_id)
         if prompt is None:
             return ""
+        if getattr(prompt, "kind", "") == APPROVAL_KIND:
+            return approval_reminder(prompt.question)
         return pending_reminder(prompt.question)
 
     async def _answer_reply(
@@ -918,6 +991,13 @@ class InboundPoller:
         won claim marks the prompt answered and echoes what happened; a lost
         claim (answered/cancelled elsewhere) gets the honest already-answered
         reply and marks the prompt superseded."""
+        if getattr(prompt, "kind", "") == APPROVAL_KIND:
+            # A mid-run approval resolves through platform.approvals, not the
+            # workflow answer path — its ref_id is an approval id, which
+            # answer_run would misread as a (missing) workflow run.
+            return await self._resolve_approval_prompt(
+                name, ch, msg, display, chat_on, prompt, answer, original_text
+            )
         if self.answer_run is None:
             # Wired prompts without an answer path is a misconfiguration —
             # be honest rather than pretending the gate opened.
@@ -953,6 +1033,76 @@ class InboundPoller:
             ALREADY_ANSWERED_REPLY, "answer_superseded",
             outbound_suffix=self._pending_reminder(name, msg.sender_id),
             prompt_id=prompt.id, run_id=prompt.ref_id,
+        )
+
+    async def _resolve_approval_prompt(
+        self,
+        name: str,
+        ch: Channel,
+        msg: InboundMessage,
+        display: str,
+        chat_on: bool,
+        prompt: Any,
+        answer: str,
+        original_text: str,
+    ) -> dict[str, Any]:
+        """Resolve a mid-run tool approval (v1.200.0) through the SAME
+        registry the dashboard bell writes to (``platform.approvals``), so
+        there is ONE write path and the first answer wins whichever surface
+        it came from.
+
+        A phone reply only ever grants ``"once"`` (see APPROVAL_DECISIONS):
+        widening the rest of the run belongs on a surface that can see the
+        run. A failed resolve means the pause already ended — answered
+        elsewhere, or the runtime's timeout denied it — so the prompt is
+        EXPIRED on the spot (timeout hygiene: an approval prompt must never
+        linger past a failed resolve) and the reply says so honestly."""
+        decision = APPROVAL_DECISIONS.get(str(answer or "").strip().lower())
+        if decision is None:
+            # /answer <free text> aimed at an approval gate: only the yes/no
+            # vocabulary decides a permission — nothing resolves implicitly.
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, original_text,
+                APPROVAL_USAGE_REPLY, "answer_usage",
+            )
+        approvals = getattr(self.platform, "approvals", None)
+        if approvals is None:
+            # Wired prompts without the registry is a misconfiguration — be
+            # honest rather than pretending the gate opened (same posture as
+            # the missing answer_run branch above).
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, original_text,
+                "I can't deliver approvals right now — use the dashboard bell.",
+                "answer_error",
+            )
+        try:
+            ok = bool(approvals.resolve(prompt.ref_id, decision))
+        except Exception as exc:  # noqa: BLE001 — the loop must reply, not die
+            log.exception("approval resolve failed on %r", name)
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, original_text,
+                f"I hit a problem: {type(exc).__name__}: {exc}",
+                "answer_error",
+            )
+        if ok:
+            self.prompt_store.resolve(prompt.id, decision)
+            return await self._answer_reply(
+                name, ch, msg, display, chat_on, original_text,
+                approval_echo(decision), "approval_answered",
+                # Another gate may still be open — surface it on the phone
+                # copy, same rule as the workflow tail above.
+                outbound_suffix=self._pending_reminder(name, msg.sender_id),
+                prompt_id=prompt.id, approval_id=prompt.ref_id,
+                decision=decision,
+            )
+        # resolve() said no: unknown, expired, or already answered. The
+        # registry is the arbiter — close the row and say what happened.
+        self.prompt_store.expire(prompt.id, status="expired")
+        return await self._answer_reply(
+            name, ch, msg, display, chat_on, original_text,
+            APPROVAL_GONE_REPLY, "approval_expired",
+            outbound_suffix=self._pending_reminder(name, msg.sender_id),
+            prompt_id=prompt.id, approval_id=prompt.ref_id,
         )
 
     async def _publish(self, etype: str, payload: dict[str, Any], **kw: Any) -> None:

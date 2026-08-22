@@ -43,6 +43,7 @@ class ReflexStore:
         target: str = "",
         task_template: str = "",
         enabled: bool = True,
+        project_id: str | None = None,
     ) -> ReflexRule:
         rule = ReflexRule(
             name=name.strip() or match.strip() or "reflex",
@@ -52,6 +53,9 @@ class ReflexStore:
             target=target.strip(),
             task_template=task_template,
             enabled=enabled,
+            # Context spine: empty/whitespace normalizes to None (ungrounded)
+            # so "" never masquerades as a project id downstream.
+            project_id=(project_id or "").strip() or None,
         )
         with session_scope(self.engine) as db:
             db.add(rule)
@@ -67,6 +71,21 @@ class ReflexStore:
             db.delete(row)
             db.commit()
         return True
+
+    def set_project(self, rule_id: str, project_id: str | None) -> ReflexRule | None:
+        """Re-ground (or un-ground) a rule. ``None``/empty clears the project.
+
+        The CALLER decides whether an omitted field means "unchanged" — this
+        method always assigns (same shape as :meth:`set_enabled`)."""
+        with session_scope(self.engine) as db:
+            row = db.get(ReflexRule, rule_id)
+            if row is None:
+                return None
+            row.project_id = (project_id or "").strip() or None
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+        return row
 
     def set_enabled(self, rule_id: str, enabled: bool) -> ReflexRule | None:
         with session_scope(self.engine) as db:

@@ -177,6 +177,14 @@ class ReflexRouter:
         wf = WorkflowStore(self.p.engine).load_def(rule.target)
         if wf is None:
             return {"ok": False, "error": f"no saved workflow '{rule.target}'"}
+        # v1.200.0 — context spine, with a precedence rule: the DEF'S OWN PIN
+        # WINS. A def pinned to project A and triggered by a rule tagged
+        # project B keeps A — the pin is part of what the workflow IS, and a
+        # trigger must not silently re-ground someone else's process. The
+        # rule's project only grounds a def that carries NO pin of its own
+        # (which used to run project-agnostic even when the rule knew better).
+        if wf.project_id is None and rule.project_id:
+            wf.project_id = rule.project_id
         engine = WorkflowEngine(self.p, self.orch)
         run = engine.create_record(wf)  # synchronous: persists a run record now
         # v1.122.0: the signal's payload used to be DROPPED for workflow
@@ -198,6 +206,9 @@ class ReflexRouter:
         return {"ok": True, "kind": "workflow", "workflow": wf.name, "run_id": run.id}
 
     def _run_remote(self, rule: ReflexRule, context: dict[str, str]) -> dict[str, Any]:
+        # Deliberately NOT project-grounded: a remote agent runs on someone
+        # else's endpoint with no access to this box's project context, so
+        # there is no grounding seam to thread ``rule.project_id`` through.
         from ..agents.remote import RemoteAgentRegistry
 
         reg = RemoteAgentRegistry(self.p.engine)
@@ -212,7 +223,15 @@ class ReflexRouter:
 
     async def _run_session(self, rule: ReflexRule, context: dict[str, str]) -> dict[str, Any]:
         task = _render(rule.task_template, context) or _default_task(rule, context)
-        session = await self.orch.create_session(task, AgentType.SUPERVISOR)
+        # v1.200.0 — context spine: a rule tagged with a project spawns a
+        # session CARRYING it, so the whole grounding pipeline (the runtime's
+        # project brief/instructions/knowledge, the memory fabric) fires for
+        # reflex work exactly as it does for a Projects task. An inbound
+        # "client emailed the missing 1099" used to run with zero client
+        # context. ``or None`` keeps a legacy ""/blank row honest.
+        session = await self.orch.create_session(
+            task, AgentType.SUPERVISOR, project_id=rule.project_id or None
+        )
         self._launch(self.orch.run_session(session.id), session.id)
         return {"ok": True, "kind": "session", "session_id": session.id}
 

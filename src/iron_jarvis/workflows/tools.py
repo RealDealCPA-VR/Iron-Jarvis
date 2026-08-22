@@ -38,8 +38,12 @@ class WorkflowCreateTool(Tool):
         "Save a reusable workflow that persists (the user sees it in the "
         "dashboard and it can be scheduled/run later). `steps` is an ordered "
         "list of {name, agent, task} objects — each step runs `agent` on `task`. "
-        "Re-using a `name` updates the existing workflow in place. Returns the "
-        "saved workflow name and step count."
+        "Re-using a `name` updates the existing workflow in place (an existing "
+        "project pin is KEPT unless you pass `project`). When this task is "
+        "grounded in a project, the workflow is pinned to that project "
+        "automatically so its runs ground there too; pass `project` (a project "
+        "id or exact name) to pin somewhere else explicitly. Returns the saved "
+        "workflow name and step count."
     )
     permission_key = "workflow_create"
     input_schema = {
@@ -58,6 +62,14 @@ class WorkflowCreateTool(Tool):
                 },
             },
             "description": {"type": "string"},
+            "project": {
+                "type": "string",
+                "description": (
+                    "optional project to pin the workflow to (project id or "
+                    "exact name); when omitted, the current task's own "
+                    "project is used, if it has one"
+                ),
+            },
         },
         "required": ["name", "steps"],
     }
@@ -65,18 +77,83 @@ class WorkflowCreateTool(Tool):
     def __init__(self, platform) -> None:
         self.platform = platform
 
+    def _own_project(self, ctx: ToolContext) -> str | None:
+        """The producing task's project: ``ctx.project_id`` when the caller
+        resolved one (v1.200.0, chat lanes — getattr-safe for older duck-typed
+        contexts), else the Session row's pin, exactly like
+        :meth:`ArtifactStore.save` inherits a session's project."""
+        pid = getattr(ctx, "project_id", None)
+        if pid:
+            return str(pid)
+        sid = getattr(ctx, "session_id", None)
+        if not sid:
+            return None
+        from ..core.db import session_scope
+        from ..core.models import Session as _Session
+
+        with session_scope(self.platform.engine) as db:
+            parent = db.get(_Session, sid)
+            if parent is not None and parent.project_id:
+                return parent.project_id
+        return None
+
+    def _resolve_project(self, requested: str) -> tuple[str | None, str | None]:
+        """Resolve an explicit ``project`` arg (id or exact name, name
+        case-insensitive) to ``(project_id, error)``. A typo must be an HONEST
+        error naming what exists — a silently-saved dangling pin would ground
+        every future run in a project that isn't there."""
+        from ..core.db import session_scope
+        from ..core.models import Project
+
+        with session_scope(self.platform.engine) as db:
+            row = db.get(Project, requested)
+            if row is not None:
+                return row.id, None
+            from sqlmodel import select as _select
+
+            rows = list(db.exec(_select(Project)))
+        matches = [
+            p for p in rows if (p.name or "").strip().lower() == requested.lower()
+        ]
+        if len(matches) == 1:
+            return matches[0].id, None
+        if len(matches) > 1:
+            ids = ", ".join(p.id for p in matches[:5])
+            return None, (
+                f"project name '{requested}' is ambiguous ({len(matches)} "
+                f"projects share it) — pass the project id instead: {ids}"
+            )
+        known = [p.name for p in rows if (p.name or "").strip()]
+        hint = f"; known projects: {', '.join(known[:10])}" if known else ""
+        return None, f"no project matching '{requested}'{hint}"
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         name = args.get("name") or ""
         if not name:
             return ToolResult(ok=False, error="name is required")
         steps = args.get("steps") or []
+        requested = str(args.get("project") or "").strip()
+        if requested:
+            pid, err = self._resolve_project(requested)
+            if err:
+                return ToolResult(ok=False, error=err)
+        else:
+            pid = self._own_project(ctx)
+        # pid=None flows through as KEEP (v1.200.0 store semantics): a fresh
+        # def simply stays unpinned, and a re-save of an already-pinned def by
+        # a project-less caller no longer silently unpins it.
         rec = WorkflowStore(self.platform.engine).save(
-            name, steps, args.get("description", "")
+            name, steps, args.get("description", ""), project_id=pid
         )
+        data: dict[str, Any] = {"name": rec.name, "steps": len(steps), "id": rec.id}
+        note = ""
+        if pid:
+            data["project_id"] = pid
+            note = f", pinned to project {pid}"
         return ToolResult(
             ok=True,
-            output=f"saved workflow '{rec.name}' with {len(steps)} step(s)",
-            data={"name": rec.name, "steps": len(steps), "id": rec.id},
+            output=f"saved workflow '{rec.name}' with {len(steps)} step(s){note}",
+            data=data,
         )
 
 

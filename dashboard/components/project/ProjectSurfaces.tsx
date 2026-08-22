@@ -317,8 +317,8 @@ function SurfaceMedia({ projectId }: { projectId: string }) {
         )
       ) : items.length === 0 ? (
         <Empty icon={<Images size={22} />}>
-          No media in this project yet — generate something in Creative while
-          this project is active, and it lands here.
+          No media in this project yet — media generated in this project&apos;s
+          chat, or by a project task, lands here.
         </Empty>
       ) : (
         <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-4">

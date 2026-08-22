@@ -92,10 +92,13 @@ class ArtifactStore:
     ) -> Artifact:
         """Write ``content`` as the next version of ``name`` (SPEC §26).
 
-        Context spine: when ``project_id`` isn't given but the producing
-        ``session_id`` is, the artifact inherits that session's project, so
-        every generation a project task makes is scoped to the workspace
-        without any caller having to thread it through."""
+        Context spine: an explicit ``project_id`` always wins. When it isn't
+        given but the producing ``session_id`` is, the artifact inherits that
+        session's project — which covers AGENT-SESSION producers only. Chat
+        and Studio producers run as ``session_id="chat"`` (not a Session row),
+        so inheritance finds nothing for them: those callers MUST pass
+        ``project_id`` explicitly or the artifact strands in the global
+        gallery with ``project_id`` NULL (the v1.200.0 audit finding)."""
         existing = self.versions(name)
         version = (existing[-1] + 1) if existing else 1
 

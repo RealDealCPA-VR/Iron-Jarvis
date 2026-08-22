@@ -23,6 +23,17 @@ from .base import Channel
 #: the same question. :func:`format_event` still knows the type so a user who
 #: EXPLICITLY subscribes it (``comm.event_types`` in config) gets a
 #: phone-friendly line instead of the generic key=value dump.
+#:
+#: ``approval.requested`` IS here (v1.200.0), and the asymmetry with
+#: ``workflow.waiting`` is deliberate: nothing else delivers an approval pause
+#: — the runtime only publishes the event — so without a default subscription
+#: the phone stayed silent for the whole 300s answer window, at exactly the
+#: moment the two-way channel exists for (CONNECT-AUDIT-2026-08-22 §3). The
+#: pending-prompt handler (``comm/prompts.py::handle_approval_requested``)
+#: registers the answerable row but sends NO copy of its own, so this alert is
+#: the ONE phone message. ``approval.resolved`` is deliberately NOT here:
+#: answering is not news — the user (or the timeout) just acted, and echoing
+#: every decision back would turn the alert channel into a log.
 DEFAULT_ALERT_EVENTS: frozenset[str] = frozenset(
     {
         EventType.REVIEW_REQUESTED,
@@ -32,6 +43,7 @@ DEFAULT_ALERT_EVENTS: frozenset[str] = frozenset(
         EventType.AUTONOMY_EXECUTED,
         EventType.PROVIDER_FAILOVER,
         EventType.SKILL_PROPOSAL_CREATED,
+        EventType.APPROVAL_REQUESTED,
     }
 )
 
@@ -55,6 +67,16 @@ def format_event(event: Any) -> str:
         return (
             f"Workflow '{wf}' needs you{detail} — reply with a number or "
             "/answer <text> from a chat-enabled destination."
+        )
+    if etype == EventType.APPROVAL_REQUESTED:
+        # Phone-friendly pause alert (v1.200.0): name the tool and BOTH answer
+        # paths a pocket actually has — the dashboard bell, or replying right
+        # here (comm/prompts.py registers the answerable prompt that makes
+        # "reply here" true on chat-enabled destinations).
+        tool = str(payload.get("tool") or "").strip() or "a tool"
+        return (
+            f"⏸ An agent is asking to use {tool} — approve from the "
+            "dashboard bell, or reply here: approve / deny."
         )
     if etype == EventType.SKILL_PROPOSAL_CREATED:
         name = str(payload.get("skill_name") or "").strip() or "a new skill"

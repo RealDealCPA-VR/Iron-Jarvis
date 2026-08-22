@@ -186,8 +186,18 @@ class RunCodeTool(Tool):
         if self._sink is None:
             return
         try:
+            # v1.200.0: chat runs as session_id="chat" (not a Session row), so
+            # the sink's inheritance can't scope chat-made scripts — the ctx
+            # carries the resolved project instead. The kwarg is passed ONLY
+            # when a project is actually set: this except-block SWALLOWS sink
+            # errors, so an unconditional kwarg against an older 7-arg sink
+            # double would TypeError silently and kill persistence (the pixio
+            # sink learned the same lesson in this wave).
+            pid = getattr(ctx, "project_id", None)
+            extra = {"project_id": pid} if pid else {}
             self._sink(
-                name, lang, code, getattr(ctx, "session_id", None), rc, output, purpose
+                name, lang, code, getattr(ctx, "session_id", None), rc, output, purpose,
+                **extra,
             )
         except Exception:  # noqa: BLE001 — bookkeeping never breaks the task
             pass

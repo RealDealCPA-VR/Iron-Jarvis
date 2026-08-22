@@ -2181,6 +2181,10 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
             workspace=tool_ws, session_id="chat", agent_run_id="chat",
             config=d.platform.config, event_bus=d.platform.event_bus,
             engine=d.platform.engine,
+            # v1.200.0: only a RESOLVED project tags artifacts — a bogus id in
+            # the body must not scope generations to a project that isn't real.
+            # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
+            project_id=(pid if resolved_proj is not None else None),
         )
         explicit_armed = [
             t for t in armed if t not in auto_armed and t not in conn_tools

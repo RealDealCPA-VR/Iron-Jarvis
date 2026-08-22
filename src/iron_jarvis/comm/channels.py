@@ -98,6 +98,29 @@ class TelegramChannel(Channel):
     #: Telegram's hard sendMessage cap — chunked replies fill the full window.
     chunk_limit = 4096
 
+    #: Transport notice for content the text-only bridge cannot carry
+    #: (v1.200.0, CONNECT-AUDIT-2026-08-22 §7). Sent at most once per sender
+    #: per poll batch, allowlisted senders only.
+    MEDIA_NOTICE = (
+        "I can't read photos, files, or voice messages here yet — send text, "
+        "or use the desktop app for attachments."
+    )
+    #: Message keys that mean "the sender tried to hand over content" (as
+    #: opposed to service updates — joins, pins, title changes — where a
+    #: notice would be noise about nothing the sender said).
+    _MEDIA_KEYS = (
+        "photo",
+        "document",
+        "voice",
+        "audio",
+        "video",
+        "video_note",
+        "sticker",
+        "animation",
+        "contact",
+        "location",
+    )
+
     def send(self, message: str, **kw: Any) -> dict[str, Any]:
         token_secret = self.config.get("token_secret")
         token = self._resolve_secret(token_secret)
@@ -136,6 +159,7 @@ class TelegramChannel(Channel):
 
         messages: list[InboundMessage] = []
         next_offset = offset
+        noticed: set[str] = set()  # senders already told about dropped media
         for upd in data.get("result", []) or []:
             update_id = upd.get("update_id")
             if isinstance(update_id, int):
@@ -143,7 +167,13 @@ class TelegramChannel(Channel):
             msg = upd.get("message") or upd.get("edited_message") or {}
             text = msg.get("text")
             if not text:
-                continue  # ignore non-text updates (photos, joins, ...)
+                # Non-text updates are still DROPPED (the brain is text-only;
+                # a recorded decision) — but silence was not: the offset
+                # advances past them, so a photo from the owner vanished with
+                # no reply and no thread entry (v1.200.0). A media message
+                # from an ALLOWED sender now gets one honest notice first.
+                self._media_notice(msg, noticed)
+                continue
             frm = msg.get("from") or {}
             chat = msg.get("chat") or {}
             messages.append(
@@ -157,6 +187,45 @@ class TelegramChannel(Channel):
                 )
             )
         return messages, next_offset
+
+    def _media_notice(self, msg: Any, noticed: set[str]) -> None:
+        """ONE honest reply for a media message the poll is about to drop.
+
+        FAIL-CLOSED POSTURE PRESERVED: only an ALLOWLISTED sender, in their
+        own PRIVATE chat, hears anything — strangers and groups still get
+        silence, and a bot's message never triggers it (loop protection).
+
+        DELIBERATELY NO CHAT-THREAD ENTRY: this is a transport notice about
+        what the channel can carry, not a conversation turn — the update
+        never reaches the inbound pipeline, so nothing lands on the desktop
+        thread, and a courtesy line masquerading as dialogue would pollute
+        the conversation record both sides read back.
+
+        Best-effort by design: a malformed update or a failed send is
+        swallowed (logged), because the poll loop must never crash or stall
+        over a courtesy message — same discipline as the rest of the module.
+        """
+        try:
+            if not isinstance(msg, dict) or not any(
+                k in msg for k in self._MEDIA_KEYS
+            ):
+                return  # service update (join, pin, ...) — nothing was said
+            frm = msg.get("from") or {}
+            chat = msg.get("chat") or {}
+            if frm.get("is_bot"):
+                return
+            sender = str(frm.get("id", "") or "")
+            chat_id = chat.get("id")
+            if not sender or chat_id is None or str(chat_id) != sender:
+                return  # group/channel media: replying would broadcast
+            if not self.is_authorized(sender):
+                return  # strangers still get silence (fail-closed)
+            if sender in noticed:
+                return  # one notice per sender per batch, not one per photo
+            noticed.add(sender)
+            self.send(self.MEDIA_NOTICE, chat_id=chat_id)
+        except Exception:  # noqa: BLE001 — never break the poll over a notice
+            _log.warning("telegram media notice failed", exc_info=True)
 
 
 class MockChannel(Channel):

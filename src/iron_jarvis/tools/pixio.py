@@ -44,11 +44,15 @@ HttpRequest = Callable[[str, str, dict[str, str], "dict[str, Any] | None"], Any]
 HttpUpload = Callable[[str, "dict[str, str]", bytes, str, str], Any]
 #: () -> Pixio API key (or ``None`` when not configured).
 KeyResolver = Callable[[], "str | None"]
-#: (artifact_name, blob, filename, kind, session_id) — durable gallery sink.
-#: The platform wires this to ArtifactStore.save so every generation lands in
-#: the Creative gallery (and fires artifact.generated) instead of dying with
-#: the disposable session workspace.
-ArtifactSink = Callable[[str, bytes, str, str, "str | None"], Any]
+#: (artifact_name, blob, filename, kind, session_id, *, project_id=...) —
+#: durable gallery sink. The platform wires this to ArtifactStore.save so every
+#: generation lands in the Creative gallery (and fires artifact.generated)
+#: instead of dying with the disposable session workspace. v1.200.0:
+#: ``project_id`` rides as a KEYWORD, and only when the producing ToolContext
+#: carries one — so a pre-v1.200.0 five-arg sink keeps working — because chat
+#: runs as session_id="chat" (not a Session row) and the store's session
+#: inheritance can never scope a chat generation to its project on its own.
+ArtifactSink = Callable[..., Any]
 
 _BASE_URL = "https://beta.pixio.myapps.ai"
 _POLL_SECONDS = 5.0
@@ -296,12 +300,20 @@ class _PixioTool(Tool):
                 from ..creative.service import media_kind
 
                 artifact_name = f"creative-{_safe_name(generation_id)}"
+                # v1.200.0: tag the artifact with the grounded project so it
+                # shows in that project's Media view. getattr + keyword-only-
+                # when-present keeps old ToolContext/sink test doubles working.
+                sink_kwargs: dict[str, Any] = {}
+                project_id = getattr(ctx, "project_id", None)
+                if project_id:
+                    sink_kwargs["project_id"] = project_id
                 self._artifact_sink(
                     artifact_name,
                     blob,
                     dest.name,
                     media_kind(dest.name) or "file",
                     ctx.session_id,
+                    **sink_kwargs,
                 )
                 gallery_note = " — added to the Creative gallery"
             except Exception:  # noqa: BLE001 — the gallery is a bonus, never break delivery

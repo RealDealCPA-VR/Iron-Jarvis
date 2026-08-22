@@ -30,6 +30,16 @@ compare-and-set, so the first answer wins whichever surface it came from. A
 lost claim (already answered from the desktop) gets an honest reply and the
 prompt is marked superseded; a run that un-parked before any reply expires
 its prompt on the next look.
+
+MID-RUN TOOL APPROVALS (v1.200.0) are the second prompt kind: a session
+paused on an ask-tier tool (``approval.requested``, agents/runtime.py
+v1.189.0) registers an approve/deny prompt per identity via
+:func:`handle_approval_requested`, and a phone reply of "approve"/"deny"
+(or 1/2, or ``/answer``) resolves it through ``platform.approvals`` — the
+SAME registry ``POST /chat/approvals/{id}`` (the dashboard bell) writes to.
+Unlike workflow gates these prompts carry a hard deadline, so
+``approval.resolved`` (published on every pause ending, timeout included)
+expires them via :meth:`PendingPromptStore.expire_ref`.
 """
 
 from __future__ import annotations
@@ -52,6 +62,42 @@ log = get_logger("comm.prompts")
 #: The engine publishes this as a raw string (workflows/engine.py, v1.121.0).
 WAITING_EVENT = "workflow.waiting"
 
+#: MID-RUN TOOL APPROVALS (v1.200.0) — the agent runtime publishes these when
+#: a session pauses on an ask-tier tool (agents/runtime.py, v1.189.0) and
+#: again when the pause ends (answered from any surface, or its ~300s timeout
+#: denied honestly). The pause becomes a pending prompt too, so the phone can
+#: answer it through the SAME registry the dashboard bell writes to
+#: (``platform.approvals`` — one write path, first answer wins).
+APPROVAL_EVENT = "approval.requested"
+APPROVAL_RESOLVED_EVENT = "approval.resolved"
+
+#: Prompt ``kind`` for a mid-run tool approval; ``ref_id`` is the approval id.
+APPROVAL_KIND = "approval"
+
+#: The two answers an approval takes — stored as the prompt's OPTIONS so the
+#: existing numbered-pick path ("1"/"2") maps onto them for free.
+APPROVAL_OPTIONS = ["approve", "deny"]
+
+#: The BARE words that resolve an open approval prompt mid-chat. Deliberately
+#: only these two — the alert's exact vocabulary. A looser set ("yes", "ok")
+#: would let an ordinary chat reply grant a tool by accident; the synonyms
+#: below are accepted only behind the EXPLICIT ``/answer`` command.
+APPROVAL_WORDS = ("approve", "deny")
+
+#: Answer word → registry decision. "once" is the deliberate ceiling for a
+#: phone reply: granting "conversation" (the rest of the run) belongs on a
+#: surface that can see what else the run is doing.
+APPROVAL_DECISIONS: dict[str, str] = {
+    "approve": "once",
+    "allow": "once",
+    "yes": "once",
+    "y": "once",
+    "deny": "deny",
+    "no": "deny",
+    "reject": "deny",
+    "n": "deny",
+}
+
 #: Question text cap on the stored prompt (a runaway templated question must
 #: not bloat the table or the phone copy).
 _QUESTION_CAP = 500
@@ -61,6 +107,11 @@ _QUESTION_CAP = 500
 NOTHING_WAITING_REPLY = "Nothing is waiting for an answer right now."
 ALREADY_ANSWERED_REPLY = "Already answered from the desktop — the run is moving on."
 ANSWER_USAGE_REPLY = "Usage: /answer <your answer>"
+APPROVAL_GONE_REPLY = (
+    "That request already timed out or was answered from the desktop — "
+    "the agent has moved on."
+)
+APPROVAL_USAGE_REPLY = "Reply approve or deny (or 1 / 2)."
 
 #: Prompt statuses the store accepts for :meth:`PendingPromptStore.expire`.
 _EXPIRE_STATUSES = ("expired", "superseded")
@@ -96,6 +147,41 @@ def prompt_line(workflow: str, question: str, options: list[str] | None) -> str:
         listing = "\n".join(f"{i}. {o}" for i, o in enumerate(opts, 1))
         return f"{base}\n{listing}\nReply with a number, or /answer <text>."
     return f"{base} — reply with /answer <your answer>."
+
+
+def approval_question(tool: str) -> str:
+    """The stored prompt question for a mid-run tool approval."""
+    return f"An agent is asking to use '{tool}'"
+
+
+def approval_prompt_line(tool: str) -> str:
+    """The line appended to the identity's THREAD at registration, so the
+    desktop conversation shows the same pause the phone was alerted about.
+    NOT sent to the phone by the handler — see
+    :func:`handle_approval_requested` for why the notifier alert is the one
+    phone copy."""
+    return (
+        f"⏸ An agent is asking to use '{tool}' — reply approve or deny "
+        "(or 1 / 2), or answer from the dashboard bell."
+    )
+
+
+def approval_echo(decision: str) -> str:
+    """The confirmation echoed back after a resolved approval — nothing is
+    ever swallowed silently, same rule as :func:`answer_echo`."""
+    if decision == "deny":
+        return "→ Denied — the agent will carry on without that tool."
+    return "→ Approved — the agent is going ahead."
+
+
+def approval_reminder(question: str) -> str:
+    """Outbound-copy suffix while an approval prompt is still open — the
+    approval twin of :func:`pending_reminder` (a workflow's wording would
+    misname the gate)."""
+    return (
+        f"\n\n(An agent is still waiting for permission: '{_snippet(question)}' "
+        "— reply approve or deny.)"
+    )
 
 
 def answer_echo(question: str, run_label: str) -> str:
@@ -184,6 +270,35 @@ class PendingPromptStore:
         if status not in _EXPIRE_STATUSES:
             status = "expired"
         return self._decide(prompt_id, status)
+
+    def expire_ref(self, kind: str, ref_id: str, status: str = "expired") -> int:
+        """Close EVERY open prompt for one gate, across all identities.
+
+        The ``approval.resolved`` hygiene path (v1.200.0): the pause ended —
+        answered from any surface, or the runtime's timeout denied it — so no
+        identity may keep an answerable row for the dead gate (it would nag
+        chat replies and invite answers into nothing). Returns how many
+        prompts closed; 0 on failure (never raises)."""
+        if status not in _EXPIRE_STATUSES:
+            status = "expired"
+        try:
+            with self._lock, session_scope(self.engine) as db:
+                rows = db.exec(
+                    select(PendingPromptRecord).where(
+                        PendingPromptRecord.kind == kind,
+                        PendingPromptRecord.ref_id == str(ref_id),
+                        PendingPromptRecord.status == "open",
+                    )
+                ).all()
+                for rec in rows:
+                    rec.status = status
+                    rec.decided_at = utcnow()
+                    db.add(rec)
+                db.commit()
+                return len(rows)
+        except Exception:  # noqa: BLE001 — a marker write must never break comm
+            log.warning("expire_ref failed for %s/%s", kind, ref_id, exc_info=True)
+            return 0
 
     def _decide(self, prompt_id: str, status: str) -> bool:
         try:
@@ -338,6 +453,113 @@ def _send_chunked_sync(ch: Any, body: str, *, chat_id: Any) -> bool:
         return False
 
 
+def handle_approval_requested(
+    event: Any,
+    *,
+    store: PendingPromptStore,
+    notifier: Any,
+    thread_store: Any,
+) -> list[dict[str, Any]]:
+    """Register answerable prompts for a session paused on an ask-tier tool.
+
+    The comm half of v1.189.0's mid-run approvals (v1.200.0): the SAME
+    identity walk as :func:`handle_workflow_waiting` — every allowlisted
+    identity on a chat-enabled, credentialed channel gets a durable prompt
+    row (kind ``approval``, ``ref_id`` = the approval id, options
+    approve/deny) plus the pause line on its desktop thread, so a phone reply
+    of approve/deny (or 1/2, or ``/answer``) resolves the pause through the
+    SAME registry the dashboard bell uses (``platform.approvals`` — one write
+    path, first answer wins).
+
+    DELIBERATELY NO PHONE SEND HERE — the inverse of the workflow
+    arrangement (see the ``DEFAULT_ALERT_EVENTS`` note in ``notifier.py``):
+    the workflow engine delivers its own park alert, so ``workflow.waiting``
+    stays OUT of the default alert set and this module sends the answerable
+    copy; nothing delivers an approval pause EXCEPT the notifier, so
+    ``approval.requested`` IS a default alert, its line already says "reply
+    here", and a second per-identity send from this handler would
+    double-message the same phone. Fully guarded — never raises.
+    """
+    try:
+        payload = _event_field(event, "payload", {}) or {}
+        approval_id = str(payload.get("approval_id") or "").strip()
+        if not approval_id:
+            return []
+        tool = str(payload.get("tool") or "").strip() or "a tool"
+        question = approval_question(tool)
+
+        out: list[dict[str, Any]] = []
+        for name in notifier.channels():
+            ch = notifier.get(name)
+            if ch is None:
+                continue
+            try:
+                if not (ch.chat_enabled() and ch.has_credentials()):
+                    continue
+            except Exception:  # noqa: BLE001 — a config quirk skips the channel
+                continue
+            for identity in _identities(store.engine, name):
+                try:
+                    # Fail-closed, exactly like the poller: a shrunk allowlist
+                    # revokes the identity's right to answer.
+                    if not ch.is_authorized(identity.sender_id):
+                        continue
+                    thread_id = str(identity.thread_id or "")
+                    if thread_store is not None:
+                        try:
+                            thread_id = thread_store.resolve(
+                                name, identity.sender_id, identity.display_name
+                            ).id
+                        except Exception:  # noqa: BLE001 — prompt still registers
+                            log.warning(
+                                "comm thread resolve failed during approval "
+                                "prompt registration on %r",
+                                name,
+                                exc_info=True,
+                            )
+                    prompt = store.register(
+                        APPROVAL_KIND,
+                        approval_id,
+                        question,
+                        APPROVAL_OPTIONS,
+                        name,
+                        identity.sender_id,
+                        thread_id,
+                    )
+                    if prompt is None:
+                        continue
+                    if thread_store is not None and thread_id:
+                        try:
+                            thread_store.append(
+                                thread_id, "assistant", approval_prompt_line(tool)
+                            )
+                        except Exception:  # noqa: BLE001 — row registered anyway
+                            log.warning(
+                                "approval prompt line could not land on thread %s",
+                                thread_id,
+                                exc_info=True,
+                            )
+                    out.append(
+                        {
+                            "channel": name,
+                            "sender": identity.sender_id,
+                            "prompt_id": prompt.id,
+                            "thread_id": thread_id,
+                        }
+                    )
+                except Exception:  # noqa: BLE001 — one identity never skips the rest
+                    log.warning(
+                        "approval prompt registration failed for %s/%s",
+                        name,
+                        getattr(identity, "sender_id", "?"),
+                        exc_info=True,
+                    )
+        return out
+    except Exception:  # noqa: BLE001 — the event bus must survive any handler
+        log.exception("approval.requested prompt registration failed")
+        return []
+
+
 def handle_workflow_waiting(
     event: Any,
     *,
@@ -354,9 +576,30 @@ def handle_workflow_waiting(
     identities → no prompts (answering from a pocket requires an established
     conversation). Fully guarded — this runs on the event bus and must never
     break it; a failure for one identity never skips the rest.
+
+    ALSO the dispatch point for the approval events (v1.200.0): this exact
+    function is what ``daemon/app.py`` registers on the bus, so routing
+    ``approval.requested`` / ``approval.resolved`` here means the shared
+    daemon factory needs no new wiring per prompt kind. ``approval.requested``
+    registers prompts (:func:`handle_approval_requested`); ``approval.resolved``
+    — published on EVERY pause ending, dashboard answer and runtime timeout
+    alike — expires every identity's open prompt for that gate, which is the
+    timeout hygiene that keeps an approval prompt from lingering past its
+    ~300s window.
     """
     try:
-        if _event_field(event, "type") != WAITING_EVENT:
+        etype = _event_field(event, "type")
+        if etype == APPROVAL_EVENT:
+            return handle_approval_requested(
+                event, store=store, notifier=notifier, thread_store=thread_store
+            )
+        if etype == APPROVAL_RESOLVED_EVENT:
+            payload = _event_field(event, "payload", {}) or {}
+            approval_id = str(payload.get("approval_id") or "").strip()
+            if approval_id:
+                store.expire_ref(APPROVAL_KIND, approval_id)
+            return []
+        if etype != WAITING_EVENT:
             return []
         payload = _event_field(event, "payload", {}) or {}
         run_id = str(payload.get("run_id") or "").strip()

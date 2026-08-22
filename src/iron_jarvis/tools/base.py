@@ -27,6 +27,12 @@ class ToolContext:
     config: "Config"
     event_bus: "EventBus"
     engine: "Engine"
+    #: The grounded project, when the caller resolved one (v1.200.0). Chat runs
+    #: as session_id="chat" — not a Session row — so artifact sinks could never
+    #: inherit a project from the session table; this field is how a
+    #: project-grounded chat turn's generations reach the project's Media view
+    #: instead of stranding in the global gallery with project_id NULL.
+    project_id: str | None = None
 
 
 @dataclass

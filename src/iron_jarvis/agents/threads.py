@@ -808,6 +808,25 @@ class AgentThreads:
         except Exception:  # noqa: BLE001 — never break a round
             pass
 
+        # LESSONS (v1.200.0): the round table WRITES into memory (remember +
+        # the history index) but its panelists advised blind — every sibling
+        # lane (chat_turn, agents/runtime) folds the accumulated lessons into
+        # its system prompt and this one did not. Reuse the ONE renderer,
+        # ``LearningEngine.apply_to_prompt`` (a second renderer would drift —
+        # the remember-ladder lesson, v1.185.0): it is already bounded (top 8
+        # lessons, terse rows) and returns the prompt UNCHANGED when nothing
+        # has been learned, so no empty heading is ever injected. Lessons are
+        # user-scope working knowledge, like the "how" slice above — they do
+        # NOT erode panelist distinctness (profile stays include=("how",)).
+        # No project knowledge here ON PURPOSE: agent threads carry no
+        # project_id (the Agents page is global — see ``_index_thread``).
+        learning = getattr(d.platform, "learning", None)
+        if learning is not None:
+            try:
+                system = learning.apply_to_prompt(system)
+            except Exception:  # noqa: BLE001 — never break a round
+                pass
+
         resp, _p, _m = await d._one_shot_complete(
             provider,
             adapter,

@@ -65,13 +65,24 @@ class WorkflowStore:
         """Upsert the workflow named ``name`` with ``steps`` (JSON) + ``description``.
 
         Inserts a new row, or updates the existing one in place and bumps
-        ``updated_at``. ``project_id`` is the optional explicit project pin;
-        each save rewrites the WHOLE def, so omitting it unpins (a stale pin
-        silently grounding runs in the wrong project would be worse than
-        re-stating it). Returns the persisted (refreshed) record.
+        ``updated_at``. Returns the persisted (refreshed) record.
+
+        ``project_id`` carries THREE intents (v1.200.0, the v1.164.0
+        remote-agent-token lesson — absent must mean KEEP, never delete):
+
+        * a non-empty string SETS the pin;
+        * ``None`` (the default — i.e. the caller said nothing) KEEPS any
+          existing pin. The old code deleted the pin row here, so every
+          pin-unaware caller (``workflow_create``, the workflow generator)
+          silently unpinned a def just by re-saving it;
+        * ``""`` (an EXPLICIT empty string) CLEARS the pin. Unlike the token,
+          a pin is not a secret no UI can prefill — ``""`` has been the
+          public unpin contract since the route shipped (``POST /workflows``
+          documents "``\"\"`` explicitly unpins" and the dashboard clears
+          exactly this way), so the store now honours the same three-way
+          contract instead of needing the route's pre-fetch workaround.
         """
         steps_json = dumps(list(steps))
-        pin = (project_id or "").strip()
         with session_scope(self.engine) as db:
             row = db.exec(
                 select(WorkflowRecord).where(WorkflowRecord.name == name)
@@ -85,15 +96,17 @@ class WorkflowStore:
                 row.steps_json = steps_json
                 row.updated_at = utcnow()
             db.add(row)
-            pin_row = db.get(WorkflowPinRecord, name)
-            if pin:
-                if pin_row is None:
-                    pin_row = WorkflowPinRecord(name=name, project_id=pin)
-                else:
-                    pin_row.project_id = pin
-                db.add(pin_row)
-            elif pin_row is not None:
-                db.delete(pin_row)  # unpinned save clears any prior pin
+            if project_id is not None:  # None = caller said nothing = KEEP
+                pin = project_id.strip()
+                pin_row = db.get(WorkflowPinRecord, name)
+                if pin:
+                    if pin_row is None:
+                        pin_row = WorkflowPinRecord(name=name, project_id=pin)
+                    else:
+                        pin_row.project_id = pin
+                    db.add(pin_row)
+                elif pin_row is not None:
+                    db.delete(pin_row)  # explicit "" clears the pin
             db.commit()
             db.refresh(row)  # un-expire attrs so the detached record stays usable
             return row

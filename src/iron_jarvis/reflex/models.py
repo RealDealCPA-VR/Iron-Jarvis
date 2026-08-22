@@ -46,6 +46,12 @@ class ReflexRule(SQLModel, table=True):
     #: Task text for session/remote_agent actions. Supports {body}/{text}/{slug}
     #: placeholders filled from the triggering signal. Empty → a sensible default.
     task_template: str = ""
+    #: Context spine: the project this rule's work is grounded in (v1.200.0).
+    #: A "client emailed the missing 1099" reflex should run with that client's
+    #: brief/instructions/knowledge, not with zero context. None = ungrounded
+    #: (the pre-v1.200.0 behavior, and still the default). Additive column —
+    #: existing DBs self-heal via ``core.db._reconcile_additive_columns``.
+    project_id: str | None = Field(default=None, index=True)
     enabled: bool = True
     created_at: datetime = Field(default_factory=utcnow)
     last_fired_at: datetime | None = None

@@ -475,6 +475,21 @@ class ConsultTool(Tool):
         except Exception:  # noqa: BLE001 — never break a consult
             pass
 
+        # LESSONS (v1.200.0): a consulted teammate was the one advisor in the
+        # app that had never seen what the app has learned — chat, agent runs
+        # and (same release) the round table all fold the lessons block in.
+        # Same renderer as every other lane (``LearningEngine.apply_to_prompt``
+        # — bounded to the top 8, unchanged prompt when nothing is learned),
+        # and never-raising because consult runs MID-RUN inside another
+        # agent's turn: a broken learning layer must cost its block, never
+        # the consult (the identity-spine call sites' rule).
+        learning = getattr(self.platform, "learning", None)
+        if learning is not None:
+            try:
+                system = learning.apply_to_prompt(system)
+            except Exception:  # noqa: BLE001 — never break a consult
+                pass
+
         route = await self.platform.router.complete(
             provider=plan.provider or None,
             model=plan.model or None,

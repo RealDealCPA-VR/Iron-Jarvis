@@ -168,6 +168,7 @@ const PRIMARY_KEYS: Record<string, string[] | null> = {
 /** Friendly names for the per-destination event routing checkboxes (N5). */
 const EVENT_LABELS: Array<{ key: string; label: string }> = [
   { key: "review.requested", label: "A review needs you" },
+  { key: "approval.requested", label: "An agent asks permission to use a tool" },
   { key: "session.completed", label: "A task finished" },
   { key: "workflow.completed", label: "A workflow finished" },
   { key: "provider.failed", label: "A model failed" },

@@ -53,6 +53,8 @@ interface ReflexRule {
   action: ReflexAction;
   target: string;
   task_template: string;
+  /** Context spine (v1.200.0): the project the fired work is grounded in. */
+  project_id: string | null;
   enabled: boolean;
   created_at: string;
   last_fired_at: string | null;
@@ -255,6 +257,10 @@ export default function ReflexPage() {
   const workflows = useApi<{ workflows: { name: string; description?: string }[] }>("/workflows");
   const remoteAgents = useApi<{ agents: { name: string }[] }>("/agents/remote");
   const webhooks = useApi<{ webhooks: Webhook[] }>("/webhooks");
+  // Context spine: projects a rule's fired work can be grounded in.
+  const projectsApi = useApi<{ projects: { id: string; name: string }[] }>("/projects");
+  const projects = projectsApi.data?.projects ?? [];
+  const projectName = (id: string) => projects.find((p) => p.id === id)?.name ?? id;
   const workflowNames = workflows.data?.workflows?.map((w) => w.name) ?? [];
   const agentNames = remoteAgents.data?.agents?.map((a) => a.name) ?? [];
   const inboundSlugs =
@@ -270,6 +276,7 @@ export default function ReflexPage() {
   const [action, setAction] = useState<ReflexAction>("workflow");
   const [target, setTarget] = useState("");
   const [taskTemplate, setTaskTemplate] = useState("");
+  const [projectId, setProjectId] = useState("");
   const [enabled, setEnabled] = useState(true);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -305,6 +312,9 @@ export default function ReflexPage() {
     workflowNames.length > 0 &&
     !workflowNames.includes(target.trim());
   const templateShown = action === "session" || action === "remote_agent";
+  // A remote agent runs on someone else's endpoint — no grounding seam there,
+  // so the picker (and the submitted project) applies to session/workflow only.
+  const projectShown = action !== "remote_agent";
   const matchReady = source !== "webhook" || !!match.trim();
   const targetReady = !targetNeeded || !!target.trim();
   const canSubmit = matchReady && targetReady && !targetUnknown && !busy;
@@ -340,6 +350,7 @@ export default function ReflexPage() {
         action,
         target: targetNeeded ? target.trim() : "",
         task_template: templateShown ? taskTemplate : "",
+        project_id: projectShown && projectId ? projectId : null,
         enabled,
       });
       setFormOk("Reflex added — it's live now and survives restarts.");
@@ -347,6 +358,7 @@ export default function ReflexPage() {
       setMatch("");
       setTarget("");
       setTaskTemplate("");
+      setProjectId("");
       setEnabled(true);
       reload();
     } catch (err) {
@@ -429,6 +441,14 @@ export default function ReflexPage() {
                 <span className="truncate font-medium text-zinc-100">{r.name}</span>
               ) : (
                 <span className="text-zinc-600">unnamed</span>
+              )}
+              {r.project_id && (
+                <span
+                  title={`Grounded in project ${projectName(r.project_id)}`}
+                  className="inline-flex min-w-0 items-center"
+                >
+                  <Badge value={projectName(r.project_id)} tone="cyan" />
+                </span>
               )}
             </div>
             <div className="mt-1.5">
@@ -690,6 +710,33 @@ export default function ReflexPage() {
                     <code className="font-mono text-accent-soft">{"{text}"}</code> /{" "}
                     <code className="font-mono text-accent-soft">{"{slug}"}</code> are filled from
                     the triggering signal. Blank = a sensible default.
+                  </div>
+                </div>
+              )}
+
+              {/* Project grounding (context spine) — session/workflow actions */}
+              {projectShown && (
+                <div>
+                  <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
+                    Run inside a project (optional)
+                  </label>
+                  <select
+                    aria-label="Project"
+                    value={projectId}
+                    onChange={(e) => setProjectId(e.target.value)}
+                    className="field"
+                  >
+                    <option value="">No project</option>
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="mt-1 text-[11px] text-zinc-600">
+                    {action === "workflow"
+                      ? "Grounds the run in that project's context — a workflow that carries its own project pin keeps it."
+                      : "The session runs with that project's brief, instructions, and files."}
                   </div>
                 </div>
               )}

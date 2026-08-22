@@ -10,6 +10,7 @@ import {
   ArrowRight,
   MessageSquare,
   CalendarClock,
+  ShieldAlert,
   Workflow,
   type LucideIcon,
 } from "lucide-react";
@@ -230,6 +231,119 @@ function WaitingRunRow({
   );
 }
 
+/** A mid-turn tool approval an AGENT RUN is paused on (v1.200.0). Job-origin
+ *  runs (the Agents page) genuinely pause on ask-tier tools, but only the chat
+ *  stream rendered a card — the job-poster never saw the ask and it timed out
+ *  into a silent degrade. GET /chat/approvals/pending lists them (id + tool +
+ *  session, NEVER args — the registry's own no-secrets posture) and the answer
+ *  goes through the same POST /chat/approvals/{id} the chat card uses. */
+interface PendingAgentApproval {
+  id: string;
+  tool: string;
+  sessionId: string;
+  requestedAt: string;
+}
+
+/** Parse one /chat/approvals/pending row (null = not a usable row). */
+function parseAgentApproval(raw: unknown): PendingAgentApproval | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const id = typeof r.id === "string" ? r.id : "";
+  if (!id) return null;
+  return {
+    id,
+    tool: typeof r.tool === "string" && r.tool ? r.tool : "unknown",
+    sessionId: typeof r.session_id === "string" ? r.session_id : "",
+    requestedAt: typeof r.requested_at === "string" ? r.requested_at : "",
+  };
+}
+
+/** One paused agent ask in the dropdown: tool name + session link + Approve
+ *  once / Deny, POSTing the same route the chat card posts. A 404 means it was
+ *  answered elsewhere or timed out (the pause window is bounded) — the row
+ *  leaves without a retry; any other failure keeps the row answerable. */
+function AgentApprovalRow({
+  ask,
+  onGone,
+}: {
+  ask: PendingAgentApproval;
+  onGone: (id: string) => void;
+}) {
+  const [busy, setBusy] = useState<"once" | "deny" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function answer(decision: "once" | "deny") {
+    if (busy) return;
+    setBusy(decision);
+    setError(null);
+    try {
+      // Encode the id (same idiom as the workflow-answer POST): it arrives
+      // from a polled response and must not silently reroute the path.
+      await post(`/chat/approvals/${encodeURIComponent(ask.id)}`, { decision });
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        onGone(ask.id); // answered elsewhere or expired — already resolved
+        return;
+      }
+      setError(e instanceof ApiError ? e.message : String(e));
+      setBusy(null); // daemon blip — keep the row answerable
+      return;
+    }
+    onGone(ask.id); // unmounts this row — no state updates past this point
+  }
+
+  return (
+    <li data-testid="bell-agent-approval" className="px-4 py-3">
+      <div className="flex items-start gap-3">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-amber-500/25 bg-amber-500/[0.08] text-amber-300">
+          <ShieldAlert size={15} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <span className="block text-sm font-medium text-zinc-100">
+            An agent is asking permission
+          </span>
+          <p className="mt-0.5 text-[12px] leading-snug text-amber-200">
+            It wants to run <span className="font-mono">{ask.tool}</span> — the
+            run is paused until you answer.
+          </p>
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => void answer("once")}
+              disabled={busy !== null}
+              className="btn-accent px-3 py-1.5 text-[12px] disabled:opacity-50"
+            >
+              {busy === "once" ? "Approving…" : "Approve once"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void answer("deny")}
+              disabled={busy !== null}
+              className="rounded-lg border border-white/10 bg-white/[0.02] px-3 py-1.5 text-[12px] text-zinc-300 transition-colors hover:border-rose-500/30 hover:text-rose-200 disabled:opacity-50"
+            >
+              {busy === "deny" ? "Denying…" : "Deny"}
+            </button>
+          </div>
+          {error && <p className="mt-1 text-[11px] text-rose-300">{error}</p>}
+          <span className="mt-1 flex items-center gap-1.5 font-mono text-[10px] text-zinc-600">
+            {ask.sessionId ? (
+              <Link
+                href={`/sessions/${encodeURIComponent(ask.sessionId)}`}
+                className="text-accent-soft transition-colors hover:text-accent"
+              >
+                {shortId(ask.sessionId)}
+              </Link>
+            ) : (
+              "—"
+            )}
+            {ask.requestedAt ? <>· {clockTime(ask.requestedAt)}</> : null}
+          </span>
+        </div>
+      </div>
+    </li>
+  );
+}
+
 /**
  * Notification center: a bell + unread badge counting work that needs a human —
  * unresolved review requests (from the live event stream) plus any pending
@@ -256,6 +370,14 @@ export function NotificationBell() {
     "/workflows/runs?status=waiting&slim=true&limit=200",
     15000,
   );
+  // Agent runs paused on an ask-tier tool (v1.200.0) — same 15s cadence as
+  // the other polled bell sources. The pause is bounded (it degrades on
+  // timeout), so this is the difference between the user answering and a
+  // silent deny they never saw.
+  const agentAsksApi = usePolledApi<{ approvals?: unknown[] }>(
+    "/chat/approvals/pending",
+    15000,
+  );
 
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -277,6 +399,38 @@ export function NotificationBell() {
     }
     return out;
   }, [runsApi.data, resolvedAsks]);
+
+  // Agent asks answered from THIS dropdown: suppressed locally so the row
+  // leaves immediately instead of lingering until the next poll lands.
+  const [answeredAgentAsks, setAnsweredAgentAsks] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const agentAsks = useMemo(() => {
+    const out: PendingAgentApproval[] = [];
+    for (const raw of agentAsksApi.data?.approvals ?? []) {
+      const ask = parseAgentApproval(raw);
+      if (ask && !answeredAgentAsks.has(ask.id)) out.push(ask);
+    }
+    return out;
+  }, [agentAsksApi.data, answeredAgentAsks]);
+
+  // A live approval.requested/resolved event means the polled list is stale —
+  // refetch right away (same idiom as the workflow.waiting refresh below).
+  const reloadAgentAsks = agentAsksApi.reload;
+  const prevApprovalEventId = useRef<string | null>(null);
+  useEffect(() => {
+    const latest = events.find(
+      (e) => e.type === "approval.requested" || e.type === "approval.resolved",
+    );
+    if (!latest || prevApprovalEventId.current === latest.id) return;
+    prevApprovalEventId.current = latest.id;
+    reloadAgentAsks();
+  }, [events, reloadAgentAsks]);
+
+  const handleAgentAskGone = (id: string) => {
+    setAnsweredAgentAsks((prev) => new Set(prev).add(id));
+    reloadAgentAsks();
+  };
 
   // A live `workflow.waiting` event means the polled list is already stale —
   // refetch right away so the question appears without the up-to-15s lag.
@@ -346,8 +500,9 @@ export function NotificationBell() {
   // Use the larger of live-streamed vs polled reviews so neither a fresh reload
   // (no events yet) nor a just-arrived live event under-reports the badge/title.
   const reviewish = Math.max(reviews.length, polledReviews) + pendingApprovals;
-  // Parked workflow questions wait on the user exactly like reviews/approvals.
-  const count = reviewish + waiting.length;
+  // Parked workflow questions and paused agent asks wait on the user exactly
+  // like reviews/approvals.
+  const count = reviewish + waiting.length + agentAsks.length;
 
   // Desktop notifications + browser tab title are owned here, app-wide.
   const { permission, requestPermission, notify } = useDesktopNotifications();
@@ -378,10 +533,14 @@ export function NotificationBell() {
         parts.push(
           `${waiting.length} workflow question${waiting.length === 1 ? "" : "s"} waiting`,
         );
+      if (agentAsks.length)
+        parts.push(
+          `${agentAsks.length} agent${agentAsks.length === 1 ? "" : "s"} asking permission`,
+        );
       const body = parts.join(" · ") || "Something needs your attention.";
       notify(`Iron Jarvis — ${count} pending`, body, () => setOpen(true));
     }
-  }, [count, reviews.length, pendingApprovals, waiting.length, notify]);
+  }, [count, reviews.length, pendingApprovals, waiting.length, agentAsks.length, notify]);
 
   // Ping a desktop notification when a NEW activity event arrives. The event
   // buffer starts empty on load and /events only streams (never replays
@@ -470,6 +629,17 @@ export function NotificationBell() {
                 </div>
               ) : (
                 <ul className="divide-y divide-white/[0.04]">
+                  {/* Paused agent asks first — the pause window is bounded, so
+                      these degrade into a silent deny if left waiting. Section
+                      absent entirely when none pend (honest empty behavior). */}
+                  {agentAsks.map((ask) => (
+                    <AgentApprovalRow
+                      key={ask.id}
+                      ask={ask}
+                      onGone={handleAgentAskGone}
+                    />
+                  ))}
+
                   {pendingApprovals > 0 && (
                     <li>
                       <Link
@@ -593,13 +763,24 @@ export function NotificationBell() {
             {count > 0 && (
               <footer className="border-t hairline px-4 py-2">
                 {/* Point at the surface that actually holds the pending work:
-                    only-parked-workflows pending → the Workflows page. */}
+                    only-parked-workflows pending → the Workflows page; only
+                    paused agent asks → the Agents page (they came from a job). */}
                 <Link
-                  href={reviewish > 0 ? "/kanban" : "/workflows"}
+                  href={
+                    reviewish > 0
+                      ? "/kanban"
+                      : waiting.length > 0
+                        ? "/workflows"
+                        : "/agents"
+                  }
                   onClick={() => setOpen(false)}
                   className="flex items-center justify-center gap-1.5 text-[11px] font-medium text-accent-soft transition-colors hover:text-accent"
                 >
-                  {reviewish > 0 ? "Open the review board" : "Open the Workflows page"}{" "}
+                  {reviewish > 0
+                    ? "Open the review board"
+                    : waiting.length > 0
+                      ? "Open the Workflows page"
+                      : "Open the Agents page"}{" "}
                   <ArrowRight size={12} />
                 </Link>
               </footer>
