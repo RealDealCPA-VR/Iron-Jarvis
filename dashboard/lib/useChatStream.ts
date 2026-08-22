@@ -68,6 +68,10 @@ export type SSEEvent =
       route?: { requested?: string; provider: string; model?: string; reason?: string };
       tools_used?: string[];
       denied_tools?: string[];
+      /** SERVER-derived doors into the surfaces this turn touched (v1.199.0)
+       *  — executed-ok tools only, files excluded (the ArtifactsRail owns
+       *  files). The client renders, never derives. */
+      doors?: { href: string; label: string }[];
       /** ABSOLUTE paths of documents this turn created/edited (preview). */
       documents?: string[];
       /** The turn decided it needs the full agent (v1.108.0 — one surface). */
@@ -109,6 +113,8 @@ export interface ChatStreamResult {
   deniedTools?: string[];
   /** Server-side route disclosure (v1.165.0) — see the done-frame field. */
   route?: { requested?: string; provider: string; model?: string; reason?: string };
+  /** Server-derived doors into the surfaces this turn touched (v1.199.0). */
+  doors?: { href: string; label: string }[];
   /** Token usage for the turn (was decoded and dropped, like denied_tools). */
   usage?: { input_tokens?: number; output_tokens?: number };
   provider?: string;
@@ -240,6 +246,11 @@ export function sseEventFrom(
       if (Array.isArray(data.tools_used)) ev.tools_used = data.tools_used as string[];
       if (Array.isArray(data.denied_tools))
         ev.denied_tools = data.denied_tools as string[];
+      // Doors (v1.199.0): pass through verbatim — this decoder WHITELISTS
+      // fields, so an un-listed field silently vanishes from exactly the lane
+      // users watch (the denied_tools lesson, learned twice already).
+      if (Array.isArray(data.doors))
+        ev.doors = data.doors as { href: string; label: string }[];
       if (Array.isArray(data.documents)) ev.documents = data.documents as string[];
       if (typeof data.escalate === "boolean") ev.escalate = data.escalate;
       if (typeof data.escalate_reason === "string")
@@ -557,6 +568,7 @@ export function useChatStream(): UseChatStream {
                 reply: ev.reply || acc,
                 tools_used: ev.tools_used,
                 deniedTools: ev.denied_tools,
+                doors: ev.doors,
                 route: ev.route,
                 usage: ev.usage,
                 provider: ev.provider ?? provider,

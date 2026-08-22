@@ -49,6 +49,7 @@ from typing import Any
 from ..core.db import session_scope
 from ..core.fs_policy import fs_read_ok
 from ..core.models import AgentState, AgentType
+from .doors import collect_doors, door_for
 
 log = logging.getLogger(__name__)
 
@@ -2146,6 +2147,12 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     tools_used: list[str] = []          # ONLY tools that actually executed
     last_tool_output = ""               # last SUCCESSFUL output (no-reply synthesis)
     denied_tools: list[str] = []        # armed tools the engine refused this turn
+    # DOORS (v1.199.0): links into the surface a SUCCESSFUL creating tool just
+    # changed. Appended only inside the `if ran:` block below — the same gate
+    # as tools_used, so a failed/denied call can never mint one. MIRROR NOTE
+    # (lock-step): routes/chat.py's stream loop carries the same collection —
+    # edit both or neither.
+    door_entries: list[dict[str, str] | None] = []
     if armed:
         from ..tools.base import ToolContext
 
@@ -2372,6 +2379,12 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                 # or failed call is not honestly reported as run.
                 if ran:
                     tools_used.append(tc.name)
+                    # DOOR (v1.199.0): a successful creating tool opens a link
+                    # into its surface. Same gate as tools_used — inside this
+                    # `if ran:` — so honesty is enforced at the call site.
+                    # MIRROR NOTE (lock-step): routes/chat.py's stream loop
+                    # carries the same append — edit both or neither.
+                    door_entries.append(door_for(tc.name, result))
                     # WORKFLOW RUN RECEIPT (v1.170.0, contract 2): a
                     # SUCCESSFUL workflow_run's {run_id, workflow} rides the
                     # response as `workflow_run` so the client can render the
@@ -2555,6 +2568,16 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         "images": len(images),
         "skill": (body.skill or "").strip() or None,
         "tools_used": tools_used,
+        # DOORS (v1.199.0): server-derived links into the surfaces this turn's
+        # SUCCESSFUL creating tools changed — deduped by href, capped at 4,
+        # ALWAYS present (possibly empty) so clients never branch on absence.
+        # Files are deliberately not doors (the ArtifactsRail owns files).
+        # The dashboard persists this field on the saved thread message the
+        # same way it persists route/tools_used (the thread PUT round-trips
+        # unknown message fields verbatim), so doors survive a reload.
+        # MIRROR NOTE (lock-step): the stream done-frame in routes/chat.py
+        # carries the identical key — edit both or neither.
+        "doors": collect_doors(door_entries),
         # ABSOLUTE paths of documents this turn created/edited — the
         # dashboard opens its embedded preview from these.
         "documents": made_docs,

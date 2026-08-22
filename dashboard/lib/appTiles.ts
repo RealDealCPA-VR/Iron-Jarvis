@@ -22,6 +22,7 @@ import { NAV, type NavEntry } from "./nav";
 
 const USE_KEY = "ironjarvis.overview.usage";
 const ORDER_KEY = "ironjarvis.overview.order";
+const DOOR_KEY = "ironjarvis.doors.usage";
 
 /** Pages that are not "apps" — reached from chrome, not from the desktop. */
 const NOT_APPS = new Set<string>(["/", "/help", "/updates"]);
@@ -62,6 +63,23 @@ export function recordOpen(href: string): void {
 
 export function readUsage(): Record<string, number> {
   return readJson<Record<string, number>>(USE_KEY, {});
+}
+
+/**
+ * Record that a DOOR under a chat reply was opened (v1.199.0).
+ *
+ * This is the local, never-leaves-the-machine counter for the
+ * emergent-surface metric ("touched N subsystems without the nav"). Nav
+ * opens already count in `ironjarvis.overview.usage` via `recordOpen`;
+ * doors count HERE, under their own key, so the two paths stay
+ * distinguishable — one merged tally could never say whether a subsystem
+ * was reached through the sidebar or through the work itself.
+ */
+export function recordDoorOpen(href: string): void {
+  if (!href) return;
+  const counts = readJson<Record<string, number>>(DOOR_KEY, {});
+  counts[href] = (counts[href] ?? 0) + 1;
+  writeJson(DOOR_KEY, counts);
 }
 
 export function readOrder(): string[] {

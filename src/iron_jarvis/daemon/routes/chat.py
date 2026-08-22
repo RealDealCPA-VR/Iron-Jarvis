@@ -30,6 +30,7 @@ from ...core.db import CONVERSATION_WRITE_LOCK, session_scope
 from ...core.models import AgentState, PermissionMode
 from ...memory import commit as _commit
 from ...core.approvals import APPROVAL_TIMEOUT_S, DECISIONS, ChatApprovals
+from ..doors import collect_doors, door_for
 
 # The chat TURN lives in daemon/chat_turn.py (v1.136.0 messaging surfaces):
 # POST /chat is a thin wrapper over run_chat_turn so headless callers (the
@@ -1593,6 +1594,12 @@ def register(app: FastAPI, d) -> None:
             usage_in = usage_out = completions = 0
             tools_used: list[str] = []          # ONLY tools that actually executed
             denied_tools: list[str] = []        # armed tools refused this turn
+            # DOORS (v1.199.0): links into the surface a SUCCESSFUL creating
+            # tool just changed. Appended only inside the `if ran:` block —
+            # the same gate as tools_used, so a failed/denied call can never
+            # mint one. MIRROR NOTE (lock-step): chat_turn.py's tool loop
+            # carries the same collection — edit both or neither.
+            door_entries: list[dict[str, str] | None] = []
             last_tool_output = ""               # last SUCCESSFUL output (synthesis)
             stopped_note = ""                   # round budget cut off tool calls
             escalate = False        # the turn asked for the full agent
@@ -1881,6 +1888,13 @@ def register(app: FastAPI, d) -> None:
                             content = f"{type(exc).__name__}: {exc}"
                         if ran:
                             tools_used.append(tc.name)
+                            # DOOR (v1.199.0): a successful creating tool
+                            # opens a link into its surface. Same gate as
+                            # tools_used — inside this `if ran:` — so honesty
+                            # is enforced at the call site. MIRROR NOTE
+                            # (lock-step): chat_turn.py's tool loop carries
+                            # the same append — edit both or neither.
+                            door_entries.append(door_for(tc.name, result))
                             # WORKFLOW RUN RECEIPT (v1.170.0, contract 2): a
                             # SUCCESSFUL workflow_run's {run_id, workflow}
                             # rides the done frame as `workflow_run` so the
@@ -2073,6 +2087,14 @@ def register(app: FastAPI, d) -> None:
                     "reason": route_reason,
                 },
                 "tools_used": tools_used,
+                # DOORS (v1.199.0): server-derived links into the surfaces
+                # this turn's SUCCESSFUL creating tools changed — deduped by
+                # href, capped at 4, ALWAYS present (possibly empty). Files
+                # are deliberately not doors (the ArtifactsRail owns files).
+                # MIRROR NOTE (lock-step): the non-stream response dict in
+                # chat_turn.py carries the identical key — edit both or
+                # neither.
+                "doors": collect_doors(door_entries),
                 "denied_tools": denied_tools,
                 "auto_armed": auto_armed,
                 "documents": made_docs,

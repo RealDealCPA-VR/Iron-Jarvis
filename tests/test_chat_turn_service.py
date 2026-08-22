@@ -400,17 +400,22 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
     # WHO answered and WHY ({requested, provider, model, reason}); top-level
     # provider/model are untouched. Same object in the SSE done frame; the
     # semantics are pinned by tests/test_route_disclosure_v1165.py.
+    # v1.199.0 (doors): one more — "doors", server-derived links into the
+    # surface a SUCCESSFUL creating tool changed ([{href, label}], deduped,
+    # capped at 4, always present). Same key in the SSE done frame; the
+    # semantics are pinned by tests/test_doors_v1199.py.
     assert set(body.keys()) == {
         "reply", "provider", "model", "attached", "images", "skill",
         "tools_used", "documents", "auto_armed", "escalate",
         "escalate_reason", "escalate_agent", "workflow_draft", "context",
-        "route",
+        "route", "doors",
     }
     assert body["reply"] == "hello"
     assert body["provider"] == "mock" and body["model"] == "mock"
     assert body["attached"] == 0 and body["images"] == 0
     assert body["skill"] is None
     assert body["tools_used"] == [] and body["documents"] == []
+    assert body["doors"] == []
     assert body["auto_armed"] == []
     assert body["escalate"] is False and body["escalate_reason"] == ""
     assert body["escalate_agent"] is None

@@ -115,6 +115,8 @@ import {
 import { RunResultCard, type RunResult } from "@/components/chat/RunResultCard";
 import { DraftCard, draftFromFence } from "@/components/chat/DraftCard";
 import { TurnReceipt, type TurnRoute } from "@/components/chat/TurnReceipt";
+import { DoorsStrip, type Door } from "@/components/chat/DoorsStrip";
+import { RecipesRow } from "@/components/chat/RecipesRow";
 import {
   ArtifactsRail,
   confirmUndoPrompt,
@@ -220,6 +222,11 @@ interface ChatMessage {
   /** ABSOLUTE paths of files this turn created/edited — per-message so the
    *  receipt can say which TURN made which file (threadDocs is the rollup). */
   documents?: string[];
+  /** DOORS into the surfaces this turn actually touched (v1.199.0) —
+   *  SERVER-derived from tools that executed ok (deduped, capped at 4; files
+   *  excluded — the ArtifactsRail owns files). Persists with the thread like
+   *  every other field; pre-v1.199.0 messages simply carry none. */
+  doors?: Door[];
   /** This assistant reply was cut off mid-stream (Stop, or a committed failure)
    *  — shown with a subtle marker so a partial answer never looks complete. */
   interrupted?: boolean;
@@ -281,6 +288,9 @@ interface ChatResponse {
   tools_used?: string[];
   /** ABSOLUTE paths of documents this turn created/edited (preview panel). */
   documents?: string[];
+  /** Doors into the surfaces this turn touched (v1.199.0) — see
+   *  ChatMessage.doors. Server-derived; the client never invents these. */
+  doors?: Door[];
   /** The turn asked to be re-run as a full agent session (v1.108.0). */
   escalate?: boolean;
   escalate_reason?: string;
@@ -315,6 +325,25 @@ function workflowRunFrom(raw: unknown): { runId: string; name: string } | null {
   const name =
     typeof r.name === "string" && r.name.trim() ? r.name.trim() : "workflow";
   return { runId, name };
+}
+
+/** Decode the daemon's `doors` array (v1.199.0) — server truth carried onto
+ *  the message verbatim. Entries are shape-checked only (the payload crosses
+ *  a JSON boundary), never re-derived, sliced, or reordered: which doors a
+ *  turn earned is the DAEMON's call (executed-ok tools, deduped, capped). */
+function doorsFrom(raw: unknown): Door[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: Door[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const d = item as { href?: unknown; label?: unknown };
+    if (typeof d.href !== "string" || !d.href.trim()) continue;
+    out.push({
+      href: d.href,
+      label: typeof d.label === "string" && d.label.trim() ? d.label : d.href,
+    });
+  }
+  return out.length > 0 ? out : null;
 }
 
 /** Human wording for a run phase (v1.149.0). An unknown phase falls through to
@@ -3974,11 +4003,18 @@ export default function ChatPage() {
           streamRes.workflowRun ??
             (streamRes as unknown as { workflow_run?: unknown }).workflow_run,
         );
+        // Doors (v1.199.0): read off the stream result defensively — the
+        // done-frame decode in useChatStream whitelists fields, so this cast
+        // starts carrying data the moment the hook copies `doors` through.
+        const doors = doorsFrom(
+          (streamRes as unknown as { doors?: unknown }).doors,
+        );
         const receipt = {
           ...(route ? { route } : {}),
           ...(deniedTools?.length ? { deniedTools } : {}),
           ...(madeDocs?.length ? { documents: madeDocs } : {}),
           ...(wfRun ? { workflowRun: wfRun } : {}),
+          ...(doors ? { doors } : {}),
         };
         const full: ChatMessage[] = [
           ...history,
@@ -4099,11 +4135,15 @@ export default function ChatPage() {
       // Contract 2 (v1.170.0) — the POST lane's copy of the stream lane's
       // workflow_run handling. MIRROR NOTE: keep in step with the stream path.
       const wfRunPost = workflowRunFrom(res.workflow_run);
+      // Doors (v1.199.0) — the POST lane's copy of the stream lane's doors
+      // handling. MIRROR NOTE: keep in step with the stream path above.
+      const doorsPost = doorsFrom(res.doors);
       const receiptPost = {
         ...(res.route ? { route: res.route } : {}),
         ...(deniedPost.length ? { deniedTools: deniedPost } : {}),
         ...(res.documents?.length ? { documents: res.documents } : {}),
         ...(wfRunPost ? { workflowRun: wfRunPost } : {}),
+        ...(doorsPost ? { doors: doorsPost } : {}),
       };
       const full: ChatMessage[] = [
         ...history,
@@ -4126,10 +4166,17 @@ export default function ChatPage() {
             role: "assistant",
             content: caption,
             workflowDraft: res.workflow_draft,
+            // Earlier rounds of THIS turn may have run tools — their
+            // provenance must survive the draft exit like any other turn.
+            // MIRROR NOTE: the stream lane's draft exit spreads its full
+            // `...receipt`; this spread must stay in step, or a turn that
+            // earned a door/route/document in round 0 and crystallized a
+            // draft in round 1 silently loses them on the fallback lane
+            // (v1.199.0 — this exact drop shipped for route/documents/doors).
+            // receiptPost already carries workflowRun, so no separate spread.
             ...(toolsUsed.length ? { toolsUsed } : {}),
             ...(viaPost ? { viaProvider: viaPost } : {}),
-            // A run started earlier in the same turn survives the draft exit.
-            ...(wfRunPost ? { workflowRun: wfRunPost } : {}),
+            ...receiptPost,
           },
         ];
         setMessages(done);
@@ -5542,6 +5589,11 @@ export default function ChatPage() {
                         </button>
                       ))}
                     </div>
+                    {/* Recipes (v1.199.0): a static curated catalog of
+                        whole-job prompts. A click PREFILLS the composer and
+                        never sends — suggest-don't-act. The row renders its
+                        own heading. */}
+                    <RecipesRow onPick={prefill} />
                   </div>
                 ) : (
                   <>
@@ -5711,6 +5763,14 @@ export default function ChatPage() {
                               />
                             </div>
                           )}
+                          {/* DOORS (v1.199.0): links into the surfaces this
+                              turn actually touched — SERVER-derived from the
+                              tools that executed ok (files excluded; the
+                              ArtifactsRail owns files). Rides the message,
+                              so live and persisted turns render alike; a
+                              pre-v1.199.0 message has none and shows
+                              nothing. */}
+                          <DoorsStrip doors={m.doors} />
                           {!m.route && m.viaProvider && (
                             <div
                               className="ml-11 mt-1 inline-flex items-center gap-1.5 rounded-full border border-amber-400/25 bg-amber-400/[0.08] px-2 py-0.5 text-[11px] text-amber-200/90"
