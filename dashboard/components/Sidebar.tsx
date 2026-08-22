@@ -280,6 +280,16 @@ function NavModeToggle({
 function SidebarFooter() {
   const { online: connected, health } = useDaemon();
   const version = health?.version;
+  // v1.198.0: the shortcut keycap used to hardcode "⌘K" — a Mac key shown to
+  // every user of a Windows-only packaged app. SSR renders the Windows label
+  // (stable hydration, and the packaged audience IS Windows); a mount-time
+  // check swaps in ⌘K for Macs running the dashboard from source.
+  const [cmdLabel, setCmdLabel] = useState("Ctrl+K");
+  useEffect(() => {
+    if (/Mac|iP(hone|ad|od)/.test(navigator.platform || navigator.userAgent)) {
+      setCmdLabel("⌘K");
+    }
+  }, []);
   return (
     <div className="space-y-2 border-t border-white/[0.06] px-5 py-4">
       {/* Version — the single source of truth (live from the daemon's /health,
@@ -312,7 +322,7 @@ function SidebarFooter() {
       </div>
       <div className="flex items-center gap-1.5 pt-0.5 text-[11px] text-zinc-600">
         <kbd className="rounded border border-white/10 bg-white/[0.03] px-1.5 py-0.5 font-sans text-[10px] text-zinc-500">
-          ⌘K
+          {cmdLabel}
         </kbd>
         <span>commands</span>
       </div>

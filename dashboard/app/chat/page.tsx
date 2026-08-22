@@ -125,6 +125,7 @@ import {
 } from "@/components/chat/ArtifactsRail";
 import { PreflightNote } from "@/components/chat/PreflightNote";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
+import { CHAT_EXAMPLES, pickExamples } from "@/components/chat/examples";
 import { useProviderHealth } from "@/lib/useProviderHealth";
 import type { WorkflowDraft, WorkflowRun } from "@/lib/types";
 import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
@@ -760,13 +761,6 @@ const DEFAULT_PERSONAS: PersonaOption[] = [
   },
 ];
 
-// Prompts the user can click to prefill the composer on an empty chat.
-const EXAMPLES = [
-  "What can you do?",
-  "Summarize the files in a folder",
-  "Draft a follow-up email to a client",
-];
-
 // A few agent states worth naming; anything else falls back to "Working…".
 const STATE_LABEL: Record<string, string> = {
   initializing: "Getting ready…",
@@ -1343,6 +1337,20 @@ export default function ChatPage() {
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [input, setInput] = useState("");
+  // Empty-state example chips (v1.198.0). The initializer must be
+  // DETERMINISTIC: this page is prerendered, so a random initial render would
+  // bake one trio into the build's HTML and hydration-mismatch nearly every
+  // live visit. We render the stable first four (anchor-led, same first chip
+  // as any pick), then rotate in an effect AFTER hydration.
+  const [examples, setExamples] = useState<string[]>(() =>
+    CHAT_EXAMPLES.slice(0, 4),
+  );
+  useEffect(() => {
+    // Rotate only after hydration (the roster-fold idiom, like approvalMode
+    // below): server HTML and first client render must agree, and both lead
+    // with the CHAT_EXAMPLES[0] anchor so no visible first-chip swap.
+    setExamples(pickExamples());
+  }, []);
   // "+" TOOLS MENU (chat mode): armed registry tool names — sent as `tools` on
   // every /chat turn and kept across turns until "New chat" / a thread switch.
   const [selectedTools, setSelectedTools] = useState<string[]>([]);
@@ -5524,7 +5532,7 @@ export default function ChatPage() {
                       just gets done.
                     </Empty>
                     <div className="flex flex-wrap justify-center gap-2">
-                      {EXAMPLES.map((ex) => (
+                      {examples.map((ex) => (
                         <button
                           key={ex}
                           onClick={() => prefill(ex)}

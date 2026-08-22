@@ -18,6 +18,7 @@ from . import (  # noqa: F401
     documents,
     fleet,
     fsbrowse,
+    helpdocs,
     knowledge,
     learning,
     memory_review,

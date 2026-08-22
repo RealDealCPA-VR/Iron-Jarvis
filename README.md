@@ -127,7 +127,7 @@ You can skip the guide and explore in demo mode — the banner keeps you honest.
 
 - *"Daemon offline" in the dashboard* → quit from the tray and relaunch; the app supervises and restarts its daemon automatically.
 - *"Port 8787 already in use" on launch* → another program (or a second Iron Jarvis) owns the port; close it and relaunch.
-- The **Settings → System health** card and `docs/`-linked doctor checks show exactly what's unhappy — errors are always shown honestly, never papered over.
+- The **System health** card on the Overview page (with **Advanced** switched on in the nav) and the doctor checks in the setup card show exactly what's unhappy — errors are always shown honestly, never papered over.
 
 #### Build the installer yourself (optional — needs Node 20 + pnpm + uv)
 

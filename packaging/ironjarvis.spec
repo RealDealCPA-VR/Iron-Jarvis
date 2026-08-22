@@ -49,6 +49,14 @@ hiddenimports += collect_submodules("iron_jarvis")
 # Bundled non-Python data (skills/builtin/*/SKILL.md, py.typed).
 datas += collect_data_files("iron_jarvis")
 
+# --- Help-page guides (v1.198.0) ---------------------------------------------
+# routes/helpdocs.py serves these to the dashboard's Help page, reading from
+# sys._MEIPASS/ijdocs when frozen — a frozen build without them would 404
+# every guide forever. EXACTLY the three allowlisted files, never a docs/*.md
+# glob: the TOFIX/audit/plan files in docs/ must not ship to users.
+for _doc in ("HANDBOOK.md", "RECOMMENDED-SETTINGS.md", "LOCAL-MODELS.md"):
+    datas.append((os.path.join(SPECPATH, os.pardir, "docs", _doc), "ijdocs"))
+
 # --- Core runtime stack (collect everything: submodules + data + metadata) --
 for pkg in (
     "fastapi",

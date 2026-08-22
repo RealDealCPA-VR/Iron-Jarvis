@@ -2130,6 +2130,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
     _routes.chat.register(app, d)
     _routes.projects.register(app, d)
     _routes.fsbrowse.register(app, d)
+    _routes.helpdocs.register(app, d)
     _routes.voice.register(app, d)
     _routes.sessions.register(app, d)
     _routes.documents.register(app, d)

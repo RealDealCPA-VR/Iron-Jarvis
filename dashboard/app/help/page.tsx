@@ -1,7 +1,9 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   Boxes,
   Bot,
@@ -14,20 +16,28 @@ import {
   MonitorCog,
   GitBranch,
   ArrowRight,
-  Sparkles,
   CheckCircle2,
   Eye,
   Smartphone,
   MessageCircle,
+  MessageSquare,
+  FolderKanban,
+  SquareTerminal,
+  Images,
+  GraduationCap,
+  LifeBuoy,
   Megaphone,
   Wifi,
   KeyRound,
   ShieldCheck,
   BookOpen,
   UserRound,
+  X,
   type LucideIcon,
 } from "lucide-react";
-import { Card } from "@/components/ui";
+import { ApiError, get } from "@/lib/api";
+import { useApi } from "@/lib/useApi";
+import { Card, ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 
@@ -39,6 +49,32 @@ interface Subsystem {
 }
 
 const SUBSYSTEMS: Subsystem[] = [
+  // The four HERO surfaces lead — the exact pages the default Simple-mode nav
+  // leads with (v1.198.0; the grid used to omit all four).
+  {
+    href: "/chat",
+    title: "Chat",
+    icon: MessageSquare,
+    desc: "One surface for everything — ask, attach files, type / for skills; big jobs escalate themselves.",
+  },
+  {
+    href: "/projects",
+    title: "Projects",
+    icon: FolderKanban,
+    desc: "The context spine: a brief, instructions, a real folder, and knowledge every chat and task inside it inherits.",
+  },
+  {
+    href: "/terminals",
+    title: "Build",
+    icon: SquareTerminal,
+    desc: "Live terminals side by side, each openable in any project folder.",
+  },
+  {
+    href: "/creative",
+    title: "Creative",
+    icon: Images,
+    desc: "Generate images, video, music and speech; browse it all in a library.",
+  },
   {
     href: "/you",
     title: "You",
@@ -189,21 +225,317 @@ interface LoopStep {
   desc: string;
 }
 
+// Chat-first (v1.198.0): the product thesis is ONE chat surface that escalates
+// itself — the loop used to describe the advanced Sessions lane instead.
 const LOOP: LoopStep[] = [
   {
-    icon: Sparkles,
-    title: "Start a session",
-    desc: "Describe what you want in plain language and pick an agent.",
+    icon: MessageSquare,
+    title: "Ask in Chat",
+    desc: "Describe what you want in plain language — quick answers come straight back.",
   },
   {
     icon: Bot,
-    title: "The agent works",
-    desc: "It plans, runs tools, and edits files on an isolated workspace.",
+    title: "It escalates itself",
+    desc: "Real multi-step work hands itself to a full agent — visibly, and with a reason.",
   },
   {
     icon: CheckCircle2,
     title: "Review & approve",
     desc: "Risky changes wait for your sign-off before anything lands.",
+  },
+];
+
+/* ------------------------------------------------------------------ guides */
+
+/** One entry of GET /helpdocs — the catalog of in-app guides. */
+interface HelpDocMeta {
+  slug: string;
+  title: string;
+  description: string;
+}
+
+/** GET /helpdocs/{slug} — one guide's full markdown. */
+interface HelpDocBody {
+  slug: string;
+  title: string;
+  markdown: string;
+}
+
+// Dark-theme element overrides for the guide viewer (the app has no typography
+// plugin — same hand-rolled "prose-invert" approach as the Chat page, sized a
+// notch roomier because a handbook is read top to bottom, not in bubbles).
+const GUIDE_MD: Components = {
+  h1: ({ children }) => (
+    <h1 className="mb-2 mt-5 text-lg font-semibold text-zinc-100 first:mt-0">{children}</h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="mb-1.5 mt-4 text-base font-semibold text-zinc-100 first:mt-0">
+      {children}
+    </h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="mb-1 mt-3 text-sm font-semibold text-zinc-100 first:mt-0">{children}</h3>
+  ),
+  h4: ({ children }) => (
+    <h4 className="mb-1 mt-2.5 text-[13px] font-semibold text-zinc-200 first:mt-0">
+      {children}
+    </h4>
+  ),
+  p: ({ children }) => (
+    <p className="my-1.5 leading-relaxed first:mt-0 last:mb-0">{children}</p>
+  ),
+  ul: ({ children }) => <ul className="my-1.5 list-disc space-y-1 pl-5">{children}</ul>,
+  ol: ({ children }) => <ol className="my-1.5 list-decimal space-y-1 pl-5">{children}</ol>,
+  li: ({ children }) => <li className="leading-relaxed [&>p]:my-0">{children}</li>,
+  table: ({ children }) => (
+    <div className="my-2 overflow-x-auto">
+      <table className="w-full border-collapse text-[13px]">{children}</table>
+    </div>
+  ),
+  th: ({ children }) => (
+    <th className="border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-left font-medium text-zinc-100">
+      {children}
+    </th>
+  ),
+  td: ({ children }) => (
+    <td className="border border-white/10 px-2.5 py-1.5 align-top text-zinc-300">
+      {children}
+    </td>
+  ),
+  a: ({ children, href }) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="text-accent-soft underline decoration-accent/40 underline-offset-2 transition-colors hover:decoration-accent"
+    >
+      {children}
+    </a>
+  ),
+  blockquote: ({ children }) => (
+    <blockquote className="my-2 border-l-2 border-accent/40 pl-3 text-zinc-400 [&>p]:my-0.5">
+      {children}
+    </blockquote>
+  ),
+  hr: () => <hr className="my-3 border-white/10" />,
+  strong: ({ children }) => (
+    <strong className="font-semibold text-zinc-100">{children}</strong>
+  ),
+  // The pre override resets the inline-code styling for fenced blocks so code
+  // inside a block is mono-on-dark, not pill-highlighted per line.
+  pre: ({ children }) => (
+    <pre className="my-2 overflow-x-auto rounded-xl border border-white/[0.06] bg-black/40 p-3 font-mono text-[11.5px] leading-relaxed text-zinc-300 [&>code]:rounded-none [&>code]:bg-transparent [&>code]:p-0 [&>code]:text-inherit">
+      {children}
+    </pre>
+  ),
+  code: ({ children, className }) => (
+    <code
+      className={`rounded bg-white/[0.08] px-1.5 py-0.5 font-mono text-[0.85em] text-accent-soft ${className ?? ""}`}
+    >
+      {children}
+    </code>
+  ),
+};
+
+/**
+ * The deep docs (Handbook, Recommended Settings, Local Models), served by the
+ * daemon and read WITHOUT leaving the app — packaged users have no repo to
+ * browse (v1.198.0). Clicking a card expands an in-page viewer below the list;
+ * clicking the open card again (or the ✕) closes it. Deliberately local state,
+ * not a ?doc= search param: useSearchParams forces a Suspense boundary and
+ * risks the static build.
+ */
+function GuidesCard() {
+  const { data, error, loading } = useApi<{ docs: HelpDocMeta[] }>("/helpdocs");
+  const [openSlug, setOpenSlug] = useState<string | null>(null);
+  const [doc, setDoc] = useState<HelpDocBody | null>(null);
+  const [docLoading, setDocLoading] = useState(false);
+  const [docError, setDocError] = useState<string | null>(null);
+  // Guards a stale response landing after the user switched guides (or closed
+  // the viewer): only the fetch for the CURRENTLY open slug may set state.
+  const wanted = useRef<string | null>(null);
+
+  const close = () => {
+    wanted.current = null;
+    setOpenSlug(null);
+    setDoc(null);
+    setDocError(null);
+    setDocLoading(false);
+  };
+
+  const openGuide = (slug: string) => {
+    if (openSlug === slug) {
+      close(); // second click on the open guide toggles it shut
+      return;
+    }
+    wanted.current = slug;
+    setOpenSlug(slug);
+    setDoc(null);
+    setDocError(null);
+    setDocLoading(true);
+    get<HelpDocBody>(`/helpdocs/${encodeURIComponent(slug)}`)
+      .then((d) => {
+        if (wanted.current !== slug) return;
+        setDoc(d);
+        setDocLoading(false);
+      })
+      .catch((e: unknown) => {
+        if (wanted.current !== slug) return;
+        // The daemon 404s honestly when a doc is missing from the install —
+        // show its message, never a blank panel.
+        setDocError(e instanceof ApiError ? e.message : String(e));
+        setDocLoading(false);
+      });
+  };
+
+  const docs = data?.docs ?? [];
+  const openMeta = docs.find((d) => d.slug === openSlug);
+
+  return (
+    <Card title="Guides" icon={<GraduationCap size={15} />}>
+      <p className="text-[13px] leading-relaxed text-zinc-400">
+        The deep documentation, readable right here — no repo or website needed.
+      </p>
+
+      {loading && (
+        <div className="mt-4">
+          <SkeletonRows rows={2} />
+        </div>
+      )}
+      {!loading && error && (
+        <div className="mt-4">
+          <ErrorNote>
+            Couldn&apos;t load the guides
+            {error.status === 0 ? " — the daemon is offline" : ""}: {error.message}
+          </ErrorNote>
+        </div>
+      )}
+      {!loading && !error && docs.length === 0 && (
+        <p className="mt-4 text-[13px] text-zinc-500">No guides shipped with this build.</p>
+      )}
+
+      {docs.length > 0 && (
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          {docs.map((d) => {
+            const isOpen = d.slug === openSlug;
+            return (
+              <button
+                key={d.slug}
+                type="button"
+                onClick={() => openGuide(d.slug)}
+                aria-expanded={isOpen}
+                className={`group flex flex-col gap-2 rounded-2xl border px-4 py-4 text-left transition-all duration-300 ${
+                  isOpen
+                    ? "border-accent/30 bg-accent/[0.06]"
+                    : "border-white/[0.05] bg-white/[0.02] hover:-translate-y-0.5 hover:border-white/10"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="grid h-9 w-9 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-accent-soft">
+                    <BookOpen size={16} />
+                  </span>
+                  <ArrowRight
+                    size={14}
+                    className={`transition-transform ${
+                      isOpen ? "rotate-90 text-accent-soft" : "text-zinc-600 group-hover:text-accent-soft"
+                    }`}
+                  />
+                </div>
+                <div>
+                  <div className="text-sm font-semibold text-zinc-100">{d.title}</div>
+                  <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">
+                    {d.description}
+                  </p>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {openSlug && (
+        <div className="mt-4 overflow-hidden rounded-2xl border border-white/[0.06] bg-white/[0.02]">
+          <div className="flex items-center justify-between gap-3 border-b hairline px-4 py-2.5">
+            <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
+              <BookOpen size={14} className="text-zinc-500" aria-hidden="true" />
+              {doc?.title ?? openMeta?.title ?? openSlug}
+            </div>
+            <button
+              type="button"
+              onClick={close}
+              aria-label="Close guide"
+              className="grid h-7 w-7 place-items-center rounded-lg border border-white/10 bg-white/[0.04] text-zinc-400 transition-colors hover:text-zinc-100"
+            >
+              <X size={14} />
+            </button>
+          </div>
+          <div className="max-h-[36rem] overflow-y-auto px-5 py-4 text-[13px] leading-relaxed text-zinc-300">
+            {docLoading ? (
+              <LoaderInline label="Loading guide…" />
+            ) : docError ? (
+              <ErrorNote>{docError}</ErrorNote>
+            ) : doc ? (
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={GUIDE_MD}>
+                {doc.markdown}
+              </ReactMarkdown>
+            ) : null}
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/* --------------------------------------------------------- troubleshooting */
+
+// Copy kept exact with README "If something looks wrong" + install/data notes —
+// these are the app's real remedies, not new ones invented for this card.
+const TROUBLE: { symptom: string; fix: ReactNode }[] = [
+  {
+    symptom: "“Daemon offline” in the dashboard",
+    fix: "Quit from the tray and relaunch — the app supervises and restarts its daemon automatically.",
+  },
+  {
+    symptom: "“Port 8787 already in use” on launch",
+    fix: "Another program (or a second Iron Jarvis) owns the port; close it and relaunch.",
+  },
+  {
+    symptom: "Windows SmartScreen on install",
+    fix: (
+      <>
+        Windows shows &ldquo;Windows protected your PC&rdquo; because the app isn&apos;t
+        code-signed yet — click <Kbd>More info</Kbd> then <Kbd>Run anyway</Kbd>. This happens
+        once per download, not every launch.
+      </>
+    ),
+  },
+  {
+    symptom: "Where is my data?",
+    fix: (
+      <>
+        In <Code>%APPDATA%\Iron Jarvis</Code> — config, the database, encrypted secrets,
+        memory, and backups. It survives every update and reinstall; delete that folder for a
+        full wipe.
+      </>
+    ),
+  },
+  {
+    symptom: "Something else?",
+    // The System health panel lives on the OVERVIEW behind the nav's Advanced
+    // toggle ({advanced && ...} in app/page.tsx), and the doctor checks
+    // surface in the Overview's setup card — NOT on Settings (v1.198.0 fix:
+    // this entry once pointed at a Settings card that does not exist).
+    fix: (
+      <>
+        The System health card on the{" "}
+        <Link href="/" className="text-accent-soft hover:text-accent">
+          Overview
+        </Link>{" "}
+        (switch on <span className="text-zinc-300">Advanced</span> at the bottom of the nav to
+        see it) and the doctor checks in the setup card show exactly what&apos;s unhappy —
+        errors are always shown honestly, never papered over.
+      </>
+    ),
   },
 ];
 
@@ -245,10 +577,17 @@ export default function HelpPage() {
           <p className="mt-4 flex items-center gap-2 text-[12px] text-zinc-500">
             <ArrowRight size={13} className="text-accent-soft/70" />
             Ready to try it? Head to{" "}
-            <Link href="/sessions" className="text-accent-soft hover:text-accent">
+            <Link href="/chat" className="text-accent-soft hover:text-accent">
+              Chat
+            </Link>{" "}
+            and ask your first question.
+          </p>
+          <p className="mt-1.5 text-[12px] text-zinc-600">
+            Want to watch an agent run step by step?{" "}
+            <Link href="/sessions" className="text-zinc-500 underline decoration-white/10 underline-offset-2 hover:text-zinc-300">
               Sessions
             </Link>{" "}
-            and start your first one.
+            shows every run in detail.
           </p>
         </Card>
       </Reveal>
@@ -281,6 +620,11 @@ export default function HelpPage() {
             );
           })}
         </div>
+      </Reveal>
+
+      {/* Guides — the deep docs, in-app */}
+      <Reveal>
+        <GuidesCard />
       </Reveal>
 
       {/* On your phone or another device */}
@@ -456,6 +800,20 @@ export default function HelpPage() {
               you trust — never the open internet. When in doubt, use the mesh-VPN option above.
             </div>
           </div>
+        </Card>
+      </Reveal>
+
+      {/* Troubleshooting */}
+      <Reveal>
+        <Card title="If something looks wrong" icon={<LifeBuoy size={15} />}>
+          <ul className="space-y-3">
+            {TROUBLE.map((t) => (
+              <li key={t.symptom} className="border-l border-accent/20 pl-3">
+                <div className="text-sm font-semibold text-zinc-100">{t.symptom}</div>
+                <p className="mt-0.5 text-[13px] leading-relaxed text-zinc-500">{t.fix}</p>
+              </li>
+            ))}
+          </ul>
         </Card>
       </Reveal>
 

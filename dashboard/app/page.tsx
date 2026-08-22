@@ -55,6 +55,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { EventStream } from "@/components/EventStream";
 import { ProviderDowngradeBanner } from "@/components/ProviderDowngradeBanner";
 import { OnboardingWelcome } from "@/components/OnboardingWelcome";
+import { PowerTips } from "@/components/PowerTips";
 import { MoodOrb } from "@/components/MoodOrb";
 import { PageShell, Reveal } from "@/components/motion";
 import { AppGrid } from "@/components/overview/AppGrid";
@@ -716,6 +717,13 @@ export default function OverviewPage() {
       {/* First-run welcome + getting-started checklist */}
       <Reveal>
         <OnboardingWelcome />
+      </Reveal>
+
+      {/* Power tips (v1.198.0): the shortcuts the README teaches, surfaced
+          in-app for packaged users who never see GitHub. One-shot dismiss —
+          Help carries the same info permanently. */}
+      <Reveal>
+        <PowerTips />
       </Reveal>
 
       {/* SYSTEMS & ADMIN (v1.156.0) — ONE collapsible instead of seven.
