@@ -1189,6 +1189,18 @@ class GoalContractCreate(BaseModel):
     verifier: dict[str, Any] | None = None  # store-validated; None = manual
 
 
+class GoalGrantsPatch(BaseModel):
+    """Extend a goal contract's ``allowed_grants`` (v1.209.0 —
+    ``PATCH /goals/{id}/grants``, the trust ladder's acceptance door).
+
+    Add-only ON PURPOSE: the offer flow grants; revoking is an edit with
+    different stakes and gets its own verb when it exists. The merged list is
+    validated by the store's own ``grants_violation`` (deny-floor tools 400
+    verbatim) — this model stays a thin wire shape."""
+
+    add: list[str] = Field(default_factory=list)
+
+
 class KillBody(BaseModel):
     enabled: bool = True  # engage (True) or release (False) the global kill switch
 

@@ -61,6 +61,22 @@ export interface GoalSpent {
   iterations?: number;
 }
 
+/** Per-tool ask receipts (v1.209.0 `ask_stats`): what the goal asked for and
+ *  how the user answered. Receipts, not policy — the SERVER computes offers. */
+export interface GoalAskStats {
+  asked?: number;
+  approved?: number;
+  denied?: number;
+  timed_out?: number;
+}
+
+export interface GoalVerifier {
+  kind?: string;
+  checks?: unknown[];
+  /** Only on "judged" verifiers: the judge's own sentence on satisfaction. */
+  judged_note?: string | null;
+}
+
 export interface GoalRecord {
   id: string;
   name: string;
@@ -71,10 +87,19 @@ export interface GoalRecord {
   spent?: GoalSpent | null;
   last_run_at?: string | null;
   project_id?: string | null;
-  verifier?: { kind?: string } | null;
+  verifier?: GoalVerifier | null;
   /** The breaker reason when state === "tripped" (shown VERBATIM). */
   trip_reason?: string | null;
   breaker?: { reason?: string | null } | null;
+  /** v1.209.0: per-tool ask receipts, keyed by tool name. DETAIL ROUTE ONLY:
+   *  the list route deliberately omits this (routes/goals.py `_payload` —
+   *  the counts back the offer, the offer is what lists render); surfaces
+   *  needing the table GET /goals/{id} lazily. */
+  ask_stats?: Record<string, GoalAskStats> | null;
+  /** v1.209.0: SERVER-computed grant offers (≥3 asks, all approved, never
+   *  deny-floor tools, never already-granted). The UI renders ONLY these —
+   *  it must never derive an offer from ask_stats on its own. */
+  grant_offers?: string[] | null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -101,6 +126,35 @@ export function goalTokensCompact(v: number | null | undefined): string {
   if (n >= 1e6) return `${scale(n / 1e6)}M`;
   if (n >= 1e3) return `${scale(n / 1e3)}k`;
   return `${n}`;
+}
+
+/**
+ * The verifier kind in words — the honesty scale matters: a deterministic
+ * check, an adversarial one, a model's judgement, and "you decide" are four
+ * different amounts of certainty and must never read alike.
+ */
+export function verifierWords(v?: GoalVerifier | null): string | null {
+  const kind = v?.kind;
+  if (!kind) return null;
+  switch (kind) {
+    case "checks":
+      return "verified by checks";
+    case "adversarial":
+      // The server attaches judged_note exactly when the judge was the ONLY
+      // gate (goal_view: kind "judged", or "adversarial" with zero checks,
+      // on a satisfied goal). An adversarial run with no deterministic
+      // checks must not read as if the ledger anchored anything.
+      return v?.judged_note
+        ? "adversarially verified — judge-only (no deterministic checks)"
+        : "adversarially verified";
+    case "judged":
+      return "model-judged — no deterministic checks";
+    case "manual":
+      return "manual — you decide";
+    default:
+      // An unknown kind is shown raw, never guessed into a nicer sentence.
+      return `verified by ${kind}`;
+  }
 }
 
 /** The breaker reason of a tripped goal, or null. Never paraphrased. */

@@ -95,24 +95,49 @@ def _ensure_table(engine) -> None:
 def verifier_violation(verifier: Any) -> str:
     """Why this verifier may never be stored, or ``""``.
 
-    ``kind:"checks"`` must carry at least one check that COERCES to a non-empty
-    workflows ``expect:`` shape — the coercion is IMPORTED from
-    ``workflows.engine._coerce_expect`` (lazily, to keep table registration
-    light), so the goal vocabulary and the workflow vocabulary cannot drift.
-    Without this rule, ``{"kind": "checks", "checks": []}`` would auto-satisfy
-    vacuously on the first completed session — a verifier that verifies
-    nothing is worse than ``manual``, because it LOOKS like one that does.
+    The tier rules (see ``models.VERIFIER_KINDS`` for the ladder):
+
+    * ``checks`` must carry at least one check that COERCES to a non-empty
+      workflows ``expect:`` shape — the coercion is IMPORTED from
+      ``workflows.engine._coerce_expect`` (lazily, to keep table registration
+      light), so the goal vocabulary and the workflow vocabulary cannot
+      drift. Without this rule, ``{"kind": "checks", "checks": []}`` would
+      auto-satisfy vacuously on the first completed session.
+    * ``adversarial`` accepts checks OPTIONALLY (the judge is the gate either
+      way) — but any check it DOES carry must still coerce, because a check
+      that silently loads as {} would look deterministic while gating nothing.
+    * ``judged`` accepts NO checks — the judge alone. A judged verifier
+      carrying checks is refused rather than silently ignored, because the
+      author plainly wanted both, and 'adversarial' is how you say that.
+    * unknown kinds are refused with the whole vocabulary named.
     """
+    from .models import VERIFIER_KINDS
+
     if verifier is None:
         return ""  # defaults to manual
     if not isinstance(verifier, dict):
-        return "verifier must be an object like {kind: 'checks'|'manual', checks?: [...]}"
+        return (
+            "verifier must be an object like "
+            "{kind: 'checks'|'adversarial'|'judged'|'manual', checks?: [...]}"
+        )
     kind = str(verifier.get("kind") or "manual").strip().lower()
-    if kind not in ("checks", "manual"):
-        return f"unknown verifier kind {kind!r}; expected 'checks' or 'manual'"
+    if kind not in VERIFIER_KINDS:
+        return (
+            f"unknown verifier kind {kind!r}; expected one of "
+            f"{', '.join(VERIFIER_KINDS)}"
+        )
+    checks = verifier.get("checks")
     if kind == "manual":
         return ""
-    checks = verifier.get("checks")
+    if kind == "judged":
+        if checks:
+            return (
+                "a 'judged' verifier runs the judge alone — use kind "
+                "'adversarial' to combine deterministic checks with the judge"
+            )
+        return ""
+    if kind == "adversarial" and not checks:
+        return ""  # checks are optional on tier 2; the judge is the gate
     if not isinstance(checks, list) or not checks:
         return (
             "a 'checks' verifier needs at least one check — an empty checklist "
@@ -498,6 +523,20 @@ def goal_view(record: GoalContractRecord) -> dict[str, Any]:
     breaker = record.decoded_breaker()
     reason = str(breaker.get("last_reason") or "").strip() or None
     tripped = record.state == "tripped"
+    verifier = record.decoded_verifier()
+    judge_was_the_only_gate = verifier.get("kind") == "judged" or (
+        # D4: `adversarial` with ZERO checks is evidentially identical to
+        # `judged` — the judge is the only gate — so satisfying it must not
+        # read "adversarially verified" as if the ledger anchored anything.
+        # The label follows the EVIDENCE, not the kind string.
+        verifier.get("kind") == "adversarial"
+        and not verifier.get("checks")
+    )
+    if record.state == "satisfied" and judge_was_the_only_gate:
+        # LOUD LABEL (G2): this satisfaction rests on a model's judgment,
+        # not on ledger-proven checks, and the card must say so — "a model
+        # said so" must never read like "the ledger proved it".
+        verifier["judged_note"] = "satisfied by model judgment — no deterministic checks"
     return {
         "id": record.id,
         "name": record.name,
@@ -508,7 +547,7 @@ def goal_view(record: GoalContractRecord) -> dict[str, Any]:
         "allowed_grants": record.decoded_grants(),
         "budget": record.decoded_budget(),
         "spent": record.decoded_spent(),
-        "verifier": record.decoded_verifier(),
+        "verifier": verifier,
         "state": record.state,
         "trip_reason": reason if tripped else None,
         "breaker": {

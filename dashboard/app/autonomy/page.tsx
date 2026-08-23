@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Activity,
   Target,
@@ -19,8 +19,9 @@ import {
   Play,
   Pause,
   RotateCcw,
+  ChevronRight,
 } from "lucide-react";
-import { api, post, put, ApiError } from "@/lib/api";
+import { api, get, post, put, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import {
   Card,
@@ -43,8 +44,11 @@ import {
   spentVsBudget,
   scheduleWords,
   tripReason,
+  verifierWords,
+  goalDollars,
   type GoalRecord,
   type GoalState,
+  type GoalAskStats,
 } from "@/components/GoalsStrip";
 
 /* -------------------------------------------------------------------------- */
@@ -686,6 +690,153 @@ function GoalStateChip({ state }: { state: GoalState }) {
 /** Contract texts longer than this are clipped to two lines with a toggle. */
 const CONTRACT_CLIP_AT = 180;
 
+/* --------------------------- Last 24h digest ------------------------------ */
+
+/** One goal's day, per GET /goals/digest (v1.209.0, server-composed).
+ *
+ * CROSS-SUITE RULE: this is the SERVER's shape, pinned in
+ * tests/test_goal_digest_v1209.py (`compose_digest`): results are per-session
+ * OBJECTS, asks_held is a LIST of held asks, state_changes are worded
+ * transitions — never flat strings or bare counts. The dashboard suite and
+ * the digest suite must pin THE SAME contract. */
+interface DigestResult {
+  session_id?: string;
+  files?: string[] | null;
+  summary?: string | null;
+}
+
+interface DigestAskHeld {
+  approval_id?: string;
+  tool?: string;
+  decision?: string;
+  at?: string;
+}
+
+interface DigestStateChange {
+  to?: string;
+  reason?: string | null;
+  at?: string;
+}
+
+interface DigestGoal {
+  id: string;
+  name: string;
+  ran?: number;
+  spent?: { tokens?: number; dollars?: number; wallclock_s?: number } | null;
+  results?: DigestResult[] | null;
+  asks_held?: DigestAskHeld[] | null;
+  state_changes?: DigestStateChange[] | null;
+}
+
+/** "tripped — 3 failures in 30 minutes", or just "satisfied" when the server
+ *  recorded no reason (it sends `reason: ""` on clean transitions). */
+function stateChangeWords(c: DigestStateChange): string {
+  const to = c.to || "changed";
+  const reason = (c.reason ?? "").trim();
+  return reason ? `${to} — ${reason}` : to;
+}
+
+/**
+ * "Last 24h" — the deterministic digest of what the goals actually did,
+ * collapsed by default at the top of the Goals section. Server-composed
+ * (GET /goals/digest?hours=24); this renders it and adds nothing.
+ */
+function GoalsDigest() {
+  const digest = useApi<{ digest: { goals: DigestGoal[]; since?: string } }>(
+    "/goals/digest?hours=24",
+  );
+  const [open, setOpen] = useState(false);
+  const rows = digest.data?.digest?.goals ?? [];
+
+  return (
+    <div className="mb-4 rounded-xl border border-white/[0.06] bg-white/[0.015]">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="group flex w-full items-center gap-2 px-4 py-2.5 text-left"
+      >
+        <ChevronRight
+          size={14}
+          className={`shrink-0 text-zinc-500 transition-transform duration-300 group-hover:text-accent-soft ${
+            open ? "rotate-90" : ""
+          }`}
+        />
+        <span className="text-[12.5px] font-semibold tracking-wide text-zinc-300">
+          Last 24h
+        </span>
+        <span className="ml-auto text-[11px] text-zinc-600">
+          what your goals did while you were away
+        </span>
+      </button>
+      {open && (
+        <div className="border-t hairline px-4 py-3">
+          {digest.loading && !digest.data ? (
+            <SkeletonRows rows={2} />
+          ) : digest.error && digest.error.status !== 0 ? (
+            <ErrorNote>{digest.error.message}</ErrorNote>
+          ) : rows.length === 0 ? (
+            <p className="text-sm text-zinc-500">Nothing ran in the last 24 hours.</p>
+          ) : (
+            <div className="space-y-2">
+              {rows.map((row) => (
+                <div
+                  key={row.id}
+                  data-testid={`digest-${row.id}`}
+                  className="rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2 text-xs"
+                >
+                  <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                    <span className="font-medium text-zinc-200">{row.name}</span>
+                    <span className="text-zinc-500">ran {row.ran ?? 0}×</span>
+                    <span className="text-zinc-500">
+                      {goalDollars(row.spent?.dollars)} spent
+                    </span>
+                    {Array.isArray(row.asks_held) && row.asks_held.length > 0 && (
+                      // Not just a count: WHICH tools waited and how each ask
+                      // ended — "2 asks held: shell (timeout), web_fetch (deny)".
+                      <span className="text-amber-300/80">
+                        {row.asks_held.length} ask
+                        {row.asks_held.length === 1 ? "" : "s"} held:{" "}
+                        {row.asks_held
+                          .map((a) => `${a.tool || "unknown"} (${a.decision || "held"})`)
+                          .join(", ")}
+                      </span>
+                    )}
+                    {Array.isArray(row.state_changes) && row.state_changes.length > 0 && (
+                      <span className="text-zinc-500">
+                        {row.state_changes.map(stateChangeWords).join(", ")}
+                      </span>
+                    )}
+                  </div>
+                  {Array.isArray(row.results) && row.results.length > 0 && (
+                    <ul className="mt-1 space-y-0.5 text-zinc-400">
+                      {row.results.map((r, i) => (
+                        // One line per session: the recorded summary (clipped)
+                        // plus the ledger's file harvest as a count.
+                        <li key={r.session_id ?? i} className="truncate">
+                          {r.summary || "(no summary recorded)"}
+                          {Array.isArray(r.files) && r.files.length > 0
+                            ? ` · ${r.files.length} file${r.files.length === 1 ? "" : "s"}`
+                            : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* --------------------------- grant offers --------------------------------- */
+
+/** "Not now" survives revisits via localStorage, keyed per goal+tool. */
+const OFFER_DISMISS_PREFIX = "ij_goal_offer_dismissed:";
+
 type GoalVerb = "run" | "pause" | "resume" | "stop" | "reopen";
 
 /** What a verb POST may answer: `{goal}` from the lifecycle verbs, or the
@@ -705,7 +856,88 @@ function GoalsSection() {
   const [warn, setWarn] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [askOpen, setAskOpen] = useState<Record<string, boolean>>({});
+  // Session-dismissed grant offers, hydrated from localStorage after the list
+  // lands (the CollapsibleCard idiom — never read storage during render).
+  const [dismissed, setDismissed] = useState<Record<string, boolean>>({});
+  // Per-goal ask receipts, fetched LAZILY from GET /goals/{id}: the list
+  // route deliberately omits ask_stats (the offer is the list's rendering of
+  // the counts), so the table and the "all N asks" wording come from the
+  // detail — requested once per goal, when an offer renders or the Ask
+  // history expand opens. `undefined` = not loaded (or still loading).
+  const [askStats, setAskStats] = useState<
+    Record<string, Record<string, GoalAskStats>>
+  >({});
+  const detailRequestedRef = useRef<Set<string>>(new Set());
   const list = goals.data?.goals ?? [];
+
+  const loadAskStats = useCallback(async (goalId: string) => {
+    if (detailRequestedRef.current.has(goalId)) return; // exactly one GET
+    detailRequestedRef.current.add(goalId);
+    try {
+      const r = await get<{ goal: GoalRecord }>(
+        `/goals/${encodeURIComponent(goalId)}`,
+      );
+      setAskStats((prev) => ({ ...prev, [goalId]: r.goal?.ask_stats ?? {} }));
+    } catch {
+      // Fallback wording ("every ask") stands; allow a later retry.
+      detailRequestedRef.current.delete(goalId);
+    }
+  }, []);
+
+  // An offer row needs the real N for its receipts wording — prefetch the
+  // detail for every goal the server made an offer on.
+  useEffect(() => {
+    for (const g of goals.data?.goals ?? []) {
+      if ((g.grant_offers ?? []).length > 0) void loadAskStats(g.id);
+    }
+  }, [goals.data, loadAskStats]);
+
+  useEffect(() => {
+    const map: Record<string, boolean> = {};
+    for (const g of goals.data?.goals ?? []) {
+      for (const tool of g.grant_offers ?? []) {
+        try {
+          if (localStorage.getItem(`${OFFER_DISMISS_PREFIX}${g.id}:${tool}`) === "1") {
+            map[`${g.id}:${tool}`] = true;
+          }
+        } catch {
+          /* localStorage unavailable — offers simply reappear */
+        }
+      }
+    }
+    setDismissed((prev) => ({ ...map, ...prev }));
+  }, [goals.data]);
+
+  function dismissOffer(goalId: string, tool: string) {
+    try {
+      localStorage.setItem(`${OFFER_DISMISS_PREFIX}${goalId}:${tool}`, "1");
+    } catch {
+      /* ignore */
+    }
+    setDismissed((prev) => ({ ...prev, [`${goalId}:${tool}`]: true }));
+  }
+
+  /** Allow = the ONE user-consented write; the server computed the offer,
+   *  the user says yes here, nothing is ever granted automatically. */
+  async function allowGrant(g: GoalRecord, tool: string) {
+    setBusy(`${g.id}:grant:${tool}`);
+    setOk(null);
+    setWarn(null);
+    setError(null);
+    try {
+      await api(`/goals/${encodeURIComponent(g.id)}/grants`, {
+        method: "PATCH",
+        body: JSON.stringify({ add: [tool] }),
+      });
+      setOk(`"${tool}" is now always allowed on "${g.name}".`);
+      goals.reload();
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function act(g: GoalRecord, verb: GoalVerb, said: string) {
     setBusy(`${g.id}:${verb}`);
@@ -737,6 +969,7 @@ function GoalsSection() {
 
   return (
     <Card title={`Goals${list.length ? ` · ${list.length}` : ""}`} icon={<Flag size={15} />}>
+      <GoalsDigest />
       {(ok || warn || error) && (
         <div className="mb-3">
           {ok ? (
@@ -771,6 +1004,17 @@ function GoalsSection() {
             const open = !!expanded[g.id];
             const reason = tripReason(g);
             const isBusy = (verb: GoalVerb) => busy === `${g.id}:${verb}`;
+            // ONLY the server's offers, minus this session's "Not now"s.
+            // Never derived from ask_stats client-side: the server already
+            // excluded deny-floor tools and existing grants, and a second
+            // copy of that rule here is how one of them rots.
+            const offers = (g.grant_offers ?? []).filter(
+              (t) => !dismissed[`${g.id}:${t}`],
+            );
+            // Receipts live on the DETAIL route only; undefined means the
+            // lazy GET /goals/{id} has not answered (yet).
+            const stats = askStats[g.id];
+            const asksShown = !!askOpen[g.id];
             return (
               <div
                 key={g.id}
@@ -782,9 +1026,12 @@ function GoalsSection() {
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-medium text-zinc-100">{g.name}</span>
                       <GoalStateChip state={g.state} />
-                      {g.verifier?.kind && (
-                        <span className="text-[11px] text-zinc-600">
-                          verified by {g.verifier.kind}
+                      {verifierWords(g.verifier) && (
+                        <span
+                          data-testid={`verifier-${g.id}`}
+                          className="text-[11px] text-zinc-600"
+                        >
+                          {verifierWords(g.verifier)}
                         </span>
                       )}
                     </div>
@@ -824,6 +1071,119 @@ function GoalsSection() {
                         <span className="text-rose-200/60"> — Resume clears it.</span>
                       </div>
                     )}
+                    {/* The server attaches judged_note exactly when the judge
+                        was the only gate (kind "judged", or "adversarial"
+                        with zero checks) on a satisfied goal — render it
+                        whenever it is present, kind-agnostic. */}
+                    {g.state === "satisfied" && g.verifier?.judged_note && (
+                        // A model's judgement is shown AS a judgement — the
+                        // note verbatim, labelled for what it is.
+                        <div className="mt-2 rounded-lg border border-emerald-500/25 bg-emerald-500/[0.06] px-3 py-2 text-xs text-emerald-200/90">
+                          <span className="font-semibold">Judge&apos;s note:</span>{" "}
+                          <span data-testid={`judged-note-${g.id}`}>
+                            {g.verifier.judged_note}
+                          </span>
+                          <span className="text-emerald-200/50">
+                            {" "}
+                            — a model&apos;s judgement, not a deterministic check.
+                          </span>
+                        </div>
+                      )}
+                    {offers.map((tool) => {
+                      // Real N from the detail's receipts; "every ask" only
+                      // while the detail is loading or failed.
+                      const approved = stats?.[tool]?.approved;
+                      return (
+                        // The receipts wording is the point: the offer names
+                        // what already happened, and NOTHING is granted
+                        // without the click.
+                        <div
+                          key={tool}
+                          data-testid={`grant-offer-${g.id}-${tool}`}
+                          className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-accent/20 bg-accent/[0.05] px-3 py-2 text-xs text-zinc-300"
+                        >
+                          <span>
+                            You approved{" "}
+                            {approved != null ? `all ${approved} asks` : "every ask"} for{" "}
+                            <span className="font-mono text-zinc-100">{tool}</span> on
+                            this goal — always allow it here?
+                          </span>
+                          <span className="flex shrink-0 items-center gap-1.5">
+                            <button
+                              type="button"
+                              disabled={busy !== null}
+                              onClick={() => allowGrant(g, tool)}
+                              title={`Grant "${tool}" on "${g.name}" from now on`}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
+                            >
+                              {busy === `${g.id}:grant:${tool}` ? (
+                                <LoaderInline label="Allowing…" />
+                              ) : (
+                                "Allow"
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => dismissOffer(g.id, tool)}
+                              title="Keep asking each time (hides this offer here)"
+                              className="rounded-lg border border-white/10 px-2.5 py-1 text-xs font-medium text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+                            >
+                              Not now
+                            </button>
+                          </span>
+                        </div>
+                      );
+                    })}
+                    <div className="mt-2">
+                      <button
+                        type="button"
+                        aria-expanded={asksShown}
+                        onClick={() => {
+                          const opening = !asksShown;
+                          setAskOpen((prev) => ({ ...prev, [g.id]: opening }));
+                          if (opening) void loadAskStats(g.id);
+                        }}
+                        className="text-[11px] font-medium text-zinc-500 transition-colors hover:text-zinc-300"
+                      >
+                        {asksShown ? "Hide ask history" : "Ask history"}
+                      </button>
+                      {asksShown &&
+                        (stats === undefined ? (
+                          <div className="mt-1.5 text-[11px] text-zinc-600">
+                            loading receipts…
+                          </div>
+                        ) : Object.keys(stats).length === 0 ? (
+                          <div className="mt-1.5 text-[11px] text-zinc-600">
+                            No asks on this goal yet.
+                          </div>
+                        ) : (
+                          <table
+                            data-testid={`ask-history-${g.id}`}
+                            className="mt-1.5 text-left text-[11px] text-zinc-400"
+                          >
+                            <thead>
+                              <tr className="text-zinc-600">
+                                <th className="pr-4 font-medium">tool</th>
+                                <th className="pr-4 font-medium">asked</th>
+                                <th className="pr-4 font-medium">approved</th>
+                                <th className="pr-4 font-medium">denied</th>
+                                <th className="font-medium">timed out</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {Object.keys(stats).map((t) => (
+                                <tr key={t}>
+                                  <td className="pr-4 font-mono text-zinc-300">{t}</td>
+                                  <td className="pr-4 tabular-nums">{stats[t]?.asked ?? 0}</td>
+                                  <td className="pr-4 tabular-nums">{stats[t]?.approved ?? 0}</td>
+                                  <td className="pr-4 tabular-nums">{stats[t]?.denied ?? 0}</td>
+                                  <td className="tabular-nums">{stats[t]?.timed_out ?? 0}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        ))}
+                    </div>
                   </div>
                   {/* Controls per state, mirroring the store's transition
                       table so no button is a dead 409: run_iteration refuses

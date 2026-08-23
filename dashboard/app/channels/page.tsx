@@ -175,6 +175,13 @@ const EVENT_LABELS: Array<{ key: string; label: string }> = [
   { key: "provider.failover", label: "A model failed over" },
   { key: "autonomy.executed", label: "Autonomy acted on its own" },
   { key: "skill.proposal_created", label: "Skill suggestions" },
+  // Goal news (v1.209.0) — the three DECISIONS a standing goal can announce.
+  // Routine iteration heartbeats are deliberately not offered: they are not in
+  // DEFAULT_ALERT_EVENTS either (comm/notifier.py), so a checkbox for them
+  // would promise a message the server never sends.
+  { key: "goal.satisfied", label: "A goal was achieved" },
+  { key: "goal.tripped", label: "A goal hit its safety breaker" },
+  { key: "goal.iteration_refused", label: "A goal run was held back (budget or state)" },
 ];
 
 /** What the user READS on the telegram two-way fields (v1.136.0). The server's

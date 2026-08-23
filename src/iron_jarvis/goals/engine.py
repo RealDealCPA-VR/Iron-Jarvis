@@ -17,12 +17,22 @@ bookkeeping with teeth, in this order and nowhere else:
    call sites).
 3. **Spend from recorded truth**: the session row's token counts and
    ``eval.pricing.cost_for`` — never the model's own claims.
-4. **The verifier is the workflows verified-steps machinery**, not a rewrite:
-   each check is a workflows ``expect:`` shape evaluated by
+4. **The verifier is a LADDER, and the doer never grades itself unlabeled**
+   (G2). Tier 1 ``"checks"`` is the workflows verified-steps machinery, not a
+   rewrite: each check is a workflows ``expect:`` shape evaluated by
    ``WorkflowEngine._expect_failure`` against the session's LEDGER evidence
    (files from ``agents/outcome.session_result``, summary from the recorded
-   row). ``kind:"checks"`` satisfies only when EVERY check passes;
-   ``kind:"manual"`` NEVER auto-satisfies.
+   row) — satisfies only when EVERY check passes. Tier 2 ``"adversarial"``
+   runs any checks first (identically), THEN a fresh-context one-shot judge
+   briefed to REFUTE satisfaction (``_judge_satisfaction`` — through
+   ``platform.router.complete(..., tools=[])``, the consult/decompose seam,
+   on the session's OWN provider); satisfied only when the checks pass AND
+   the judge fails to refute. Tier 3 ``"judged"`` is the judge alone, and
+   ``goal_view`` labels such a satisfaction loudly. No real provider ⇒ the
+   judge cannot run ⇒ the iteration records
+   :data:`VERIFICATION_PENDING_NOTE` and does NOT satisfy (the honest-mock
+   rule — never a fabricated verdict, never a silent demotion to
+   checks-only). ``kind:"manual"`` NEVER auto-satisfies.
 5. **Checkpoint is deterministic**: session id, ledger-recorded files, the
    session's recorded summary — composed by code, never model-written in G1.
 6. **The breaker trips honestly**: 3 failed iterations inside 30 minutes →
@@ -87,12 +97,43 @@ _CHECKPOINT_MAX_REMAINING = 2000
 #: The breaker reason for a goal whose iteration session died with the daemon.
 _INTERRUPTED_REASON = "interrupted by a daemon restart"
 
+#: HONEST-MOCK REFUSAL (G2). Recorded on the iteration when the adversarial/
+#: judged tier's judge cannot run — no real provider, a route that resolved to
+#: mock, or the call itself failing. The goal is NOT satisfied and NOT failed:
+#: the work happened, the verdict is simply still owed. Never a fabricated
+#: verdict (mock text is scripted), never a silent fallthrough to checks-only
+#: (that would quietly demote the tier the user chose).
+VERIFICATION_PENDING_NOTE = "verification pending — no model available to judge"
+
+#: Wall-clock ceiling on one judge call (the consult tool's own bound).
+_JUDGE_TIMEOUT_S = 120.0
+
+#: The refute framing. The judge is briefed to ATTACK the satisfaction claim
+#: from fresh context — the doer never grades itself unlabeled — and to
+#: default to REFUTED when uncertain, so ambiguity fails closed.
+_JUDGE_SYSTEM = (
+    "You are an adversarial verifier with fresh context and no stake in the "
+    "outcome. Your only job is to try to REFUTE the claim that a goal is "
+    "satisfied. Only ledger-proven evidence counts: the files the session "
+    "verifiably created or changed, and its recorded summary — prose claims "
+    "without evidence count against satisfaction. Default to REFUTED when "
+    "uncertain. Reply with exactly one line first — 'VERDICT: SATISFIED' or "
+    "'VERDICT: REFUTED' — followed by a short reason."
+)
+
 
 def _goal_origin(goal_id: str) -> str:
     """The Session origin stamp for a goal iteration. Goal ids are
     ``goal_<hex12>`` (``new_id``), already inside the origin charset
     (``daemon/schemas._ORIGIN_RE``) and well under its 64-char cap."""
     return f"goal:{goal_id}"[:64]
+
+
+def _after_marker(text: str, index: int) -> str:
+    """The judge's reason after its VERDICT marker: separators stripped,
+    bounded, first-line-ish. ``""`` when the verdict stood alone."""
+    tail = text[index:].strip().lstrip("—–-:. ").strip()
+    return tail[:300]
 
 
 def _agent_type(name: str) -> AgentType:
@@ -335,6 +376,10 @@ class GoalEngine:
                     GOAL_TRIPPED,
                     {
                         "goal_id": goal.id,
+                        # The phone lines read the NAME — a Telegram ping
+                        # saying "goal_3f9a1c tripped" is a lookup chore, not
+                        # a notification (the digest agent's finding).
+                        "name": goal.name,
                         "reason": reason,
                         "failures": len(record.decoded_breaker().get("failures", [])),
                     },
@@ -389,22 +434,47 @@ class GoalEngine:
 
         satisfied = False
         unmet = ""
+        pending = ""
         tripped = False
         if completed:
             verifier = goal.decoded_verifier()
-            if verifier["kind"] == "checks":
+            kind = verifier["kind"]
+            may_satisfy = False
+            if kind == "checks":
+                # Tier 1 (G1) — deterministic checks, byte-identical since.
                 unmet = self._verify_checks(verifier["checks"], session) or ""
-                if not unmet and live_state == "active":
-                    self.store.transition(goal.id, "satisfied")
-                    satisfied = True
-                    await self.p.event_bus.publish(
-                        GOAL_SATISFIED,
-                        {"goal_id": goal.id, "iteration": iteration},
-                        session_id=session.id,
-                    )
+                may_satisfy = not unmet
+            elif kind in ("adversarial", "judged"):
+                # Tier 2/3 (G2). Adversarial: optional checks FIRST (all must
+                # pass, exactly as tier 1 — and a failed check saves the judge
+                # call), THEN the refute-framed judge. Judged: the judge alone.
+                if kind == "adversarial" and verifier["checks"]:
+                    unmet = self._verify_checks(verifier["checks"], session) or ""
+                if not unmet:
+                    verdict, detail = await self._judge_satisfaction(goal, session)
+                    if verdict == "satisfied":
+                        may_satisfy = True
+                    elif verdict == "pending":
+                        pending = detail or VERIFICATION_PENDING_NOTE
+                    else:
+                        unmet = (
+                            f"judge refuted satisfaction: {detail}"
+                            if detail
+                            else "judge refuted satisfaction"
+                        )
             # kind "manual": NEVER auto-satisfies — only the user's explicit
             # decision (the route) moves it. The iteration result still says
             # what happened.
+            if may_satisfy and live_state == "active":
+                self.store.transition(goal.id, "satisfied")
+                satisfied = True
+                await self.p.event_bus.publish(
+                    GOAL_SATISFIED,
+                    # "name" rides along for the notifier's phone lines —
+                    # payload.name first, goal_id as the honest fallback.
+                    {"goal_id": goal.id, "name": goal.name, "iteration": iteration},
+                    session_id=session.id,
+                )
         else:
             reason = f"session {session.id} failed: {(session.summary or '')[:200]}"
             record, tripped = self.store.record_failure(goal.id, reason)
@@ -413,6 +483,7 @@ class GoalEngine:
                     GOAL_TRIPPED,
                     {
                         "goal_id": goal.id,
+                        "name": goal.name,  # the notifier's phone lines
                         "reason": reason,
                         "failures": len(record.decoded_breaker().get("failures", [])),
                     },
@@ -428,6 +499,7 @@ class GoalEngine:
                 "status": "completed" if completed else "failed",
                 "satisfied": satisfied,
                 **({"unmet": unmet[:400]} if unmet else {}),
+                **({"pending": pending[:400]} if pending else {}),
                 **({"note": note} if note else {}),
             },
             session_id=session.id,
@@ -442,6 +514,7 @@ class GoalEngine:
             "state": current.state if current else ("tripped" if tripped else "active"),
             "satisfied": satisfied,
             **({"unmet": unmet} if unmet else {}),
+            **({"pending": pending} if pending else {}),
             **({"note": note} if note else {}),
             "spent": current.decoded_spent() if current else {},
         }
@@ -476,7 +549,10 @@ class GoalEngine:
     async def _refuse(self, goal: GoalContractRecord, reason: str) -> dict[str, Any]:
         """The honest no: an event naming why, state untouched, nothing spawned."""
         await self.p.event_bus.publish(
-            GOAL_ITERATION_REFUSED, {"goal_id": goal.id, "reason": reason}
+            GOAL_ITERATION_REFUSED,
+            # "name" for the notifier's phone lines (payload.name preferred,
+            # goal_id the honest fallback).
+            {"goal_id": goal.id, "name": goal.name, "reason": reason},
         )
         return {
             "ok": False,
@@ -573,6 +649,90 @@ class GoalEngine:
                 return problem
         return None
 
+    # -- the adversarial judge (tiers 2/3, G2) -----------------------------------
+
+    async def _judge_satisfaction(
+        self, goal: GoalContractRecord, session: Session
+    ) -> tuple[str, str]:
+        """One fresh-context, refute-framed judge call. Returns
+        ``(verdict, detail)`` with verdict ``"satisfied" | "refuted" |
+        "pending"`` — never raises (a crashed judge is a PENDING verdict, not a
+        failed iteration; the session's work already happened).
+
+        THE SEAM, and why: ``platform.router.complete(..., tools=[])`` — the
+        agents-layer one-shot door that ``consult`` and ``agents/decompose``
+        already use, carrying the router's transient retry, failover, and the
+        v1.162.0 rule that an unreachable REAL provider raises rather than
+        returning mock prose. The daemon's ``_one_shot_complete`` is a closure
+        inside ``daemon/app.py``'s factory — a platform-held engine cannot
+        reach it, and ``consult_tool``'s docstring records that the router
+        door is the one a non-daemon component can actually use.
+
+        PROVIDER: the SESSION's own (explicit), never a different one — this
+        goal's content may be client data, and judging it must not move it to
+        another provider as a side effect (the never-auto-switch rule).
+
+        HONEST-MOCK: a route that lands on the mock provider means the judge
+        CANNOT run — mock text is scripted, and a scripted verdict is a
+        fabricated one — so the verdict is ``pending`` with
+        :data:`VERIFICATION_PENDING_NOTE`. The same for a raised/timed-out
+        call. An UNREADABLE reply from a real model is ``refuted`` (fail
+        closed, per the judge's own default-to-refuted brief), never
+        satisfied.
+
+        The evidence brief is the DETERMINISTIC CHECKPOINT — the ledger's
+        files + the recorded summary — composed by code, so the judge attacks
+        the record, not the doer's prose about the record. The judge's own
+        tokens are not billed to the goal budget in G2 (one one-shot per
+        iteration; stated, not hidden).
+        """
+        checkpoint = (self.store.get(goal.id) or goal).decoded_checkpoint()
+        files = [str(f) for f in (checkpoint.get("files") or [])][:_CHECKPOINT_MAX_FILES]
+        summary = str(checkpoint.get("remaining") or session.summary or "").strip()
+        user = (
+            f"GOAL CONTRACT:\n{goal.contract_text.strip()}\n\n"
+            "LEDGER-PROVEN RESULTS (deterministic checkpoint):\n"
+            f"- files created/changed per the ledger: "
+            f"{', '.join(files) if files else '(none recorded)'}\n\n"
+            f"SESSION REPLY (recorded summary):\n{summary or '(empty)'}\n\n"
+            "Try to refute that the goal is satisfied. Default to refuted "
+            "when uncertain."
+        )
+        try:
+            from ..providers.adapters.base import LLMMessage
+
+            route = await asyncio.wait_for(
+                self.p.router.complete(
+                    provider=session.provider or None,
+                    model=session.model or None,
+                    system=_JUDGE_SYSTEM,
+                    messages=[LLMMessage(role="user", content=user)],
+                    tools=[],
+                    session_id=session.id,
+                ),
+                _JUDGE_TIMEOUT_S,
+            )
+        except Exception as exc:  # noqa: BLE001 — no judge is a pending verdict
+            return (
+                "pending",
+                f"{VERIFICATION_PENDING_NOTE} ({type(exc).__name__}: {str(exc)[:160]})",
+            )
+        if str(getattr(route, "provider", "") or "") == "mock":
+            return "pending", VERIFICATION_PENDING_NOTE
+        text = (getattr(route.response, "text", "") or "").strip()
+        upper = text.upper()
+        i_ref = upper.find("VERDICT: REFUTED")
+        i_sat = upper.find("VERDICT: SATISFIED")
+        if i_ref != -1 and (i_sat == -1 or i_ref < i_sat):
+            return "refuted", _after_marker(text, i_ref + len("VERDICT: REFUTED"))
+        if i_sat != -1:
+            return "satisfied", _after_marker(text, i_sat + len("VERDICT: SATISFIED"))
+        return (
+            "refuted",
+            "the judge's verdict was unreadable — refusing to satisfy "
+            f"(reply began: {text[:160]!r})",
+        )
+
     # -- restart survival --------------------------------------------------------
 
     def rehydrate(self) -> int:
@@ -635,6 +795,7 @@ class GoalEngine:
                     GOAL_TRIPPED,
                     {
                         "goal_id": goal.id,
+                        "name": goal.name,  # the notifier's phone lines
                         "reason": _INTERRUPTED_REASON,
                         "failures": len(record.decoded_breaker().get("failures", [])),
                     },

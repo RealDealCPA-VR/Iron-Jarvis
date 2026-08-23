@@ -41,8 +41,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from iron_jarvis.core.db import session_scope
+from iron_jarvis.core.ids import new_id
+from iron_jarvis.core.models import EventRecord
+from iron_jarvis.core.models import Session as SessionRow
 from iron_jarvis.daemon.routes import autonomy as autonomy_routes
 from iron_jarvis.daemon.routes import goals as goals_routes
+from iron_jarvis.daemon.routes.goals import ask_stats_for, grant_offers
 from iron_jarvis.goals.engine import GoalEngine
 from iron_jarvis.goals.models import (
     GoalContractRecord,
@@ -333,6 +337,182 @@ def test_the_two_goal_surfaces_never_leak_into_each_other(dual_client):
         ).status_code
         == 405
     )
+
+
+# --------------------------------------------------------------------------- #
+# the trust ladder's receipts (G2, v1.209.0): ask_stats + grant_offers + PATCH
+# --------------------------------------------------------------------------- #
+
+
+def _seed_session(platform, origin: str) -> str:
+    with session_scope(platform.engine) as db:
+        row = SessionRow(task="goal work", origin=origin)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row.id
+
+
+def _seed_asks(platform, session_id: str, tool: str, decisions, asked=None) -> None:
+    """`asked` requested-events (default: one per decision) + one resolved
+    event per decision. Args carry a sentinel so the hygiene pin can prove
+    they never reach a response."""
+    n_asked = len(decisions) if asked is None else asked
+    with session_scope(platform.engine) as db:
+        for _ in range(n_asked):
+            db.add(
+                EventRecord(
+                    id=new_id("evt"),
+                    type="approval.requested",
+                    session_id=session_id,
+                    payload_json=json.dumps(
+                        {
+                            "approval_id": new_id("apr"),
+                            "tool": tool,
+                            "args": {"path": "SECRET-ARG-NEVER-SERVED"},
+                            "timeout_s": 180,
+                        }
+                    ),
+                )
+            )
+        for decision in decisions:
+            db.add(
+                EventRecord(
+                    id=new_id("evt"),
+                    type="approval.resolved",
+                    session_id=session_id,
+                    payload_json=json.dumps(
+                        {"approval_id": new_id("apr"), "tool": tool, "decision": decision}
+                    ),
+                )
+            )
+        db.commit()
+
+
+def _stat(asked=0, approved=0, denied=0, timed_out=0):
+    return {"asked": asked, "approved": approved, "denied": denied, "timed_out": timed_out}
+
+
+def test_detail_route_reports_ask_stats_and_never_the_args(client, platform):
+    gid = _create(client).json()["goal"]["id"]
+    sid = _seed_session(platform, f"goal:{gid}")
+    _seed_asks(platform, sid, "web_search", ["once", "conversation", "once"])
+    _seed_asks(platform, sid, "list_folder", ["deny", "timeout"])
+    # Another surface's asks (a chat session) must never count as this goal's.
+    chat_sid = _seed_session(platform, "chat")
+    _seed_asks(platform, chat_sid, "web_search", ["once"] * 5)
+
+    r = client.get(f"/goals/{gid}")
+    assert r.status_code == 200, r.text
+    goal = r.json()["goal"]
+    assert goal["ask_stats"] == {
+        "web_search": _stat(asked=3, approved=3),
+        "list_folder": _stat(asked=2, denied=1, timed_out=1),
+    }
+    assert goal["grant_offers"] == ["web_search"]  # 3/3 clean; list_folder is not
+    # The approvals-pending posture: counts only, args NEVER copied out.
+    assert "SECRET-ARG-NEVER-SERVED" not in r.text
+    # The list carries the same server-side offer — one computation, no drift.
+    listed = client.get("/goals").json()["goals"][0]
+    assert listed["grant_offers"] == ["web_search"]
+    assert "ask_stats" not in listed  # raw counts ride the detail route only
+
+
+def test_grant_offer_thresholds(platform, goal_engine):
+    """The trust-ladder rule, pinned case by case: offer ONLY on >=3 asks,
+    all approved, zero denied, zero timed out, not already granted, never a
+    deny-floor tool."""
+    record = goal_engine.store.create(
+        name="g",
+        contract_text="do a thing",
+        budget=TOKENS_BUDGET,
+        allowed_grants=["list_folder"],
+    )
+    assert grant_offers(record, {"web_search": _stat(asked=2, approved=2)}) == []
+    assert grant_offers(record, {"web_search": _stat(asked=3, approved=3)}) == [
+        "web_search"
+    ]
+    assert (
+        grant_offers(record, {"web_search": _stat(asked=3, approved=2, denied=1)}) == []
+    )
+    assert (
+        grant_offers(record, {"web_search": _stat(asked=4, approved=3, timed_out=1)})
+        == []
+    )
+    # Already granted: nothing left to offer.
+    assert grant_offers(record, {"list_folder": _stat(asked=5, approved=5)}) == []
+    # A deny-floor tool is NEVER offered — even on a perfect 10/10 streak.
+    assert grant_offers(record, {"shell": _stat(asked=10, approved=10)}) == []
+    # Deterministic ordering when several qualify.
+    both = {
+        "web_search": _stat(asked=3, approved=3),
+        "history_search": _stat(asked=4, approved=4),
+    }
+    assert grant_offers(record, both) == ["history_search", "web_search"]
+
+
+def test_ask_stats_counts_unanswered_asks_and_blocks_the_offer(client, platform):
+    gid = _create(client).json()["goal"]["id"]
+    sid = _seed_session(platform, f"goal:{gid}")
+    # 4 asks, only 3 answered (one still pending / lost): approved != asked.
+    _seed_asks(platform, sid, "web_search", ["once", "once", "conversation"], asked=4)
+    goal = client.get(f"/goals/{gid}").json()["goal"]
+    assert goal["ask_stats"]["web_search"] == _stat(asked=4, approved=3)
+    assert goal["grant_offers"] == []
+
+
+def test_patch_grants_extends_and_floor_refusal_is_verbatim(client, platform):
+    gid = _create(client, allowed_grants=["list_folder"]).json()["goal"]["id"]
+
+    r = client.patch(f"/goals/{gid}/grants", json={"add": ["web_search"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["goal"]["allowed_grants"] == ["list_folder", "web_search"]
+
+    # Idempotent: re-granting is not an error and never duplicates.
+    r = client.patch(f"/goals/{gid}/grants", json={"add": ["web_search"]})
+    assert r.json()["goal"]["allowed_grants"] == ["list_folder", "web_search"]
+
+    # A deny-floor tool 400s with the store's sentence VERBATIM.
+    r = client.patch(f"/goals/{gid}/grants", json={"add": ["shell"]})
+    assert r.status_code == 400
+    assert r.json()["detail"] == grants_violation(["shell"])
+    # And the refusal wrote nothing.
+    fresh = client.get(f"/goals/{gid}").json()["goal"]
+    assert fresh["allowed_grants"] == ["list_folder", "web_search"]
+
+    assert (
+        client.patch(f"/goals/{gid}/grants", json={"add": []}).status_code == 400
+    )  # nothing to grant is a client bug, said plainly
+    assert (
+        client.patch("/goals/goal_missing/grants", json={"add": ["x"]}).status_code
+        == 404
+    )
+
+
+def test_accepting_an_offer_makes_it_disappear(client, platform):
+    gid = _create(client).json()["goal"]["id"]
+    sid = _seed_session(platform, f"goal:{gid}")
+    _seed_asks(platform, sid, "web_search", ["once", "once", "once"])
+    assert client.get(f"/goals/{gid}").json()["goal"]["grant_offers"] == ["web_search"]
+
+    accepted = client.patch(f"/goals/{gid}/grants", json={"add": ["web_search"]})
+    assert accepted.json()["goal"]["grant_offers"] == []  # granted = nothing to offer
+    assert "web_search" in accepted.json()["goal"]["allowed_grants"]
+
+
+def test_patched_grant_rides_the_next_iterations_spawn(client, platform, goal_engine):
+    """The effect-on-next-iteration pin: run_iteration re-reads the row and
+    _iterate passes decoded_grants() as allow_tools into create_session — so
+    a PATCH is live on the very next spawn with no extra wiring."""
+    gid = _create(client).json()["goal"]["id"]
+    client.patch(f"/goals/{gid}/grants", json={"add": ["web_search"]})
+
+    result = client.post(f"/goals/{gid}/run").json()
+    assert result["ok"] is True, result
+
+    with session_scope(platform.engine) as db:
+        session = db.get(SessionRow, result["session_id"])
+    assert "web_search" in json.loads(session.allow_tools_json)
 
 
 # --------------------------------------------------------------------------- #

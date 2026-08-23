@@ -1274,7 +1274,14 @@ class AgentRuntime:
         if approvals is None:  # bare-platform tests: no registry, no pause
             return "", set()
         origin = getattr(session, "origin", None) or ""
-        if not origin.startswith(("chat", "job", "project", "user")):
+        # "goal" joined v1.209.0: without it a goal iteration's ask-tier tool
+        # took the instant headless denial and minted NO approval receipts —
+        # so ask_stats stayed empty and grant_offers could never fire. The
+        # contract card promises "asks flow to the bell" (v1.200.0 delivers
+        # them to bell + phone); an unattended 3am ask times out into a
+        # conservative timeout receipt that BLOCKS offers — the designed
+        # trust-ladder behavior, not a hazard.
+        if not origin.startswith(("chat", "job", "project", "user", "goal")):
             return "", set()
         tool = self.p.registry.get(tc.name)
         perm = tool.perm_key() if tool is not None else tc.name

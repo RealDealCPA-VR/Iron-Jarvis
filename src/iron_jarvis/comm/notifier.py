@@ -34,6 +34,22 @@ from .base import Channel
 #: the ONE phone message. ``approval.resolved`` is deliberately NOT here:
 #: answering is not news — the user (or the timeout) just acted, and echoing
 #: every decision back would turn the alert channel into a log.
+#: Goal NEWS (v1.209.0): a standing goal SATISFYING itself, TRIPPING its
+#: breaker, or REFUSING to run is exactly the news an unattended-autonomy
+#: channel exists for — each one is a decision the user may want to act on
+#: (celebrate/stop, investigate, raise the budget). ``goal.iteration_started``
+#: and ``goal.iteration_completed`` are deliberately NOT here — they are
+#: routine heartbeats (a daily goal would buzz the phone twice a morning
+#: forever), the same reasoning that keeps ``approval.resolved`` out below:
+#: routine motion is a log, not news. The digest (``goals/digest.py``) is
+#: where the routine record lives. Plain strings mirroring goals/engine.py's
+#: constants (importing the engine would drag its sqlmodel chain into this
+#: light module); tests/test_goal_digest_v1209.py pins them against the
+#: engine's constants so they cannot drift.
+GOAL_SATISFIED_EVENT = "goal.satisfied"
+GOAL_TRIPPED_EVENT = "goal.tripped"
+GOAL_ITERATION_REFUSED_EVENT = "goal.iteration_refused"
+
 DEFAULT_ALERT_EVENTS: frozenset[str] = frozenset(
     {
         EventType.REVIEW_REQUESTED,
@@ -44,8 +60,27 @@ DEFAULT_ALERT_EVENTS: frozenset[str] = frozenset(
         EventType.PROVIDER_FAILOVER,
         EventType.SKILL_PROPOSAL_CREATED,
         EventType.APPROVAL_REQUESTED,
+        GOAL_SATISFIED_EVENT,
+        GOAL_TRIPPED_EVENT,
+        GOAL_ITERATION_REFUSED_EVENT,
     }
 )
+
+
+def _goal_label(payload: dict) -> str:
+    """The goal's NAME for a phone line, best recorded truth first.
+
+    The engine's satisfied/tripped/refused payloads carry ``name`` since
+    v1.209.0 (all five publish sites), so the name is the normal case. The
+    fallbacks stay for the records that predate it and for defensive parsing
+    of a hand-fed event: a v1.208.0 EventRecord replayed through a formatter
+    has no ``name``, and an id names the exact goal, uglily — better than
+    inventing one."""
+    return (
+        str(payload.get("name") or "").strip()
+        or str(payload.get("goal_id") or "").strip()
+        or "a goal"
+    )
 
 
 def _event_field(event: Any, attr: str, default: Any = None) -> Any:
@@ -77,6 +112,23 @@ def format_event(event: Any) -> str:
         return (
             f"⏸ An agent is asking to use {tool} — approve from the "
             "dashboard bell, or reply here: approve / deny."
+        )
+    if etype == GOAL_SATISFIED_EVENT:
+        # House voice (v1.209.0): the verifier's checks all held — say so
+        # plainly; the digest carries the evidence trail.
+        return f"✅ Goal satisfied: {_goal_label(payload)}"
+    if etype == GOAL_TRIPPED_EVENT:
+        reason = str(payload.get("reason") or "").strip()
+        return f"🛑 Goal breaker tripped: {_goal_label(payload)}" + (
+            f" — {reason}" if reason else ""
+        )
+    if etype == GOAL_ITERATION_REFUSED_EVENT:
+        # A refusal names its reason (budget exhausted / tripped / paused /
+        # already running) — the one line that tells the user WHY the goal
+        # went quiet instead of letting silence read as progress.
+        reason = str(payload.get("reason") or "").strip()
+        return f"⏸ Goal run refused: {_goal_label(payload)}" + (
+            f" — {reason}" if reason else ""
         )
     if etype == EventType.SKILL_PROPOSAL_CREATED:
         name = str(payload.get("skill_name") or "").strip() or "a new skill"

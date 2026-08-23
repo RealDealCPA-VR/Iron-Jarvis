@@ -87,10 +87,25 @@ BUDGET_BOUNDS: tuple[tuple[str, str], ...] = (
     ("max_wallclock_s", "wallclock_s"),
 )
 
-#: Verifier kinds. "checks" = deterministic, ledger-evidenced expectations (the
-#: workflows verified-steps machinery); "manual" = only the user can declare it
-#: satisfied — the engine NEVER auto-satisfies a manual goal.
-VERIFIER_KINDS: tuple[str, ...] = ("checks", "manual")
+#: Verifier kinds — the LADDER (G2, v1.209.0). The doer never grades itself
+#: unlabeled:
+#:
+#: * "checks"      — tier 1: deterministic, ledger-evidenced expectations (the
+#:   workflows verified-steps machinery). Shipped in G1, byte-identical since.
+#: * "adversarial" — tier 2: optional checks run FIRST (all must pass exactly
+#:   as tier 1); then a fresh-context one-shot judge is briefed to REFUTE
+#:   satisfaction. Satisfied only when the checks pass AND the judge fails to
+#:   refute. No real provider ⇒ the judge cannot run ⇒ the iteration records
+#:   "verification pending" and does NOT satisfy (the honest-mock rule — a
+#:   scripted mock verdict would be a fabricated one, and silently falling
+#:   back to checks-only would quietly demote the tier the user chose).
+#: * "judged"      — tier 3: the judge alone, same refute framing, same
+#:   honest-mock refusal — and ``goal_view`` labels a satisfaction earned this
+#:   way loudly (``verifier.judged_note``), because "a model said so" must
+#:   never read like "the ledger proved it".
+#: * "manual"      — only the user can declare it satisfied; the engine NEVER
+#:   auto-satisfies a manual goal.
+VERIFIER_KINDS: tuple[str, ...] = ("checks", "adversarial", "judged", "manual")
 
 _ZERO_SPENT = {"tokens": 0, "dollars": 0.0, "wallclock_s": 0.0, "iterations": 0}
 

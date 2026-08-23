@@ -30,12 +30,16 @@ import pytest
 from iron_jarvis.core.db import session_scope
 from iron_jarvis.core.ids import utcnow
 from iron_jarvis.core.models import Session, SessionStatus
+from types import SimpleNamespace
+
 from iron_jarvis.goals.engine import (
+    _JUDGE_SYSTEM,
     GOAL_ITERATION_COMPLETED,
     GOAL_ITERATION_REFUSED,
     GOAL_ITERATION_STARTED,
     GOAL_SATISFIED,
     GOAL_TRIPPED,
+    VERIFICATION_PENDING_NOTE,
     GoalEngine,
 )
 from iron_jarvis.goals.models import GoalContractRecord
@@ -74,6 +78,32 @@ async def _failing_run(session):
     session.status = SessionStatus.FAILED
     session.summary = "boom"
     return session
+
+
+def _script_judge(platform, monkeypatch, text, provider="anthropic"):
+    """Script the G2 judge's one-shot, PASSING EVERY OTHER CALL THROUGH.
+
+    The doer session's own perceive→act loop rides the same
+    ``platform.router.complete``, so a blanket patch would sabotage the very
+    run under verification — the fake dispatches on the judge's exact system
+    prompt and delegates everything else to the real router. Returns the list
+    of judge calls (kwargs) for briefing assertions.
+    """
+    calls: list[dict] = []
+    real_complete = platform.router.complete
+
+    async def fake_complete(**kwargs):
+        if kwargs.get("system") == _JUDGE_SYSTEM:
+            calls.append(kwargs)
+            return SimpleNamespace(
+                response=SimpleNamespace(text=text),
+                provider=provider,
+                model="judge-model",
+            )
+        return await real_complete(**kwargs)
+
+    monkeypatch.setattr(platform.router, "complete", fake_complete)
+    return calls
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +212,7 @@ async def test_budget_gate_refuses_before_spawning(
     assert engine.store.get(goal.id).state == "active"  # a budget is not a failure
     refusals = _events(platform, GOAL_ITERATION_REFUSED, goal.id)
     assert refusals and bound_name in refusals[-1].payload["reason"]
+    assert refusals[-1].payload["name"] == "g"  # the notifier's phone lines
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +284,8 @@ async def test_satisfied_via_checks_using_the_workflows_machinery(engine, platfo
     result = await engine.run_iteration(goal.id)
     assert result["satisfied"] is True
     assert engine.store.get(goal.id).state == "satisfied"
-    assert _events(platform, GOAL_SATISFIED, goal.id)
+    satisfied_events = _events(platform, GOAL_SATISFIED, goal.id)
+    assert satisfied_events and satisfied_events[-1].payload["name"] == "g"
 
 
 async def test_the_workflows_expect_implementation_is_the_one_called(
@@ -317,6 +349,7 @@ async def test_breaker_trips_on_three_failures_and_blocks_iterations(
     assert len(breaker["failures"]) == 3 and breaker.get("tripped_at")
     tripped_events = _events(platform, GOAL_TRIPPED, goal.id)
     assert tripped_events and "failed" in tripped_events[-1].payload["reason"]
+    assert tripped_events[-1].payload["name"] == "g"  # the notifier's phone lines
 
     # Tripped BLOCKS further iterations, honestly.
     fourth = await engine.run_iteration(goal.id)
@@ -460,6 +493,11 @@ async def test_rehydrate_reconciles_a_goal_stranded_mid_iteration(
     )
     assert engine.rehydrate() == 1
     assert engine.store.get(goal2.id).state == "tripped"
+    # The fire-and-forget trip event carries the NAME too (rehydrate path).
+    for _ in range(3):
+        await asyncio.sleep(0)  # let _publish_bg's task run
+    tripped_events = _events(platform, GOAL_TRIPPED, goal2.id)
+    assert tripped_events and tripped_events[-1].payload["name"] == "g2"
 
 
 async def test_rehydrate_accounts_a_session_that_finished_before_the_crash(
@@ -679,3 +717,239 @@ async def test_provider_crash_is_a_breaker_failure_with_the_real_reason(
     third = await engine.run_iteration(goal.id)
     assert third["state"] == "tripped"
     assert _events(platform, GOAL_TRIPPED, goal.id)
+
+
+# ---------------------------------------------------------------------------
+# G2 (v1.209.0): the verifier ladder — adversarial and judged tiers
+# ---------------------------------------------------------------------------
+
+ADVERSARIAL_RESULT = {
+    "kind": "adversarial",
+    "checks": [{"files": ["RESULT.md"], "summary_contains": ["RESULT.md"]}],
+}
+
+
+async def test_adversarial_refute_gate_flips_the_outcome(
+    engine, platform, monkeypatch
+):
+    """Mutation-check of the refute gate: two byte-identical goals, the ONLY
+    difference is the scripted judge's verdict text — and the outcome flips.
+    That pins the gate on the judge's answer, not on the checks alone."""
+    goal = engine.store.create(
+        name="g",
+        contract_text="Create a file summarizing the task.",
+        budget=TOKENS_BUDGET,
+        verifier=ADVERSARIAL_RESULT,
+    )
+    calls = _script_judge(
+        platform,
+        monkeypatch,
+        "VERDICT: REFUTED — the ledger shows no verification artifact",
+    )
+    result = await engine.run_iteration(goal.id)
+    assert result["ok"] is True and result["satisfied"] is False
+    assert "judge refuted satisfaction" in result["unmet"]
+    assert "no verification artifact" in result["unmet"]  # the judge's reason
+    assert engine.store.get(goal.id).state == "active"
+    # The briefing is the contract + the deterministic checkpoint's evidence,
+    # asked on the SESSION'S OWN provider (never-auto-switch) with no tools.
+    assert calls, "the judge was never consulted"
+    briefing = calls[0]["messages"][0].content
+    assert "Create a file summarizing the task." in briefing
+    assert "RESULT.md" in briefing
+    assert calls[0]["provider"] == "mock"  # the session ran on mock
+    assert calls[0]["tools"] == []
+    done = _events(platform, GOAL_ITERATION_COMPLETED, goal.id)
+    assert "judge refuted satisfaction" in done[-1].payload["unmet"]
+
+    # Same setup — only the verdict text differs — and it satisfies.
+    goal2 = engine.store.create(
+        name="g2",
+        contract_text="Create a file summarizing the task.",
+        budget=TOKENS_BUDGET,
+        verifier=ADVERSARIAL_RESULT,
+    )
+    _script_judge(
+        platform, monkeypatch, "VERDICT: SATISFIED — evidence matches the contract"
+    )
+    result2 = await engine.run_iteration(goal2.id)
+    assert result2["satisfied"] is True
+    assert engine.store.get(goal2.id).state == "satisfied"
+    assert _events(platform, GOAL_SATISFIED, goal2.id)
+
+
+async def test_adversarial_failed_checks_short_circuit_the_judge(
+    engine, platform, monkeypatch
+):
+    goal = engine.store.create(
+        name="g",
+        contract_text="Create a file summarizing the task.",
+        budget=TOKENS_BUDGET,
+        verifier={"kind": "adversarial", "checks": [{"files": ["MISSING.md"]}]},
+    )
+    calls = _script_judge(platform, monkeypatch, "VERDICT: SATISFIED")
+    result = await engine.run_iteration(goal.id)
+    assert result["satisfied"] is False
+    assert "MISSING.md" in result["unmet"]  # tier 1's own failure wording
+    assert calls == []  # the checks gate first — no judge call, no judge spend
+    assert engine.store.get(goal.id).state == "active"
+
+
+@pytest.mark.parametrize(
+    "verifier",
+    [
+        {"kind": "adversarial", "checks": [{"files": ["RESULT.md"]}]},
+        {"kind": "judged"},
+    ],
+)
+async def test_no_real_provider_records_pending_never_a_verdict(
+    engine, platform, verifier
+):
+    """HONEST-MOCK: the whole suite runs on the mock provider, so the judge
+    CANNOT run — the iteration records the pending note and the goal is
+    neither satisfied nor failed. No fabricated verdict, no silent
+    fallthrough to checks-only."""
+    goal = engine.store.create(
+        name="g",
+        contract_text="Create a file summarizing the task.",
+        budget=TOKENS_BUDGET,
+        verifier=verifier,
+    )
+    result = await engine.run_iteration(goal.id)  # REAL router; mock route
+    assert result["ok"] is True
+    assert result["satisfied"] is False
+    assert result["pending"] == VERIFICATION_PENDING_NOTE
+    assert "unmet" not in result  # pending is not a failed evaluation
+    record = engine.store.get(goal.id)
+    assert record.state == "active"  # not satisfied, NOT failed
+    assert record.decoded_breaker()["failures"] == []
+    done = _events(platform, GOAL_ITERATION_COMPLETED, goal.id)
+    assert done[-1].payload["pending"] == VERIFICATION_PENDING_NOTE
+    assert not _events(platform, GOAL_SATISFIED, goal.id)
+
+
+async def test_judged_satisfaction_is_loudly_labeled(engine, platform, monkeypatch):
+    goal = engine.store.create(
+        name="g",
+        contract_text="Create a file summarizing the task.",
+        budget=TOKENS_BUDGET,
+        verifier={"kind": "judged"},
+    )
+    _script_judge(
+        platform, monkeypatch, "VERDICT: SATISFIED — the recorded summary matches"
+    )
+    result = await engine.run_iteration(goal.id)
+    assert result["satisfied"] is True
+    view = goal_view(engine.store.get(goal.id))
+    assert view["state"] == "satisfied"
+    assert (
+        view["verifier"]["judged_note"]
+        == "satisfied by model judgment — no deterministic checks"
+    )
+
+    # An adversarial satisfaction WITH passing checks carries NO such label —
+    # its checks are deterministic evidence anchoring the verdict.
+    goal2 = engine.store.create(
+        name="g2",
+        contract_text="Create a file summarizing the task.",
+        budget=TOKENS_BUDGET,
+        verifier=ADVERSARIAL_RESULT,
+    )
+    _script_judge(platform, monkeypatch, "VERDICT: SATISFIED — fine")
+    await engine.run_iteration(goal2.id)
+    view2 = goal_view(engine.store.get(goal2.id))
+    assert view2["state"] == "satisfied"
+    assert "judged_note" not in view2["verifier"]
+    # And an UNSATISFIED judged goal is not labeled either.
+    goal3 = engine.store.create(
+        name="g3", contract_text="do", budget=TOKENS_BUDGET, verifier={"kind": "judged"}
+    )
+    assert "judged_note" not in goal_view(engine.store.get(goal3.id))["verifier"]
+
+
+async def test_adversarial_with_zero_checks_is_labeled_like_judged(
+    engine, platform, monkeypatch
+):
+    """D4: `adversarial` with ZERO checks is evidentially identical to
+    `judged` — the judge is the only gate — so a satisfaction earned that way
+    must carry the loud label too. The label follows the EVIDENCE, not the
+    kind string: 'a model said so' must never wear the ledger's clothes."""
+    goal = engine.store.create(
+        name="g",
+        contract_text="Create a file summarizing the task.",
+        budget=TOKENS_BUDGET,
+        verifier={"kind": "adversarial"},  # checks-optional tier, none given
+    )
+    _script_judge(platform, monkeypatch, "VERDICT: SATISFIED — the summary matches")
+    result = await engine.run_iteration(goal.id)
+    assert result["satisfied"] is True
+    view = goal_view(engine.store.get(goal.id))
+    assert view["state"] == "satisfied"
+    assert (
+        view["verifier"]["judged_note"]
+        == "satisfied by model judgment — no deterministic checks"
+    )
+    # Not yet satisfied -> not yet labeled (the label reports an earned
+    # satisfaction, never a prediction about one).
+    goal2 = engine.store.create(
+        name="g2", contract_text="do", budget=TOKENS_BUDGET,
+        verifier={"kind": "adversarial"},
+    )
+    assert "judged_note" not in goal_view(engine.store.get(goal2.id))["verifier"]
+
+
+async def test_unreadable_judge_reply_fails_closed(engine, platform, monkeypatch):
+    goal = engine.store.create(
+        name="g",
+        contract_text="Create a file summarizing the task.",
+        budget=TOKENS_BUDGET,
+        verifier={"kind": "judged"},
+    )
+    _script_judge(platform, monkeypatch, "Looks good to me, ship it.")
+    result = await engine.run_iteration(goal.id)
+    assert result["ok"] is True and result["satisfied"] is False
+    assert "unreadable" in result["unmet"]
+    assert engine.store.get(goal.id).state == "active"
+
+
+async def test_checks_tier_is_untouched_and_never_consults_the_judge(
+    engine, platform, monkeypatch
+):
+    """Regression pin for tier 1: a REFUTING judge sits scripted and armed,
+    and a plain checks goal satisfies without ever asking it — byte-identical
+    G1 behavior."""
+    goal = engine.store.create(
+        name="g",
+        contract_text="Create a file summarizing the task.",
+        budget=TOKENS_BUDGET,
+        verifier={"kind": "checks", "checks": [{"files": ["RESULT.md"]}]},
+    )
+    calls = _script_judge(
+        platform, monkeypatch, "VERDICT: REFUTED — should never be read"
+    )
+    result = await engine.run_iteration(goal.id)
+    assert result["satisfied"] is True
+    assert engine.store.get(goal.id).state == "satisfied"
+    assert calls == []
+
+
+def test_verifier_tier_vocabulary_validation(platform):
+    store = GoalStore(platform.engine)
+
+    def make(verifier):
+        return store.create(
+            name="g", contract_text="do a thing", budget=TOKENS_BUDGET, verifier=verifier
+        )
+
+    # adversarial: checks OPTIONAL — but a carried check must still coerce.
+    assert make({"kind": "adversarial"}).decoded_verifier()["kind"] == "adversarial"
+    assert make({"kind": "adversarial", "checks": [{"files": ["a.md"]}]}).state == "active"
+    with pytest.raises(ValueError):
+        make({"kind": "adversarial", "checks": [{"bogus": 1}]})
+    # judged: the judge alone — checks are refused, not silently ignored.
+    assert make({"kind": "judged"}).decoded_verifier()["kind"] == "judged"
+    with pytest.raises(ValueError, match="adversarial"):
+        make({"kind": "judged", "checks": [{"files": ["a.md"]}]})
+    # unknown kinds still refused, with the whole vocabulary named.
+    with pytest.raises(ValueError, match="checks, adversarial, judged, manual"):
+        make({"kind": "vibes"})
