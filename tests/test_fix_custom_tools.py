@@ -114,7 +114,14 @@ def test_custom_tool_endpoints(tmp_path):
     assert client.get("/tools/custom").json()["tools"] == []
     created = client.post(
         "/tools/custom",
-        json={"name": "ping_tool", "description": "d", "command": ["echo", "ok"]},
+        json={
+            "name": "ping_tool",
+            "description": "d",
+            # A program that provably exists: since v1.205.0 creation REFUSES
+            # an argv[0] that doesn't resolve on PATH ("echo" is a shell
+            # builtin on Windows, not a program).
+            "command": [sys.executable, "-c", "print('ok')"],
+        },
     )
     assert created.status_code == 200 and created.json()["name"] == "ping_tool"
     assert len(client.get("/tools/custom").json()["tools"]) == 1

@@ -35,6 +35,30 @@ def _resolve_read_path(raw: str, ctx: ToolContext) -> Path:
     return p if p.is_absolute() else Path(ctx.workspace) / raw
 
 
+def _open_error(exc: Exception, path: Path) -> str:
+    """An honest message for a workbook openpyxl could not open.
+
+    THE LIVE FAILURE (v1.205.0): ``excel_profile`` on a user's tax-document
+    folder surfaced a raw ``BadZipFile: File is not a zip file`` — which tells
+    an agent nothing it can act on. A .xlsx is a zip container, so BadZipFile's
+    real-world meaning is a legacy .xls (or another format) wearing an .xlsx
+    name — the suffix gate above this already passed, so only the BYTES can be
+    wrong. Wording matches the documented known limit ("Legacy Office formats
+    (.doc/.xls/.ppt/.odt) must be converted before preview/extraction",
+    docs/TODO.md) and readers.py's ``_LEGACY_HINTS``. Every other exception is
+    reported exactly as before.
+    """
+    from zipfile import BadZipFile
+
+    if isinstance(exc, BadZipFile):
+        return (
+            f"{path.name} is not a valid .xlsx — likely a legacy .xls or a "
+            "renamed file; convert it to .xlsx first (legacy Office formats "
+            "need conversion)"
+        )
+    return f"{type(exc).__name__}: {exc}"
+
+
 def _read_workbook(path: Path, sheet: "str | None", cell_range: "str | None",
                    include_formulas: bool) -> dict[str, Any]:
     from openpyxl import load_workbook
@@ -106,7 +130,7 @@ class ExcelReadTool(Tool):
                 bool(args.get("include_formulas")),
             )
         except Exception as exc:  # noqa: BLE001 — real files must not crash the runtime
-            return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+            return ToolResult(ok=False, error=_open_error(exc, path))
         import json
 
         return ToolResult(ok=True, output=json.dumps(data, ensure_ascii=False), data=data)
@@ -225,7 +249,7 @@ class ExcelEditTool(Tool):
                 _apply_edits, target, args.get("sheet"), edits, add_sheets
             )
         except Exception as exc:  # noqa: BLE001
-            return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+            return ToolResult(ok=False, error=_open_error(exc, target))
         rel = str(target.relative_to(Path(ctx.workspace).resolve())).replace("\\", "/")
         return ToolResult(
             ok=True,
@@ -369,7 +393,7 @@ class ExcelProfileTool(Tool):
         try:
             data = await asyncio.to_thread(_profile)
         except Exception as exc:  # noqa: BLE001 — real files must not crash the runtime
-            return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+            return ToolResult(ok=False, error=_open_error(exc, path))
         lines = [f"{path.name} — {len(data['sheets'])} sheet(s)"]
         for s in data["sheets"]:
             heads = ", ".join(h for h in s["headers"] if h) or "(no header row)"
@@ -523,7 +547,7 @@ class ExcelQueryTool(Tool):
         except ValueError as exc:
             return ToolResult(ok=False, error=str(exc))
         except Exception as exc:  # noqa: BLE001 — real files must not crash the runtime
-            return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+            return ToolResult(ok=False, error=_open_error(exc, path))
 
 
 # --------------------------------------------------------------------------- #

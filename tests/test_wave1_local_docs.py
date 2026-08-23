@@ -65,6 +65,43 @@ async def test_excel_profile_maps_the_workbook(tmp_path):
     assert "Ledger" in res.output and "headers: Client, Amount, Month" in res.output
 
 
+async def test_excel_profile_translates_badzipfile_honestly(tmp_path):
+    """v1.205.0, from a live task: excel_profile on a user's folder surfaced a
+    raw "BadZipFile: File is not a zip file" — real-world meaning a legacy .xls
+    or a renamed non-Excel file wearing the .xlsx name. The error must say THAT
+    (matching the documented known limit: legacy Office formats need
+    conversion), never the exception name."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "legacy.xlsx").write_bytes(b"plain text pretending to be a workbook\n")
+    res = await _tool("excel_profile").execute({"path": "legacy.xlsx"}, _ctx(ws))
+    assert not res.ok
+    err = res.error or ""
+    assert "legacy.xlsx is not a valid .xlsx" in err
+    assert "likely a legacy .xls or a renamed file" in err
+    assert "convert it to .xlsx first" in err
+    assert "BadZipFile" not in err  # the raw name is exactly the live failure
+
+
+async def test_excel_query_and_edit_share_the_honest_badzipfile_message(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "book.xlsx").write_bytes(b"col_a,col_b\n1,2\n")  # a CSV renamed .xlsx
+    q = await _tool("excel_query").execute(
+        {"path": "book.xlsx", "op": "count", "column": "col_a"}, _ctx(ws)
+    )
+    assert not q.ok
+    assert "not a valid .xlsx" in (q.error or "") and "BadZipFile" not in (q.error or "")
+    e = await _tool("excel_edit").execute(
+        {"path": "book.xlsx", "edits": [{"cell": "A1", "value": 1}]}, _ctx(ws)
+    )
+    assert not e.ok
+    assert "not a valid .xlsx" in (e.error or "") and "BadZipFile" not in (e.error or "")
+    r = await _tool("excel_read").execute({"path": "book.xlsx"}, _ctx(ws))
+    assert not r.ok
+    assert "not a valid .xlsx" in (r.error or "") and "BadZipFile" not in (r.error or "")
+
+
 async def test_excel_query_sum_is_engine_computed(tmp_path):
     ws = tmp_path / "ws"
     ws.mkdir()

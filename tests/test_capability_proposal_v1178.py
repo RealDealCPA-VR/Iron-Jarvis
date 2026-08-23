@@ -86,6 +86,22 @@ _ASK = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _qpdf_resolves(monkeypatch):
+    """Since v1.205.0 tool_create REFUSES a command whose program is not
+    installed (the dead-`mv` live failure). These tests use `qpdf` as a
+    real-SHAPED example without requiring it on the machine, so the resolver
+    seam reports it installed; everything else resolves for real."""
+    import iron_jarvis.tools.dynamic as dynamic
+
+    real_which = dynamic._which
+    monkeypatch.setattr(
+        dynamic,
+        "_which",
+        lambda prog: "qpdf" if str(prog).strip().lower() == "qpdf" else real_which(prog),
+    )
+
+
 @pytest.fixture
 def platform(tmp_path):
     return build_platform(str(tmp_path))

@@ -1286,6 +1286,17 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=400, detail=f"'{name}' is a built-in tool")
         if not body.command:
             raise HTTPException(status_code=400, detail="command (argv) is required")
+        # THE PROGRAM MUST EXIST (v1.205.0) — the same refusal, same wording,
+        # as the `tool_create` agent tool: both doors go through
+        # `missing_program_error`, so a dead tool (POSIX `mv` on a Windows
+        # install — 22/22 live failures) is never persisted from either side.
+        from ...tools.dynamic import missing_program_error
+
+        not_installed = missing_program_error(
+            [str(c) for c in body.command if str(c).strip()]
+        )
+        if not_installed:
+            raise HTTPException(status_code=400, detail=not_installed)
         try:
             rec = d.platform.tools_registry.register(
                 name, body.description, body.parameters, body.command, body.timeout_seconds

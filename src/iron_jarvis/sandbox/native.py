@@ -50,6 +50,34 @@ def scrubbed_env() -> dict[str, str]:
     return env
 
 
+def scrubbed_env_description(os_name: str | None = None) -> str:
+    """Model-facing truth about what :func:`scrubbed_env` leaves resolvable
+    (v1.205.0).
+
+    A live task burned 14 failed shell calls guessing ``mv``/``python``/
+    ``powershell`` because nothing told the model what the scrubbed native
+    environment actually contains. This one-liner is baked into the shell
+    tool's registered description; it lives NEXT TO ``scrubbed_env`` so the
+    description and the scrub cannot drift apart silently. Deliberately
+    conservative (dev-mode ``python`` sometimes resolves via the interpreter
+    dir; a packaged install's does not) — never overpromise.
+    """
+    if (os_name or os.name) == "nt":
+        return (
+            "Windows cmd.exe with a minimal scrubbed PATH — no python, no "
+            "powershell, no POSIX tools (mv/ls/cp/rm/cat/grep do not "
+            "resolve); py.exe is available. Prefer the built-in tools "
+            "(rename_file, list_files, grep, read_document/write_document) "
+            "for file work."
+        )
+    return (
+        "POSIX sh with a minimal scrubbed PATH (/usr/bin:/bin) — system "
+        "utilities resolve, but user-installed tools, shell profiles, and "
+        "virtualenvs do not. Prefer the built-in tools (rename_file, "
+        "list_files, grep, read_document/write_document) for file work."
+    )
+
+
 class NativeSandbox(Sandbox):
     """Run commands via ``subprocess.run`` on the host (§16, best-effort)."""
 

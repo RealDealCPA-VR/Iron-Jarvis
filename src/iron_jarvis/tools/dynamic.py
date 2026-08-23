@@ -19,7 +19,10 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
 import subprocess
+import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from sqlmodel import select
@@ -33,6 +36,88 @@ if TYPE_CHECKING:  # avoid importing the heavy SQLAlchemy symbol at runtime
 
 #: Maximum command runtime regardless of the record's request (a guardrail).
 MAX_TIMEOUT_SECONDS = 600
+
+#: How long a CommandTool trusts its last argv[0] health probe (v1.205.0).
+#: ``specs()`` asks on every model-facing catalog build, so an uncached probe
+#: would walk the whole PATH (× PATHEXT on Windows) per request per tool.
+_HEALTH_TTL_SECONDS = 30.0
+
+#: When the missing program has an obvious built-in equivalent, the refusal
+#: SAYS so — an agent proposing a dead tool should learn what to reach for
+#: instead. Grounded in a live task (v1.205.0): a custom `rename_real_file`
+#: built on POSIX `mv` failed 22/22 times on the user's packaged install
+#: ("command not found: 'mv'") while the built-in rename_file succeeded 15/15.
+#: Names here MUST be real registered built-ins.
+_BUILTIN_HINTS: dict[str, str] = {
+    "mv": "for file renames the built-in rename_file already works",
+    "move": "for file renames the built-in rename_file already works",
+    "ren": "for file renames the built-in rename_file already works",
+    "cat": "for reading files the built-in read_file already works",
+    "type": "for reading files the built-in read_file already works",
+    "ls": "for listing folders the built-in list_files already works",
+    "dir": "for listing folders the built-in list_files already works",
+    "grep": "for searching file contents the built-in grep already works",
+    "findstr": "for searching file contents the built-in grep already works",
+}
+
+
+def _which(prog: str) -> "str | None":
+    """Does ``prog`` resolve to a runnable program on THIS machine?
+
+    A thin seam around :func:`shutil.which` (which honours Windows ``PATHEXT``,
+    so ``mv`` finds ``mv.EXE``) — module-level so tests can stand in a fake
+    resolver without patching ``shutil`` for the whole process.
+    """
+    return shutil.which(prog)
+
+
+def missing_program_error(argv: "list[str] | None") -> str:
+    """Why this command template cannot run on this machine, or ``""``.
+
+    THE MEASURED FAILURE (v1.205.0): ``tool_create`` never checked that the
+    template's program exists, so an agent authored ``rename_real_file`` around
+    POSIX ``mv`` on a Windows install, the dead tool was persisted, advertised
+    to every future run, and failed 22/22 times mid-task with
+    ``command not found: 'mv'``. Both creation doors (the ``tool_create`` agent
+    tool AND ``POST /tools/custom``) refuse through THIS one function so the
+    two can never drift, and :meth:`CommandTool.missing_program` reuses it for
+    advertise-time health on tools that were persisted before the check existed
+    (or whose program was uninstalled later).
+
+    A templated ``argv[0]`` (``{prog}``) is filled at call time, so there is
+    nothing to check yet — the capability deny-floor screens that hole
+    separately. An empty argv is the callers' "command is required" case, not
+    ours.
+    """
+    if not argv:
+        return ""
+    prog = str(argv[0]).strip()
+    if not prog or "{" in prog:
+        return ""
+    if _which(prog):
+        return ""
+    base = Path(prog).name.lower()
+    for ext in (".exe", ".bat", ".cmd", ".com"):
+        if base.endswith(ext):
+            base = base[: -len(ext)]
+            break
+    hint = _BUILTIN_HINTS.get(
+        base, "a built-in tool may already cover this — check the built-in tools first"
+    )
+    return (
+        f"'{prog}' is not installed on this machine (nothing named '{prog}' "
+        f"resolves on PATH) — custom tools run real programs; {hint}"
+    )
+
+
+#: The pointer appended when a PERSISTED dead tool is invoked anyway (v1.205.0):
+#: creation now refuses, but a tool created before the check — or whose program
+#: was uninstalled since — stays in the registry (never deleted automatically)
+#: and must fail honestly instead of with a bare "command not found".
+_DEAD_TOOL_POINTER = (
+    "this custom tool's program isn't installed; built-in tools may already "
+    "cover this — see the Tools page"
+)
 
 
 def _build_input_schema(params: list[dict]) -> dict[str, Any]:
@@ -90,6 +175,29 @@ class CommandTool(Tool):
             self._argv = []
         self._timeout = max(1, min(int(record.timeout_seconds or 60), MAX_TIMEOUT_SECONDS))
         self.input_schema = _build_input_schema(self._params)
+        # argv[0] health probe cache (v1.205.0) — see missing_program().
+        self._health = ""
+        self._health_at = 0.0
+
+    def missing_program(self) -> str:
+        """``""`` when this tool's program resolves (or argv[0] is templated),
+        else the honest :func:`missing_program_error` text.
+
+        THE HEALTH SIGNAL (v1.205.0). ``ToolRegistry.specs`` asks this before
+        advertising a custom tool to a model, and ``execute`` asks it before
+        running — so a persisted tool whose program is gone stops being offered
+        and fails honestly, while the record itself is never touched (the user
+        sees and deletes it on the Tools page). Cached for a short TTL because
+        ``specs()`` runs per model request and an uncached miss walks the whole
+        PATH; the TTL also means a freshly INSTALLED program is picked up
+        within seconds rather than never.
+        """
+        now = time.monotonic()
+        if self._health_at and (now - self._health_at) < _HEALTH_TTL_SECONDS:
+            return self._health
+        self._health = missing_program_error(self._argv)
+        self._health_at = now
+        return self._health
 
     def _render(self, args: dict[str, Any]) -> list[str]:
         """Substitute ``{param}`` placeholders, each value as ONE literal argv
@@ -106,6 +214,12 @@ class CommandTool(Tool):
         ]
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        # DEAD PROGRAM FIRST (v1.205.0): a tool that can NEVER run must say so
+        # before quibbling about arguments — "missing required: path" on a tool
+        # whose program does not exist sends the caller fixing the wrong thing.
+        dead = self.missing_program()
+        if dead:
+            return ToolResult(ok=False, error=f"{dead}. Note: {_DEAD_TOOL_POINTER}.")
         missing = [
             p["name"]
             for p in self._params
@@ -134,7 +248,14 @@ class CommandTool(Tool):
         except subprocess.TimeoutExpired:
             return ToolResult(ok=False, error="command timed out")
         except FileNotFoundError:
-            return ToolResult(ok=False, error=f"command not found: {argv[0]!r}")
+            # Reachable when argv[0] was templated (missing_program() cannot
+            # judge a placeholder) or the program vanished inside the health
+            # TTL — same honest wording as the pre-check, never a bare
+            # "command not found" (the 22-failure live shape, v1.205.0).
+            return ToolResult(
+                ok=False,
+                error=f"command not found: {argv[0]!r} — {_DEAD_TOOL_POINTER}",
+            )
         except OSError as exc:
             return ToolResult(ok=False, error=f"could not run command: {exc}")
         out = proc.stdout + (("\n[stderr]\n" + proc.stderr) if proc.stderr else "")
@@ -303,6 +424,17 @@ class ToolCreateTool(Tool):
                     f"got {bad[0]!r}"
                 ),
             )
+        # THE PROGRAM MUST EXIST (v1.205.0). Refused HERE, before anything is
+        # persisted: a dead tool used to be committed, advertised to every
+        # future run, and fail forever ("command not found: 'mv'", 22/22 on a
+        # live task). The refusal names the missing program and the built-in
+        # that already covers the job, so the proposing agent can pick that
+        # instead. Same check, same wording as POST /tools/custom.
+        not_installed = missing_program_error(
+            [str(c) for c in command if str(c).strip()]
+        )
+        if not_installed:
+            return ToolResult(ok=False, error=not_installed)
         try:
             rec = self.p.tools_registry.register(
                 name,
@@ -337,7 +469,21 @@ class ToolListTool(Tool):
         rows = self.p.tools_registry.list()
         if not rows:
             return ToolResult(ok=True, output="(no custom tools yet)", data={"tools": []})
-        lines = [f"{r.name}: {r.description}" for r in rows]
+        # A dead tool is LISTED but marked (v1.205.0): tool_list is management,
+        # so hiding it would make it undeletable by an agent — but offering it
+        # unmarked invites the call that can only fail.
+        lines = []
+        for r in rows:
+            try:
+                argv = [str(a) for a in json.loads(r.argv_json or "[]")]
+            except (TypeError, ValueError):
+                argv = []
+            mark = (
+                " [unavailable: its program is not installed on this machine]"
+                if missing_program_error(argv)
+                else ""
+            )
+            lines.append(f"{r.name}: {r.description}{mark}")
         return ToolResult(
             ok=True,
             output="\n".join(lines),

@@ -247,7 +247,33 @@ class ToolRegistry:
                 or (wild and t.name in self._custom)
                 or (mcp_wild and t.name in self._mcp)
             ]
+        # ADVERTISE-TIME HEALTH (v1.205.0): a custom tool whose program is no
+        # longer installed is not offered to models — every model-facing
+        # catalog (both chat lanes, the agent runtime, decompose) builds
+        # through here, so gating once covers them all. The record itself is
+        # NEVER deleted: it stays in the dynamic-tool registry and on the
+        # Tools page (GET /tools/custom reads that directly), where the user
+        # can see it and choose to delete it. Grounded in a live task where a
+        # dead `rename_real_file` was advertised forever and failed 22/22.
+        tools = [t for t in tools if not self._unavailable_custom(t)]
         return [self._spec_with_store_as(t) for t in tools]
+
+    def _unavailable_custom(self, tool: Tool) -> bool:
+        """True only for a CUSTOM tool that reports its program missing.
+
+        Built-ins and MCP tools are never probed (they carry no
+        ``missing_program``), and a probe that CRASHES fails open — a broken
+        health check must not hide a working tool from every model.
+        """
+        if tool.name not in self._custom:
+            return False
+        probe = getattr(tool, "missing_program", None)
+        if not callable(probe):
+            return False
+        try:
+            return bool(probe())
+        except Exception:  # noqa: BLE001 — health must never break the catalog
+            return False
 
     def _spec_with_store_as(self, tool: Tool) -> dict[str, Any]:
         """A tool's spec, plus ``_store_as`` for the verbose ones.
