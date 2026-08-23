@@ -516,7 +516,17 @@ describe("source pins — the call sites the component tests cannot see", () => 
     // appear after it, inside the same return.
     const chipAt = pageSrc.lastIndexOf("{m.workflowRun && (");
     expect(chipAt).toBeGreaterThan(-1);
-    const sameReturn = pageSrc.slice(chipAt, chipAt + 7000);
+    // Bound the slice SEMANTICALLY, not by character count: the message map's
+    // return ends right before the live streaming bubble ("{chatBusy && ("),
+    // so everything between the chip and that marker is inside the same
+    // return. The old fixed `chipAt + 7000` window was a proxy that measured
+    // the branch's LENGTH, and it went red on CI the moment this wave's
+    // additions (DoorsStrip, GoalBirth, receipt comments) pushed the hover
+    // actions past 7,000 characters — the invariant (no forked return) never
+    // broke, only the ruler did.
+    const mapEnd = pageSrc.indexOf("{chatBusy && (", chipAt);
+    expect(mapEnd).toBeGreaterThan(chipAt);
+    const sameReturn = pageSrc.slice(chipAt, mapEnd);
     for (const affordance of [
       "TurnReceipt", // accountability
       "SourcesRow", // URLs the turn's web tools returned
