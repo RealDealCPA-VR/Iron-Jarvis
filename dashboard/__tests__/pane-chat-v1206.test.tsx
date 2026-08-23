@@ -22,6 +22,8 @@
  *    daemon-down is the OfflineHint, with the composer disabled.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import {
   cleanup,
@@ -53,6 +55,10 @@ const H = vi.hoisted(() => {
       failThreads: new Set<string>(),
       projects: [] as { id: string; name: string; root?: string }[],
       nextThreadId: "th_1",
+      /** GET /undo?session_id=chat rows (newest first, the route's order). */
+      undoRows: [] as Record<string, unknown>[],
+      /** When set, POST /undo/{id} fails with this (the guard's refusal). */
+      undoFail: null as { detail: string; status: number } | null,
     },
   };
 });
@@ -64,6 +70,7 @@ vi.mock("@/lib/api", () => ({
   get: async (path: string) => {
     H.api.gets.push(path);
     if (path === "/projects") return { projects: H.api.projects };
+    if (path === "/undo?session_id=chat") return { actions: H.api.undoRows };
     const m = /^\/chat\/threads\/(.+)$/.exec(path);
     if (m) {
       const id = decodeURIComponent(m[1]);
@@ -78,6 +85,12 @@ vi.mock("@/lib/api", () => ({
     H.api.posts.push({ path, body });
     if (path === "/documents/upload")
       return { path: `C:/up/${body.filename}`, name: body.filename };
+    if (path.startsWith("/undo/")) {
+      if (H.api.undoFail)
+        throw new H.FakeApiError(H.api.undoFail.detail, H.api.undoFail.status);
+      return { undone: decodeURIComponent(path.slice("/undo/".length)) };
+    }
+    if (path === "/documents/open") return { ok: true, app: "Notepad" };
     return { ok: true };
   },
   put: async (path: string, body: Record<string, unknown>) => {
@@ -181,7 +194,9 @@ import {
   mergeSetup,
   paneTitle,
   paneThreadKey,
+  pathIsUnder,
   projectForCwd,
+  runnableBlocks,
 } from "@/components/terminal/paneChatCore";
 
 const CWD = "C:\\work\\demo";
@@ -194,6 +209,8 @@ beforeEach(() => {
   H.api.failThreads = new Set();
   H.api.projects = [];
   H.api.nextThreadId = "th_1";
+  H.api.undoRows = [];
+  H.api.undoFail = null;
   S.stream.bodies = [];
   S.stream.result = { reply: "ok" };
   S.stream.reject = null;
@@ -695,6 +712,292 @@ describe("save-time setup refresh (BC1 D3)", () => {
     expect(setup.model).toBe("qwen-14b");
     // The pane still overwrites the one key it owns.
     expect(setup.workspace_dir).toBe(CWD);
+  });
+});
+
+describe("runnableBlocks (pure, BC2)", () => {
+  it("detects every tagged shell language, case-insensitively", () => {
+    for (const lang of ["sh", "bash", "shell", "powershell", "ps1", "cmd", "bat", "BASH"]) {
+      const md = `Run:\n\`\`\`${lang}\nnpm test\n\`\`\`\n`;
+      expect(runnableBlocks(md)).toEqual([
+        { lang: lang.toLowerCase(), code: "npm test" },
+      ]);
+    }
+  });
+
+  it("EXCLUDES language-less fences and non-shell languages — no guessing", () => {
+    // A bare fence is how models paste terminal OUTPUT, logs and diffs; a
+    // guessed Run button would type that text into a REAL PTY.
+    expect(runnableBlocks("```\nnpm test\n```")).toEqual([]);
+    expect(runnableBlocks("```python\nprint(1)\n```")).toEqual([]);
+    expect(runnableBlocks("```json\n{}\n```")).toEqual([]);
+    expect(runnableBlocks("no fences at all")).toEqual([]);
+  });
+
+  it("keeps multi-line code VERBATIM and reads only the info string's first token", () => {
+    const md = "```bash title=deploy\ncd app\nnpm run build   # keep  spaces\n```";
+    expect(runnableBlocks(md)).toEqual([
+      { lang: "bash", code: "cd app\nnpm run build   # keep  spaces" },
+    ]);
+  });
+
+  it("an UNCLOSED fence and an empty block yield nothing", () => {
+    expect(runnableBlocks("```bash\nnpm test")).toEqual([]);
+    expect(runnableBlocks("```bash\n\n```")).toEqual([]);
+  });
+
+  it("finds multiple blocks and skips the non-shell ones between them", () => {
+    const md =
+      "```sh\nfirst\n```\ntext\n```python\nx=1\n```\n```powershell\nSecond-Cmd\n```";
+    expect(runnableBlocks(md)).toEqual([
+      { lang: "sh", code: "first" },
+      { lang: "powershell", code: "Second-Cmd" },
+    ]);
+  });
+
+  it("pathIsUnder: boundary + case-insensitive (win32)", () => {
+    expect(pathIsUnder("C:\\work\\demo\\out.md", "c:\\WORK\\demo")).toBe(true);
+    expect(pathIsUnder("C:\\workshop\\x", "C:\\work")).toBe(false);
+    expect(pathIsUnder("D:\\other\\f.txt", "C:\\work")).toBe(false);
+  });
+});
+
+describe("Run in terminal (BC2)", () => {
+  const REPLY =
+    "Build it:\n```bash\nnpm run build\npnpm test\n```\nand this is just code:\n```python\nprint(1)\n```";
+
+  function seedThread(paneId: string, content = REPLY) {
+    window.localStorage.setItem(`ij.pane.thread.${paneId}`, "th_run");
+    H.api.threads["th_run"] = {
+      id: "th_run",
+      messages: [
+        { role: "user", content: "build it" },
+        { role: "assistant", content },
+      ],
+    };
+  }
+
+  it("shell fences get a button; the code is handed over VERBATIM; python does not", async () => {
+    seedThread("pr");
+    const onRunCommand = vi.fn(() => true);
+    render(<PaneChat paneId="pr" cwd={CWD} onRunCommand={onRunCommand} />);
+    const btns = await screen.findAllByRole("button", {
+      name: /run in terminal/i,
+    });
+    expect(btns.length).toBe(1); // the python fence gets nothing
+    fireEvent.click(btns[0]);
+    expect(onRunCommand).toHaveBeenCalledWith("npm run build\npnpm test");
+    // The write landed — no note.
+    expect(screen.queryByText(/terminal not connected/i)).not.toBeInTheDocument();
+  });
+
+  it("a false return renders the honest note instead of pretending it ran", async () => {
+    seedThread("pf");
+    const onRunCommand = vi.fn(() => false);
+    render(<PaneChat paneId="pf" cwd={CWD} onRunCommand={onRunCommand} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: /run in terminal/i }),
+    );
+    expect(
+      await screen.findByText(/terminal not connected/i),
+    ).toBeInTheDocument();
+  });
+
+  it("no onRunCommand prop = no Run buttons at all", async () => {
+    seedThread("pn");
+    render(<PaneChat paneId="pn" cwd={CWD} />);
+    // The user bubble's exact text — the assistant reply also contains the
+    // phrase, so a regex would match two nodes.
+    await waitFor(() => expect(screen.getByText("build it")).toBeInTheDocument());
+    expect(
+      screen.queryByRole("button", { name: /run in terminal/i }),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("changed-file cards + undo where you look (BC2)", () => {
+  const DOC = "C:\\work\\demo\\notes\\out.md";
+
+  function seedFileThread(paneId: string, docs: string[] = [DOC]) {
+    window.localStorage.setItem(`ij.pane.thread.${paneId}`, "th_f");
+    H.api.threads["th_f"] = {
+      id: "th_f",
+      messages: [
+        { role: "user", content: "write it" },
+        { role: "assistant", content: "Wrote the file.", documents: docs },
+      ],
+    };
+  }
+
+  let confirmSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+  });
+  afterEach(() => confirmSpy.mockRestore());
+
+  it("renders a card per receipt path; Open posts the full path to /documents/open", async () => {
+    seedFileThread("pc");
+    render(<PaneChat paneId="pc" cwd={CWD} />);
+    const card = await screen.findByTestId("pane-file-card");
+    expect(card).toHaveTextContent("out.md");
+    fireEvent.click(screen.getByRole("button", { name: /^open$/i }));
+    await waitFor(() =>
+      expect(
+        H.api.posts.some(
+          (p) => p.path === "/documents/open" && p.body.path === DOC,
+        ),
+      ).toBe(true),
+    );
+    // Inside the pane's folder — no location flag.
+    expect(screen.queryByText(/outside this folder/i)).not.toBeInTheDocument();
+  });
+
+  it("Undo joins the NEWEST journal row, says so honestly (label + confirm), POSTs that id; success disables", async () => {
+    seedFileThread("pu");
+    // Newest first (the route's order): tool_new must win over tool_old.
+    H.api.undoRows = [
+      {
+        action_id: "tool_new",
+        kind: "file_write",
+        undoable: true,
+        path: "notes/out.md",
+        workspace: "C:\\work\\demo",
+      },
+      {
+        action_id: "tool_old",
+        kind: "file_write",
+        undoable: true,
+        path: "notes/out.md",
+        workspace: "C:\\work\\demo",
+      },
+    ];
+    render(<PaneChat paneId="pu" cwd={CWD} />);
+    // BC2 defect 3: the join is newest-per-path over the SHARED session-
+    // "chat" journal, so the reverted write may be another surface's — the
+    // label and confirm must say "newest write", never "this message's".
+    const undo = await screen.findByRole("button", {
+      name: /undo newest write/i,
+    });
+    fireEvent.click(undo);
+    // Exactly one decision, to the newest row — never the stale one.
+    await waitFor(() => {
+      const posts = H.api.posts.filter((p) => p.path.startsWith("/undo/"));
+      expect(posts.length).toBe(1);
+      expect(posts[0].path).toBe("/undo/tool_new");
+    });
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    const prompt = String(confirmSpy.mock.calls[0][0]);
+    expect(prompt).toContain("out.md");
+    expect(prompt).toContain("NEWEST write");
+    expect(prompt).toContain("panes and Chat share one journal");
+    // Honest success note + the button disables (and stays disabled after
+    // the refetch — undone state is remembered by action id).
+    expect(
+      await screen.findByText(/undone — restored to before the newest write/i),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /undone/i })).toBeDisabled(),
+    );
+  });
+
+  it("the since-changed guard's refusal renders VERBATIM and the button stays usable", async () => {
+    seedFileThread("pg");
+    H.api.undoRows = [
+      {
+        action_id: "tool_1",
+        kind: "file_write",
+        undoable: true,
+        path: "notes/out.md",
+        workspace: "C:\\work\\demo",
+      },
+    ];
+    H.api.undoFail = {
+      detail:
+        "out.md changed since this write — refusing to clobber the newer content",
+      status: 409,
+    };
+    render(<PaneChat paneId="pg" cwd={CWD} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: /undo newest write/i }),
+    );
+    // The daemon's own words, where the user clicked.
+    expect(
+      await screen.findByText(
+        /out\.md changed since this write — refusing to clobber the newer content/i,
+      ),
+    ).toBeInTheDocument();
+    // A refused undo did not happen — the affordance must not die.
+    expect(
+      screen.getByRole("button", { name: /undo newest write/i }),
+    ).toBeEnabled();
+  });
+
+  it("no matching journal row = NO undo affordance (never a guess); Open still offered", async () => {
+    seedFileThread("pz");
+    H.api.undoRows = []; // nothing joinable
+    render(<PaneChat paneId="pz" cwd={CWD} />);
+    await screen.findByTestId("pane-file-card");
+    expect(
+      screen.queryByRole("button", { name: /undo newest write/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^open$/i })).toBeInTheDocument();
+  });
+
+  it("a path OUTSIDE the pane cwd still renders — flagged with its location", async () => {
+    seedFileThread("po", ["D:\\elsewhere\\gen.txt"]);
+    render(<PaneChat paneId="po" cwd={CWD} />);
+    const card = await screen.findByTestId("pane-file-card");
+    expect(card).toHaveTextContent("gen.txt");
+    expect(card).toHaveTextContent(/outside this folder/i);
+  });
+
+  it("a file re-written by a LATER turn notes '(newer than this message)' on the older card only", async () => {
+    // The detectable half of the shared-journal hazard: a later assistant
+    // message in THIS thread lists the same path, so the newest journal row
+    // cannot be the older message's write.
+    window.localStorage.setItem("ij.pane.thread.pn2", "th_n2");
+    H.api.threads["th_n2"] = {
+      id: "th_n2",
+      messages: [
+        { role: "user", content: "write it" },
+        { role: "assistant", content: "First write.", documents: [DOC] },
+        { role: "user", content: "again" },
+        { role: "assistant", content: "Second write.", documents: [DOC] },
+      ],
+    };
+    H.api.undoRows = [
+      {
+        action_id: "tool_2",
+        kind: "file_write",
+        undoable: true,
+        path: "notes/out.md",
+        workspace: "C:\\work\\demo",
+      },
+    ];
+    render(<PaneChat paneId="pn2" cwd={CWD} />);
+    const cards = await screen.findAllByTestId("pane-file-card");
+    expect(cards.length).toBe(2);
+    // Older card: flagged (the note waits on the async /undo join — it only
+    // qualifies an offered undo button). Newest card: no flag — its write IS
+    // the newest known to this thread.
+    await waitFor(() =>
+      expect(cards[0]).toHaveTextContent(/newer than this message/i),
+    );
+    expect(cards[1]).not.toHaveTextContent(/newer than this message/i);
+  });
+
+  it("the UNDETECTABLE half (cross-surface newer writes) is documented in-code (source-pinned)", () => {
+    // Rows carry created_at but no thread/message attribution, and wire
+    // messages carry no timestamps — so a newer write from the big page or
+    // another pane cannot be flagged. The wording ("Undo newest write") is
+    // the fix; this pin keeps the reasoning from being cleaned away.
+    const src = readFileSync(
+      join(process.cwd(), "components", "terminal", "PaneChat.tsx"),
+      "utf8",
+    );
+    expect(src).toContain("CROSS-SURFACE half is NOT detectable");
+    expect(src).toContain("no thread/message attribution");
+    expect(src).toMatch(/Undo newest write/);
   });
 });
 

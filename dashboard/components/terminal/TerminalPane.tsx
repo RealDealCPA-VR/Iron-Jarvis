@@ -262,6 +262,7 @@ export function TerminalPane({
   focused,
   onFocus,
   onClose,
+  onWriterReady,
   models = [],
   aiClis = [],
   skills = [],
@@ -271,6 +272,12 @@ export function TerminalPane({
   focused: boolean;
   onFocus: () => void;
   onClose: () => void;
+  /** v1.207.0: receives this pane's "type into the live shell" writer on
+   *  attach, and null on dispose. The writer is the SAME mechanism the
+   *  v1.194 snippet path types with (raw text over the attach WebSocket) and
+   *  is HONEST when down: writing to a closed/absent socket is a no-op that
+   *  returns false, so the caller can tell whether the text landed. */
+  onWriterReady?: (write: ((text: string) => boolean) | null) => void;
   /** Model catalog for the PER-PANE AI assist picker (from /models). */
   models?: ModelOption[];
   /** AI CLIs detected on this machine, for the "Launch" dropdown. */
@@ -626,6 +633,22 @@ export function TerminalPane({
     let focusedOnce = false; // steal focus on FIRST connect only — a reconnect
     // mid-interaction would close an open dropdown/popup out from under the user
 
+    // v1.207.0: hand the page this pane's "type into the live shell" writer —
+    // the SAME mechanism the v1.194 snippet path uses (raw text over the
+    // attach WebSocket; the daemon feeds it to the PTY as keystrokes, exactly
+    // like term.onData). Registered once per attach and read through wsRef at
+    // call time, so it survives reconnects without churning the registry;
+    // unregistered (null) in the cleanup below. HONEST when down: a write on
+    // a closed/absent socket is a no-op that returns false, so the caller can
+    // refuse instead of pretending the command ran.
+    const writeToShell = (text: string): boolean => {
+      const live = wsRef.current;
+      if (!live || live.readyState !== WebSocket.OPEN) return false;
+      live.send(text);
+      return true;
+    };
+    onWriterReady?.(writeToShell);
+
     // Paste support. A terminal treats Ctrl+V as a control char (0x16), NOT
     // paste — so pasting looks broken. Wire it explicitly. term.paste() respects
     // bracketed-paste mode, so a multi-line prompt inserts as ONE block instead
@@ -934,6 +957,7 @@ export function TerminalPane({
 
     return () => {
       disposed = true;
+      onWriterReady?.(null); // the session is going away — no writer to offer
       wsRef.current = null;
       termRef.current = null;
       if (reconnectTimer) clearTimeout(reconnectTimer);

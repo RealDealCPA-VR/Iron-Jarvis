@@ -265,6 +265,82 @@ export function mergeSetup(
   };
 }
 
+// --------------------------------------------------------- runnable fences
+
+/** Fence languages that mean "this is a command for a shell" (BC2). EXACTLY
+ *  the tagged set — sh/bash/shell for POSIX, powershell/ps1/cmd/bat for
+ *  Windows. Deliberately NO guessing at language-less fences: models use bare
+ *  fences for terminal OUTPUT, logs, diffs and file contents, and a guessed
+ *  "Run" button types its text into a REAL PTY — one misjudged paste of
+ *  output would execute as commands. Tagged-only means every Run button was
+ *  the model explicitly saying "this is shell". */
+export const RUN_LANGS = new Set([
+  "sh",
+  "bash",
+  "shell",
+  "powershell",
+  "ps1",
+  "cmd",
+  "bat",
+]);
+
+export interface RunnableBlock {
+  lang: string;
+  /** The fence's inner text VERBATIM (lines joined with \n, no trailing
+   *  newline) — what "Run in terminal" hands to the PTY. */
+  code: string;
+}
+
+/**
+ * Fenced code blocks in `markdown` whose language tag is in {@link RUN_LANGS}.
+ * Backtick fences only (``` and longer, CommonMark's ≤3-space indent), the
+ * info string's FIRST token is the language (```bash title=x → bash), and an
+ * UNCLOSED fence yields nothing — half a block is not a command.
+ */
+export function runnableBlocks(markdown: string): RunnableBlock[] {
+  const out: RunnableBlock[] = [];
+  const lines = (markdown ?? "").split(/\r?\n/);
+  let i = 0;
+  while (i < lines.length) {
+    const open = /^\s{0,3}(`{3,})\s*(\S*)/.exec(lines[i]);
+    if (!open) {
+      i += 1;
+      continue;
+    }
+    const fenceLen = open[1].length;
+    const lang = open[2].toLowerCase();
+    const body: string[] = [];
+    let closed = false;
+    let j = i + 1;
+    for (; j < lines.length; j += 1) {
+      const close = /^\s{0,3}(`{3,})\s*$/.exec(lines[j]);
+      if (close && close[1].length >= fenceLen) {
+        closed = true;
+        break;
+      }
+      body.push(lines[j]);
+    }
+    if (closed && RUN_LANGS.has(lang) && body.join("\n").trim()) {
+      out.push({ lang, code: body.join("\n") });
+    }
+    // Resume after the close fence (or at EOF for an unclosed one).
+    i = closed ? j + 1 : j;
+  }
+  return out;
+}
+
+// ------------------------------------------------------------ path containment
+
+/** Is `path` inside `dir` (or dir itself)? Same normalisation policy as
+ *  {@link projectForCwd}: segment boundary, case-insensitive (win32 panes;
+ *  a posix false positive costs a location NOTE, not data). Used to flag
+ *  changed-file cards whose path lies outside the pane's folder. */
+export function pathIsUnder(path: string, dir: string): boolean {
+  const p = normDir(path);
+  const d = normDir(dir);
+  return !!d && (p === d || p.startsWith(`${d}/`));
+}
+
 // -------------------------------------------------------------- file reading
 
 /** File → bare base64 (no data: prefix) — the /documents/upload contract. */

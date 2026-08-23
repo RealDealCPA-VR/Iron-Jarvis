@@ -72,17 +72,82 @@ vi.mock("@/lib/api", () => ({
 // The chat stub counts its MOUNTS — the D2 pin is "one mount, ever, per
 // pane", because a remount cycle is exactly the data-eating defect.
 
-const counters = vi.hoisted(() => ({ chatMounts: 0 }));
+const counters = vi.hoisted(() => ({
+  chatMounts: 0,
+  /** Everything typed through the per-pane writers, as `${paneId}:${text}`. */
+  written: [] as string[],
+  /** When false the stub writer reports a dead socket (write → false). */
+  writerOk: true,
+  registered: [] as string[],
+  unregistered: [] as string[],
+  /** What each Run click returned — null means the prop never arrived. */
+  runResults: [] as Array<boolean | null>,
+  /** The code block the stub's Run button hands over on the next click. */
+  runPayload: "git status",
+}));
 
 vi.mock("next/dynamic", async () => {
   const { useEffect } = await import("react");
-  function PaneChatStub({ paneId, cwd }: { paneId: string; cwd: string }) {
+  function PaneChatStub({
+    paneId,
+    cwd,
+    onRunCommand,
+  }: {
+    paneId: string;
+    cwd: string;
+    onRunCommand?: (cmd: string) => boolean;
+  }) {
     useEffect(() => {
       counters.chatMounts += 1;
     }, []);
     return (
       <div data-testid="pane-chat">
         chat:{paneId}:{cwd}
+        {/* Stands in for the per-code-block "Run in terminal" button the
+            parallel PaneChat build renders — user-clicked, never model-fired. */}
+        <button
+          type="button"
+          data-testid={`chat-run-${paneId}`}
+          onClick={() => {
+            counters.runResults.push(
+              onRunCommand ? onRunCommand(counters.runPayload) : null,
+            );
+          }}
+        >
+          run
+        </button>
+      </div>
+    );
+  }
+  function TerminalPaneStub({
+    info,
+    onWriterReady,
+  }: {
+    info: { id: string; shell: string; cwd: string };
+    onWriterReady?: (write: ((text: string) => boolean) | null) => void;
+  }) {
+    // Mirrors the real pane's contract: register the writer on attach,
+    // unregister with null on dispose; a dead socket writes nothing and
+    // says so (false).
+    useEffect(() => {
+      counters.registered.push(info.id);
+      onWriterReady?.((text: string) => {
+        if (!counters.writerOk) return false;
+        counters.written.push(`${info.id}:${text}`);
+        return true;
+      });
+      return () => {
+        onWriterReady?.(null);
+        counters.unregistered.push(info.id);
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    return (
+      <div data-testid={`terminal-pane-${info.id}`}>
+        {/* Mirrors the real pane's shape: the header IS the drag handle… */}
+        <header className="ij-term-drag">{info.shell}</header>
+        {/* …and this stands in for the xterm holder (the PTY-survival pin). */}
+        <div data-testid={`xterm-${info.id}`} className="xterm" />
       </div>
     );
   }
@@ -90,16 +155,23 @@ vi.mock("next/dynamic", async () => {
     default: () => {
       function DynamicStub(props: Record<string, unknown>) {
         if (typeof props.paneId === "string") {
-          return <PaneChatStub paneId={props.paneId} cwd={String(props.cwd)} />;
+          return (
+            <PaneChatStub
+              paneId={props.paneId}
+              cwd={String(props.cwd)}
+              onRunCommand={props.onRunCommand as ((cmd: string) => boolean) | undefined}
+            />
+          );
         }
-        const info = props.info as { id: string; shell: string; cwd: string };
         return (
-          <div data-testid={`terminal-pane-${info.id}`}>
-            {/* Mirrors the real pane's shape: the header IS the drag handle… */}
-            <header className="ij-term-drag">{info.shell}</header>
-            {/* …and this stands in for the xterm holder (the PTY-survival pin). */}
-            <div data-testid={`xterm-${info.id}`} className="xterm" />
-          </div>
+          <TerminalPaneStub
+            info={props.info as { id: string; shell: string; cwd: string }}
+            onWriterReady={
+              props.onWriterReady as
+                | ((write: ((text: string) => boolean) | null) => void)
+                | undefined
+            }
+          />
         );
       }
       return DynamicStub;
@@ -200,6 +272,12 @@ async function renderPage(firstId = "t1") {
 beforeEach(() => {
   localStorage.clear();
   counters.chatMounts = 0;
+  counters.written = [];
+  counters.writerOk = true;
+  counters.registered = [];
+  counters.unregistered = [];
+  counters.runResults = [];
+  counters.runPayload = "git status";
   seedApi([term("t1", "C:\\proj\\alpha"), term("t2", "C:\\proj\\beta")]);
 });
 
@@ -366,6 +444,92 @@ describe("the Files tab follows the PANE, not the view", () => {
   });
 });
 
+describe("run-in-pane plumbing (BC2)", () => {
+  it("panes register their writers on attach and unregister on dispose", async () => {
+    await renderPage();
+    expect(counters.registered).toEqual(expect.arrayContaining(["t1", "t2"]));
+    expect(counters.unregistered).toEqual([]);
+    cleanup();
+    expect(counters.unregistered).toEqual(expect.arrayContaining(["t1", "t2"]));
+  });
+
+  it("a clicked Run writes the command + Enter and flips the pane so the user WATCHES it", async () => {
+    await renderPage();
+    fireEvent.click(chatBtn("t1"));
+    expect(screen.getByTestId("chat-layer-t1")).toHaveStyle({ visibility: "visible" });
+
+    fireEvent.click(screen.getByTestId("chat-run-t1"));
+    // Single line, unchanged shape: the line + "\r" — the byte xterm emits
+    // for the Enter key, the only byte ConPTY treats as Enter (the v1.194
+    // snippet path deliberately omits it; a clicked Run submits).
+    expect(counters.written).toEqual(["t1:git status\r"]);
+    // The agreed contract: the caller is TOLD the write landed…
+    expect(counters.runResults).toEqual([true]);
+    // …and the pane flips to terminal view so the run is watched, with the
+    // chat hidden — not unmounted (D2 holds straight through a run).
+    expect(screen.getByTestId("term-layer-t1")).toHaveStyle({ visibility: "visible" });
+    expect(screen.getByTestId("chat-layer-t1")).toHaveStyle({ visibility: "hidden" });
+    expect(screen.getByTestId("pane-chat")).toBeInTheDocument();
+    expect(counters.chatMounts).toBe(1);
+  });
+
+  it("a fence ending in a blank line still EXECUTES — \\n is NOT Enter in ConPTY", async () => {
+    // The BC2 live repro: code ending "\n" used to skip the "\r" entirely —
+    // cmd.exe left the command typed-but-unexecuted, PS 5.1 opened a ">>"
+    // continuation — while runInPane returned true and flipped the pane
+    // "so the user watches it run". Nothing ran. Trailing blank lines are
+    // dropped and the last real line still gets its Enter.
+    counters.runPayload = "npm test\n";
+    await renderPage();
+    fireEvent.click(chatBtn("t1"));
+    fireEvent.click(screen.getByTestId("chat-run-t1"));
+    // Ends with "\r", NOTHING after it.
+    expect(counters.written).toEqual(["t1:npm test\r"]);
+    expect(counters.runResults).toEqual([true]);
+    expect(screen.getByTestId("term-layer-t1")).toHaveStyle({ visibility: "visible" });
+  });
+
+  it("multi-line blocks hand over PER LINE — each reviewed line gets its own Enter", async () => {
+    // The cmd.exe WELD (live repro): conhost drops mid-block LFs, so a blob
+    // ending in one "\r" executed "echo AAA111echo BBB222" — an unreviewed
+    // concatenation. Per-line "\r" is also what PSReadLine expects: it is
+    // byte-identical to a human typing, so an open construct still buffers.
+    counters.runPayload = "echo AAA\necho BBB\n";
+    await renderPage();
+    fireEvent.click(chatBtn("t1"));
+    fireEvent.click(screen.getByTestId("chat-run-t1"));
+    expect(counters.written).toEqual(["t1:echo AAA\recho BBB\r"]);
+    expect(counters.runResults).toEqual([true]);
+  });
+
+  it("an all-blank block refuses: false, nothing written, NO flip", async () => {
+    counters.runPayload = "\n  \n\n";
+    await renderPage();
+    fireEvent.click(chatBtn("t1"));
+    fireEvent.click(screen.getByTestId("chat-run-t1"));
+    expect(counters.runResults).toEqual([false]);
+    expect(counters.written).toEqual([]);
+    expect(screen.getByTestId("chat-layer-t1")).toHaveStyle({ visibility: "visible" });
+    expect(localStorage.getItem("ij.pane.view.t1")).toBe("chat");
+  });
+
+  it("a disconnected writer refuses: false, nothing written, NO flip", async () => {
+    counters.writerOk = false; // the stub's socket is down
+    await renderPage();
+    fireEvent.click(chatBtn("t1"));
+    fireEvent.click(screen.getByTestId("chat-run-t1"));
+
+    // false — not null (null would mean the prop never reached PaneChat).
+    expect(counters.runResults).toEqual([false]);
+    expect(counters.written).toEqual([]);
+    // The user is NOT dumped onto a dead terminal: still in chat view, and
+    // nothing was persisted as a flip.
+    expect(screen.getByTestId("chat-layer-t1")).toHaveStyle({ visibility: "visible" });
+    expect(screen.getByTestId("term-layer-t1")).toHaveStyle({ visibility: "hidden" });
+    expect(localStorage.getItem("ij.pane.view.t1")).toBe("chat");
+  });
+});
+
 /* ---- source pins (seams a rendered test cannot reach) ----------------------- */
 
 describe("page.tsx source pins", () => {
@@ -394,10 +558,37 @@ describe("page.tsx source pins", () => {
 
   it("renders PaneChat to the agreed contract, dynamically like TerminalPane", () => {
     expect(page).toContain('import("@/components/terminal/PaneChat")');
-    expect(page).toMatch(/<PaneChat paneId=\{t\.id\} cwd=\{t\.cwd\} \/>/);
+    expect(page).toContain("paneId={t.id}");
+    expect(page).toContain("cwd={t.cwd}");
+    // The BC2 contract: PaneChat is told whether its Run click landed.
+    expect(page).toContain("onRunCommand={(cmd) => runInPane(t.id, cmd)}");
     // Browser-only, like every xterm-adjacent surface on this page.
     const dyn = page.slice(page.indexOf("const PaneChat = dynamic"));
     expect(dyn.slice(0, 400)).toContain("ssr: false");
+  });
+
+  it("runInPane hands over PER LINE, refuses empties, and flips only on success", () => {
+    const run = page.slice(page.indexOf("const runInPane"));
+    // Refusal precedes the flip: a dead pane returns false and the view is
+    // untouched — never a flip onto a terminal that got nothing.
+    const refuse = run.indexOf("if (!ok) return false;");
+    const flip = run.indexOf('setPaneView(id, "terminal")');
+    expect(refuse).toBeGreaterThan(-1);
+    expect(flip).toBeGreaterThan(refuse);
+    // EVERY line is terminated by "\r" — the byte xterm emits for Enter, the
+    // only byte ConPTY treats as Enter ("\n" is not; and in cmd.exe conhost
+    // drops mid-block LFs, welding a blob into one unreviewed command —
+    // both defects live-verified by the BC2 review).
+    expect(run).toContain("${line}\\r");
+    expect(run).not.toContain("${cmd}\\r"); // the blob shape is the defect
+    // Trailing blank lines are dropped; an all-blank block refuses, no flip,
+    // in ONE write so a dying socket can't hand over half a block.
+    expect(run).toContain("if (lines.length === 0) return false;");
+    // The per-line choice is DOCUMENTED honestly where the code lives.
+    expect(page).toContain("verbatim PER LINE");
+    // Writers live in a ref registry that forgets a disposed pane.
+    expect(page).toContain("paneWriters.current[id]");
+    expect(page).toMatch(/else delete paneWriters\.current\[id\];/);
   });
 
   it("persists under the per-pane key, and only on an explicit toggle", () => {
@@ -437,5 +628,22 @@ describe("TerminalPane's one-shot focus steal (source-pinned)", () => {
     expect(gate).toBeGreaterThan(consume);
     // No API on an odd runtime ⇒ default VISIBLE (focus behaves as before).
     expect(block).toContain(": true;");
+  });
+
+  it("exposes the v1.194 snippet write mechanism as an HONEST writer (BC2)", () => {
+    // Registered on attach, unregistered with null on dispose.
+    expect(pane).toContain("onWriterReady?.(writeToShell)");
+    expect(pane).toContain("onWriterReady?.(null)");
+    // The writer is the snippet path's mechanism — raw text on the attach WS,
+    // read through wsRef at CALL time so reconnects are covered — and refuses
+    // (false) on a closed/absent socket instead of pretending it typed.
+    const writer = pane.slice(
+      pane.indexOf("const writeToShell"),
+      pane.indexOf("onWriterReady?.(writeToShell)"),
+    );
+    expect(writer).toContain("wsRef.current");
+    expect(writer).toContain("readyState !== WebSocket.OPEN) return false");
+    expect(writer).toContain("live.send(text)");
+    expect(writer).toContain("return true");
   });
 });

@@ -246,6 +246,62 @@ export default function TerminalsPage() {
     }
   }, []);
 
+  // Per-pane "type into this session" writers (v1.207.0). Each TerminalPane
+  // registers the same mechanism the v1.194 snippet path types with — raw
+  // text over its attach WebSocket, fed to the PTY as keystrokes — and
+  // unregisters with null on dispose. A ref, not state: writers arrive from
+  // inside pane effects and must never re-render the whole canvas.
+  const paneWriters = useRef<Record<string, (text: string) => boolean>>({});
+  const registerWriter = useCallback(
+    (id: string, write: ((text: string) => boolean) | null) => {
+      if (write) paneWriters.current[id] = write;
+      else delete paneWriters.current[id];
+    },
+    [],
+  );
+
+  // "Run in terminal" from a pane's chat. USER-CLICKED ONLY — PaneChat renders
+  // a per-code-block button; the model never triggers this (suggest-don't-act,
+  // same stance as the AI bar's "Type it in"). WRITE FIRST, FLIP ONLY ON
+  // SUCCESS: a pane whose shell isn't connected refuses (false) and stays in
+  // chat view, so the button can say so instead of dumping the user onto a
+  // dead terminal. On success the pane flips to terminal view — the flip is
+  // the point: the user WATCHES their command run in their own visible shell.
+  //
+  // The hand-over is normalized to PER-LINE writes: split the block on
+  // newlines, drop trailing blank lines, terminate EVERY line with "\r" (the
+  // byte xterm emits for the Enter key), delivered as ONE write so a dying
+  // socket can never hand over half a block. Empirically pinned against live
+  // ConPTY by the BC2 review — this is the only shape that keeps the promise:
+  //  (a) "\n" is NOT Enter in ConPTY. A fence ending in a blank line used to
+  //      skip the "\r" and leave the command typed-but-unexecuted (cmd.exe)
+  //      or stuck in a ">>" continuation (PS 5.1) while we still returned
+  //      true and flipped "so the user watches it run" — and nothing ran.
+  //  (b) In cmd.exe, conhost drops mid-block LFs, so a trailing "\r" executed
+  //      one unreviewed WELD ("echo AAA111echo BBB222", live repro). Per-line
+  //      "\r" makes each line execute exactly as the user reviewed it.
+  //  (c) In PowerShell, per-line + Enter is what a human typing produces —
+  //      PSReadLine's continuation buffers an incomplete construct, so a
+  //      multi-line block with an open brace still runs as one unit.
+  // So "verbatim" means verbatim PER LINE: every line's characters reach the
+  // shell untouched; only the line TERMINATORS are normalized to Enter (the
+  // bytes-as-one-blob promise was empirically the wrong promise). A block of
+  // nothing but blank lines refuses (false) — nothing to run, no flip.
+  const runInPane = useCallback(
+    (id: string, cmd: string): boolean => {
+      const write = paneWriters.current[id];
+      if (!write) return false; // pane never attached / already disposed
+      const lines = cmd.split(/\r\n|\r|\n/);
+      while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();
+      if (lines.length === 0) return false; // all blank — nothing to run, no flip
+      const ok = write(lines.map((line) => `${line}\r`).join(""));
+      if (!ok) return false;
+      setPaneView(id, "terminal");
+      return true;
+    },
+    [setPaneView],
+  );
+
   function changeTreeCollapsed(v: boolean) {
     setTreeCollapsed(v);
     try {
@@ -560,6 +616,7 @@ export default function TerminalsPage() {
                               focused={focusedId === t.id}
                               onFocus={() => bringToFront(t.id)}
                               onClose={() => setPendingClose(t.id)}
+                              onWriterReady={(w) => registerWriter(t.id, w)}
                               models={models}
                               aiClis={aiClis}
                               skills={skills}
@@ -624,7 +681,11 @@ export default function TerminalsPage() {
                                 </button>
                               </header>
                               <div className="min-h-0 flex-1">
-                                <PaneChat paneId={t.id} cwd={t.cwd} />
+                                <PaneChat
+                                  paneId={t.id}
+                                  cwd={t.cwd}
+                                  onRunCommand={(cmd) => runInPane(t.id, cmd)}
+                                />
                               </div>
                             </div>
                           )}

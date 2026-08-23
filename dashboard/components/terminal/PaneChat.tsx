@@ -27,6 +27,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ClipboardEvent as ReactClipboardEvent,
@@ -34,10 +35,13 @@ import {
 } from "react";
 import {
   CircleAlert,
+  FileText,
   FolderKanban,
   Loader2,
   Paperclip,
+  Play,
   Send,
+  Undo2,
   Wrench,
   X,
 } from "lucide-react";
@@ -51,6 +55,12 @@ import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { TurnReceipt } from "@/components/chat/TurnReceipt";
 import { DoorsStrip } from "@/components/chat/DoorsStrip";
 import {
+  joinUndoByPath,
+  normalizeFsPath,
+  parentDir,
+  type UndoRowLike,
+} from "@/components/chat/ArtifactsRail";
+import {
   buildTurnBody,
   engineLabel,
   engineOptions,
@@ -58,8 +68,10 @@ import {
   paneBasename,
   paneThreadKey,
   paneTitle,
+  pathIsUnder,
   projectForCwd,
   readAsBase64,
+  runnableBlocks,
   unionTools,
   PANE_MAX_ATTACHMENTS,
   PANE_MAX_FILE_BYTES,
@@ -73,6 +85,11 @@ export interface PaneChatProps {
   paneId: string;
   /** ABSOLUTE working directory this chat is bound to (workspace_dir). */
   cwd: string;
+  /** Type `cmd` into this pane's REAL terminal (the page flips the pane to
+   *  terminal view and writes cmd+Enter into the PTY). Returns whether the
+   *  write landed — false renders an honest "terminal not connected" note.
+   *  ABSENT = no terminal behind this chat: no Run buttons render at all. */
+  onRunCommand?: (cmd: string) => boolean;
 }
 
 /** GET /chat/threads/{id} — the slice this pane reads. */
@@ -87,6 +104,49 @@ interface PaneThreadDetail {
 interface PaneAttachment {
   name: string;
   path: string;
+}
+
+/**
+ * The undo confirm, in the pane's HONEST wording (BC2 reviewer, defect 3).
+ * The join is newest-row-per-path over the shared session-"chat" journal —
+ * the same journal the big chat page and every other pane write to — so the
+ * write being reverted may be MORE RECENT than the message whose card was
+ * clicked, and the since-changed hash guard cannot catch a same-content
+ * cross-thread write. The confirm says so instead of implying "this
+ * message's write". The file_delete case keeps the rail's created→removed
+ * honesty: confirming a "restore" there would confirm the user into a
+ * deletion.
+ */
+function paneUndoPrompt(kind: string | undefined, base: string): string {
+  return kind === "file_delete" || kind === "files_delete"
+    ? `Undo the newest write? ${base} was created by a chat write and will be ` +
+        `removed — that write may be more recent than this message (panes and ` +
+        `Chat share one journal).`
+    : `This restores ${base} to its content from before the NEWEST write to ` +
+        `it — which may be more recent than this message (panes and Chat ` +
+        `share one journal). Continue?`;
+}
+
+/**
+ * The detectable HALF of "is the newest journal row newer than this
+ * message?": a LATER assistant message in THIS thread listing the same path
+ * proves it (that later turn wrote the file after this one). The
+ * CROSS-SURFACE half is NOT detectable with the current row shape — rows
+ * carry created_at but no thread/message attribution, and wire messages
+ * carry no timestamps to compare against — which is exactly why the button
+ * says "Undo newest write" rather than pretending to know.
+ */
+function docReappearsLater(
+  messages: readonly PaneMsg[],
+  index: number,
+  normPath: string,
+): boolean {
+  for (let j = index + 1; j < messages.length; j += 1) {
+    const m = messages[j];
+    if (m.role !== "assistant") continue;
+    if (m.documents?.some((d) => normalizeFsPath(d) === normPath)) return true;
+  }
+  return false;
 }
 
 function storedThreadId(paneId: string): string | null {
@@ -129,7 +189,7 @@ function PaneMarkdown({ text }: { text: string }) {
   );
 }
 
-export function PaneChat({ paneId, cwd }: PaneChatProps) {
+export function PaneChat({ paneId, cwd, onRunCommand }: PaneChatProps) {
   const daemon = useDaemon();
   const stream = useChatStream();
 
@@ -168,6 +228,25 @@ export function PaneChat({ paneId, cwd }: PaneChatProps) {
   const [loadNonce, setLoadNonce] = useState(0);
   const [project, setProject] = useState<PaneProjectOption | null>(null);
 
+  // ---- changed-file cards + undo-where-you-look (BC2) --------------------
+  // Live undo candidates from GET /undo?session_id=chat — pane turns run
+  // through /chat/stream, whose file writes all land as session id "chat",
+  // so the pane reads the SAME journal lane the big chat page does. Failure
+  // is a quiet degrade: no undo affordance, nothing broken.
+  const [undoRows, setUndoRows] = useState<UndoRowLike[]>([]);
+  // Actions undone FROM THIS PANE — keeps the button disabled after success
+  // even after the refetch drops the row from the live candidate list.
+  const [undoneActions, setUndoneActions] = useState<Set<string>>(new Set());
+  // One undo in flight at a time (keyed by normalized path).
+  const [undoBusyPath, setUndoBusyPath] = useState<string | null>(null);
+  // Per-file result notes (open failure, undo success, the guard's refusal),
+  // keyed by normalized path — a blocked undo must say why, where clicked.
+  const [fileNotes, setFileNotes] = useState<
+    Record<string, { ok: boolean; text: string }>
+  >({});
+  // Per-run-button notes ("terminal not connected"), keyed "<msg>:<block>".
+  const [runNotes, setRunNotes] = useState<Record<string, string>>({});
+
   // The setup snapshot the open thread STORED — carried forward on every save
   // so the pane never clobbers keys it does not manage (see mergeSetup).
   const baseSetupRef = useRef<PaneThreadSetup | null>(null);
@@ -195,6 +274,11 @@ export function PaneChat({ paneId, cwd }: PaneChatProps) {
     paneGrantsRef.current = [];
     baseSetupRef.current = null;
     saveChainRef.current = Promise.resolve();
+    setUndoRows([]);
+    setUndoneActions(new Set());
+    setUndoBusyPath(null);
+    setFileNotes({});
+    setRunNotes({});
     const stored = storedThreadId(paneId);
     saveTargetRef.current = { id: stored };
     if (!stored) {
@@ -260,6 +344,100 @@ export function PaneChat({ paneId, cwd }: PaneChatProps) {
       cancelled = true;
     };
   }, [cwd]);
+
+  // ------------------------------------------------ file cards: open + undo
+  const refreshUndoRows = useCallback(async () => {
+    try {
+      const res = await get<{ actions: UndoRowLike[] }>(
+        "/undo?session_id=chat",
+      );
+      setUndoRows(res.actions ?? []);
+    } catch {
+      /* offline / older daemon — no undo affordances, nothing broken */
+    }
+  }, []);
+
+  // Fetch when any message carries documents (thread load or a file-writing
+  // turn completing) — exactly "a new journal row may exist".
+  useEffect(() => {
+    if (messages.some((m) => m.documents?.length)) void refreshUndoRows();
+  }, [messages, refreshUndoRows]);
+
+  // Newest journal row per absolute path (GET /undo is newest-first and
+  // joinUndoByPath keeps the first) — the shared join, not a reimplementation.
+  const undoByPath = useMemo(() => joinUndoByPath(undoRows), [undoRows]);
+
+  function setFileNote(normPath: string, note: { ok: boolean; text: string } | null) {
+    setFileNotes((prev) => {
+      const next = { ...prev };
+      if (note) next[normPath] = note;
+      else delete next[normPath];
+      return next;
+    });
+  }
+
+  /** "Open": POST /documents/open — the OS-associated app, the ArtifactsRail's
+   *  own Open mechanism. Chosen over DocPreview deliberately: the preview is
+   *  a rail-sized surface (diff machinery, width management) and this pane is
+   *  a narrow column inside a terminal pane; launching the real app is the
+   *  lightest honest open. A failure lands on the card, verbatim. */
+  async function openDoc(path: string) {
+    const norm = normalizeFsPath(path);
+    setFileNote(norm, null);
+    try {
+      await post<{ ok: boolean; app?: string }>("/documents/open", { path });
+    } catch (e) {
+      setFileNote(norm, {
+        ok: false,
+        text: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  /** "Undo newest write": explicit confirm (the app's window.confirm
+   *  convention, in the pane's honest wording — see paneUndoPrompt), POST
+   *  /undo/{action_id}. The daemon's since-changed hash guard is the safety —
+   *  its refusal (409 detail) renders VERBATIM on the card; success disables
+   *  the button and says so. */
+  async function undoWrite(actionId: string, path: string) {
+    const norm = normalizeFsPath(path);
+    if (undoBusyPath) return;
+    const row = undoByPath.get(norm);
+    if (!window.confirm(paneUndoPrompt(row?.kind, paneBasename(path)))) return;
+    setUndoBusyPath(norm);
+    setFileNote(norm, null);
+    try {
+      await post(`/undo/${encodeURIComponent(actionId)}`, {});
+      setUndoneActions((prev) => new Set(prev).add(actionId));
+      setFileNote(norm, {
+        ok: true,
+        text: "undone — restored to before the newest write",
+      });
+      void refreshUndoRows();
+    } catch (e) {
+      // The guard's own words — a blocked undo must say why.
+      setFileNote(norm, {
+        ok: false,
+        text: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setUndoBusyPath(null);
+    }
+  }
+
+  /** "Run in terminal" (BC2): hand the fence's code VERBATIM to the page's
+   *  PTY writer. A false return is the page saying the write did not land —
+   *  render the honest note instead of pretending the command ran. */
+  function runBlock(key: string, code: string) {
+    if (!onRunCommand) return;
+    const landed = onRunCommand(code);
+    setRunNotes((prev) => {
+      const next = { ...prev };
+      if (landed) delete next[key];
+      else next[key] = "terminal not connected";
+      return next;
+    });
+  }
 
   // ------------------------------------------------------------------ saving
   /** Queue ONE autosave of the full bubble array (turn completion, failed
@@ -594,6 +772,142 @@ export function PaneChat({ paneId, cwd }: PaneChatProps) {
                 <div className="mt-1 flex items-center gap-1.5 text-[11px] text-amber-400/90">
                   <CircleAlert size={11} /> interrupted — this answer is
                   incomplete
+                </div>
+              ) : null}
+              {/* RUN-IN-TERMINAL (BC2): one action row per language-tagged
+                  shell fence, rendered UNDER the markdown rather than inside
+                  it — one renderer for the block text (the mocked-markdown
+                  test idiom, and no fragile children-extraction from
+                  react-markdown's tree). No onRunCommand prop = no terminal
+                  behind this chat = no buttons at all. */}
+              {onRunCommand
+                ? runnableBlocks(m.content).map((b, bi) => {
+                    const key = `${i}:${bi}`;
+                    const first = b.code.split("\n")[0];
+                    const more = b.code.includes("\n");
+                    return (
+                      <div key={key} className="mt-1.5">
+                        <div
+                          data-testid="pane-run-block"
+                          className="flex items-center gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5"
+                        >
+                          <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-400">
+                            {first}
+                            {more ? " …" : ""}
+                          </code>
+                          <button
+                            type="button"
+                            onClick={() => runBlock(key, b.code)}
+                            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent/25 bg-accent/10 px-2 py-1 text-[11px] text-accent-soft transition-colors hover:bg-accent/20"
+                          >
+                            <Play size={10} /> Run in terminal
+                          </button>
+                        </div>
+                        {runNotes[key] ? (
+                          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-amber-400/90">
+                            <CircleAlert size={11} /> {runNotes[key]}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })
+                : null}
+              {/* CHANGED-FILE CARDS (BC2): the receipt's created/changed
+                  paths as actionable rows — Open (OS app) + Undo (the real
+                  journal). The receipt below stays the accountability record;
+                  these are the actions where the user is looking. */}
+              {m.documents?.length ? (
+                <div className="mt-1.5 space-y-1">
+                  {Array.from(new Set(m.documents)).map((p) => {
+                    const norm = normalizeFsPath(p);
+                    const row = undoByPath.get(norm);
+                    const undone = row
+                      ? undoneActions.has(row.action_id)
+                      : false;
+                    const outside = !pathIsUnder(p, cwd);
+                    const note = fileNotes[norm];
+                    // The detectable half of "newest row is newer than this
+                    // message" — a later turn in THIS thread wrote the file
+                    // again (cross-surface writes stay undetectable, see
+                    // docReappearsLater).
+                    const newerInThread =
+                      !!row && docReappearsLater(messages, i, norm);
+                    return (
+                      <div
+                        key={p}
+                        data-testid="pane-file-card"
+                        className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-1.5"
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <FileText
+                            size={12}
+                            className="shrink-0 text-accent-soft/80"
+                          />
+                          <span className="truncate text-xs text-zinc-200">
+                            {paneBasename(p)}
+                          </span>
+                          <span
+                            className="hidden truncate text-[10px] text-zinc-500 sm:inline"
+                            title={p}
+                          >
+                            {parentDir(p)}
+                          </span>
+                          {outside ? (
+                            // The receipt is truth — a path outside the
+                            // pane's folder still renders, flagged.
+                            <span className="shrink-0 rounded-full border border-amber-500/25 bg-amber-500/[0.06] px-1.5 py-px text-[10px] text-amber-300">
+                              outside this folder
+                            </span>
+                          ) : null}
+                          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => void openDoc(p)}
+                              className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
+                            >
+                              Open
+                            </button>
+                            {row ? (
+                              <button
+                                type="button"
+                                disabled={
+                                  undone ||
+                                  undoBusyPath === norm ||
+                                  row.undoable === false
+                                }
+                                title={
+                                  row.undoable === false
+                                    ? "this action has no safe inverse"
+                                    : undefined
+                                }
+                                onClick={() =>
+                                  void undoWrite(row.action_id, p)
+                                }
+                                className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-zinc-300 transition-colors hover:border-rose-400/40 hover:text-rose-300 disabled:opacity-40"
+                              >
+                                <Undo2 size={10} />
+                                {undone ? "Undone" : "Undo newest write"}
+                              </button>
+                            ) : null}
+                            {newerInThread ? (
+                              <span className="shrink-0 text-[10px] text-amber-400/80">
+                                (newer than this message)
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                        {note ? (
+                          <div
+                            className={`mt-1 text-[11px] ${
+                              note.ok ? "text-emerald-400/90" : "text-rose-300"
+                            }`}
+                          >
+                            {note.text}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
               ) : null}
               {/* Server-truth receipt + doors — the shared components, verbatim. */}
