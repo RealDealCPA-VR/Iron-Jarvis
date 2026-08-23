@@ -505,6 +505,9 @@ class OpenAIAdapter(LLMAdapter):
         system: str,
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
+        response_format: dict | None = None,
+        tool_choice: str | dict | None = None,
+        extra_body: dict | None = None,
     ) -> LLMResponse:
         # Resolve the credential off the loop — for an OAuth provider this may
         # trigger a blocking token refresh that must not stall the event loop.
@@ -518,6 +521,8 @@ class OpenAIAdapter(LLMAdapter):
             and self._endpoint == _ENDPOINT
             and _is_chatgpt_token(key)
         ):
+            # ChatGPT-account (subscription) backend: guided-decoding knobs are
+            # out of scope for the Responses ladder this wave — accepted, DROPPED.
             return await self._complete_chatgpt(
                 token=key, system=system, messages=messages, tools=tools
             )
@@ -538,6 +543,17 @@ class OpenAIAdapter(LLMAdapter):
         }
         if tools:
             body["tools"] = self._to_openai_tools(tools)
+        # Guided-decoding knobs (v1.203.0): response_format is the portable
+        # OpenAI form; extra_body carries server-specific keys (vLLM
+        # guided_json/guided_grammar, llama.cpp grammar) and is applied last,
+        # so it wins any key clash. Defaults (None) add NOTHING — the wire
+        # payload stays byte-identical (pinned).
+        if response_format is not None:
+            body["response_format"] = response_format
+        if tool_choice is not None:
+            body["tool_choice"] = tool_choice
+        if extra_body:
+            body.update(extra_body)
         resp = await self._client().post(
             self._endpoint,
             headers=headers,
@@ -578,6 +594,9 @@ class OpenAIAdapter(LLMAdapter):
         system: str,
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
+        response_format: dict | None = None,
+        tool_choice: str | dict | None = None,
+        extra_body: dict | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Real token streaming for every backend this adapter serves.
 
@@ -601,6 +620,8 @@ class OpenAIAdapter(LLMAdapter):
             and self._endpoint == _ENDPOINT
             and _is_chatgpt_token(key)
         ):
+            # ChatGPT-account (subscription) backend: guided-decoding knobs are
+            # out of scope for the Responses ladder this wave — accepted, DROPPED.
             async for frame in self._stream_chatgpt(
                 token=key, system=system, messages=messages, tools=tools
             ):
@@ -622,6 +643,17 @@ class OpenAIAdapter(LLMAdapter):
         }
         if tools:
             body["tools"] = self._to_openai_tools(tools)
+        # Guided-decoding knobs (v1.203.0) — same contract as complete():
+        # response_format is the portable OpenAI form; extra_body carries
+        # server-specific keys (vLLM guided_json/guided_grammar, llama.cpp
+        # grammar) and is applied last, so it wins any key clash. None adds
+        # nothing (byte-identical wire payload, pinned).
+        if response_format is not None:
+            body["response_format"] = response_format
+        if tool_choice is not None:
+            body["tool_choice"] = tool_choice
+        if extra_body:
+            body.update(extra_body)
         # Some local OpenAI-compat servers reject `stream_options` outright
         # (older Ollama builds, some llama.cpp gateways 400 on it). Attempt
         # WITH it first (usage accounting), and on a 400 from a NON-hosted

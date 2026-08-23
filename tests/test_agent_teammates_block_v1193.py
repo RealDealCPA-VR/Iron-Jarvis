@@ -126,9 +126,13 @@ async def test_the_block_lands_before_the_context_planner(platform, monkeypatch)
     priced: list[str] = []
     real = _win.plan_agent_transcript
 
-    def spy(messages, *, window, system_text=""):
+    # **kw so the spy survives additive planner-signature growth — v1.203.0
+    # added `chars_per_token` and a fixed-signature spy TypeError'd into
+    # "the planner never ran" (the same shape as the v1.202.0 arming-spy
+    # break; a spy must never pin a signature it doesn't assert on).
+    def spy(messages, *, window, system_text="", **kw):
         priced.append(system_text)
-        return real(messages, window=window, system_text=system_text)
+        return real(messages, window=window, system_text=system_text, **kw)
 
     monkeypatch.setattr(_win, "plan_agent_transcript", spy)
     _capture(platform, {})

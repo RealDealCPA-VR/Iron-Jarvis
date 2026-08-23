@@ -37,8 +37,13 @@ class ProbeReply:
 
 #: ``complete(messages, **kw) -> ProbeReply`` — the one seam between the
 #: battery and a real provider. Keyword args a probe may pass: ``tools``
-#: (native trials) and ``response_format`` (strict_json trials); a transport
-#: that cannot honor them simply ignores them and is scored on what it emits.
+#: (native trials) and ``response_format`` (strict_json trials — since Wave C
+#: the daemon's probe transport FORWARDS it to the adapter, so the trial runs
+#: under real constrained decoding); a transport that cannot honor a kwarg
+#: simply ignores it and is scored on what it emits — the profile's
+#: ``probe_generation`` (stamped by the runner) is what records which
+#: semantics scored the battery, per the binding Wave-A reviewer note in
+#: docs/IRONCORE-INTEGRATION.md.
 Transport = Callable[..., Awaitable[ProbeReply]]
 
 
@@ -49,12 +54,24 @@ class ProbeResult:
     ``scores`` maps a dotted profile path (``tool_protocols.native``,
     ``json_adherence``, ``chars_per_token``) to the value to merge.
     ``ok=False`` means the probe ran but does not trust its own result; the
-    runner floors its declared reliability targets to 0.0."""
+    runner floors its declared reliability targets to 0.0.
+
+    ``floored`` (Wave C, the reviewer's Finding-3 fix) is the per-rung
+    version of that flooring: dotted RELIABILITY paths this probe attempted
+    and could not score (the transport raised mid-rung) while OTHER rungs of
+    the same probe measured fine. The runner writes them as 0.0 WITHOUT
+    claiming measurement evidence — the same conservative shape a dead
+    probe's targets get, at sub-probe granularity. Not "absent" deliberately:
+    an absent path would keep the BASE's value, and on a re-probe the base is
+    the stored record — a gen-1 strict_json 0.95 would ride into the freshly
+    gen-2-stamped profile and the ladder (which reads raw scores) would
+    select the rung the server just rejected."""
 
     probe_id: str
     scores: dict[str, float] = field(default_factory=dict)
     notes: str = ""
     ok: bool = True
+    floored: set[str] = field(default_factory=set)
 
 
 #: Default trials per rung/schema. Three, not IronCore's ten: this is the
@@ -87,9 +104,12 @@ _TOOL_SPEC: dict[str, Any] = {
     },
 }
 
-#: The strict_json rung's constraint: pin output to the one-call shape. A
-#: server that honors it cannot emit malformed JSON; one that ignores it
-#: returns best-effort JSON, scored exactly the same.
+#: The strict_json rung's constraint: pin output to the one-call shape (the
+#: schema shape ported from IronCore's ``guided.tool_call_response_format`` —
+#: a ``tool`` enum plus an ``args`` object, ``strict``; the probe pins the
+#: enum to its ONE expected tool since a single-trial battery needs no
+#: ``done`` pseudo-tool). A server that honors it cannot emit malformed JSON;
+#: one that ignores it returns best-effort JSON, scored exactly the same.
 _STRICT_JSON_FORMAT: dict[str, Any] = {
     "type": "json_schema",
     "json_schema": {
@@ -139,6 +159,10 @@ class ToolFormProbe:
     transport call per trial, so a fake transport scripts ``2 * trials``
     replies in that order. Score per rung = fraction of trials that are
     parseable AND name the pinned tool AND carry its exact args.
+
+    Rungs fail INDEPENDENTLY: a transport error mid-rung floors that rung
+    (0.0, unclaimed — ``ProbeResult.floored``) and the other rung's
+    measurement stands; only every-rung-errored is a probe-level ``ok=False``.
     """
 
     id = "TOOL-FORM"
@@ -167,34 +191,54 @@ class ToolFormProbe:
                 {"response_format": _STRICT_JSON_FORMAT},
             ),
         )
+        # PER-RUNG isolation (the Wave-C reviewer's Finding 3, executed
+        # repro): one try around BOTH rungs let a server that 400s
+        # ``response_format`` — real on the wire since the transport forwards
+        # it — raise during the strict trials and destroy the native 2/2
+        # measured seconds earlier: the whole probe came back ok=False, the
+        # runner floored BOTH rungs, and one Measure click re-probed a
+        # native-capable model into rung "none" (tool cap 3 + decompose +
+        # verify-all). Each rung now scores independently: an errored rung is
+        # FLOORED (0.0, no evidence claim — see ProbeResult.floored), the
+        # surviving rungs' measurements stand.
         scores: dict[str, float] = {}
+        floored: set[str] = set()
         summary: list[str] = []
-        try:
-            for name, checker, kwargs in rungs:
-                system = (
-                    "You can call tools via the native function-calling interface."
-                    if name == "native"
-                    else 'Reply with ONLY a bare JSON object of the form '
-                    '{"tool": "<name>", "args": {<arguments>}} and nothing else.'
-                )
-                messages = [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": ask},
-                ]
-                correct = 0
+        for name, checker, kwargs in rungs:
+            system = (
+                "You can call tools via the native function-calling interface."
+                if name == "native"
+                else 'Reply with ONLY a bare JSON object of the form '
+                '{"tool": "<name>", "args": {<arguments>}} and nothing else.'
+            )
+            messages = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": ask},
+            ]
+            correct = 0
+            try:
                 for _ in range(self.trials):
                     if checker(await complete(messages, **kwargs)):
                         correct += 1
-                scores[f"tool_protocols.{name}"] = correct / self.trials
-                summary.append(f"{name} {correct}/{self.trials}")
-        except Exception as exc:  # noqa: BLE001 — transport failure degrades, never crashes
+            except Exception as exc:  # noqa: BLE001 — a rung failure degrades ITS rung only
+                floored.add(f"tool_protocols.{name}")
+                summary.append(
+                    f"{name} errored ({type(exc).__name__}: {exc}); "
+                    "floored to 0.0, not evidence"
+                )
+                continue
+            scores[f"tool_protocols.{name}"] = correct / self.trials
+            summary.append(f"{name} {correct}/{self.trials}")
+        if not scores:  # every rung errored — the old total-failure shape
             return ProbeResult(
                 self.id,
                 {},
-                notes=f"transport failed during TOOL-FORM: {type(exc).__name__}: {exc}",
+                notes=f"transport failed during TOOL-FORM: {'; '.join(summary)}",
                 ok=False,
             )
-        return ProbeResult(self.id, scores, notes="; ".join(summary), ok=True)
+        return ProbeResult(
+            self.id, scores, notes="; ".join(summary), ok=True, floored=floored
+        )
 
 
 # --------------------------------------------------------------------------- #

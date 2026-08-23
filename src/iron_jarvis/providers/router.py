@@ -47,6 +47,7 @@ from .adapters.base import (
     TRANSIENT_STATUS,
 )
 from .adapters.prompted_tools import PromptedToolsAdapter
+from .guided import GuidedToolsAdapter, profile_supports_guided
 from .local import is_local_provider
 from .manager import ProviderManager
 
@@ -605,6 +606,42 @@ class ModelRouter:
             session_id=session_id,
         )
 
+    def _wrap_for_tools(self, adapter: LLMAdapter) -> LLMAdapter:
+        """The v1.131.0 wrap decision, envelope-gated onto its two rungs
+        (v1.203.0, C2). Same seam, same disclosure: either rung routes as
+        ``reason == "prompted-tools"`` (user-configured automation — the
+        chosen model keeps the request and serves the loop itself).
+
+        A text-only adapter whose CAPABILITY ENVELOPE is measured, CURRENT-
+        generation, and mechanically selects ``strict_json``
+        (:func:`~..guided.profile_supports_guided`) gets the
+        :class:`~..guided.GuidedToolsAdapter` — real server-side constrained
+        decoding, with an honest ladder-down to the fenced contract inside
+        the wrapper itself. EVERYTHING ELSE — unmeasured, stale-generation,
+        trusted, no ``capability_profile`` on the manager (bare test
+        managers), a profile read that raises — falls through to
+        :func:`wrap_prompted_tools` exactly as before, byte-identical. The
+        profile comes from ``manager.capability_profile`` (cached, one stat
+        per call, never raises) — NEVER loaded from disk here: this method
+        sits on the hot path of every tool-carrying request.
+
+        Native-capable adapters never reach this method (the seam is guarded
+        by ``not _supports_tools``), and the belt below keeps even a direct
+        caller from wrapping one — bending a frontier run is the catastrophic
+        direction, and it stays pinned shut.
+        """
+        if isinstance(adapter, PromptedToolsAdapter) or _supports_tools(adapter):
+            return adapter
+        profiler = getattr(self.manager, "capability_profile", None)
+        if callable(profiler):
+            try:
+                profile = profiler(adapter.provider, adapter.model)
+            except Exception:  # noqa: BLE001 — the envelope must never break routing
+                profile = None
+            if profile is not None and profile_supports_guided(profile):
+                return GuidedToolsAdapter(adapter)
+        return wrap_prompted_tools(adapter)
+
     def _first_available_real(self, *, need_tools: bool = False) -> str | None:
         """The strongest connected REAL provider (capability-ordered failover
         list), used as the Auto fallback so a request never drops to mock while a
@@ -832,10 +869,15 @@ class ModelRouter:
         # (never the mock/downgrade). Under the pin the user's pick keeps the
         # request — tools are offered to the chosen adapter RAW, no wrap (an
         # unverified local endpoint often CAN call tools natively; the verify
-        # chip in Connections is the way to prove it).
+        # chip in Connections is the way to prove it). Since v1.203.0 the wrap
+        # is envelope-gated onto its two rungs (see _wrap_for_tools): a
+        # measured current-generation strict_json profile upgrades the same
+        # seam to guided decoding; everything else keeps the fenced contract
+        # byte-identical. MIRROR NOTE (lock-step): stream() carries the
+        # identical seam — edit both or neither.
         if not pinned and not downgraded and adapter.provider != "mock":
             if need_tools and not _supports_tools(adapter):
-                adapter = wrap_prompted_tools(adapter)
+                adapter = self._wrap_for_tools(adapter)
                 reason = "prompted-tools"
             repl = self._enforce_capabilities(adapter, need_tools, need_vision, avail)
             if repl is not None:
@@ -1200,11 +1242,13 @@ class ModelRouter:
         # Capability-aware routing — same contract as complete(): a tool
         # request on a text-only adapter is wrapped in the prompted-tools
         # scaffold (v1.131.0; the wrapper streams via the base single-chunk
-        # default), vision keeps the reroute. Under the pin the user's pick
-        # keeps the request, tools offered RAW (no wrap).
+        # default), envelope-gated onto its two rungs since v1.203.0
+        # (_wrap_for_tools — MIRROR NOTE, lock-step with complete(): edit
+        # both or neither), vision keeps the reroute. Under the pin the
+        # user's pick keeps the request, tools offered RAW (no wrap).
         if not pinned and not downgraded and adapter.provider != "mock":
             if need_tools and not _supports_tools(adapter):
-                adapter = wrap_prompted_tools(adapter)
+                adapter = self._wrap_for_tools(adapter)
                 reason = "prompted-tools"
             repl = self._enforce_capabilities(adapter, need_tools, need_vision, avail)
             if repl is not None:

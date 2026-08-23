@@ -100,11 +100,40 @@ IronCore is the user's own Codex-style CLI for open-source models. Its thesis
 - **opencode-cli envelope treatment**: its models are local, but the CLI
   owns its own harness; Wave A renders no envelope surfaces for it
   (backend treats every `*-cli` as trusted). Revisit only with evidence.
+- **C4 live tuning wiring (deferred from Wave C, 2026-08-23)**: the
+  OutcomeLedger + downgrade-only tuner shipped fully tested, and the two
+  production recorders collect per-step outcomes — but `apply_tuning` is
+  DELIBERATELY UNCONSULTED live. The Wave-C reviewer proved the only
+  production evidence stream is step-GOAL verdicts (judge fails on hard
+  tasks, "unverified" passes, budget stops), and the ported constants were
+  calibrated for tool-PROTOCOL adherence: wiring them together makes a
+  difficulty-driven downgrade spiral (hard goals → lowered rung → tighter
+  loop → harder goals). Wiring condition: a parse/validate evidence feed
+  (the guided rung is the natural source once it sees live traffic) or
+  constants re-argued for goal evidence. The plan's original "report card
+  shows it" claim is therefore NOT met this wave — by this recorded
+  decision, not by omission.
+- **Compaction pressure gauges deliberately not ratio-threaded (Wave C,
+  2026-08-23)**: `_measure` in chat_turn.py and the raw-demand sums in
+  runtime.py still estimate at the module default while both PLANNERS use
+  the measured ratio — so for a dense measured model the fill percent can
+  under-report pressure relative to the plan (compaction fires late, never
+  early; the planners themselves stay correct). Accepted for now; thread
+  the gauges when compaction behavior on measured models gets its own
+  wave.
+- **strict_json in the adapted disclosure (deferred from Wave C)**: the
+  guided rung engages inside the router, which has no reach into the
+  runtime's `adaptations` list, and the runtime cannot honestly predict
+  the wrap. The rung IS disclosed as `reason="prompted-tools"` (the quiet
+  class it upgrades). The clean seam, when wanted: an additive
+  `RouteResult` field the runtime folds into its list — `wordChange`
+  already passes unknown tokens through, so the rendering side needs one
+  vocabulary entry.
 
 ## THE TODO — every task, by wave
 
 ### Wave A (v1.201.0) — the envelope exists
-- [ ] A1 NEW `src/iron_jarvis/envelope/` package: `profile.py`
+- [x] A1 NEW `src/iron_jarvis/envelope/` package: `profile.py`
   (CapabilityProfile port: window/honest_context/chars_per_token/vision/
   tool_protocols/json_adherence/coherence_horizon; `source` with the full
   six-value provenance vocabulary + docstring table; ladder selection with
@@ -116,43 +145,43 @@ IronCore is the user's own Codex-style CLI for open-source models. Its thesis
   TOOL-FORM native/strict_json trials with mechanical scoring, JSON-STRICT,
   TOKEN-RATIO from server usage; bounded time; off-loop; honest source
   stamping incl. partial/probe_failed; failed re-probe keeps last good).
-- [ ] A2 NEW `daemon/routes/envelope.py`: GET profile, POST probe
+- [x] A2 NEW `daemon/routes/envelope.py`: GET profile, POST probe
   (background, `envelope.probe_started/completed` events), provider+model
   addressed; local/custom endpoints only; registration by coordinator.
-- [ ] A3 `providers/manager.py`: `_context_window` consults the profile's
+- [x] A3 `providers/manager.py`: `_context_window` consults the profile's
   measured window between pin and probe; `trusted` envelope for cloud/CLI
   providers by construction.
-- [ ] A4 UI (minimal): Model report card gains the envelope section
+- [x] A4 UI (minimal): Model report card gains the envelope section
   (source, window, ladder scores vs bars, chars/token); Connections
   local-endpoint rows gain "Measure" (progress via events, honest failure);
   no new routes.
-- [ ] A5 Tests: fake-transport probe batteries; provenance pins
+- [x] A5 Tests: fake-transport probe batteries; provenance pins
   (probe_failed never probed_at; partial vs probed; re-probe-keeps-last-
   good); store atomicity/never-raise; frontier-unchanged pins.
 
 ### Wave B (v1.202.0) — the loop bends
-- [ ] B1 Envelope-driven arming: `tools/autoselect`'s cap and the agent
+- [x] B1 Envelope-driven arming: `tools/autoselect`'s cap and the agent
   lane's `arm_for_task` consult `profile.max_tools()`; trusted/unmeasured
   ⇒ today's behavior byte-identical (pinned).
-- [ ] B2 `agents/runtime.should_decompose` consults
+- [x] B2 `agents/runtime.should_decompose` consults
   `profile.needs_decomposition()` (config flag becomes an override, not the
   only gate); the SUPERVISOR lane finally routes through `decompose.py`'s
   plan/verify engine for low-envelope models — closing the repo's oldest
   open item.
-- [ ] B3 Chat narration: `stepLabel` renders `plan.created/step_started/
+- [x] B3 Chat narration: `stepLabel` renders `plan.created/step_started/
   step_completed` as "step k of n: <goal>" with verified marks — the
   Codex-feel seam, one switch statement away.
-- [ ] B4 `envelope.adapted` event published when the loop bends (decomposed
+- [x] B4 `envelope.adapted` event published when the loop bends (decomposed
   / tool-cap / strict_json rung), + a quiet TurnReceipt note. Narrated,
   never alarming, absent for trusted models.
-- [ ] B5 Tests incl. mutation pins on every consult site + frontier
+- [x] B5 Tests incl. mutation pins on every consult site + frontier
   zero-change pins.
 
 ### Wave C (v1.203.0) — the rungs get real
-- [ ] C1 Adapters (openai-compat family: custom/ollama): additive
+- [x] C1 Adapters (openai-compat family: custom/ollama): additive
   `response_format` (json_schema) + `tool_choice` forcing + `extra_body`
   escape hatch; capability-probed at seed time; cloud adapters untouched.
-- [ ] C2 The strict_json rung: when native tool-form < bar but strict_json
+- [x] C2 The strict_json rung: when native tool-form < bar but strict_json
   ≥ bar, the tool loop switches to guided decoding (port of
   `core/guided.py`: schema pinning, `done` pseudo-tool, exclusive
   3-way parse, scaffold suppressed from the transcript).
@@ -162,16 +191,16 @@ IronCore is the user's own Codex-style CLI for open-source models. Its thesis
   bump the probe generation / force a re-probe for profiles whose
   strict_json score predates constrained decoding, or the ladder selects on
   stale evidence.
-- [ ] C3 Per-step verify/retry ladder: `verify_every_step` envelopes get
+- [x] C3 Per-step verify/retry ladder: `verify_every_step` envelopes get
   one retry per failed step with the error fed back and the instruction
   narrowed, then an honest failure — never a silent skip.
-- [ ] C4 Outcome tuning: downgrade-only with hysteresis, fed from
+- [x] C4 Outcome tuning (SHIPPED AS MACHINERY + RECORDERS; live overlay deferred by the dated decision recorded below): downgrade-only with hysteresis, fed from
   ToolInvocation outcomes per provider+model; `tuned` provenance; a new
   probe generation resets evidence; report card shows it.
-- [ ] C5 `context/budget` token estimator uses measured `chars_per_token`
+- [x] C5 `context/budget` token estimator uses measured `chars_per_token`
   for the answering model (4.0 default preserved for everything
   unmeasured — byte-identical today-behavior pinned).
-- [ ] C6 Tests: guided parse battery (ported cases), retry-ladder pins,
+- [x] C6 Tests: guided parse battery (ported cases), retry-ladder pins,
   tuning hysteresis pins, estimator regression pins.
 
 ### Definition of "integrated and flawless"

@@ -327,6 +327,43 @@ def _C_DEFAULT_WINDOW() -> int:
     return DEFAULT_WINDOW
 
 
+def _history_ratio(d, provider: str, model: str) -> "float | None":
+    """The answering model's MEASURED chars-per-token ratio, or None.
+
+    Feeds ``plan_history``'s estimator (v1.203.0, IronCore Wave C5).
+    Provenance-gated PER FIELD (the IC-1215 rule): only
+    ``profile.field_measured("chars_per_token")`` licenses the value. An
+    unmeasured profile carries the universal 4.0 default, and passing that
+    through would be the same number with the wrong pedigree — it would stop
+    matching the moment the default moved, and it would claim evidence that
+    was never collected. Resolution mirrors ``_context_window`` exactly
+    (empty provider/model fall back to the config defaults — the COMMON case,
+    since the composer only sends a provider on an override), so the window
+    and the ratio always describe the SAME answering model. Never raises: no
+    envelope, no ratio, no change.
+    """
+    try:
+        profiler = getattr(
+            getattr(getattr(d, "platform", None), "providers", None),
+            "capability_profile",
+            None,
+        )
+        if profiler is None:
+            return None
+        provider = (provider or "").strip() or str(
+            getattr(d.platform.config, "default_provider", "") or ""
+        )
+        model = (model or "").strip() or str(
+            getattr(d.platform.config, "default_model", "") or ""
+        )
+        prof = profiler(provider, model)
+        if prof.field_measured("chars_per_token"):
+            return float(prof.chars_per_token)
+    except Exception:  # noqa: BLE001 — the ratio refines a budget; it never breaks a turn
+        pass
+    return None
+
+
 def _plan_context(d, body, system: str, provider: str, model: str, messages=None):
     """Budget this turn's history against the answering model's window.
 
@@ -334,7 +371,10 @@ def _plan_context(d, body, system: str, provider: str, model: str, messages=None
     window comes from the SAME resolver the attachment budgets use
     (``_context_window``: a config pin, then a probe, then None) — one source
     of truth for "how big is this model", or the two halves would eventually
-    make contradictory decisions about the same turn.
+    make contradictory decisions about the same turn. The MEASURED
+    chars-per-token ratio (``_history_ratio``, v1.203.0) rides along under the
+    same resolution, so the estimator divides by what the TOKEN-RATIO probe
+    actually saw on this model — and by the pinned default everywhere else.
 
     Never raises: a planner failure falls back to the historical fixed slice,
     because a turn that runs with too much history is recoverable and a turn
@@ -348,6 +388,7 @@ def _plan_context(d, body, system: str, provider: str, model: str, messages=None
             items,
             window=_context_window(d, provider, model),
             system_text=system,
+            chars_per_token=_history_ratio(d, provider, model),
         )
     except Exception:  # noqa: BLE001 — degrade to the pre-v1.146.0 behaviour
         log.warning("context planning failed; using the fixed slice", exc_info=True)

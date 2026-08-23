@@ -46,7 +46,7 @@ from typing import Any
 
 from iron_jarvis.envelope import store
 from iron_jarvis.envelope.probes import ProbeResult, Transport, quick_battery
-from iron_jarvis.envelope.profile import CapabilityProfile
+from iron_jarvis.envelope.profile import CURRENT_PROBE_GENERATION, CapabilityProfile
 
 #: Whole-battery wall-clock budget in seconds. Generous for three quick
 #: probes; what it exists to bound is a live endpoint that accepts the
@@ -164,14 +164,34 @@ def _fold_results(
       ``measured_fields`` claim: the value survived, and so does its
       provenance (a re-probe whose base is the cached record must not strip
       the record's untouched measurements).
+
+    Every battery is stamped ``probe_generation = CURRENT_PROBE_GENERATION``
+    — the SESSION profile was scored by this build's trial semantics, whatever
+    generation its base carried (the binding Wave-A reviewer note: gen 2 is
+    strict_json scored WITH constrained decoding forwarded). The stamp rides
+    the session profile only as far as it should: on a ``probe_failed``
+    battery the store's wholesale carry keeps the RECORD's own generation,
+    because the carried scores are still the old generation's evidence.
     """
     profile = base.copy()
+    profile.probe_generation = CURRENT_PROBE_GENERATION
     delivered: set[str] = set()
     floored: set[str] = set()
     for result in results:
         (delivered if result.ok else floored).update(result.scores)
         for path, value in result.scores.items():
             store.merge_value(profile, path, value)
+        # Per-rung flooring (ProbeResult.floored, the Finding-3 fix): a rung
+        # that errored inside an otherwise-OK probe is written as 0.0 and
+        # counted with the floored set — same conservative shape as a dead
+        # probe's targets, so the base's value AND its evidence claim are
+        # both dropped rather than riding into a freshly stamped profile.
+        # Restricted to reliability paths, exactly like _degraded: a failed
+        # measurement must not zero a token ratio or a context number.
+        for path in result.floored:
+            if store.is_reliability_path(path):
+                floored.add(path)
+                store.merge_value(profile, path, 0.0)
     kept = set(profile.measured_fields) - floored
     profile.measured_fields = sorted(kept | delivered)
     profile.source, profile.probed_at = _battery_provenance(results, probed_at)

@@ -6,6 +6,15 @@ re-probe keeps the last good measurement), mechanical ladder selection,
 loop-bending bands incl. the Iron-Jarvis-only "trusted" source, store
 atomicity + never-raising loads + filename sanitization, seeding from a
 faked /api/show, and mechanical probe scoring on canned outputs.
+
+Extended for Wave C (v1.203.0) with the probe-GENERATION pins — the binding
+Wave-A reviewer note under C2 in docs/IRONCORE-INTEGRATION.md: Wave A scored
+strict_json trials on the bare prompt, so when constrained decoding became
+real the rung's semantics changed under stored scores. A gen-1 strict_json
+score must be ignored by the ladder (native stays honored — its trials never
+changed), every battery restamps to CURRENT, and the daemon's probe transport
+now FORWARDS response_format/tool_choice/extra_body to adapters that accept
+them (and still degrades to the Wave-A drop for adapters that cannot).
 """
 
 from __future__ import annotations
@@ -26,6 +35,7 @@ from iron_jarvis.envelope.probes import (
     quick_battery,
 )
 from iron_jarvis.envelope.profile import (
+    CURRENT_PROBE_GENERATION,
     SOURCES,
     TOOL_PROTOCOL_THRESHOLDS,
     CapabilityProfile,
@@ -33,6 +43,8 @@ from iron_jarvis.envelope.profile import (
 )
 from iron_jarvis.envelope.runner import run_quick_battery
 from iron_jarvis.envelope.seed import seed_profile
+from iron_jarvis.daemon.routes import envelope as envelope_routes
+from iron_jarvis.providers.adapters.base import LLMResponse
 
 GOOD_CALL = ProbeReply(tool_calls=[{"name": "get_weather", "arguments": {"city": "Paris", "units": "celsius"}}])
 BAD_CALL = ProbeReply(tool_calls=[{"name": "get_weather", "arguments": {"city": "London", "units": "celsius"}}])
@@ -102,7 +114,13 @@ def test_ladder_picks_native_at_its_bar():
 
 
 def test_ladder_falls_to_strict_json_when_native_misses_its_bar():
-    p = CapabilityProfile(model_id="m", tool_protocols={"native": 0.9499, "strict_json": 0.90})
+    # Current-generation scores: the strict_json rung was measured under
+    # today's trial semantics, so the ladder may select it.
+    p = CapabilityProfile(
+        model_id="m",
+        tool_protocols={"native": 0.9499, "strict_json": 0.90},
+        probe_generation=CURRENT_PROBE_GENERATION,
+    )
     assert p.select_tool_protocol() == "strict_json"
 
 
@@ -691,3 +709,310 @@ async def test_seed_never_raises_and_answers_none_when_nothing_answers():
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     assert await seed_profile("ollama", "m", "http://127.0.0.1:1", client=client) is None
     assert await seed_profile("ollama", "m", "", client=client) is None
+
+
+# --------------------------------------------------------------------------- #
+# probe generations (Wave C, v1.203.0 — the binding Wave-A reviewer note):
+# gen 1 scored strict_json on the bare prompt; gen 2 scores it WITH
+# constrained decoding. A stored gen-1 strict_json score is stale for the
+# ladder; native never changed semantics and stays honored.
+# --------------------------------------------------------------------------- #
+
+
+def test_gen1_strict_json_is_ignored_by_the_ladder_native_still_honored():
+    # A Wave-A record whose native rung held: nothing changes for it.
+    native_holds = measured_profile(probe_generation=1)
+    assert native_holds.is_current_generation() is False
+    assert native_holds.select_tool_protocol() == "native"
+    # A Wave-A record that LEANED on strict_json: that score answered a
+    # different question (bare prompt, no constrained decoding) — the ladder
+    # must treat it as unmeasured and fall to the floor, not route the loop
+    # onto a rung nothing verified.
+    leaned = measured_profile(
+        tool_protocols={"native": 0.5, "strict_json": 0.95}, probe_generation=1
+    )
+    assert leaned.select_tool_protocol() == "none"
+    # The identical scores under the CURRENT generation select strict_json.
+    rescored = measured_profile(
+        tool_protocols={"native": 0.5, "strict_json": 0.95},
+        probe_generation=CURRENT_PROBE_GENERATION,
+    )
+    assert rescored.is_current_generation() is True
+    assert rescored.select_tool_protocol() == "strict_json"
+    # >= not ==: a future generation-3 profile is not stale under gen-2 code.
+    assert measured_profile(
+        probe_generation=CURRENT_PROBE_GENERATION + 1
+    ).is_current_generation() is True
+
+
+def test_pre_generation_json_on_disk_loads_as_gen1_stale(tmp_path):
+    # Every Wave-A measurement on a live install predates the field: it must
+    # load as generation 1 — honestly stale — not as current.
+    path = store.profile_path(tmp_path, "ollama", "legacy")
+    path.parent.mkdir(parents=True)
+    payload = measured_profile(
+        model_id="legacy", tool_protocols={"native": 0.5, "strict_json": 0.95}
+    ).to_dict()
+    del payload["probe_generation"]  # written before the field existed
+    path.write_text(json.dumps(payload))
+    loaded = store.load_profile(tmp_path, "ollama", "legacy")
+    assert loaded is not None
+    assert loaded.probe_generation == 1
+    assert loaded.is_current_generation() is False
+    assert loaded.select_tool_protocol() == "none"  # the stale rung is not evidence
+
+
+def test_corrupt_generation_coerces_to_stale_never_current():
+    for junk in ("2", True, None, -3, 0, 2.0):
+        p = CapabilityProfile.from_dict(
+            {"model_id": "m", "probe_generation": junk,
+             "tool_protocols": {"strict_json": 0.99}}
+        )
+        assert p.probe_generation == 1, junk  # garbage never launders to current
+        assert p.select_tool_protocol() == "none", junk
+
+
+def test_trusted_profiles_are_always_current_generation():
+    # Trusted is capability by construction, not a measurement — the
+    # staleness rule is about probe semantics and must not strip its rungs.
+    trusted = trusted_profile("anthropic", "claude-opus-4-8")
+    assert trusted.is_current_generation() is True
+    assert trusted.select_tool_protocol() == "native"
+
+
+async def test_battery_restamps_the_generation_and_rescores(tmp_path):
+    # A gen-1 base (a Wave-A record used as the re-probe base): the battery
+    # restamps the session AND the saved record to CURRENT — its trials ran
+    # under today's semantics, whatever the base carried.
+    base = measured_profile(probe_generation=1)
+    session = await run_quick_battery(
+        base, scripted(full_battery_replies()),
+        home=tmp_path, probed_at="2026-08-23T12:00:00+00:00",
+    )
+    assert session.probe_generation == CURRENT_PROBE_GENERATION
+    assert session.is_current_generation() is True
+    assert session.tool_protocols["strict_json"] == 1.0  # re-scored, current
+    saved = store.load_profile(tmp_path, "ollama", "qwen3:30b/instruct")
+    assert saved is not None
+    assert saved.probe_generation == CURRENT_PROBE_GENERATION
+
+
+async def test_failed_battery_keeps_the_records_own_generation(tmp_path):
+    # Wholesale carry (keep-last-good): a gen-2 battery that measured NOTHING
+    # carries the gen-1 record forward — and the carried scores are still the
+    # OLD generation's evidence, so the record must keep generation 1 and its
+    # strict_json score must stay stale. Restamping it CURRENT would launder
+    # bare-prompt evidence into "scored with constrained decoding".
+    store.save_profile(
+        tmp_path,
+        measured_profile(
+            tool_protocols={"native": 0.5, "strict_json": 0.95}, probe_generation=1
+        ),
+    )
+    await run_quick_battery(base_profile(), failing_transport(), home=tmp_path)
+    saved = store.load_profile(tmp_path, "ollama", "qwen3:30b/instruct")
+    assert saved is not None
+    assert saved.tool_protocols == {"native": 0.5, "strict_json": 0.95}  # carried
+    assert saved.probe_generation == 1  # the evidence's own generation
+    assert saved.select_tool_protocol() == "none"  # still stale, still honest
+
+
+# --------------------------------------------------------------------------- #
+# rung isolation (reviewer Finding 3, executed repro): a server that 400s
+# response_format must cost the STRICT rung only — one Measure click was
+# about to re-probe a native-capable model into rung "none" (cap 3 +
+# decompose + verify-all) because one try wrapped both rungs.
+# --------------------------------------------------------------------------- #
+
+
+def strict_rejecting_transport():
+    """Answers native trials correctly; RAISES on any response_format call
+    (the 400-on-constrained-decoding server); serves JSON-STRICT and
+    TOKEN-RATIO from one schema-conforming, usage-carrying reply."""
+
+    async def transport(messages, **kw):
+        if kw.get("response_format") is not None:
+            raise ConnectionError("400: response_format is not supported")
+        if kw.get("tools"):
+            return GOOD_CALL
+        return ProbeReply(text=GOOD_SCHEMA.text, usage={"prompt_tokens": 400})
+
+    return transport
+
+
+async def test_a_strict_json_rejection_floors_that_rung_only():
+    result = await ToolFormProbe(trials=3).run(strict_rejecting_transport())
+    assert result.ok is True  # the probe trusts what it DID measure
+    assert result.scores == {"tool_protocols.native": 1.0}  # native survived
+    assert result.floored == {"tool_protocols.strict_json"}  # errored, unclaimed
+    assert "errored" in result.notes and "native 3/3" in result.notes
+
+
+async def test_the_reviewers_repro_native_evidence_survives_a_400ing_server(tmp_path):
+    # THE executed repro: Measure against a native-capable model on a server
+    # that rejects response_format. Before the fix the whole TOOL-FORM probe
+    # died, both rungs floored, and the profile landed on rung "none".
+    session = await run_quick_battery(
+        base_profile(), strict_rejecting_transport(),
+        home=tmp_path, probed_at="2026-08-23T12:00:00+00:00",
+    )
+    assert session.tool_protocols["native"] == 1.0  # kept, not destroyed
+    assert session.tool_protocols["strict_json"] == 0.0  # floored honestly
+    assert session.select_tool_protocol() == "native"  # NOT "none"
+    assert session.max_tools() is None  # no cap-3, no decompose lane
+    assert session.needs_decomposition() is False
+    # provenance: the errored rung delivered nothing and must not be claimed.
+    assert session.field_measured("tool_protocols.native") is True
+    assert session.field_measured("tool_protocols.strict_json") is False
+    saved = store.load_profile(tmp_path, "ollama", "qwen3:30b/instruct")
+    assert saved is not None
+    assert saved.tool_protocols["native"] == 1.0
+    assert saved.select_tool_protocol() == "native"
+    assert saved.field_measured("tool_protocols.strict_json") is False
+
+
+async def test_an_errored_rung_never_carries_the_records_stale_score(tmp_path):
+    # WHY floored-to-0.0 and not absent: on a re-probe the base IS the stored
+    # record. An absent score would keep a gen-1 strict_json 0.95 in a
+    # profile the battery restamps to gen 2 — and the ladder reads raw
+    # scores, so the loop would select the very rung the server just 400'd.
+    store.save_profile(tmp_path, measured_profile(probe_generation=1))
+    base = store.load_profile(tmp_path, "ollama", "qwen3:30b/instruct")
+    session = await run_quick_battery(
+        base, strict_rejecting_transport(),
+        home=tmp_path, probed_at="2026-08-23T12:00:00+00:00",
+    )
+    assert session.probe_generation == CURRENT_PROBE_GENERATION
+    assert session.tool_protocols["strict_json"] == 0.0  # not the stale 0.95
+    assert session.field_measured("tool_protocols.strict_json") is False
+    saved = store.load_profile(tmp_path, "ollama", "qwen3:30b/instruct")
+    assert saved is not None
+    assert saved.tool_protocols["strict_json"] == 0.0
+    assert saved.field_measured("tool_protocols.strict_json") is False
+    assert saved.select_tool_protocol() == "native"
+
+
+async def test_rung_isolation_works_the_other_way_too():
+    # A native-side failure (tools rejected) must not destroy a strict_json
+    # measurement — the isolation is symmetric, not special-cased.
+    async def transport(messages, **kw):
+        if kw.get("tools"):
+            raise ConnectionError("tools unsupported")
+        return GOOD_JSON
+
+    result = await ToolFormProbe(trials=3).run(transport)
+    assert result.ok is True
+    assert result.scores == {"tool_protocols.strict_json": 1.0}
+    assert result.floored == {"tool_protocols.native"}
+
+
+# --------------------------------------------------------------------------- #
+# strict_json trials send response_format (the C1-probe-half wire contract)
+# --------------------------------------------------------------------------- #
+
+
+async def test_strict_json_trials_send_the_pinning_response_format():
+    """The probe-side half of constrained decoding: every strict_json trial
+    passes a json_schema response_format pinning the one-call shape (the
+    IronCore ``tool_call_response_format`` shape: a ``tool`` enum + an
+    ``args`` object, strict); native trials pass tools and NO constraint."""
+    calls: list[dict] = []
+
+    async def transport(messages, **kw):
+        calls.append(kw)
+        return GOOD_CALL if kw.get("tools") else GOOD_JSON
+
+    result = await ToolFormProbe(trials=3).run(transport)
+    assert result.ok is True
+    native, strict = calls[:3], calls[3:]
+    assert len(strict) == 3
+    for kw in native:
+        assert kw["tools"] and "response_format" not in kw
+    for kw in strict:
+        assert "tools" not in kw
+        rf = kw["response_format"]
+        assert rf["type"] == "json_schema"
+        schema = rf["json_schema"]["schema"]
+        assert rf["json_schema"]["strict"] is True
+        assert schema["properties"]["tool"]["enum"] == ["get_weather"]
+        assert schema["required"] == ["tool", "args"]
+        assert schema["additionalProperties"] is False
+
+
+# --------------------------------------------------------------------------- #
+# the daemon transport FORWARDS the guided kwargs (Wave C) — and still
+# degrades to the Wave-A drop for an adapter that cannot take them
+# --------------------------------------------------------------------------- #
+
+
+class _GuidedFakeAdapter:
+    """The v1.203.0 adapter shape: complete() accepts the guided kwargs."""
+
+    provider = "ollama"
+    model = "qwen3:30b"
+
+    def __init__(self) -> None:
+        self.seen: list[dict] = []
+
+    async def complete(
+        self, *, system, messages, tools,
+        response_format=None, tool_choice=None, extra_body=None,
+    ):
+        self.seen.append(
+            {"tools": list(tools), "response_format": response_format,
+             "tool_choice": tool_choice, "extra_body": extra_body}
+        )
+        return LLMResponse(text='{"tool": "get_weather", "args": {}}')
+
+
+class _WaveAFakeAdapter:
+    """The Wave-A shape: three arguments, no guided kwargs, no **kw."""
+
+    provider = "ollama"
+    model = "qwen3:30b"
+
+    def __init__(self) -> None:
+        self.seen: list[dict] = []
+
+    async def complete(self, *, system, messages, tools):
+        self.seen.append({"tools": list(tools)})
+        return LLMResponse(text="OK")
+
+
+def test_probe_transport_forwards_guided_kwargs_to_a_capable_adapter():
+    adapter = _GuidedFakeAdapter()
+    transport = envelope_routes.probe_transport(adapter)
+    rf = {"type": "json_schema", "json_schema": {"name": "tool_call"}}
+    reply = asyncio.run(
+        transport(
+            [{"role": "user", "content": "call it"}],
+            response_format=rf,
+            tool_choice="required",
+            extra_body={"guided_json": {}},
+        )
+    )
+    assert reply.text == '{"tool": "get_weather", "args": {}}'
+    assert adapter.seen == [
+        {"tools": [], "response_format": rf, "tool_choice": "required",
+         "extra_body": {"guided_json": {}}}
+    ]
+    # ...and a call WITHOUT the kwargs sends None, not stale state.
+    asyncio.run(transport([{"role": "user", "content": "again"}]))
+    assert adapter.seen[1]["response_format"] is None
+
+
+def test_probe_transport_still_drops_for_a_wave_a_shaped_adapter():
+    # An adapter (or third-party shim) still on the three-argument signature
+    # must keep probing — dropped kwargs, bare-prompt scoring — never a
+    # mid-battery TypeError. The probe_generation field, not the transport,
+    # records which semantics scored the battery.
+    adapter = _WaveAFakeAdapter()
+    transport = envelope_routes.probe_transport(adapter)
+    reply = asyncio.run(
+        transport(
+            [{"role": "user", "content": "call it"}],
+            response_format={"type": "json_schema"},
+        )
+    )
+    assert reply.text == "OK"
+    assert adapter.seen == [{"tools": []}]

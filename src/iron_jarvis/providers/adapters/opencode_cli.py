@@ -141,7 +141,17 @@ class OpencodeCliAdapter(LLMAdapter):
         return self.model
 
     async def complete(
-        self, *, system: str, messages: list[LLMMessage], tools: list[dict[str, Any]]
+        self,
+        *,
+        system: str,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+        # Guided-decoding knobs (v1.203.0): accepted so callers can pass them
+        # uniformly across adapters; IGNORED — the CLI owns its own harness,
+        # not part of the openai-compat guided-decoding family this wave.
+        response_format: dict | None = None,
+        tool_choice: str | dict | None = None,
+        extra_body: dict | None = None,
     ) -> LLMResponse:
         from ..opencode import binary
 

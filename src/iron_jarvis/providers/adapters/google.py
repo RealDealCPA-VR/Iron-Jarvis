@@ -236,6 +236,12 @@ class GoogleAdapter(LLMAdapter):
         system: str,
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
+        # Guided-decoding knobs (v1.203.0): accepted so callers can pass them
+        # uniformly across adapters; IGNORED — not wired into the Gemini wire
+        # format this wave (openai-compat family only).
+        response_format: dict | None = None,
+        tool_choice: str | dict | None = None,
+        extra_body: dict | None = None,
     ) -> LLMResponse:
         # Resolve the credential off the event loop: an OAuth credential() may do
         # a blocking (up to 30s) httpx refresh, which must not stall the loop.
@@ -285,6 +291,10 @@ class GoogleAdapter(LLMAdapter):
         system: str,
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
+        # Guided-decoding knobs (v1.203.0): accepted-ignored, as in complete().
+        response_format: dict | None = None,
+        tool_choice: str | dict | None = None,
+        extra_body: dict | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Real token stream via ``:streamGenerateContent?alt=sse`` (FX-01).
 

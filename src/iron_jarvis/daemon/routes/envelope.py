@@ -44,10 +44,15 @@ Design decisions, recorded here because each one had a wrong alternative:
   adapter path records NOTHING: chat history, the ToolInvocation ledger, and
   Usage accounting all live in the layers this deliberately bypasses, so
   probe traffic cannot masquerade as user conversation or billable turns.
-  Probes may pass ``response_format`` (the strict_json rung); adapters grow
-  that parameter in Wave C, so until then the transport DROPS it and the rung
-  is scored on what the bare prompt produces — the probes contract explicitly
-  allows a transport to ignore kwargs it cannot honor.
+  Probes may pass ``response_format`` (the strict_json rung). Since Wave C
+  (v1.203.0) the transport FORWARDS ``response_format`` / ``tool_choice`` /
+  ``extra_body`` to ``adapter.complete`` — the additive guided-decoding
+  kwargs — but only when the adapter's signature can accept them (checked
+  once per adapter; ``**kwargs`` counts): a fake or third-party adapter
+  still on the Wave-A three-argument shape must keep probing (the probes
+  contract allows ignoring), never TypeError mid-battery. The profile's
+  ``probe_generation`` is what records which semantics scored a battery —
+  the binding Wave-A reviewer note under C2 in docs/IRONCORE-INTEGRATION.md.
 * **Background = ``asyncio.create_task``, not ``d._spawn_bg``**: the spawn
   governor parks work FIFO under ``max_concurrent_sessions`` and returns
   ``None`` when parked — right for agent sessions, wrong for a bounded
@@ -66,6 +71,7 @@ Design decisions, recorded here because each one had a wrong alternative:
 from __future__ import annotations
 
 import asyncio
+import inspect
 from pathlib import Path
 from typing import Any
 
@@ -85,13 +91,41 @@ PROBE_COMPLETED = "envelope.probe_completed"
 _FLEET_PREFIX = "fleet-"
 
 
+#: The guided-decoding kwargs the transport forwards when the adapter can
+#: take them (the v1.203.0 additive ``LLMAdapter.complete`` parameters).
+_GUIDED_KWARGS: tuple[str, ...] = ("response_format", "tool_choice", "extra_body")
+
+
+def _accepted_guided_kwargs(adapter: Any) -> frozenset[str]:
+    """Which of :data:`_GUIDED_KWARGS` this adapter's ``complete`` can accept
+    — named parameters or a ``**kwargs`` catch-all. Computed ONCE per
+    transport (not per trial), and an unsignaturable callable answers none:
+    the conservative reading keeps a probe running instead of crashing it."""
+    try:
+        params = inspect.signature(adapter.complete).parameters
+    except (TypeError, ValueError):  # builtins/mocks with no signature
+        return frozenset()
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return frozenset(_GUIDED_KWARGS)
+    return frozenset(name for name in _GUIDED_KWARGS if name in params)
+
+
 def probe_transport(adapter: Any):
     """An async ``complete(messages, **kw) -> ProbeReply`` over ONE resolved
     adapter — the battery's transport seam. The adapter is resolved by the
     caller (``manager.get(provider, model)``), so the pin is total: no
-    failover, no mock fallback, no router. Unknown kwargs (``response_format``
-    until Wave C) are dropped, which the probes contract allows — the rung is
-    then scored on what the bare prompt produces."""
+    failover, no mock fallback, no router.
+
+    Guided-decoding kwargs (Wave C): ``response_format`` / ``tool_choice`` /
+    ``extra_body`` are FORWARDED to ``adapter.complete`` so the strict_json
+    trials run under real constrained decoding — that forwarding is what the
+    probe-generation bump (``CURRENT_PROBE_GENERATION == 2``) records. An
+    adapter whose ``complete`` cannot accept them (a test fake or third-party
+    shim on the Wave-A three-argument shape) gets them dropped instead of a
+    mid-battery TypeError — the probes contract allows a transport to ignore
+    kwargs it cannot honor, and the rung is then scored on what the bare
+    prompt produces."""
+    accepted = _accepted_guided_kwargs(adapter)
 
     async def transport(messages: list[dict[str, Any]], **kw: Any) -> ProbeReply:
         system_parts: list[str] = []
@@ -103,10 +137,16 @@ def probe_transport(adapter: Any):
                 system_parts.append(content)
             else:
                 msgs.append(LLMMessage(role=role, content=content))
+        guided = {
+            name: kw[name]
+            for name in _GUIDED_KWARGS
+            if name in accepted and kw.get(name) is not None
+        }
         resp = await adapter.complete(
             system="\n\n".join(system_parts),
             messages=msgs,
             tools=list(kw.get("tools") or []),
+            **guided,
         )
         return ProbeReply(
             text=resp.text or "",

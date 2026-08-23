@@ -145,7 +145,30 @@ class LLMAdapter(ABC):
         system: str,
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
+        response_format: dict | None = None,
+        tool_choice: str | dict | None = None,
+        extra_body: dict | None = None,
     ) -> LLMResponse:
+        """One completion.
+
+        The three trailing keywords are the GUIDED-DECODING knobs (v1.203.0,
+        additive — every default None means a byte-identical wire payload, so
+        existing callers and adapters are untouched):
+
+        - ``response_format``: the portable OpenAI form (``json_schema`` /
+          ``json_object``) for server-side constrained decoding.
+        - ``tool_choice``: force/steer tool selection (``"required"`` or the
+          ``{"type": "function", ...}`` dict form).
+        - ``extra_body``: carries server-specific keys (vLLM guided_json/
+          guided_grammar, llama.cpp grammar) and is applied last, so it wins
+          any key clash — the escape hatch for servers whose guided-decoding
+          dialect is not the portable ``response_format``.
+
+        Only the openai-compat family (openai/ollama/custom base_urls) puts
+        them on the wire; every other adapter ACCEPTS and IGNORES them, so a
+        caller (the guided rung) can pass them uniformly without knowing the
+        adapter class.
+        """
         ...
 
     async def stream(
@@ -154,6 +177,9 @@ class LLMAdapter(ABC):
         system: str,
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
+        response_format: dict | None = None,
+        tool_choice: str | dict | None = None,
+        extra_body: dict | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Token-stream a completion (FX-01). Yields frames:
 
@@ -167,7 +193,20 @@ class LLMAdapter(ABC):
         :meth:`complete` returns, so callers that consume the aggregate (token
         accounting, tool loop, persisted result) stay byte-compatible.
         """
-        resp = await self.complete(system=system, messages=messages, tools=tools)
+        # Forward the guided-decoding knobs ONLY when set: a None-knob call is
+        # byte-identical to the pre-v1.203.0 call, so subclasses that still
+        # declare the narrow complete(system=, messages=, tools=) signature
+        # (older test doubles, third-party adapters) keep working untouched —
+        # they only fail (honestly, with a TypeError) if a caller actually
+        # asks them for guided decoding.
+        kw: dict[str, Any] = {}
+        if response_format is not None:
+            kw["response_format"] = response_format
+        if tool_choice is not None:
+            kw["tool_choice"] = tool_choice
+        if extra_body is not None:
+            kw["extra_body"] = extra_body
+        resp = await self.complete(system=system, messages=messages, tools=tools, **kw)
         if resp.text:
             yield {"type": "text", "text": resp.text}
         yield {"type": "final", "response": resp}

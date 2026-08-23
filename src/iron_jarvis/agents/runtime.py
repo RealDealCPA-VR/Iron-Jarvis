@@ -392,6 +392,74 @@ def should_decompose_enveloped(platform, session, profile) -> tuple[bool, bool]:
     return False, False
 
 
+def verify_all_enveloped(profile) -> bool:
+    """Should THIS run's decomposed lane verify EVERY step (v1.203.0, Wave C3)?
+
+    ``profile.verify_every_step()`` speaks only for a MEASURED, untrusted
+    profile — the same ``is_measured()`` gate ``should_decompose_enveloped``
+    carries, and for the same load-bearing reason: the unmeasured floor
+    answers ``verify_every_step() == True`` by conservative construction
+    (through ``needs_decomposition()``'s floor), and consulting it raw would
+    flip every prompted-mode local decomposition — the lane's whole
+    pre-envelope population — into goal-gated verification on day one. The
+    envelope only ever bends on EVIDENCE; everyone else keeps
+    ``test_decompose_v1132``'s byte-identical behavior (a criteria-less step
+    passes ungated). Never raises: a stub profile answers False, the lane's
+    safe default."""
+    try:
+        return bool(
+            not profile.is_trusted()
+            and profile.is_measured()
+            and profile.verify_every_step()
+        )
+    except Exception:  # noqa: BLE001 — the envelope must never break the lane
+        return False
+
+
+def step_outcome_recorder(platform, provider: str, model: str):
+    """Per-step outcome hook for the decomposed lane (the Wave C3→C4 seam).
+
+    Returns a ``record(ok: bool)`` callable feeding
+    ``envelope.outcomes.record_outcome(home, provider, model, ok)`` — the
+    per-model outcome ledger (landed in parallel with this seam; the ledger
+    itself additionally no-ops for anything but a stored MEASURED profile) —
+    or ``None`` when there is nothing to feed:
+
+    * The module is absent (the ``ImportError`` arm — resolved per run, so a
+      partial checkout degrades to "no ledger" instead of a dead runtime).
+    * TRUSTED providers record nothing — frontier sees zero envelope
+      behavior, ledger writes included (``is_trusted_provider`` is THE single
+      oracle per its own docstring).
+    * No configured home / bare stub platform / blank ids — nowhere to write.
+
+    The returned callable never raises (``record_outcome`` is never-raising
+    by contract; the guard here is belt-and-braces). It does synchronous file
+    I/O — the caller owns the ``to_thread`` hop (``execute_plan`` awaits one
+    per step, per the v1.153.1 rule and outcomes' own docstring).
+    """
+    try:
+        from ..envelope.outcomes import record_outcome
+    except ImportError:
+        return None
+    try:
+        manager = getattr(platform, "providers", None)
+        if manager is None or manager.is_trusted_provider(provider):
+            return None
+        home = getattr(getattr(platform, "config", None), "home", None)
+    except Exception:  # noqa: BLE001 — a stub platform records nothing
+        return None
+    if not home or not provider or not model:
+        return None
+
+    def record(ok: bool) -> None:
+        try:
+            record_outcome(home, provider, model, bool(ok))
+        except Exception:  # noqa: BLE001 — the ledger must never break a run
+            pass
+
+    return record
+
+
 #: Bounds for the `# Team` block (v1.193.0). A department is a TEAM, not a
 #: directory: a deep delegation tree can hold dozens of runs, and listing them
 #: all would spend more prompt budget than the block earns back. The roster is
@@ -1062,6 +1130,15 @@ class AgentRuntime:
             self.p, session, env_profile
         )
         if engage_decomposed:
+            # WAVE C3 (v1.203.0): a measured-weak envelope that demands
+            # per-step verification gates EVERY step — criteria-less ones on
+            # their goal — so a failed step earns the lane's one retry with
+            # the error fed back, then an honest failure, never a silent
+            # skip. Unmeasured/trusted profiles pass False and the lane is
+            # byte-identical to v1.202.0. The lane appends "step_retry" into
+            # `adaptations` (goal-gated retries only) BEFORE returning, so
+            # the single resolved-bends publish below still carries every
+            # bend of the run. Step outcomes feed the C4 ledger seam.
             final_text = await _decompose.run_decomposed(
                 self,
                 run,
@@ -1071,6 +1148,11 @@ class AgentRuntime:
                 tool_specs=tool_specs,
                 session_allow=session_allow,
                 sink=sink,
+                verify_all=verify_all_enveloped(env_profile),
+                adaptations=adaptations,
+                record_outcome=step_outcome_recorder(
+                    self.p, env_provider, env_model
+                ),
             )
         # B4 (v1.202.0): the loop actually BENT under a measured envelope — say
         # so, ONCE per run. Published HERE, after the decompose decision has
@@ -1306,9 +1388,20 @@ class AgentRuntime:
             step_messages, step_system = messages, system_prompt
             try:
                 from ..context.agent_window import plan_agent_transcript
-                from ..daemon.chat_turn import _context_window
+                from ..daemon.chat_turn import _context_window, _history_ratio
 
                 _win = _context_window(
+                    SimpleNamespace(platform=self.p),
+                    session.provider,
+                    session.model,
+                )
+                # MEASURED token ratio (v1.203.0, Wave C5): the SAME resolver
+                # both chat lanes use — provenance-gated per field inside
+                # `_history_ratio` (`field_measured("chars_per_token")`), so
+                # every unmeasured route passes None and the estimate is
+                # byte-identical to v1.202.0. One resolver, not a copy: the
+                # two lanes must count tokens identically by construction.
+                _cpt = _history_ratio(
                     SimpleNamespace(platform=self.p),
                     session.provider,
                     session.model,
@@ -1337,6 +1430,7 @@ class AgentRuntime:
                     _eff_messages,
                     window=_win,
                     system_text=_eff_system,
+                    chars_per_token=_cpt,
                 )
                 step_messages, step_system = _plan.messages, _eff_system
                 if _plan.recap:

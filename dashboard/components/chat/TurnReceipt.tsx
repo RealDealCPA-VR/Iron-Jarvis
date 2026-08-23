@@ -72,6 +72,7 @@ export function wordChange(token: string): string {
   const cap = /^tool_cap:(\d+)$/.exec(t);
   if (cap) return `${cap[1]} tools max`;
   if (t === "decomposed") return "running step-by-step";
+  if (t === "step_retry") return "retried a failed step"; // v1.203.0 (C3)
   return t;
 }
 

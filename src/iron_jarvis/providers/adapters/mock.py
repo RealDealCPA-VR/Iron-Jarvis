@@ -32,6 +32,11 @@ class MockLLMAdapter(LLMAdapter):
         system: str,
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
+        # Guided-decoding knobs (v1.203.0): accepted so callers can pass them
+        # uniformly across adapters; IGNORED — openai-compat wire only this wave.
+        response_format: dict | None = None,
+        tool_choice: str | dict | None = None,
+        extra_body: dict | None = None,
     ) -> LLMResponse:
         if self._script:
             return self._script.pop(0)
@@ -43,6 +48,10 @@ class MockLLMAdapter(LLMAdapter):
         system: str,
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
+        # Guided-decoding knobs (v1.203.0): accepted-ignored, as in complete().
+        response_format: dict | None = None,
+        tool_choice: str | dict | None = None,
+        extra_body: dict | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Actually stream the offline reply word-by-word so the streaming path
         demos + smoke-tests end-to-end with zero network. A tool-use turn (empty

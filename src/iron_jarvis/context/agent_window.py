@@ -29,10 +29,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .budget import (
-    CHARS_PER_TOKEN,
     DEFAULT_WINDOW,
     MIN_LAST_MESSAGE_CHARS,
     RECAP_RESERVE,
+    effective_chars_per_token,
     estimate_tokens,
     output_reserve,
 )
@@ -87,8 +87,11 @@ def blocks_of(messages: list[Any]) -> list[list[Any]]:
     return out
 
 
-def _block_tokens(block: list[Any]) -> int:
-    return sum(estimate_tokens(getattr(m, "content", "") or "") + 4 for m in block)
+def _block_tokens(block: list[Any], chars_per_token: float | None = None) -> int:
+    return sum(
+        estimate_tokens(getattr(m, "content", "") or "", chars_per_token) + 4
+        for m in block
+    )
 
 
 def recap_of(dropped: list[list[Any]], *, max_chars: int = 900) -> str:
@@ -132,6 +135,7 @@ def plan_agent_transcript(
     *,
     window: int | None,
     system_text: str = "",
+    chars_per_token: float | None = None,
 ) -> TranscriptPlan:
     """Fit the transcript to *window*, sacrificing the cheapest things first.
 
@@ -142,6 +146,12 @@ def plan_agent_transcript(
 
     Returns the ORIGINAL list untouched when everything already fits, so a run
     that never approaches the window behaves exactly as it did before.
+
+    ``chars_per_token`` (v1.203.0) is the answering model's MEASURED ratio or
+    None — the same parameter, with the same None-is-byte-identical contract,
+    as ``budget.plan_history``'s: both lanes must count tokens IDENTICALLY, so
+    it feeds every estimate here (and the token→char back-conversion of the
+    task clip).
     """
     win = int(window or DEFAULT_WINDOW)
     if win <= 0:
@@ -150,11 +160,12 @@ def plan_agent_transcript(
     if not messages:
         return plan
 
-    system_tokens = estimate_tokens(system_text)
+    cpt = chars_per_token
+    system_tokens = estimate_tokens(system_text, cpt)
     budget = win - system_tokens - output_reserve(win)
 
     blocks = blocks_of(list(messages))
-    total = sum(_block_tokens(b) for b in blocks)
+    total = sum(_block_tokens(b, cpt) for b in blocks)
     plan.raw_tokens = system_tokens + total
     if total <= budget:
         plan.messages = list(messages)
@@ -184,27 +195,33 @@ def plan_agent_transcript(
         working.append(new_block)
 
     task_block, rest = working[0], working[1:]
-    task_tokens = _block_tokens(task_block)
+    task_tokens = _block_tokens(task_block, cpt)
 
     # (3) Degenerate: not even the task fits. Keep as much of it as possible and
-    # let the caller report that the model is too small for the job.
+    # let the caller report that the model is too small for the job. The
+    # token→char conversion uses the SAME ratio as the estimates — clipping at
+    # 3.6 chars/token while counting at a measured 2.0 would keep a task that
+    # still overflows the budget it was clipped to fit.
     if task_tokens > budget:
         first = copy.copy(task_block[0])
-        room = max(MIN_LAST_MESSAGE_CHARS, int(max(0, budget) * CHARS_PER_TOKEN))
+        room = max(
+            MIN_LAST_MESSAGE_CHARS,
+            int(max(0, budget) * effective_chars_per_token(cpt)),
+        )
         original = getattr(first, "content", "") or ""
         first.content = original[:room]
         plan.clipped_task = len(original) > len(first.content)
         plan.messages = [first]
         plan.dropped_blocks = len(rest)
         plan.recap = recap_of(rest)
-        plan.used_tokens = system_tokens + estimate_tokens(first.content)
+        plan.used_tokens = system_tokens + estimate_tokens(first.content, cpt)
         return plan
 
     # (2) Keep the newest blocks that fit in what the task leaves.
     kept: list[list[Any]] = []
     used = task_tokens
     for block in reversed(rest):
-        cost = _block_tokens(block)
+        cost = _block_tokens(block, cpt)
         if used + cost > budget:
             break
         kept.append(block)
@@ -215,5 +232,5 @@ def plan_agent_transcript(
     plan.dropped_blocks = len(dropped)
     plan.recap = recap_of(dropped)
     plan.messages = [m for block in [task_block, *kept] for m in block]
-    plan.used_tokens = system_tokens + used + estimate_tokens(plan.recap)
+    plan.used_tokens = system_tokens + used + estimate_tokens(plan.recap, cpt)
     return plan

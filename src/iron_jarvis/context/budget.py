@@ -33,6 +33,7 @@ tells the user.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -46,6 +47,16 @@ CHARS_PER_TOKEN = 3.6
 #: CJK text is roughly one token per character — a 4x error if estimated as
 #: Latin prose, which on a 8k window is the difference between fitting and not.
 CJK_CHARS_PER_TOKEN = 1.1
+
+#: Defensive bounds on a MEASURED chars-per-token ratio (v1.203.0, IronCore
+#: Wave C5). The TOKEN-RATIO probe clamps to a sane range before persisting,
+#: but the value crosses a JSON store on disk between the probe and this
+#: divisor: a corrupt or hand-edited 0.0 must not zero every history budget
+#: (dividing by ~0 makes any transcript "cost" millions of tokens), and an
+#: absurd 1e9 must not make a 200k-char transcript "fit" an 8k window — the
+#: exact overflow this module exists to prevent.
+MEASURED_RATIO_MIN = 1.0
+MEASURED_RATIO_MAX = 8.0
 
 #: Share of the window kept free for the REPLY. A turn that fills the window
 #: with input has nowhere to put an answer; local servers differ on whether
@@ -97,19 +108,50 @@ def _is_cjk(ch: str) -> bool:
     return any(lo <= o <= hi for lo, hi in _CJK_RANGES)
 
 
-def estimate_tokens(text: str) -> int:
+def effective_chars_per_token(chars_per_token: float | None) -> float:
+    """The divisor :func:`estimate_tokens` actually uses for NON-CJK text.
+
+    ``None`` → :data:`CHARS_PER_TOKEN` EXACTLY — the pinned pre-v1.203.0
+    constant, so every unmeasured route estimates byte-identically to before.
+    A measured value is clamped to
+    [:data:`MEASURED_RATIO_MIN`, :data:`MEASURED_RATIO_MAX`]; anything that is
+    not a finite number (a corrupt store row, a stub handing back a string)
+    falls back to the default rather than poisoning a budget.
+    """
+    if chars_per_token is None:
+        return CHARS_PER_TOKEN
+    try:
+        ratio = float(chars_per_token)
+    except (TypeError, ValueError):
+        return CHARS_PER_TOKEN
+    if not math.isfinite(ratio):
+        return CHARS_PER_TOKEN
+    return max(MEASURED_RATIO_MIN, min(MEASURED_RATIO_MAX, ratio))
+
+
+def estimate_tokens(text: str, chars_per_token: float | None = None) -> int:
     """A deliberately CONSERVATIVE token estimate for *text*.
 
     Not a tokenizer: shipping one would mean a per-provider vocabulary
     download in a frozen desktop app, for a number whose only job is to decide
     what to leave out. Overestimating slightly is the safe direction — see
     :data:`CHARS_PER_TOKEN`.
+
+    ``chars_per_token`` (v1.203.0) is the answering model's MEASURED ratio —
+    the capability envelope's TOKEN-RATIO probe → ``profile.chars_per_token``,
+    provenance-gated by ``field_measured("chars_per_token")`` at the call
+    site. It replaces ONLY the Latin-ish divisor: the probe measures
+    latin-filler documents against server-reported prompt tokens, so it says
+    nothing about CJK density — the CJK constant keeps that 4x error covered
+    exactly as before. ``None`` (every unmeasured route) is byte-identical to
+    the pre-v1.203.0 estimate.
     """
     if not text:
         return 0
+    ratio = effective_chars_per_token(chars_per_token)
     cjk = sum(1 for ch in text if _is_cjk(ch))
     other = len(text) - cjk
-    return int(other / CHARS_PER_TOKEN + cjk / CJK_CHARS_PER_TOKEN) + 1
+    return int(other / ratio + cjk / CJK_CHARS_PER_TOKEN) + 1
 
 
 def output_reserve(window: int) -> int:
@@ -253,17 +295,28 @@ def plan_history(
     window: int | None,
     system_text: str = "",
     max_messages: int = MAX_MESSAGES,
+    chars_per_token: float | None = None,
 ) -> HistoryPlan:
     """Choose the messages for one turn against a real token budget.
 
     ``messages`` are the conversation so far (objects or dicts with role +
     content), oldest first. ``window`` is the model's context window, or None
-    when unknown (:data:`DEFAULT_WINDOW` is assumed).
+    when unknown (:data:`DEFAULT_WINDOW` is assumed). ``chars_per_token`` is
+    the answering model's MEASURED ratio or None — see
+    :func:`estimate_tokens`; it feeds EVERY estimate in the plan (and the
+    token→char back-conversion of the clip path), because a ratio applied to
+    some counters and not others makes the plan disagree with itself about
+    what fits.
     """
     win = int(window or DEFAULT_WINDOW)
     if win <= 0:
         win = DEFAULT_WINDOW
-    system_tokens = estimate_tokens(system_text)
+    cpt = chars_per_token
+
+    def _est(text: str) -> int:
+        return estimate_tokens(text, cpt)
+
+    system_tokens = _est(system_text)
     reserve = output_reserve(win)
     budget = win - system_tokens - reserve
 
@@ -271,7 +324,7 @@ def plan_history(
     # Raw demand, measured BEFORE any cap or trim: what this conversation would
     # cost if nothing were given up.
     plan.raw_tokens = system_tokens + sum(
-        estimate_tokens(_content_of(m)) + 4 for m in messages
+        _est(_content_of(m)) + 4 for m in messages
     )
     if not messages:
         plan.used_tokens = system_tokens
@@ -309,13 +362,13 @@ def plan_history(
         plan.dropped = len(messages) - 1
         plan.recap = build_recap(list(older) + list(recent[:-1]))
         plan.suggest_larger = True
-        plan.used_tokens = system_tokens + estimate_tokens(plan.messages[0]["content"])
+        plan.used_tokens = system_tokens + _est(plan.messages[0]["content"])
         return plan
 
     # Does it all fit as-is? Answer this FIRST: it is the overwhelmingly common
     # case, it keeps the untouched path exactly untouched, and it decides
     # whether the recap reserve below has to be charged at all.
-    full_cost = sum(estimate_tokens(m["content"]) + 4 for m in prepared)
+    full_cost = sum(_est(m["content"]) + 4 for m in prepared)
     fits_whole = full_cost <= budget and not older
     if not fits_whole:
         budget -= RECAP_RESERVE  # the recap rides in the system prompt
@@ -324,18 +377,24 @@ def plan_history(
     kept: list[dict[str, str]] = []
     used = 0
     for m in reversed(prepared):
-        cost = estimate_tokens(m["content"]) + 4  # role/format overhead
+        cost = _est(m["content"]) + 4  # role/format overhead
         if used + cost > budget and kept:
             break
         if used + cost > budget and not kept:
             # Step 5: the newest message alone overflows — clip it rather than
-            # send an empty turn, and be loud about it.
-            room_chars = max(MIN_LAST_MESSAGE_CHARS, int(budget * CHARS_PER_TOKEN))
+            # send an empty turn, and be loud about it. The token→char
+            # conversion uses the SAME ratio as the estimates: clipping to
+            # 3.6 chars/token while counting at a measured 2.0 would produce
+            # a clip that still overflows the budget it was cut to fit.
+            room_chars = max(
+                MIN_LAST_MESSAGE_CHARS,
+                int(budget * effective_chars_per_token(cpt)),
+            )
             clipped = m["content"][:room_chars]
             kept.append({"role": m["role"], "content": clipped})
             plan.clipped_last = len(m["content"]) > len(clipped)
             plan.suggest_larger = True
-            used += estimate_tokens(clipped) + 4
+            used += _est(clipped) + 4
             break
         kept.append(m)
         used += cost
@@ -345,7 +404,7 @@ def plan_history(
     plan.messages = kept
     plan.dropped = len(dropped_msgs)
     plan.recap = build_recap(dropped_msgs)
-    plan.used_tokens = system_tokens + used + estimate_tokens(plan.recap)
+    plan.used_tokens = system_tokens + used + _est(plan.recap)
     # A conversation that had to shed turns fits better on a bigger model — say
     # so once, not on every trim of a stale tool result.
     if plan.dropped:

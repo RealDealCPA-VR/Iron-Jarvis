@@ -166,6 +166,12 @@ class AnthropicAdapter(LLMAdapter):
         system: str,
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
+        # Guided-decoding knobs (v1.203.0): accepted so callers can pass them
+        # uniformly across adapters; IGNORED — not wired into the Anthropic
+        # Messages wire format this wave (openai-compat family only).
+        response_format: dict | None = None,
+        tool_choice: str | dict | None = None,
+        extra_body: dict | None = None,
     ) -> LLMResponse:
         # Build the client off the loop — credential resolution may trigger a
         # blocking OAuth token refresh that must not stall the event loop.
@@ -246,6 +252,10 @@ class AnthropicAdapter(LLMAdapter):
         system: str,
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
+        # Guided-decoding knobs (v1.203.0): accepted-ignored, as in complete().
+        response_format: dict | None = None,
+        tool_choice: str | dict | None = None,
+        extra_body: dict | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Real token streaming (FX-01). Builds the SAME request as :meth:`complete`
         — verbatim tool/system/message construction + prompt-cache breakpoints — but

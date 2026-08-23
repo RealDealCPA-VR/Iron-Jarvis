@@ -141,7 +141,17 @@ class SubprocessCliAdapter(LLMAdapter):
         self._out_flag = output_last_message_flag
 
     async def complete(
-        self, *, system: str, messages: list[LLMMessage], tools: list[dict[str, Any]]
+        self,
+        *,
+        system: str,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+        # Guided-decoding knobs (v1.203.0): accepted so callers can pass them
+        # uniformly across adapters; IGNORED — subscription CLI backend, not
+        # part of the openai-compat guided-decoding family this wave.
+        response_format: dict | None = None,
+        tool_choice: str | dict | None = None,
+        extra_body: dict | None = None,
     ) -> LLMResponse:
         exe = self._which(self._binary)
         if not exe:
@@ -337,7 +347,16 @@ class ClaudeCliAdapter(LLMAdapter):
         return argv
 
     async def complete(
-        self, *, system: str, messages: list[LLMMessage], tools: list[dict[str, Any]]
+        self,
+        *,
+        system: str,
+        messages: list[LLMMessage],
+        tools: list[dict[str, Any]],
+        # Guided-decoding knobs (v1.203.0): accepted-ignored (see
+        # SubprocessCliAdapter.complete — subscription CLI backend).
+        response_format: dict | None = None,
+        tool_choice: str | dict | None = None,
+        extra_body: dict | None = None,
     ) -> LLMResponse:
         exe = self._which("claude")
         if not exe:

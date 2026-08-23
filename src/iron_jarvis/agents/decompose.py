@@ -460,6 +460,15 @@ class StepResult:
     #: and failed its gate — reporting "FAILED verification" for work nobody
     #: attempted is the same class of lie as claiming it passed.
     attempted: bool = True
+    #: True = this step declared NO success criteria and was gated on its GOAL
+    #: because the run's capability envelope demands per-step verification
+    #: (v1.203.0, Wave C3 — ``verify_all``). Load-bearing for ATTRIBUTION: a
+    #: retry of a goal-gated step happened only because the envelope closed the
+    #: silent skip, so it may be narrated as an envelope bend ("step_retry");
+    #: a retry of a criteria-carrying step is v1.132.0 behavior that would have
+    #: happened with no envelope at all, and narrating it would repeat the
+    #: confirmed Wave-B defect (claiming a bend that was going to happen anyway).
+    goal_gated: bool = False
 
 
 # ------------------------------------------------------------------- one-shots
@@ -820,6 +829,7 @@ async def verify_step(
     output: str,
     *,
     llm: "RoleResolution | None" = None,
+    verify_all: bool = False,
 ) -> tuple[bool, str, str]:
     """The per-step gate. Returns ``(ok, reason, method)``.
     ``llm`` = the "judge" role's resolved pair (None → the session's own).
@@ -829,20 +839,37 @@ async def verify_step(
     a one-shot model judge with the strict ``{"pass", "reason"}`` contract + 1
     repair. An unrepairable judge reply passes the step as "unverified" rather
     than failing it — failing possibly-good work on a broken VERIFIER reply
-    would burn the retry for nothing; the honest signal is recorded instead."""
+    would burn the retry for nothing; the honest signal is recorded instead.
+
+    ``verify_all`` (v1.203.0, Wave C3 — the ``verify_every_step()`` envelope):
+    a step that declared NO success criteria used to pass with zero
+    verification ("none") — for a measured-weak model that is a SILENT SKIP,
+    and an unfinished mini-loop ("step stopped: mini-loop budget reached")
+    sailed through it as a pass. Under a verify-every-step envelope the GOAL
+    itself becomes the gate, judged by the MODEL — deliberately never the
+    deterministic file gate, because a goal names its INPUT files as often as
+    its outputs ("read notes.txt and summarize") and a false deterministic
+    FAIL would burn the step's one retry on a phantom. False (every
+    pre-envelope caller) is byte-identical to v1.132.0."""
     criteria = (step.success_criteria or "").strip()
     if not criteria:
-        return True, "", "none"  # nothing declared → nothing to gate on
-    files = criteria_files(criteria)
-    if files:
-        missing = [f for f in files if not (workspace / f).exists()]
-        if missing:
-            return (
-                False,
-                "expected file(s) not found in the workspace: " + ", ".join(missing),
-                "files",
-            )
-        return True, "", "files"
+        if not verify_all:
+            return True, "", "none"  # nothing declared → nothing to gate on
+        criteria = (
+            "the worker's output shows the step's goal was actually "
+            f"accomplished: {step.goal}"
+        )
+    else:
+        files = criteria_files(criteria)
+        if files:
+            missing = [f for f in files if not (workspace / f).exists()]
+            if missing:
+                return (
+                    False,
+                    "expected file(s) not found in the workspace: " + ", ".join(missing),
+                    "files",
+                )
+            return True, "", "files"
     user = (
         f"Step goal: {step.goal}\n"
         f"Success criteria: {criteria}\n\n"
@@ -940,6 +967,8 @@ async def execute_plan(
     session_allow: set[str],
     sink,
     judge_llm: "RoleResolution | None" = None,
+    verify_all: bool = False,
+    record_outcome=None,
 ) -> list[StepResult]:
     """Execute each step in a FRESH bounded mini-loop through the runtime's
     ``perceive_act`` seam (same routing/streaming/tool machinery, same run
@@ -947,6 +976,24 @@ async def execute_plan(
     reason prepended; a second failure is recorded and the REMAINING steps
     still run (kept simple by design — later steps see the failure in their
     prior-step context and the final answer surfaces it honestly).
+
+    ``verify_all`` (v1.203.0, Wave C3): the run's envelope demands per-step
+    verification — criteria-less steps are gated on their GOAL (see
+    :func:`verify_step`), which makes their failures VISIBLE and lets the
+    existing one-retry ladder above absorb them; the retry outcome is final
+    either way (ok → continue; still failing → recorded honestly, never a
+    third attempt, never a silent skip). A retried step's
+    ``plan.step_completed`` payload gains an ADDITIVE ``attempts: 2`` key —
+    chosen over a second event because the chat progress line renders one line
+    per event (``stepLabel.ts``) and a duplicate would double-render; the key
+    is published only under ``verify_all`` so every pre-envelope payload stays
+    byte-identical to its v1.132.0 pin. False = v1.132.0 behavior unchanged.
+
+    ``record_outcome`` (Wave C3→C4 seam): ``record(ok: bool)`` called once per
+    ATTEMPTED step with its FINAL verdict (post-retry) — the per-model outcome
+    ledger's evidence. Never for a budget-skipped step: work nobody attempted
+    is not evidence about the model. ``None`` = no ledger (trusted provider,
+    or the ledger module is absent).
 
     ``judge_llm`` (v1.135.0) reroutes ONLY the verify gate's judge one-shots;
     the mini-loops themselves are the tool-using lane and always keep the
@@ -1097,7 +1144,8 @@ async def execute_plan(
             if sink is not None:
                 sink.phase("verifying", f"checking step {index + 1}")
             ok, reason, method = await verify_step(
-                runtime, run, session, workspace, step, output, llm=judge_llm
+                runtime, run, session, workspace, step, output,
+                llm=judge_llm, verify_all=verify_all,
             )
             if ok or attempt == 1:
                 break
@@ -1111,15 +1159,39 @@ async def execute_plan(
                 reason=("" if ok else reason),
                 verified=method,
                 retried=retried,
+                # Attribution fact for the "step_retry" adaptation (see the
+                # field's own docstring): this step was gated on its GOAL only
+                # because the envelope closed the criteria-less silent skip.
+                goal_gated=(verify_all and not (step.success_criteria or "").strip()),
             )
         )
+        # C3→C4 seam: the step's FINAL verdict (post-retry) is per-model
+        # evidence for the outcome ledger. Best-effort by contract — the
+        # ledger must never be able to break a run — and OFF THE EVENT LOOP
+        # (v1.153.1): envelope.outcomes.record_outcome does synchronous file
+        # I/O and its own docstring requires async callers to hop through
+        # to_thread. Awaited (not fire-and-forget) so the evidence has landed
+        # by the time the run reports done.
+        if record_outcome is not None:
+            try:
+                await asyncio.to_thread(record_outcome, bool(ok))
+            except Exception:  # noqa: BLE001
+                pass
         prior.append(
             f"Step {index + 1} ({'done' if ok else 'FAILED'}): {step.goal} -> "
             + " ".join((output or "(no output)").split())[:400]
         )
+        payload: dict[str, Any] = {"run_id": run.id, "index": index, "ok": ok}
+        # HONEST RETRY DISCLOSURE (v1.203.0, Wave C3): an ADDITIVE key, never a
+        # second event (stepLabel.ts renders one line per event — a duplicate
+        # would double-render "Step k done"), and only under verify_all — the
+        # pre-envelope payload is pinned byte-identical by test_decompose_v1132
+        # (a retried step there asserts payload EQUALITY without this key).
+        if verify_all and retried:
+            payload["attempts"] = 2
         await p.event_bus.publish(
             EventType.PLAN_STEP_COMPLETED,
-            {"run_id": run.id, "index": index, "ok": ok},
+            payload,
             session_id=session.id,
         )
     return results
@@ -1225,12 +1297,26 @@ async def run_decomposed(
     tool_specs: list[dict[str, Any]],
     session_allow: set[str],
     sink,
+    verify_all: bool = False,
+    adaptations: list[str] | None = None,
+    record_outcome=None,
 ) -> str | None:
     """The decomposed path: plan, then execute + verify each step, then
     assemble. Returns the final answer text, or ``None`` when the planner
     declines (degenerate/unparseable plan) — the caller then runs the flat
     loop unchanged. An error DURING execution propagates exactly as a flat-loop
-    error would (the orchestrator's failure handling applies either way)."""
+    error would (the orchestrator's failure handling applies either way).
+
+    Wave C3 (v1.203.0) knobs, all dormant at their defaults: ``verify_all``
+    and ``record_outcome`` thread straight into :func:`execute_plan` (see its
+    docstring); ``adaptations`` is the RUNTIME's bend list for the single
+    ``envelope.adapted`` event, appended here with ``"step_retry"`` when a
+    GOAL-GATED step actually retried — appended before this function returns,
+    so it composes with the caller's resolved-bends publish site (which fires
+    only after the lane resolves). Attribution is deliberately narrow: a
+    criteria-carrying step's retry is v1.132.0 behavior the run would have
+    performed with no envelope at all, and narrating it as a bend is the exact
+    Wave-B defect class ("adapted" must mean the envelope bent the loop)."""
     # Step-aware routing (v1.135.0): resolve each one-shot ROLE exactly once
     # per run — plan/judge/synthesize may name a stronger local model while the
     # mini-loops (the tool-using lane) keep the session's own provider. All
@@ -1283,7 +1369,19 @@ async def run_decomposed(
         session_allow=session_allow,
         sink=sink,
         judge_llm=judge_llm,
+        verify_all=verify_all,
+        record_outcome=record_outcome,
     )
+    # C3: a goal-gated retry exists ONLY because the envelope closed the
+    # criteria-less silent skip — that is a realized bend, said once.
+    # (`retried` is set only when the retry actually RAN: a retry denied for
+    # want of budget, and a step never attempted at all, both stay False.)
+    if (
+        verify_all
+        and adaptations is not None
+        and any(r.retried and r.goal_gated for r in results)
+    ):
+        adaptations.append("step_retry")
     if sink is not None:
         sink.phase("assembling", "writing up what happened")
     return await assemble(runtime, run, session, results, llm=synth_llm)

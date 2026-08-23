@@ -32,6 +32,17 @@ where a battery whose every probe failed once read as "measured"):
 The ladder selection (``select_tool_protocol``) is mechanical, never vibes:
 the highest rung whose measured score clears its acceptance bar wins, and the
 bars are IronCore's proven thresholds.
+
+Probe generations (Wave C, v1.203.0). The Wave-A reviewer note under C2 in
+docs/IRONCORE-INTEGRATION.md is BINDING here: Wave A scored strict_json
+trials on the bare prompt (adapters had no ``response_format`` yet), so when
+constrained decoding became real the rung's semantics changed UNDER stored
+scores — a profile probed before the change would let the ladder select
+strict_json on evidence measured against a different mechanism. The
+``probe_generation`` field records which semantics scored a profile;
+:data:`CURRENT_PROBE_GENERATION` names today's; a stored score from an older
+generation is STALE for the rungs whose semantics changed (and ONLY those —
+see :data:`_GENERATION_SENSITIVE_RUNGS`).
 """
 
 from __future__ import annotations
@@ -65,6 +76,29 @@ TOOL_PROTOCOL_THRESHOLDS: dict[str, float] = {"native": 0.95, "strict_json": 0.9
 #: only profiles whose scores may drive a CAP (max_tools). ``tuned`` is
 #: measured-then-lowered, so it stays in.
 _MEASURED_SOURCES = frozenset({"probed", "partial", "tuned"})
+
+#: The probe-battery generation this build SCORES with. Bump it whenever the
+#: mechanics of a trial change under stored scores (the binding Wave-A
+#: reviewer note under C2 in docs/IRONCORE-INTEGRATION.md):
+#:
+#:     1  Wave A (v1.201.0): strict_json trials scored on the bare prompt —
+#:        the transport dropped ``response_format`` because adapters had no
+#:        such parameter yet.
+#:     2  Wave C (v1.203.0): strict_json trials scored WITH constrained
+#:        decoding — the probe's ``response_format`` json_schema is forwarded
+#:        to the adapter, so the score measures the guided rung the loop will
+#:        actually run.
+#:
+#: The runner stamps every battery with this value; a stored profile whose
+#: generation is older is stale for the generation-sensitive rungs.
+CURRENT_PROBE_GENERATION = 2
+
+#: Rungs whose TRIAL SEMANTICS changed between generations. Only strict_json:
+#: generation 2 changed how its trials are issued (``response_format``
+#: forwarded -> server-side constrained decoding), while native trials are
+#: byte-identical in both generations — so a gen-1 native score remains valid
+#: evidence and only the strict_json rung goes stale.
+_GENERATION_SENSITIVE_RUNGS = frozenset({"strict_json"})
 
 
 def sanitize_id(value: str) -> str:
@@ -118,15 +152,42 @@ class CapabilityProfile:
     #: profiles written before it existed load as [] (everything unmeasured).
     measured_fields: list[str] = field(default_factory=list)
 
+    #: Which battery SEMANTICS scored this profile — see
+    #: :data:`CURRENT_PROBE_GENERATION`. Additive: a stored profile written
+    #: before the field existed (every Wave-A measurement) loads as 1, which
+    #: is exactly the honest reading — its strict_json score was measured on
+    #: the bare prompt. The runner restamps to CURRENT on every battery.
+    probe_generation: int = 1
+
     # ------------------------------------------------------------------ #
     # Ladder selection (mechanical — the engine must never pick another way)
     # ------------------------------------------------------------------ #
 
+    def is_current_generation(self) -> bool:
+        """Were this profile's scores measured under TODAY's trial semantics?
+        A stored profile whose ``probe_generation`` predates
+        :data:`CURRENT_PROBE_GENERATION` is stale for ladder purposes — its
+        generation-sensitive scores answered a different question."""
+        return self.probe_generation >= CURRENT_PROBE_GENERATION
+
     def select_tool_protocol(self) -> str:
         """The highest rung whose measured score clears its acceptance bar;
         ``"none"`` when nothing clears — callers treat that as "decompose
-        heavily, keep the tool surface minimal"."""
+        heavily, keep the tool surface minimal".
+
+        Generation staleness (the binding Wave-A reviewer note): a rung whose
+        trial semantics changed since this profile was scored is treated as
+        UNMEASURED — its stored number answered a different question, and
+        selecting on it would route the loop onto a rung nothing verified.
+        Only the changed rung goes stale (strict_json — its gen-2 trials run
+        under real constrained decoding); a gen-1 NATIVE score stays usable
+        because native trials are byte-identical across generations, so a
+        legacy profile keeps its native rung and merely loses the strict_json
+        fallback until a re-probe re-scores it.
+        """
         for rung in TOOL_PROTOCOL_LADDER:
+            if rung in _GENERATION_SENSITIVE_RUNGS and not self.is_current_generation():
+                continue  # scored under old semantics — unmeasured, not evidence
             if self.tool_protocols.get(rung, 0.0) >= TOOL_PROTOCOL_THRESHOLDS[rung]:
                 return rung
         return "none"
@@ -242,6 +303,12 @@ class CapabilityProfile:
         # — everything honestly unmeasured, never a guess.
         raw_fields = profile.measured_fields if isinstance(profile.measured_fields, list) else []
         profile.measured_fields = [entry for entry in raw_fields if isinstance(entry, str)]
+        # probe_generation: pre-Wave-C JSONs load as 1 (dataclass default);
+        # a corrupt value coerces to 1 too — the STALE reading, so a garbage
+        # generation can never launder an old strict_json score into current.
+        gen = profile.probe_generation
+        if not isinstance(gen, int) or isinstance(gen, bool) or gen < 1:
+            profile.probe_generation = 1
         return profile
 
     def copy(self) -> CapabilityProfile:
@@ -258,7 +325,10 @@ def trusted_profile(provider: str, model_id: str) -> CapabilityProfile:
     trusted is capability-by-construction, not evidence, and a surface that
     asks "was this value measured?" must hear no. NOT a context-window
     authority: the provider manager's pin -> probe -> default chain keeps
-    that job."""
+    that job. ``probe_generation`` is stamped CURRENT: generation staleness
+    exists to invalidate old MEASUREMENTS, and a grant by construction is
+    never a measurement — a trusted profile must not lose its strict_json
+    rung to a rule about probe semantics it never participated in."""
     return CapabilityProfile(
         model_id=model_id,
         provider=provider,
@@ -266,4 +336,5 @@ def trusted_profile(provider: str, model_id: str) -> CapabilityProfile:
         tool_protocols={"native": 1.0, "strict_json": 1.0},
         json_adherence=1.0,
         coherence_horizon=12,
+        probe_generation=CURRENT_PROBE_GENERATION,
     )
