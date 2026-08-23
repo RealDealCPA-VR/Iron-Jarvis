@@ -280,15 +280,19 @@ def test_http_goals_proposals_and_kill(tmp_path):
         # A manual tick no-ops while off (no proposals created).
         assert client.post("/autonomy/tick").json()["ran"] is False
 
-        g = client.post("/goals", json={"text": "keep things tidy", "priority": 4}).json()
+        # v1.208.0: the intent-goal endpoints live at /autonomy/goals — the
+        # public /goals surface belongs to goal CONTRACTS (routes/goals.py).
+        g = client.post(
+            "/autonomy/goals", json={"text": "keep things tidy", "priority": 4}
+        ).json()
         assert g["status"] == "active" and g["autonomy_level"] == "suggest"
 
-        listed = client.get("/goals").json()["goals"]
+        listed = client.get("/autonomy/goals").json()["goals"]
         assert any(x["id"] == g["id"] for x in listed)
 
         # Dial it up via PATCH.
         patched = client.patch(
-            f"/goals/{g['id']}", json={"autonomy_level": "act_low"}
+            f"/autonomy/goals/{g['id']}", json={"autonomy_level": "act_low"}
         ).json()
         assert patched["autonomy_level"] == "act_low"
 

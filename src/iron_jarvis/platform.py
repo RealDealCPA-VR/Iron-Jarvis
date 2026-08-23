@@ -222,6 +222,15 @@ class Platform:
     #: Optional so bare-platform unit tests still construct; the dispatcher
     #: raises an honest error when a task schedule fires without it.
     orchestrator: "object | None" = None
+    #: Goal CONTRACTS (v1.208.0, ``goals/``) — the engine that runs ONE honest
+    #: iteration of a standing goal (hard budget gate, verifier, breaker).
+    #: Built in ``build_platform`` (it only needs the platform); the daemon
+    #: hands it the SHARED orchestrator right where it attaches
+    #: ``platform.orchestrator`` (``goal_engine._orch = orchestrator``), so
+    #: cancel/observability reach a goal iteration's live session — a bare
+    #: platform lazily builds a private one (``GoalEngine.orch``). Consumed by
+    #: ``routes/goals.py`` and the ``kind="goal"`` schedule dispatch below.
+    goal_engine: "object | None" = None
     #: LOCAL FLEET registry (the user's own inference machines). Seeded from the
     #: two config endpoint slots, so it is populated with zero setup.
     fleet: "object | None" = None
@@ -1317,6 +1326,42 @@ def build_platform(
             if inspect.isawaitable(result):
                 await result
             return f"event {etype} published"
+        if task.kind == "goal":
+            # One goal-CONTRACT iteration (v1.208.0). The GoalEngine owns every
+            # refusal rule (state, deny-floor re-check, hard budget, overlap
+            # guard) and refuses HONESTLY instead of raising — so this branch
+            # only relays: a refusal is a SKIP recorded on the row (nothing
+            # spawned, the goal.* event already told the story, and a schedule
+            # whose goal was deleted or exhausted its budget must not error
+            # forever), while a session that ran and FAILED is an error like
+            # any task fire. Either way the scheduler loop survives —
+            # ``_run_scheduled`` catches and records (the v1.119 discipline).
+            goal_id = str(payload.get("goal_id") or "").strip()
+            if not goal_id:
+                raise ValueError("goal schedule has no 'goal_id' in its payload")
+            goal_engine = platform.goal_engine
+            if goal_engine is None:
+                raise RuntimeError("goal schedules need the daemon's goal engine")
+            result = await goal_engine.run_iteration(goal_id)
+            sid = str(result.get("session_id") or "")
+            if sid:
+                fired["session_id"] = sid
+            if not result.get("ok"):
+                if sid:
+                    # A session really ran and did not complete — surface it
+                    # exactly like a failed task fire.
+                    raise RuntimeError(
+                        f"goal iteration {result.get('status') or 'failed'}: "
+                        f"{str(result.get('reason') or result.get('unmet') or '')[:200]}"
+                    )
+                reason = str(result.get("reason") or "").strip() or "refused"
+                return f"goal iteration skipped: {reason}"
+            detail = f"goal iteration {int(result.get('iteration') or 0)} completed"
+            if result.get("satisfied"):
+                detail += " — goal satisfied"
+            elif result.get("unmet"):
+                detail += f" — not yet satisfied: {result['unmet']}"
+            return detail
         raise ValueError(f"unknown schedule kind {task.kind!r}")
 
     def _run_scheduled(task):
@@ -1373,6 +1418,16 @@ def build_platform(
         return WorkflowEngine(platform, platform.orchestrator).run(
             load_workflow(payload)
         )
+
+    # Goal contracts (v1.208.0): the engine ``routes/goals.py`` and the
+    # ``kind="goal"`` dispatch above run iterations through. Constructed with
+    # no orchestrator — the daemon attaches its SHARED one right where it sets
+    # ``platform.orchestrator`` (``platform.goal_engine._orch = orchestrator``),
+    # so cancels reach a live iteration's session; until then ``GoalEngine.orch``
+    # lazily builds a private one (the bare-platform/unit-test path).
+    from .goals.engine import GoalEngine
+
+    platform.goal_engine = GoalEngine(platform)
 
     platform.scheduler = Scheduler(engine, _run_scheduled)
 

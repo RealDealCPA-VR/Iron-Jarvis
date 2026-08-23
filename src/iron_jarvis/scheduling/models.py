@@ -22,7 +22,7 @@ from ..core.ids import new_id, utcnow
 # opens a real agent session on fire — the thing people actually mean when they
 # say "every Friday, summarize my projects". workflow/event remain for
 # pre-built graphs and API callers.
-KINDS: tuple[str, ...] = ("task", "workflow", "event")
+KINDS: tuple[str, ...] = ("task", "workflow", "event", "goal")  # goal: v1.208.0 contract iterations
 
 # The trigger kinds a scheduled task may fire on.
 TRIGGER_TYPES: tuple[str, ...] = ("cron", "date", "interval")

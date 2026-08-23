@@ -397,6 +397,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # Task-kind schedules (v1.119.0) fire real agent sessions: the scheduler's
     # dispatcher lives in build_platform, so hand it the orchestrator here.
     platform.orchestrator = orchestrator
+    # Goal contracts (v1.208.0): the engine shares THIS orchestrator so goal
+    # iterations ride the same session machinery as everything else.
+    platform.goal_engine._orch = orchestrator
     # Health of the background loops (auto-backup/autonomy/sentinel/inbound), so a
     # silent failure (e.g. backups failing) is visible in /diagnostics, not just
     # buried in the log. Keyed by loop name.
@@ -507,6 +510,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 log.exception("boot rehydration step %s failed", name)
 
         _rehydrate_step("reconcile_sessions", orchestrator.reconcile_interrupted_sessions)
+        # AFTER session reconciliation by contract: a goal stranded mid-iteration
+        # reads its session's honest FAILED/interrupted verdict (v1.208.0).
+        _rehydrate_step("rehydrate_goals", platform.goal_engine.rehydrate)
         _rehydrate_step("rehydrate_reviews", orchestrator.rehydrate_reviews)
 
         def _revalidate_active_project() -> None:
@@ -1078,7 +1084,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # CORS: default to loopback dashboard origins ONLY (never wildcard, since the
     # daemon is RCE-by-design); a public deployment sets IRONJARVIS_CORS_ORIGINS.
     _origins = os.environ.get("IRONJARVIS_CORS_ORIGINS", "").strip()
-    # PATCH is required for the autonomy goal controls (PATCH /goals/{id} — the
+    # PATCH is required for the autonomy goal controls (PATCH /autonomy/goals/{id} — the
     # per-goal dial + pause/activate). Without it the browser preflight fails and
     # the call surfaces as a misleading "daemon offline".
     _methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
@@ -2145,6 +2151,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
     _routes.terminals.register(app, d)
     _routes.workflows.register(app, d)
     _routes.autonomy.register(app, d)
+    _routes.goals.register(app, d)
     _routes.settings.register(app, d)
     _routes.knowledge.register(app, d)
     _routes.codelab.register(app, d)

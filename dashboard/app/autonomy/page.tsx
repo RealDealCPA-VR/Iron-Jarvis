@@ -15,6 +15,10 @@ import {
   CircleCheck,
   Sparkles,
   Send,
+  Flag,
+  Play,
+  Pause,
+  RotateCcw,
 } from "lucide-react";
 import { api, post, put, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
@@ -34,6 +38,14 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { timeAgo } from "@/lib/format";
+import {
+  useLiveGoals,
+  spentVsBudget,
+  scheduleWords,
+  tripReason,
+  type GoalRecord,
+  type GoalState,
+} from "@/components/GoalsStrip";
 
 /* -------------------------------------------------------------------------- */
 /*  Local types (mirror the daemon's motivation endpoints)                     */
@@ -124,7 +136,11 @@ function errText(err: unknown): string {
 
 export default function AutonomyPage() {
   const status = usePolledApi<AutonomyStatus>("/autonomy", 10000);
-  const goals = useApi<{ goals: Goal[] }>("/goals");
+  // LEGACY motivation intent goals (v1.208.0 route reconciliation): the new
+  // contract goals took /goals, and these relocated verbatim to
+  // /autonomy/goals — this card renders its own records again instead of
+  // degrading against the new shape.
+  const goals = useApi<{ goals: Goal[] }>("/autonomy/goals");
   const proposals = useApi<{ proposals: Proposal[] }>("/proposals?status=pending");
   const briefing = useApi<Briefing>("/autonomy/briefing");
 
@@ -241,7 +257,7 @@ export default function AutonomyPage() {
   async function patchGoal(id: string, body: Record<string, unknown>) {
     flash(null);
     try {
-      await api(`/goals/${encodeURIComponent(id)}`, {
+      await api(`/autonomy/goals/${encodeURIComponent(id)}`, {
         method: "PATCH",
         body: JSON.stringify(body),
       });
@@ -279,8 +295,11 @@ export default function AutonomyPage() {
   const killed = !!s?.kill_switch;
   const goalList = goals.data?.goals ?? [];
   // Exact goal texts already on the books — lets starter recipes render as
-  // "Added ✓" across visits so clicks stay idempotent.
-  const goalTexts = new Set(goalList.map((g) => g.text.trim()));
+  // "Added ✓" across visits so clicks stay idempotent. (`?? ""` kept from the
+  // v1.208.0 transition: a contract-shaped record — `name`/`contract_text`,
+  // no `text` — must degrade, never crash this card, even if one is ever
+  // misrouted onto /autonomy/goals.)
+  const goalTexts = new Set(goalList.map((g) => (g.text ?? "").trim()));
   const pending = (proposals.data?.proposals ?? []).filter(
     (p) => p.status === "pending",
   );
@@ -389,6 +408,14 @@ export default function AutonomyPage() {
           )}
         </Reveal>
       )}
+
+      {/* Goals (v1.208.0) — the contract-and-breaker goals live where autonomy
+          already lives, ABOVE the older motivation dials: what each goal is
+          bound to, what it has spent against what you allowed, and the
+          controls per state. Live-refreshed on goal.* events. */}
+      <Reveal>
+        <GoalsSection />
+      </Reveal>
 
       {/* Status tiles */}
       <Reveal>
@@ -629,6 +656,277 @@ export default function AutonomyPage() {
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Goals (v1.208.0) — contract goals with budgets, breakers and controls      */
+/* -------------------------------------------------------------------------- */
+
+/** State chip: active=accent, satisfied=emerald, tripped/failed=rose,
+ *  paused/stopped=zinc. Semantic, not branded — same scale the app uses
+ *  everywhere else. */
+const GOAL_STATE_CHIP: Record<GoalState, string> = {
+  active: "border-accent/30 bg-accent/[0.1] text-accent-soft",
+  satisfied: "border-emerald-500/30 bg-emerald-500/[0.1] text-emerald-300",
+  tripped: "border-rose-500/30 bg-rose-500/[0.1] text-rose-300",
+  failed: "border-rose-500/30 bg-rose-500/[0.1] text-rose-300",
+  paused: "border-white/10 bg-white/[0.04] text-zinc-400",
+  stopped: "border-white/10 bg-white/[0.04] text-zinc-400",
+};
+
+function GoalStateChip({ state }: { state: GoalState }) {
+  const cls = GOAL_STATE_CHIP[state] ?? GOAL_STATE_CHIP.paused;
+  return (
+    <span
+      data-goal-state={state}
+      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-medium capitalize ${cls}`}
+    >
+      {state}
+    </span>
+  );
+}
+
+/** Contract texts longer than this are clipped to two lines with a toggle. */
+const CONTRACT_CLIP_AT = 180;
+
+type GoalVerb = "run" | "pause" | "resume" | "stop" | "reopen";
+
+/** What a verb POST may answer: `{goal}` from the lifecycle verbs, or the
+ *  engine's run result — where an honest refusal is a RESULT at 200
+ *  (`{ok:false, refused:true, reason}`), never an HTTP error. */
+type GoalVerbResult = {
+  goal?: unknown;
+  ok?: boolean;
+  refused?: boolean;
+  reason?: string;
+};
+
+function GoalsSection() {
+  const goals = useLiveGoals();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+  const [warn, setWarn] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const list = goals.data?.goals ?? [];
+
+  async function act(g: GoalRecord, verb: GoalVerb, said: string) {
+    setBusy(`${g.id}:${verb}`);
+    setOk(null);
+    setWarn(null);
+    setError(null);
+    try {
+      const res = await post<GoalVerbResult>(
+        `/goals/${encodeURIComponent(g.id)}/${verb}`,
+      );
+      if (res && res.ok === false) {
+        // A 200 with ok:false is the engine saying a truthful NO (refused/
+        // unknown). Its reason renders VERBATIM as a warning — a green
+        // "running now" over a refusal would be a lie.
+        setWarn(`"${g.name}": ${res.reason || "refused, no reason given"}`);
+      } else {
+        setOk(said);
+      }
+      goals.reload();
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const smallBtn =
+    "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50";
+
+  return (
+    <Card title={`Goals${list.length ? ` · ${list.length}` : ""}`} icon={<Flag size={15} />}>
+      {(ok || warn || error) && (
+        <div className="mb-3">
+          {ok ? (
+            <SuccessNote>{ok}</SuccessNote>
+          ) : warn ? (
+            <div
+              data-testid="goal-refusal"
+              className="rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-3.5 py-2.5 text-sm text-amber-200"
+            >
+              {warn}
+            </div>
+          ) : (
+            <ErrorNote>{error}</ErrorNote>
+          )}
+        </div>
+      )}
+      {goals.loading && !goals.data ? (
+        <SkeletonRows rows={3} />
+      ) : goals.error && goals.error.status !== 0 ? (
+        <ErrorNote>{goals.error.message}</ErrorNote>
+      ) : list.length === 0 ? (
+        // One quiet line — no CTA to a creation form that doesn't exist.
+        <p className="text-sm text-zinc-500">
+          No goals yet. Goals are born in Chat — ask for something recurring
+          and it takes a seat here, budget and all.
+        </p>
+      ) : (
+        <div className="space-y-2.5">
+          {list.map((g) => {
+            const contract = g.contract_text ?? "";
+            const long = contract.length > CONTRACT_CLIP_AT;
+            const open = !!expanded[g.id];
+            const reason = tripReason(g);
+            const isBusy = (verb: GoalVerb) => busy === `${g.id}:${verb}`;
+            return (
+              <div
+                key={g.id}
+                data-testid={`goal-card-${g.id}`}
+                className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-3"
+              >
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium text-zinc-100">{g.name}</span>
+                      <GoalStateChip state={g.state} />
+                      {g.verifier?.kind && (
+                        <span className="text-[11px] text-zinc-600">
+                          verified by {g.verifier.kind}
+                        </span>
+                      )}
+                    </div>
+                    {contract && (
+                      <p
+                        className={`mt-1.5 whitespace-pre-wrap text-sm text-zinc-400 ${
+                          open ? "" : "line-clamp-2"
+                        }`}
+                      >
+                        {contract}
+                      </p>
+                    )}
+                    {long && (
+                      <button
+                        type="button"
+                        aria-expanded={open}
+                        onClick={() =>
+                          setExpanded((prev) => ({ ...prev, [g.id]: !open }))
+                        }
+                        className="mt-1 text-[11px] font-medium text-accent-soft transition-colors hover:text-accent"
+                      >
+                        {open ? "Show less" : "Show the full contract"}
+                      </button>
+                    )}
+                    <div className="mt-1.5 text-[11px] text-zinc-600">
+                      {spentVsBudget(g)} · {scheduleWords(g.schedule)} ·{" "}
+                      {g.last_run_at ? `last ran ${timeAgo(g.last_run_at)}` : "never run"}
+                    </div>
+                    {g.state === "tripped" && (
+                      // The breaker reason VERBATIM — approving a resume you
+                      // cannot read is not a decision.
+                      <div className="mt-2 rounded-lg border border-rose-500/30 bg-rose-500/[0.08] px-3 py-2 text-xs text-rose-200">
+                        <span className="font-semibold">Breaker tripped:</span>{" "}
+                        <span data-testid={`trip-reason-${g.id}`}>
+                          {reason || "no reason recorded"}
+                        </span>
+                        <span className="text-rose-200/60"> — Resume clears it.</span>
+                      </div>
+                    )}
+                  </div>
+                  {/* Controls per state, mirroring the store's transition
+                      table so no button is a dead 409: run_iteration refuses
+                      every non-active state, and satisfied/failed/stopped are
+                      terminal except through the explicit /reopen door. */}
+                  <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                    {g.state === "active" && (
+                      <button
+                        type="button"
+                        disabled={busy !== null}
+                        onClick={() => act(g, "run", `"${g.name}" is running now.`)}
+                        title={`Run "${g.name}" now, ahead of its schedule`}
+                        className={`${smallBtn} border-accent/30 bg-accent/[0.08] text-accent-soft hover:bg-accent/[0.14]`}
+                      >
+                        {isBusy("run") ? (
+                          <LoaderInline label="Starting…" />
+                        ) : (
+                          <>
+                            <Play size={13} /> Run now
+                          </>
+                        )}
+                      </button>
+                    )}
+                    {(g.state === "satisfied" || g.state === "failed" || g.state === "stopped") && (
+                      <button
+                        type="button"
+                        disabled={busy !== null}
+                        onClick={() =>
+                          act(g, "reopen", `"${g.name}" reopened — it is active again.`)
+                        }
+                        title={`Reopen "${g.name}" — back to active, then Run now works`}
+                        className={`${smallBtn} border-accent/30 bg-accent/[0.08] text-accent-soft hover:bg-accent/[0.14]`}
+                      >
+                        {isBusy("reopen") ? (
+                          <LoaderInline label="Reopening…" />
+                        ) : (
+                          <>
+                            <RotateCcw size={13} /> Reopen
+                          </>
+                        )}
+                      </button>
+                    )}
+                    {g.state === "active" && (
+                      <button
+                        type="button"
+                        disabled={busy !== null}
+                        onClick={() => act(g, "pause", `"${g.name}" paused.`)}
+                        title={`Pause "${g.name}" — no iterations until you resume`}
+                        className={`${smallBtn} border-white/10 bg-white/[0.03] text-zinc-300 hover:bg-white/[0.08]`}
+                      >
+                        {isBusy("pause") ? (
+                          <LoaderInline label="Pausing…" />
+                        ) : (
+                          <>
+                            <Pause size={13} /> Pause
+                          </>
+                        )}
+                      </button>
+                    )}
+                    {(g.state === "paused" || g.state === "tripped") && (
+                      <button
+                        type="button"
+                        disabled={busy !== null}
+                        onClick={() => act(g, "resume", `"${g.name}" resumed.`)}
+                        title={
+                          g.state === "tripped"
+                            ? `Clear the breaker and resume "${g.name}"`
+                            : `Resume "${g.name}"`
+                        }
+                        className={`${smallBtn} border-emerald-500/30 bg-emerald-500/[0.08] text-emerald-300 hover:bg-emerald-500/[0.14]`}
+                      >
+                        {isBusy("resume") ? (
+                          <LoaderInline label="Resuming…" />
+                        ) : (
+                          <>
+                            <Play size={13} /> Resume
+                          </>
+                        )}
+                      </button>
+                    )}
+                    {/* Stop only where the transition table allows it —
+                        active/paused/tripped. On the terminal states it would
+                        be a guaranteed 409, and a button that always errors
+                        is worse than no button. */}
+                    {(g.state === "active" || g.state === "paused" || g.state === "tripped") && (
+                      <ConfirmButton
+                        onConfirm={() => act(g, "stop", `"${g.name}" stopped.`)}
+                        label="Stop"
+                        title={`Stop "${g.name}" for good`}
+                      />
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /*  New-goal form (kept local so the page stays readable)                       */
 /* -------------------------------------------------------------------------- */
 
@@ -652,7 +950,7 @@ function NewGoalCard({
     setBusy(true);
     setOk(null);
     try {
-      await post("/goals", {
+      await post("/autonomy/goals", {
         text: text.trim(),
         category: category.trim() || "general",
         priority,
@@ -803,7 +1101,7 @@ function StarterGoalsCard({
   async function add(recipe: (typeof STARTER_GOALS)[number]) {
     setBusyId(recipe.id);
     try {
-      await post("/goals", {
+      await post("/autonomy/goals", {
         text: recipe.text,
         category: recipe.category,
         priority: recipe.priority,

@@ -10,7 +10,7 @@ import re
 
 from typing import Any
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from ..core.models import SESSION_MAX_STEPS_MAX, SESSION_MAX_STEPS_MIN
 
@@ -1165,6 +1165,28 @@ class GoalPatch(BaseModel):
     spend_budget: int | None = None
     actions_taken: int | None = None  # set to 0 to reset the rolling counter
     tokens_spent: int | None = None
+
+
+class GoalContractCreate(BaseModel):
+    """Create one GOAL CONTRACT (v1.208.0, the ``goals/`` package) —
+    ``POST /goals`` (routes/goals.py).
+
+    NOT the motivation-era ``GoalBody`` above: that lightweight intent shape
+    belongs to the Motivation Layer and now answers at ``POST /autonomy/goals``.
+    This model is deliberately a THIN wire shape: every rule with a WHY
+    (deny-floor grants, budget must be bounded or explicitly unlimited, a
+    ``checks`` verifier must check something) lives in ``GoalStore.create``,
+    and the route relays its ``ValueError`` text verbatim as the 400 — one
+    rule set, one wording, no drift."""
+
+    name: str = ""  # blank falls back to the contract's first 60 chars
+    contract_text: str  # the goal, stated checkably — required
+    agent_type: str = "builder"
+    project_id: str | None = None  # context spine; None/blank = ungrounded
+    schedule: str = ""  # cron for the kind="goal" dispatch; "" = run-now only
+    allowed_grants: list[str] = Field(default_factory=list)
+    budget: dict[str, Any] | None = None  # store-validated (bound or unlimited)
+    verifier: dict[str, Any] | None = None  # store-validated; None = manual
 
 
 class KillBody(BaseModel):

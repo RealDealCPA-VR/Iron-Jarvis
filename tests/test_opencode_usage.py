@@ -81,8 +81,16 @@ def test_db_path_override_accepts_dir_or_file(tmp_path):
 
 
 def test_usage_endpoint_merges_opencode_totals(tmp_path):
+    # The ENDPOINT computes its window from REAL now (no now_ms injection), so
+    # the fixture must be anchored relatively — the frozen NOW_MS constant is
+    # only for the unit tests that inject it. This test failed on 2026-08-23
+    # when NOW_MS-DAY_MS silently aged past the 30-day cutoff: an absolute
+    # timestamp in a real-clock test is a time bomb.
+    import time as _time
+
+    real_now_ms = int(_time.time() * 1000)
     _store(tmp_path / "opencode.db", [
-        _fleet("s1", 1_000_000, 50_000, NOW_MS - DAY_MS),
+        _fleet("s1", 1_000_000, 50_000, real_now_ms - DAY_MS),
     ])
     client = TestClient(create_app(str(tmp_path)))
     client.app.state.platform.config.opencode_data_dir = str(tmp_path)

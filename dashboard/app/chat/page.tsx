@@ -112,6 +112,7 @@ import {
   WorkflowDraftCard,
   WorkflowRunChip,
 } from "@/components/chat/WorkflowDraftCard";
+import { GoalBirth } from "@/components/chat/GoalContractCard";
 import { RunResultCard, type RunResult } from "@/components/chat/RunResultCard";
 import { DraftCard, draftFromFence } from "@/components/chat/DraftCard";
 import {
@@ -5821,6 +5822,18 @@ export default function ChatPage() {
                                 Keep this as a workflow?
                               </button>
                             )}
+                          {/* Goal birth (v1.208.0): only on the newest settled
+                              reply; GoalBirth applies the deliberately-high bar
+                              and renders nothing otherwise, because a
+                              false chip trains the user to ignore every chip.
+                              Per-turn dismissal lives inside it. */}
+                          {i === messages.length - 1 && !busy && (
+                            <GoalBirth
+                              userText={i > 0 && messages[i - 1].role === "user" ? messages[i - 1].content : ""}
+                              toolsUsed={m.toolsUsed}
+                              projectId={projectId}
+                            />
+                          )}
                           <div className="ml-11 mt-1 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100">
                             <CopyIconButton text={m.content} title="Copy message" />
                             <PromoteKnowledgeButton

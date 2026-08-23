@@ -325,10 +325,11 @@ def test_prune_events_huge_age_does_not_overflow(platform):
 
 
 def test_cors_allows_patch_preflight(tmp_path):
-    # PATCH /goals/{id} (autonomy dial) must survive the browser preflight.
+    # PATCH /autonomy/goals/{id} (autonomy dial; relocated from /goals in
+    # v1.208.0) must survive the browser preflight.
     client = TestClient(create_app(str(tmp_path)))
     resp = client.options(
-        "/goals/abc",
+        "/autonomy/goals/abc",
         headers={
             "Origin": "http://localhost:3000",
             "Access-Control-Request-Method": "PATCH",

@@ -1,7 +1,16 @@
-"""Autonomy routes: goals, proposals, autonomy status, sentinels.
+"""Autonomy routes: intent goals, proposals, autonomy status, sentinels.
 
 Moved verbatim from daemon/app.py's create_app; closure-local state is
 reached through ``d`` (see the deps object built in create_app).
+
+v1.208.0: the three INTENT-goal endpoints (the Motivation Layer's lightweight
+``GoalRecord`` rows — ``d.platform.intent``) relocated from ``/goals`` to
+``/autonomy/goals`` HANDLERS VERBATIM, paths only: the public ``/goals``
+surface now belongs to goal CONTRACTS (``routes/goals.py`` over the ``goals/``
+package), and one user-facing "Goals" concept must not answer with two
+different record shapes depending on which module registered first. The
+handler names gained an ``intent_`` infix only so the two modules' OpenAPI
+operation ids cannot collide — bodies untouched.
 """
 
 from __future__ import annotations
@@ -14,12 +23,12 @@ from ..schemas import GoalBody, GoalPatch, KillBody, SentinelAdd
 
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
-    @app.get("/goals")
-    def list_goals(status: str | None = None) -> dict[str, Any]:
+    @app.get("/autonomy/goals")
+    def list_intent_goals(status: str | None = None) -> dict[str, Any]:
         return {"goals": [d._goal_view(g) for g in d.platform.intent.list_goals(status)]}
 
-    @app.post("/goals")
-    def create_goal(body: GoalBody) -> dict[str, Any]:
+    @app.post("/autonomy/goals")
+    def create_intent_goal(body: GoalBody) -> dict[str, Any]:
         try:
             rec = d.platform.intent.add_goal(
                 body.text,
@@ -32,8 +41,8 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=400, detail=str(exc))
         return d._goal_view(rec)
 
-    @app.patch("/goals/{goal_id}")
-    def patch_goal(goal_id: str, body: GoalPatch) -> dict[str, Any]:
+    @app.patch("/autonomy/goals/{goal_id}")
+    def patch_intent_goal(goal_id: str, body: GoalPatch) -> dict[str, Any]:
         rec = d.platform.intent.update_goal(
             goal_id, **{k: v for k, v in body.model_dump().items() if v is not None}
         )

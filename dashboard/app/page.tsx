@@ -56,6 +56,7 @@ import { EventStream } from "@/components/EventStream";
 import { ProviderDowngradeBanner } from "@/components/ProviderDowngradeBanner";
 import { OnboardingWelcome } from "@/components/OnboardingWelcome";
 import { PowerTips } from "@/components/PowerTips";
+import { GoalsStrip } from "@/components/GoalsStrip";
 import { MoodOrb } from "@/components/MoodOrb";
 import { PageShell, Reveal } from "@/components/motion";
 import { AppGrid } from "@/components/overview/AppGrid";
@@ -725,6 +726,13 @@ export default function OverviewPage() {
       <Reveal>
         <PowerTips />
       </Reveal>
+
+      {/* Goals strip (v1.208.0): the forgotten-goal killer — every live goal
+          visible from the page the user lands on, linking to /autonomy.
+          Deliberately NOT wrapped in <Reveal>: the strip renders null when
+          there is nothing to show, and a motion wrapper around null would
+          still be an empty div (a husk). */}
+      <GoalsStrip />
 
       {/* SYSTEMS & ADMIN (v1.156.0) — ONE collapsible instead of seven.
           Everything below the tiles used to be its own card with its own

@@ -19,6 +19,7 @@ from . import (  # noqa: F401
     envelope,
     fleet,
     fsbrowse,
+    goals,
     helpdocs,
     knowledge,
     learning,
