@@ -1321,8 +1321,12 @@ def _context_window(d, provider: str, model: str) -> "int | None":
     """The resolved model's context window (tokens), when known. An explicit
     ``config.model_context_windows`` pin wins ("provider::model" > "model" >
     "provider" — the reliable source for custom/tailnet endpoints that don't
-    advertise their window), then a fleet probe's ``context_length`` when one
-    was recorded. None = unknown → conservative fixed budgets.
+    advertise their window), then a MEASURED capability envelope
+    (v1.201.0: ``ProviderManager.measured_context_window`` — only a
+    probed/partial/tuned profile with a real ``probed_at`` stamp answers;
+    seeded/trusted/default profiles are silent here by design), then a fleet
+    probe's ``context_length`` when one was recorded. None = unknown →
+    conservative fixed budgets.
 
     EMPTY provider/model mean "the turn did not pick one", which is the COMMON
     case — the composer only sends a provider when the user overrides it. Until
@@ -1349,6 +1353,20 @@ def _context_window(d, provider: str, model: str) -> "int | None":
                 continue
             if n > 0:
                 return n
+    # v1.201.0 (envelope Wave A3): the MEASURED envelope speaks between the
+    # pin and the fleet probe. An explicit user pin still wins above; only a
+    # measured profile answers (`measured_context_window` returns None for
+    # seeded/trusted/default/probe_failed, so the ladder below stays
+    # byte-identical whenever nothing was really measured). This is the ONLY
+    # envelope consult outside the manager — routing/failover/tool arming do
+    # not bend in Wave A (that is Wave B). getattr-guarded because older
+    # tests hand this function minimal fake platforms.
+    _providers = getattr(getattr(d, "platform", None), "providers", None)
+    _measured = getattr(_providers, "measured_context_window", None)
+    if callable(_measured):
+        n = _measured(provider, model)
+        if n:
+            return int(n)
     fleet = getattr(d.platform, "fleet", None)
     if fleet is not None and model:
         try:  # best-effort probe read — fleet node models may carry the window

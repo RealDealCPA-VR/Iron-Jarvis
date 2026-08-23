@@ -16,6 +16,7 @@ from . import (  # noqa: F401
     connectors,
     creative,
     documents,
+    envelope,
     fleet,
     fsbrowse,
     helpdocs,

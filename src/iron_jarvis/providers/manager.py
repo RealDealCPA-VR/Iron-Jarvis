@@ -11,8 +11,11 @@ what makes "connect a model and it just works" true. Browser-session providers
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Callable
 
+from ..envelope import store as envelope_store
+from ..envelope.profile import CapabilityProfile, trusted_profile
 from .adapters.anthropic import AnthropicAdapter
 from .adapters.base import LLMAdapter
 from .adapters.google import GoogleAdapter
@@ -71,7 +74,21 @@ class ProviderManager:
         inherit_cli_logins: bool = False,
         dynamic_available: Callable[[str], bool | None] | None = None,
         opencode_allowed: Callable[[], list[str]] | None = None,
+        envelope_home: "Path | str | None" = None,
     ) -> None:
+        # Capability-envelope store home (profiles live at
+        # ``<home>/envelopes/<provider>__<model>.json``). None on a bare
+        # ProviderManager() — hermetic: no disk is ever consulted and every
+        # untrusted provider reads as the default floor profile. The platform
+        # passes ``config.home``.
+        self._envelope_home: Path | None = Path(envelope_home) if envelope_home else None
+        #: ``capability_profile`` cache: (provider, model) -> (store-file
+        #: signature, profile). Signature is ``(st_mtime_ns, st_size)`` of the
+        #: profile file, or None when it does not exist — see
+        #: ``capability_profile`` for why a signature beats a TTL here.
+        self._profile_cache: dict[
+            tuple[str, str], tuple[tuple[int, int] | None, CapabilityProfile]
+        ] = {}
         #: Resolver for the LOCAL models OpenCode may serve. Injected (and
         #: defaulting to "none") so a bare ProviderManager() never shells out.
         self._opencode_resolver: Callable[[], list[str]] = opencode_allowed or (lambda: [])
@@ -533,6 +550,120 @@ class ProviderManager:
             except TypeError:
                 self._cache[key] = factory()
         return self._cache[key]
+
+    # ------------------------------------------------------------------ #
+    # Capability envelope (v1.201.0, Wave A3)
+    #
+    # ACCESSORS ONLY. Nothing in routing/failover/availability/tool-arming
+    # consults these yet — tempting as it is to let `available()` or the
+    # router peek at a profile, the loop deliberately does not bend in Wave A
+    # (that is Wave B: B1 arm_for_task, B2 should_decompose). The single
+    # behavior change this wave is the context window, and that consult lives
+    # in `daemon/chat_turn._context_window` (pin > MEASURED envelope > fleet
+    # probe > None), which both chat lanes and the agent runtime share.
+    # ------------------------------------------------------------------ #
+
+    def is_trusted_provider(self, name: str) -> bool:
+        """THE single trusted-provider oracle. Every surface deciding whether
+        a provider gets the trusted envelope — this class, the envelope
+        routes, any later wave — must call THIS method, never derive its own
+        set: two oracles drift (the envelope route's private copy disagreed
+        on ``mock`` and would disagree on every future CLI).
+
+        Cloud/CLI providers (and the offline mock) are trusted BY
+        CONSTRUCTION — never probed, zero loop-bending. Derived from this
+        file's own taxonomy rather than a second string list that can drift:
+        ``API_PROVIDERS`` is the hosted-API set, every subscription/terminal
+        CLI is registered under a ``*-cli`` name (grok-cli, claude-cli,
+        codex-cli, opencode-cli), and ``mock`` must be trusted so the offline
+        suite and the first-run demo see zero envelope behavior. Everything
+        else (ollama/custom/fleet-*/runtime registrations) is a local endpoint
+        the quick battery may measure."""
+        n = (name or "").strip()
+        return n in API_PROVIDERS or n == "mock" or n.endswith("-cli")
+
+    def capability_profile(self, provider: str, model: str) -> CapabilityProfile:
+        """The capability envelope for ``(provider, model)``. NEVER raises.
+
+        Cloud/CLI/mock providers -> ``trusted_profile()`` by construction
+        (see ``is_trusted_provider``); the store is not even consulted for
+        them. Everything else -> the stored profile under
+        ``<home>/envelopes``, or the default floor ``CapabilityProfile`` when
+        nothing was ever measured (or when no ``envelope_home`` is wired —
+        the bare-manager/unit-test path).
+
+        CACHING: in-memory per (provider, model), invalidated by the store
+        file's ``(st_mtime_ns, st_size)`` signature — chosen over a TTL
+        because a probe that just completed must be visible on the very next
+        turn (a 30s TTL would let one more turn plan against the stale
+        window), and because tests can assert invalidation deterministically
+        instead of sleeping. Cost per call is one ``stat``; the JSON parse
+        only happens when the file actually changed. The returned profile is
+        the CACHED instance — treat it as read-only (every consumer here only
+        reads; call ``.copy()`` before mutating).
+        """
+        provider = (provider or "").strip()
+        model = (model or "").strip()
+        if self.is_trusted_provider(provider):
+            return trusted_profile(provider, model)
+        try:
+            home = self._envelope_home
+            if home is None:
+                return CapabilityProfile(model_id=model, provider=provider)
+            path = envelope_store.profile_path(home, provider, model)
+            try:
+                st = path.stat()
+                sig: tuple[int, int] | None = (st.st_mtime_ns, st.st_size)
+            except OSError:  # missing/unreadable = unprobed
+                sig = None
+            key = (provider, model)
+            cached = self._profile_cache.get(key)
+            if cached is not None and cached[0] == sig:
+                return cached[1]
+            profile: CapabilityProfile | None = None
+            if sig is not None:
+                # load_profile never raises; a corrupt file answers None (and
+                # is quarantined), which reads as the floor below.
+                profile = envelope_store.load_profile(home, provider, model)
+            if profile is None:
+                profile = CapabilityProfile(model_id=model, provider=provider)
+            self._profile_cache[key] = (sig, profile)
+            return profile
+        except Exception:  # noqa: BLE001 — per contract: never raises
+            return CapabilityProfile(model_id=model, provider=provider)
+
+    def measured_context_window(self, provider: str, model: str) -> "int | None":
+        """The MEASURED honest context window (tokens), or ``None`` when the
+        envelope has no authority over the window. Only a measured profile —
+        ``probed``/``partial``/``tuned`` WITH a ``probed_at`` stamp, i.e.
+        ``profile.is_measured()`` — AND whose ``honest_context`` itself
+        carries a battery's evidence (``field_measured("honest_context")``)
+        may speak: a ``seeded`` honest_context is a capped optimistic guess,
+        ``trusted_profile`` is documented as NOT a window authority (the
+        pin -> probe -> default chain keeps that job for cloud/CLI), and the
+        default floor would silently shrink every unprobed local model to
+        4096. ``None`` keeps the caller's existing ladder byte-identical.
+        Never raises.
+
+        THE PER-FIELD GATE IS THE WAVE-A SHIP-BLOCKER'S TOMBSTONE (recorded
+        in docs/IRONCORE-INTEGRATION.md): the profile-level ``probed`` stamp
+        means THE BATTERY RAN, not that every field was measured — the quick
+        battery delivers exactly chars_per_token, json_adherence and the two
+        tool_protocols rungs and NEVER honest_context, so gating on
+        ``is_measured()`` alone let one Measure click speak the 4096 floor as
+        a measured window and shrink a 128k model's ``_context_window``.
+        Until the deep CTX battery ships, NO quick-battery profile can alter
+        a window: only a profile whose ``measured_fields`` names
+        ``honest_context`` ever answers here."""
+        try:
+            profile = self.capability_profile(provider, model)
+            if profile.is_measured() and profile.field_measured("honest_context"):
+                n = int(profile.honest_context)
+                if n > 0:
+                    return n
+        except Exception:  # noqa: BLE001 — the window ladder must never break
+            pass
+        return None
 
     def health(self) -> list[dict]:
         rows = [

@@ -378,6 +378,10 @@ def build_platform(
         # OpenCode is offered LOCAL-ONLY: it can also reach hosted/paid models,
         # and the user asked for their own hardware only. See providers/opencode.
         opencode_allowed=lambda: _opencode_allowed(),
+        # Capability envelope (v1.201.0): measured profiles live under
+        # <home>/envelopes; cloud/CLI/mock providers are trusted by
+        # construction and never touch this store.
+        envelope_home=config.home,
     )
     # LOCAL FLEET — the user's own inference machines. The registry derives nodes
     # from the two config endpoint slots (so it works with zero setup) plus any

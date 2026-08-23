@@ -85,6 +85,10 @@ import {
   ConfirmButton,
 } from "@/components/ui";
 import { RestHookups } from "@/components/connections/RestHookups";
+import {
+  EnvelopeRowControls,
+  EnvelopeSection,
+} from "@/components/connections/EnvelopeCard";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { ProviderMark } from "@/components/BrandGlyph";
@@ -119,6 +123,20 @@ function isLocalReportProvider(provider: string): boolean {
     provider === "opencode-cli" ||
     provider.startsWith("fleet-")
   );
+}
+
+/**
+ * Which providers get ENVELOPE surfaces (v1.201.0) — a narrower set than the
+ * quality report. opencode-cli's models are local, but the backend treats
+ * every *-cli provider as `trusted` (the CLI owns its own harness), so its
+ * GET would answer "fully capable — no measurement needed" right beside a
+ * quality line that may say the opposite: a frontier claim on an unmeasured
+ * local model is the exact lie the provenance gating exists to prevent.
+ * Envelope treatment for opencode-cli is future work — until then it gets NO
+ * section, NO chip, NO Measure.
+ */
+function hasEnvelopeSurface(provider: string): boolean {
+  return isLocalReportProvider(provider) && provider !== "opencode-cli";
 }
 
 /**
@@ -241,21 +259,30 @@ function ModelReportLine({
         );
         const detail = classRows.map(classVerdict).join("; ");
         return (
-          <p
-            key={r.model || "_"}
-            title={`Auto-tier judges local models on the average completion score of their evaluated sessions — below the bar (or without enough evidence), eligible work routes to a stronger model. Tune the bar in Settings.${
-              detail ? ` Per task class — ${detail}.` : ""
-            }`}
-            className="flex items-start gap-1 text-[10.5px] leading-relaxed text-zinc-500"
-          >
-            <Gauge size={10} className="mt-0.5 shrink-0 text-zinc-600" />
-            <span className="min-w-0">
-              {mine.length > 1 && r.model ? (
-                <span className="font-mono text-zinc-400">{r.model}: </span>
-              ) : null}
-              {qualityLine(r, classRows)}
-            </span>
-          </p>
+          <div key={r.model || "_"}>
+            <p
+              title={`Auto-tier judges local models on the average completion score of their evaluated sessions — below the bar (or without enough evidence), eligible work routes to a stronger model. Tune the bar in Settings.${
+                detail ? ` Per task class — ${detail}.` : ""
+              }`}
+              className="flex items-start gap-1 text-[10.5px] leading-relaxed text-zinc-500"
+            >
+              <Gauge size={10} className="mt-0.5 shrink-0 text-zinc-600" />
+              <span className="min-w-0">
+                {mine.length > 1 && r.model ? (
+                  <span className="font-mono text-zinc-400">{r.model}: </span>
+                ) : null}
+                {qualityLine(r, classRows)}
+              </span>
+            </p>
+            {/* The Capability Envelope section (v1.201.0): what this model
+                was MEASURED to do, provenance always shown next to the
+                numbers. Renders nothing until GET /envelope answers; gated
+                to hasEnvelopeSurface (opencode-cli is trusted server-side —
+                see the helper's comment). */}
+            {hasEnvelopeSurface(provider) && (
+              <EnvelopeSection provider={provider} model={r.model} surface={surface} />
+            )}
+          </div>
         );
       })}
     </div>
@@ -1082,6 +1109,21 @@ function ConnectionCard({
                       {epBusy === ep.id ? "…" : "Verify tools"}
                     </button>
                   )}
+                  {/* Capability envelope (v1.201.0): provenance chip once a
+                      profile exists + Measure. Addressing: config-seeded
+                      slots use the node id AS the provider — fleet/registry
+                      renders BOTH ollama_base_url (id="ollama") and
+                      custom_base_url (id="custom") as source="config" nodes,
+                      so hardcoding "custom" here would probe the WRONG
+                      server for the ollama slot and file the measurement
+                      under custom__<model>.json. User nodes are their own
+                      "fleet-<id>" provider. */}
+                  {ep.default_model && (
+                    <EnvelopeRowControls
+                      provider={ep.seeded ? ep.id : `fleet-${ep.id}`}
+                      model={ep.default_model}
+                    />
+                  )}
                   <ConfirmButton
                     className="shrink-0"
                     onConfirm={() => void (ep.seeded ? removeLegacy() : removeEndpoint(ep))}
@@ -1363,12 +1405,17 @@ function CliProviderRow({
   info,
   available,
   report = [],
+  envelopeModels = [],
 }: {
   info: CliProviderInfo;
   available: boolean;
   /** Model report card rows (v1.169.0) — rendered only for LOCAL providers
    *  (ollama, opencode-cli); the cloud CLI rows never get a report line. */
   report?: QualityRow[];
+  /** Models on this LOCAL provider that the envelope can measure (v1.201.0):
+   *  derived by the page from quality rows + the health default. Cloud CLI
+   *  rows always get [] — a trusted provider has nothing to measure. */
+  envelopeModels?: string[];
 }) {
   const Icon = info.icon;
   return (
@@ -1388,6 +1435,12 @@ function CliProviderRow({
             {!available && <span className="text-zinc-600"> · {info.hint}</span>}
           </div>
           <ModelReportLine rows={report} provider={info.provider} />
+          {envelopeModels.map((m) => (
+            <div key={m} className="mt-1 flex flex-wrap items-center gap-1.5">
+              <span className="font-mono text-[10px] text-zinc-500">{m}</span>
+              <EnvelopeRowControls provider={info.provider} model={m} />
+            </div>
+          ))}
         </div>
       </div>
       {available ? (
@@ -1509,6 +1562,22 @@ export default function ConnectionsPage() {
   const daemonProviders = health?.providers ?? [];
   const isDetected = (provider: string) =>
     daemonProviders.some((p) => p.provider === provider && p.available);
+
+  // Which models a LOCAL provider's row can Measure (v1.201.0): the models
+  // the router has judged (quality rows), plus the health default when this
+  // provider IS the default. Cloud providers get [] — trusted by
+  // construction, nothing to measure — and so does opencode-cli (see
+  // hasEnvelopeSurface).
+  const envelopeModelsFor = (provider: string): string[] => {
+    if (!hasEnvelopeSurface(provider)) return [];
+    const models = qualityRows
+      .filter((r) => r.provider === provider && r.task_class == null && r.model)
+      .map((r) => r.model);
+    if (health?.default_provider === provider && health.default_model) {
+      models.push(health.default_model);
+    }
+    return [...new Set(models)];
+  };
 
   /* --- Rescan local CLIs (POST /providers/rescan) --------------------------- */
   // Re-detects locally installed CLI inference providers (Claude/Codex/Grok
@@ -1731,6 +1800,7 @@ export default function ConnectionsPage() {
                 info={info}
                 available={isDetected(info.provider)}
                 report={qualityRows}
+                envelopeModels={envelopeModelsFor(info.provider)}
               />
             ))}
           </div>

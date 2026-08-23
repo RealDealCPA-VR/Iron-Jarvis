@@ -77,7 +77,9 @@ cd dashboard && pnpm dev           # dashboard
   chat lanes call `_plan_context` → `context.plan_history`; the perceive→act
   loop calls `context.agent_window.plan_agent_transcript` once per step. Both
   fit the transcript to the answering model's window (`_context_window`: pin →
-  probe → default) and report what they dropped. Do not reintroduce a fixed
+  measured envelope (v1.201.0, probed/partial/tuned profiles only — seeded and
+  trusted never speak here) → fleet probe → default) and report what they
+  dropped. Do not reintroduce a fixed
   `messages[-N:]`, and if you add to the system prompt, add it BEFORE the
   planner runs or its cost is invisible to the budget.
 - **Compaction is MODEL-written and LEDGER-checked** (v1.153.0). `context/
