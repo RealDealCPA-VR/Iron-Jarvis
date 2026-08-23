@@ -828,6 +828,7 @@ def _resolve_armed_tools(
                 if d.platform.registry.get(t)
             ]
         _fill_attachment_pass(auto, ceiling)
+        _fill_workspace_pass(auto, ceiling)
         return auto
     # THE ATTACHMENT'S OWN TOOLS (v1.196.0). Everything above scores the
     # SENTENCE; the only thing an attachment contributes to `select_auto_tools`
@@ -903,6 +904,42 @@ def _resolve_armed_tools(
                 auto.append(name)
                 seen.add(name)
 
+    # THE BOUND WORKSPACE'S OWN TOOLS (v1.210.0). A Build-pane chat carries
+    # `workspace_dir` every turn, but nothing above reads it: `select_auto_tools`
+    # scores only the SENTENCE, so "tell me about this code base" armed ZERO
+    # tools and the model answered blind about a folder the user had explicitly
+    # bound (the live chat_06bf0135cc8f bug). Binding a folder is the same kind
+    # of signal attaching a file is — consent to have it READ — so, with
+    # auto_tools on, a curated READ-ONLY baseline fills whatever slots remain.
+    #
+    # Placed LAST (after the sentence pass and the attachment pass) so typed
+    # intent and attached-file tools keep their slots; inside `_fill` so the
+    # v1.202.0 envelope drop-signal arithmetic (the identical fill re-run at
+    # the baseline ceiling) stays consistent automatically. Deterministic
+    # order; each name gated on the registry, dedupe, and AUTO_SAFE_TOOLS
+    # membership (this pass must never widen the auto-allow set). NO write
+    # tools: arming here is granting (session_allow), and a bound folder is
+    # consent to read, not to change.
+    _WORKSPACE_BASELINE = ("list_files", "read_file", "file_search", "list_folder")
+
+    def _fill_workspace_pass(auto: list[str], ceiling: int) -> None:
+        if not (getattr(body, "workspace_dir", "") or "").strip():
+            return
+        if not getattr(body, "auto_tools", False):
+            return
+        from ..tools.autoselect import AUTO_SAFE_TOOLS
+
+        seen = set(explicit) | set(auto)
+        for name in _WORKSPACE_BASELINE:
+            if len(explicit) + len(auto) >= ceiling:
+                break
+            if name in seen or name not in AUTO_SAFE_TOOLS:
+                continue
+            if d.platform.registry.get(name) is None:
+                continue
+            auto.append(name)
+            seen.add(name)
+
     auto = _fill(_ceiling)
     # THE DROP SIGNAL (v1.202.0): candidates cut ONLY by the envelope ceiling,
     # measured by re-running the identical fill at the standing ceiling. Zero
@@ -958,6 +995,57 @@ def _resolve_tool_workspace(
             tool_ws, in_project_folder = proot, True
     tool_ws.mkdir(parents=True, exist_ok=True)
     return tool_ws, in_project_folder
+
+
+def _workspace_grounding_block(
+    workspace_dir: str, resolved: "tuple[Path, bool] | None"
+) -> str:
+    """The prompt block that names the folder a bound chat lives in (v1.210.0).
+
+    THE LIVE BUG THIS FIXES: a Build-pane chat POSTs ``workspace_dir`` every
+    turn, but the daemon consumed it ONLY to place the tool workspace, and only
+    inside the armed branch — so "tell me about this code base" (which arms
+    nothing) produced a system prompt that never mentioned the folder, and the
+    model honestly answered "I don't have any project or folder attached"
+    (live thread chat_06bf0135cc8f). This block renders REGARDLESS of whether
+    any tools armed: the binding is context, not a tool concern.
+
+    *resolved* is the ``_resolve_tool_workspace`` result the lane already
+    computed for this turn (ONE resolution per lane — the armed branch reuses
+    the same tuple for its ToolContext; never a second stat hop on a folder
+    the v1.153.1 rule exists for). Its second element is True exactly when
+    ``fs_policy.usable_workspace_root`` accepted the user's pick, so:
+
+    * usable — name the ABSOLUTE folder and pin the deixis ("this codebase",
+      "here") to it;
+    * NOT usable (missing/protected/not a dir, or the resolution itself
+      raised, passed as ``None``) — say honestly that the user bound the chat
+      to <path> but the folder is not accessible, and to say so rather than
+      guess. NEVER silently claim grounding in a folder tools cannot reach.
+
+    Returns "" when no workspace was bound. Called by BOTH lanes (the
+    documented lock-step mirror pair: ``run_chat_turn`` here and
+    ``routes/chat.py``'s /chat/stream) BEFORE the history planner runs, so its
+    cost is priced by the budget (the CLAUDE.md rule).
+    """
+    ws = (workspace_dir or "").strip()
+    if not ws:
+        return ""
+    if resolved is not None and resolved[1]:
+        return (
+            "\n\n# Working folder (bound by the user)\n"
+            f"This chat was opened from a Build terminal pane bound to the "
+            f"folder: {resolved[0]}\n"
+            'When the user says "this codebase", "this project", "these '
+            'files", or "here", they mean that folder and its contents.'
+        )
+    return (
+        "\n\n# Working folder (bound by the user)\n"
+        f"The user bound this chat to the folder {ws}, but that folder is "
+        "not accessible right now (missing, protected, or not a directory). "
+        "Say so plainly if asked about it — do not guess at or invent its "
+        "contents."
+    )
 
 
 #: The one surface (v1.108.0). Chat and Agent used to be a toggle the user had
@@ -2244,6 +2332,33 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     # same line — edit both or neither.
     system += _saved_workflows_block(platform)
 
+    # WORKSPACE GROUNDING (v1.210.0): a chat bound to a folder (the Build
+    # pane's per-pane chat sends `workspace_dir` every turn) has that folder
+    # NAMED in the prompt — regardless of whether any tools arm. Resolved
+    # HERE, at most ONCE per turn: the armed-tools branch below reuses this
+    # exact tuple for its ToolContext instead of a second resolution hop.
+    # Off the event loop (the v1.153.1 rule — this stats a folder the USER
+    # picked: network share, unhydrated OneDrive). Added BEFORE the budget
+    # planner runs so its cost is priced (the repo rule) — note the # Tools
+    # block below has always rendered AFTER the planner; this block does not
+    # inherit that pre-existing violation.
+    # MIRROR NOTE (lock-step): stream copy in routes/chat.py — edit both or
+    # neither.
+    _ws_resolved: "tuple[Path, bool] | None" = None
+    if (getattr(body, "workspace_dir", "") or "").strip():
+        try:
+            _ws_resolved = await asyncio.to_thread(
+                _resolve_tool_workspace,
+                d.platform.config.home / "uploads",
+                body.workspace_dir or "",
+                (resolved_proj.root or "") if resolved_proj is not None else "",
+            )
+        except Exception:  # noqa: BLE001 — resolution MKDIRs a folder the user
+            # picked; that can fail. None renders the honest "not accessible"
+            # wording rather than a grounding claim tools cannot back.
+            _ws_resolved = None
+        system += _workspace_grounding_block(body.workspace_dir, _ws_resolved)
+
     # CONTEXT PROTECTION (v1.146.0): the history is budgeted against the WINDOW
     # of the model that will answer, not sliced at a fixed 30 messages. The
     # system prompt is finished by this point — profile, project, awareness,
@@ -2394,14 +2509,22 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         # stats + resolve()s + a mkdir on a folder the USER picked, and a
         # network share or unhydrated OneDrive path stalls the entire daemon.
         # ONE hop for the lot; see _resolve_tool_workspace's docstring.
+        # v1.210.0: when the turn is BOUND to a workspace, the grounding block
+        # above already resolved it — reuse that tuple (one resolution per
+        # turn; the prompt block and this ToolContext must agree on the
+        # folder). The hop below now runs only for the project-root / scratch
+        # default path.
         # MIRROR NOTE (lock-step): same call in routes/chat.py's /chat/stream —
         # edit both or neither.
-        tool_ws, in_project_folder = await asyncio.to_thread(
-            _resolve_tool_workspace,
-            d.platform.config.home / "uploads",
-            body.workspace_dir or "",
-            (resolved_proj.root or "") if resolved_proj is not None else "",
-        )
+        if _ws_resolved is not None:
+            tool_ws, in_project_folder = _ws_resolved
+        else:
+            tool_ws, in_project_folder = await asyncio.to_thread(
+                _resolve_tool_workspace,
+                d.platform.config.home / "uploads",
+                body.workspace_dir or "",
+                (resolved_proj.root or "") if resolved_proj is not None else "",
+            )
         ctx = ToolContext(
             workspace=tool_ws, session_id="chat", agent_run_id="chat",
             config=d.platform.config, event_bus=d.platform.event_bus,

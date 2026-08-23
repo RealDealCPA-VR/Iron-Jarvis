@@ -187,6 +187,32 @@ _URL_RX = re.compile(r"https?://\S+", re.IGNORECASE)
 # Windows (C:\...) or POSIX-looking absolute paths typed into the message.
 _PATH_RX = re.compile(r"(?:[A-Za-z]:\\[^\s\"']+|(?<!\S)/(?:[\w.-]+/)+[\w.-]+)")
 
+#: A bare SOURCE/CONFIG FILENAME typed into the message (v1.210.0): "fix the
+#: bug in main.py", "open Cargo.toml". `_PATH_RX` needs a separator, so a lone
+#: filename — the way people actually name a file when they are standing in
+#: its folder — scored NOTHING and a coding request armed no reader at all
+#: (measured: "fix the bug in main.py" -> []).
+#:
+#: CONSERVATIVE ON PURPOSE, two ways:
+#:  * The extension comes from an EXPLICIT allowlist of code/config suffixes —
+#:    never a generic `\.\w{1,4}` — because a dotted token is just as often a
+#:    DOMAIN, and `com`/`net`/`org`/`co`/`io`/`ai` are deliberately not in the
+#:    list: "check anthropic.com for the docs" must not read as a filename.
+#:    (`sh`/`md`/`rs` are ccTLDs too, but "script.sh"/"NOTES.md"/"main.rs"
+#:    are overwhelmingly files in a message typed at a local assistant, while
+#:    a bare two-letter-ccTLD domain with no scheme is a rarity worth losing.)
+#:  * The stem must start with a letter or underscore, the token must stand
+#:    alone (no preceding `/`, `\\`, `.` or word char — so URL path segments
+#:    and e-mail hosts stay out), and nothing dotted may FOLLOW the suffix
+#:    ("main.py.bak" is not a .py file; "main.py." at sentence end still is).
+_CODE_FILE_RX = re.compile(
+    r"(?<![\w.\-/\\])[A-Za-z_][\w.\-]*"
+    r"\.(?:py|tsx|ts|jsx|js|json|toml|yaml|yml|rs|go|java|cs|cpp|c|h|rb|php|"
+    r"sh|ps1|md|txt|cfg|ini)"
+    r"(?!\w)(?!\.\w)",
+    re.IGNORECASE,
+)
+
 #: The spreadsheet NOUNS, extracted in v1.196.0 so the two rules that need them
 #: cannot drift. ONE definition is what makes the apply-spec rule's safety claim
 #: STRUCTURAL instead of coincidental: because that rule requires a noun from
@@ -960,6 +986,51 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             re.IGNORECASE,
         ),
         {"list_folder": 9, "file_search": 4, "read_document": 3},
+    ),
+    # --- the CODEBASE vocabulary (v1.210.0) -------------------------------
+    # This module's nouns were office-document-shaped and coding requests
+    # scored NOTHING at all — measured on the real selector:
+    #   "tell me about this code base"  -> []
+    #   "what does this project do"     -> []
+    #   "fix the bug in main.py"        -> []   (closed by _CODE_FILE_RX below)
+    # while "list the files here" armed four tools. The daily-driver thesis is
+    # creative + CODING + office, and the one deterministic sentence→tools
+    # scorer (both chat lanes AND `agents/runtime.arm_for_task`) could not hear
+    # the coding half.
+    #
+    # READ-ONLY BY CONSTRUCTION, so the rule stays UNGATED (no `_imperative()`):
+    # every tool it awards is a reader/lister already in `AUTO_SAFE_TOOLS`, and
+    # the module's licence — "an armed-but-unneeded tool is simply ignored" —
+    # holds. Asking ABOUT code is consent to READ it, never to change it: no
+    # `_CHANGE_TOOLS` member is awarded here, and "fix the bug in main.py"
+    # arming `read_file`/`file_search` is correct — the change-verb machinery
+    # elsewhere owns mutations, and `edit_file`/`shell` stay behind explicit
+    # "+" arming per the module docstring.
+    #
+    # THE NOUNS ARE THE UNAMBIGUOUS ONES: codebase/repo/repository/source code/
+    # readme/"this project"/"architecture of". "the code" ALONE is deliberately
+    # NOT a noun here — this practitioner's domain says "the Code" for the IRC,
+    # and "edit the code" is pinned in tests/test_agent_auto_arm_v1178.py — so
+    # the bare noun needs a READ-shaped verb in front of it ("explain this
+    # code", "walk me through the code"). `repos?\b` needs its own \b because
+    # the alternation continues; "report" cannot match it (the boundary fails).
+    #
+    # WEIGHTS mirror the folder rule above (`file_search` leads at 8): a
+    # codebase question is answered by finding + reading files. `read_file`
+    # rides at the `_PATH_RX` reader's 6 — source files are exactly what it
+    # reads — with the listers below it and `read_document` (README/docs prose)
+    # at the nudge level.
+    (
+        re.compile(
+            r"\b(?:code\s?bases?|repositor(?:y|ies)|repos?\b|source\s+code|"
+            r"source\s+tree|readme\b|this\s+project\b|architecture\s+of\b|"
+            r"(?:explain|understand|describe|summari[sz]e|review|analy[sz]e|"
+            r"read|walk\s+(?:me\s+)?through|tell\s+me\s+about|look\s+at)\b"
+            r"[^.!?]{0,30}?\b(?:this|the|our|your|my)\s+code\b)",
+            re.IGNORECASE,
+        ),
+        {"file_search": 8, "read_file": 6, "list_files": 5, "list_folder": 4,
+         "read_document": 3},
     ),
     (
         re.compile(
@@ -1995,6 +2066,14 @@ def select_auto_tools(
             for m in _PATH_RX.finditer(msg)
         ):
             bump({"list_folder": 6})
+    # v1.210.0: a bare source/config FILENAME ("main.py", "Cargo.toml") is a
+    # read signal `_PATH_RX` cannot see (no separator). Same weights as the
+    # typed-path reader above, READ tools only — naming a file is consent to
+    # read it, and mutations stay with the change-verb machinery. One bump
+    # however many filenames appear (the `_PATH_RX` convention: three names
+    # are not three times the signal).
+    if _CODE_FILE_RX.search(msg):
+        bump({"read_file": 6, "file_search": 4})
     for name in attachments or []:
         if _DOC_EXT_RX.search(name):
             bump({"read_document": 9})

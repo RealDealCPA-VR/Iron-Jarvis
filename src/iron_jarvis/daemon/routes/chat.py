@@ -64,6 +64,7 @@ from ..chat_turn import (
     _resolve_persona,
     _resolve_tool_workspace,
     _sanitize_draft,
+    _workspace_grounding_block,
     _saved_workflows_block,
     _write_directive,
     STRICT_ASK_TOOLS,
@@ -1438,6 +1439,33 @@ def register(app: FastAPI, d) -> None:
         # chat_turn.run_chat_turn — edit both or neither.
         system += _saved_workflows_block(d.platform)
 
+        # WORKSPACE GROUNDING (v1.210.0) — the lock-step copy of chat_turn's
+        # injection: a chat bound to a folder (the Build pane's per-pane chat
+        # sends `workspace_dir` every turn) has that folder NAMED in the
+        # prompt, regardless of whether any tools arm. THIS lane is the one
+        # the Build pane actually POSTs to, so skipping it here would leave
+        # the live bug in place exactly where it was reported. Resolved at
+        # most ONCE per turn (the armed branch below reuses this tuple for
+        # its ToolContext), off the event loop (v1.153.1), and BEFORE the
+        # budget planner so its cost is priced (the repo rule).
+        # MIRROR NOTE (lock-step): same block in chat_turn.run_chat_turn —
+        # edit both or neither.
+        _ws_resolved: "tuple[Path, bool] | None" = None
+        if (getattr(body, "workspace_dir", "") or "").strip():
+            try:
+                _ws_resolved = await asyncio.to_thread(
+                    _resolve_tool_workspace,
+                    d.platform.config.home / "uploads",
+                    body.workspace_dir or "",
+                    (resolved_proj.root or "") if resolved_proj is not None else "",
+                )
+            except Exception:  # noqa: BLE001 — resolution MKDIRs a folder the
+                # user picked; that can fail. None renders the honest "not
+                # accessible" wording rather than a grounding claim tools
+                # cannot back.
+                _ws_resolved = None
+            system += _workspace_grounding_block(body.workspace_dir, _ws_resolved)
+
         # CONTEXT PROTECTION (v1.146.0) + COMPACTION (v1.153.0) — the lock-step
         # copy of chat_turn's. MIRROR NOTE: edit both or neither.
         system, _ctx_messages, context_report = await _apply_compaction(
@@ -1548,6 +1576,22 @@ def register(app: FastAPI, d) -> None:
                     t for t in select_ask_tools(_last_user_text(body.messages))
                     if t not in armed
                 ]
+                # WORKSPACE ASK (v1.210.0): a chat BOUND to a folder (the
+                # Build pane) is a coding surface — `shell` joins the ask tier
+                # so the model can propose a command without the user typing
+                # "run" first. Same contract as every other ask_armed entry:
+                # VISIBLE (tool_specs), never GRANTED — a call renders the
+                # mid-turn ApprovalCard and waits for the human. STREAM LANE
+                # ONLY, deliberately: the non-stream lane serves headless
+                # callers where nobody is present to answer a card (the
+                # documented asymmetry above).
+                if (
+                    (getattr(body, "workspace_dir", "") or "").strip()
+                    and "shell" not in ask_armed
+                    and "shell" not in armed
+                    and d.platform.registry.get("shell") is not None
+                ):
+                    ask_armed.append("shell")
             tool_specs = (
                 d.platform.registry.specs(armed + ask_armed)
                 if (armed or ask_armed)
@@ -1580,12 +1624,19 @@ def register(app: FastAPI, d) -> None:
             # folder the USER picked (network share, unhydrated OneDrive), and
             # THIS is the lane the user is watching when the app goes "Daemon
             # offline". One hop for the whole block, not four.
-            tool_ws, in_project_folder = await asyncio.to_thread(
-                _resolve_tool_workspace,
-                d.platform.config.home / "uploads",
-                body.workspace_dir or "",
-                (resolved_proj.root or "") if resolved_proj is not None else "",
-            )
+            # v1.210.0: a BOUND workspace was already resolved by the
+            # grounding block above — reuse that tuple (one resolution per
+            # turn; the prompt block and this ToolContext must agree on the
+            # folder). The hop runs only for the project-root / scratch path.
+            if _ws_resolved is not None:
+                tool_ws, in_project_folder = _ws_resolved
+            else:
+                tool_ws, in_project_folder = await asyncio.to_thread(
+                    _resolve_tool_workspace,
+                    d.platform.config.home / "uploads",
+                    body.workspace_dir or "",
+                    (resolved_proj.root or "") if resolved_proj is not None else "",
+                )
             ctx = ToolContext(
                 workspace=tool_ws, session_id="chat", agent_run_id="chat",
                 config=d.platform.config, event_bus=d.platform.event_bus,

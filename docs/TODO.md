@@ -34,10 +34,20 @@ scope. None is speculative.
   WHERE, absolutely"). In chat the workspace is the grounded project root, so a
   saved workbook is announced as a bare filename — the exact scenario that rule
   was written for. Pre-existing; fix both together.
-- [ ] **A refused chat workspace pick is silent.** When `body.workspace_dir`
+- [x] **A refused chat workspace pick is silent.** When `body.workspace_dir`
   fails the policy check the turn quietly runs in `home/uploads` and the user is
   never told their chosen folder was rejected. Pre-existing, and a real instance
-  of the never-silently-degrade rule.
+  of the never-silently-degrade rule. FIXED v1.210.0: `_workspace_grounding_block`
+  renders the honest "bound to X, but that folder is not accessible right now"
+  wording in BOTH lanes whenever the pick is refused, and instructs the model to
+  say so rather than guess.
+- [ ] **New v1.210.0 codebase-vocabulary signals have known read-only false
+  positives** (reviewer finding, dated 2026-08-23): "node.js"/"deno" runtime
+  names arm `read_file` via the extension list; "section 179 of the code" with a
+  read verb within range matches the codebase rule (the verb-less IRC phrasing
+  is pinned safe); `bob@notes.md` reads as a filename (`@` missing from the
+  lookbehind); `code  base` (double space) is missed. All award AUTO_SAFE
+  read-only tools, so cost is an ignored armed tool — tighten when convenient.
 - [ ] **`ironjarvis file-search` surfaces a bad regex as a Typer traceback.**
   `daemon/cli.py` calls `platform.filesearch.search` bare; the HTTP route
   returns a clean 400. One `try/except BadSearchPattern`.
