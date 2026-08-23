@@ -46,13 +46,26 @@ from typing import Any
 
 from iron_jarvis.envelope import store
 from iron_jarvis.envelope.probes import ProbeResult, Transport, quick_battery
-from iron_jarvis.envelope.profile import CURRENT_PROBE_GENERATION, CapabilityProfile
+from iron_jarvis.envelope.profile import (
+    CURRENT_PROBE_GENERATION,
+    PROBE_NOTE_MAX,
+    CapabilityProfile,
+)
 
 #: Whole-battery wall-clock budget in seconds. Generous for three quick
 #: probes; what it exists to bound is a live endpoint that accepts the
 #: connection and then trickles — without a deadline one wedged server keeps
 #: a background probe task alive forever.
 DEFAULT_TOTAL_TIMEOUT = 120.0
+
+
+def _clip_note(text: str) -> str:
+    """One ``probe_notes`` entry from a result's notes: whitespace collapsed
+    to a single line (an HTTP error body can carry newlines — the note is a
+    short WHY for a card, not a transport dump) and clipped to
+    :data:`PROBE_NOTE_MAX`. The probe-side text already names the exception
+    class and message ("native errored (HTTPStatusError: 400 ...)")."""
+    return " ".join(str(text or "").split())[:PROBE_NOTE_MAX]
 
 
 def _degraded(probe: Any, note: str) -> ProbeResult:
@@ -177,10 +190,22 @@ def _fold_results(
     profile.probe_generation = CURRENT_PROBE_GENERATION
     delivered: set[str] = set()
     floored: set[str] = set()
+    #: WHY each floored path is zero this run (v1.204.0, live finding): the
+    #: v1.203.0 isolation put an honest note in the ProbeResult and nothing
+    #: persisted it — the live profiles showed native 0.0 with no way to see
+    #: the endpoint had 400'd the tools param.
+    notes: dict[str, str] = {}
     for result in results:
         (delivered if result.ok else floored).update(result.scores)
         for path, value in result.scores.items():
             store.merge_value(profile, path, value)
+        note = _clip_note(result.notes)
+        if not result.ok and note:
+            # A degraded result's scores ARE its floored reliability paths
+            # (_degraded / the evaluate_probes normalization) — each zero
+            # keeps the reason the probe gave for it.
+            for path in result.scores:
+                notes[path] = note
         # Per-rung flooring (ProbeResult.floored, the Finding-3 fix): a rung
         # that errored inside an otherwise-OK probe is written as 0.0 and
         # counted with the floored set — same conservative shape as a dead
@@ -192,8 +217,18 @@ def _fold_results(
             if store.is_reliability_path(path):
                 floored.add(path)
                 store.merge_value(profile, path, 0.0)
+                if note:
+                    notes[path] = note
     kept = set(profile.measured_fields) - floored
     profile.measured_fields = sorted(kept | delivered)
+    # probe_notes follow the same evidence rule as the values they explain:
+    # a path this run MEASURED sheds any stale note (the zero it explained is
+    # gone — a stale WHY beside a fresh score would be a lie about this run);
+    # a path this run FLOORED carries the floor's reason; a path this run
+    # never touched keeps the base's note beside the base's value.
+    carried = {p: n for p, n in profile.probe_notes.items() if p not in delivered}
+    carried.update(notes)
+    profile.probe_notes = carried
     profile.source, profile.probed_at = _battery_provenance(results, probed_at)
     return profile
 

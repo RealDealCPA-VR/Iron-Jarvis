@@ -1016,3 +1016,147 @@ def test_probe_transport_still_drops_for_a_wave_a_shaped_adapter():
     )
     assert reply.text == "OK"
     assert adapter.seen == [{"tools": []}]
+
+
+# --------------------------------------------------------------------------- #
+# probe_notes (v1.204.0, live finding 3): the v1.203.0 rung isolation floored
+# an errored rung with an honest note in the ProbeResult — and nothing
+# persisted it. The live profiles showed native 0.0 with no way to see the
+# endpoint had 400'd the tools param, and the user read it as their models
+# scoring zero. The reason now travels WITH the zero it explains.
+# --------------------------------------------------------------------------- #
+
+
+async def test_floored_rung_persists_its_reason(tmp_path):
+    # A native-side rejection (the LIVE shape: the endpoint 400s the tools
+    # param) — the zero must carry WHY, and the measured rung must carry
+    # nothing.
+    async def transport(messages, **kw):
+        if kw.get("tools"):
+            raise ConnectionError("400: tools param not supported")
+        if kw.get("response_format") is not None:
+            return GOOD_JSON
+        return ProbeReply(text=GOOD_SCHEMA.text, usage={"prompt_tokens": 400})
+
+    session = await run_quick_battery(
+        base_profile(), transport, home=tmp_path,
+        probed_at="2026-08-23T12:00:00+00:00",
+    )
+    assert session.tool_protocols["native"] == 0.0
+    note = session.probe_notes["tool_protocols.native"]
+    assert "errored" in note
+    assert "ConnectionError" in note  # the exception class, per the contract
+    assert "400: tools param not supported" in note  # ...and its first line
+    assert "tool_protocols.strict_json" not in session.probe_notes  # measured clean
+    # persisted with the value it explains
+    saved = store.load_profile(tmp_path, "ollama", "qwen3:30b/instruct")
+    assert saved is not None
+    assert saved.tool_protocols["native"] == 0.0
+    assert saved.probe_notes["tool_protocols.native"] == note
+
+
+async def test_dead_probe_notes_cover_its_floored_reliabilities_only():
+    session = await run_quick_battery(
+        base_profile(), failing_transport(ConnectionError("endpoint down"))
+    )
+    # every floored reliability carries the reason...
+    for path in ("tool_protocols.native", "tool_protocols.strict_json", "json_adherence"):
+        assert "ConnectionError" in session.probe_notes[path], path
+        assert "endpoint down" in session.probe_notes[path], path
+    # ...and non-reliabilities never get a note: nothing was zeroed there
+    # (TOKEN-RATIO's failure leaves chars_per_token at the base 4.0).
+    assert "chars_per_token" not in session.probe_notes
+
+
+async def test_probe_failed_wholesale_carry_keeps_the_records_notes(tmp_path):
+    # First: a partial run writes a floored rung + its note into the record.
+    session = await run_quick_battery(
+        base_profile(), strict_rejecting_transport(),
+        home=tmp_path, probed_at="2026-08-23T12:00:00+00:00",
+    )
+    assert "tool_protocols.strict_json" in session.probe_notes
+    # Then a TOTAL failure: keep-last-good carries the record wholesale —
+    # the note stays beside the 0.0 it explains, exactly like the values.
+    await run_quick_battery(base_profile(), failing_transport(), home=tmp_path)
+    saved = store.load_profile(tmp_path, "ollama", "qwen3:30b/instruct")
+    assert saved is not None
+    assert saved.source == "probe_failed"
+    assert saved.tool_protocols["strict_json"] == 0.0
+    assert "errored" in saved.probe_notes["tool_protocols.strict_json"]
+    # native 1.0 carried too, still note-free — the pairing stays coherent.
+    assert saved.tool_protocols["native"] == 1.0
+    assert "tool_protocols.native" not in saved.probe_notes
+
+
+async def test_a_later_battery_that_measures_the_rung_clears_its_note(tmp_path):
+    # The strict rung errored once and carries a note...
+    await run_quick_battery(
+        base_profile(), strict_rejecting_transport(),
+        home=tmp_path, probed_at="2026-08-23T12:00:00+00:00",
+    )
+    stored = store.load_profile(tmp_path, "ollama", "qwen3:30b/instruct")
+    assert stored is not None and stored.probe_notes  # the premise
+    # ...then a clean battery (the stored record as base, the route's shape)
+    # measures it: stale WHY beside a fresh score would be a lie — cleared.
+    session = await run_quick_battery(
+        stored, scripted(full_battery_replies()),
+        home=tmp_path, probed_at="2026-08-23T13:00:00+00:00",
+    )
+    assert session.tool_protocols["strict_json"] == 1.0
+    assert session.probe_notes == {}
+    saved = store.load_profile(tmp_path, "ollama", "qwen3:30b/instruct")
+    assert saved is not None and saved.probe_notes == {}
+
+
+async def test_first_ever_total_failure_writes_the_clean_floor_anchor(tmp_path):
+    # The floor anchor stays note-free (and byte-identical to _empty_record):
+    # the RECORD holds no zeroes this run measured, so a session-failure note
+    # beside floor values would explain numbers that are not evidence — and
+    # it would break the anchor identity _holds_no_evidence keys on.
+    session = await run_quick_battery(
+        base_profile(), failing_transport(), home=tmp_path
+    )
+    assert session.probe_notes  # the SESSION keeps its honest reasons...
+    saved = store.load_profile(tmp_path, "ollama", "qwen3:30b/instruct")
+    assert saved is not None
+    assert saved.probe_notes == {}  # ...the floor anchor carries none
+
+
+async def test_probe_notes_are_clipped_and_single_line():
+    big = ConnectionError("boom\n" + "x" * 2000)
+    session = await run_quick_battery(base_profile(), failing_transport(big))
+    assert session.probe_notes  # floored reliabilities got their reasons
+    for note in session.probe_notes.values():
+        assert len(note) <= 200
+        assert "\n" not in note  # an HTTP body's newlines never hit the card
+        assert "boom" in note  # the first line survived the clip
+
+
+def test_probe_notes_from_dict_is_unknown_tolerant():
+    # pre-v1.204.0 payload: no field at all -> {}
+    legacy = CapabilityProfile.from_dict({"model_id": "m"})
+    assert legacy.probe_notes == {}
+    # corrupt shapes: not a dict -> {}; non-string keys/values dropped;
+    # long values re-clipped; empty strings dropped.
+    junk = CapabilityProfile.from_dict(
+        {"model_id": "m", "probe_notes": ["not", "a", "dict"]}
+    )
+    assert junk.probe_notes == {}
+    mixed = CapabilityProfile.from_dict(
+        {"model_id": "m", "probe_notes": {
+            "tool_protocols.native": "y" * 5000,
+            "ok.path": "kept",
+            "empty": "",
+            "num": 42,
+            7: "non-string key",
+        }}
+    )
+    assert mixed.probe_notes["ok.path"] == "kept"
+    assert len(mixed.probe_notes["tool_protocols.native"]) == 200
+    assert "empty" not in mixed.probe_notes
+    assert "num" not in mixed.probe_notes
+    assert 7 not in mixed.probe_notes
+    # round trip stays lossless for a clean profile (dataclass equality)
+    clean = measured_profile()
+    clean.probe_notes = {"json_adherence": "probe raised X; floored"}
+    assert CapabilityProfile.from_dict(clean.to_dict()) == clean

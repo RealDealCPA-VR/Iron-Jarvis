@@ -87,26 +87,54 @@ class FakeManager:
     #: change to the manager's taxonomy is felt here without a third copy.
     is_trusted_provider = ProviderManager.is_trusted_provider
 
-    def __init__(self, adapter: FakeAdapter | None = None) -> None:
+    def __init__(self, adapter: FakeAdapter | None = None, measured=None) -> None:
         self.adapter = adapter or FakeAdapter()
         self.calls: list[tuple[str, str | None]] = []
+        #: (provider, model) -> int for the measured-envelope window rung —
+        #: the same accessor shape the real manager exposes.
+        self.measured = dict(measured or {})
 
     def get(self, name: str, model: str | None = None):
         self.calls.append((name, model))
         return self.adapter
 
+    def measured_context_window(self, provider: str, model: str):
+        return self.measured.get((provider, model))
 
-def build_app(tmp_path, *, ollama_url="http://localhost:11434", custom_url="", fleet=None):
+
+def build_app(
+    tmp_path,
+    *,
+    ollama_url="http://localhost:11434",
+    custom_url="",
+    fleet=None,
+    pins=None,
+    measured=None,
+    window_fleet=None,
+):
     bus = FakeBus()
-    manager = FakeManager()
+    manager = FakeManager(measured=measured)
     cfg = SimpleNamespace(
-        home=tmp_path, ollama_base_url=ollama_url, custom_base_url=custom_url
+        home=tmp_path,
+        ollama_base_url=ollama_url,
+        custom_base_url=custom_url,
+        # the effective-window resolver's pin rung (v1.204.0)
+        model_context_windows=dict(pins or {}),
     )
-    platform = SimpleNamespace(config=cfg, event_bus=bus, providers=manager)
+    platform = SimpleNamespace(
+        config=cfg, event_bus=bus, providers=manager, fleet=window_fleet
+    )
     d = SimpleNamespace(platform=platform, fleet=fleet)
     app = FastAPI()
     envelope.register(app, d)
     return app, bus, manager
+
+
+def _window_fleet(model: str, context_length: int):
+    """A fleet whose probe recorded ``context_length`` for ``model`` — the
+    shape _context_window_source reads (platform.fleet.nodes()[].models)."""
+    node = SimpleNamespace(models=[SimpleNamespace(name=model, context_length=context_length)])
+    return SimpleNamespace(nodes=lambda: [node])
 
 
 def wait_until(pred, timeout=5.0) -> bool:
@@ -530,3 +558,121 @@ def test_probe_transport_maps_the_reply_and_drops_unknown_kwargs():
             "tools": [{"type": "function"}],
         }
     ]
+
+
+# --------------------------------------------------------------------------- #
+# v1.204.0 live finding 2 — GET carries the window the app ACTUALLY plans
+# with. The profile's context fields are the unmeasured floor (8192/4096) and
+# the card rendered them raw; effective_window comes from THE one resolver
+# (chat_turn._context_window_source), never a second ladder in the route.
+# --------------------------------------------------------------------------- #
+
+
+def test_get_effective_window_pin_source(tmp_path):
+    app, _bus, _mgr = build_app(
+        tmp_path,
+        pins={"ollama::qwen3:30b": 131_072},
+        measured={("ollama", "qwen3:30b"): 12_000},
+        window_fleet=_window_fleet("qwen3:30b", 32_768),
+    )
+    r = TestClient(app).get("/envelope/ollama/qwen3:30b")
+    assert r.status_code == 200, r.text
+    # the pin wins over a measured envelope AND a fleet probe — the ladder's
+    # order, not the route's opinion.
+    assert r.json()["effective_window"] == {"value": 131_072, "source": "pin"}
+    # ...and the raw profile floor is still there, honestly separate: the two
+    # numbers answer different questions and the UI now has both.
+    assert r.json()["profile"]["honest_context"] == 4096
+
+
+def test_get_effective_window_measured_source(tmp_path):
+    app, _bus, _mgr = build_app(
+        tmp_path,
+        measured={("ollama", "qwen3:30b"): 12_000},
+        window_fleet=_window_fleet("qwen3:30b", 32_768),
+    )
+    r = TestClient(app).get("/envelope/ollama/qwen3:30b")
+    assert r.json()["effective_window"] == {"value": 12_000, "source": "measured"}
+
+
+def test_get_effective_window_endpoint_source(tmp_path):
+    app, _bus, _mgr = build_app(
+        tmp_path, window_fleet=_window_fleet("qwen3:30b", 32_768)
+    )
+    r = TestClient(app).get("/envelope/ollama/qwen3:30b")
+    assert r.json()["effective_window"] == {"value": 32_768, "source": "endpoint"}
+
+
+def test_get_effective_window_default_source_is_null_not_the_floor(tmp_path):
+    """THE live repro: nothing pinned, probed, or measured — the app plans on
+    conservative fixed budgets, so the honest answer is null/'default', NEVER
+    the profile's 8192/4096 floor dressed up as the app's window."""
+    app, _bus, _mgr = build_app(tmp_path)
+    r = TestClient(app).get("/envelope/ollama/qwen3:30b")
+    assert r.status_code == 200, r.text
+    assert r.json()["effective_window"] == {"value": None, "source": "default"}
+
+
+def test_trusted_get_carries_effective_window_too(tmp_path):
+    # A cloud provider's card gets the same honest key: a user pin speaks...
+    app, _bus, _mgr = build_app(tmp_path, pins={"anthropic": 200_000})
+    r = TestClient(app).get("/envelope/anthropic/claude-opus-4-8")
+    assert r.json()["trusted"] is True
+    assert r.json()["effective_window"] == {"value": 200_000, "source": "pin"}
+    # ...and with nothing known it says so (trusted_profile is documented as
+    # NOT a window authority — its 4096 floor must not leak out here).
+    app2, _bus2, _mgr2 = build_app(tmp_path)
+    r2 = TestClient(app2).get("/envelope/anthropic/claude-opus-4-8")
+    assert r2.json()["effective_window"] == {"value": None, "source": "default"}
+
+
+# --------------------------------------------------------------------------- #
+# v1.204.0 live finding 1 (route half) — an empty-string ollama_base_url is
+# NOT a probe target: the ghost provider's Measure button must 400 honestly,
+# not hang a battery on "" (the config-slot read collapses "" to None).
+# --------------------------------------------------------------------------- #
+
+
+def test_probe_refuses_when_ollama_base_url_is_the_empty_string(tmp_path):
+    app, bus, _mgr = build_app(tmp_path, ollama_url="")
+    r = TestClient(app).post("/envelope/ollama/qwen3:30b/probe")
+    assert r.status_code == 400, r.text
+    detail = r.json()["detail"]
+    assert "ollama" in detail and "base_url" in detail
+    assert bus.published == []  # a refusal starts nothing and says nothing
+
+
+# --------------------------------------------------------------------------- #
+# v1.204.0 live finding 3 (route half) — probe_notes ride the GET: a floored
+# 0.0 arrives WITH its reason, so the card can say the endpoint 400'd the
+# tools param instead of letting the user read "my model scored zero".
+# --------------------------------------------------------------------------- #
+
+
+def test_get_returns_the_stored_probe_notes(tmp_path):
+    save_profile(
+        tmp_path,
+        CapabilityProfile(
+            model_id="qwen3:30b",
+            provider="ollama",
+            source="partial",
+            probed_at=STAMP,
+            tool_protocols={"native": 0.0, "strict_json": 1.0},
+            probe_notes={
+                "tool_protocols.native": (
+                    "native errored (HTTPStatusError: 400 tools not supported); "
+                    "floored to 0.0, not evidence"
+                )
+            },
+        ),
+    )
+    app, _bus, _mgr = build_app(tmp_path)
+    r = TestClient(app).get("/envelope/ollama/qwen3:30b")
+    assert r.status_code == 200, r.text
+    prof = r.json()["profile"]
+    assert prof["tool_protocols"]["native"] == 0.0
+    assert "400 tools not supported" in prof["probe_notes"]["tool_protocols.native"]
+    # a legacy profile (or a clean one) answers the empty dict, never a miss
+    app2, _bus2, _mgr2 = build_app(tmp_path)
+    r2 = TestClient(app2).get("/envelope/ollama/never-probed")
+    assert r2.json()["profile"]["probe_notes"] == {}

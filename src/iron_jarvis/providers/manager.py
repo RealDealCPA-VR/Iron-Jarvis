@@ -112,12 +112,19 @@ class ProviderManager:
         # provider is available and routes through OpenAIAdapter(base_url=...).
         # Normalized so a host-only URL ("http://localhost:11434") still resolves
         # to the real /v1/chat/completions endpoint instead of 404-ing.
-        self._ollama_base_url = _normalize_ollama_url(ollama_base_url)
+        # `or None` — CONSTRUCTOR/RECONFIGURE PARITY (v1.204.0 live finding):
+        # config.toml stores a cleared endpoint as "" (TOML has no null), and
+        # _normalize_ollama_url passes "" through untouched. configure_local
+        # already collapsed "" to None, but the constructor did not — so every
+        # BOOT resurrected a "Local Ollama" the user never installed
+        # (available() gates on `is None`, and "" slipped past it) until the
+        # first Settings save re-ran the reconfigure path. Both slots.
+        self._ollama_base_url = _normalize_ollama_url(ollama_base_url) or None
         self._ollama_model = ollama_model
         # CUSTOM OpenAI-compatible endpoint (Ollama Cloud / LM Studio / vLLM /
         # any aggregator) — same normalization; key is OPTIONAL (resolved from
         # the vault when connected, keyless local servers just work).
-        self._custom_base_url = _normalize_ollama_url(custom_base_url)
+        self._custom_base_url = _normalize_ollama_url(custom_base_url) or None
         self._custom_model = custom_model
         # Live availability probe for the locally-installed Grok CLI, INJECTED by
         # the platform (reads ~/.grok). Kept out of the manager itself so unit

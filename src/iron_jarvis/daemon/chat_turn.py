@@ -1474,6 +1474,29 @@ def _context_window(d, provider: str, model: str) -> "int | None":
     caller) in one place. An "auto" route is still a guess — but a guess from
     the user's own default beats assuming nothing is known.
     """
+    return _context_window_source(d, provider, model)[0]
+
+
+def _context_window_source(d, provider: str, model: str) -> "tuple[int | None, str]":
+    """``(window, source)`` — the SAME ladder as :func:`_context_window`
+    (which delegates here; every existing caller keeps the plain-int shape),
+    plus WHERE the number came from:
+
+    * ``"pin"`` — an explicit ``config.model_context_windows`` entry;
+    * ``"measured"`` — the capability envelope's measured honest window
+      (``ProviderManager.measured_context_window``);
+    * ``"endpoint"`` — a fleet probe's advertised ``context_length``;
+    * ``"default"`` — unknown; the value is ``None`` and callers fall back to
+      their conservative fixed budgets.
+
+    v1.204.0 (live finding): the envelope card rendered the profile's floor
+    context fields (8192/4096, honestly unmeasured per ``measured_fields``)
+    raw, while chat planned against this ladder — the user read the floor as
+    the window the app uses. ``GET /envelope/{provider}/{model}`` now returns
+    ``effective_window`` from THIS resolver. ONE RESOLVER: a route must
+    consume this function, never re-derive the ladder (two ladders drift —
+    the exact bug class the trusted-oracle rule already documents).
+    """
     provider = (provider or "").strip() or str(
         getattr(d.platform.config, "default_provider", "") or ""
     )
@@ -1488,7 +1511,7 @@ def _context_window(d, provider: str, model: str) -> "int | None":
             except (TypeError, ValueError):
                 continue
             if n > 0:
-                return n
+                return n, "pin"
     # v1.201.0 (envelope Wave A3): the MEASURED envelope speaks between the
     # pin and the fleet probe. An explicit user pin still wins above; only a
     # measured profile answers (`measured_context_window` returns None for
@@ -1502,7 +1525,7 @@ def _context_window(d, provider: str, model: str) -> "int | None":
     if callable(_measured):
         n = _measured(provider, model)
         if n:
-            return int(n)
+            return int(n), "measured"
     fleet = getattr(d.platform, "fleet", None)
     if fleet is not None and model:
         try:  # best-effort probe read — fleet node models may carry the window
@@ -1511,10 +1534,10 @@ def _context_window(d, provider: str, model: str) -> "int | None":
                     if getattr(m, "name", None) == model:
                         n = getattr(m, "context_length", None)
                         if n:
-                            return int(n)
+                            return int(n), "endpoint"
         except Exception:  # noqa: BLE001 — budgets fall back to defaults
             pass
-    return None
+    return None, "default"
 
 
 def _attachment_budgets(d, provider: str, model: str) -> tuple[int, int, int]:

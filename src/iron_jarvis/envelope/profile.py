@@ -93,6 +93,12 @@ _MEASURED_SOURCES = frozenset({"probed", "partial", "tuned"})
 #: generation is older is stale for the generation-sensitive rungs.
 CURRENT_PROBE_GENERATION = 2
 
+#: Clip for one ``probe_notes`` entry. Long enough for an exception class +
+#: the first line of a server's error body ("native errored (HTTPStatusError:
+#: 400 ... tools not supported)..."), short enough that a profile file can
+#: never balloon on a chatty proxy's HTML error page.
+PROBE_NOTE_MAX = 200
+
 #: Rungs whose TRIAL SEMANTICS changed between generations. Only strict_json:
 #: generation 2 changed how its trials are issued (``response_format``
 #: forwarded -> server-side constrained decoding), while native trials are
@@ -151,6 +157,20 @@ class CapabilityProfile:
     #: :meth:`field_measured`, never the stamp. Additive and unknown-tolerant:
     #: profiles written before it existed load as [] (everything unmeasured).
     measured_fields: list[str] = field(default_factory=list)
+
+    #: WHY a floored score is zero (v1.204.0, live finding): dotted
+    #: reliability path -> a short honest reason ("native errored
+    #: (HTTPStatusError: 400 ...); floored to 0.0, not evidence"). The
+    #: v1.203.0 rung isolation floored an errored rung with an honest note in
+    #: the ProbeResult — and then nothing persisted it, so the live profiles
+    #: showed ``native 0.0`` with no way to see the endpoint had 400'd the
+    #: tools param, and the user read it as their models scoring zero.
+    #: Written by the runner on fold; a note travels WITH the zero it
+    #: explains: carried when keep-last-good carries the value, cleared when
+    #: a later battery actually measures the path. Values clipped to
+    #: :data:`PROBE_NOTE_MAX`. Additive and unknown-tolerant: profiles
+    #: written before it existed load as {}.
+    probe_notes: dict[str, str] = field(default_factory=dict)
 
     #: Which battery SEMANTICS scored this profile — see
     #: :data:`CURRENT_PROBE_GENERATION`. Additive: a stored profile written
@@ -303,6 +323,16 @@ class CapabilityProfile:
         # — everything honestly unmeasured, never a guess.
         raw_fields = profile.measured_fields if isinstance(profile.measured_fields, list) else []
         profile.measured_fields = [entry for entry in raw_fields if isinstance(entry, str)]
+        # probe_notes: pre-v1.204.0 JSONs (and corrupt shapes) load as {};
+        # non-string entries are dropped, never coerced (a note is prose for
+        # the user, not data to launder), and values are re-clipped so a
+        # hand-edited file cannot smuggle a megabyte into every GET.
+        raw_notes = profile.probe_notes if isinstance(profile.probe_notes, dict) else {}
+        profile.probe_notes = {
+            key: value[:PROBE_NOTE_MAX]
+            for key, value in raw_notes.items()
+            if isinstance(key, str) and isinstance(value, str) and value
+        }
         # probe_generation: pre-Wave-C JSONs load as 1 (dataclass default);
         # a corrupt value coerces to 1 too — the STALE reading, so a garbage
         # generation can never launder an old strict_json score into current.

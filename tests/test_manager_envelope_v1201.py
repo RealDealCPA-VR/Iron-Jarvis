@@ -27,7 +27,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import iron_jarvis.providers.manager as manager_mod
-from iron_jarvis.daemon.chat_turn import _context_window
+from iron_jarvis.daemon.chat_turn import _context_window, _context_window_source
 from iron_jarvis.envelope import store
 from iron_jarvis.envelope.profile import CapabilityProfile
 from iron_jarvis.providers.manager import API_PROVIDERS, ProviderManager
@@ -387,3 +387,104 @@ def test_cache_invalidates_when_the_profile_file_appears_or_disappears(tmp_path)
     assert mgr.capability_profile("ollama", "m").source == "probed"
     store.profile_path(tmp_path, "ollama", "m").unlink()  # and DISAPPEARS
     assert mgr.capability_profile("ollama", "m").source == "default"
+
+
+# --------------------------------------------------------------------------- #
+# v1.204.0 live finding 1 — GHOST OLLAMA: config.toml stores a cleared
+# endpoint as "" (TOML has no null); the constructor read "" as configured
+# while configure_local collapsed it to None, so every BOOT showed a
+# "Local Ollama" the user never installed until the first Settings save.
+# --------------------------------------------------------------------------- #
+
+
+def test_empty_string_endpoint_config_is_unconfigured_at_the_constructor(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    mgr = ProviderManager(ollama_base_url="", custom_base_url="")
+    # BOTH slots: "" means not configured, exactly like None — the gate in
+    # available() is `is None`, and "" used to slip past it.
+    assert mgr._ollama_base_url is None
+    assert mgr._custom_base_url is None
+    assert mgr.available("ollama") is False
+    assert mgr.available("custom") is False
+    # ...and the ghost no longer feeds the "a real provider is connected"
+    # trap detector (has_available_api_provider folds ollama/custom in).
+    assert mgr.has_available_api_provider() is False
+    # A REAL constructor URL still configures (the fix must not eat it).
+    real = ProviderManager(
+        ollama_base_url="http://localhost:11434",
+        custom_base_url="http://lan-box:8000/v1",
+    )
+    assert real.available("ollama") is True
+    assert real.available("custom") is True
+
+
+def test_constructor_and_reconfigure_agree_on_the_empty_string():
+    """PARITY PIN: the two paths that set the slots must answer identically
+    for every clearing shape. The reconfigure half was already correct
+    (v1.148.0's `or None`) — this pins the pair so neither regresses alone."""
+    for cleared in ("", None):
+        built = ProviderManager(ollama_base_url=cleared, custom_base_url=cleared)
+        reconf = ProviderManager(
+            ollama_base_url="http://localhost:11434",
+            custom_base_url="http://lan-box:8000/v1",
+        )
+        reconf.configure_local(ollama_base_url=cleared, custom_base_url=cleared)
+        assert built._ollama_base_url is reconf._ollama_base_url is None, cleared
+        assert built._custom_base_url is reconf._custom_base_url is None, cleared
+        assert built.available("ollama") is reconf.available("ollama") is False
+        assert built.available("custom") is reconf.available("custom") is False
+
+
+# --------------------------------------------------------------------------- #
+# v1.204.0 live finding 2 — ONE window resolver with provenance:
+# _context_window_source answers (value, source) on the SAME ladder, and the
+# plain _context_window (every existing caller) delegates to it.
+# --------------------------------------------------------------------------- #
+
+
+def test_context_window_source_names_all_four_rungs(tmp_path):
+    _save(tmp_path, "ollama", "llama3.1", **MEASURED)
+    mgr = ProviderManager(envelope_home=tmp_path)
+    bare = ProviderManager(envelope_home=tmp_path / "empty")
+    cases = [
+        # pin beats everything, even with measured + fleet present
+        (_d(pins={"ollama::llama3.1": 8192}, providers=mgr, fleet=_fleet("llama3.1")),
+         (8192, "pin")),
+        # measured envelope beats the fleet probe
+        (_d(providers=mgr, fleet=_fleet("llama3.1", 32_768)), (20_000, "measured")),
+        # fleet probe speaks when nothing above does
+        (_d(providers=bare, fleet=_fleet("llama3.1", 32_768)), (32_768, "endpoint")),
+        # unknown: value None, source "default" — callers keep fixed budgets
+        (_d(providers=bare), (None, "default")),
+    ]
+    for d, expected in cases:
+        assert _context_window_source(d, "ollama", "llama3.1") == expected
+        # BYTE-IDENTITY of the public shape: the plain function answers the
+        # tuple's value on every rung (it delegates — one ladder, not two).
+        assert _context_window(d, "ollama", "llama3.1") == expected[0]
+
+
+def test_existing_context_window_callers_still_use_the_plain_function():
+    """The v1.204.0 seam pin: _context_window's existing callers (both chat
+    lanes' planners, _attachment_budgets, the agent runtime) must stay on the
+    plain-int call — only routes/envelope.py consumes the (value, source)
+    sibling. A refactor that migrates a caller silently changes its unpack
+    shape; a refactor that re-derives the ladder in the route drifts."""
+    from pathlib import Path as _P
+
+    import iron_jarvis
+
+    src = _P(iron_jarvis.__file__).resolve().parent
+    chat_turn = (src / "daemon" / "chat_turn.py").read_text(encoding="utf-8")
+    routes_chat = (src / "daemon" / "routes" / "chat.py").read_text(encoding="utf-8")
+    runtime = (src / "agents" / "runtime.py").read_text(encoding="utf-8")
+    route_env = (src / "daemon" / "routes" / "envelope.py").read_text(encoding="utf-8")
+    assert "window = _context_window(d, provider, model)" in chat_turn
+    assert "ctx = _context_window(d, provider, model)" in chat_turn  # _attachment_budgets
+    assert "window = _context_window(d, provider, model)" in routes_chat
+    assert "_context_window(" in runtime
+    # the delegation itself: ONE ladder, the plain function reads the sibling
+    assert "return _context_window_source(d, provider, model)[0]" in chat_turn
+    # and the route consumes the sibling instead of growing a second ladder
+    assert "_context_window_source" in route_env
+    assert "model_context_windows" not in route_env

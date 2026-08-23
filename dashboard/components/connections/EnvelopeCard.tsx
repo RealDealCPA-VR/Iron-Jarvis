@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * The Capability Envelope surfaces (v1.201.0, Wave A A4).
+ * The Capability Envelope surfaces (v1.201.0, restructured v1.204.0 from
+ * live user feedback).
  *
  * IronCore's lesson, ported: a model's profile is only worth showing if its
  * PROVENANCE is shown next to it. The report card once rendered a green
@@ -11,11 +12,32 @@
  *    (probed / partial / tuned) — seeded and floor profiles say what they
  *    are instead of dressing up as a scorecard;
  *  - a probe that measured nothing says so ("measure failed — keeping floor
- *    defaults"), and a trusted (frontier) model gets one quiet line, never a
- *    fake scorecard.
+ *    defaults").
+ *
+ * v1.204.0 — three findings from the shipped UI, live on the user's install:
+ *  1. PLACEMENT: the envelope section inside the connect tiles made the
+ *     custom-endpoint card enormous. Measurements now render in their OWN
+ *     `MeasuredEndpoints` section below the connect cards, showing ONLY
+ *     endpoints whose GET returns a stored profile (source != "default").
+ *     Nothing measured -> no section at all, not an empty husk. The Measure
+ *     button + provenance chip stay small on the endpoint rows.
+ *  2. CONTEXT HONESTY: the card used to print the profile's floor context
+ *     (8192/4096) although the app budgets with `effective_window` (pin →
+ *     measured → endpoint → default). The context row now shows the
+ *     effective window with its source in words, and unmeasured context
+ *     fields say "not yet deep-measured" instead of parading floor numbers.
+ *  3. FLOORED-RUNG HONESTY: a rung the prober FLOORED (score 0.0 and the
+ *     path absent from `measured_fields`) is a refusal, not a measurement —
+ *     it renders as "the endpoint refused them" (+ the probe_notes reason),
+ *     never a bare 0.00 score bar the user reads as their model scoring
+ *     zero. A truly SCORED 0.0 (path present) keeps the bar.
  *
  * Wire contract (backend ships in parallel — mocked in tests):
- *   GET  /envelope/{provider}/{model}        -> { profile, trusted }
+ *   GET  /envelope/{provider}/{model}
+ *     -> { profile, trusted,
+ *          effective_window: { value, source: pin|measured|endpoint|default } }
+ *     profile carries `measured_fields: string[]` (per-field provenance) and
+ *     `probe_notes: {[path]: string}` (why a rung was floored).
  *   POST /envelope/{provider}/{model}/probe  -> { started: true } | 400 | 409
  *   completion: `envelope.probe_completed` on the live event stream.
  */
@@ -41,11 +63,26 @@ export interface EnvelopeProfile {
   tool_protocols?: Partial<Record<"native" | "strict_json", number>> | null;
   json_adherence?: number | null;
   coherence_horizon?: number | null;
+  /** Per-field provenance: paths the probe REALLY measured (e.g.
+   *  "tool_protocols.native", "honest_context"). A 0.0 rung whose path is
+   *  absent here was FLOORED (the endpoint refused the trials), not scored. */
+  measured_fields?: string[] | null;
+  /** Why a path was floored, keyed the same way as measured_fields (e.g.
+   *  {"tool_protocols.native": "native trials errored: HTTP 400 …"}). */
+  probe_notes?: Record<string, string> | null;
+}
+
+/** The window the app ACTUALLY budgets with (pin → measured → endpoint →
+ *  default) — the profile's own context fields may be unmeasured floors. */
+export interface EffectiveWindow {
+  value: number | null;
+  source: "pin" | "measured" | "endpoint" | "default" | string;
 }
 
 export interface EnvelopeData {
   profile?: EnvelopeProfile | null;
   trusted?: boolean;
+  effective_window?: EffectiveWindow | null;
 }
 
 /**
@@ -229,50 +266,187 @@ function LadderRow({
   );
 }
 
-/* -------------------------------------------------------- report section */
+/* ---------------------------------------------- measured-endpoints section */
 
-/**
- * The envelope section of the Model report card. Renders nothing until the
- * GET answers with a real profile; a trusted model gets one quiet line and
- * never a scorecard; ladder rows appear only on measured provenance.
- */
-export function EnvelopeSection({
-  provider,
-  model,
-  surface,
-}: {
+/** One (provider, model) the page considers measurable — the same list the
+ *  endpoint rows offer Measure for. */
+export interface MeasuredEntry {
   provider: string;
   model: string;
-  /** Same disambiguation ModelReportLine uses when one provider renders on
-   *  two surfaces — duplicate testids would make both unaddressable. */
-  surface?: string;
-}) {
-  const { data, reload } = useEnvelope(provider, model);
-  useProbeCompleted(provider, model, reload);
+  /** Human name of the endpoint the model runs on (node label / provider). */
+  label: string;
+}
 
-  if (!data) return null;
-  const tid = `envelope-${surface ? `${surface}-` : ""}${provider}-${model}`;
-  if (data.trusted) {
-    return (
-      <div data-testid={`${tid}-trusted`} className="mt-0.5 text-[10.5px] text-zinc-600">
-        fully capable — no measurement needed
-      </div>
-    );
+/** A GET answer worth a card: a stored, non-trusted profile. Floor defaults
+ *  (source "default") are the ABSENCE of measurement and render nothing. */
+function isStoredProfile(
+  d: EnvelopeData | undefined,
+): d is EnvelopeData & { profile: EnvelopeProfile } {
+  return Boolean(
+    d && d.trusted !== true && d.profile?.source && d.profile.source !== "default",
+  );
+}
+
+/** The effective window's source, in words the user can act on. */
+function effectiveWindowWords(source: string): string {
+  switch (source) {
+    case "pin":
+      return "pinned by you";
+    case "measured":
+      return "measured";
+    case "endpoint":
+      return "from the endpoint";
+    default:
+      return "conservative default";
   }
-  const profile = data.profile;
-  if (!profile || !profile.source) return null;
+}
 
+/**
+ * The measurements section — its OWN card BELOW the connect cards, one
+ * compact row per stored non-trusted profile. Renders NOTHING (no husk)
+ * when no endpoint has a stored profile. Refetches every profile when an
+ * `envelope.probe_completed` lands on the live stream, so a Measure pressed
+ * on an endpoint row surfaces its result here.
+ */
+export function MeasuredEndpoints({ entries }: { entries: MeasuredEntry[] }) {
+  const [results, setResults] = useState<Record<string, EnvelopeData>>({});
+  const [gen, setGen] = useState(0);
+  const reload = useCallback(() => setGen((g) => g + 1), []);
+
+  // ANY probe completion refetches the lot — one extra GET per entry is
+  // cheap, and a missed one leaves a stale (or missing) card on screen.
+  const { events } = useEvents(60);
+  const latest = events.find((e) => e.type === "envelope.probe_completed");
+  const seenRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!latest || seenRef.current === latest.id) return;
+    seenRef.current = latest.id;
+    reload();
+  }, [latest, reload]);
+
+  // entries is rebuilt every parent render — key the effect on its CONTENT.
+  const entriesKey = entries.map((e) => `${e.provider}\u0000${e.model}`).join("|");
+  useEffect(() => {
+    if (entries.length === 0) {
+      setResults({});
+      return;
+    }
+    let cancelled = false;
+    void Promise.all(
+      entries.map(async (e) => {
+        try {
+          const d = await get<EnvelopeData>(envelopeUrl(e.provider, e.model));
+          return [`${e.provider}\u0000${e.model}`, d ?? null] as const;
+        } catch {
+          return null; // best-effort — an unreachable daemon shows nothing
+        }
+      }),
+    ).then((pairs) => {
+      if (cancelled) return;
+      const next: Record<string, EnvelopeData> = {};
+      for (const p of pairs) {
+        if (p && p[1]) next[p[0]] = p[1];
+      }
+      setResults(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entriesKey, gen]);
+
+  const shown = entries.filter((e) =>
+    isStoredProfile(results[`${e.provider}\u0000${e.model}`]),
+  );
+  if (shown.length === 0) return null;
+
+  return (
+    <section data-testid="measured-endpoints" className="card-surface p-5">
+      <div className="mb-3">
+        <h2 className="text-sm font-semibold text-zinc-100">Measured endpoints</h2>
+        <p className="mt-0.5 text-[11px] leading-relaxed text-zinc-500">
+          What each local model was measured to do. An endpoint appears here once a
+          capability profile exists — Measure lives on the endpoint rows above.
+        </p>
+      </div>
+      <div className="space-y-2">
+        {shown.map((e) => (
+          <MeasuredProfileCard
+            key={`${e.provider}\u0000${e.model}`}
+            entry={e}
+            data={results[`${e.provider}\u0000${e.model}`] as EnvelopeData & { profile: EnvelopeProfile }}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * One measured profile: plain-language verdict first, the effective window
+ * (what the app REALLY budgets with) with its source in words, and the full
+ * scores behind an expand. Floored rungs say "refused", never 0.00.
+ */
+function MeasuredProfileCard({
+  entry,
+  data,
+}: {
+  entry: MeasuredEntry;
+  data: EnvelopeData & { profile: EnvelopeProfile };
+}) {
+  const [open, setOpen] = useState(false);
+  const { provider, model, label } = entry;
+  const tid = `measured-${provider}-${model}`;
+  const profile = data.profile;
   const badge = sourceBadge(profile.source);
   const measured = MEASURED_SOURCES.has(profile.source);
   const tp = profile.tool_protocols ?? {};
-  const selectedRung =
-    (measured &&
-      LADDER.find((l) => {
-        const s = tp[l.rung];
-        return typeof s === "number" && s >= l.bar;
-      })?.rung) ||
-    null;
+  const notes = profile.probe_notes ?? {};
 
+  // Per-field provenance. Profiles written before measured_fields existed
+  // carry none — treat every field of a measured profile as measured then
+  // (the old behaviour), rather than calling real scores floored.
+  const hasFieldProvenance = Array.isArray(profile.measured_fields);
+  const mf = new Set(profile.measured_fields ?? []);
+  const fieldMeasured = (path: string): boolean =>
+    hasFieldProvenance ? mf.has(path) : measured;
+
+  const rungs = LADDER.map((l) => {
+    const raw = tp[l.rung];
+    const score = typeof raw === "number" ? raw : undefined;
+    // A 0.0 whose path the probe never scored is a REFUSAL (the endpoint
+    // errored on those trials), not a measurement of the model.
+    const refused = score === 0 && !fieldMeasured(`tool_protocols.${l.rung}`);
+    return { ...l, score, refused };
+  });
+  const selectedRung = measured
+    ? (rungs.find((r) => r.score != null && !r.refused && r.score >= r.bar)?.rung ?? null)
+    : null;
+
+  // The one-line verdict, plain language FIRST — the user read "native 0.00"
+  // as their model scoring zero; the card now leads with what it means.
+  const verdict = !measured
+    ? profile.source === "probe_failed"
+      ? "measure failed — keeping floor defaults"
+      : "reported by the endpoint — not verified yet"
+    : selectedRung === "native"
+      ? "fully usable — native tool calls"
+      : selectedRung === "strict_json"
+        ? "fully usable — tool calls run as guided JSON"
+        : "limited — runs step-by-step with verification";
+  const verdictTone = !measured
+    ? profile.source === "probe_failed"
+      ? "text-amber-200/90"
+      : "text-zinc-400"
+    : selectedRung != null
+      ? "text-emerald-300/90"
+      : "text-amber-200/90";
+
+  // Context honesty: the app budgets with effective_window, so THAT is the
+  // number shown. The profile's own floor context (8192/4096) never renders
+  // as if it were the operating window.
+  const ew = data.effective_window ?? null;
+  const ctxMeasured = fieldMeasured("context_window") || fieldMeasured("honest_context");
   const adv = profile.context_window ?? null;
   const honest = profile.honest_context ?? null;
   const gapPct = adv && honest && adv > 0 ? Math.round((honest / adv) * 100) : null;
@@ -280,89 +454,133 @@ export function EnvelopeSection({
 
   const meta: string[] = [];
   if (measured) {
-    if (profile.json_adherence != null) meta.push(`JSON adherence ${profile.json_adherence.toFixed(2)}`);
-    if (profile.coherence_horizon != null) meta.push(`coherent to ~${profile.coherence_horizon} turns`);
-    if (profile.vision != null) meta.push(`vision ${profile.vision ? "yes" : "no"}`);
+    if (profile.json_adherence != null && fieldMeasured("json_adherence"))
+      meta.push(`JSON adherence ${profile.json_adherence.toFixed(2)}`);
+    if (profile.coherence_horizon != null && fieldMeasured("coherence_horizon"))
+      meta.push(`coherent to ~${profile.coherence_horizon} turns`);
+    if (profile.vision != null && fieldMeasured("vision"))
+      meta.push(`vision ${profile.vision ? "yes" : "no"}`);
   }
 
   return (
     <div
       data-testid={tid}
-      className="mt-1 space-y-1 rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-2"
+      className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5"
     >
-      <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
-        <span className="font-medium uppercase tracking-wide text-zinc-500">envelope</span>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="max-w-[10rem] truncate text-[12px] font-medium text-zinc-200" title={label}>
+          {label}
+        </span>
+        <span className="min-w-0 truncate font-mono text-[10.5px] text-zinc-500" title={model}>
+          {model}
+        </span>
         <span
           data-testid={`${tid}-source`}
           title={badge.title}
-          className={`rounded-full border px-1.5 py-0.5 ${badge.tone}`}
+          className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] ${badge.tone}`}
         >
           {badge.label}
         </span>
-        <span className="font-mono text-zinc-600">{model}</span>
+        <button
+          type="button"
+          data-testid={`${tid}-expand`}
+          aria-expanded={open}
+          onClick={() => setOpen((v) => !v)}
+          className="ml-auto shrink-0 rounded-full border border-white/10 px-1.5 py-0.5 text-[10px] text-zinc-400 transition-colors hover:border-accent/30 hover:text-accent-soft"
+        >
+          {open ? "hide details" : "details"}
+        </button>
       </div>
 
-      {honest != null && adv != null && honest < adv ? (
-        <p className="text-[10.5px] text-zinc-400">
-          honest context <span className="font-mono">{fmtInt(honest)}</span> of{" "}
-          <span className="font-mono">{fmtInt(adv)}</span> advertised
-          {gapPct != null ? ` (${gapPct}%)` : ""}
-          {bigGap && (
-            <span className="text-rose-300/90"> — big gap; budgets use the honest number</span>
-          )}
-        </p>
-      ) : honest != null || adv != null ? (
-        <p className="text-[10.5px] text-zinc-400">
-          context <span className="font-mono">{fmtInt((honest ?? adv) as number)}</span> tokens
-          {measured ? "" : profile.source === "seeded" ? " (reported)" : " (floor)"}
-        </p>
-      ) : null}
+      <p data-testid={`${tid}-verdict`} className={`mt-1 text-[11px] font-medium ${verdictTone}`}>
+        {verdict}
+      </p>
 
-      {profile.chars_per_token != null && (
-        <p className="text-[10.5px] text-zinc-400">
-          {profile.chars_per_token} chars/token
-          {measured ? "" : " (assumed)"}
+      {ew && ew.value != null && (
+        <p className="mt-0.5 text-[10.5px] text-zinc-400">
+          context window: <span className="font-mono">{fmtInt(ew.value)}</span>{" "}
+          ({effectiveWindowWords(ew.source)})
+        </p>
+      )}
+      {!ctxMeasured && (
+        <p className="mt-0.5 text-[10.5px] text-zinc-500">
+          context not yet deep-measured; the app uses{" "}
+          {ew?.source === "pin" ? "your pinned value" : "the endpoint's value"}
         </p>
       )}
 
-      {measured ? (
-        <div data-testid={`${tid}-ladder`} className="space-y-1 pt-0.5">
-          {LADDER.map((l) => (
-            <LadderRow
-              key={l.rung}
-              label={l.label}
-              rung={l.rung}
-              score={tp[l.rung]}
-              bar={l.bar}
-              selected={selectedRung === l.rung}
-            />
-          ))}
-          <div data-rung="text_floor" className="flex items-center gap-2 text-[10.5px]">
-            <span className="w-36 shrink-0 truncate text-zinc-400">text floor</span>
-            <span
-              className={
-                selectedRung == null ? "font-semibold text-emerald-300" : "text-zinc-600"
-              }
-            >
-              {selectedRung == null ? "SELECTED — no rung cleared its bar" : "floor (always works)"}
-            </span>
-          </div>
-          {meta.length > 0 && (
-            <p className="pt-0.5 text-[10px] text-zinc-500">{meta.join(" · ")}</p>
+      {open && (
+        <div data-testid={`${tid}-detail`} className="mt-2 space-y-1 border-t border-white/[0.06] pt-2">
+          {measured ? (
+            <>
+              <div data-testid={`${tid}-ladder`} className="space-y-1">
+                {rungs.map((r) =>
+                  r.refused ? (
+                    <div key={r.rung} data-rung={r.rung} className="text-[10.5px]">
+                      <span className="text-zinc-400">{r.label}: </span>
+                      <span className="text-amber-200/90">the endpoint refused them</span>
+                      {notes[`tool_protocols.${r.rung}`] && (
+                        <p className="mt-0.5 text-[10px] leading-relaxed text-zinc-500">
+                          {notes[`tool_protocols.${r.rung}`]}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <LadderRow
+                      key={r.rung}
+                      label={r.label}
+                      rung={r.rung}
+                      score={r.score}
+                      bar={r.bar}
+                      selected={selectedRung === r.rung}
+                    />
+                  ),
+                )}
+                <div data-rung="text_floor" className="flex items-center gap-2 text-[10.5px]">
+                  <span className="w-36 shrink-0 truncate text-zinc-400">text floor</span>
+                  <span
+                    className={
+                      selectedRung == null ? "font-semibold text-emerald-300" : "text-zinc-600"
+                    }
+                  >
+                    {selectedRung == null
+                      ? "SELECTED — no rung cleared its bar"
+                      : "floor (always works)"}
+                  </span>
+                </div>
+              </div>
+              {ctxMeasured && honest != null && adv != null && honest < adv && (
+                <p className="text-[10.5px] text-zinc-400">
+                  honest context <span className="font-mono">{fmtInt(honest)}</span> of{" "}
+                  <span className="font-mono">{fmtInt(adv)}</span> advertised
+                  {gapPct != null ? ` (${gapPct}%)` : ""}
+                  {bigGap && (
+                    <span className="text-rose-300/90">
+                      {" "}
+                      — big gap; budgets use the honest number
+                    </span>
+                  )}
+                </p>
+              )}
+              {profile.chars_per_token != null && fieldMeasured("chars_per_token") && (
+                <p className="text-[10.5px] text-zinc-400">
+                  {profile.chars_per_token} chars/token
+                </p>
+              )}
+              {meta.length > 0 && (
+                <p className="pt-0.5 text-[10px] text-zinc-500">{meta.join(" · ")}</p>
+              )}
+            </>
+          ) : profile.source === "probe_failed" ? (
+            <p className="text-[10.5px] text-amber-200/80">
+              the probe battery ran and nothing came back usable — keeping floor defaults
+            </p>
+          ) : (
+            <p className="text-[10.5px] text-zinc-500">
+              capabilities reported by the endpoint, not verified — Measure runs the real probes
+            </p>
           )}
         </div>
-      ) : profile.source === "seeded" ? (
-        <p className="text-[10.5px] text-zinc-500">
-          capabilities reported by the endpoint, not verified — Measure runs the real probes
-        </p>
-      ) : profile.source === "probe_failed" ? (
-        <p className="text-[10.5px] text-amber-200/80">
-          the probe battery ran and nothing came back usable — keeping floor defaults
-        </p>
-      ) : (
-        <p className="text-[10.5px] text-zinc-500">
-          nothing probed yet — Measure runs the capability battery
-        </p>
       )}
     </div>
   );

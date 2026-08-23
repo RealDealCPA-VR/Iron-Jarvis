@@ -87,7 +87,8 @@ import {
 import { RestHookups } from "@/components/connections/RestHookups";
 import {
   EnvelopeRowControls,
-  EnvelopeSection,
+  MeasuredEndpoints,
+  type MeasuredEntry,
 } from "@/components/connections/EnvelopeCard";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -274,14 +275,10 @@ function ModelReportLine({
                 {qualityLine(r, classRows)}
               </span>
             </p>
-            {/* The Capability Envelope section (v1.201.0): what this model
-                was MEASURED to do, provenance always shown next to the
-                numbers. Renders nothing until GET /envelope answers; gated
-                to hasEnvelopeSurface (opencode-cli is trusted server-side —
-                see the helper's comment). */}
-            {hasEnvelopeSurface(provider) && (
-              <EnvelopeSection provider={provider} model={r.model} surface={surface} />
-            )}
+            {/* Envelope measurements moved OUT of the tiles (v1.204.0, live
+                user feedback: they made the cards enormous) — they render in
+                the MeasuredEndpoints section below the connect cards. The
+                Measure button + provenance chip stay on the endpoint rows. */}
           </div>
         );
       })}
@@ -1549,6 +1546,10 @@ export default function ConnectionsPage() {
     rows: QualityRow[];
   }>("/routing/quality");
   const qualityRows = qualityData?.rows ?? [];
+  // The fleet snapshot, for the MeasuredEndpoints section (v1.204.0): the
+  // stored endpoints' (provider, model) pairs — the same measurable list the
+  // endpoint rows offer Measure for. Best-effort like everything else here.
+  const { data: fleetData } = useApi<{ nodes?: { node?: EndpointNodeDump }[] }>("/fleet");
   const { health, refresh: refreshHealth } = useDaemon();
   const offline = error && error.status === 0;
   const connections = data?.connections ?? [];
@@ -1578,6 +1579,42 @@ export default function ConnectionsPage() {
     }
     return [...new Set(models)];
   };
+
+  // Every (provider, model) the envelope could have measured — endpoint
+  // default models, quality-judged local models, and the health default.
+  // MeasuredEndpoints GETs each one and shows ONLY those with a stored
+  // profile; when nothing is measured the section is absent entirely.
+  const measuredEntries: MeasuredEntry[] = (() => {
+    const seen = new Set<string>();
+    const out: MeasuredEntry[] = [];
+    const add = (provider: string, model: string, label: string) => {
+      if (!provider || !model || !hasEnvelopeSurface(provider)) return;
+      const k = `${provider}\u0000${model}`;
+      if (seen.has(k)) return;
+      seen.add(k);
+      out.push({ provider, model, label });
+    };
+    for (const row of fleetData?.nodes ?? []) {
+      const n = row.node;
+      if (!n?.id || !n.routable || !n.default_model) continue;
+      if (n.source !== "user" && n.source !== "config") continue;
+      // Config-seeded slots ARE their provider (id "ollama"/"custom");
+      // user nodes are their own "fleet-<id>" provider — same addressing
+      // as the rows' EnvelopeRowControls (the v1.201 defect pin).
+      add(
+        n.source === "config" ? n.id : `fleet-${n.id}`,
+        n.default_model,
+        n.label || n.id,
+      );
+    }
+    for (const r of qualityRows) {
+      if (r.task_class == null && r.model) add(r.provider, r.model, r.provider);
+    }
+    if (health?.default_provider && health.default_model) {
+      add(health.default_provider, health.default_model, health.default_provider);
+    }
+    return out;
+  })();
 
   /* --- Rescan local CLIs (POST /providers/rescan) --------------------------- */
   // Re-detects locally installed CLI inference providers (Claude/Codex/Grok
@@ -1761,6 +1798,12 @@ export default function ConnectionsPage() {
           </div>
         )}
       </Reveal>
+
+      {/* Measured endpoints (v1.204.0): the capability measurements, BELOW
+          the connect cards as their own section. Renders nothing at all when
+          no endpoint has a stored profile — deliberately not wrapped in
+          Reveal so an empty section leaves no husk in the layout. */}
+      <MeasuredEndpoints entries={measuredEntries} />
 
       <Reveal>
         <Card

@@ -247,10 +247,30 @@ def register(app: FastAPI, d) -> None:
         """The capability profile for one provider+model. Trusted providers
         answer by construction; local providers answer the stored measurement
         or the floor. ``stored`` says which, so a UI can render provenance
-        without re-deriving it."""
+        without re-deriving it.
+
+        ``effective_window`` (v1.204.0, live finding): the profile's context
+        fields are the FLOOR until a deep CTX battery measures them
+        (8192/4096, honestly absent from ``measured_fields``), but the card
+        rendered them raw — the user read the floor as the window the app
+        plans with. This key carries the window chat ACTUALLY uses,
+        ``{"value": int|null, "source": "pin"|"measured"|"endpoint"|
+        "default"}``, resolved by THE one ladder
+        (``chat_turn._context_window_source`` — the same function both chat
+        lanes and the agent runtime plan through). Deliberately NOT re-derived
+        here: two window ladders drift, same as two trusted oracles did."""
         model = model.strip()
         if not model:
             raise HTTPException(status_code=400, detail="model id required after the provider")
+        # Lazy import, the routes/chat.py idiom for chat_turn helpers (the
+        # module is heavy and this avoids a cycle at registration time).
+        from ..chat_turn import _context_window_source
+
+        # The measured rung stats/reads the envelope store — off the loop.
+        value, source = await asyncio.to_thread(
+            _context_window_source, d, provider, model
+        )
+        effective_window = {"value": value, "source": source}
         if d.platform.providers.is_trusted_provider(provider):
             return {
                 "provider": provider,
@@ -258,6 +278,7 @@ def register(app: FastAPI, d) -> None:
                 "trusted": True,
                 "stored": False,
                 "profile": trusted_profile(provider, model).to_dict(),
+                "effective_window": effective_window,
             }
         home = Path(d.platform.config.home)
         # load_profile never raises, but it reads disk — off the loop (v1.153.1).
@@ -271,6 +292,7 @@ def register(app: FastAPI, d) -> None:
             "trusted": False,
             "stored": stored is not None,
             "profile": profile.to_dict(),
+            "effective_window": effective_window,
         }
 
     @app.post("/envelope/{provider}/{model:path}/probe")
