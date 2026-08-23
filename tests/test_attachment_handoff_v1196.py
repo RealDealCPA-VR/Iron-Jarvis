@@ -1732,13 +1732,17 @@ def test_the_scorer_is_hopped_off_the_loop_in_both_lanes(client, monkeypatch, ro
     saw_running_loop: list[bool] = []
     real = _ct._resolve_armed_tools
 
-    def spy(d, body):
+    # *args/**kw so the spy survives additive signature growth — v1.202.0
+    # added `max_tools` to the arming pass and a fixed (d, body) spy raised
+    # TypeError inside the lanes' except-guards, which read as "never reached
+    # the arming pass" instead of naming the real breakage.
+    def spy(d, body, *args, **kw):
         try:
             _asyncio.get_running_loop()
             saw_running_loop.append(True)
         except RuntimeError:
             saw_running_loop.append(False)
-        return real(d, body)
+        return real(d, body, *args, **kw)
 
     # PATCH BOTH BINDINGS. `routes/chat.py` does `from ..chat_turn import
     # _resolve_armed_tools` at module level, so the streaming lane holds its own

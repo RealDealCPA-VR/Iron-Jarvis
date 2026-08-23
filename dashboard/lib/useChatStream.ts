@@ -9,7 +9,8 @@
 //   approval_resolved {"id","call_id","tool","decision"}     (v1.187.0)
 //   meta      {"provider","model"}
 //   round     {"round":n}
-//   done      {"reply","provider","model","tools_used","denied_tools","usage"}
+//   done      {"reply","provider","model","tools_used","denied_tools","usage",
+//              "adapted": {model,changes}|null, ...}
 //   error     {"detail","status"?}
 //
 // with a ": keepalive" comment every ~15s of idle. This library turns that raw
@@ -85,6 +86,11 @@ export type SSEEvent =
       /** The turn RAN a saved workflow via the workflow_run tool (v1.170.0) —
        *  render the live run chip under the reply. */
       workflow_run?: { run_id: string; name: string } | null;
+      /** The capability ENVELOPE bent this turn to fit a measured-weak model
+       *  (v1.202.0): {model, changes:["tool_cap:<n>", ...]}. The daemon sends
+       *  the key on EVERY turn (null when nothing bent — the common case);
+       *  the decoder keeps only the bent shape, so absent ≡ null here. */
+      adapted?: { model?: string; changes: string[] } | null;
       usage?: { input_tokens?: number; output_tokens?: number };
       /** Context-window accounting for this turn (v1.146.0). */
       context?: ContextUsage | null;
@@ -115,6 +121,9 @@ export interface ChatStreamResult {
   route?: { requested?: string; provider: string; model?: string; reason?: string };
   /** Server-derived doors into the surfaces this turn touched (v1.199.0). */
   doors?: { href: string; label: string }[];
+  /** The envelope's adaptation disclosure (v1.202.0) — see the done-frame
+   *  field. Absent/null = nothing bent. */
+  adapted?: { model?: string; changes: string[] } | null;
   /** Token usage for the turn (was decoded and dropped, like denied_tools). */
   usage?: { input_tokens?: number; output_tokens?: number };
   provider?: string;
@@ -251,6 +260,16 @@ export function sseEventFrom(
       // users watch (the denied_tools lesson, learned twice already).
       if (Array.isArray(data.doors))
         ev.doors = data.doors as { href: string; label: string }[];
+      // Adapted (v1.202.0): the envelope's disclosure — same whitelist
+      // hazard as doors. The daemon sends null on the common (unbent) path;
+      // only the bent shape (an object with a changes array) survives the
+      // decode, so downstream treats absent and null identically.
+      if (
+        data.adapted &&
+        typeof data.adapted === "object" &&
+        Array.isArray((data.adapted as { changes?: unknown }).changes)
+      )
+        ev.adapted = data.adapted as { model?: string; changes: string[] };
       if (Array.isArray(data.documents)) ev.documents = data.documents as string[];
       if (typeof data.escalate === "boolean") ev.escalate = data.escalate;
       if (typeof data.escalate_reason === "string")
@@ -569,6 +588,7 @@ export function useChatStream(): UseChatStream {
                 tools_used: ev.tools_used,
                 deniedTools: ev.denied_tools,
                 doors: ev.doors,
+                adapted: ev.adapted,
                 route: ev.route,
                 usage: ev.usage,
                 provider: ev.provider ?? provider,

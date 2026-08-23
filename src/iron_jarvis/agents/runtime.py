@@ -17,10 +17,21 @@ from ..core.db import session_scope
 from ..core.events import EventType
 from ..core.ids import utcnow
 from ..core.models import AgentRun, AgentState, AgentType, PermissionMode, Session
+from ..envelope.profile import CapabilityProfile
 from ..providers.adapters.base import LLMMessage
 from ..tools.base import ToolContext
 from . import decompose as _decompose
 from .types import AgentDefinition
+
+#: Published (string event type, the ``envelope.probe_started`` convention from
+#: daemon/routes/envelope.py) when a run's loop actually BENT under a measured
+#: capability envelope — ONCE per run, after the run's bends have RESOLVED
+#: (deciding to decompose is not decomposing: the planner may decline), payload
+#: ``{provider, model, adaptations, source}`` tagged with the session id.
+#: NEVER emitted for trusted or unmeasured profiles, and never for a run whose
+#: bends all evaporated: adaptation is narrated, never silent — and a run that
+#: did not adapt must not narrate one.
+ENVELOPE_ADAPTED = "envelope.adapted"
 
 #: How long a PAUSED run holds for a mid-run approval before denying honestly
 #: (v1.189.0). Longer than chat's (the user may be on another page — the event
@@ -134,8 +145,37 @@ _ROSTER_WRITERS: frozenset[str] = _WRITE_TIER | {
 }
 
 
-def arm_for_task(platform, task: str, roster: list[str], *, cap: int = _AUTO_ARM_CAP):
+def arm_for_task(
+    platform,
+    task: str,
+    roster: list[str],
+    *,
+    cap: int = _AUTO_ARM_CAP,
+    max_tools: int | None = None,
+    adaptations: "list[str] | None" = None,
+):
     """*roster* plus up to *cap* capability-selected tools for THIS task.
+
+    ``max_tools`` (v1.202.0, Wave B1) is the CAPABILITY ENVELOPE's arming
+    budget — ``CapabilityProfile.max_tools()`` for the model this run will
+    answer with. It takes the same contract ``tools/autoselect
+    .select_auto_tools`` gives its own ``max_tools`` parameter: ``None`` (a
+    trusted or unmeasured profile — the helper itself answers None for both)
+    leaves the arming byte-identical to v1.201.0, and an int bounds the run's
+    TOTAL tool count while the roster is CONSENT and is never dropped — a
+    definition's explicit grant survives however weak the model measured, so
+    only the auto ADDITIONS shrink (to ``max_tools - len(roster)``, floored at
+    zero). The budget is applied here as a slice of the selector's ranked
+    output rather than passed down as its ``max_tools`` argument, for two
+    reasons: the slice lands AFTER the registry-presence filter (so a capped
+    run still gets tools this install actually serves, instead of paying its
+    tiny budget on ghost names — ``select_auto_tools``'s own doc pins the cap
+    as "the SAME ranked slice", so the order is identical either way), and the
+    slice is the one place that can HONESTLY report whether the cap bent
+    anything: when it drops at least one selected tool, ``"tool_cap:<n>"`` is
+    appended to *adaptations* (caller-owned list; the runtime folds it into
+    the single ``envelope.adapted`` event). A cap that dropped nothing bent
+    nothing and reports nothing.
 
     FIVE RELEASES IN A ROW FAILED THE SAME WAY: the tool the run needed was not
     on the definition's roster, so it did not exist — `rename_file` (v1.177.2),
@@ -215,7 +255,141 @@ def arm_for_task(platform, task: str, roster: list[str], *, cap: int = _AUTO_ARM
     except Exception:  # noqa: BLE001 — arming is an optimisation; a failure
         # must leave the run with exactly the roster it had before.
         return roster
+    if max_tools is not None and extra:
+        # THE ENVELOPE CAP (v1.202.0, B1). Roster = consent, never dropped —
+        # even when the roster alone already exceeds the budget the additions
+        # simply go to zero. Recorded ONLY when a tool was actually dropped:
+        # "adapted" must mean the loop bent, not that a budget existed.
+        room = max(0, max_tools - len(roster))
+        if len(extra) > room:
+            extra = extra[:room]
+            if adaptations is not None:
+                adaptations.append(f"tool_cap:{max_tools}")
     return [*roster, *extra] if extra else roster
+
+
+def resolve_run_envelope(platform, session) -> tuple[str, str, CapabilityProfile]:
+    """The capability envelope consulted for THIS run (v1.202.0, Wave B).
+
+    Returns ``(provider, model, profile)``. Never raises: every resolution
+    failure answers the default floor profile, which is UNMEASURED and so
+    bends nothing (``max_tools()`` -> None, and the decompose consult in
+    :func:`should_decompose_enveloped` requires ``is_measured()``).
+
+    HOW THE RUNTIME KNOWS ITS MODEL. ``orchestrator.create_session`` stamps
+    every session with a provider and a model at creation time (falling back
+    to ``config.default_provider`` / ``config.default_model`` when the caller
+    picked nothing), so on the production path ``session.model`` is the
+    answer and the consult simply reads it. BE HONEST ABOUT THE EDGE: for a
+    session created without an explicit model on a NON-default provider, the
+    stamped model is the CONFIG default, while the model that actually
+    answers is only truly resolved inside ``router.complete()`` (the
+    provider's factory decides — model-aware factories honor the stamp,
+    legacy ones serve their own default). The consult follows the stamp — the
+    same "consult with the default provider+model from config" resolution the
+    integration plan prescribes for the default route — and for stub sessions
+    that carry NO model at all it falls back to the adapter's advertised
+    ``capabilities()["model"]`` (the same defensive resolution
+    ``decompose.resolved_tool_mode`` performs at this exact point in the
+    flow), then to the config default. A wrong guess is safe in both
+    directions: an unknown (provider, model) pair loads the unmeasured floor
+    and the loop stays byte-identical, and it cannot borrow a weak profile
+    measured for a different model unless the ids actually collide. Trusted
+    providers skip the adapter probe entirely — their profile ignores the
+    model's identity by construction, so there is nothing to resolve."""
+    provider = str(getattr(session, "provider", "") or "").strip()
+    if not provider:
+        try:
+            provider = str(getattr(platform.router, "default_provider", "") or "")
+        except Exception:  # noqa: BLE001 — a router stub without the property
+            provider = ""
+        if not provider:
+            provider = str(getattr(platform.config, "default_provider", "") or "")
+    model = str(getattr(session, "model", "") or "").strip()
+    manager = getattr(platform, "providers", None)
+    try:
+        trusted = bool(manager is not None and manager.is_trusted_provider(provider))
+    except Exception:  # noqa: BLE001
+        trusted = False
+    if not model and not trusted and provider and provider != "auto":
+        try:
+            if manager is not None and manager.available(provider):
+                caps = manager.get(provider, None).capabilities() or {}
+                model = str(caps.get("model") or "").strip()
+        except Exception:  # noqa: BLE001 — an unresolvable adapter → default
+            model = ""
+    if not model:
+        model = str(getattr(platform.config, "default_model", "") or "")
+    try:
+        if manager is not None:
+            return provider, model, manager.capability_profile(provider, model)
+    except Exception:  # noqa: BLE001 — capability_profile never raises, but a
+        pass  # test stub standing in for the manager may not carry it at all
+    return provider, model, CapabilityProfile(model_id=model, provider=provider)
+
+
+def should_decompose_enveloped(platform, session, profile) -> tuple[bool, bool]:
+    """The decompose gate with the capability envelope consulted (Wave B2).
+
+    Returns ``(engage, envelope_caused)``. Wraps — never edits —
+    ``decompose.should_decompose``, so every direct consumer of that gate
+    keeps its exact v1.201.0 contract; this is the runtime's own call-site
+    layer, and the runtime is the only production caller of the gate.
+
+    PRECEDENCE (the documented contract):
+
+    1. Today's gate speaks first, unchanged: ``decompose_all_tasks``, the
+       ``decompose_local_tasks`` flag, the bulk-task reason, the
+       prompted-mode reason. When IT engages, ``envelope_caused`` is False —
+       the run would have decomposed with no envelope at all, nothing bent,
+       and no ``envelope.adapted`` event may claim otherwise.
+    2. ``decompose_local_tasks`` is the GLOBAL override in BOTH directions.
+       False = NEVER: the envelope reason is silenced along with the bulk and
+       prompted ones (the one standing exception is the explicit
+       ``decompose_all_tasks`` opt-in, which already outranks the flag inside
+       step 1 today — preserved byte-identically). True (the default) =
+       the envelope reason below is PERMITTED, never forced.
+    3. The envelope reason: a MEASURED (probed/partial/tuned with a
+       ``probed_at`` stamp), untrusted profile whose ``needs_decomposition()``
+       answers True routes a plausibly multi-step task through the decomposed
+       lane even where today's gate runs flat — e.g. a weak model behind a
+       NATIVE tool-use endpoint, the exact reach limit ``should_decompose``'s
+       own docstring records. The ``is_measured()`` gate is load-bearing: an
+       unmeasured untrusted floor profile answers ``needs_decomposition() ==
+       True`` by conservative construction, and consulting it raw would flip
+       every unprobed local provider into the decomposed lane on day one —
+       the envelope only ever bends on EVIDENCE (the same rule
+       ``max_tools()`` enforces internally). Trusted profiles never reach the
+       consult: frontier sees zero change. A simple task stays flat on every
+       profile — plan/verify on a one-liner spends a planner round to learn
+       there is nothing to plan, the same reason the prompted reason requires
+       ``is_plausibly_multi_step``. Note one deliberate divergence: unlike
+       the prompted reason, the envelope reason fires under
+       ``strict_model_pin`` too — the pin is a statement about MODEL CHOICE
+       (never substitute), decomposition substitutes nothing, and the flag in
+       step 2 remains the way to force the flat loop.
+
+    This is also what finally routes the SUPERVISOR through decompose.py's
+    plan/verify engine: ``run_supervised`` drives ``AgentRuntime.run``, which
+    consults this gate with no agent-type branch, so a supervisor session
+    whose measured envelope demands decomposition takes the same lane every
+    other type does (its ``delegate``/worklist specs ride along unchanged).
+    """
+    if _decompose.should_decompose(platform, session):
+        return True, False
+    if not getattr(platform.config, "decompose_local_tasks", True):
+        return False, False
+    try:
+        if (
+            not profile.is_trusted()
+            and profile.is_measured()
+            and profile.needs_decomposition()
+            and _decompose.is_plausibly_multi_step(getattr(session, "task", "") or "")
+        ):
+            return True, True
+    except Exception:  # noqa: BLE001 — the envelope must never break the gate
+        return False, False
+    return False, False
 
 
 #: Bounds for the `# Team` block (v1.193.0). A department is a TEAM, not a
@@ -719,9 +893,24 @@ class AgentRuntime:
         # the decomposed run is armed identically to the flat one.
         # OFF THE EVENT LOOP (v1.196.0): `arm_for_task` runs the same CPU-bound
         # regex scorer both chat lanes hop to a thread for. See its docstring.
+        # CAPABILITY ENVELOPE (v1.202.0, Wave B): the run's measured profile is
+        # resolved ONCE here and consulted twice — the arming cap below and the
+        # decompose gate further down — with every bend collected into
+        # `adaptations` for the single `envelope.adapted` event. Trusted and
+        # unmeasured profiles bend NOTHING by construction (`max_tools()`
+        # answers None, the decompose consult requires `is_measured()`), so
+        # every pre-envelope run is byte-identical. The list is filled inside
+        # the worker thread and read only after `to_thread` returns — no race.
+        env_provider, env_model, env_profile = resolve_run_envelope(self.p, session)
+        adaptations: list[str] = []
         tool_specs = self.p.registry.specs(
             await asyncio.to_thread(
-                arm_for_task, self.p, session.task, agent_def.tools
+                arm_for_task,
+                self.p,
+                session.task,
+                agent_def.tools,
+                max_tools=env_profile.max_tools(),
+                adaptations=adaptations,
             )
         )
 
@@ -869,7 +1058,10 @@ class AgentRuntime:
         # loop byte-for-byte unchanged; a planner that declines (degenerate/
         # unparseable plan) falls back to it too.
         final_text: str | None = None
-        if _decompose.should_decompose(self.p, session):
+        engage_decomposed, envelope_caused = should_decompose_enveloped(
+            self.p, session, env_profile
+        )
+        if engage_decomposed:
             final_text = await _decompose.run_decomposed(
                 self,
                 run,
@@ -880,6 +1072,39 @@ class AgentRuntime:
                 session_allow=session_allow,
                 sink=sink,
             )
+        # B4 (v1.202.0): the loop actually BENT under a measured envelope — say
+        # so, ONCE per run. Published HERE, after the decompose decision has
+        # RESOLVED, because deciding to decompose is not decomposing: the
+        # planner may DECLINE (degenerate/unparseable plan -> run_decomposed
+        # returns None -> the flat loop below runs unchanged), and an event
+        # that fired before the planner spoke would permanently claim a
+        # decomposition that never happened — the reviewer's confirmed Wave-B
+        # defect. "decomposed" is appended only when the envelope caused the
+        # engagement AND the lane actually produced the run's answer; the
+        # arm-time bend (tool_cap) was realized at arming and rides along
+        # either way; a run with ZERO realized bends publishes NOTHING. A
+        # later wave adding a mid-run bend (the strict_json rung) must keep
+        # the once-per-run contract — collect into `adaptations`, publish at
+        # the single point where every bend of that run has resolved. Belt
+        # and braces on "NEVER for trusted/unmeasured": `adaptations` can
+        # only be non-empty for a measured, untrusted profile (both producers
+        # gate on it), and the guard re-asserts it.
+        if envelope_caused and final_text is not None:
+            adaptations.append("decomposed")
+        if adaptations and env_profile.is_measured() and not env_profile.is_trusted():
+            try:
+                await self.p.event_bus.publish(
+                    ENVELOPE_ADAPTED,
+                    {
+                        "provider": env_provider,
+                        "model": env_model,
+                        "adaptations": list(adaptations),
+                        "source": env_profile.source,
+                    },
+                    session_id=session.id,
+                )
+            except Exception:  # noqa: BLE001 — narration must never break a run
+                pass
         if final_text is None:
             # The FLAT loop has no planning stage, so it says so plainly rather
             # than leaving the client on a phase-less spinner (v1.149.0). Every

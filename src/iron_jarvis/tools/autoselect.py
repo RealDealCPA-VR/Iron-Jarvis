@@ -1887,11 +1887,58 @@ def select_auto_tools(
     attachments: list[str] | None = None,
     exclude: set[str] | frozenset[str] | None = None,
     cap: int = 6,
+    max_tools: int | None = None,
 ) -> list[str]:
     """Score *text* (the last user message) + attachment file names and return
     up to *cap* auto-armable tool names, best signal first. Tools in *exclude*
     (the user's explicit picks) are never repeated. Returns ``[]`` for plain
-    conversation — no signal, no tools, no latency."""
+    conversation — no signal, no tools, no latency.
+
+    *max_tools* is the CAPABILITY ENVELOPE's arming budget (v1.202.0):
+    ``envelope/profile.CapabilityProfile.max_tools()`` for the model answering
+    this turn. ``None`` — no envelope cap (trusted/unmeasured profiles, and
+    every pre-envelope caller) — leaves the selection byte-identical to
+    v1.201.0. An int is folded in as ``min(cap, max_tools)`` and truncates at
+    the SAME ranked slice today's *cap* does; a value ``<= 0`` means the
+    envelope budget is already spent and selects nothing. See the comment at
+    the fold below for the rationale and the explicit-picks contract.
+    """
+    # v1.202.0 — THE ENVELOPE CAP, folded into `cap` so it truncates at the one
+    # slice that has always truncated (`ranked[:cap]` below). WHY IT EXISTS: a
+    # measured local model picks from the top of a menu, and the menu's WIDTH is
+    # itself a failure mode — the evidence run behind v1.174.0 (quoted at
+    # `agents/runtime.arm_for_task`: "five `shell` calls where `read_file` was
+    # sitting right there") shows a weak model choosing the wrong door simply
+    # because it was offered. The envelope's `max_tools()` turns that from a
+    # fixed guess (6 for everybody) into a measured band: a model that held the
+    # native tool rung keeps today's cap (None), one that wobbled gets 4 or 3.
+    #
+    # TWO CONTRACTS RIDE ON THE FOLD, both directions preserved by construction:
+    #
+    # * EXPLICIT PICKS ARE NEVER THE ENVELOPE'S TO DROP. A "+" pick is a CONSENT
+    #   STATEMENT — the interactive grant the permission engine's session_allow
+    #   is built on (module docstring) — and a measured capability band is a
+    #   statement about model SKILL. Skill evidence must not override consent:
+    #   the user who armed five tools by hand gets five tools, however weak the
+    #   model measured. That holds structurally here because this function
+    #   returns AUTO slots only (explicit picks arrive via `exclude` and are
+    #   never in the ranking), so `max_tools` can only ever shrink the auto
+    #   contribution. Callers uphold the other half: pass the envelope's
+    #   REMAINING budget after their explicit picks (`max_tools - len(explicit)`
+    #   in `chat_turn._resolve_armed_tools`' shape), never a truncated explicit
+    #   list — when the picks alone meet the band, the remainder is <= 0 and
+    #   auto arming yields entirely while every pick survives.
+    # * OVER-NAMING beats OVER-ARMING, exactly as with `cap` today. `cap` is an
+    #   ARMING budget, not an intent verdict — the attachment consent gate
+    #   (`documents/attachment_rag.change_verbs_wanted`, "THE SCORER IS RUN
+    #   UNCAPPED") deliberately calls this function with the cap wide open so a
+    #   verb the sentence genuinely scored is never invisible to consent just
+    #   because unrelated tools outranked it. `max_tools` is the same kind of
+    #   budget and takes the same treatment: intent-gate callers keep the
+    #   default None, and the envelope narrows only what gets ARMED, never what
+    #   the request is understood to have asked for.
+    if max_tools is not None:
+        cap = min(cap, max_tools)
     if cap <= 0:
         return []
     skip = set(exclude or ())
@@ -2055,6 +2102,7 @@ def tools_named_in_playbook(
     *,
     exclude: set[str] | frozenset[str] | None = None,
     cap: int = 6,
+    max_tools: int | None = None,
 ) -> list[str]:
     """Safe-set tools a SKILL's playbook explicitly names, in first-mention order.
 
@@ -2068,7 +2116,22 @@ def tools_named_in_playbook(
     Restricted to :data:`AUTO_SAFE_TOOLS` on purpose. A tool name appearing in
     prose is a weak signal, and it must never be enough to hand a skill ``shell``
     or computer control; those stay behind explicit arming.
+
+    *max_tools* (v1.202.0) is the same envelope arming budget
+    :func:`select_auto_tools` takes, with the same semantics — ``None`` is
+    byte-identical to v1.201.0, an int folds in as ``min(cap, max_tools)`` at
+    the same truncation slice, and it only ever shrinks THIS function's
+    playbook slots, never the user's explicit picks (those arrive via
+    *exclude*). It is here because a "/"-invoked skill fills the same armed
+    list the sentence pass fills, under the same `_MAX_ARMED_TOOLS` — an
+    envelope that capped the sentence pass but not the playbook pass would be
+    a band a skill invocation silently walks around.
     """
+    # v1.202.0: envelope fold — see the block comment in `select_auto_tools`
+    # for the full rationale (a weak model choosing `shell` over `read_file`
+    # from a wide menu is the measured failure mode the band exists for).
+    if max_tools is not None:
+        cap = min(cap, max_tools)
     if cap <= 0 or not instructions:
         return []
     skip = set(exclude or ())

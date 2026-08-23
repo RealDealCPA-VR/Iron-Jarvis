@@ -647,67 +647,147 @@ def _connector_memory_block(d, sources: list[str], query: str) -> str:
     )
 
 
-def _resolve_armed_tools(d, body) -> tuple[list[str], list[str]]:
+class ArmedSelection(tuple):
+    """``(armed, auto_armed)`` PLUS the envelope's drop signal (v1.202.0).
+
+    A tuple subclass, not a third return slot, because the 2-tuple shape is
+    pinned by four pre-envelope test files and unpacked at ~30 call sites —
+    ``armed, auto = _resolve_armed_tools(...)`` and ``== ([], [])`` both keep
+    working verbatim. The extra facts ride as attributes:
+
+    * ``dropped`` — how many auto candidates passed EVERY other filter
+      (registry, AUTO_SAFE, dedupe, intent gate) and were cut ONLY by the
+      envelope ceiling. This is the honesty predicate for the ``adapted``
+      disclosure: "adapted" must mean the loop BENT, not that a budget
+      existed — a plain "hello" on a weak model drops nothing and must
+      disclose nothing (the Wave-B reviewer's repro), and 5 explicit picks
+      under a cap of 3 drop nothing either (the cap yielded to consent).
+    * ``ceiling`` — the effective ceiling the fill ran under (``max(len(
+      explicit), min(max_tools, _MAX_ARMED_TOOLS))``). When ``dropped > 0``
+      this is the number the receipt may honestly print: it is the width the
+      menu actually had, never smaller than what was armed.
+
+    (No ``__slots__``: CPython refuses nonempty slots on a variable-length
+    builtin subtype — the per-turn ``__dict__`` is the price of keeping the
+    pinned tuple shape.)
+    """
+
+    def __new__(
+        cls, armed: list[str], auto: list[str], dropped: int, ceiling: int
+    ) -> "ArmedSelection":
+        self = tuple.__new__(cls, (armed, auto))
+        self.dropped = dropped
+        self.ceiling = ceiling
+        return self
+
+
+def _resolve_armed_tools(
+    d, body, max_tools: "int | None" = None
+) -> "ArmedSelection":
     """The turn's tool set: explicit "+"-armed tools first, then — when the
     client sent ``auto_tools`` — auto-selected tools fill the free slots under
     the same cap. Selection is deterministic (see tools/autoselect.py) and
     draws only from a curated safe set: file/document tools (fs-policy
     confined), read-only web retrieval, local image tools — never shell,
     computeruse, MCP, or paid generative media, which stay behind explicit
-    arming. Returns ``(armed, auto_armed)`` with ``auto_armed ⊆ armed``.
+    arming. Returns an :class:`ArmedSelection` — unpacks as the historical
+    ``(armed, auto_armed)`` with ``auto_armed ⊆ armed``, and carries the
+    envelope drop signal as attributes (see the class docstring).
 
     Three sources, in precedence order: the user's "+" picks, then a
     "/"-invoked skill's playbook, then the sentence (``select_auto_tools``) —
     and since v1.196.0 the ATTACHMENT'S OWN TYPE fills whatever is left, so the
     verbs ``_prepare_attachments`` names in the prompt are verbs the model can
     actually call. Called by BOTH chat lanes (``routes/chat.py`` imports it), so
-    this is one implementation, not a mirrored pair."""
+    this is one implementation, not a mirrored pair.
+
+    ``max_tools`` (v1.202.0) is the capability ENVELOPE's verdict for the
+    answering model (``CapabilityProfile.max_tools()`` — the lanes resolve it
+    and pass it in). The cap is about a WEAK model facing a wide menu: a small
+    local model measured below the native tool-form bar picks ``shell`` over
+    ``read_file`` from six options, so the envelope narrows how many AUTO
+    slots exist. Explicit user tool picks are consent and the autoselect
+    contract already protects them — the cap only ever shrinks the ceiling the
+    auto passes fill toward, never the explicit list, so a user who armed more
+    tools than the cap keeps every one (and auto-arming simply adds none).
+    ``None`` (trusted/unmeasured — every cloud/CLI/mock model and every
+    unprobed local one) keeps today's behavior byte-identical: the ceiling IS
+    ``_MAX_ARMED_TOOLS``, exactly as before the parameter existed.
+
+    THE DROP SIGNAL IS MEASURED, NEVER INFERRED: when the ceiling is narrower
+    than ``_MAX_ARMED_TOOLS``, the SAME fill runs once more at the standing
+    ceiling and ``dropped`` is the count difference. The fill is deterministic
+    and monotone in its ceiling (every pass appends in a fixed order and a
+    smaller ceiling only stops earlier), so the capped selection is a subset
+    of the baseline and the difference is exactly the candidates the envelope
+    excluded. Two fills only ever run on a measured-weak-capped turn — rare,
+    and already off the event loop (both lanes hop here via to_thread)."""
     explicit = [
         t for t in (body.tools or [])[:_MAX_ARMED_TOOLS] if d.platform.registry.get(t)
     ]
-    auto: list[str] = []
-    # A "/"-invoked skill arms the tools ITS PLAYBOOK NAMES, ahead of anything
-    # inferred from the sentence. Auto-arming only ever read the user's text, so
-    # "/pii-redaction" + "skill for the attached" armed just read_document: the
-    # injected playbook told the model to call redact_scan, that tool was absent
-    # from its tool list, and the only honest move left was "switch to Agent
-    # mode". Picking the skill IS the request — it should carry its own tools.
+    # The envelope ceiling bounds EVERY auto pass below (skill playbook,
+    # sentence, attachment type) — capping only the `select_auto_tools` call
+    # would leave two of the three fill paths uncapped. Floored at
+    # len(explicit) so the arithmetic can never go negative and explicit picks
+    # keep their slots.
+    if max_tools is None:
+        _ceiling = _MAX_ARMED_TOOLS
+    else:
+        _ceiling = max(len(explicit), min(max_tools, _MAX_ARMED_TOOLS))
     skill_name = (getattr(body, "skill", "") or "").strip()
-    if skill_name and len(explicit) < _MAX_ARMED_TOOLS:
-        from ..tools.autoselect import tools_named_in_playbook
-
-        sk = d.platform.skills.get(skill_name)
-        if sk is not None:
-            auto += [
-                t
-                for t in tools_named_in_playbook(
-                    sk.instructions,
-                    exclude=set(explicit),
-                    cap=_MAX_ARMED_TOOLS - len(explicit),
-                )
-                if d.platform.registry.get(t)
-            ]
-    # The request, read ONCE: both passes below score the same sentence, and the
-    # attachment pass's consent gate must be asking about the same words the
-    # sentence pass scored.
+    # The request, read ONCE: both sentence-scoring passes below read the same
+    # sentence, and the attachment pass's consent gate must be asking about
+    # the same words the sentence pass scored.
     last_user = next(
         (m.content or "" for m in reversed(body.messages) if m.role == "user"),
         "",
     )
     attach_names = [Path(a).name for a in (body.attachments or [])]
-    if getattr(body, "auto_tools", False) and len(explicit) + len(auto) < _MAX_ARMED_TOOLS:
-        from ..tools.autoselect import select_auto_tools
 
-        auto += [
-            t
-            for t in select_auto_tools(
-                last_user,
-                attachments=attach_names,
-                exclude=set(explicit) | set(auto),
-                cap=_MAX_ARMED_TOOLS - len(explicit) - len(auto),
-            )
-            if d.platform.registry.get(t)
-        ]
+    def _fill(ceiling: int) -> list[str]:
+        """One deterministic auto-fill toward *ceiling*. Factored so the drop
+        signal can run the IDENTICAL passes at the baseline ceiling — a
+        separate counting heuristic would drift from the arming truth."""
+        auto: list[str] = []
+        # A "/"-invoked skill arms the tools ITS PLAYBOOK NAMES, ahead of
+        # anything inferred from the sentence. Auto-arming only ever read the
+        # user's text, so "/pii-redaction" + "skill for the attached" armed
+        # just read_document: the injected playbook told the model to call
+        # redact_scan, that tool was absent from its tool list, and the only
+        # honest move left was "switch to Agent mode". Picking the skill IS
+        # the request — it should carry its own tools.
+        if skill_name and len(explicit) < ceiling:
+            from ..tools.autoselect import tools_named_in_playbook
+
+            sk = d.platform.skills.get(skill_name)
+            if sk is not None:
+                auto += [
+                    t
+                    for t in tools_named_in_playbook(
+                        sk.instructions,
+                        exclude=set(explicit),
+                        cap=ceiling - len(explicit),
+                    )
+                    if d.platform.registry.get(t)
+                ]
+        if getattr(body, "auto_tools", False) and len(explicit) + len(auto) < ceiling:
+            from ..tools.autoselect import select_auto_tools
+
+            auto += [
+                t
+                for t in select_auto_tools(
+                    last_user,
+                    attachments=attach_names,
+                    exclude=set(explicit) | set(auto),
+                    # The envelope cap rides the existing free-slot arithmetic
+                    # — `cap` is already "how many auto slots remain", so a
+                    # narrowed ceiling IS the max_tools consult (v1.202.0).
+                    cap=ceiling - len(explicit) - len(auto),
+                )
+                if d.platform.registry.get(t)
+            ]
+        _fill_attachment_pass(auto, ceiling)
+        return auto
     # THE ATTACHMENT'S OWN TOOLS (v1.196.0). Everything above scores the
     # SENTENCE; the only thing an attachment contributes to `select_auto_tools`
     # is `bump({"read_document": 9})`, keyed on a doc-extension regex and blind
@@ -752,7 +832,12 @@ def _resolve_armed_tools(d, body) -> tuple[list[str], list[str]]:
     # request asked for that verb. `excel_apply_spec` is no longer explicit-only:
     # it joined `AUTO_SAFE_TOOLS` this wave, so it arms here EXACTLY when the
     # request asks for it, like every other change verb.
-    if getattr(body, "auto_tools", False) and len(explicit) + len(auto) < _MAX_ARMED_TOOLS:
+    def _fill_attachment_pass(auto: list[str], ceiling: int) -> None:
+        """The attachment-type pass, appending into *auto* in place — split
+        from ``_fill`` only so the wall of measurement above stays attached to
+        the code it justifies."""
+        if not getattr(body, "auto_tools", False) or len(explicit) + len(auto) >= ceiling:
+            return
         from ..documents.attachment_rag import change_verbs_wanted, live_tool_names
         from ..tools.autoselect import AUTO_SAFE_TOOLS
 
@@ -768,7 +853,7 @@ def _resolve_armed_tools(d, body) -> tuple[list[str], list[str]]:
                     explicit=set(explicit),
                 )
             ):
-                if len(explicit) + len(auto) >= _MAX_ARMED_TOOLS:
+                if len(explicit) + len(auto) >= ceiling:
                     break
                 if name in seen or name not in AUTO_SAFE_TOOLS:
                     continue
@@ -776,7 +861,17 @@ def _resolve_armed_tools(d, body) -> tuple[list[str], list[str]]:
                     continue
                 auto.append(name)
                 seen.add(name)
-    return explicit + auto, auto
+
+    auto = _fill(_ceiling)
+    # THE DROP SIGNAL (v1.202.0): candidates cut ONLY by the envelope ceiling,
+    # measured by re-running the identical fill at the standing ceiling. Zero
+    # whenever the envelope did not narrow the menu (the common case) OR the
+    # request never had that many candidates — which is exactly when the
+    # `adapted` disclosure must stay null.
+    dropped = 0
+    if _ceiling < _MAX_ARMED_TOOLS:
+        dropped = max(0, len(_fill(_MAX_ARMED_TOOLS)) - len(auto))
+    return ArmedSelection(explicit + auto, auto, dropped, _ceiling)
 
 
 def _resolve_tool_workspace(
@@ -2140,10 +2235,41 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
             )
         except Exception:  # noqa: BLE001 — resolution failures rout normally
             text_only_pick = False
+    # ENVELOPE ADAPTATION DISCLOSURE (v1.202.0): non-null exactly when the
+    # capability envelope narrowed this turn's arming (the tool cap below) —
+    # null on every trusted/unmeasured route, which is the common case. The
+    # text-only branch never arms, so nothing there can bend.
+    # MIRROR NOTE (lock-step): routes/chat.py carries the same computation —
+    # edit both or neither.
+    envelope_adapted: "dict[str, Any] | None" = None
     if text_only_pick:
         armed, auto_armed = [], []
         tool_specs = []
     else:
+        # ENVELOPE TOOL CAP (v1.202.0): consult the answering model's measured
+        # capability profile BEFORE arming. The cap is about a weak model
+        # facing a wide menu — a small local model measured below the native
+        # tool-form bar picks `shell` over `read_file` from six options —
+        # while explicit user tool picks are consent and the autoselect
+        # contract already protects them (`_resolve_armed_tools` never drops
+        # one). The profile is resolved for the model that will ANSWER: the
+        # explicit body pin (or the project default) when there is one, else
+        # the config default route — the same ladder `_attachment_budgets`
+        # scales by above. Trusted (cloud/CLI/mock) and unmeasured profiles
+        # answer None, which keeps arming byte-identical (pinned in
+        # tests/test_chat_envelope_v1202.py).
+        # MIRROR NOTE (lock-step): routes/chat.py — edit both or neither.
+        _env_model = model_choice or d.platform.config.default_model
+        _tool_cap: "int | None" = None
+        try:
+            _profiler = getattr(d.platform.providers, "capability_profile", None)
+            if _profiler is not None:
+                _tool_cap = _profiler(
+                    provider_choice or d.platform.config.default_provider,
+                    _env_model,
+                ).max_tools()
+        except Exception:  # noqa: BLE001 — the envelope must never break a turn
+            _tool_cap = None
         # OFF THE EVENT LOOP (v1.196.0). `_resolve_armed_tools` is pure regex
         # scoring — it was ~2 ms and nobody minded. v1.196.0 fronted fourteen
         # rules with the imperative test, and a pasted document full of blank
@@ -2156,7 +2282,24 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         # worker thread is the honest home for it; the mirror in
         # `routes/chat.py` gets the same hop, because these two lanes are
         # LOCK-STEP and the streaming one is the lane the user watches.
-        armed, auto_armed = await asyncio.to_thread(_resolve_armed_tools, d, body)
+        _selection = await asyncio.to_thread(
+            _resolve_armed_tools, d, body, _tool_cap
+        )
+        armed, auto_armed = _selection
+        # "adapted" MUST MEAN THE LOOP BENT, not that a budget existed (the
+        # runtime's arm_for_task rule; both failure shapes were empirically
+        # reproduced in the Wave-B review): a plain "hello" under a cap drops
+        # nothing — stamping a permanent receipt line on every such turn
+        # defeats the zero-noise guard — and 5 explicit picks under a cap of 3
+        # arm all 5, so printing "3 tools max" beside them would be a false
+        # statement on the accountability surface. The gate is therefore the
+        # MEASURED drop signal (see ArmedSelection), and the number printed is
+        # the ceiling that actually bit — never below the armed count.
+        if _selection.dropped > 0:
+            envelope_adapted = {
+                "model": _env_model,
+                "changes": [f"tool_cap:{_selection.ceiling}"],
+            }
         armed += [t for t in conn_tools if t not in armed]
         tool_specs = (d.platform.registry.specs(armed) if armed else []) + [
             _ESCALATE_SPEC,
@@ -2600,6 +2743,15 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         # MIRROR NOTE (lock-step): the stream done-frame in routes/chat.py
         # carries the identical key — edit both or neither.
         "doors": collect_doors(door_entries),
+        # ENVELOPE ADAPTATION (v1.202.0): {"model": str, "changes":
+        # ["tool_cap:<n>", ...]} when the capability envelope bent this turn
+        # (a measured-weak model's tool menu was narrowed), else null —
+        # ALWAYS PRESENT, like doors' [], so clients never branch on absence
+        # and the two lanes cannot drift on absent-vs-null. Quiet by design:
+        # this is user-configured-hardware honesty, not a warning.
+        # MIRROR NOTE (lock-step): the stream done-frame in routes/chat.py
+        # carries the identical key — edit both or neither.
+        "adapted": envelope_adapted,
         # ABSOLUTE paths of documents this turn created/edited — the
         # dashboard opens its embedded preview from these.
         "documents": made_docs,

@@ -59,6 +59,30 @@ describe("decodeSSE carries the accountability fields", () => {
     const bare = done({ provider: "mock" });
     expect(bare && bare.type === "done" && bare.doors).toBeUndefined();
   });
+
+  // Adapted (v1.202.0): the envelope's adaptation disclosure — same
+  // whitelist hazard as doors, pinned the same way.
+  it("passes adapted through verbatim", () => {
+    const adapted = { model: "qwen3:4b", changes: ["tool_cap:4"] };
+    const ev = done({ adapted });
+    expect(ev && ev.type === "done" && ev.adapted).toEqual(adapted);
+  });
+
+  it("adapted null (the daemon's unbent-turn value) decodes to absent", () => {
+    // The daemon sends the key on EVERY turn — null when nothing bent — so
+    // null must land as "nothing to show", identically to absence.
+    const ev = done({ adapted: null });
+    expect(ev && ev.type === "done" && ev.adapted).toBeUndefined();
+    const bare = done({ provider: "mock" });
+    expect(bare && bare.type === "done" && bare.adapted).toBeUndefined();
+  });
+
+  it("drops a malformed adapted instead of crashing the stream", () => {
+    const ev = done({ adapted: "tool_cap:4" });
+    expect(ev && ev.type === "done" && ev.adapted).toBeUndefined();
+    const ev2 = done({ adapted: { model: "x" } }); // no changes array
+    expect(ev2 && ev2.type === "done" && ev2.adapted).toBeUndefined();
+  });
 });
 
 /**
@@ -74,11 +98,15 @@ describe("useChatStream carries doors onto the resolved result", () => {
     vi.unstubAllGlobals();
   });
 
-  it("run() resolves with the done frame's doors", async () => {
+  it("run() resolves with the done frame's doors and adapted", async () => {
     const doors = [{ href: "/schedules", label: "See your schedule" }];
+    // Adapted rides the SAME frame (v1.202.0): the hook's merge is one
+    // object literal, and a deleted `adapted: ev.adapted` line would leave
+    // every decode-level pin green — this is the mutation check for it.
+    const adapted = { model: "qwen3:4b", changes: ["tool_cap:4"] };
     const frame =
       `event: done\n` +
-      `data: ${JSON.stringify({ reply: "made it", doors })}\n\n`;
+      `data: ${JSON.stringify({ reply: "made it", doors, adapted })}\n\n`;
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode(frame));
@@ -98,5 +126,6 @@ describe("useChatStream carries doors onto the resolved result", () => {
     expect(settled).not.toBeNull();
     expect(settled!.reply).toBe("made it");
     expect(settled!.doors).toEqual(doors);
+    expect(settled!.adapted).toEqual(adapted);
   });
 });

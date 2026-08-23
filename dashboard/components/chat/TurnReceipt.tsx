@@ -15,6 +15,10 @@
  *   - mock answered        → strongest wording, amber, always visible
  *   - failover / mismatch  → "answered by X — …", amber, always visible
  *   - denied tools         → "N blocked" count in the collapsed line
+ *   - envelope adapted     → quiet zinc line, always visible, NEVER amber
+ *     (v1.202.0 — the user's own measured local model being fitted is
+ *     user-configured-hardware honesty, the prompted-tools/auto-tier quiet
+ *     class, not a substitution warning)
  * A turn with literally nothing to say (no route, no tools, no denials, no
  * files) renders NOTHING — zero-noise on trivial turns is a feature, not an
  * omission.
@@ -43,6 +47,55 @@ import {
   Wrench,
 } from "lucide-react";
 
+/** The capability envelope's adaptation disclosure (v1.202.0): the daemon
+ *  bent this turn to fit a measured-weak model — e.g. narrowed the auto-tool
+ *  menu ("tool_cap:4"). QUIET by design: this is user-configured-hardware
+ *  honesty (the user's own local model, measured on their own machine), not a
+ *  substitution or a failure — it belongs with the prompted-tools/auto-tier
+ *  quiet class in the tone rules above, never amber. */
+export interface TurnAdapted {
+  model?: string;
+  changes?: string[];
+}
+
+/**
+ * ONE renderer per wire token (the draftFromFence lesson: two renderers of
+ * the same source drift, and a mismatch between the receipt and the progress
+ * line would read as two different stories about the same turn). This is THE
+ * translation from the daemon's `adapted.changes` vocabulary to words — the
+ * receipt uses it below, and chat's step narration imports the SAME function.
+ * An UNKNOWN token renders verbatim: a new adaptation kind the daemon learns
+ * should read oddly here, not silently vanish (the PHASE_LABEL rule).
+ */
+export function wordChange(token: string): string {
+  const t = token.trim();
+  const cap = /^tool_cap:(\d+)$/.exec(t);
+  if (cap) return `${cap[1]} tools max`;
+  if (t === "decomposed") return "running step-by-step";
+  return t;
+}
+
+/**
+ * Human wording for the quiet adapted line, or null when there is nothing to
+ * disclose. Token wording is delegated to {@link wordChange} — never inline a
+ * second copy of that mapping here.
+ */
+export function adaptedLabel(
+  adapted: TurnAdapted | null | undefined,
+): string | null {
+  if (!adapted) return null;
+  const changes = (adapted.changes ?? []).filter(
+    (c) => typeof c === "string" && c.trim().length > 0,
+  );
+  if (changes.length === 0) return null;
+  const worded = changes.map(wordChange);
+  const who =
+    typeof adapted.model === "string" && adapted.model.trim()
+      ? ` to ${adapted.model.trim()}`
+      : "";
+  return `adapted${who}: ${worded.join(", ")}`;
+}
+
 /** Server truth about who served the turn (daemon's routing decision). */
 export interface TurnRoute {
   /** What the user/client asked for, when they asked at all. */
@@ -57,6 +110,8 @@ export interface TurnRoute {
 export interface TurnReceiptProps {
   /** May be absent on messages persisted before the route object existed. */
   route?: TurnRoute | null;
+  /** The envelope bent this turn (v1.202.0) — absent/null renders nothing. */
+  adapted?: TurnAdapted | null;
   /** Tools that actually executed this turn. */
   toolsUsed?: string[];
   /** Armed tools the engine refused to run. */
@@ -146,6 +201,7 @@ function names(xs: string[]): string[] {
 
 export function TurnReceipt({
   route,
+  adapted,
   toolsUsed = [],
   deniedTools = [],
   documents = [],
@@ -185,10 +241,15 @@ export function TurnReceipt({
   // A route object with no provider and nothing to warn about (degenerate
   // persisted shapes) carries no accountability fact — treat it as absent.
   const rt = route && (route.provider || warning) ? route : null;
+  // The envelope's adaptation note (v1.202.0) — quiet zinc, NEVER amber:
+  // this is the user's own configured hardware being fitted, not a
+  // substitution (the mock/failover class) — see the tone rules up top.
+  const adaptedText = adaptedLabel(adapted);
 
   // Zero-noise guard: nothing to account for, render nothing at all. A route
-  // carrying a WARNING always renders — the warning is the whole point.
-  if (!rt && !tools.length && !denied.length && !docs.length) {
+  // carrying a WARNING always renders — the warning is the whole point; an
+  // adaptation note alone also renders (a bent turn must never be silent).
+  if (!rt && !tools.length && !denied.length && !docs.length && !adaptedText) {
     return null;
   }
 
@@ -215,6 +276,15 @@ export function TurnReceipt({
           {rt.provider}
         </span>
       ),
+    );
+  }
+  if (adaptedText) {
+    // Visible WITHOUT expanding (an invisible adaptation is a silent
+    // degrade), but in the QUIET class — plain zinc, no icon, no chip.
+    parts.push(
+      <span key="adapted" className="text-zinc-500">
+        {adaptedText}
+      </span>,
     );
   }
   if (tools.length > 0) {

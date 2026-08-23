@@ -404,11 +404,15 @@ def test_response_dict_keys_exactly(tmp_path, monkeypatch):
     # surface a SUCCESSFUL creating tool changed ([{href, label}], deduped,
     # capped at 4, always present). Same key in the SSE done frame; the
     # semantics are pinned by tests/test_doors_v1199.py.
+    # v1.202.0 (envelope): one more — "adapted", the capability-envelope
+    # adaptation disclosure ({model, changes} | null, always present — null
+    # on every trusted/unmeasured route). Same key in the SSE done frame; the
+    # semantics are pinned by tests/test_chat_envelope_v1202.py.
     assert set(body.keys()) == {
         "reply", "provider", "model", "attached", "images", "skill",
         "tools_used", "documents", "auto_armed", "escalate",
         "escalate_reason", "escalate_agent", "workflow_draft", "context",
-        "route", "doors",
+        "route", "doors", "adapted",
     }
     assert body["reply"] == "hello"
     assert body["provider"] == "mock" and body["model"] == "mock"

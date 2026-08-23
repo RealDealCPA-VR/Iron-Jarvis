@@ -114,7 +114,11 @@ import {
 } from "@/components/chat/WorkflowDraftCard";
 import { RunResultCard, type RunResult } from "@/components/chat/RunResultCard";
 import { DraftCard, draftFromFence } from "@/components/chat/DraftCard";
-import { TurnReceipt, type TurnRoute } from "@/components/chat/TurnReceipt";
+import {
+  TurnReceipt,
+  type TurnAdapted,
+  type TurnRoute,
+} from "@/components/chat/TurnReceipt";
 import { DoorsStrip, type Door } from "@/components/chat/DoorsStrip";
 import { RecipesRow } from "@/components/chat/RecipesRow";
 import {
@@ -128,6 +132,7 @@ import {
 import { PreflightNote } from "@/components/chat/PreflightNote";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { CHAT_EXAMPLES, pickExamples } from "@/components/chat/examples";
+import { stepLabel } from "@/components/chat/stepLabel";
 import { useProviderHealth } from "@/lib/useProviderHealth";
 import type { WorkflowDraft, WorkflowRun } from "@/lib/types";
 import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
@@ -216,6 +221,11 @@ interface ChatMessage {
    *  against the EXPLICIT pick only, so a downgraded default-route turn — the
    *  mock's "Done. Wrote RESULT.md" incident — surfaced nothing. */
   route?: TurnRoute;
+  /** The capability envelope bent this turn to fit a measured-weak model
+   *  (v1.202.0) — the receipt's quiet "adapted to <model>: …" line. Persists
+   *  with the thread like route; absent on unbent turns (the daemon sends
+   *  null there, which never lands on the message). */
+  adapted?: TurnAdapted;
   /** Armed tools the engine refused this turn (assistant messages) — a silent
    *  denial reads as the model ignoring the user, so the receipt shows it. */
   deniedTools?: string[];
@@ -291,6 +301,9 @@ interface ChatResponse {
   /** Doors into the surfaces this turn touched (v1.199.0) — see
    *  ChatMessage.doors. Server-derived; the client never invents these. */
   doors?: Door[];
+  /** The envelope's adaptation disclosure (v1.202.0) — null on every unbent
+   *  turn (always present on the wire; see ChatMessage.adapted). */
+  adapted?: TurnAdapted | null;
   /** The turn asked to be re-run as a full agent session (v1.108.0). */
   escalate?: boolean;
   escalate_reason?: string;
@@ -344,6 +357,27 @@ function doorsFrom(raw: unknown): Door[] | null {
     });
   }
   return out.length > 0 ? out : null;
+}
+
+/** Decode the daemon's `adapted` object (v1.202.0) — the envelope's own
+ *  disclosure that this turn was bent to fit a measured-weak model, carried
+ *  onto the message verbatim (shape-checked only; the daemon sends null on
+ *  every unbent turn, and null decodes to null so nothing lands on the
+ *  message). Shared by BOTH chat lanes so they cannot drift. */
+function adaptedFrom(raw: unknown): TurnAdapted | null {
+  if (!raw || typeof raw !== "object") return null;
+  const a = raw as { model?: unknown; changes?: unknown };
+  if (!Array.isArray(a.changes)) return null;
+  const changes = a.changes.filter(
+    (c): c is string => typeof c === "string" && c.trim().length > 0,
+  );
+  if (changes.length === 0) return null;
+  return {
+    ...(typeof a.model === "string" && a.model.trim()
+      ? { model: a.model }
+      : {}),
+    changes,
+  };
 }
 
 /** Human wording for a run phase (v1.149.0). An unknown phase falls through to
@@ -790,50 +824,10 @@ const DEFAULT_PERSONAS: PersonaOption[] = [
   },
 ];
 
-// A few agent states worth naming; anything else falls back to "Working…".
-const STATE_LABEL: Record<string, string> = {
-  initializing: "Getting ready…",
-  running: "Working…",
-  waiting: "Waiting…",
-  paused: "Paused…",
-  delegating: "Bringing in a helper…",
-  reviewing: "Reviewing the work…",
-  completed: "Wrapping up…",
-};
-
-// Turn one raw session event into a short, human-friendly progress line (or null
-// to skip events that don't read well as a step).
-function stepLabel(e: IJEvent): string | null {
-  const p = e.payload || {};
-  switch (e.type) {
-    case "agent.started":
-      return "Thinking…";
-    case "agent.state_changed": {
-      // Backend payload is {from, to}; tolerate a `state` alias just in case.
-      const to = (p.to ?? p.state) as string | undefined;
-      if (!to) return "Working…";
-      return STATE_LABEL[to.toLowerCase()] ?? "Working…";
-    }
-    case "tool.executed": {
-      const tool = p.tool as string | undefined;
-      return tool ? `Using ${tool}…` : "Using a tool…";
-    }
-    case "tool.denied": {
-      const tool = p.tool as string | undefined;
-      return tool ? `Skipped ${tool} (not permitted)` : "Skipped a tool";
-    }
-    case "provider.failed": {
-      const provider = p.provider as string | undefined;
-      return `Provider ${provider} failed — ${String(p.error || "").slice(0, 120)}`;
-    }
-    case "provider.downgraded":
-      return "Model not connected — using offline mock (connect a model)";
-    case "agent.completed":
-      return "Finishing up…";
-    default:
-      return null;
-  }
-}
+// stepLabel (the event -> progress-line renderer) lives in
+// components/chat/stepLabel.ts since v1.202.0: an App Router page may not
+// carry extra named exports (the .next/types check rejects them), and the
+// function needed unit tests for the plan.* / envelope.adapted narration.
 
 // The model <select> encodes the choice as `${provider}::${model}` (empty => let the
 // server pick its default). Split it back out only when it carries both halves.
@@ -4009,8 +4003,14 @@ export default function ChatPage() {
         const doors = doorsFrom(
           (streamRes as unknown as { doors?: unknown }).doors,
         );
+        // Adapted (v1.202.0) — the envelope's disclosure rides the message
+        // like route/doors. MIRROR NOTE: keep in step with the POST lane's
+        // receiptPost below — this exact merge line is where done-frame
+        // fields have died silently before (denied_tools, doors — measured).
+        const adapted = adaptedFrom(streamRes.adapted);
         const receipt = {
           ...(route ? { route } : {}),
+          ...(adapted ? { adapted } : {}),
           ...(deniedTools?.length ? { deniedTools } : {}),
           ...(madeDocs?.length ? { documents: madeDocs } : {}),
           ...(wfRun ? { workflowRun: wfRun } : {}),
@@ -4138,8 +4138,12 @@ export default function ChatPage() {
       // Doors (v1.199.0) — the POST lane's copy of the stream lane's doors
       // handling. MIRROR NOTE: keep in step with the stream path above.
       const doorsPost = doorsFrom(res.doors);
+      // Adapted (v1.202.0) — the POST lane's copy of the stream lane's
+      // adapted handling. MIRROR NOTE: keep in step with the stream path.
+      const adaptedPost = adaptedFrom(res.adapted);
       const receiptPost = {
         ...(res.route ? { route: res.route } : {}),
+        ...(adaptedPost ? { adapted: adaptedPost } : {}),
         ...(deniedPost.length ? { deniedTools: deniedPost } : {}),
         ...(res.documents?.length ? { documents: res.documents } : {}),
         ...(wfRunPost ? { workflowRun: wfRunPost } : {}),
@@ -5754,6 +5758,7 @@ export default function ChatPage() {
                             <div className="ml-11">
                               <TurnReceipt
                                 route={m.route}
+                                adapted={m.adapted}
                                 toolsUsed={m.toolsUsed}
                                 deniedTools={m.deniedTools}
                                 documents={m.documents}

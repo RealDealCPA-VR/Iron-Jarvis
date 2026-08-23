@@ -362,6 +362,19 @@ def test_cache_hits_while_unchanged_and_invalidates_on_store_change(tmp_path, mo
     _save(tmp_path, "ollama", "llama3.1", source="tuned",
           probed_at="2026-08-22T11:00:00Z", honest_context=111_111,
           measured_fields=["honest_context"])
+    # Determinism: two writes inside one filesystem-timestamp tick with a
+    # coincidentally equal byte length leave the (mtime_ns, size) signature
+    # unchanged and this test flaked ~1/10 on Windows. The subject here is
+    # "a CHANGED signature invalidates", so force the mtime forward instead
+    # of gambling on timer granularity. (In production an unchanged signature
+    # serves the stale profile until the NEXT write changes it — potentially
+    # indefinitely, not one read. Accepted: it needs a same-tick, same-size
+    # rewrite of a probe result, and the next probe/tune write clears it.)
+    import os as _os
+
+    _p = store.profile_path(tmp_path, "ollama", "llama3.1")
+    _st = _p.stat()
+    _os.utime(_p, ns=(_st.st_atime_ns, _st.st_mtime_ns + 10_000_000))
     assert mgr.capability_profile("ollama", "llama3.1").honest_context == 111_111
     assert len(calls) == 2
     assert mgr.measured_context_window("ollama", "llama3.1") == 111_111

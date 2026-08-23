@@ -1480,15 +1480,57 @@ def register(app: FastAPI, d) -> None:
                 )
             except Exception:  # noqa: BLE001 — resolution failures rout normally
                 text_only_pick = False
+        # ENVELOPE ADAPTATION DISCLOSURE (v1.202.0): non-null exactly when the
+        # capability envelope narrowed this turn's arming (the tool cap below)
+        # — null on every trusted/unmeasured route, which is the common case.
+        # The text-only branch never arms, so nothing there can bend.
+        # MIRROR NOTE (lock-step): chat_turn.run_chat_turn carries the same
+        # computation — edit both or neither.
+        envelope_adapted: "dict[str, Any] | None" = None
         if text_only_pick:
             armed, auto_armed, ask_armed = [], [], []
             tool_specs = []
         else:
+            # ENVELOPE TOOL CAP (v1.202.0) — the lock-step twin of the consult
+            # in `chat_turn.run_chat_turn`; see the reasoning there. The cap is
+            # about a weak model facing a wide menu; explicit user tool picks
+            # are consent and the autoselect contract already protects them.
+            # Resolved for the model that will ANSWER (explicit/project pin,
+            # else the config default route); trusted (cloud/CLI/mock) and
+            # unmeasured profiles answer None -> arming byte-identical.
+            # MIRROR NOTE (lock-step): edit both or neither.
+            _env_model = model_choice or d.platform.config.default_model
+            _tool_cap: "int | None" = None
+            try:
+                _profiler = getattr(
+                    d.platform.providers, "capability_profile", None
+                )
+                if _profiler is not None:
+                    _tool_cap = _profiler(
+                        provider_choice or d.platform.config.default_provider,
+                        _env_model,
+                    ).max_tools()
+            except Exception:  # noqa: BLE001 — never break a turn
+                _tool_cap = None
             # OFF THE EVENT LOOP (v1.196.0) — the lock-step twin of the hop in
             # `chat_turn.run_chat_turn`; see the reasoning there. This lane
             # matters more, not less: it is the one the user watches token by
             # token, so a parked loop here reads as the app having died.
-            armed, auto_armed = await asyncio.to_thread(_resolve_armed_tools, d, body)
+            _selection = await asyncio.to_thread(
+                _resolve_armed_tools, d, body, _tool_cap
+            )
+            armed, auto_armed = _selection
+            # "adapted" MUST MEAN THE LOOP BENT, not that a budget existed —
+            # the gate is the MEASURED drop signal, and the number printed is
+            # the ceiling that actually bit (lock-step twin of chat_turn's
+            # disclosure gate; the two reviewer repros — plain "hello" under a
+            # cap, and 5 explicit picks under a cap of 3 — are pinned in
+            # tests/test_chat_envelope_v1202.py for BOTH lanes).
+            if _selection.dropped > 0:
+                envelope_adapted = {
+                    "model": _env_model,
+                    "changes": [f"tool_cap:{_selection.ceiling}"],
+                }
             armed += [t for t in conn_tools if t not in armed]
             # ASK-TIER ARMING (v1.187.0): show the model the host-reach verbs
             # this message signals a need for — VISIBLE, never GRANTED. They
@@ -2188,6 +2230,14 @@ def register(app: FastAPI, d) -> None:
                 # chat_turn.py carries the identical key — edit both or
                 # neither.
                 "doors": collect_doors(door_entries),
+                # ENVELOPE ADAPTATION (v1.202.0): {"model", "changes":
+                # ["tool_cap:<n>", ...]} when the capability envelope bent
+                # this turn, else null — ALWAYS PRESENT (null, never absent),
+                # like doors' [], pinning lane parity on absent-vs-null.
+                # MIRROR NOTE (lock-step): the non-stream response dict in
+                # chat_turn.py carries the identical key — edit both or
+                # neither.
+                "adapted": envelope_adapted,
                 "denied_tools": denied_tools,
                 "auto_armed": auto_armed,
                 "documents": made_docs,
