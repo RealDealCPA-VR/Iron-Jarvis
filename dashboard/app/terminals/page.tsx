@@ -13,10 +13,12 @@ import {
   FolderTree,
   LayoutGrid,
   Loader2,
+  MessageSquare,
   PanelLeftOpen,
   PanelRightClose,
   Plus,
   SquareTerminal,
+  X,
 } from "lucide-react";
 import { ApiError, del, get, post } from "@/lib/api";
 import type { AiCli, ModelOption, Shell, Skill, TerminalInfo } from "@/lib/types";
@@ -39,8 +41,31 @@ const TerminalPane = dynamic(
   },
 );
 
+// Chat view for a pane (v1.206.0): the same box, flipped from a live shell to
+// a chat thread grounded in that pane's folder. Self-contained by contract —
+// own thread, composer, drag-drop, stream. Loaded like TerminalPane: browser
+// only, never during SSR / `next build`.
+const PaneChat = dynamic(
+  () => import("@/components/terminal/PaneChat").then((m) => m.PaneChat),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="grid h-full place-items-center text-zinc-600">
+        <Loader2 size={18} className="animate-spin" />
+      </div>
+    ),
+  },
+);
+
 // A pane's position + size on the free-form canvas.
 type Rect = { x: number; y: number; width: number; height: number };
+
+// What a pane is SHOWING: the live terminal (default) or the pane chat.
+// Persisted per pane id under `ij.pane.view.<paneId>` — only ever written on
+// an explicit toggle, so existing users' storage is byte-for-byte untouched.
+type PaneView = "terminal" | "chat";
+
+const paneViewKey = (id: string) => `ij.pane.view.${id}`;
 
 // Cascading default (fallback only) so freshly opened panes stagger.
 function cascadeRect(i: number): Rect {
@@ -80,6 +105,18 @@ export default function TerminalsPage() {
   const [treeTab, setTreeTab] = useState<"folders" | "files">("folders");
   // Once the user manually picks a tab, stop auto-defaulting it (session-sticky).
   const tabTouched = useRef(false);
+
+  // Per-pane Terminal ⇄ Chat view, keyed by pane id. Seeded from localStorage
+  // as panes appear (see the fill effect below); missing = "terminal".
+  const [views, setViews] = useState<Record<string, PaneView>>({});
+  // Panes whose chat has EVER been opened this session. Once open, PaneChat
+  // STAYS MOUNTED for the pane's lifetime — the flip only changes which layer
+  // is visible. PaneChat owns an in-flight turn (stream + thread saves), and
+  // unmounting it mid-turn leaves that turn streaming in a dead closure whose
+  // late last-write-wins save can erase a newer turn, or strands the first
+  // exchange in an orphaned thread if the remount races the CREATE save.
+  // Mounting is still LAZY (first flip) so never-toggled panes pay nothing.
+  const [chatOpened, setChatOpened] = useState<Record<string, boolean>>({});
 
   // Per-terminal free-form layout (position + size), persisted to localStorage.
   const [layout, setLayout] = useState<Record<string, Rect>>({});
@@ -153,6 +190,61 @@ export default function TerminalsPage() {
       return changed ? next : prev;
     });
   }, [terminals, findFreeSlot]);
+
+  // Seed each pane's persisted view as it appears (mirrors the layout fill
+  // above — never during render, localStorage is client-only). Only a stored
+  // "chat" flips anything; everything else stays the terminal default, and a
+  // pane never toggled writes NOTHING back.
+  useEffect(() => {
+    setViews((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      terminals.forEach((t) => {
+        if (next[t.id] !== undefined) return;
+        let v: PaneView = "terminal";
+        try {
+          if (localStorage.getItem(paneViewKey(t.id)) === "chat") v = "chat";
+        } catch {
+          /* private mode — default stands */
+        }
+        next[t.id] = v;
+        changed = true;
+      });
+      return changed ? next : prev;
+    });
+    // A pane restored INTO chat view counts as opened — its PaneChat mounts
+    // now and stays mounted (a cwd-less pane can't ground a chat, so never).
+    setChatOpened((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      terminals.forEach((t) => {
+        if (next[t.id] || !t.cwd) return;
+        try {
+          if (localStorage.getItem(paneViewKey(t.id)) === "chat") {
+            next[t.id] = true;
+            changed = true;
+          }
+        } catch {
+          /* private mode */
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [terminals]);
+
+  // Flip one pane's view and persist it under its own key. Opening chat marks
+  // the pane so its PaneChat stays mounted across every later flip.
+  const setPaneView = useCallback((id: string, v: PaneView) => {
+    setViews((prev) => ({ ...prev, [id]: v }));
+    if (v === "chat") {
+      setChatOpened((prev) => (prev[id] ? prev : { ...prev, [id]: true }));
+    }
+    try {
+      localStorage.setItem(paneViewKey(id), v);
+    } catch {
+      /* private mode */
+    }
+  }, []);
 
   function changeTreeCollapsed(v: boolean) {
     setTreeCollapsed(v);
@@ -418,6 +510,9 @@ export default function TerminalsPage() {
                 ) : (
                   terminals.map((t, i) => {
                     const r = rectFor(t, i);
+                    // A pane with no cwd can't ground a chat — force terminal
+                    // view even if a stale "chat" key survives in storage.
+                    const view: PaneView = t.cwd ? (views[t.id] ?? "terminal") : "terminal";
                     return (
                       <Rnd
                         key={t.id}
@@ -445,22 +540,147 @@ export default function TerminalsPage() {
                         }
                       >
                         <div className="relative h-full w-full">
-                          <TerminalPane
-                            info={t}
-                            focused={focusedId === t.id}
-                            onFocus={() => bringToFront(t.id)}
-                            onClose={() => setPendingClose(t.id)}
-                            models={models}
-                            aiClis={aiClis}
-                            skills={skills}
-                            otherTerminals={terminals.map((x) => ({
-                              id: x.id,
-                              shell: x.shell,
-                              cwd: x.cwd,
-                            }))}
-                          />
+                          {/* Terminal layer — ALWAYS mounted. Flipping to chat
+                              hides it with visibility (NEVER display:none and
+                              never an unmount): the PTY, its WebSocket, and the
+                              scrollback all live inside TerminalPane, and
+                              visibility keeps the holder's real box so the
+                              v1.190.0 fit-before-connect + ResizeObserver
+                              machinery measures true dimensions even while
+                              hidden. display:none would zero the holder — a
+                              (re)connect replay then wraps into a default-sized
+                              buffer that no later fit can re-wrap. */}
+                          <div
+                            data-testid={`term-layer-${t.id}`}
+                            className="h-full w-full"
+                            style={{ visibility: view === "chat" ? "hidden" : "visible" }}
+                          >
+                            <TerminalPane
+                              info={t}
+                              focused={focusedId === t.id}
+                              onFocus={() => bringToFront(t.id)}
+                              onClose={() => setPendingClose(t.id)}
+                              models={models}
+                              aiClis={aiClis}
+                              skills={skills}
+                              otherTerminals={terminals.map((x) => ({
+                                id: x.id,
+                                shell: x.shell,
+                                cwd: x.cwd,
+                              }))}
+                            />
+                          </div>
+
+                          {/* Chat layer — same box, chat grounded in this
+                              pane's folder. Its header carries ij-term-drag so
+                              the pane still drags by its header in chat view;
+                              the pane (not the view) stays the unit of focus,
+                              so the Files tab keeps following this cwd.
+                              SYMMETRIC with the terminal layer: mounted LAZILY
+                              on the first flip to chat, then NEVER unmounted —
+                              only hidden via visibility (never display:none,
+                              never an unmount). PaneChat owns an in-flight
+                              turn's stream and saves; unmounting it mid-turn
+                              leaves the turn finishing in a dead closure whose
+                              late last-write-wins save can erase a newer turn,
+                              or orphans the first exchange if a remount races
+                              the CREATE save. visibility:hidden also drops the
+                              hidden layer out of hit-testing, focus, and
+                              scrolling, so it can't sit invisibly over the
+                              terminal and steal input. */}
+                          {(view === "chat" || chatOpened[t.id]) && (
+                            <div
+                              data-testid={`chat-layer-${t.id}`}
+                              style={{ visibility: view === "chat" ? "visible" : "hidden" }}
+                              className={`absolute inset-0 z-10 flex flex-col overflow-hidden rounded-2xl border bg-[#0a0c11] shadow-card transition-colors ${
+                                focusedId === t.id
+                                  ? "border-accent/50 shadow-glow-sm ring-1 ring-accent/30"
+                                  : "border-white/[0.07] hover:border-white/[0.14]"
+                              }`}
+                            >
+                              <header className="ij-term-drag flex shrink-0 cursor-move items-center gap-2 border-b border-white/[0.06] bg-ink-900/60 px-3 py-2">
+                                <MessageSquare
+                                  size={13}
+                                  className={focusedId === t.id ? "text-accent" : "text-zinc-500"}
+                                />
+                                <span className="shrink-0 font-mono text-[11px] font-semibold text-zinc-200">
+                                  chat
+                                </span>
+                                <span
+                                  className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-500"
+                                  title={t.cwd}
+                                >
+                                  {t.cwd}
+                                </span>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setPendingClose(t.id);
+                                  }}
+                                  title="Close terminal"
+                                  className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-rose-500/15 hover:text-rose-300"
+                                >
+                                  <X size={13} />
+                                </button>
+                              </header>
+                              <div className="min-h-0 flex-1">
+                                <PaneChat paneId={t.id} cwd={t.cwd} />
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Terminal ⇄ Chat toggle. Floats just BELOW the
+                              header in both views — deliberately outside every
+                              ij-term-drag region, and buttons besides, which
+                              react-rnd's `cancel` already exempts: clicking it
+                              can never start a drag. */}
+                          <div
+                            data-testid={`pane-view-toggle-${t.id}`}
+                            className="absolute right-1.5 top-10 z-20 flex items-center gap-0.5 rounded-lg border border-white/10 bg-ink-900/85 p-0.5 shadow-card backdrop-blur"
+                          >
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPaneView(t.id, "terminal");
+                              }}
+                              title="Terminal view"
+                              aria-label={`Terminal view for pane ${t.id}`}
+                              aria-pressed={view === "terminal"}
+                              className={`grid h-5 w-5 place-items-center rounded-md transition-colors ${
+                                view === "terminal"
+                                  ? "bg-accent/15 text-accent"
+                                  : "text-zinc-500 hover:bg-accent/15 hover:text-accent-soft"
+                              }`}
+                            >
+                              <SquareTerminal size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={!t.cwd}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (t.cwd) setPaneView(t.id, "chat");
+                              }}
+                              title={
+                                t.cwd
+                                  ? "Chat view — talk to an agent grounded in this pane's folder"
+                                  : "Chat needs a working folder — this terminal has no cwd"
+                              }
+                              aria-label={`Chat view for pane ${t.id}`}
+                              aria-pressed={view === "chat"}
+                              className={`grid h-5 w-5 place-items-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                                view === "chat"
+                                  ? "bg-accent/15 text-accent"
+                                  : "text-zinc-500 hover:bg-accent/15 hover:text-accent-soft"
+                              }`}
+                            >
+                              <MessageSquare size={12} />
+                            </button>
+                          </div>
+
                           {pendingClose === t.id && (
-                            <div className="absolute inset-0 z-20 grid place-items-center rounded-2xl bg-black/70 backdrop-blur-sm">
+                            <div className="absolute inset-0 z-30 grid place-items-center rounded-2xl bg-black/70 backdrop-blur-sm">
                               <div className="w-[min(20rem,90%)] rounded-2xl border border-white/10 bg-ink-850/95 p-5 text-center shadow-card">
                                 <div className="text-sm font-semibold text-zinc-100">
                                   Close this terminal?

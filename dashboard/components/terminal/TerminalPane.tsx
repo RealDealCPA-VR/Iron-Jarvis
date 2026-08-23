@@ -772,8 +772,27 @@ export function TerminalPane({
           }
         }, 850);
         if (!focusedOnce) {
+          // One-shot either way: the shot is CONSUMED even when skipped, so a
+          // later reconnect can never steal focus mid-interaction (the
+          // original point of focusedOnce). Skipped when the holder isn't
+          // actually visible (v1.206.0): a pane restored straight into chat
+          // view keeps its terminal mounted under visibility:hidden, and an
+          // invisible PTY grabbing keystrokes is a keylogger-shaped bug in
+          // the desktop app. offsetParent misses visibility:hidden, so use
+          // checkVisibility with the visibility option (both spellings — the
+          // dictionary member was renamed checkVisibilityCSS →
+          // visibilityProperty); default to visible where the API is absent.
           focusedOnce = true;
-          term?.focus();
+          const check = (
+            holder as HTMLElement & {
+              checkVisibility?: (opts?: Record<string, boolean>) => boolean;
+            }
+          ).checkVisibility;
+          const holderVisible =
+            typeof check === "function"
+              ? check.call(holder, { checkVisibilityCSS: true, visibilityProperty: true })
+              : true;
+          if (holderVisible) term?.focus();
         }
       };
       ws.onmessage = (ev: MessageEvent) => {
