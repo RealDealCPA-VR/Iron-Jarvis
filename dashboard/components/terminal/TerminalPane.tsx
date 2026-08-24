@@ -35,6 +35,7 @@ import {
   shrinkToFit,
 } from "@/lib/snippet";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
+import { outputNotifyAt } from "@/components/terminal/paneStatusCore";
 import type { AiCli, ModelOption, Skill, TerminalInfo } from "@/lib/types";
 
 type AIResult = {
@@ -263,6 +264,7 @@ export function TerminalPane({
   onFocus,
   onClose,
   onWriterReady,
+  onOutput,
   models = [],
   aiClis = [],
   skills = [],
@@ -278,6 +280,11 @@ export function TerminalPane({
    *  is HONEST when down: writing to a closed/absent socket is a no-op that
    *  returns false, so the caller can tell whether the text landed. */
   onWriterReady?: (write: ((text: string) => boolean) | null) => void;
+  /** v1.212.0: fired when this pane's PTY produced NEW output, throttled to
+   *  at most one call per ~300ms — the page badges the view toggle so output
+   *  isn't missed while the pane shows its chat layer. Not fired during the
+   *  post-(re)connect replay window (the scrollback catch-up is old news). */
+  onOutput?: () => void;
   /** Model catalog for the PER-PANE AI assist picker (from /models). */
   models?: ModelOption[];
   /** AI CLIs detected on this machine, for the "Launch" dropdown. */
@@ -295,6 +302,15 @@ export function TerminalPane({
   const [state, setState] = useState<ConnState>("connecting");
   // The live WS, exposed to the AI bar so "Run" can type into THIS shell.
   const wsRef = useRef<WebSocket | null>(null);
+
+  // v1.212.0: output notifications for the page's view-toggle badge. The
+  // socket effect below runs once per session id while the page hands a
+  // fresh onOutput closure each render — read it through a ref at
+  // ws.onmessage time so the callback never goes stale. The timestamp ref
+  // is the ~300ms throttle's memory (see paneStatusCore.outputNotifyAt).
+  const onOutputRef = useRef(onOutput);
+  onOutputRef.current = onOutput;
+  const lastOutputNotifyRef = useRef(0);
 
   // --- Per-pane AI assist (suggest-only; Run is an explicit click) ---------
   const [aiOpen, setAiOpen] = useState(false);
@@ -823,6 +839,26 @@ export function TerminalPane({
         // Server -> client: PTY output as binary (ArrayBuffer); text just in case.
         if (typeof ev.data === "string") term.write(ev.data);
         else term.write(new Uint8Array(ev.data as ArrayBuffer));
+        // v1.212.0: tell the page NEW output landed (throttled) so a pane
+        // showing its chat layer can badge the terminal toggle. Every server
+        // frame on this socket IS PTY output — the daemon only send_bytes()es
+        // PTY reads, the scrollback replay, and the exit note; control JSON
+        // travels client->server only — so classification is "non-empty
+        // frame". The (re)connect replay is NOT distinguishable by frame
+        // shape (it arrives as ordinary send_bytes, no marker), so this
+        // honestly reuses the same replayGuardUntil time window the
+        // answerback suppression above trusts; the ~300ms throttle and the
+        // page's view gate absorb whatever that heuristic misses.
+        const at = outputNotifyAt(
+          ev.data,
+          Date.now(),
+          lastOutputNotifyRef.current,
+          replayGuardUntil,
+        );
+        if (at !== null) {
+          lastOutputNotifyRef.current = at;
+          onOutputRef.current?.();
+        }
       };
       ws.onclose = (ev: CloseEvent) => {
         if (disposed) return;

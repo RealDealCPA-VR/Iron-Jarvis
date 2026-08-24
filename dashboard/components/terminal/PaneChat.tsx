@@ -79,6 +79,7 @@ import {
   type PaneProjectOption,
   type PaneThreadSetup,
 } from "@/components/terminal/paneChatCore";
+import type { PaneChatStatus } from "@/components/terminal/paneStatusCore";
 
 export interface PaneChatProps {
   /** Stable pane identity — keys the pane's thread in localStorage. */
@@ -90,6 +91,12 @@ export interface PaneChatProps {
    *  write landed — false renders an honest "terminal not connected" note.
    *  ABSENT = no terminal behind this chat: no Run buttons render at all. */
   onRunCommand?: (cmd: string) => boolean;
+  /** v1.212.0: report this chat's live status whenever it CHANGES — the page
+   *  keeps this component mounted-but-hidden behind the terminal view, so a
+   *  streaming turn or (worse) an ApprovalCard the daemon holds for up to
+   *  180s is invisible without it. The page paints toggle-button badges
+   *  from these reports. */
+  onStatus?: (s: PaneChatStatus) => void;
 }
 
 /** GET /chat/threads/{id} — the slice this pane reads. */
@@ -189,7 +196,7 @@ function PaneMarkdown({ text }: { text: string }) {
   );
 }
 
-export function PaneChat({ paneId, cwd, onRunCommand }: PaneChatProps) {
+export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps) {
   const daemon = useDaemon();
   const stream = useChatStream();
 
@@ -588,6 +595,29 @@ export function PaneChat({ paneId, cwd, onRunCommand }: PaneChatProps) {
   const canCompose =
     !loading && !loadError && (daemon.online || daemon.checking);
   const busy = sending || stream.streaming;
+
+  // ---- status reporting (v1.212.0) ---------------------------------------
+  // Streaming is reported as `busy` (sending || stream.streaming) — the same
+  // derivation the composer's spinner uses — so the pre-stream POST window
+  // counts as working and the badge never flickers off between the POST
+  // landing and the first streamed token. Read `onStatus` through a ref so
+  // the page may hand a fresh closure each render without re-firing the
+  // effect; the deps make this report only on an actual change.
+  const onStatusRef = useRef(onStatus);
+  onStatusRef.current = onStatus;
+  const approvalPending = !!stream.approval;
+  useEffect(() => {
+    onStatusRef.current?.({ streaming: busy, approval: approvalPending });
+  }, [busy, approvalPending]);
+  // Hygiene: an unmounted chat is not working on anything — never leave a
+  // stale "working"/"approval" badge behind. (The page never unmounts an
+  // opened PaneChat (v1.206.0); this covers pane close and future callers.)
+  useEffect(
+    () => () => {
+      onStatusRef.current?.({ streaming: false, approval: false });
+    },
+    [],
+  );
 
   async function send() {
     const text = input.trim();

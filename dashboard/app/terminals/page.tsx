@@ -27,6 +27,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
+import type { PaneChatStatus } from "@/components/terminal/paneStatusCore";
 
 // xterm only runs in the browser — never during SSR / `next build`.
 const TerminalPane = dynamic(
@@ -117,6 +118,45 @@ export default function TerminalsPage() {
   // exchange in an orphaned thread if the remount races the CREATE save.
   // Mounting is still LAZY (first flip) so never-toggled panes pay nothing.
   const [chatOpened, setChatOpened] = useState<Record<string, boolean>>({});
+
+  // ---- pane progress visibility (v1.212.0) --------------------------------
+  // The view toggle must not be blind: from terminal view the user needs to
+  // SEE that the hidden chat is streaming — or worse, PAUSED on an approval
+  // the daemon holds for up to 180s — and from chat view that the hidden
+  // terminal printed new output. PaneChat reports {streaming, approval} via
+  // onStatus; TerminalPane fires onOutput (throttled) on real PTY frames.
+  // Both feed the small badges on the toggle buttons below.
+  const [chatStatus, setChatStatus] = useState<Record<string, PaneChatStatus>>({});
+  // Panes whose terminal printed output the user has NOT seen (it arrived
+  // while the pane showed its chat layer). Cleared on the flip back.
+  const [unseenTermOutput, setUnseenTermOutput] = useState<Record<string, boolean>>({});
+  // The views map, readable from onOutput callbacks: TerminalPane wires
+  // ws.onmessage once per session id, so a closure over `views` would pin
+  // the map from that render forever — the ref always holds the latest.
+  const viewsRef = useRef<Record<string, PaneView>>({});
+  viewsRef.current = views;
+
+  /** PaneChat's onStatus sink — stored per pane, no-op when nothing changed
+   *  (the reporter already reports only on change; this keeps a duplicate
+   *  report from re-rendering the whole canvas anyway). */
+  const reportChatStatus = useCallback((id: string, s: PaneChatStatus) => {
+    setChatStatus((prev) => {
+      const cur = prev[id];
+      if (cur && cur.streaming === s.streaming && cur.approval === s.approval) {
+        return prev;
+      }
+      return { ...prev, [id]: s };
+    });
+  }, []);
+
+  /** TerminalPane's onOutput sink. Output counts as UNSEEN only while the
+   *  pane is showing its chat layer — output the user is already watching
+   *  needs no badge — and the check reads viewsRef so the once-per-session
+   *  ws closure never judges against a stale views map. */
+  const noteTermOutput = useCallback((id: string) => {
+    if (viewsRef.current[id] !== "chat") return;
+    setUnseenTermOutput((prev) => (prev[id] ? prev : { ...prev, [id]: true }));
+  }, []);
 
   // Per-terminal free-form layout (position + size), persisted to localStorage.
   const [layout, setLayout] = useState<Record<string, Rect>>({});
@@ -238,6 +278,15 @@ export default function TerminalsPage() {
     setViews((prev) => ({ ...prev, [id]: v }));
     if (v === "chat") {
       setChatOpened((prev) => (prev[id] ? prev : { ...prev, [id]: true }));
+    } else {
+      // Back on the terminal: whatever it printed is on screen now, so the
+      // "new terminal output" badge has nothing left to announce (v1.212.0).
+      setUnseenTermOutput((prev) => {
+        if (!prev[id]) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
     }
     try {
       localStorage.setItem(paneViewKey(id), v);
@@ -569,6 +618,28 @@ export default function TerminalsPage() {
                     // A pane with no cwd can't ground a chat — force terminal
                     // view even if a stale "chat" key survives in storage.
                     const view: PaneView = t.cwd ? (views[t.id] ?? "terminal") : "terminal";
+                    // Toggle badges (v1.212.0): the HIDDEN layer's progress,
+                    // painted on the button that would reveal it. Chat side
+                    // only while the chat is hidden — an approval waiting
+                    // OUTRANKS mere streaming (it blocks the turn for up to
+                    // 180s and needs the user). Terminal side only while the
+                    // chat is showing and unseen output arrived.
+                    const status = chatStatus[t.id];
+                    const chatBadge =
+                      view !== "chat" && status
+                        ? status.approval
+                          ? ("approval" as const)
+                          : status.streaming
+                            ? ("streaming" as const)
+                            : null
+                        : null;
+                    const chatBadgeText =
+                      chatBadge === "approval"
+                        ? "Approval waiting in chat"
+                        : chatBadge === "streaming"
+                          ? "Chat is working"
+                          : null;
+                    const termBadge = view === "chat" && !!unseenTermOutput[t.id];
                     return (
                       <Rnd
                         key={t.id}
@@ -617,6 +688,7 @@ export default function TerminalsPage() {
                               onFocus={() => bringToFront(t.id)}
                               onClose={() => setPendingClose(t.id)}
                               onWriterReady={(w) => registerWriter(t.id, w)}
+                              onOutput={() => noteTermOutput(t.id)}
                               models={models}
                               aiClis={aiClis}
                               skills={skills}
@@ -685,6 +757,7 @@ export default function TerminalsPage() {
                                   paneId={t.id}
                                   cwd={t.cwd}
                                   onRunCommand={(cmd) => runInPane(t.id, cmd)}
+                                  onStatus={(s) => reportChatStatus(t.id, s)}
                                 />
                               </div>
                             </div>
@@ -705,16 +778,34 @@ export default function TerminalsPage() {
                                 e.stopPropagation();
                                 setPaneView(t.id, "terminal");
                               }}
-                              title="Terminal view"
-                              aria-label={`Terminal view for pane ${t.id}`}
+                              title={
+                                termBadge
+                                  ? "Terminal view — New terminal output"
+                                  : "Terminal view"
+                              }
+                              aria-label={
+                                termBadge
+                                  ? `Terminal view for pane ${t.id} — New terminal output`
+                                  : `Terminal view for pane ${t.id}`
+                              }
                               aria-pressed={view === "terminal"}
-                              className={`grid h-5 w-5 place-items-center rounded-md transition-colors ${
+                              className={`relative grid h-5 w-5 place-items-center rounded-md transition-colors ${
                                 view === "terminal"
                                   ? "bg-accent/15 text-accent"
                                   : "text-zinc-500 hover:bg-accent/15 hover:text-accent-soft"
                               }`}
                             >
                               <SquareTerminal size={12} />
+                              {/* INSIDE the button on purpose: react-rnd's
+                                  cancel="button…" exempts the whole subtree
+                                  from dragging, so the badge inherits it. */}
+                              {termBadge ? (
+                                <span
+                                  data-testid={`pane-term-badge-${t.id}`}
+                                  aria-hidden
+                                  className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-accent shadow-glow-sm"
+                                />
+                              ) : null}
                             </button>
                             <button
                               type="button"
@@ -724,19 +815,40 @@ export default function TerminalsPage() {
                                 if (t.cwd) setPaneView(t.id, "chat");
                               }}
                               title={
-                                t.cwd
-                                  ? "Chat view — talk to an agent grounded in this pane's folder"
-                                  : "Chat needs a working folder — this terminal has no cwd"
+                                !t.cwd
+                                  ? "Chat needs a working folder — this terminal has no cwd"
+                                  : chatBadgeText
+                                    ? `Chat view — ${chatBadgeText}`
+                                    : "Chat view — talk to an agent grounded in this pane's folder"
                               }
-                              aria-label={`Chat view for pane ${t.id}`}
+                              aria-label={
+                                chatBadgeText
+                                  ? `Chat view for pane ${t.id} — ${chatBadgeText}`
+                                  : `Chat view for pane ${t.id}`
+                              }
                               aria-pressed={view === "chat"}
-                              className={`grid h-5 w-5 place-items-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                              className={`relative grid h-5 w-5 place-items-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                                 view === "chat"
                                   ? "bg-accent/15 text-accent"
                                   : "text-zinc-500 hover:bg-accent/15 hover:text-accent-soft"
                               }`}
                             >
                               <MessageSquare size={12} />
+                              {/* INSIDE the button (drag-exempt via the Rnd
+                                  cancel). Amber pulse = an approval is
+                                  WAITING; accent pulse = the chat is
+                                  streaming a turn. */}
+                              {chatBadge ? (
+                                <span
+                                  data-testid={`pane-chat-badge-${t.id}`}
+                                  aria-hidden
+                                  className={`absolute -right-0.5 -top-0.5 h-1.5 w-1.5 animate-pulse rounded-full ${
+                                    chatBadge === "approval"
+                                      ? "bg-amber-400"
+                                      : "bg-accent"
+                                  }`}
+                                />
+                              ) : null}
                             </button>
                           </div>
 
