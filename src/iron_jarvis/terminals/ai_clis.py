@@ -27,6 +27,7 @@ AI_CLIS: list[dict[str, str]] = [
     {"id": "codex", "label": "Codex", "command": "codex", "provider": "OpenAI", "url": "https://developers.openai.com/codex/cli"},
     {"id": "grok", "label": "Grok CLI", "command": "grok", "provider": "xAI", "url": "https://github.com/superagent-ai/grok-cli"},
     {"id": "opencode", "label": "opencode", "command": "opencode", "provider": "opencode", "url": "https://opencode.ai"},
+    {"id": "pi", "label": "Pi", "command": "pi", "provider": "Earendil", "url": "https://github.com/earendil-works/pi"},
     {"id": "gemini", "label": "Gemini CLI", "command": "gemini", "provider": "Google", "url": "https://github.com/google-gemini/gemini-cli"},
     {"id": "cursor-agent", "label": "Cursor Agent", "command": "cursor-agent", "provider": "Cursor", "url": "https://cursor.com/cli"},
     {"id": "aider", "label": "Aider", "command": "aider", "provider": "Aider", "url": "https://aider.chat"},
@@ -152,6 +153,11 @@ def _extra_bin_dirs() -> list[Path]:
         local = os.environ.get("LOCALAPPDATA")
         if local:
             dirs.append(Path(local) / "Programs")
+            # Pi's installer ships a bundled Node runtime and drops pi.cmd in
+            # %LOCALAPPDATA%\pi-node\current, prepending it to the USER PATH —
+            # which a GUI-launched daemon whose environment predates the
+            # install never sees (same driving case as ~/.grok/bin above).
+            dirs.append(Path(local) / "pi-node" / "current")
     return [d for d in dirs if d.is_dir()]
 
 
