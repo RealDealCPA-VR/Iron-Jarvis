@@ -403,6 +403,8 @@ _SETTINGS_KEYS = [
     "decompose_local_tasks",
     # OpenCode store override for the Usage merge (dir or .db path).
     "opencode_data_dir",
+    # Pi coding agent session-store override for the Usage merge (dir path).
+    "pi_sessions_dir",
     # Voice speech-to-text — an optional DEDICATED whisper endpoint + model, so a
     # self-hosted STT server works independently of the (possibly non-transcribing)
     # chat endpoint. Its key lives in the vault as voice_transcribe_key.

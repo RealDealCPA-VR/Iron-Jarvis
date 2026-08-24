@@ -16,6 +16,85 @@ export interface PaneChatStatus {
   streaming: boolean;
   /** The turn is PAUSED on an ApprovalCard waiting for the user. */
   approval: boolean;
+  /** v1.213.0: name of the LAST still-running tool card of the live stream,
+   *  "" when none (or when the chat is idle — a finished turn's stale card
+   *  list must never read as current activity). */
+  tool: string;
+  /** v1.213.0: tail of the streamed text so far ({@link textTail}, ~90
+   *  chars, whitespace-collapsed), "" while idle. Changes every token — the
+   *  reporter throttles reports it drives (see TAIL_REPORT_MS). */
+  textTail: string;
+}
+
+/** Peek-strip sizing/timing (v1.213.0) — shared by PaneChat, the page, and
+ *  the tests so no surface hardcodes its own copy. */
+export const CHAT_TAIL_CHARS = 90;
+export const TERM_LINE_CHARS = 120;
+/** Minimum gap between textTail-DRIVEN status reports (ms). Transitions of
+ *  streaming/approval/tool always report immediately; only the every-token
+ *  text tail is paced, so a token burst cannot re-render the whole Build
+ *  canvas per token. */
+export const TAIL_REPORT_MS = 400;
+/** How long the terminal peek line stays up after the LAST output frame (ms).
+ *  Timestamp state + one timeout scheduled from the last update — no polling. */
+export const TERM_PEEK_QUIET_MS = 15_000;
+
+// ---- ANSI/OSC stripping (v1.213.0) ----------------------------------------
+// The terminal peek line shows raw PTY bytes to a human OUTSIDE xterm, so the
+// escape traffic has to go. Hand-rolled and conservative on purpose (no
+// dependency):
+//  - OSC (ESC ] … BEL / ESC \): the payload match is BOUNDED at 256 chars so
+//    an UNTERMINATED OSC (its terminator still in the next frame) can never
+//    swallow the rest of a chunk's real output. Cost of the bound: a
+//    terminated-but-huge OSC leaves its overflow behind — window titles are
+//    tens of chars, real output loss is the expensive failure.
+//  - CSI (ESC [ params intermediates final): the standard byte-range grammar.
+//  - Leftover ESC + optional intermediate + optional final covers charset
+//    designations (ESC ( B) and stray Fe escapes.
+//  - "\r" becomes "\n" BEFORE the control sweep: progress bars redraw with
+//    bare carriage returns, and deleting "\r" outright would weld every
+//    redraw into one line ("10%50%90%") — as line breaks, lastLine honestly
+//    picks the LATEST redraw.
+//  - Remaining control chars except "\n" are removed, including "�"
+//    (a frame boundary can split a UTF-8 sequence; the best-effort decode's
+//    replacement char is decode noise, not output).
+// eslint-disable-next-line no-control-regex
+const OSC_RE = /\x1b\][^\x07\x1b]{0,256}(?:\x07|\x1b\\)?/g;
+// eslint-disable-next-line no-control-regex
+const CSI_RE = /\x1b\[[0-?]*[ -/]*[@-~]/g;
+// eslint-disable-next-line no-control-regex
+const ESC_RE = /\x1b[ -/]?[0-~]?/g;
+// eslint-disable-next-line no-control-regex
+const CTRL_RE = /[\0-\x09\x0b-\x1f\x7f�]/g;
+
+/** Remove CSI/OSC/single-char escapes and control chars (except \n). */
+export function stripAnsi(text: string): string {
+  return text
+    .replace(OSC_RE, "")
+    .replace(CSI_RE, "")
+    .replace(ESC_RE, "")
+    .replace(/\r/g, "\n")
+    .replace(CTRL_RE, "");
+}
+
+/** The last NON-EMPTY line of `text` after {@link stripAnsi}, trimmed (a
+ *  prompt's trailing whitespace says nothing) and capped to `cap` chars —
+ *  the NEWEST chars win, with a leading ellipsis owning up to the cut.
+ *  "" = genuinely nothing to show (the no-empty-husk rule). */
+export function lastLine(text: string, cap: number = TERM_LINE_CHARS): string {
+  const lines = stripAnsi(text).split("\n");
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i].trim();
+    if (line) return line.length > cap ? `…${line.slice(-(cap - 1))}` : line;
+  }
+  return "";
+}
+
+/** Collapse ALL whitespace (a peek strip is one line) and keep the TAIL,
+ *  capped to `cap` chars with a leading ellipsis owning up to the cut. */
+export function textTail(text: string, cap: number = CHAT_TAIL_CHARS): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > cap ? `…${flat.slice(-(cap - 1))}` : flat;
 }
 
 /** Minimum gap between onOutput notifications (ms). PTY output arrives as a

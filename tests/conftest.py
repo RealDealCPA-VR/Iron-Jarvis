@@ -111,3 +111,33 @@ def _isolate_opencode_store():
         yield
     finally:
         _mod.opencode_db_path = original
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_pi_store():
+    """Keep the developer's REAL Pi session store out of every test (v1.213.0).
+
+    Same trap as ``_isolate_opencode_store`` above: ``pi_sessions_root``
+    resolves from the real ``Path.home()``, so on a machine where the Pi CLI
+    has run, every usage assertion would see real tokens while CI sees none.
+    Tests that WANT the merge set ``config.pi_sessions_dir`` (honoured) or
+    monkeypatch ``pi_usage`` directly.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from iron_jarvis.eval import pi_usage as _mod
+
+    original = _mod.pi_sessions_root
+    nowhere = Path(tempfile.mkdtemp(prefix="ij-test-no-pi-")) / "sessions"
+
+    def _isolated(config=None):
+        if str(getattr(config, "pi_sessions_dir", "") or "").strip():
+            return original(config)
+        return nowhere
+
+    _mod.pi_sessions_root = _isolated
+    try:
+        yield
+    finally:
+        _mod.pi_sessions_root = original

@@ -41,6 +41,18 @@ scope. None is speculative.
   renders the honest "bound to X, but that folder is not accessible right now"
   wording in BOTH lanes whenever the pick is refused, and instructs the model to
   say so rather than guess.
+- [ ] **v1.213.0 reviewer nits (all bounded, dated 2026-08-24):** Pi/opencode
+  usage folds count an unknown hosted vendor as local (fails-open on
+  unrecognised, documented convention); Pi CACHE tokens (310M real on this
+  machine, 120:1 vs everything else) ride only the source block, never the
+  merged totals or any UI; stripAnsi leaks an OSC split across frames and the
+  overflow of a >256-char OSC payload (VS Code shell-integration OSC 633 is
+  the likely trigger); the peek strip halves the bottom resize grab band and
+  overlays the chat composer's bottom ~24px while visible (≤15s); a closed
+  pane's quiet-window timer can fire one harmless re-render; textTail
+  regexes the whole streamed text per render (slice(-4*cap) first would
+  bound it). `pi_sessions_dir`/`opencode_data_dir` are settable via the API
+  but rendered by no Settings surface.
 - [ ] **New v1.210.0 codebase-vocabulary signals have known read-only false
   positives** (reviewer finding, dated 2026-08-23): "node.js"/"deno" runtime
   names arm `read_file` via the extension list; "section 179 of the code" with a

@@ -143,14 +143,21 @@ vi.mock("next/dynamic", () => ({
       if (typeof props.paneId === "string") {
         const paneId = props.paneId;
         const onStatus = props.onStatus as
-          | ((s: { streaming: boolean; approval: boolean }) => void)
+          | ((s: {
+              streaming: boolean;
+              approval: boolean;
+              tool: string;
+              textTail: string;
+            }) => void)
           | undefined;
         return (
           <div data-testid="pane-chat">
             <button
               type="button"
               data-testid={`emit-streaming-${paneId}`}
-              onClick={() => onStatus?.({ streaming: true, approval: false })}
+              onClick={() =>
+                onStatus?.({ streaming: true, approval: false, tool: "", textTail: "" })
+              }
             >
               streaming
             </button>
@@ -159,14 +166,18 @@ vi.mock("next/dynamic", () => ({
             <button
               type="button"
               data-testid={`emit-approval-${paneId}`}
-              onClick={() => onStatus?.({ streaming: true, approval: true })}
+              onClick={() =>
+                onStatus?.({ streaming: true, approval: true, tool: "", textTail: "" })
+              }
             >
               approval
             </button>
             <button
               type="button"
               data-testid={`emit-idle-${paneId}`}
-              onClick={() => onStatus?.({ streaming: false, approval: false })}
+              onClick={() =>
+                onStatus?.({ streaming: false, approval: false, tool: "", textTail: "" })
+              }
             >
               idle
             </button>
@@ -174,14 +185,14 @@ vi.mock("next/dynamic", () => ({
         );
       }
       const info = props.info as { id: string; shell: string };
-      const onOutput = props.onOutput as (() => void) | undefined;
+      const onOutput = props.onOutput as ((chunk: string) => void) | undefined;
       return (
         <div data-testid={`terminal-pane-${info.id}`}>
           <header className="ij-term-drag">{info.shell}</header>
           <button
             type="button"
             data-testid={`emit-output-${info.id}`}
-            onClick={() => onOutput?.()}
+            onClick={() => onOutput?.("$ echo hi\r\nhi\r\n")}
           >
             output
           </button>
@@ -317,7 +328,9 @@ describe("PaneChat status reporting (rendered against the real component)", () =
     });
     render(<PaneChat paneId="p1" cwd={CWD} onStatus={onStatus} />);
     await waitFor(() =>
-      expect(onStatus).toHaveBeenCalledWith({ streaming: false, approval: false }),
+      expect(onStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ streaming: false, approval: false }),
+      ),
     );
     onStatus.mockClear();
 
@@ -328,7 +341,9 @@ describe("PaneChat status reporting (rendered against the real component)", () =
     // derivation as the composer's spinner). A report keyed on the hook flag
     // alone would leave the badge dark for the whole pre-stream window.
     await waitFor(() =>
-      expect(onStatus).toHaveBeenCalledWith({ streaming: true, approval: false }),
+      expect(onStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ streaming: true, approval: false }),
+      ),
     );
     expect(onStatus).not.toHaveBeenCalledWith(
       expect.objectContaining({ approval: true }),
@@ -340,7 +355,9 @@ describe("PaneChat status reporting (rendered against the real component)", () =
       await S.stream.gate;
     });
     await waitFor(() =>
-      expect(onStatus).toHaveBeenCalledWith({ streaming: false, approval: false }),
+      expect(onStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ streaming: false, approval: false }),
+      ),
     );
   });
 
@@ -354,7 +371,9 @@ describe("PaneChat status reporting (rendered against the real component)", () =
     const onStatus = vi.fn();
     const view = render(<PaneChat paneId="p2" cwd={CWD} onStatus={onStatus} />);
     await waitFor(() =>
-      expect(onStatus).toHaveBeenCalledWith({ streaming: false, approval: true }),
+      expect(onStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ streaming: false, approval: true }),
+      ),
     );
     // The card itself renders too — the report and the card are one fact.
     expect(screen.getByTestId("chat-approval-card")).toBeInTheDocument();
@@ -365,7 +384,9 @@ describe("PaneChat status reporting (rendered against the real component)", () =
     onStatus.mockClear();
     view.rerender(<PaneChat paneId="p2" cwd={CWD} onStatus={onStatus} />);
     await waitFor(() =>
-      expect(onStatus).toHaveBeenCalledWith({ streaming: false, approval: false }),
+      expect(onStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ streaming: false, approval: false }),
+      ),
     );
   });
 
@@ -374,12 +395,16 @@ describe("PaneChat status reporting (rendered against the real component)", () =
     const onStatus = vi.fn();
     const { unmount } = render(<PaneChat paneId="p3" cwd={CWD} onStatus={onStatus} />);
     await waitFor(() =>
-      expect(onStatus).toHaveBeenCalledWith({ streaming: true, approval: false }),
+      expect(onStatus).toHaveBeenCalledWith(
+        expect.objectContaining({ streaming: true, approval: false }),
+      ),
     );
     unmount();
     expect(onStatus.mock.calls[onStatus.mock.calls.length - 1][0]).toEqual({
       streaming: false,
       approval: false,
+      tool: "",
+      textTail: "",
     });
   });
 });
@@ -535,7 +560,9 @@ describe("TerminalPane wiring (source-pinned)", () => {
     expect(om).toContain("outputNotifyAt(");
     expect(om).toContain("replayGuardUntil");
     expect(om).toContain("lastOutputNotifyRef.current = at;");
-    expect(om).toContain("onOutputRef.current?.()");
+    // v1.213.0 widened the callback to carry the frame's decoded text — the
+    // pin holds the call shape, not the (now non-empty) argument list.
+    expect(om).toContain("onOutputRef.current?.(decodeFrame(ev.data))");
     // The honest limitation is documented where the code lives: the replay is
     // not distinguishable by frame shape (the phrase wraps in the source, so
     // the pin holds the line-stable half).

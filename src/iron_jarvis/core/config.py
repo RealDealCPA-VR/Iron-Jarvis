@@ -365,6 +365,10 @@ class Config(BaseModel):
     #: merges OpenCode's own session tokens so local work done there counts.
     #: "" = the standard ~/.local/share/opencode location.
     opencode_data_dir: str = ""
+    #: Pi coding agent's session store dir — the Usage page merges Pi's own
+    #: per-message tokens/costs so CLI work done in Build terminals counts.
+    #: "" = the standard ~/.pi/agent/sessions location.
+    pi_sessions_dir: str = ""
     #: Known context windows (TOKENS) for budget scaling, keyed by
     #: "provider::model", "model", or "provider" (most-specific wins). Local
     #: endpoints rarely advertise their window, so this pin lets big-context

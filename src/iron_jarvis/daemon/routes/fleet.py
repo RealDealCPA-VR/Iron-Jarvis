@@ -804,12 +804,13 @@ def register(app: FastAPI, d) -> None:
             #      -> say "(removed)"; it used to render with an EMPTY label,
             #         i.e. a nameless endpoint they had already deleted
             #   3. an EXTERNAL source that was never a fleet node at all
-            #      (opencode/*) -> name it for what it is. Marking this "removed"
-            #         would invent a deletion that never happened.
-            external = node_id.startswith("opencode/")
+            #      (opencode/*, pi/*) -> name it for what it is. Marking this
+            #         "removed" would invent a deletion that never happened.
+            external = node_id.startswith(("opencode/", "pi/"))
             retired = not external and node_id not in live_ids
             if external:
-                label = f"OpenCode · {node_id.split('/', 1)[1]}"
+                src_name = "OpenCode" if node_id.startswith("opencode/") else "Pi"
+                label = f"{src_name} · {node_id.split('/', 1)[1]}"
             else:
                 label = labels.get(node_id) or (
                     f"{node_id} (removed)" if retired else node_id

@@ -79,7 +79,12 @@ import {
   type PaneProjectOption,
   type PaneThreadSetup,
 } from "@/components/terminal/paneChatCore";
-import type { PaneChatStatus } from "@/components/terminal/paneStatusCore";
+import {
+  CHAT_TAIL_CHARS,
+  TAIL_REPORT_MS,
+  textTail,
+  type PaneChatStatus,
+} from "@/components/terminal/paneStatusCore";
 
 export interface PaneChatProps {
   /** Stable pane identity — keys the pane's thread in localStorage. */
@@ -94,8 +99,10 @@ export interface PaneChatProps {
   /** v1.212.0: report this chat's live status whenever it CHANGES — the page
    *  keeps this component mounted-but-hidden behind the terminal view, so a
    *  streaming turn or (worse) an ApprovalCard the daemon holds for up to
-   *  180s is invisible without it. The page paints toggle-button badges
-   *  from these reports. */
+   *  180s is invisible without it. The page paints toggle-button badges and
+   *  (v1.213.0) the live peek strip from these reports. Transitions of
+   *  streaming/approval/tool report immediately; the every-token textTail is
+   *  paced to one report per TAIL_REPORT_MS. */
   onStatus?: (s: PaneChatStatus) => void;
 }
 
@@ -596,25 +603,89 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
     !loading && !loadError && (daemon.online || daemon.checking);
   const busy = sending || stream.streaming;
 
-  // ---- status reporting (v1.212.0) ---------------------------------------
+  // ---- status reporting (v1.212.0, peek fields v1.213.0) ------------------
   // Streaming is reported as `busy` (sending || stream.streaming) — the same
   // derivation the composer's spinner uses — so the pre-stream POST window
   // counts as working and the badge never flickers off between the POST
   // landing and the first streamed token. Read `onStatus` through a ref so
   // the page may hand a fresh closure each render without re-firing the
-  // effect; the deps make this report only on an actual change.
+  // effect.
+  //
+  // The v1.213.0 peek fields are SERVER truth only: `tool` is the last
+  // still-RUNNING card of the live stream, `textTail` the tail of the text
+  // that actually streamed — both "" while idle, so a finished turn's stale
+  // card list can never read as current activity. textTail changes EVERY
+  // TOKEN, and one page re-render per token across the whole Build canvas is
+  // a render storm — so reports are split in two: transitions (busy /
+  // approval / tool) fire immediately, while tail-only changes are paced
+  // through a ref-timestamped scheduler to one report per TAIL_REPORT_MS
+  // (every report carries the freshest tail; a scheduled trailing report
+  // flushes the last tokens of a burst).
   const onStatusRef = useRef(onStatus);
   onStatusRef.current = onStatus;
   const approvalPending = !!stream.approval;
+  const runningTool = busy
+    ? ([...stream.tools].reverse().find((t) => t.status === "running")?.name ?? "")
+    : "";
+  const tail = busy ? textTail(stream.text, CHAT_TAIL_CHARS) : "";
+  const latestStatusRef = useRef<PaneChatStatus>({
+    streaming: busy,
+    approval: approvalPending,
+    tool: runningTool,
+    textTail: tail,
+  });
+  latestStatusRef.current = {
+    streaming: busy,
+    approval: approvalPending,
+    tool: runningTool,
+    textTail: tail,
+  };
+  const lastTailReportRef = useRef(0);
+  const tailTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reportStatusNow = useCallback(() => {
+    if (tailTimerRef.current !== null) {
+      clearTimeout(tailTimerRef.current);
+      tailTimerRef.current = null;
+    }
+    // Every report counts as a tail report too — it carries the freshest
+    // tail, so the pacer's clock restarts here as well.
+    lastTailReportRef.current = Date.now();
+    onStatusRef.current?.(latestStatusRef.current);
+  }, []);
+  // Transitions report IMMEDIATELY — an approval pause or a tool starting
+  // must never wait out the tail pacer.
   useEffect(() => {
-    onStatusRef.current?.({ streaming: busy, approval: approvalPending });
-  }, [busy, approvalPending]);
+    reportStatusNow();
+  }, [busy, approvalPending, runningTool, reportStatusNow]);
+  // The tail pacer: report now when the window already elapsed, else keep
+  // exactly ONE trailing report scheduled (it reads latestStatusRef at fire
+  // time, so the burst's final tokens always land).
+  useEffect(() => {
+    if (!busy) return; // idle tail is "" and rode the transition report
+    const wait = TAIL_REPORT_MS - (Date.now() - lastTailReportRef.current);
+    if (wait <= 0) {
+      reportStatusNow();
+      return;
+    }
+    if (tailTimerRef.current !== null) return;
+    tailTimerRef.current = setTimeout(() => {
+      tailTimerRef.current = null;
+      reportStatusNow();
+    }, wait);
+  }, [tail, busy, reportStatusNow]);
   // Hygiene: an unmounted chat is not working on anything — never leave a
-  // stale "working"/"approval" badge behind. (The page never unmounts an
-  // opened PaneChat (v1.206.0); this covers pane close and future callers.)
+  // stale "working"/"approval" badge (or peek line) behind. (The page never
+  // unmounts an opened PaneChat (v1.206.0); this covers pane close and
+  // future callers.) The pending trailing report dies with the component.
   useEffect(
     () => () => {
-      onStatusRef.current?.({ streaming: false, approval: false });
+      if (tailTimerRef.current !== null) clearTimeout(tailTimerRef.current);
+      onStatusRef.current?.({
+        streaming: false,
+        approval: false,
+        tool: "",
+        textTail: "",
+      });
     },
     [],
   );

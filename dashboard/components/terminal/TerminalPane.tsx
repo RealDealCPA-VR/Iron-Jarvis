@@ -258,6 +258,22 @@ const XTERM_THEME = {
   brightWhite: "#f4f4f5",
 } as const;
 
+/** Best-effort utf-8 decode of ONE PTY frame for the page's peek strip
+ *  (v1.213.0). A frame boundary may split a multi-byte sequence — the
+ *  replacement chars that produces are stripped by paneStatusCore.stripAnsi,
+ *  never shown. Anything undecodable is honestly "" (no output claimed). */
+function decodeFrame(data: unknown): string {
+  if (typeof data === "string") return data;
+  if (typeof ArrayBuffer !== "undefined" && data instanceof ArrayBuffer) {
+    try {
+      return new TextDecoder("utf-8").decode(new Uint8Array(data));
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
 export function TerminalPane({
   info,
   focused,
@@ -283,8 +299,11 @@ export function TerminalPane({
   /** v1.212.0: fired when this pane's PTY produced NEW output, throttled to
    *  at most one call per ~300ms — the page badges the view toggle so output
    *  isn't missed while the pane shows its chat layer. Not fired during the
-   *  post-(re)connect replay window (the scrollback catch-up is old news). */
-  onOutput?: () => void;
+   *  post-(re)connect replay window (the scrollback catch-up is old news).
+   *  v1.213.0: carries the notifying frame's text (utf-8 best-effort decode)
+   *  so the page can peek the last output line; frames suppressed by the
+   *  throttle are simply not delivered — the peek is a glimpse, not a log. */
+  onOutput?: (chunk: string) => void;
   /** Model catalog for the PER-PANE AI assist picker (from /models). */
   models?: ModelOption[];
   /** AI CLIs detected on this machine, for the "Launch" dropdown. */
@@ -857,7 +876,9 @@ export function TerminalPane({
         );
         if (at !== null) {
           lastOutputNotifyRef.current = at;
-          onOutputRef.current?.();
+          // Decode ONLY the notifying frame (v1.213.0) — the throttle already
+          // decided the page wants a glimpse; suppressed frames cost nothing.
+          onOutputRef.current?.(decodeFrame(ev.data));
         }
       };
       ws.onclose = (ev: CloseEvent) => {

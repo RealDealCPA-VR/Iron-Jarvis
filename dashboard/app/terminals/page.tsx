@@ -27,7 +27,12 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
-import type { PaneChatStatus } from "@/components/terminal/paneStatusCore";
+import {
+  TERM_LINE_CHARS,
+  TERM_PEEK_QUIET_MS,
+  lastLine,
+  type PaneChatStatus,
+} from "@/components/terminal/paneStatusCore";
 
 // xterm only runs in the browser — never during SSR / `next build`.
 const TerminalPane = dynamic(
@@ -119,17 +124,38 @@ export default function TerminalsPage() {
   // Mounting is still LAZY (first flip) so never-toggled panes pay nothing.
   const [chatOpened, setChatOpened] = useState<Record<string, boolean>>({});
 
-  // ---- pane progress visibility (v1.212.0) --------------------------------
+  // ---- pane progress visibility (v1.212.0, peek strip v1.213.0) -----------
   // The view toggle must not be blind: from terminal view the user needs to
   // SEE that the hidden chat is streaming — or worse, PAUSED on an approval
   // the daemon holds for up to 180s — and from chat view that the hidden
-  // terminal printed new output. PaneChat reports {streaming, approval} via
-  // onStatus; TerminalPane fires onOutput (throttled) on real PTY frames.
-  // Both feed the small badges on the toggle buttons below.
+  // terminal printed new output. PaneChat reports {streaming, approval,
+  // tool, textTail} via onStatus; TerminalPane fires onOutput (throttled) on
+  // real PTY frames, carrying the frame's decoded text. Both feed the small
+  // badges on the toggle buttons AND the one-line peek strip at the pane's
+  // bottom edge (v1.213.0) — badges say THAT something is happening, the
+  // strip shows WHAT, and clicking it flips to the hidden view.
   const [chatStatus, setChatStatus] = useState<Record<string, PaneChatStatus>>({});
   // Panes whose terminal printed output the user has NOT seen (it arrived
   // while the pane showed its chat layer). Cleared on the flip back.
   const [unseenTermOutput, setUnseenTermOutput] = useState<Record<string, boolean>>({});
+  // The last output line the hidden terminal printed (ANSI-stripped, capped)
+  // + when it landed. SERVER truth only: every entry came from a real PTY
+  // frame. `at` powers the quiet-window hide below — timestamp state, no
+  // polling loop.
+  const [termPeek, setTermPeek] = useState<
+    Record<string, { lastLine: string; at: number }>
+  >({});
+  // Re-render trigger for the quiet window: ONE timeout scheduled from the
+  // LAST output frame (per pane) bumps this so the render re-evaluates the
+  // recency check. New frames reschedule it — no interval ever runs.
+  const [, bumpPeekEval] = useState(0);
+  const termPeekTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  useEffect(() => {
+    const timers = termPeekTimers.current;
+    return () => {
+      Object.values(timers).forEach((t) => clearTimeout(t));
+    };
+  }, []);
   // The views map, readable from onOutput callbacks: TerminalPane wires
   // ws.onmessage once per session id, so a closure over `views` would pin
   // the map from that render forever — the ref always holds the latest.
@@ -142,7 +168,13 @@ export default function TerminalsPage() {
   const reportChatStatus = useCallback((id: string, s: PaneChatStatus) => {
     setChatStatus((prev) => {
       const cur = prev[id];
-      if (cur && cur.streaming === s.streaming && cur.approval === s.approval) {
+      if (
+        cur &&
+        cur.streaming === s.streaming &&
+        cur.approval === s.approval &&
+        cur.tool === s.tool &&
+        cur.textTail === s.textTail
+      ) {
         return prev;
       }
       return { ...prev, [id]: s };
@@ -151,11 +183,30 @@ export default function TerminalsPage() {
 
   /** TerminalPane's onOutput sink. Output counts as UNSEEN only while the
    *  pane is showing its chat layer — output the user is already watching
-   *  needs no badge — and the check reads viewsRef so the once-per-session
-   *  ws closure never judges against a stale views map. */
-  const noteTermOutput = useCallback((id: string) => {
+   *  needs no badge or peek — and the check reads viewsRef so the
+   *  once-per-session ws closure never judges against a stale views map.
+   *  v1.213.0: also keeps the peek line. A chunk whose stripped last line is
+   *  empty (pure escape traffic) refreshes `at` on an EXISTING entry (frames
+   *  are landing — keep the line up) but never creates one: an empty husk is
+   *  not a peek. */
+  const noteTermOutput = useCallback((id: string, chunk: string) => {
     if (viewsRef.current[id] !== "chat") return;
     setUnseenTermOutput((prev) => (prev[id] ? prev : { ...prev, [id]: true }));
+    const line = lastLine(chunk, TERM_LINE_CHARS);
+    setTermPeek((prev) => {
+      const cur = prev[id];
+      if (!line && !cur) return prev; // nothing to show — no empty husk
+      return {
+        ...prev,
+        [id]: { lastLine: line || (cur?.lastLine ?? ""), at: Date.now() },
+      };
+    });
+    const timers = termPeekTimers.current;
+    if (timers[id]) clearTimeout(timers[id]);
+    timers[id] = setTimeout(() => {
+      delete timers[id];
+      bumpPeekEval((n) => n + 1);
+    }, TERM_PEEK_QUIET_MS);
   }, []);
 
   // Per-terminal free-form layout (position + size), persisted to localStorage.
@@ -640,6 +691,46 @@ export default function TerminalsPage() {
                           ? "Chat is working"
                           : null;
                     const termBadge = view === "chat" && !!unseenTermOutput[t.id];
+                    // Peek strip (v1.213.0): ONE slim line at the pane's
+                    // bottom edge showing the HIDDEN view's live activity,
+                    // clickable to flip. Renders only when it has something
+                    // TRUE to say (server truth: a status the chat actually
+                    // reported, bytes the terminal actually printed) — never
+                    // an empty husk, never a synthesized "probably working".
+                    // Suppressed under the pendingClose confirm (z-30 — the
+                    // strip is z-20 anyway, but a clickable flip under a
+                    // modal asking "close this pane?" is noise).
+                    const chatPeek =
+                      view !== "chat" &&
+                      pendingClose !== t.id &&
+                      status &&
+                      (status.approval || status.streaming)
+                        ? status.approval
+                          ? {
+                              amber: true,
+                              text: "Approval needed — click to answer",
+                            }
+                          : {
+                              amber: false,
+                              // Precedence mirrors what the chat itself shows:
+                              // a running tool row beats the token text.
+                              text: status.tool
+                                ? `Chat: ${status.tool}…`
+                                : status.textTail
+                                  ? `Chat: ${status.textTail}`
+                                  : "Chat: working…",
+                            }
+                        : null;
+                    const peek = termPeek[t.id];
+                    const termPeekLine =
+                      view === "chat" &&
+                      pendingClose !== t.id &&
+                      peek &&
+                      peek.lastLine &&
+                      (unseenTermOutput[t.id] ||
+                        Date.now() - peek.at < TERM_PEEK_QUIET_MS)
+                        ? peek.lastLine
+                        : null;
                     return (
                       <Rnd
                         key={t.id}
@@ -688,7 +779,7 @@ export default function TerminalsPage() {
                               onFocus={() => bringToFront(t.id)}
                               onClose={() => setPendingClose(t.id)}
                               onWriterReady={(w) => registerWriter(t.id, w)}
-                              onOutput={() => noteTermOutput(t.id)}
+                              onOutput={(chunk) => noteTermOutput(t.id, chunk)}
                               models={models}
                               aiClis={aiClis}
                               skills={skills}
@@ -851,6 +942,48 @@ export default function TerminalsPage() {
                               ) : null}
                             </button>
                           </div>
+
+                          {/* LIVE PEEK STRIP (v1.213.0) — the hidden view's
+                              activity as one slim line at the bottom edge,
+                              above both layers (z-20; the visibility-hidden
+                              layer is out of hit-testing anyway) and BELOW
+                              the pendingClose confirm (z-30 — also gated out
+                              above). A BUTTON so react-rnd's cancel keeps it
+                              drag-exempt; pointer events live only on the
+                              strip itself. Renders ONLY with something true
+                              to say; clicking flips to the view doing the
+                              talking. */}
+                          {chatPeek ? (
+                            <button
+                              type="button"
+                              data-testid={`pane-peek-${t.id}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPaneView(t.id, "chat");
+                              }}
+                              title="Open the chat"
+                              className={`absolute inset-x-0 bottom-0 z-20 truncate rounded-b-2xl border-t px-3 py-1 text-left text-[11px] backdrop-blur transition-colors ${
+                                chatPeek.amber
+                                  ? "border-amber-400/30 bg-amber-500/[0.18] text-amber-200 hover:bg-amber-500/[0.28]"
+                                  : "border-white/10 bg-ink-900/85 text-zinc-300 hover:bg-accent/15 hover:text-accent-soft"
+                              }`}
+                            >
+                              {chatPeek.text}
+                            </button>
+                          ) : termPeekLine ? (
+                            <button
+                              type="button"
+                              data-testid={`pane-peek-${t.id}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPaneView(t.id, "terminal");
+                              }}
+                              title="Open the terminal"
+                              className="absolute inset-x-0 bottom-0 z-20 truncate rounded-b-2xl border-t border-white/10 bg-ink-900/85 px-3 py-1 text-left font-mono text-[11px] text-zinc-300 backdrop-blur transition-colors hover:bg-accent/15 hover:text-accent-soft"
+                            >
+                              {termPeekLine}
+                            </button>
+                          ) : null}
 
                           {pendingClose === t.id && (
                             <div className="absolute inset-0 z-30 grid place-items-center rounded-2xl bg-black/70 backdrop-blur-sm">
