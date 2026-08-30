@@ -86,7 +86,7 @@ import { useApi } from "@/lib/useApi";
 import { timeAgo } from "@/lib/format";
 import { Card } from "@/components/ui";
 import { Reveal } from "@/components/motion";
-import AgentFace from "@/components/agents/AgentFace";
+import AgentFace, { type FaceOverride } from "@/components/agents/AgentFace";
 import { SOURCE_LABEL, type AgentSource } from "@/components/agents/identity";
 
 interface RosterStats {
@@ -117,6 +117,12 @@ export interface RosterEntry {
   last_message?: string | null;
   /** Serve path for a stored portrait — present ONLY when one exists. */
   avatar?: string | null;
+  /** v1.180.0 additive: the CHOSEN face, or null/absent to derive it from the
+   *  name. The daemon has served this on every roster row since v1.180.0
+   *  (`_face_override(bare)`); it was never typed here because the rail read
+   *  faces from the shared provider instead. The agents room (v1.214.0) draws
+   *  from the roster directly, so the field is declared where it arrives. */
+  face?: FaceOverride | null;
   /** v1.193.0 LIVENESS, additive and optional — "busy" | "queued" | "idle" |
    *  "unknown" (agents/roster.py::RosterEntry.activity). A daemon that predates
    *  it, or one whose /agents/roster serializer does not forward it yet, sends
@@ -132,13 +138,13 @@ export interface RosterEntry {
  *  `cacheKey` (the row's last_active — SetupCard's `rev` idea at low
  *  resolution) busts the browser cache after a portrait is replaced, so the
  *  roster never keeps rendering a stale image the daemon no longer serves. */
-function avatarSrc(rel: string, cacheKey?: string | null): string {
+export function rosterAvatarSrc(rel: string, cacheKey?: string | null): string {
   const token = ijToken();
   const v = encodeURIComponent(cacheKey || "0");
   return `${API_BASE}${rel}?v=${v}${token ? `&token=${encodeURIComponent(token)}` : ""}`;
 }
 
-const KIND_PILL: Record<AgentSource, string> = {
+export const KIND_PILL: Record<AgentSource, string> = {
   builtin: "border-accent/30 bg-accent/[0.08] text-accent-soft",
   dynamic: "border-violet-500/25 bg-violet-500/10 text-violet-300",
   remote: "border-zinc-500/25 bg-zinc-500/10 text-zinc-400",
@@ -146,7 +152,7 @@ const KIND_PILL: Record<AgentSource, string> = {
 
 /** The shown name: the bare slug — the kind pill carries provenance, so the
  *  wire prefixes ("custom:", "remote:") stay off the screen. */
-function bareName(name: string): string {
+export function bareName(name: string): string {
   if (name.startsWith("custom:")) return name.slice("custom:".length);
   if (name.startsWith("remote:")) return name.slice("remote:".length);
   return name;
@@ -196,7 +202,7 @@ export function livenessOf(e: RosterEntry): Liveness | null {
 /** The liveness marker: a DOT plus the word, so it reads at a glance without
  *  being parsed — and stays legible to a screen reader, which a dot alone
  *  would not be. Deliberately says nothing about agents with no marker. */
-function LivePill({
+export function LivePill({
   state,
   bare,
   testId,
@@ -242,7 +248,7 @@ function LivePill({
  *  since v1.193.0 `custom:` and `remote:` agents finally accumulate a real
  *  track record, and a builtin-only shortcut here would keep reading
  *  "no runs yet" about exactly the agents that release exists for. */
-function statsText(e: RosterEntry): string {
+export function statsText(e: RosterEntry): string {
   const paren = statsParen(e);
   if (paren) return paren;
   const s = e.stats;
@@ -270,7 +276,7 @@ function statsText(e: RosterEntry): string {
  * button's hover/focus colour instead of pinning a hue that only works on one
  * theme. Nothing animates — the rail's real faces carry the motion budget.
  */
-function GearFace({ size = 26 }: { size?: number }): ReactElement {
+export function GearFace({ size = 26 }: { size?: number }): ReactElement {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -576,7 +582,7 @@ export function RosterStrip({
                         // title="" = decorative: the visible name beside it is
                         // already the accessible name of this button.
                         title=""
-                        avatarUrl={e.avatar ? avatarSrc(e.avatar, e.last_active) : undefined}
+                        avatarUrl={e.avatar ? rosterAvatarSrc(e.avatar, e.last_active) : undefined}
                         className={off ? "opacity-50" : ""}
                       />
                       <span
@@ -808,7 +814,7 @@ export function RosterStrip({
               size={30}
               avatarUrl={
                 selected.avatar
-                  ? avatarSrc(selected.avatar, selected.last_active)
+                  ? rosterAvatarSrc(selected.avatar, selected.last_active)
                   : undefined
               }
               className="mt-0.5"

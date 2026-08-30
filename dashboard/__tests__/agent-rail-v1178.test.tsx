@@ -203,6 +203,19 @@ const THREADS = [
 const rail = () => screen.getByTestId("roster-rail");
 const railButton = (name: RegExp | string) =>
   within(rail()).getByRole("button", { name });
+/**
+ * WHERE THE ROSTER LIVES SINCE v1.214.0. The rail on the PAGE is the thread
+ * list now; the faces moved into the agents room, a real dialog behind the
+ * icon at the foot of that rail. `RosterStrip` itself is unchanged and the
+ * component-level tests above still render it directly — these page-level ones
+ * open the room first and click the same names in it.
+ */
+const openRoom = () => {
+  fireEvent.click(screen.getByTestId("roster-gear"));
+  return screen.getByTestId("agents-modal");
+};
+const roomButton = (name: RegExp | string) =>
+  within(screen.getByTestId("agents-modal-list")).getByRole("button", { name });
 const table = () => screen.getByTestId("round-table");
 /** WHO THE WORK IS AIMED AT, as the page tells the composer (v1.180.0).
  *  "" = nobody named yet, i.e. the thread's own agent decides. */
@@ -334,50 +347,56 @@ describe("the rail — the selection is announced", () => {
 
 /* ------------------------------------------------- selection drives the page */
 
-describe("the page — clicking a face", () => {
+describe("the page — clicking a face in the agents room", () => {
+  // RETARGETED FOR v1.214.0. Every claim below is the same claim v1.178.0
+  // made; only the surface the face is clicked ON moved. The roster used to
+  // stand as a rail in the page and now lives in a dialog behind the rail's
+  // icon, because the left card is the THREAD list ("a new fixed full lenth
+  // and scrollable left card"). What must not change is that a click on a
+  // portrait selects, aims the work, opens an existing 1:1 thread — and
+  // creates nothing.
+
   it("aims the work at that agent", async () => {
-    // v1.180.0: the preselect that used to land in the job-post card's "Who
-    // takes it" select now lands in the thread composer. Same page state, same
-    // guarantee, new home — nothing is named until a face says so.
     render(<AgentsPage />);
     await waitFor(() => expect(aimedAt()).toBe(""));
-    fireEvent.click(railButton("analyst"));
+    openRoom();
+    fireEvent.click(roomButton("analyst"));
     await waitFor(() => expect(aimedAt()).toBe("dynamic:analyst"));
   });
 
   it("never aims the work at an agent that cannot take it", async () => {
     render(<AgentsPage />);
-    fireEvent.click(railButton(/down-box/));
+    openRoom();
+    fireEvent.click(roomButton(/down-box/));
     // An unreachable remote (and the non-delegable supervisor) leave the work
     // aimed at the Team rather than naming a target the composer would quietly
     // fall back from at dispatch time.
     await waitFor(() => expect(aimedAt()).toBe("builtin:__team__"));
-    fireEvent.click(railButton("supervisor"));
+    fireEvent.click(roomButton("supervisor"));
     await waitFor(() => expect(aimedAt()).toBe("builtin:__team__"));
   });
 
   it("leaves no STALE target behind when the next pick cannot take work", async () => {
-    // ADVERSARIAL REVIEW. Skipping the preselect for an un-workable agent is
-    // only half the job: pick a workable one FIRST and the old target survives
-    // the next pick. Measured before the fix — rail ring + aria-current on
+    // ADVERSARIAL REVIEW (v1.178.0). Skipping the preselect for an un-workable
+    // agent is only half the job: pick a workable one FIRST and the old target
+    // survives the next pick. Measured before the fix — the highlight on
     // "down-box", the work still aimed at "custom:analyst", so dispatching
-    // would have sent the job to the analyst while the page's own highlight
-    // named the offline box. The rail is the page's primary control now; it may
-    // never point at one agent while the work is aimed at another. (v1.180.0:
-    // read off the composer instead of the deleted card — the bug is the same
-    // wherever the target lives, which is exactly why it is still asserted.)
+    // would have sent the job to the analyst while the page's own selection
+    // named the offline box. Still asserted, because the bug lives in the
+    // page's state and is indifferent to which surface the click came from.
     render(<AgentsPage />);
-    fireEvent.click(railButton("analyst"));
+    openRoom();
+    fireEvent.click(roomButton("analyst"));
     await waitFor(() => expect(aimedAt()).toBe("dynamic:analyst"));
-    fireEvent.click(railButton(/down-box/));
+    fireEvent.click(roomButton(/down-box/));
     await waitFor(() => {
-      expect(railButton(/down-box/).getAttribute("aria-current")).toBe("true");
+      expect(roomButton(/down-box/).getAttribute("aria-current")).toBe("true");
       expect(aimedAt()).toBe("builtin:__team__");
     });
     // Same for the non-delegable supervisor, reached from a live target.
-    fireEvent.click(railButton("analyst"));
+    fireEvent.click(roomButton("analyst"));
     await waitFor(() => expect(aimedAt()).toBe("dynamic:analyst"));
-    fireEvent.click(railButton("supervisor"));
+    fireEvent.click(roomButton("supervisor"));
     await waitFor(() => expect(aimedAt()).toBe("builtin:__team__"));
   });
 
@@ -387,64 +406,68 @@ describe("the page — clicking a face", () => {
     await waitFor(() =>
       expect(screen.getByTestId("round-table").textContent).toBe("t-other"),
     );
-    fireEvent.click(railButton("analyst"));
+    openRoom();
+    fireEvent.click(roomButton("analyst"));
     await waitFor(() =>
       expect(screen.getByTestId("round-table").textContent).toBe("t-analyst"),
     );
   });
 
   it("keeps the highlight through the re-render the click itself causes", async () => {
-    // THE PAGE OWNS THE SELECTION. When the rail kept it internally, the
+    // THE PAGE OWNS THE SELECTION. When the roster kept it internally, the
     // highlight was lost the moment the click's own state updates remounted
-    // the strip: the rail then pointed at one agent while the work was aimed
-    // at another — the page disagreeing with itself, silently. (The
+    // the strip: it then pointed at one agent while the work was aimed at
+    // another — the page disagreeing with itself, silently. (The
     // framer-motion test double makes that remount happen every render, which
     // is exactly why this test can see it at all.)
     render(<AgentsPage />);
-    fireEvent.click(railButton("analyst"));
+    openRoom();
+    fireEvent.click(roomButton("analyst"));
     // BOTH assertions live INSIDE the waitFor. The highlight is page state and
     // the target reaches the composer one commit downstream of it; asserting
     // the second one after the await is the exact shape that flaked CI in
     // v1.177.1 — it happens to be synchronous under act() today, and "today"
     // is not a guarantee.
     await waitFor(() => {
-      expect(railButton("analyst").getAttribute("aria-current")).toBe("true");
+      expect(roomButton("analyst").getAttribute("aria-current")).toBe("true");
       expect(aimedAt()).toBe("dynamic:analyst");
-    });
-  });
-
-  it("the narrow-width picker means the same thing as the faces", async () => {
-    // The <select> IS the rail below md, not a second control with its own
-    // idea of who is selected — choosing there drives the page identically.
-    render(<AgentsPage />);
-    fireEvent.change(screen.getByLabelText("Choose an agent"), {
-      target: { value: "custom:analyst" },
-    });
-    await waitFor(() => {
-      expect(aimedAt()).toBe("dynamic:analyst");
-      expect(railButton("analyst").getAttribute("aria-current")).toBe("true");
     });
   });
 
   it("creates nothing — an agent with no thread just becomes the selection", async () => {
     render(<AgentsPage />);
-    fireEvent.click(railButton("builder"));
+    openRoom();
+    fireEvent.click(roomButton("builder"));
     await waitFor(() => expect(aimedAt()).toBe("builtin:builder"));
     // The open thread is untouched and no POST went out: starting a
     // conversation stays behind the explicit Talk button.
     expect(table().textContent).toBe("t-other");
     expect(hooks.posts).toHaveLength(0);
   });
+
+  it("stays open while you browse — selecting is not a dismissal", async () => {
+    // The room is where portraits and faces are chosen, so clicking one agent
+    // must not shut the surface the user is configuring in. (Talk DOES close
+    // it — see agents-room-v1214: it opens the thread the click asked for, and
+    // leaving a dialog on top of that would hide the answer.)
+    render(<AgentsPage />);
+    openRoom();
+    fireEvent.click(roomButton("analyst"));
+    await waitFor(() => expect(aimedAt()).toBe("dynamic:analyst"));
+    expect(screen.getByTestId("agents-modal")).toBeTruthy();
+  });
 });
 
-/* -------------------------------------------------------------- the gear --- */
+/* -------------------------------------------------------------- the icon --- */
 
 describe("the gear with a face", () => {
-  it("opens the create surface — local AND remote behind one door", async () => {
+  it("opens the agents room — every agent, and the door to a new one", async () => {
     render(<AgentsPage />);
-    // Collapsed to start with (nothing in localStorage).
-    expect(screen.queryByText("Create an agent")).toBeNull();
-    fireEvent.click(screen.getByTestId("roster-gear"));
+    expect(screen.queryByTestId("agents-modal")).toBeNull();
+    openRoom();
+    await waitFor(() => expect(screen.getByTestId("agents-modal")).toBeTruthy());
+    // Local AND remote still live behind this ONE door, one click further in.
+    fireEvent.click(screen.getByTestId("agents-modal-new"));
     await waitFor(() => expect(screen.getByText("Create an agent")).toBeTruthy());
     expect(screen.getByText("Connect a remote agent")).toBeTruthy();
   });
@@ -452,7 +475,7 @@ describe("the gear with a face", () => {
   it("says what it does — the drawn gear is decorative", () => {
     render(<AgentsPage />);
     const gear = screen.getByRole("button", {
-      name: /configure a local or remote agent/i,
+      name: /creating a new local or remote agent/i,
     });
     expect(gear).toBe(screen.getByTestId("roster-gear"));
     const drawn = within(gear).getByTestId("gear-face");
@@ -462,24 +485,22 @@ describe("the gear with a face", () => {
     expect(drawn.getAttribute("role")).toBeNull();
   });
 
-  it("keeps setup behind the gear even when it was left open before", async () => {
-    // REWRITTEN for v1.179.0, and the inversion is the point. In v1.178.0 the
-    // gear only REVEALED a card that the page already rendered, so a persisted
-    // "open" meant setup greeted you on arrival. The user asked for the
-    // opposite: "the set up agents should all be contained in the new agent
-    // gear face on the left pane and not shown unless the user decided to
-    // configure an agent." So a stored open flag no longer puts a form on the
-    // page — only the click does.
+  it("opens nothing on arrival, however the page was left last time", async () => {
+    // v1.179.0 established that configuration is "not shown unless the user
+    // decided to configure an agent", and the stored flag from the older
+    // card's disclosure must not resurrect that on a page that now uses a
+    // DIALOG. A modal that reopened itself because it was open last week is a
+    // page that starts by interrupting you.
     window.localStorage.setItem("ij_agents_setup_open", "1");
     render(<AgentsPage />);
     await waitFor(() => expect(screen.getByTestId("roster-gear")).toBeTruthy());
-    expect(screen.queryByText("Create an agent")).toBeNull();
+    expect(screen.queryByTestId("agents-modal")).toBeNull();
 
     fireEvent.click(screen.getByTestId("roster-gear"));
-    await waitFor(() => expect(screen.getByText("Create an agent")).toBeTruthy());
-    // ...and it folds away again, so the gear is a door, not a one-way reveal.
+    await waitFor(() => expect(screen.getByTestId("agents-modal")).toBeTruthy());
+    // ...and it closes again, so the icon is a door, not a one-way reveal.
     fireEvent.click(screen.getByTestId("roster-gear"));
-    await waitFor(() => expect(screen.queryByText("Create an agent")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("agents-modal")).toBeNull());
   });
 });
 

@@ -239,6 +239,21 @@ const railButton = (name: RegExp | string) =>
   within(rail()).getByRole("button", { name });
 const railGiveWork = () => screen.getByRole("button", { name: /^Give work$/ });
 
+/* v1.214.0 — WHERE THE ROSTER LIVES NOW. The page's left card is the THREAD
+   list; the faces are in a dialog behind the icon at its foot. `RosterStrip`
+   itself is unchanged, so the component-level tests in this file still drive
+   it directly; the page-level ones open the room first. */
+const room = () => screen.getByTestId("agents-modal");
+const openRoom = () => {
+  fireEvent.click(screen.getByTestId("roster-gear"));
+  return room();
+};
+const roomButton = (name: RegExp | string) =>
+  within(screen.getByTestId("agents-modal-list")).getByRole("button", { name });
+const roomGiveWork = () =>
+  within(room()).getByRole("button", { name: /^Give work$/ });
+const threadRail = () => screen.getByTestId("agents-thread-rail");
+
 beforeEach(() => {
   hooks.api = {
     "/agents": { builtin: ["supervisor", "builder"], dynamic: [] },
@@ -263,124 +278,137 @@ afterEach(() => {
 
 /* ------------------------------------------------------------- the stack --- */
 
-describe("the roster sits BELOW the round-table", () => {
-  it("renders the roster after the conversation in document order", async () => {
-    // INVERTED in v1.182.0, and the reason is the FOLD, not taste. With the
-    // roster above, expanding the list pushed the conversation DOWN the
-    // page — opening the roster moved the thing the user was reading, so
-    // the fold cost something every time it was used. Below, the list grows
-    // into empty space and the transcript never shifts.
+describe("the left card is the THREAD list, and it fills the app", () => {
+  // REPLACES "the roster sits BELOW the round-table" (v1.180.0/v1.184.0).
+  // Those tests pinned a composition this release deliberately retires: the
+  // roster was the rail and the threads were a SECOND 16rem rail beside the
+  // conversation. Reported: the left pane should be "a new fixed full lenth
+  // and scrollable left card that is the height length of the app below the
+  // very top pane", holding the threads. What is asserted here is the shape
+  // that replaced it, at the same level of detail — the container is the
+  // mechanism, so the container is what gets checked.
+
+  it("puts the thread rail BESIDE the conversation, and nothing else on the page", async () => {
     render(<AgentsPage />);
     await waitFor(() => expect(table()).toBeTruthy());
-    expect(
-      table().compareDocumentPosition(pane()) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    const module = screen.getByTestId("agents-room");
+    expect(module.contains(threadRail())).toBe(true);
+    expect(module.contains(table())).toBe(true);
+    // A row at md and up, so the rail is a column and not a band above the
+    // transcript; a plain stack below it, where 17rem beside a transcript is
+    // two unusable columns.
+    expect(module.className).toMatch(/md:flex-row/);
+    // The ROSTER is not on the page at all any more — it is behind the icon.
+    expect(screen.queryByTestId("roster-pane")).toBeNull();
+    expect(screen.queryByTestId("roster-rail")).toBeNull();
   });
 
-  it("puts them in ONE column, not side by side", async () => {
-    // Document order alone is not the ask: the old page ALSO had the rail
-    // first in the DOM and then painted it as a left grid column beside the
-    // transcript. The container is the mechanism, so the container is asserted
-    // — a `grid-cols-[15rem_…]` back on this wrapper is the regression.
+  it("is the height of the app, with only its list scrolling", async () => {
+    // The two halves of "fixed full length and scrollable": the module row is
+    // pinned to the window height, and INSIDE the card exactly one region
+    // scrolls. Both matter — a card that is full height but scrolls as a whole
+    // carries its own footer away, which is the failure this replaces (a long
+    // thread list used to push the roster's gear, the only door to agent
+    // configuration, off the bottom of the page).
     render(<AgentsPage />);
     await waitFor(() => expect(table()).toBeTruthy());
-    expect(within(stack()).getByTestId("roster-pane")).toBeTruthy();
-    expect(within(stack()).getByTestId("round-table")).toBeTruthy();
-    expect(stack().className).not.toMatch(/grid-cols/);
+    expect(screen.getByTestId("agents-room").className).toMatch(
+      /md:h-\[calc\(100vh-4\.5rem\)\]/,
+    );
+    // Every thread row lives inside ONE scroll region...
+    const scrollers = new Set(
+      within(threadRail())
+        .getAllByTitle(/Talk with|Thread /)
+        .map((b) => b.closest("[class*='overflow-y-auto']"))
+        .filter(Boolean),
+    );
+    expect(scrollers.size).toBe(1);
+    // ...and the icon is NOT in it. Asserted against THAT region rather than
+    // "any scrolling ancestor": in the real app the layout's own <main> is
+    // `overflow-y-auto`, so the looser check would be true of every element on
+    // the page and would pass for a reason that has nothing to do with this.
+    const list = [...scrollers][0] as HTMLElement;
+    expect(list.contains(screen.getByTestId("roster-gear"))).toBe(false);
+    expect(threadRail().contains(screen.getByTestId("roster-gear"))).toBe(true);
   });
 
-  it("shares the conversation's cell, so the two cards are the same width", async () => {
-    // v1.184.0, and the earlier versions of this test were measuring the
-    // WRONG PAIR. The round-table does not span the page: it sits in the
-    // right cell of `md:grid-cols-[16rem_minmax(0,1fr)]`, beside the thread
-    // rail. The roster sat one level ABOVE that grid, so it spanned the
-    // whole page and really was the wider card — the user said so twice.
-    // Comparing the roster to the PAGE (a width cap, then no width cap) was
-    // the mistake; comparing it to the CARD ABOVE IT is the requirement.
-    // Same cell = same width by construction, at every breakpoint, with no
-    // pair of classes to keep in step.
+  it("draws each thread's panel as the agents' own faces, layered", async () => {
+    // "the image of the related agent or agents (layered as they are now)".
+    // The layering was already right; the contents were coloured initials
+    // while every other surface in the app drew the agent.
     render(<AgentsPage />);
     await waitFor(() => expect(table()).toBeTruthy());
-    const cell = table().closest("div.min-w-0");
-    expect(cell).toBeTruthy();
-    expect(cell!.contains(screen.getByTestId("roster-pane"))).toBe(true);
-    // ...and the roster FOLLOWS the conversation inside it.
-    expect(
-      table().compareDocumentPosition(screen.getByTestId("roster-pane")) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    // By TITLE, not by accessible name: the row's delete button is named
+    // "Delete Talk with vr-assistant", so a name match finds two.
+    const row = within(threadRail()).getByTitle("Talk with vr-assistant");
+    expect(within(row).getAllByTestId("agent-face").length).toBeGreaterThan(0);
   });
 });
 
-/* -------------------------------------------------------------- the fold --- */
+/* ------------------------------------------------ the icon, bottom left ---- */
 
-describe("the roster list collapses", () => {
-  it("starts open — a list nobody asked to hide stays visible", async () => {
+describe("the agents icon at the foot of the rail", () => {
+  // REPLACES "the roster list collapses" (v1.180.0). The fold existed because
+  // the roster was a long list in the page and the user wanted it out of the
+  // way; with the roster behind a dialog there is no list in the page to fold.
+  // The guarantee the fold was protecting — "keeps the GEAR reachable" — is
+  // what survives, and it is now structural rather than a state to maintain.
+
+  it("opens the room, and the room carries every kind of agent", async () => {
     render(<AgentsPage />);
-    await waitFor(() => expect(fold().getAttribute("aria-expanded")).toBe("true"));
-    expect(rail()).toBeVisible();
+    await waitFor(() => expect(threadRail()).toBeTruthy());
+    expect(screen.queryByTestId("agents-modal")).toBeNull();
+    openRoom();
+    await waitFor(() => expect(room()).toBeTruthy());
+    for (const name of ["supervisor", "builder", "analyst"]) {
+      expect(roomButton(name)).toBeTruthy();
+    }
+    expect(roomButton(/vr-assistant/)).toBeTruthy();
   });
 
-  it("folds away and comes back", async () => {
+  it("stays put however long the thread list gets", async () => {
+    // The fold's real job, kept: configuration must never become unreachable
+    // by having too many threads. The icon is outside the scrolling region, so
+    // this holds by construction instead of by a persisted flag.
+    hooks.api["/agents/threads"] = {
+      threads: Array.from({ length: 60 }, (_, i) => ({
+        id: `t-${i}`,
+        title: `Thread ${i}`,
+        participants: [],
+        message_count: 1,
+        updated_at: "2026-08-20T10:00:00Z",
+      })),
+    };
     render(<AgentsPage />);
-    await waitFor(() => expect(fold().getAttribute("aria-expanded")).toBe("true"));
-    fireEvent.click(fold());
-    await waitFor(() => expect(fold().getAttribute("aria-expanded")).toBe("false"));
-    // Hidden, not unmounted: the narrow <select>'s value and a long rail's
-    // scroll position survive a fold, and `hidden` still takes the controls out
-    // of the a11y tree.
-    expect(rail()).not.toBeVisible();
-    expect(screen.getByLabelText("Choose an agent")).not.toBeVisible();
-    fireEvent.click(fold());
-    await waitFor(() => expect(rail()).toBeVisible());
+    await waitFor(() => expect(screen.getByTestId("roster-gear")).toBeVisible());
+    const list = within(threadRail())
+      .getAllByTitle(/Thread /)[0]
+      .closest("[class*='overflow-y-auto']") as HTMLElement;
+    expect(list).toBeTruthy();
+    expect(list.contains(screen.getByTestId("roster-gear"))).toBe(false);
   });
 
-  it("remembers the choice across visits", async () => {
+  it("names who the page is working with, so the selection is still visible", async () => {
+    // The pick used to show as a highlighted row in the roster rail. With the
+    // roster behind a door, a selection with nothing on screen to show it is
+    // page state the user cannot see — so the rail says it.
     render(<AgentsPage />);
-    await waitFor(() => expect(fold().getAttribute("aria-expanded")).toBe("true"));
-    fireEvent.click(fold());
-    await waitFor(() => expect(window.localStorage.getItem(ROSTER_KEY)).toBe("0"));
-    cleanup();
-
-    // A second visit, same browser: the page comes back folded.
-    render(<AgentsPage />);
-    await waitFor(() => expect(fold().getAttribute("aria-expanded")).toBe("false"));
-    expect(rail()).not.toBeVisible();
-    // ...and reopening is remembered too, or the fold would be a one-way door.
-    fireEvent.click(fold());
-    await waitFor(() => expect(window.localStorage.getItem(ROSTER_KEY)).toBe("1"));
-  });
-
-  it("says what it is hiding while folded, including who is selected", async () => {
-    render(<AgentsPage />);
-    await waitFor(() => expect(rail()).toBeVisible());
-    fireEvent.click(railButton("analyst"));
-    fireEvent.click(fold());
+    await waitFor(() => expect(threadRail()).toBeTruthy());
+    expect(screen.getByTestId("rail-picked").textContent).toMatch(/nobody picked/);
+    openRoom();
+    fireEvent.click(roomButton("analyst"));
     await waitFor(() =>
-      expect(fold().getAttribute("aria-expanded")).toBe("false"),
+      expect(screen.getByTestId("rail-picked").textContent).toMatch(
+        /working with analyst/,
+      ),
     );
-    // The count is always true; the name only appears for a REAL pick.
-    expect(fold().textContent).toContain(`Roster · ${ROSTER.length}`);
-    expect(fold().textContent).toContain("analyst selected");
-  });
-
-  it("keeps the GEAR reachable while folded", async () => {
-    // Configuration lives behind the gear and nowhere else (v1.179.0). If the
-    // fold swallowed it, tidying the page would delete the only door to
-    // creating an agent.
-    render(<AgentsPage />);
-    fireEvent.click(fold());
-    await waitFor(() => expect(rail()).not.toBeVisible());
-    expect(gear()).toBeVisible();
-    fireEvent.click(gear());
-    await waitFor(() => expect(screen.getByText("Create an agent")).toBeTruthy());
-    // And the list is still folded — the gear opened setup, not the roster.
-    expect(fold().getAttribute("aria-expanded")).toBe("false");
   });
 
   it("offers no fold on the pre-rail composition", () => {
     // A `collapsed` with no toggle would be a section with no way back, so the
-    // strip ignores it outright.
+    // strip ignores it outright. (Component-level: `RosterStrip` still ships
+    // the fold for the older-daemon page, which is the only page that has a
+    // roster list in the flow.)
     render(<RosterStrip entries={ROSTER} collapsed />);
     expect(screen.queryByTestId("roster-toggle")).toBeNull();
     expect(screen.getByLabelText("Choose an agent")).toBeVisible();
@@ -403,9 +431,10 @@ describe("posting a job is starting a thread", () => {
 
   it("Give work opens the thread with that agent and arms the composer", async () => {
     render(<AgentsPage />);
-    await waitFor(() => expect(rail()).toBeVisible());
-    fireEvent.click(railButton("analyst"));
-    fireEvent.click(railGiveWork());
+    await waitFor(() => expect(threadRail()).toBeTruthy());
+    openRoom();
+    fireEvent.click(roomButton("analyst"));
+    fireEvent.click(roomGiveWork());
     // Both facts inside the waitFor: the POST and the state it drives land in
     // separate commits, and asserting the second after awaiting the first is
     // the shape that flaked CI twice.
@@ -414,15 +443,17 @@ describe("posting a job is starting a thread", () => {
       expect(table().textContent).toBe("t-new");
       expect(table().getAttribute("data-assign")).toBe("dynamic:analyst");
       // ...and the page moves the user TO the surface it just armed. Carried
-      // over from job-post-v1166's deleted page test, which asserted the same
-      // scroll onto the job card this replaced: a Give-work that arms a
-      // composer three sections down, silently, is a button that did nothing
+      // over from job-post-v1166's deleted page test: a Give-work that arms a
+      // composer somewhere off screen, silently, is a button that did nothing
       // the user can see.
       expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalled();
     });
     // The composer also gets the page's own roster rows, so its target list
-    // never disagrees with the rail beside it.
+    // never disagrees with the room the job was aimed from.
     expect(table().getAttribute("data-roster")).toBe(String(ROSTER.length));
+    // The room GETS OUT OF THE WAY once it has opened a thread — leaving a
+    // dialog on top of the conversation it just started would hide the answer.
+    expect(screen.queryByTestId("agents-modal")).toBeNull();
   });
 
   it("Give work re-aims the composer even at the agent already selected", async () => {
@@ -436,10 +467,11 @@ describe("posting a job is starting a thread", () => {
     // their manual choice silently outranking the control they just used.
     // Identity is therefore what is counted; the value alone cannot see it.
     render(<AgentsPage />);
-    await waitFor(() => expect(rail()).toBeVisible());
-    fireEvent.click(railButton("analyst"));
+    await waitFor(() => expect(threadRail()).toBeTruthy());
+    openRoom();
+    fireEvent.click(roomButton("analyst"));
     await waitFor(() => expect(hooks.arms).toEqual(["dynamic:analyst"]));
-    fireEvent.click(railGiveWork());
+    fireEvent.click(roomGiveWork());
     await waitFor(() =>
       expect(hooks.arms).toEqual(["dynamic:analyst", "dynamic:analyst"]),
     );
@@ -450,8 +482,9 @@ describe("posting a job is starting a thread", () => {
     // select now lands in the composer — same page state, new home. Clicking a
     // FACE still POSTs nothing: that stays behind Talk and Give work.
     render(<AgentsPage />);
-    await waitFor(() => expect(rail()).toBeVisible());
-    fireEvent.click(railButton("analyst"));
+    await waitFor(() => expect(threadRail()).toBeTruthy());
+    openRoom();
+    fireEvent.click(roomButton("analyst"));
     await waitFor(() =>
       expect(table().getAttribute("data-assign")).toBe("dynamic:analyst"),
     );
@@ -462,51 +495,38 @@ describe("posting a job is starting a thread", () => {
     // Carried over from the v1.178.0 adversarial review, which asserted it
     // through the job card that no longer exists here. The bug is the same
     // wherever the target lives: pick a workable agent, then an offline one,
-    // and the rail's highlight moves while the work stays aimed at the first.
+    // and the highlight moves while the work stays aimed at the first.
     // An un-workable pick RESETS the target to the Team — the honest answer,
     // since neither the supervisor nor an offline remote can take a session.
     render(<AgentsPage />);
-    await waitFor(() => expect(rail()).toBeVisible());
-    fireEvent.click(railButton("analyst"));
+    await waitFor(() => expect(threadRail()).toBeTruthy());
+    openRoom();
+    fireEvent.click(roomButton("analyst"));
     await waitFor(() =>
       expect(table().getAttribute("data-assign")).toBe("dynamic:analyst"),
     );
-    fireEvent.click(railButton(/down-box/));
+    fireEvent.click(roomButton(/down-box/));
     await waitFor(() => {
-      expect(railButton(/down-box/).getAttribute("aria-current")).toBe("true");
+      expect(roomButton(/down-box/).getAttribute("aria-current")).toBe("true");
       expect(table().getAttribute("data-assign")).toBe("builtin:__team__");
     });
     // Same for the non-delegable supervisor, reached from a live target.
-    fireEvent.click(railButton("analyst"));
+    fireEvent.click(roomButton("analyst"));
     await waitFor(() =>
       expect(table().getAttribute("data-assign")).toBe("dynamic:analyst"),
     );
-    fireEvent.click(railButton("supervisor"));
+    fireEvent.click(roomButton("supervisor"));
     await waitFor(() =>
       expect(table().getAttribute("data-assign")).toBe("builtin:__team__"),
     );
   });
 
-  it("the narrow-width picker aims the composer exactly as the faces do", async () => {
-    // The <select> IS the rail below md, not a second control with its own
-    // idea of who is selected. (Carried over from v1.178.0, which asserted it
-    // through the job card that no longer stands on this page.)
-    render(<AgentsPage />);
-    await waitFor(() => expect(rail()).toBeVisible());
-    fireEvent.change(screen.getByLabelText("Choose an agent"), {
-      target: { value: "custom:analyst" },
-    });
-    await waitFor(() => {
-      expect(table().getAttribute("data-assign")).toBe("dynamic:analyst");
-      expect(railButton("analyst").getAttribute("aria-current")).toBe("true");
-    });
-  });
-
   it("Give work reuses the existing 1:1 thread instead of posting a second one", async () => {
     render(<AgentsPage />);
-    await waitFor(() => expect(rail()).toBeVisible());
-    fireEvent.click(railButton(/vr-assistant/));
-    fireEvent.click(railGiveWork());
+    await waitFor(() => expect(threadRail()).toBeTruthy());
+    openRoom();
+    fireEvent.click(roomButton(/vr-assistant/));
+    fireEvent.click(roomGiveWork());
     await waitFor(() => {
       expect(table().textContent).toBe("t-assistant");
       expect(table().getAttribute("data-assign")).toBe("remote:vr-assistant");
@@ -570,23 +590,32 @@ describe("a daemon that serves the roster but not the thread routes", () => {
 /* ------------------------------------------------- one roster, never two --- */
 
 describe("the roster renders exactly once", () => {
-  it("lives in the conversation's cell when there is one", async () => {
+  it("lives in the room, and nowhere in the page behind it", async () => {
+    // v1.184.0's guard, restated for the surface that replaced its subject.
+    // The failure it exists to catch is unchanged: a roster rendered in two
+    // places is two lists that can disagree about who exists.
     render(<AgentsPage />);
     await waitFor(() => expect(table()).toBeTruthy());
-    expect(screen.getAllByTestId("roster-pane")).toHaveLength(1);
-    expect(table().closest("div.min-w-0")!.contains(screen.getByTestId("roster-pane"))).toBe(true);
+    expect(screen.queryByTestId("roster-pane")).toBeNull();
+    openRoom();
+    await waitFor(() => expect(room()).toBeTruthy());
+    expect(screen.getAllByTestId("agents-modal-list")).toHaveLength(1);
+    // Still nothing in the page itself — the dialog is portalled OUT of it.
+    expect(screen.queryByTestId("roster-rail")).toBeNull();
   });
 
-  it("falls back to the page flow when no conversation card exists", async () => {
-    // v1.184.0 REGRESSION GUARD. Moving the roster into the round-table's cell
-    // made it vanish on every path WITHOUT that cell — a daemon serving no
-    // thread routes lost its roster entirely, and only the degraded-path test
-    // noticed. One `rail` in two places, gated so it can never be both.
-    delete hooks.api["/agents/threads"];
-    hooks.api["/agents/threads"] = { threads: [] };
+  it("falls back to the page flow when the daemon has no thread routes", async () => {
+    // v1.184.0 REGRESSION GUARD, carried forward. Moving the roster into a
+    // surface that needs threads made it vanish on every path without them —
+    // a daemon serving no thread routes lost its roster entirely, and only the
+    // degraded-path test noticed. The room needs BOTH the roster and the
+    // thread routes; without either, the older stacked page keeps the roster
+    // where it has always been.
+    hooks.errors["/agents/threads"] = { status: 404, message: "Not Found" };
     render(<AgentsPage />);
     await waitFor(() => expect(screen.getByTestId("roster-pane")).toBeTruthy());
     expect(screen.getAllByTestId("roster-pane")).toHaveLength(1);
     expect(screen.queryByTestId("round-table")).toBeNull();
+    expect(screen.queryByTestId("agents-room")).toBeNull();
   });
 });

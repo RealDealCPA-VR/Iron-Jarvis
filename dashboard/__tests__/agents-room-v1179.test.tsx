@@ -255,9 +255,22 @@ const aimedAt = () => table().getAttribute("data-assign");
 /** Only the pre-rail composition still carries the standalone card. */
 const targetSelect = () =>
   screen.getByLabelText("Who takes it") as HTMLSelectElement;
-/** The narrow-width twin of the rail (below lg the column is display:none). */
+/** The narrow-width twin of the rail (below md the column is display:none). */
 const narrowPick = () =>
   screen.getByLabelText("Choose an agent") as HTMLSelectElement;
+
+/* v1.214.0 — the roster moved into a dialog behind the thread rail's icon.
+   The component-level tests below still render `RosterStrip` directly (it is
+   unchanged, and the older-daemon page still uses it); the page-level ones
+   open the room. */
+const room = () => screen.getByTestId("agents-modal");
+const openRoom = () => {
+  fireEvent.click(screen.getByTestId("roster-gear"));
+  return room();
+};
+const roomButton = (name: RegExp | string) =>
+  within(screen.getByTestId("agents-modal-list")).getByRole("button", { name });
+const detail = () => within(room()).getByTestId(/^agent-detail-/);
 
 beforeEach(() => {
   hooks.api = {
@@ -280,47 +293,78 @@ afterEach(() => {
 
 /* ------------------------------------------------- one agent, drawn once --- */
 
-describe("the left pane draws each agent exactly once", () => {
-  it("names the selected agent once — on its rail row, not again below it", () => {
+describe("the agents room draws each agent exactly once", () => {
+  // RETARGETED FOR v1.214.0. The report this suite was written for —
+  // "there seems to be a redundant agent on the left pane for vr-assistant" —
+  // was about a rail that drew a face for every agent AND re-drew the selected
+  // one in a detail block stacked directly beneath it: two portraits of one
+  // agent, in one narrow column, one above the other. The roster is now a
+  // master–detail DIALOG, where a list column and a detail pane are two
+  // different places by construction. What still has to hold is that the LIST
+  // has one row per agent and the DETAIL pane speaks about exactly one.
+
+  it("lists every roster agent once", async () => {
     render(<AgentsPage />);
-    fireEvent.click(railButton(/vr-assistant/));
-    // getAllByText matches on an element's OWN text nodes, so this counts
-    // renderings of the name, not ancestors of one. Two = the detail block is
-    // back and the user is looking at the same agent twice.
-    expect(within(pane()).getAllByText("vr-assistant")).toHaveLength(1);
-    // Nothing was lost with the block: its detail is on the selected row.
-    expect(screen.getByTestId("roster-preview").textContent).toContain(
-      "Reviewed the draft — two issues flagged.",
-    );
+    openRoom();
+    const list = screen.getByTestId("agents-modal-list");
+    // One row per agent, plus the New-agent row at the foot.
+    expect(within(list).getAllByRole("button")).toHaveLength(ROSTER.length + 1);
+    expect(within(list).getAllByTestId("agent-face")).toHaveLength(ROSTER.length);
   });
 
-  it("draws one face per agent and no second portrait of the selected one", () => {
+  it("shows detail for ONE agent — the one that is open", async () => {
     render(<AgentsPage />);
-    fireEvent.click(railButton("analyst"));
-    // Five roster rows, five drawn faces — a detail block would make six.
-    expect(within(pane()).getAllByTestId("agent-face")).toHaveLength(
-      ROSTER.length,
+    openRoom();
+    fireEvent.click(roomButton("analyst"));
+    await waitFor(() =>
+      expect(within(room()).getByTestId("agent-detail-analyst")).toBeTruthy(),
     );
-    // The selected row carries what the block used to say: kind, stats, and
-    // the description when there is no recorded activity.
-    expect(within(pane()).getByTestId("roster-kind-analyst").textContent).toBe(
-      "Yours",
+    expect(within(room()).queryByTestId("agent-detail-builder")).toBeNull();
+    // The detail carries what the old rail's block did: kind, honest stats,
+    // and the description when there is no recorded activity.
+    expect(
+      within(detail()).getByTestId("roster-kind-analyst").textContent,
+    ).toBe("Yours");
+    expect(within(detail()).getByText("87% over 23 runs")).toBeTruthy();
+    expect(within(detail()).getByText("Your analyst")).toBeTruthy();
+
+    fireEvent.click(roomButton("builder"));
+    await waitFor(() =>
+      expect(within(room()).getByTestId("agent-detail-builder")).toBeTruthy(),
     );
-    expect(screen.getByText("87% over 23 runs")).toBeTruthy();
-    expect(screen.getByText("Your analyst")).toBeTruthy();
+    expect(within(room()).queryByTestId("agent-detail-analyst")).toBeNull();
   });
 
-  it("shows detail for the selected row only", () => {
+  it("carries the messenger preview for an agent that has spoken", async () => {
     render(<AgentsPage />);
-    // Nobody picked yet: no detail anywhere (the fallback is a preview of the
-    // first entry, and previewing is not selecting).
-    expect(screen.queryByText("Your analyst")).toBeNull();
-    fireEvent.click(railButton("analyst"));
-    expect(screen.getByText("Your analyst")).toBeTruthy();
-    expect(screen.queryByText("Builds things")).toBeNull();
-    fireEvent.click(railButton("builder"));
-    expect(screen.getByText("Builds things")).toBeTruthy();
-    expect(screen.queryByText("Your analyst")).toBeNull();
+    openRoom();
+    fireEvent.click(roomButton(/vr-assistant/));
+    await waitFor(() =>
+      expect(screen.getByTestId("roster-preview").textContent).toContain(
+        "Reviewed the draft — two issues flagged.",
+      ),
+    );
+    // ONE preview: the list rows carry no detail of their own.
+    expect(screen.getAllByTestId("roster-preview")).toHaveLength(1);
+  });
+
+  it("offers the same two controls for a BUILT-IN agent as for one of yours", async () => {
+    // The point of the release: "every agent should be customizable including
+    // the predefined agents ... with the ability for the user to choose a
+    // custom image for any of the agents." The daemon always allowed it —
+    // storage is `avatars/<slug>.png` keyed by name — and only the UI drew the
+    // line at agents the user had created.
+    render(<AgentsPage />);
+    openRoom();
+    fireEvent.click(roomButton("builder"));
+    await waitFor(() =>
+      expect(within(room()).getByTestId("avatar-row-builder")).toBeTruthy(),
+    );
+    const row = within(room()).getByTestId("avatar-row-builder");
+    expect(within(row).getByText("Upload")).toBeTruthy();
+    expect(within(row).getByRole("button", { name: /Generate/ })).toBeTruthy();
+    // ...and the face picker, on the same agent.
+    expect(within(room()).getByTestId("face-picker-builder")).toBeTruthy();
   });
 });
 
@@ -355,72 +399,53 @@ describe("the remote indicator rides on the rail row", () => {
 
 /* --------------------------------------------------------------- the gear --- */
 
-describe("setup lives behind the gear and nowhere else", () => {
-  it("is absent until the gear is clicked, and folds away again", async () => {
+describe("configuration lives behind the icon and nowhere else", () => {
+  it("is absent until the icon is clicked, and closes again", async () => {
     render(<AgentsPage />);
+    expect(screen.queryByTestId("agents-modal")).toBeNull();
     expect(screen.queryByText("Create an agent")).toBeNull();
     expect(screen.queryByText("Connect a remote agent")).toBeNull();
     fireEvent.click(screen.getByTestId("roster-gear"));
+    await waitFor(() => expect(room()).toBeTruthy());
+    // One door, both kinds — one click further in.
+    fireEvent.click(screen.getByTestId("agents-modal-new"));
     await waitFor(() => expect(screen.getByText("Create an agent")).toBeTruthy());
-    // One door, both kinds.
     expect(screen.getByText("Connect a remote agent")).toBeTruthy();
     fireEvent.click(screen.getByTestId("roster-gear"));
-    await waitFor(() => expect(screen.queryByText("Create an agent")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("agents-modal")).toBeNull());
   });
 
-  it("stays absent even when the card's own persisted state says 'open'", async () => {
-    // The card remembers being opened; the PAGE decides whether it is on
-    // screen. "Not shown unless the user decided to configure an agent" means
-    // this visit, not a visit last week.
+  it("stays absent even when the older card's persisted state says 'open'", async () => {
+    // "Not shown unless the user decided to configure an agent" means this
+    // visit, not a visit last week — and the flag the older stacked page
+    // persists must not reach a dialog at all.
     window.localStorage.setItem("ij_agents_setup_open", "1");
     render(<AgentsPage />);
+    expect(screen.queryByTestId("agents-modal")).toBeNull();
     expect(screen.queryByText("Create an agent")).toBeNull();
-    // And the gear still reveals it OPEN rather than mounted-but-collapsed.
     fireEvent.click(screen.getByTestId("roster-gear"));
-    await waitFor(() => expect(screen.getByText("Create an agent")).toBeTruthy());
+    await waitFor(() => expect(room()).toBeTruthy());
   });
 
-  it("reveals it OPEN even when it was left COLLAPSED last visit", async () => {
-    /* v1.185.0, and the case the sibling above cannot reach: it seeds "1", so
-     * the disclosure is already open and a gear that failed to expand would
-     * look identical. Seeding "0" is the only state that tells the two apart —
-     * a user who folded the card away, then came back and pressed the gear.
-     *
-     * The guarantee itself is v1.179.0's ("the gear reveals it OPEN rather than
-     * mounted-but-collapsed"); what changed is where it comes from. It used to
-     * be a side effect of the page writing localStorage BEFORE mounting the
-     * card, which the card then hydrated — the ordering was the mechanism. The
-     * page now holds the value and sets it directly, so this asserts the
-     * promise rather than the handshake that used to deliver it. */
-    window.localStorage.setItem("ij_agents_setup_open", "0");
+  it("is a DIALOG, portalled out of the page it was opened from", async () => {
+    // THE BUG THIS RELEASE EXISTS FOR, asserted structurally. `.card-surface`
+    // carries `backdrop-filter`, which makes an element the containing block
+    // for `position: fixed` descendants — so an overlay rendered inside one is
+    // sized to that card and clipped by its `overflow-hidden`. Reported as the
+    // add-agent popup being "bound by the size of the thread (chat window)".
+    // A portal to <body> is the only fix available from inside, so the escape
+    // is what gets pinned: the dialog must not sit under the page root.
     render(<AgentsPage />);
-    expect(screen.queryByText("Create an agent")).toBeNull();
-
-    fireEvent.click(screen.getByTestId("roster-gear"));
-    await waitFor(() => expect(screen.getByText("Create an agent")).toBeTruthy());
-  });
-
-  it("keeps the card's own fold, and remembers it", async () => {
-    /* The other half of one-source-of-truth: the gear and the card's chevron
-     * are different controls over different things (on screen at all / body
-     * disclosed), and folding the body must not evict the card — otherwise the
-     * chevron is a second Close button and the header it sits on vanishes with
-     * the click that used it. */
-    render(<AgentsPage />);
-    fireEvent.click(screen.getByTestId("roster-gear"));
-    await waitFor(() => expect(screen.getByText("Create an agent")).toBeTruthy());
-
-    const header = screen.getByRole("button", { name: /set up agents/i });
-    fireEvent.click(header);
-    await waitFor(() => expect(screen.queryByText("Create an agent")).toBeNull());
-    // Folded, NOT removed — the card is still there to unfold.
-    expect(screen.getByRole("button", { name: /set up agents/i })).toBeTruthy();
-    expect(window.localStorage.getItem("ij_agents_setup_open")).toBe("0");
+    openRoom();
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.parentElement?.parentElement).toBe(document.body);
+    expect(screen.getByTestId("agents-room").contains(dialog)).toBe(false);
   });
 
   it("announces the state it controls", () => {
     render(<AgentsPage />);
     const gear = screen.getByTestId("roster-gear");
+    expect(gear.getAttribute("aria-haspopup")).toBe("dialog");
     expect(gear.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(gear);
     expect(screen.getByTestId("roster-gear").getAttribute("aria-expanded")).toBe(
@@ -432,27 +457,28 @@ describe("setup lives behind the gear and nowhere else", () => {
 /* ---------------------------------------------------------- give work ------ */
 
 describe("give work is reachable, but it is not the page header", () => {
-  it("the rail's Give-work button opens the thread with that agent, work armed", async () => {
-    // RETARGETED for v1.180.0. Give-work used to reveal the job-post
-    // disclosure with the agent preselected; it now opens the 1:1 THREAD with
-    // that agent and aims the composer at them — "if i choose to start a
-    // thread with an agent that would be the start of posting a new job". Same
-    // button, same one-click guarantee, one surface instead of two.
+  it("the room's Give-work button opens the thread with that agent, work armed", async () => {
+    // RETARGETED for v1.180.0, then again for v1.214.0. Give-work used to
+    // reveal the job-post disclosure with the agent preselected; it opens the
+    // 1:1 THREAD with that agent and aims the composer at them — "if i choose
+    // to start a thread with an agent that would be the start of posting a new
+    // job". Same button, same one-click guarantee, one surface instead of two.
     //
     // ADVERSARIAL REVIEW (v1.180.0): the first retarget drove vr-assistant and
-    // asserted NOTHING. Give-work can only be reached after picking a face, and
-    // picking vr-assistant's face ALREADY opens its 1:1 thread (soloThreadWith)
+    // asserted NOTHING. Give-work can only be reached after picking an agent,
+    // and picking vr-assistant ALREADY opens its 1:1 thread (soloThreadWith)
     // and ALREADY arms it — so with the whole `assignWork` body replaced by a
     // no-op this test still passed. Measured, not reasoned about. The agent
     // driven here therefore has NO existing 1:1 thread, which makes opening one
-    // something only the button can have done: the face click leaves t-other on
+    // something only the button can have done: the pick leaves t-other on
     // screen, and t-new can only arrive through Give-work's POST.
     render(<AgentsPage />);
-    fireEvent.click(railButton("analyst"));
+    openRoom();
+    fireEvent.click(roomButton("analyst"));
     // The selection alone changes nothing about which thread is open.
     await waitFor(() => expect(table().textContent).toBe("t-other"));
     expect(hooks.posts).toHaveLength(0);
-    fireEvent.click(railGiveWork());
+    fireEvent.click(within(room()).getByRole("button", { name: /^Give work$/ }));
     // ALL THREE assertions live inside the waitFor: the POST, opening the
     // thread and arming the composer land in separate commits, and asserting
     // the later ones after awaiting the first is the shape that flaked CI twice.
@@ -467,11 +493,40 @@ describe("give work is reachable, but it is not the page header", () => {
     // Selecting only OPENS an existing 1:1 thread — a click on a portrait is
     // not consent to POST. Starting one stays an explicit button.
     render(<AgentsPage />);
-    fireEvent.click(railButton("builder"));
+    openRoom();
+    fireEvent.click(roomButton("builder"));
     expect(hooks.posts).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: /^Talk$/ }));
+    fireEvent.click(within(room()).getByRole("button", { name: /^Talk$/ }));
     await waitFor(() =>
       expect(hooks.posts.map((p) => p.path)).toEqual(["/agents/threads"]),
+    );
+    // ...and the room gets out of the way of the conversation it just opened.
+    await waitFor(() => expect(screen.queryByTestId("agents-modal")).toBeNull());
+  });
+
+  it("offers no action for an agent that cannot take one", async () => {
+    // The supervisor is non-delegable and an offline remote cannot take a
+    // session — so neither gets a button that would quietly fall back to
+    // something else at dispatch time. Unlike the rail (v1.179.0), the room
+    // needs no "has anyone really picked" clause on top: its buttons are handed
+    // the agent explicitly, beside that agent's portrait and name in full.
+    render(<AgentsPage />);
+    openRoom();
+    fireEvent.click(roomButton("supervisor"));
+    await waitFor(() =>
+      expect(within(room()).getByTestId("agent-detail-supervisor")).toBeTruthy(),
+    );
+    expect(within(room()).queryByRole("button", { name: /^Talk$/ })).toBeNull();
+    expect(within(room()).queryByRole("button", { name: /^Give work$/ })).toBeNull();
+    fireEvent.click(roomButton(/down-box/));
+    await waitFor(() =>
+      expect(within(room()).getByTestId("agent-detail-down-box")).toBeTruthy(),
+    );
+    expect(within(room()).queryByRole("button", { name: /^Give work$/ })).toBeNull();
+    // A healthy, delegable one does get them.
+    fireEvent.click(roomButton("builder"));
+    await waitFor(() =>
+      expect(within(room()).getByRole("button", { name: /^Give work$/ })).toBeTruthy(),
     );
   });
 

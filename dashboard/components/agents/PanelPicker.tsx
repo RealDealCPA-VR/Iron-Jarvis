@@ -9,7 +9,7 @@
 // caller maps entries to options, offline remotes included-but-disabled);
 // older daemons fall back to the raw /agents + /agents/remote lists.
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Bot,
   CheckCircle2,
@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { ApiError } from "@/lib/api";
 import { ErrorNote, LoaderInline } from "@/components/ui";
+import { Modal } from "@/components/Modal";
 import AgentFace from "./AgentFace";
 import {
   ROLE_PRESETS,
@@ -251,15 +252,6 @@ export function PanelPicker({
     avatarByKey.set(participantKey(o.source, o.name), o.avatar ?? null);
   }
 
-  // Escape closes (unless a submit is in flight).
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && !busy) onClose();
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [busy, onClose]);
-
   function isSelected(key: string) {
     return selected.some((p) => p.key === key);
   }
@@ -314,25 +306,25 @@ export function PanelPicker({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-      onClick={() => {
-        if (!busy) onClose();
-      }}
+    // THE OVERLAY IS PORTALLED (v1.214.0). This was `fixed inset-0` written
+    // inline — and it did not mean the viewport: RoundTable renders this
+    // picker from inside a `.card-surface`, whose `backdrop-filter` makes it
+    // the containing block for fixed descendants, so the dialog was sized to
+    // the thread card and clipped by its `overflow-hidden`. That is the
+    // reported "bound by the size of the thread window" bug. `Modal` renders
+    // into document.body and owns the backdrop, Escape and the scroll lock.
+    <Modal
+      label={
+        mode === "create"
+          ? "New agent thread"
+          : editingSeated
+            ? "Add an agent to the panel"
+            : "Edit the panel"
+      }
+      onClose={onClose}
+      busy={busy}
+      className="w-full max-w-2xl"
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={
-          mode === "create"
-            ? "New agent thread"
-            : editingSeated
-              ? "Add an agent to the panel"
-              : "Edit the panel"
-        }
-        onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-ink-850/95 shadow-card-hover backdrop-blur-xl"
-      >
         {/* Header */}
         <header className="flex shrink-0 items-center gap-2 border-b hairline px-4 py-3">
           <Users size={16} className="text-accent-soft/80" />
@@ -404,7 +396,7 @@ export function PanelPicker({
             source="dynamic"
             icon={<Sparkles size={13} />}
             count={catalog.dynamic.length}
-            hint="No agents of your own yet — create one in “Set up agents”; its persona and model carry into every thread it joins."
+            hint="No agents of your own yet — create one from the agents icon at the foot of the thread rail; its persona and model carry into every thread it joins."
           >
             {cards(catalog.dynamic)}
           </SourceGroup>
@@ -413,7 +405,7 @@ export function PanelPicker({
             source="remote"
             icon={<Globe size={13} />}
             count={catalog.remotes.length}
-            hint="No remote agents connected — register one in “Set up agents” to bring an agent running on another computer onto the panel."
+            hint="No remote agents connected — register one from the agents icon at the foot of the thread rail, to bring an agent running on another computer onto the panel."
           >
             {cards(catalog.remotes)}
           </SourceGroup>
@@ -516,7 +508,6 @@ export function PanelPicker({
             </button>
           </div>
         </footer>
-      </div>
-    </div>
+    </Modal>
   );
 }

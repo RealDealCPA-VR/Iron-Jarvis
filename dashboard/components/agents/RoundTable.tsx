@@ -855,7 +855,10 @@ export function RoundTable({
   const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
   const [mentionIdx, setMentionIdx] = useState(0);
 
-  const bottomRef = useRef<HTMLDivElement>(null);
+  /** The transcript's own scroll box — see the auto-scroll effect below. The
+   *  bottom SENTINEL this replaced is gone with it: an empty anchor div that
+   *  nothing reads is a thing the next reader has to prove is unused. */
+  const transcriptRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // Bumped on thread switch so a slow round from the OLD thread can't land here.
   const genRef = useRef(0);
@@ -934,8 +937,37 @@ export function RoundTable({
   const byKey = new Map(participants.map((p) => [p.key, p]));
   detailRef.current = detail;
 
+  /**
+   * Keep the transcript pinned to the newest line — and ONLY the transcript
+   * (v1.214.0).
+   *
+   * This was `bottomRef.current.scrollIntoView({block:"end"})`, and
+   * `scrollIntoView` walks EVERY scrollable ancestor, not just the nearest
+   * one. The transcript is its own `max-h-[62vh] overflow-y-auto` box, so the
+   * inner scroll was always enough — the walk then also scrolled `<main>`,
+   * which is the app's page scroller. Measured after the v1.214.0 layout
+   * change: at 430px wide the Agents page LANDED at `main.scrollTop = 506`,
+   * with the thread rail and the agents icon pushed off the top of the screen
+   * on arrival. (v1.213.0 landed at 0 — the same call, a shorter page above
+   * it, so the walk had nothing left to do.)
+   *
+   * Scrolling the BOX is what the effect always meant, and it cannot reach an
+   * ancestor by construction. `?? 0` keeps a stubbed element in a test from
+   * throwing on a missing scrollHeight.
+   */
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    const box = transcriptRef.current;
+    if (!box) return;
+    // `Element.scrollTo` is not implemented in jsdom (it is `undefined`, and
+    // calling it throws a TypeError that takes the whole component down mid-
+    // render — measured: 64 RoundTable tests went red on the first cut of
+    // this). The property assignment is the same scroll without the smooth
+    // easing, and it exists everywhere.
+    if (typeof box.scrollTo === "function") {
+      box.scrollTo({ top: box.scrollHeight, behavior: "smooth" });
+    } else {
+      box.scrollTop = box.scrollHeight;
+    }
   }, [messages.length, speaking, pendingUser]);
 
   /** Re-pull the open thread after the daemon persisted a speaker's entry
@@ -1639,6 +1671,7 @@ export function RoundTable({
 
       {/* Transcript */}
       <div
+        ref={transcriptRef}
         data-testid="thread-transcript"
         className={`flex max-h-[62vh] flex-col gap-4 overflow-y-auto p-4${
           openingRoom ? " min-h-[36vh]" : ""
@@ -1745,7 +1778,6 @@ export function RoundTable({
           </div>
         )}
         {sayError && <ErrorNote>{sayError}</ErrorNote>}
-        <div ref={bottomRef} />
       </div>
 
       {/* Composer */}

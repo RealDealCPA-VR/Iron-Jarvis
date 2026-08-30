@@ -41,6 +41,26 @@ scope. None is speculative.
   renders the honest "bound to X, but that folder is not accessible right now"
   wording in BOTH lanes whenever the pick is refused, and instructs the model to
   say so rather than guess.
+- [x] **The Agents module's dialogs were bounded by the card they were rendered
+  from — CLOSED v1.214.0.** Reported: the add-agent "+" popup "is bound by the
+  size of the thread (chat window) and on a small card doesn't show everthing
+  from this pop up". `PanelPicker` is `fixed inset-0`, but it is returned from
+  inside `RoundTable`, whose root is `.card-surface` — and that class carries
+  `backdrop-filter: blur(18px)`, which makes an element the CONTAINING BLOCK
+  for its fixed-position descendants. So `inset-0` resolved to the thread card
+  and its `overflow-hidden` clipped the footer (the Save button). Fixed by
+  `components/Modal.tsx`, which portals to `document.body` and owns the
+  backdrop, Escape and the scroll lock.
+- [ ] **The same trap is latent in six other overlays.** `CompactionCard`,
+  `ShareChatDialog`, `FilePickerModal`, `memory/LongTerm`,
+  `terminal/FilesPanel` and the creative lightbox each write `fixed inset-0`
+  inline rather than going through `Modal`. Whether any of them is currently
+  rendered inside a `.card-surface` was NOT measured — the report was about the
+  Agents module and only that module was driven in a browser. The predicate to
+  check per site is exactly the one above: does the overlay have an ancestor
+  with `backdrop-filter`, `transform`, `filter`, `perspective` or
+  `contain: paint`? The fix, where it bites, is one component swap.
+
 - [ ] **v1.213.0 reviewer nits (all bounded, dated 2026-08-24):** Pi/opencode
   usage folds count an unknown hosted vendor as local (fails-open on
   unrecognised, documented convention); Pi CACHE tokens (310M real on this

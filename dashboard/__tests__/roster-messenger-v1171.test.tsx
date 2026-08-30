@@ -317,7 +317,16 @@ describe("SetupCard — the portrait row", () => {
     expect(within(row).getByTestId("agent-face")).toBeTruthy();
   });
 
-  it("Upload reads the file and posts its bare base64", async () => {
+  it("Upload opens the cropper and posts NOTHING until the square is chosen", async () => {
+    // CHANGED IN v1.214.0, and the change is the feature. A pick used to be
+    // read straight to base64 and POSTed, and the daemon's `Image.thumbnail`
+    // then preserved its aspect ratio — so a 1600x900 photo was stored
+    // 1600x900-shaped and CSS center-cropped it to a circle at render time.
+    // The user never saw the crop coming and could not move it. Reported: the
+    // images "must either conform to a size suitable or require user
+    // cropping". So the file opens `PortraitCropper` and the upload happens
+    // on ITS confirmation, with a square PNG — see portrait-crop-v1214 for the
+    // geometry and the POST.
     renderSetup();
     openAvatarRow();
     const input = screen.getByLabelText(
@@ -326,10 +335,19 @@ describe("SetupCard — the portrait row", () => {
     const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
     const file = new File([bytes], "face.png", { type: "image/png" });
     fireEvent.change(input, { target: { files: [file] } });
-    await waitFor(() => expect(hooks.posts.length).toBe(1));
-    expect(hooks.posts).toEqual([
-      { path: "/agents/analyst/avatar", body: { image_b64: "iVBORw==" } },
-    ]);
+    await waitFor(() => expect(screen.getByTestId("portrait-cropper")).toBeTruthy());
+    expect(hooks.posts).toHaveLength(0);
+    // Cancelling stores nothing at all.
+    // Scoped to the cropper: the row's own edit form has a Cancel too.
+    fireEvent.click(
+      within(screen.getByTestId("portrait-cropper")).getByRole("button", {
+        name: "Cancel",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId("portrait-cropper")).toBeNull(),
+    );
+    expect(hooks.posts).toHaveLength(0);
   });
 
   it("an oversized pick fails client-side with a plain line and never posts", async () => {

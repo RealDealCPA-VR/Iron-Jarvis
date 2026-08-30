@@ -22,9 +22,6 @@ import {
   Save,
   Settings2,
   Sparkles,
-  Trash2,
-  Upload,
-  Wand2,
   Wrench,
   X,
 } from "lucide-react";
@@ -44,6 +41,7 @@ import AgentFace, {
   FACE_SHAPES,
   type FaceOverride,
 } from "./AgentFace";
+import { AgentPortrait } from "./AgentPortrait";
 import type { RemoteAgentInfo } from "./identity";
 
 // The disclosure key lives on the PAGE now (v1.185.0) — one owner, one write,
@@ -86,29 +84,14 @@ export function faceFor(
   return rowFace ?? null;
 }
 
-/** Portrait upload cap — mirrors the daemon's 2MB decoded limit so an
- *  oversized pick fails HERE with a plain line instead of a 413 round-trip. */
-const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
-
 /** <img> can't send the Authorization header — token rides as a query param
  *  (the creative-gallery pattern). `rev` busts the browser cache after an
- *  upload/generate/remove, since the URL itself never changes. */
+ *  upload/generate/remove, since the URL itself never changes.
+ *  The upload CAP and the file→base64 step moved to `AgentPortrait`
+ *  (v1.214.0) along with the controls; this card only renders portraits. */
 function avatarSrc(rel: string, rev: number): string {
   const token = ijToken();
   return `${API_BASE}${rel}?v=${rev}${token ? `&token=${encodeURIComponent(token)}` : ""}`;
-}
-
-/** File → bare base64 (the data:-URL prefix stripped). */
-function fileToB64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const s = String(reader.result || "");
-      resolve(s.slice(s.indexOf(",") + 1));
-    };
-    reader.onerror = () => reject(reader.error ?? new Error("could not read the file"));
-    reader.readAsDataURL(file);
-  });
 }
 
 /* ------------------------------------------------------- tools, truthfully --- */
@@ -244,7 +227,7 @@ function FaceRow({
  * no fields is not a state the daemon stores, and "reset" is what the user
  * means by it.
  */
-function FacePicker({
+export function FacePicker({
   name,
   avatarUrl,
   face,
@@ -558,13 +541,22 @@ function DynamicRow({
     );
     setToolsDirty(true);
   }
-  // Portrait state (v1.171.0). `rev` only busts the <img> cache — whether a
-  // portrait EXISTS always comes from the daemon via agent.avatar, so a
-  // failed write can never leave the row pretending one is stored.
+  // Portrait cache-buster (v1.171.0). `rev` ONLY busts the <img> cache —
+  // whether a portrait EXISTS always comes from the daemon via agent.avatar,
+  // so a failed write can never leave the row pretending one is stored. The
+  // controls themselves moved to `AgentPortrait` (v1.214.0), which every kind
+  // of agent now shares; this row keeps `rev` because the FACE PICKER below
+  // renders the portrait too, and it has to stop showing the old bytes the
+  // moment a new picture lands.
   const [rev, setRev] = useState(0);
-  const [avatarBusy, setAvatarBusy] = useState(false);
-  const [avatarError, setAvatarError] = useState<string | null>(null);
   const avatarUrl = agent.avatar ? avatarSrc(agent.avatar, rev) : undefined;
+
+  /** A portrait write landed: bust this row's cache AND refetch the list, so
+   *  `agent.avatar` (presence) and the rendered bytes agree. */
+  function portraitChanged() {
+    setRev((v) => v + 1);
+    onChanged();
+  }
 
   function startEdit() {
     setPrompt(agent.system_prompt ?? "");
@@ -577,55 +569,6 @@ function DynamicRow({
     setToolFilter("");
     setEditing(true);
     if (storedTools.length > 0) void loadCatalog();
-  }
-
-  async function uploadAvatar(file: File) {
-    if (file.size > AVATAR_MAX_BYTES) {
-      setAvatarError("portrait too large — 2 MB max");
-      return;
-    }
-    setAvatarBusy(true);
-    setAvatarError(null);
-    try {
-      const b64 = await fileToB64(file);
-      await post(`/agents/${encodeURIComponent(agent.name)}/avatar`, { image_b64: b64 });
-      setRev((v) => v + 1);
-      onChanged();
-    } catch (err) {
-      setAvatarError(err instanceof ApiError ? err.message : String(err));
-    } finally {
-      setAvatarBusy(false);
-    }
-  }
-
-  async function generateAvatar() {
-    setAvatarBusy(true);
-    setAvatarError(null);
-    try {
-      await post(`/agents/${encodeURIComponent(agent.name)}/avatar`, { generate: true });
-      setRev((v) => v + 1);
-      onChanged();
-    } catch (err) {
-      // The daemon's honest 409 ("no image model is connected — …") lands
-      // here as plain text — shown as-is, never swapped for a placeholder.
-      setAvatarError(err instanceof ApiError ? err.message : String(err));
-    } finally {
-      setAvatarBusy(false);
-    }
-  }
-
-  async function removeAvatar() {
-    setAvatarBusy(true);
-    setAvatarError(null);
-    try {
-      await del(`/agents/${encodeURIComponent(agent.name)}/avatar`);
-      setRev((v) => v + 1);
-      onChanged();
-    } catch (err) {
-      setAvatarError(err instanceof ApiError ? err.message : String(err));
-    } finally {
-      setAvatarBusy(false);
-    }
   }
 
   async function save() {
@@ -853,64 +796,19 @@ function DynamicRow({
             )}
           </div>
 
-          {/* Portrait row (v1.171.0): the current face (or stored portrait),
-              Upload / Generate / Remove. Generate goes through the daemon's
-              real image path; with no image model configured the daemon's
-              honest 409 renders below as plain text — never a placeholder. */}
-          <div
-            data-testid={`avatar-row-${agent.name}`}
-            className="flex flex-wrap items-center gap-2"
-          >
-            <AgentFace
-              name={agent.name}
-              mood="idle"
-              size={28}
-              avatarUrl={avatarUrl}
-              face={face}
-            />
-            <span className="text-[11px] text-zinc-500">Portrait</span>
-            <span className="ml-auto flex items-center gap-1.5">
-              <label
-                className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
-                title={`Upload a portrait for "${agent.name}" (PNG/JPEG/WebP, 2 MB max)`}
-              >
-                <Upload size={12} /> Upload
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  className="hidden"
-                  aria-label={`Upload a portrait for ${agent.name}`}
-                  disabled={avatarBusy}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) void uploadAvatar(f);
-                    e.target.value = "";
-                  }}
-                />
-              </label>
-              <button
-                type="button"
-                onClick={generateAvatar}
-                disabled={avatarBusy}
-                title={`Generate a portrait for "${agent.name}" with the connected image model`}
-                className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-50"
-              >
-                {avatarBusy ? <LoaderInline label="…" /> : <><Wand2 size={12} /> Generate</>}
-              </button>
-              {agent.avatar && (
-                <button
-                  type="button"
-                  onClick={removeAvatar}
-                  disabled={avatarBusy}
-                  title={`Remove the stored portrait of "${agent.name}" (back to the drawn face)`}
-                  className="inline-flex items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-rose-400/40 hover:text-rose-300 disabled:opacity-50"
-                >
-                  <Trash2 size={12} /> Remove
-                </button>
-              )}
-            </span>
-          </div>
-          {avatarError && <ErrorNote>{avatarError}</ErrorNote>}
+          {/* PORTRAIT (v1.171.0, shared since v1.214.0). The controls used to
+              live inline here, which is the only reason a portrait was
+              something an agent the user CREATED could have — the daemon's
+              storage was never kind-specific. `AgentPortrait` is that row
+              taking a NAME, so built-in and remote agents reach the same
+              implementation, and an upload now goes through the square
+              cropper on its way. */}
+          <AgentPortrait
+            name={agent.name}
+            avatar={agent.avatar}
+            face={face}
+            onChanged={portraitChanged}
+          />
 
           {/* THE FACE PICKER (v1.180.0) — shape, eyes, colour, live preview,
               reset. It writes on its own Apply, independent of this form's
@@ -948,7 +846,7 @@ function DynamicRow({
   );
 }
 
-function YourAgentsSection({
+export function YourAgentsSection({
   dynamic,
   models,
   faces,
@@ -1391,7 +1289,7 @@ function RemoteRow({
   );
 }
 
-function RemoteAgentsSection({
+export function RemoteAgentsSection({
   remotes,
   faces,
   facesSupported,
@@ -1553,7 +1451,7 @@ function RemoteAgentsSection({
  * On a daemon with no face routes the chips fall back to the original badges:
  * a control that could only fail is worse than the plain list it replaced.
  */
-function BuiltinFaces({
+export function BuiltinFaces({
   builtin,
   faces,
   facesSupported,

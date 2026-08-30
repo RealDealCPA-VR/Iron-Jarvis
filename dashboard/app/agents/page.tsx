@@ -3,79 +3,73 @@
 // Agents — organized around the ROUND-TABLE: persistent threads where agents
 // from different sources (built-in, yours, remote — including agents on other
 // computers) sit on a panel, each with a role, and answer in turn — seeing
-// each other's replies. The management surfaces (create dynamic agents,
-// connect remote ones) collapse into the "Set up agents" card; the
-// round-table is the star.
+// each other's replies.
 //
-// v1.178.0 — A ROOM, NOT A FORM. The roster stands as a PERSISTENT LEFT RAIL
-// of faces (sticky from md up) and everything else — give work, setup, the
-// round-table — is the module beside it. Clicking a face is the page's main
-// gesture: it preselects that agent in the job-post card and, when a 1:1
-// thread with exactly that agent already exists, opens it so the user carries
-// on where they left off. It never CREATES a thread — that stays behind the
-// explicit Talk button, because a POST is not what a click on a portrait
-// promises. The rail column only appears when the roster does: an older
-// daemon that doesn't serve /agents/roster gets the plain stacked page it has
-// always had, with no empty column beside it.
+// v1.178.0 — A ROOM, NOT A FORM. The roster became a persistent left rail of
+// faces and everything else — give work, setup, the round-table — the module
+// beside it.
+// v1.179.0 — THE THREAD IS THE PAGE. The give-work form and the setup card
+// moved behind their own doors (a disclosure, and the rail's gear).
+// v1.180.0 — ONE COLUMN, AND TALK *IS* WORK. The page became a stack, the
+// roster folded, and dispatch moved into the thread composer — a job posted
+// from a form and a thread started with an agent were two front doors to one
+// intent.
+// v1.184.0 — the roster moved INTO the conversation's grid cell so the two
+// cards shared an edge.
 //
-// v1.179.0 — THE THREAD IS THE PAGE. Reported verbatim: "the give work part at
-// the top shouldnt be there because it should simply open when a specific agent
-// is selected and be treated more like a thread with that individual agent",
-// and "the set up agents should all be contained in the new agent gear face on
-// the left pane and not shown unless the user decided to configure an agent".
-// So the module beside the rail opens on the CONVERSATION. Two surfaces that
-// used to stand permanently above it moved behind their own doors:
-//   * GIVE WORK is a collapsed disclosure UNDER the round-table. Posting a job
-//     to the TEAM (a supervisor session that plans and delegates) is a real
-//     capability with no other home, so it is one click away — from the
-//     disclosure itself, or from the rail's Give-work button, which opens it
-//     and preselects the agent exactly as before. The fold is a HIDE, not an
-//     unmount: `hidden` takes the form out of the picture AND out of the a11y
-//     tree, while a job half typed into it survives a stray collapse, and the
-//     recent-jobs poll behaves exactly as it did when the card stood open.
-//   * SETUP is not in the page at all until the gear-with-a-face is clicked,
-//     and the gear collapses it again.
-// Both doors need a rail to hang on, so on an older daemon with no roster the
-// page keeps rendering them in the flow — the pre-rail page, unchanged.
+// v1.214.0 — THE LEFT CARD IS THE THREADS, AND CONFIGURATION IS A DIALOG.
+// Reported verbatim: the add-agent "+" popup "is bound by the size of the
+// thread (chat window) and on a small card doesn't show everthing from this
+// pop up"; the left pane should be "a new fixed full lenth and scrollable left
+// card that is the height length of the app below the very top pane"; the
+// roster and new-agent controls should collapse into "a small icon button on
+// the bottom left" that opens "a modal pop up [where] the user [can] configure
+// as desired"; "every agent should be customizable including the predefined
+// agents"; and the pane should show "the image of the related agent or agents
+// (layered as they are now)".
 //
-// v1.180.0 — ONE COLUMN, AND TALK *IS* WORK. Reported verbatim: "the round
-// table card could be below the roster", "the roster list should be collapsable
-// for a cleaner look", and "the post a job seems to be redundant because if i
-// choose to start a thread with an agent that would be the start of posting a
-// new job". Three consequences here:
-//   * THE PAGE IS A STACK, not a two-column grid. The roster keeps its narrow
-//     left shape (it is capped at 17rem and block-flow left-aligns it) and the
-//     conversation sits UNDER it at every width, with the whole page width to
-//     itself — the transcript used to run in whatever was left beside a 15rem
-//     rail. The rail is no longer sticky: an element cannot stick beside
-//     content it is stacked above, and pinning it would cover the transcript.
-//   * THE ROSTER FOLDS. `ij_agents_roster_open` remembers the choice across
-//     visits, following SETUP_OPEN_KEY's idiom (default OPEN — a roster the
-//     user never asked to hide must not come back hidden). Folded, the header
-//     still names the count and who is selected, and THE GEAR STAYS PUT: agent
-//     configuration must not become unreachable by tidying the page.
-//   * THE "Post a job" DISCLOSURE IS GONE. Not the capability — the SEPARATE
-//     SURFACE. A job posted from a form and a thread started with an agent were
-//     two different front doors to the same intent, which is exactly the split
-//     chat already closed ("one surface, zero routing"). Dispatch now lives in
-//     the thread composer (RoundTable), so the rail's Give-work opens the
-//     thread with that agent and hands the composer the target: `assign` and
-//     `roster` ride down to RoundTable, which owns the team case, project
-//     grounding, the max-steps budget and the recent-jobs list from here on.
-//     The older-daemon path below still renders JobPostCard in the flow,
-//     because that daemon may not have the thread routes at all.
+// FOUR CHANGES, and the first one is a real bug rather than a layout taste:
+//
+//   1. THE POPUP WAS NOT ACTUALLY FIXED TO THE VIEWPORT. `PanelPicker` is
+//      `fixed inset-0`, but it is rendered from INSIDE `RoundTable`, whose
+//      root is `<div class="card-surface … overflow-hidden">` — and
+//      `.card-surface` carries `backdrop-filter: blur(18px)`. A non-`none`
+//      backdrop-filter makes an element the CONTAINING BLOCK for fixed-position
+//      descendants, so `inset-0` resolved to the thread card and
+//      `overflow-hidden` clipped the rest. Every dialog in this module now goes
+//      through `components/Modal.tsx`, which portals to `document.body`; the
+//      full diagnosis lives in that file's header.
+//
+//   2. THE LEFT CARD IS THE THREAD LIST, full height, scrolling itself. The
+//      roster used to be the rail and the threads a SECOND 16rem rail beside
+//      the conversation. Two rails for one module, and the thing a user picks
+//      dozens of times a day — a conversation — was in the narrower one.
+//
+//   3. THE ROSTER IS BEHIND THE ICON at the foot of that card, in
+//      `AgentsModal`: who exists, what each one looks like, Talk / Give work,
+//      and the create/connect surfaces `SetupCard` has always held. A dialog
+//      is not bounded by the column it was revealed into, which is exactly
+//      what went wrong with the old inline reveal.
+//
+//   4. EVERY AGENT IS CUSTOMIZABLE, built-ins included — portrait AND face.
+//      The daemon never restricted portraits by kind (storage is
+//      `avatars/<slug>.png` by name); one component's location did.
+//
+// THE OLDER-DAEMON PAGE IS UNTOUCHED. A daemon that serves no
+// `/agents/roster`, or no thread routes at all, still gets the stacked
+// composition with `RosterStrip`, `JobPostCard` and `SetupCard` in the flow —
+// hiding them there would delete capabilities from the daemons least able to
+// spare them.
 
-import { useEffect, useRef, useState } from "react";
-import { Check, MessagesSquare, Plus, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { MessagesSquare, Plus } from "lucide-react";
 import { del, post, put, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import type { AgentsResponse, ModelOption } from "@/lib/types";
 import { Card, Empty, ErrorNote, OfflineHint, SkeletonRows } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
-import { timeAgo } from "@/lib/format";
 import {
-  AvatarStack,
   participantKey,
   type AgentSource,
   type Participant,
@@ -84,7 +78,13 @@ import {
   type ThreadRow,
 } from "@/components/agents/identity";
 import { SetupCard, type DynamicAgentFull } from "@/components/agents/SetupCard";
-import { RosterStrip, type RosterEntry } from "@/components/agents/RosterStrip";
+import {
+  RosterStrip,
+  rosterAvatarSrc,
+  type RosterEntry,
+} from "@/components/agents/RosterStrip";
+import { ThreadRail } from "@/components/agents/ThreadRail";
+import { AgentsModal } from "@/components/agents/AgentsModal";
 import {
   JobPostCard,
   TEAM_TARGET,
@@ -105,36 +105,17 @@ type PickerState =
 /**
  * SetupCard's disclosure key — read and written HERE, and nowhere else.
  *
- * TWO STATES, ONE OWNER EACH (v1.185.0). Setup has genuinely two questions and
- * they are not the same question:
+ * TWO STATES, ONE OWNER EACH (v1.185.0): `setupOpen` is "is the card on screen
+ * this visit" (the gear's answer, deliberately not persisted) and
+ * `setupExpanded` is "is its body disclosed" (the card's own chevron, the only
+ * half worth remembering across visits).
  *
- *   `setupOpen`      is the card ON SCREEN this visit? — the gear's answer,
- *                    deliberately NOT persisted ("not shown unless the user
- *                    decided to configure an agent" means this visit, not a
- *                    visit last week).
- *   `setupExpanded`  is its body disclosed? — the card's own chevron, and the
- *                    only half worth remembering across visits.
- *
- * The second used to be answered in two places: the card hydrated it from this
- * key while the page WROTE the key just before mounting the card. That worked,
- * and the reason it worked was an ordering — v1.179.0's comment here described
- * writing-before-mount as a race fix, which is an accurate description of a
- * handshake and not of a source of truth. The card now takes `open` as a prop,
- * so there is one value, held here, and nothing to keep in step.
+ * BOTH NOW BELONG TO THE OLDER-DAEMON PATH ONLY (v1.214.0). On a daemon that
+ * serves the roster, configuration is a dialog and has no persisted open
+ * state at all — a modal that reopened itself because it was open last week
+ * would be a page that starts by interrupting you.
  */
 const SETUP_OPEN_KEY = "ij_agents_setup_open";
-
-/**
- * The roster's own disclosure key (v1.180.0) — "the roster list should be
- * collapsable for a cleaner look", remembered across visits.
- *
- * Same idiom as SetupCard's key (default state on the server, hydrated from
- * storage after mount so the first client render matches the markup Next sent)
- * but the DEFAULT IS OPEN and the stored "0" is what folds it: a user who never
- * touched the control must never find the roster missing, and a storage read
- * that throws leaves the page in its full state rather than its tidy one.
- */
-const ROSTER_OPEN_KEY = "ij_agents_roster_open";
 
 /** "custom:slug" / "remote:name" → the bare registry name the thread routes
  *  accept (clean_participants stores source + bare name; the round engine
@@ -156,7 +137,7 @@ function defaultTitle(participants: Participant[]): string {
 }
 
 export default function AgentsPage() {
-  // --- catalog (also feeds the setup card + the panel picker) --------------
+  // --- catalog (also feeds the agents room + the panel picker) -------------
   const {
     data: agentsData,
     error: agentsError,
@@ -167,10 +148,11 @@ export default function AgentsPage() {
     remotes?: RemoteAgentInfo[];
   }>("/agents/remote");
   const { data: modelsData } = useApi<{ models: ModelOption[] }>("/models");
-  // The roster (v1.139.0) also feeds the participant picker: descriptions +
-  // live remote health. Older daemons 404 here — the picker falls back to the
-  // raw /agents + /agents/remote lists below.
-  const { data: rosterData } = useApi<{ roster?: RosterEntry[] }>("/agents/roster");
+  // The roster (v1.139.0) feeds the agents room, the participant picker, and
+  // the portraits the thread rail layers. Older daemons 404 here — the room is
+  // not offered at all and the page falls back to its pre-rail composition.
+  const { data: rosterData, reload: reloadRoster } =
+    useApi<{ roster?: RosterEntry[] }>("/agents/roster");
 
   const builtin = agentsData?.builtin ?? [];
   const dynamic = (agentsData?.dynamic ?? []) as DynamicAgentFull[];
@@ -204,23 +186,16 @@ export default function AgentsPage() {
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const tableRef = useRef<HTMLDivElement>(null);
   const talkBusyRef = useRef(false);
-  // WHO TAKES THE WORK. Once the roster's "Give work" preselect for the
-  // job-post card (v1.166.0); since v1.180.0 it is the THREAD COMPOSER's
-  // dispatch target, because a thread with an agent IS how a job starts now.
-  // The card itself survives only on the older-daemon path below, where it
-  // still reads this exact prop — hence `jobRef`, which is that path's scroll
-  // target and nothing else.
+  // WHO TAKES THE WORK — the THREAD COMPOSER's dispatch target since v1.180.0,
+  // because a thread with an agent IS how a job starts now. `jobRef` is the
+  // older-daemon path's scroll target and nothing else.
   const jobRef = useRef<HTMLDivElement>(null);
   const [assign, setAssign] = useState<JobAssign | null>(null);
-  // The roster fold (v1.180.0). Open until storage says otherwise; hydrated
-  // after mount so SSR and the first client render agree.
-  const [rosterOpen, setRosterOpen] = useState(true);
-  // The rail's gear reveals the setup surfaces through this wrapper.
+  // THE AGENTS ROOM (v1.214.0). Not persisted, on purpose — see SETUP_OPEN_KEY.
+  const [agentsOpen, setAgentsOpen] = useState(false);
+  // The older-daemon setup card's two states (see SETUP_OPEN_KEY).
   const setupRef = useRef<HTMLDivElement>(null);
   const [setupOpen, setSetupOpen] = useState(false);
-  // The card's DISCLOSURE, hydrated after mount so SSR and the first client
-  // render agree — the same idiom the roster fold above uses. Default open:
-  // the gear reveals a usable form, never a second thing to click.
   const [setupExpanded, setSetupExpanded] = useState(true);
   useEffect(() => {
     try {
@@ -230,9 +205,9 @@ export default function AgentsPage() {
     }
   }, []);
   // WHO THE USER IS WORKING WITH (v1.178.0). This lives on the page, not
-  // inside the rail, because it drives the page: the job card's target and
-  // which thread is open. Kept as kind + BARE name, the shape every handler
-  // here already speaks (participantKey, JobAssign, talkWith).
+  // inside the roster, because it drives the page: the composer's dispatch
+  // target and which thread is open. Kept as kind + BARE name, the shape every
+  // handler here already speaks (participantKey, JobAssign, talkWith).
   const [picked, setPicked] = useState<{ kind: AgentSource; name: string } | null>(
     null,
   );
@@ -242,35 +217,51 @@ export default function AgentsPage() {
     justCreated && !polled.some((t) => t.id === justCreated.id)
       ? [justCreated, ...polled]
       : polled;
-  // TRUE exactly when the two-column conversation grid renders, i.e. when
-  // there is a round-table card for the roster to sit beneath and match.
-  // The roster is rendered in that cell when this holds, and in the page
-  // flow when it does not — never both.
-  const showsConversationCell =
-    !threadsMissing &&
-    !(threadsError && threadsError.status !== 0) &&
-    threads.length > 0;
   const threadsReady = threadsData !== null || threadsError !== null;
+
+  const rosterEntries = (rosterData?.roster ?? []).filter(
+    (e): e is RosterEntry => Boolean(e) && typeof e.name === "string",
+  );
+  const hasRoster = rosterEntries.length > 0;
+  /**
+   * THE COMPOSITION THIS RELEASE INTRODUCES, and the one condition that
+   * decides it. The full-height rail IS the thread list, so it needs the
+   * thread routes to have anything in it; the agents room reads the roster, so
+   * it needs that. Missing either one and the page renders exactly what the
+   * daemon that lacks it has always been given.
+   */
+  const room = hasRoster && !threadsMissing;
+
+  /**
+   * participantKey → the portrait the roster serves for that agent.
+   *
+   * Built HERE from the page's own roster rows rather than fetched inside the
+   * rail: the two would otherwise be independent answers to "what does this
+   * agent look like", and the one in the narrower column would be the one that
+   * went stale. `last_active` is the cache key the roster already uses, so a
+   * replaced portrait stops being served from the browser cache.
+   */
+  const avatarByKey = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const e of rosterEntries) {
+      map.set(
+        participantKey(e.kind, bareRosterName(e.name)),
+        e.avatar ? rosterAvatarSrc(e.avatar, e.last_active) : null,
+      );
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rosterData]);
 
   /**
    * `/agents?thread=<id>` opens THAT round-table (v1.142.0).
    *
-   * The palette's "In your conversations" lane sends round-table hits here.
-   * Without this the page just auto-selected the newest thread, so clicking a
-   * search result for one conversation silently opened a DIFFERENT one — the
-   * worst kind of wrong, because nothing on screen says so.
-   *
    * Read off window.location, not useSearchParams: /agents is a static route
-   * and useSearchParams would force it behind a Suspense boundary (the same
-   * reason app/reflex, app/schedules and app/terminals read params this way).
-   * An id that no longer exists is not special-cased: RoundTable already
-   * renders a missing thread honestly, which is the whole point — showing a
-   * DIFFERENT thread is the failure, showing "gone" is an answer.
-   *
-   * The ref is a three-state handshake with the auto-select below, because
-   * both are mount effects and "whichever setState lands second wins" is not
-   * a design: `undefined` = the URL has not been read yet, a string = a deep
-   * link is claiming the selection, `null` = nobody is, carry on as before.
+   * and useSearchParams would force it behind a Suspense boundary. The ref is
+   * a three-state handshake with the auto-select below, because both are mount
+   * effects and "whichever setState lands second wins" is not a design:
+   * `undefined` = the URL has not been read yet, a string = a deep link is
+   * claiming the selection, `null` = nobody is.
    */
   const deepLinkRef = useRef<string | null | undefined>(undefined);
   useEffect(() => {
@@ -288,10 +279,6 @@ export default function AgentsPage() {
   useEffect(() => {
     if (deepLinkRef.current === undefined) return; // the URL gets first refusal
     if (deepLinkRef.current) {
-      // A deep link owns THIS pass — without the skip, an already-loaded rail
-      // lets both effects fire in the same commit and the newest thread wins.
-      // Consumed once, so deleting the deep-linked thread later hands the
-      // choice straight back to the auto-select.
       deepLinkRef.current = null;
       return;
     }
@@ -349,9 +336,9 @@ export default function AgentsPage() {
   }
 
   /** The one 1:1 thread whose panel is EXACTLY this agent, if it exists.
-   *  Extracted (v1.178.0) so the rail's "continue working with" and the Talk
-   *  button ask the same question — two copies of this predicate would be two
-   *  chances to open a thread with somebody else on the panel. */
+   *  Extracted (v1.178.0) so "continue working with" and the Talk button ask
+   *  the same question — two copies of this predicate would be two chances to
+   *  open a thread with somebody else on the panel. */
   function soloThreadWith(kind: AgentSource, name: string) {
     const key = participantKey(kind, name);
     return threads.find(
@@ -359,8 +346,8 @@ export default function AgentsPage() {
     );
   }
 
-  /** The roster's Talk button: open the existing 1:1 thread with exactly this
-   *  agent, or start one ("Talk with <name>"), then jump to the round-table. */
+  /** Talk: open the existing 1:1 thread with exactly this agent, or start one
+   *  ("Talk with <name>"), then bring the round-table into view. */
   async function talkWith(kind: AgentSource, name: string) {
     if (talkBusyRef.current) return;
     const key = participantKey(kind, name);
@@ -368,12 +355,16 @@ export default function AgentsPage() {
     setTableError(null);
     if (existing) {
       setSelectedId(existing.id);
+      // The room is a dialog over the page: leaving it open on top of the
+      // thread it just opened would hide the thing the click asked for.
+      setAgentsOpen(false);
       tableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
     talkBusyRef.current = true;
     try {
       await createThread(`Talk with ${name}`, [{ key, source: kind, name, role: "" }]);
+      setAgentsOpen(false);
       tableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (e) {
       setTableError(e instanceof ApiError ? e.message : String(e));
@@ -383,90 +374,45 @@ export default function AgentsPage() {
   }
 
   /**
-   * The roster's Give-work button (v1.180.0): OPEN THE THREAD with this agent,
-   * with the work armed.
+   * Give work (v1.180.0): OPEN THE THREAD with this agent, with the work armed.
    *
-   * "The post a job seems to be redundant because if i choose to start a thread
-   * with an agent that would be the start of posting a new job." So Give work
-   * no longer reveals a second form: it arms the composer's dispatch target
-   * (the nonce keeps a repeat click on the same agent a distinct assign, so it
-   * still lands after a manual change) and then does exactly what Talk does —
-   * open the 1:1 thread with that agent, starting one if there is none. Give
-   * work is an explicit button, so the POST is what the user asked for; a click
-   * on a FACE still creates nothing (see selectAgent).
-   *
-   * Where there is no composer to arm — an older daemon with no roster, or one
-   * without the thread routes — JobPostCard is still standing in the flow, so
-   * that path keeps the v1.179.0 behaviour exactly: preselect in the card and
-   * scroll to it. The two branches read the SAME condition the card is
-   * rendered under, or Give-work would scroll to a ref pointing at nothing.
+   * It arms the composer's dispatch target (the nonce keeps a repeat click on
+   * the same agent a distinct assign, so it still lands after a manual change)
+   * and then does exactly what Talk does. Where there is no composer to arm —
+   * an older daemon with no roster, or one without the thread routes —
+   * JobPostCard is still standing in the flow, so that path keeps the v1.179.0
+   * behaviour: preselect in the card and scroll to it. Both branches read the
+   * SAME condition the card is rendered under, or Give-work would scroll to a
+   * ref pointing at nothing.
    */
   function assignWork(kind: AgentSource, name: string) {
     setAssign({ kind, name, nonce: Date.now() });
-    if (!hasRoster || threadsMissing) {
+    if (!room) {
+      setAgentsOpen(false);
       jobRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
     void talkWith(kind, name);
   }
 
-  /** The roster's fold (v1.180.0), remembered across visits. */
-  function toggleRoster() {
-    const next = !rosterOpen;
-    setRosterOpen(next);
-    try {
-      localStorage.setItem(ROSTER_OPEN_KEY, next ? "1" : "0");
-    } catch {
-      /* persistence is best-effort; the fold itself does not depend on it */
-    }
-  }
-
-  // Hydrate the fold after mount. Only a stored "0" collapses it: an absent
-  // key, a storage that throws, and any other value all mean "never asked to
-  // hide it", and the roster is the thing the user said they like.
-  useEffect(() => {
-    try {
-      setRosterOpen(localStorage.getItem(ROSTER_OPEN_KEY) !== "0");
-    } catch {
-      /* storage unavailable — stays open */
-    }
-  }, []);
-
   /**
-   * A face in the rail was clicked (v1.178.0): "this is who I'm working with".
+   * An agent was picked: "this is who I'm working with".
    *
-   * Two effects, both of them things the user can already do by hand — the
-   * click just stops making them do it:
-   *   - the job-post card preselects this agent, so typing a job and pressing
-   *     Post sends it to the face that is highlighted. Only when it can
-   *     actually TAKE work: `canWork` is the roster's delegable + healthy
-   *     gate, and preselecting an offline remote would put a target in the box
-   *     that the card then silently falls back to Team for.
-   *   - "continue working with": an existing 1:1 thread with exactly this
-   *     agent opens. Nothing is created — that is Talk's job, and a POST is
-   *     not what clicking a portrait promises.
-   * It deliberately does NOT scroll the job card into view the way Give-work
-   * does: selecting is a light gesture, and yanking the page under someone who
-   * was reading a transcript is the opposite of what a rail is for.
+   * Two effects, both things the user can already do by hand — the click just
+   * stops making them do it: the composer's target becomes this agent, and an
+   * existing 1:1 thread with exactly this agent opens. Nothing is CREATED —
+   * that stays behind Talk, because a POST is not what selecting a portrait
+   * promises.
+   *
+   * ADVERSARIAL REVIEW (v1.178.0): the `canWork` guard alone left a STALE
+   * target behind — picking an offline remote after the analyst moved the
+   * highlight while the composer still aimed at the analyst. So an un-workable
+   * pick doesn't merely skip the preselect, it RESETS the target to the Team,
+   * which is also the honest answer: the supervisor is non-delegable and an
+   * offline remote cannot take a session.
    */
   function selectAgent(kind: AgentSource, name: string, canWork: boolean) {
     setPicked({ kind, name });
-    // ADVERSARIAL REVIEW (v1.178.0): the `if (canWork)` guard alone left a
-    // STALE target behind. Click the analyst (job card → "custom:analyst"),
-    // then click the offline down-box: the rail moved its ring and its
-    // aria-current onto down-box while the card still said analyst, and Post
-    // would have sent the job to the analyst. That is the page disagreeing
-    // with itself, the same class of bug that forced the selection onto the
-    // page in the first place — just reached from the other side.
-    //
-    // So an un-workable pick doesn't merely skip the preselect, it RESETS the
-    // target to the Team. `wireTarget` passes builtin names through unchanged
-    // (its own contract: "builtins are bare on the wire already"), so a
-    // builtin-kinded assign carrying JobPostCard's own TEAM_TARGET sentinel
-    // lands as exactly that sentinel and the card visibly reads
-    // "Team — supervisor plans & delegates". Team is also the honest answer:
-    // the supervisor is non-delegable and an offline remote cannot take a
-    // session, so the Team is where that job was always going to end up.
     setAssign(
       canWork
         ? { kind, name, nonce: Date.now() }
@@ -479,24 +425,14 @@ export default function AgentsPage() {
     }
   }
 
-  /**
-   * The gear-with-a-face: the ONE door to agent configuration (v1.179.0).
-   *
-   * Setup is not in the page until this runs — "not shown unless the user
-   * decided to configure an agent" — and clicking again folds it away.
-   *
-   * REVEALING ALSO EXPANDS, and that is a decision rather than a side effect:
-   * a gear that produces a collapsed card has asked for two clicks to do one
-   * thing. It is the same guarantee v1.179.0 got from writing storage before
-   * mounting the card, now made directly instead of through a key.
-   */
+  /** The older-daemon gear: reveal the setup card, and fold it again. */
   function toggleSetup() {
     const next = !setupOpen;
     setSetupOpen(next);
     if (next) setSetupExpanded(true);
   }
 
-  /** The card's own chevron — the half that is remembered across visits. */
+  /** That card's own chevron — the half remembered across visits. */
   function setSetupDisclosure(open: boolean) {
     setSetupExpanded(open);
     try {
@@ -506,9 +442,10 @@ export default function AgentsPage() {
     }
   }
 
-  // Focus and the viewport follow the reveal — otherwise a keyboard user
-  // activates the gear and their focus is still down in the rail, a section
-  // away from the form that just appeared.
+  // Focus and the viewport follow the older-daemon reveal — otherwise a
+  // keyboard user activates the gear and their focus is still in the roster, a
+  // section away from the form that just appeared. (The room needs none of
+  // this: a dialog takes focus by being a dialog.)
   useEffect(() => {
     if (!setupOpen) return;
     const host = setupRef.current;
@@ -519,11 +456,7 @@ export default function AgentsPage() {
   // --- the participant picker's catalog ------------------------------------
   // Roster-fed when available: descriptions + live health, offline remotes
   // shown but disabled. Roster names arrive as "builder" / "custom:<slug>" /
-  // "remote:<name>"; the thread routes want source + BARE name (verified
-  // against agents/threads.py clean_participants + participant_key).
-  const rosterEntries = (rosterData?.roster ?? []).filter(
-    (e): e is RosterEntry => Boolean(e) && typeof e.name === "string",
-  );
+  // "remote:<name>"; the thread routes want source + BARE name.
   const rosterOptions = (kind: AgentSource): PickerOption[] =>
     rosterEntries
       .filter((e) => e.kind === kind)
@@ -532,6 +465,7 @@ export default function AgentsPage() {
         name: bareRosterName(e.name),
         description: e.description || undefined,
         offline: kind === "remote" && !e.healthy,
+        avatar: e.avatar ?? null,
       }));
   const catalog: PickerCatalog =
     rosterEntries.length > 0
@@ -555,348 +489,37 @@ export default function AgentsPage() {
           })),
         };
 
-  // The rail (v1.178.0). `hasRoster` decides the page LAYOUT, so the rail is
-  // handed the page's OWN rows rather than fetching a second opinion — a rail
-  // that disagreed with the grid would leave a 15rem column of nothing beside
-  // the work. When the page has no rows (older daemon, or its fetch failed
-  // while the strip's succeeded) the component falls back to fetching for
-  // itself and simply renders in the stacked flow, exactly as before.
-  const hasRoster = rosterEntries.length > 0;
-  const rail = (
-    <RosterStrip
-      entries={hasRoster ? rosterEntries : undefined}
-      onTalk={threadsMissing ? undefined : talkWith}
-      onAssign={assignWork}
-      // ADVERSARIAL REVIEW (v1.179.0): both of these are gated on `hasRoster`
-      // now. The strip falls back to fetching /agents/roster for ITSELF when
-      // the page has no rows, so the page's fetch failing while the strip's
-      // succeeds used to render a rail and a gear inside the STACKED (pre-rail)
-      // layout — and the gear was then a lie: `hasRoster && setupOpen` gates the
-      // reveal, so clicking it flipped aria-expanded to "true" and revealed
-      // nothing, while setup was already standing in the flow below. Tying both
-      // props to the same flag that decides the LAYOUT keeps the two halves of
-      // the page telling one story; in the normal case (`hasRoster`) nothing
-      // changes at all.
-      onSelect={hasRoster ? selectAgent : undefined}
-      onConfigure={hasRoster ? toggleSetup : undefined}
-      configureOpen={setupOpen}
-      // THE FOLD (v1.180.0) — gated on `hasRoster` for the same reason as the
-      // two props above: the pre-rail composition is the layout an older
-      // daemon has always rendered, and growing a collapse control on it would
-      // be a new state to persist for a page that never had one.
-      onToggleCollapse={hasRoster ? toggleRoster : undefined}
-      collapsed={!rosterOpen}
-      selected={picked}
+  /** Portraits and faces are written by name, and BOTH lists carry them: the
+   *  roster feeds the rail and the room, `/agents` feeds the dynamic rows. A
+   *  write refreshes both, or the rail keeps drawing the picture the room just
+   *  replaced. */
+  function agentsChanged() {
+    reloadAgents();
+    reloadRoster();
+  }
+
+  const header = (
+    <PageHeader
+      title="Agents"
+      subtitle="Assemble a round-table of agents — built-in, yours, and agents on other computers — give each a role, and talk it out together."
+      actions={
+        !threadsMissing ? (
+          <button
+            type="button"
+            onClick={() => setPicker({ mode: "create" })}
+            className="btn-accent"
+          >
+            <Plus size={14} /> New thread
+          </button>
+        ) : undefined
+      }
     />
   );
 
-  return (
-    <PageShell>
-      <Reveal>
-        <PageHeader
-          title="Agents"
-          subtitle="Assemble a round-table of agents — built-in, yours, and agents on other computers — give each a role, and talk it out together."
-          actions={
-            !threadsMissing ? (
-              <button
-                type="button"
-                onClick={() => setPicker({ mode: "create" })}
-                className="btn-accent"
-              >
-                <Plus size={14} /> New thread
-              </button>
-            ) : undefined
-          }
-        />
-      </Reveal>
-
-      {offline && (
-        <Reveal>
-          <OfflineHint />
-        </Reveal>
-      )}
-
-      {/* THE ROOM, STACKED (v1.180.0): the roster on the left, the round-table
-          BELOW it. One column at every width — there is no side-by-side grid to
-          collapse at a breakpoint any more, so the narrow layout and the wide
-          one differ only in how much room the same stack has.
-          The roster keeps its rail SHAPE (capped at 17rem, and a block element
-          in normal flow sits left) while the conversation under it now spans
-          the full page width instead of whatever was left beside a 15rem
-          column. The cap engages at `md`, in lock-step with RosterStrip's
-          `hidden md:block` face column / `md:hidden` <select>: below that the
-          card is full width and shows the <select> form of the picker, which is
-          the control that fits a phone. That lock-step is the same two-halves
-          rule v1.178.0 wrote at `lg` — it can move DOWN safely now because the
-          roster no longer competes with the transcript for width. */}
-      <div data-testid="agents-stack" className="space-y-6">
-        <div className="min-w-0 space-y-6">
-          {/* Roster (v1.139.0) — who can take delegated work. Renders nothing
-              on daemons that predate GET /agents/roster (it carries its own
-              Reveal, so hiding leaves no empty gap). The Talk button needs the
-              thread routes, so it's only offered when they exist. */}
-          {!hasRoster && rail}
-
-          {/* THE PRE-RAIL PAGE (older daemon). No roster means no rail, which
-              means no gear and no disclosure to hold these — so they stay in
-              the flow exactly as they shipped. Hiding them here would delete
-              two capabilities from the daemons least able to spare them.
-
-              THE JOB CARD ALSO STANDS IN FOR A MISSING COMPOSER (v1.180.0).
-              Dispatch moved INTO the thread composer, so a daemon that serves
-              the roster but not the thread routes would otherwise have a rail
-              with a Give-work button and nowhere for the work to go — the one
-              combination where "it moved" would mean "it's gone". */}
-          {(!hasRoster || threadsMissing) && (
-            <Reveal>
-              <div ref={jobRef}>
-                <JobPostCard roster={rosterEntries} assign={assign} />
-              </div>
-            </Reveal>
-          )}
-          {!hasRoster && (
-            <Reveal>
-              <div ref={setupRef}>
-                <SetupCard
-                  builtin={builtin}
-                  dynamic={dynamic}
-                  remotes={remotes}
-                  models={models}
-                  onAgentsChanged={reloadAgents}
-                  onRemotesChanged={reloadRemotes}
-                  open={setupExpanded}
-                  onOpenChange={setSetupDisclosure}
-                />
-              </div>
-            </Reveal>
-          )}
-
-          {tableError && (
-            <Reveal>
-              <ErrorNote>{tableError}</ErrorNote>
-            </Reveal>
-          )}
-
-          {/* The round-table (hidden entirely on daemons without the thread routes) */}
-          {!threadsMissing && (
-            <Reveal>
-              <div ref={tableRef}>
-                {!threadsReady ? (
-                  <Card>
-                    <SkeletonRows rows={4} />
-                  </Card>
-                ) : threadsData === null ? (
-                  // Errored before any data — never fake an empty list. Offline
-                  // shows the hint at the top; other failures get an honest note.
-                  threadsError && threadsError.status !== 0 ? (
-                    <ErrorNote>{threadsError.message}</ErrorNote>
-                  ) : null
-                ) : threads.length === 0 ? (
-                  <Card>
-                    <Empty icon={<MessagesSquare size={26} />}>
-                      <span className="mb-1 block text-sm font-medium text-zinc-300">
-                        The round-table is empty
-                      </span>
-                      Start a thread and pick which agents sit at the table — a
-                      planner, your own skeptic, and an agent on another computer
-                      can all talk it out.
-                    </Empty>
-                    <div className="flex justify-center pb-2">
-                      <button
-                        type="button"
-                        onClick={() => setPicker({ mode: "create" })}
-                        className="btn-accent"
-                      >
-                        <Plus size={14} /> New thread
-                      </button>
-                    </div>
-                  </Card>
-                ) : (
-                  <div className="grid items-start gap-4 md:grid-cols-[16rem_minmax(0,1fr)]">
-                    {/* Thread rail */}
-                    <Card pad={false} className="overflow-hidden">
-                      <div className="flex items-center justify-between border-b hairline px-3 py-2">
-                        <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-                          Round-table · {threads.length}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setPicker({ mode: "create" })}
-                          className="btn-ghost px-2 py-1 text-[12px]"
-                          title="Start a new agent thread"
-                        >
-                          <Plus size={13} /> New
-                        </button>
-                      </div>
-                      <div className="max-h-[70vh] space-y-0.5 overflow-y-auto p-1.5">
-                        {railError && <ErrorNote>{railError}</ErrorNote>}
-                        {threads.map((t) => {
-                          const active = t.id === selectedId;
-                          return (
-                            <div
-                              key={t.id}
-                              className={`group/thread relative rounded-xl border transition-colors ${
-                                active
-                                  ? "border-accent/25 bg-accent/[0.08]"
-                                  : "border-transparent hover:bg-white/[0.04]"
-                              }`}
-                            >
-                              <button
-                                type="button"
-                                onClick={() => setSelectedId(t.id)}
-                                className="w-full px-2.5 py-2 pr-8 text-left"
-                                title={t.title || "Agent thread"}
-                              >
-                                <span
-                                  className={`block truncate text-[13px] ${
-                                    active ? "text-accent-soft" : "text-zinc-200"
-                                  }`}
-                                >
-                                  {t.title || "Agent thread"}
-                                </span>
-                                <span className="mt-1.5 flex items-center gap-2">
-                                  <AvatarStack participants={t.participants} size="sm" />
-                                  <span className="text-[11px] text-zinc-500">
-                                    {t.message_count} msg{t.message_count === 1 ? "" : "s"} ·{" "}
-                                    {timeAgo(t.updated_at)}
-                                  </span>
-                                </span>
-                              </button>
-                              {pendingDelete === t.id ? (
-                                <button
-                                  type="button"
-                                  onClick={() => void removeThread(t.id)}
-                                  aria-label="Confirm delete"
-                                  title="Click again to delete"
-                                  className="absolute right-1.5 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md bg-rose-500/15 text-rose-300"
-                                >
-                                  <Check size={13} />
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => setPendingDelete(t.id)}
-                                  aria-label={`Delete ${t.title || "thread"}`}
-                                  title="Delete this thread"
-                                  className="absolute right-1.5 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md text-zinc-500 opacity-0 transition-opacity hover:bg-white/[0.06] hover:text-rose-300 focus-visible:opacity-100 group-hover/thread:opacity-100"
-                                >
-                                  <Trash2 size={13} />
-                                </button>
-                              )}
-
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </Card>
-
-                    {/* Conversation */}
-                    <div className="min-w-0">
-                      {selectedId ? (
-                        <RoundTable
-                          threadId={selectedId}
-                          reloadNonce={detailNonce}
-                          onEditPanel={(detail) => setPicker({ mode: "edit", thread: detail })}
-                          onRoundDone={reloadThreads}
-                          // DISPATCH LIVES IN THE COMPOSER NOW (v1.180.0). The
-                          // page keeps owning WHO the user is working with —
-                          // the rail sets it, the thread acts on it — so the
-                          // composer is handed the same `assign` the job card
-                          // used to read, and the page's own roster rows so it
-                          // never has to fetch a second opinion about who can
-                          // take work.
-                          roster={rosterEntries}
-                          assign={assign}
-                        />
-                      ) : (
-                        <Card>
-                          <Empty icon={<MessagesSquare size={22} />}>
-                            Pick a thread from the rail — or start a new one.
-                          </Empty>
-                          {/* THE EMPTY STATE IS NOT A DEAD END (v1.180.0).
-                              Dispatch moved into the composer, and the composer
-                              needs a thread — so with none selected this panel
-                              was the one place the page told the user to do
-                              something and gave them nothing to do it with. The
-                              header carries the same button; repeating it HERE
-                              is the difference between "one click away" and
-                              "one click away, if you go looking". */}
-                          <div className="flex justify-center pb-2">
-                            <button
-                              type="button"
-                              onClick={() => setPicker({ mode: "create" })}
-                              className="btn-accent"
-                            >
-                              <Plus size={14} /> New thread
-                            </button>
-                          </div>
-                        </Card>
-                      )}
-
-                      {/* THE ROSTER, IN THE SAME CELL AS THE CONVERSATION
-                          (v1.184.0). It sat in the page stack, one level
-                          ABOVE this grid — so it spanned the full page while
-                          the round-table only ever got
-                          `minmax(0,1fr)` beside a 16rem thread rail. The
-                          roster really was the wider card; comparing it to
-                          the PAGE instead of to the card above it is what
-                          hid that. Inside this cell the two share an edge by
-                          construction, at every width, with no cap to keep
-                          in step. */}
-                      {hasRoster && rail}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </Reveal>
-          )}
-
-          {/* THE "Post a job" DISCLOSURE IS GONE (v1.180.0), and its
-              capabilities are not: the TEAM case (a supervisor session that
-              plans and delegates), project grounding, the max-steps budget and
-              the recent-jobs list all moved INTO the thread composer, where
-              starting a thread with an agent and giving that agent a job are
-              one gesture instead of two front doors to the same intent. What
-              stood here was the second door. Dispatched sessions still carry
-              origin "job:agents", which is how the recent-jobs list finds
-              them wherever it is rendered. */}
-
-          {/* ...AND WHEREVER THERE IS NO CONVERSATION CARD TO MATCH
-              (v1.184.0). The roster belongs in the round-table's cell so the
-              two share an edge — but that cell only exists once there is a
-              thread to show. With no threads yet, a thread error, or a daemon
-              serving no thread routes at all, there is no card to line up
-              with, so the roster stands in the page flow instead. Gated so it
-              can never render TWICE: the cell owns it whenever the cell
-              exists. Caught by the degraded-path test, not by reading — the
-              first cut of this move made the roster vanish entirely on a
-              daemon without thread routes. */}
-          {hasRoster && !showsConversationCell && rail}
-
-          {/* SETUP — only once the gear says so. Not rendered at all otherwise:
-              "not shown unless the user decided to configure an agent". */}
-          {hasRoster && setupOpen && (
-            <Reveal>
-              <div ref={setupRef}>
-                <SetupCard
-                  builtin={builtin}
-                  dynamic={dynamic}
-                  remotes={remotes}
-                  models={models}
-                  onAgentsChanged={reloadAgents}
-                  onRemotesChanged={reloadRemotes}
-                  open={setupExpanded}
-                  onOpenChange={setSetupDisclosure}
-                />
-              </div>
-            </Reveal>
-          )}
-        </div>
-
-
-      </div>
-
-      {/* New-thread / edit-panel modal */}
+  const modals = (
+    <>
+      {/* New-thread / edit-panel. Portalled by `Modal` inside PanelPicker, so
+          it is no longer clipped by whichever card it was rendered from. */}
       {picker && (
         <PanelPicker
           mode={picker.mode}
@@ -912,6 +535,268 @@ export default function AgentsPage() {
           }
         />
       )}
+      {/* The agents room. */}
+      {agentsOpen && room && (
+        <AgentsModal
+          roster={rosterEntries}
+          dynamic={dynamic}
+          remotes={remotes}
+          models={models}
+          selected={picked}
+          onSelect={selectAgent}
+          onTalk={talkWith}
+          onAssign={assignWork}
+          onAgentsChanged={agentsChanged}
+          onRemotesChanged={reloadRemotes}
+          onClose={() => setAgentsOpen(false)}
+        />
+      )}
+    </>
+  );
+
+  /* ---------------------------------------------------- the room (v1.214.0) */
+  if (room) {
+    const conversation = !threadsReady ? (
+      <Card>
+        <SkeletonRows rows={4} />
+      </Card>
+    ) : threadsData === null ? (
+      // Errored before any data — never fake an empty list. Offline shows the
+      // hint above; other failures get an honest note.
+      threadsError && threadsError.status !== 0 ? (
+        <ErrorNote>{threadsError.message}</ErrorNote>
+      ) : null
+    ) : selectedId ? (
+      <RoundTable
+        threadId={selectedId}
+        reloadNonce={detailNonce}
+        onEditPanel={(detail) => setPicker({ mode: "edit", thread: detail })}
+        onRoundDone={reloadThreads}
+        // DISPATCH LIVES IN THE COMPOSER (v1.180.0). The page keeps owning WHO
+        // the user is working with — the room sets it, the thread acts on it —
+        // so the composer is handed the same `assign` the job card used to
+        // read, and the page's own roster rows so it never has to fetch a
+        // second opinion about who can take work.
+        roster={rosterEntries}
+        assign={assign}
+      />
+    ) : (
+      <Card>
+        <Empty icon={<MessagesSquare size={22} />}>
+          {threads.length === 0
+            ? "The round-table is empty. Start a thread and pick which agents sit at the table — a planner, your own skeptic, and an agent on another computer can all talk it out."
+            : "Pick a thread from the rail — or start a new one."}
+        </Empty>
+        <div className="flex justify-center pb-2">
+          <button
+            type="button"
+            onClick={() => setPicker({ mode: "create" })}
+            className="btn-accent"
+          >
+            <Plus size={14} /> New thread
+          </button>
+        </div>
+      </Card>
+    );
+
+    return (
+      <PageShell className="space-y-0">
+        {/* THE MODULE FILLS THE APP. `md:h-[calc(100vh-4.5rem)]` is the title
+            bar (2.5rem) plus MainContent's own `py-4` (2rem), so the row ends
+            exactly where the window does and nothing but the two panes
+            scrolls. Below md it is a plain column: a 17rem rail beside a
+            transcript on a phone is two unusable columns, so the rail becomes
+            a normal card above the conversation (with its own capped height —
+            see ThreadRail). */}
+        <div
+          data-testid="agents-room"
+          className="flex flex-col gap-4 md:h-[calc(100vh-4.5rem)] md:min-h-[28rem] md:flex-row"
+        >
+          <div className="shrink-0 md:h-full md:w-[17rem]">
+            <ThreadRail
+              threads={threads}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              onNew={() => setPicker({ mode: "create" })}
+              pendingDelete={pendingDelete}
+              onArmDelete={setPendingDelete}
+              onConfirmDelete={(id) => void removeThread(id)}
+              avatarByKey={avatarByKey}
+              error={railError}
+              // A TOGGLE, not a one-way reveal. The icon carries
+              // `aria-expanded` for the dialog it controls, and a control that
+              // announces a state it can only ever set in one direction is
+              // lying about half of it. (In practice the backdrop is over the
+              // icon while the room is open, so this is the keyboard path.)
+              onOpenAgents={() => setAgentsOpen((v) => !v)}
+              agentsOpen={agentsOpen}
+              agentCount={rosterEntries.length}
+              pickedName={picked?.name ?? null}
+            />
+          </div>
+
+          {/* The conversation, with the page header above it in the SAME
+              column — so the left card starts at the top of the module and is
+              genuinely full height, rather than starting under a header that
+              spans the page. */}
+          <div className="flex min-w-0 flex-1 flex-col gap-4 md:min-h-0 md:overflow-y-auto">
+            <Reveal>{header}</Reveal>
+            {offline && (
+              <Reveal>
+                <OfflineHint />
+              </Reveal>
+            )}
+            {tableError && (
+              <Reveal>
+                <ErrorNote>{tableError}</ErrorNote>
+              </Reveal>
+            )}
+            <div ref={tableRef} className="min-h-0 flex-1">
+              {conversation}
+            </div>
+          </div>
+        </div>
+        {modals}
+      </PageShell>
+    );
+  }
+
+  /* ------------------------------------------- the older-daemon page, as-is */
+  return (
+    <PageShell>
+      <Reveal>{header}</Reveal>
+
+      {offline && (
+        <Reveal>
+          <OfflineHint />
+        </Reveal>
+      )}
+
+      <div data-testid="agents-stack" className="space-y-6">
+        <div className="min-w-0 space-y-6">
+          {/* Roster (v1.139.0) — who can take delegated work. Renders nothing
+              on daemons that predate GET /agents/roster (it carries its own
+              Reveal, so hiding leaves no empty gap). The Talk button needs the
+              thread routes, so it's only offered when they exist. */}
+          <RosterStrip
+            entries={hasRoster ? rosterEntries : undefined}
+            onTalk={threadsMissing ? undefined : talkWith}
+            onAssign={assignWork}
+            // Gated on `hasRoster` (v1.179.0): the strip falls back to fetching
+            // for ITSELF when the page has no rows, so the page's fetch failing
+            // while the strip's succeeds must not grow a gear that reveals
+            // nothing — setup is already standing in the flow below. Tying
+            // these to the same flag that decides the LAYOUT keeps the two
+            // halves of the page telling one story.
+            onSelect={hasRoster ? selectAgent : undefined}
+            onConfigure={hasRoster ? toggleSetup : undefined}
+            configureOpen={setupOpen}
+            selected={picked}
+          />
+
+          {/* THE PRE-RAIL PAGE. No roster means no gear and no dialog to hold
+              these, so they stay in the flow exactly as they shipped — hiding
+              them here would delete two capabilities from the daemons least
+              able to spare them.
+
+              THE JOB CARD ALSO STANDS IN FOR A MISSING COMPOSER (v1.180.0):
+              dispatch moved INTO the thread composer, so a daemon that serves
+              the roster but not the thread routes would otherwise have a
+              Give-work button and nowhere for the work to go. */}
+          <Reveal>
+            <div ref={jobRef}>
+              <JobPostCard roster={rosterEntries} assign={assign} />
+            </div>
+          </Reveal>
+
+          {(!hasRoster || setupOpen) && (
+            <Reveal>
+              <div ref={setupRef}>
+                <SetupCard
+                  builtin={builtin}
+                  dynamic={dynamic}
+                  remotes={remotes}
+                  models={models}
+                  onAgentsChanged={agentsChanged}
+                  onRemotesChanged={reloadRemotes}
+                  open={setupExpanded}
+                  onOpenChange={setSetupDisclosure}
+                />
+              </div>
+            </Reveal>
+          )}
+
+          {tableError && (
+            <Reveal>
+              <ErrorNote>{tableError}</ErrorNote>
+            </Reveal>
+          )}
+
+          {/* The round-table (hidden entirely on daemons without the thread
+              routes). Reached only when the roster is missing, since a daemon
+              that has both renders the room above. */}
+          {!threadsMissing && (
+            <Reveal>
+              <div ref={tableRef}>
+                {!threadsReady ? (
+                  <Card>
+                    <SkeletonRows rows={4} />
+                  </Card>
+                ) : threadsData === null ? (
+                  threadsError && threadsError.status !== 0 ? (
+                    <ErrorNote>{threadsError.message}</ErrorNote>
+                  ) : null
+                ) : (
+                  <div className="grid items-start gap-4 md:grid-cols-[16rem_minmax(0,1fr)]">
+                    <ThreadRail
+                      threads={threads}
+                      selectedId={selectedId}
+                      onSelect={setSelectedId}
+                      onNew={() => setPicker({ mode: "create" })}
+                      pendingDelete={pendingDelete}
+                      onArmDelete={setPendingDelete}
+                      onConfirmDelete={(id) => void removeThread(id)}
+                      avatarByKey={avatarByKey}
+                      error={railError}
+                    />
+                    <div className="min-w-0">
+                      {selectedId ? (
+                        <RoundTable
+                          threadId={selectedId}
+                          reloadNonce={detailNonce}
+                          onEditPanel={(detail) =>
+                            setPicker({ mode: "edit", thread: detail })
+                          }
+                          onRoundDone={reloadThreads}
+                          roster={rosterEntries}
+                          assign={assign}
+                        />
+                      ) : (
+                        <Card>
+                          <Empty icon={<MessagesSquare size={22} />}>
+                            Pick a thread from the rail — or start a new one.
+                          </Empty>
+                          <div className="flex justify-center pb-2">
+                            <button
+                              type="button"
+                              onClick={() => setPicker({ mode: "create" })}
+                              className="btn-accent"
+                            >
+                              <Plus size={14} /> New thread
+                            </button>
+                          </div>
+                        </Card>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </Reveal>
+          )}
+        </div>
+      </div>
+
+      {modals}
     </PageShell>
   );
 }
