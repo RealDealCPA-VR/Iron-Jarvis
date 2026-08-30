@@ -155,36 +155,141 @@ export function cleanHtml(node: HTMLElement): string {
 }
 
 /**
- * Turn SOFT line breaks into hard ones before the body is parsed (v1.163.0).
+ * Turn the line breaks that MEAN something into hard ones (v1.215.1).
  *
- * Markdown collapses a single newline into a space, which is right for prose
- * and wrong for the two places an email actually uses one: a signature block
- * and an address. "Best,\nValentino" rendered — and therefore PASTED — as
- * "Best, Valentino" on one line, which is the other half of the spacing the
- * user had to redo by hand.
+ * Markdown collapses a single newline into a space. That is right for prose
+ * and wrong for the two places an email actually uses one — a signature block
+ * and an address — so v1.163.0 hardened every soft newline in a draft.
  *
- * Done by appending markdown's two-space hard break rather than adding a
- * remark plugin: it keeps the dependency list still, and it applies ONLY to
- * draft bodies, so ordinary chat prose keeps standard markdown behaviour.
+ * WHICH BROKE THE OTHER HALF, and it took a look at the real clipboard payload
+ * to see it. Models hard-wrap their output at around 80 columns, so a single
+ * sentence arrives as two source lines; hardening every newline turned that
+ * wrap into a `<br>` and the pasted email carried a line break through the
+ * middle of a sentence. Captured from the shipping build:
  *
- * Blank lines are left alone (they already separate paragraphs), and fenced
- * code is skipped — inside a fence a newline is already literal, and padding
- * those lines would corrupt the very content being quoted.
+ *   <p>To finish your return before the <strong>October 15</strong>
+ *   extended deadline, I need three<br>
+ *   things from you:</p>
+ *
+ * A newline inside a paragraph is genuinely ambiguous, and neither blanket
+ * answer is right. The signal that separates the two cases is LINE LENGTH: a
+ * line that wrapped is long by construction (it wrapped because it ran out of
+ * width), while the lines of a signature or an address are short because the
+ * writer ended them. So the decision is made per BLOCK — a run of non-blank
+ * lines — rather than per line:
+ *
+ *   contains a long line  →  it is wrapped prose; leave the newlines soft
+ *   all lines are short   →  they were ended on purpose; harden them
+ *
+ * Structured blocks (lists, headings, quotes, tables) are skipped outright:
+ * markdown already gives each of their lines its own line, so a hard break
+ * would be at best redundant and at worst a stray `<br>` inside an `<li>`.
+ *
+ * Fenced code is skipped for the original reason — inside a fence a newline is
+ * already literal, and padding those lines would corrupt the quoted content.
  */
+
+/** A line at least this long is assumed to have WRAPPED rather than to have
+ *  been ended deliberately. Model output wraps in the 72–100 column range and
+ *  signature/address lines are rarely past 40, so the gap is wide and the
+ *  exact number is not load-bearing. */
+export const WRAP_HINT = 60;
+
+/** Lines markdown already lays out itself — a hard break adds nothing. */
+const STRUCTURED = /^\s*(#{1,6}\s|>|\||[-*+]\s|\d+[.)]\s)/;
+
 export function hardenLineBreaks(markdown: string): string {
   const lines = markdown.split("\n");
-  let fenced = false;
+
+  // Which lines are inside a fence (the fence markers themselves count, so a
+  // block never straddles one).
+  const fenced: boolean[] = [];
+  let inFence = false;
+  for (const line of lines) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      fenced.push(true);
+      inFence = !inFence;
+    } else {
+      fenced.push(inFence);
+    }
+  }
+
+  const out = lines.slice();
+  let i = 0;
+  while (i < lines.length) {
+    if (fenced[i] || !lines[i].trim()) {
+      i += 1;
+      continue;
+    }
+    let j = i;
+    while (j < lines.length && lines[j].trim() && !fenced[j]) j += 1;
+    const block = lines.slice(i, j);
+    const structured = block.some((l) => STRUCTURED.test(l));
+    const wrapped = block.some((l) => l.trim().length >= WRAP_HINT);
+    if (!structured && !wrapped) {
+      for (let k = i; k < j - 1; k += 1) {
+        // A line that already ends in a hard break is left alone.
+        if (/\s{2,}$/.test(lines[k])) continue;
+        out[k] = lines[k] + "  ";
+      }
+    }
+    i = j;
+  }
+  return out.join("\n");
+}
+
+/**
+ * The PLAIN-TEXT flavour, actually in plain text (v1.215.1).
+ *
+ * `text/plain` was the fence's body verbatim — which is MARKDOWN. Anything
+ * that took that flavour got `**October 1**` and `[the portal](https://…)`
+ * literally, and the whole point of the two-flavour copy is that neither one
+ * needs fixing by hand. Captured from the shipping build:
+ *
+ *   To finish your return before the **October 15** extended deadline…
+ *
+ * That flavour is not a rare path: it is what a plain-text composer takes, what
+ * a `Ctrl+Shift+V` paste takes, and what the whole copy degrades to when the
+ * rich write is unavailable (`copyRich` → "plain", which the button reports).
+ *
+ * Inline syntax is unwrapped; STRUCTURE is kept, because in plain text a "- "
+ * bullet and a blank line between paragraphs are how structure survives at all.
+ * Fenced content is left exactly as written — it is quoted material.
+ */
+export function plainFromMarkdown(markdown: string): string {
+  const lines = markdown.split("\n");
+  let inFence = false;
   return lines
-    .map((line, i) => {
-      if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
-      if (fenced) return line;
-      const next = lines[i + 1];
-      if (next === undefined || !next.trim() || !line.trim()) return line;
-      // A line already ending in a hard break, or one that opens a block that
-      // owns its own line handling, is left as it is.
-      if (/\s{2,}$/.test(line) || /^\s*(#{1,6}\s|>|\||\s*$)/.test(next)) return line;
-      return line + "  ";
+    .map((line) => {
+      if (/^\s*(```|~~~)/.test(line)) {
+        inFence = !inFence;
+        return null; // the fence markers are syntax, not content
+      }
+      if (inFence) return line;
+      return (
+        line
+          // Markdown's own hard-break marker has done its job by now.
+          .replace(/\s{2,}$/, "")
+          // Headings and quote markers: the words, not the punctuation.
+          .replace(/^(\s*)#{1,6}\s+/, "$1")
+          .replace(/^(\s*)>\s?/, "$1")
+          // Images first (they are links with a leading !), then links. The
+          // URL is dropped rather than kept in parentheses: a signature line
+          // reading "Valentino (https://…)" is not tidier than the name.
+          .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+          .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+          // Emphasis. Paired markers only, so snake_case and a lone asterisk
+          // survive untouched.
+          .replace(/\*\*\*([^*\n]+)\*\*\*/g, "$1")
+          .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+          .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, "$1$2")
+          .replace(/__([^_\n]+)__/g, "$1")
+          .replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,;:!?]|$)/g, "$1$2")
+          // Inline code.
+          .replace(/`([^`\n]+)`/g, "$1")
+      );
     })
+    .filter((line): line is string => line !== null)
     .join("\n");
 }
 
@@ -256,7 +361,15 @@ export function draftFromFence(
   //: `text` is the plain-text flavour (what a plain paste gets); `markdown` is
   //: what gets RENDERED, with soft newlines hardened so a signature block does
   //: not collapse onto one line.
-  return { subject, text: body, markdown: hardenLineBreaks(body) };
+  //: `text` is the PLAIN-TEXT flavour — markdown syntax unwrapped, structure
+  //: kept — and `markdown` is what gets RENDERED, with the line breaks that
+  //: mean something hardened. They are two different jobs on the same body and
+  //: neither is the raw fence: see plainFromMarkdown and hardenLineBreaks.
+  return {
+    subject,
+    text: plainFromMarkdown(body),
+    markdown: hardenLineBreaks(body),
+  };
 }
 
 export function DraftCard({
