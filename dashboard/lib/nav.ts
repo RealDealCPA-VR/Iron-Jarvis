@@ -209,9 +209,10 @@ export const NAV: NavSectionDef[] = [
           "packs",
           "plugins",
           "plug-ins",
+          "extensions",
           "capabilities",
         ],
-        blurb: "What agents can DO — plus per-tool approval and plug-ins (MCP).",
+        blurb: "What agents can DO — plus per-tool approval and extensions (MCP).",
       },
       {
         href: "/autonomy",

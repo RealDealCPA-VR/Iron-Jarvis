@@ -60,27 +60,57 @@ describe("chat speaks 'connections', never 'connectors' or 'integrations'", () =
   it("the tool-category label retired 'Integrations'", () => {
     const s = read("app/chat/page.tsx");
     expect(s).not.toContain('"Integrations (MCP)"');
-    expect(s).toContain('"Plug-ins (MCP)"');
+    // …and moved on again in v1.216.0: plug-in → extension. The retired word
+    // this test was written to bury stays buried either way.
+    expect(s).toContain('"Extensions (MCP)"');
   });
 });
 
 describe("MCP servers are 'plug-ins' — 'Pack' is reserved for the staff bundle", () => {
-  it("the tools page presents plug-ins", () => {
+  // RENAMED plug-in → extension (v1.216.0). From a UX review of the Tools
+  // page: "'Plug-ins (MCP)' is insider jargon on a first-run screen." The word
+  // was picked to free up "pack" and did that job, but it never told a
+  // first-time reader what the thing IS. "Extension" is what browsers, editors
+  // and IDEs already call a separate program that adds abilities, so it lands
+  // pre-understood; MCP stays in a parenthetical because it is the wire, not
+  // the noun. See VOCABULARY.md for the canon entry.
+  it("the tools page presents extensions", () => {
     const s = read("app/tools/page.tsx");
-    expect(s).toContain('title="Plug-ins (MCP)"');
+    expect(s).toContain("title={`Extensions${");
+    expect(s).not.toContain('title="Plug-ins (MCP)"');
     expect(s).not.toContain("Tool pack ");
     expect(s).not.toContain('`Tool pack "');
     expect(s).not.toContain("connected pack");
   });
   it("the palette deep link agrees", () => {
-    expect(read("components/CommandPalette.tsx")).toContain('"Tools → Plug-ins"');
+    const s = read("components/CommandPalette.tsx");
+    expect(s).toContain('"Tools → Extensions"');
+    // The retired word stays as a SEARCH ALIAS — someone who learned the old
+    // name must still find the page (the canon's own rule).
+    expect(s).toContain('"connect a plug-in"');
   });
   it("the Connections directory tile agrees", () => {
     // The directory the user explicitly asked to keep (v1.101.0) — its words
     // teach the taxonomy harder than any other card.
     const s = read("app/connections/page.tsx");
-    expect(s).toContain('title: "Plug-ins (MCP)"');
+    expect(s).toContain('title: "Extensions (MCP)"');
     expect(s).not.toContain("Tool packs");
+  });
+  it("no user-visible surface still says plug-in", () => {
+    // A half-done rename is worse than either name: the app would say two
+    // words for one thing, which is the exact failure this file exists to
+    // prevent. Comments and aliases are allowed; rendered strings are not.
+    for (const f of [
+      "app/tools/page.tsx",
+      "app/connections/page.tsx",
+      "app/chat/page.tsx",
+      "lib/nav.ts",
+    ]) {
+      const code = read(f)
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, "");
+      expect(code).not.toMatch(/Plug-in|Plug-ins/);
+    }
   });
 });
 

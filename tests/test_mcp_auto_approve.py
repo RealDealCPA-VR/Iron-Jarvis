@@ -112,15 +112,35 @@ def test_one_pack_trusting_grants_every_pack(client):
     assert "any(" in src and "auto_approve" in src
 
 
-def test_the_ui_says_it_affects_every_connected_pack():
+def test_the_ui_says_it_affects_every_connected_extension():
     """The old copy said it "trusts every tool this pack exposes", which reads
     as per-pack. It is not — and a user granting unattended tool execution
-    deserves to know the real blast radius."""
+    deserves to know the real blast radius.
+
+    THE WARNING MOVED, IT DID NOT GO (v1.216.0). A UX review of this page:
+    "A global, restart-gated, all-future-plugins grant sits in a shopping
+    list… Do not put the blast-radius essay inline… label it like a dangerous
+    setting with a confirm dialog, not a casual checkbox." So the essay now
+    lives in the confirm step the global switch opens, which is where a warning
+    is read instead of skimmed past — and this pin follows it there rather than
+    being deleted. What must remain true is unchanged: before a user grants
+    unattended execution, the words EVERY and FUTURE are in front of them.
+
+    (Vocabulary: plug-in → extension in the same release; see VOCABULARY.md.)
+    """
     from pathlib import Path
 
-    page = Path(__file__).resolve().parents[1] / "dashboard" / "app" / "tools" / "page.tsx"
-    text = page.read_text(encoding="utf-8")
-    # v1.113.0 vocabulary pass: the UI says "plug-in" (one name per concept);
-    # the wire (/mcp/servers) and this test's behaviour pins are unchanged.
-    assert "every" in text and "connected plug-in" in text
-    assert "auto-approve on" in text and "auto-approve off" in text  # it's a toggle
+    root = Path(__file__).resolve().parents[1] / "dashboard"
+    panel = (root / "components" / "tools" / "PermissionsPanel.tsx").read_text(
+        encoding="utf-8"
+    )
+    # The dangerous direction is gated by a confirm dialog…
+    assert "perm-global-confirm" in panel
+    # …and that dialog states the real blast radius.
+    assert "every extension connected now" in panel
+    assert "every one you connect" in panel
+    # Per-extension grants are still a toggle, now named by extension.
+    assert "Asks first" in panel and "Allowed" in panel
+    # The page itself no longer prints the essay beside the catalog.
+    page = (root / "app" / "tools" / "page.tsx").read_text(encoding="utf-8")
+    assert "coarse" not in page

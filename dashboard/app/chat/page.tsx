@@ -754,7 +754,7 @@ const TOOL_CATEGORY_ORDER: ToolCategory[] = [
   "other",
 ];
 const TOOL_CATEGORY_LABEL: Record<ToolCategory, string> = {
-  integrations: "Plug-ins (MCP)",
+  integrations: "Extensions (MCP)",
   files: "Files",
   web: "Web",
   media: "Media",

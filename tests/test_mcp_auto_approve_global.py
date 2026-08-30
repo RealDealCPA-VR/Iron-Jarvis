@@ -126,14 +126,36 @@ def test_the_boot_resolver_honours_the_global_flag():
 
 
 def test_the_ui_has_no_unsaved_form_field_left():
-    """The regression this file exists to prevent: the checkbox must bind to
-    the polled server state and save through /mcp/settings — not a useState
-    default that navigation silently resets."""
+    """The regression this file exists to prevent: the control must bind to the
+    polled server state and save through /mcp/settings — not a useState default
+    that navigation silently resets.
+
+    STILL TRUE, THROUGH A DIFFERENT CONTROL (v1.216.0). The checkbox became a
+    `PermissionsPanel`, which takes the state as a PROP and calls back to save;
+    it holds no copy of the answer at all, which is a stronger version of the
+    same guarantee than "no local useState" was.
+
+    THE ONE BEHAVIOUR CHANGE, and it is a fix rather than a regression: the
+    page used to render `auto_approve_effective` (the daemon's `global OR
+    any-server` roll-up) inside a control labelled as the GLOBAL switch, so a
+    single extension with its own grant made the blanket switch look armed. The
+    panel is handed `auto_approve_global` — the raw flag — and shows per-server
+    grants as their own rows.
+    """
     from pathlib import Path
 
-    page = Path(__file__).resolve().parents[1] / "dashboard" / "app" / "tools" / "page.tsx"
-    text = page.read_text(encoding="utf-8")
-    assert "auto_approve_effective" in text
-    assert "/mcp/settings" in text
-    assert "useState(false);\n  const autoApprove" not in text  # no local checkbox state
-    assert "Saves the moment you click" in text  # the copy promises persistence
+    root = Path(__file__).resolve().parents[1] / "dashboard"
+    page = (root / "app" / "tools" / "page.tsx").read_text(encoding="utf-8")
+    assert "/mcp/settings" in page
+    # The GLOBAL switch is fed the global flag, not the roll-up.
+    assert "globalOn={mcpData?.auto_approve_global ?? false}" in page
+    # The roll-up is still read somewhere (the daemon serves it), but never as
+    # the value of the global control.
+    assert "auto_approve_effective" not in page.split("globalOn=")[1]
+    panel = (root / "components" / "tools" / "PermissionsPanel.tsx").read_text(
+        encoding="utf-8"
+    )
+    # No copy of the answer inside the control: it renders the prop and calls
+    # back. (`useState` in there is the confirm dialog's open flag only.)
+    assert "globalOn," in panel and "onSetGlobal" in panel
+    assert "useState(globalOn" not in panel

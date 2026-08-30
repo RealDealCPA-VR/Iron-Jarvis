@@ -280,6 +280,11 @@ describe("the curated gallery", () => {
     const cards = await renderGallery();
     for (const card of cards) {
       fireEvent.click(screen.getByTitle(`Add "${card.name}"`));
+      // ADD IS TWO STEPS SINCE v1.216.0: the grid button opens the consequence
+      // preview and the dialog's Enable is what POSTs. The security invariant
+      // below is unchanged and is the whole point of this file — what reaches
+      // the daemon must still be exactly the argv the card shows.
+      fireEvent.click(await screen.findByTestId("enable-confirm"));
       // The success note is set at the END of the handler (after the POST
       // resolves) — never wait on the POST itself.
       await waitFor(() => {
@@ -327,6 +332,9 @@ describe("a daemon that already stored the injectable definition", () => {
     // …and the gallery offers the replacement instead of a smug "Added".
     expect(screen.queryByTitle('Add "list_dir"')).toBeNull();
     fireEvent.click(screen.getByTitle('Replace the saved "list_dir" with this command'));
+    // Through the preview, as every add now goes (v1.216.0). The dialog says
+    // it is a replacement; what it POSTs is still the safe argv.
+    fireEvent.click(await screen.findByTestId("enable-confirm"));
 
     await waitFor(() => {
       expect(screen.getByText('Tool "list_dir" updated.')).toBeInTheDocument();
@@ -346,8 +354,10 @@ describe("a daemon that already stored the injectable definition", () => {
     api.tools = [{ ...savedListDir, command: safe.command }];
     render(<ToolsPage />);
 
+    // "Enabled" since v1.216.0 — the status chip carries an icon AND a word
+    // so it is not colour-only (review, accessibility).
     await waitFor(() => {
-      expect(screen.getByText("Added")).toBeInTheDocument();
+      expect(screen.getByTestId("status-added")).toBeInTheDocument();
     });
     expect(
       screen.queryByTitle('Replace the saved "list_dir" with this command'),

@@ -17,7 +17,7 @@ PR that ships it.
 |---|---|---|
 | Anything recall reads | **memory base** | source, brain, LTM |
 | Anything the app talks to | **connection** | integration, connector |
-| An MCP server (a connection that adds tools) | **plug-in** | tool pack, MCP pack |
+| An MCP server (a connection that adds tools) | **extension** | plug-in, tool pack, MCP pack |
 | Anything Iron Jarvis knows how to do | **skill** | — |
 | Where alerts go | **Notifications** (page) / **destination** (row) | channels |
 | A destination you can talk back to | **two-way destination** | gateway, messaging platform |
@@ -35,7 +35,21 @@ search, it goes in as an alias only.
 
 - **Pack** — reserved for the future staff-export bundle ("hand your setup to
   firm staff as a Pack", decided 2026-07-25). Do not use it for anything else;
-  freeing this word was the point of renaming MCP packs to plug-ins.
+  freeing this word was the point of renaming MCP packs away from "pack".
+
+### plug-in → extension (v1.216.0)
+
+From a UX review of the Tools page: *"'Plug-ins (MCP)' is insider jargon on a
+first-run screen."* The word was chosen to free up "pack", which it did — but
+it never told a first-time reader what the thing IS, and the page it leads is
+the one place a new user meets the concept.
+
+**extension** is the word the surrounding software already uses for "a separate
+program that adds abilities" (browsers, editors, IDEs), so it arrives already
+understood. The section that hosts them says *Extensions* and keeps the
+protocol in a parenthetical for people who know it: MCP is the wire, not the
+noun. "plug-in" joins "tool pack" as a retired word kept as a search alias, so
+anyone who learned the old name still finds the page.
 
 ## The three-layer rule
 

@@ -47,6 +47,28 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { timeAgo } from "@/lib/format";
 import { ProposalsCard } from "@/components/capability/ProposalsCard";
+import {
+  PrimaryAction,
+  RiskChips,
+  SourceChip,
+  StatusChip,
+} from "@/components/tools/chips";
+import {
+  EMPTY_FILTERS,
+  FilterBar,
+  filtersActive,
+  type ToolFilters,
+} from "@/components/tools/FilterBar";
+import { EnableDialog, type EnablePlan } from "@/components/tools/EnableDialog";
+import { PermissionsPanel } from "@/components/tools/PermissionsPanel";
+import {
+  RICHER_PACK,
+  VERIFY_PACK_ID,
+  isOfficial,
+  packCaps,
+  suiteCaps,
+  type Capability,
+} from "@/components/tools/meta";
 
 /* -------------------------------------------------------------------------- */
 /*  Types (local — lib/types.ts is intentionally untouched)                    */
@@ -749,8 +771,8 @@ export default function ToolsPage() {
         : "";
       setMcpOk(
         res.note
-          ? `Plug-in "${serverName}" connected — ${res.note}${approveNote}`
-          : `Plug-in "${serverName}" connected — ${res.tools_loaded} tool${
+          ? `Extension "${serverName}" connected — ${res.note}${approveNote}`
+          : `Extension "${serverName}" connected — ${res.tools_loaded} tool${
               res.tools_loaded === 1 ? "" : "s"
             } ready to use.${approveNote}`,
       );
@@ -777,7 +799,7 @@ export default function ToolsPage() {
       });
       setMcpOk(
         next
-          ? `"${server.name}" set to auto-approve — restart Iron Jarvis for autonomous agents to pick it up. This trusts every connected plug-in's tools.`
+          ? `"${server.name}" runs without asking — restart Iron Jarvis for autonomous agents to pick it up.`
           : `"${server.name}" will ask before each use again — restart Iron Jarvis to apply.`,
       );
       reloadServers();
@@ -794,7 +816,7 @@ export default function ToolsPage() {
     try {
       await del(`/mcp/servers/${encodeURIComponent(serverName)}`);
       setMcpOk(
-        `Plug-in "${serverName}" disconnected. Restart Iron Jarvis to fully unload its tools.`,
+        `Extension "${serverName}" disconnected. Restart Iron Jarvis to fully unload its tools.`,
       );
       reloadServers();
     } catch (err) {
@@ -844,137 +866,95 @@ export default function ToolsPage() {
     }
   }
 
-  /** One curated MCP catalog card (extracted so the two category groups share it). */
+  /**
+   * One catalog card, answering the review's four questions in order:
+   * what it does · status · risk · action (§4).
+   *
+   * The old card led with the pack name and a small "+ Add" chip in the
+   * corner, put the runtime in a grey pill that read as decoration, and said
+   * nothing at all about what the pack could reach. Adding was one click from
+   * a grid — which the review rightly called a flattened risk surface.
+   */
   function catalogCard(entry: McpCatalogEntry) {
     const connected = serverNames.has(entry.id);
-    const phs = placeholdersOf(entry.args);
-    const envKeys = entry.env_keys ?? [];
-    const needsConfig = phs.length > 0 || envKeys.length > 0;
-    const open = cfgId === entry.id;
+    const caps = packCaps(entry.id);
+    const official = isOfficial(entry.category);
     const isBusy = mcpBusy === entry.id;
-    const canConnect =
-      phs.every((ph) => (cfgValues[ph] ?? "").trim().length > 0) &&
-      envKeys.every((k) => (cfgEnv[k] ?? "").trim().length > 0);
     return (
       <div
         key={entry.id}
-        className="flex flex-col rounded-xl border border-white/[0.06] bg-white/[0.015] p-4 transition-colors hover:border-white/10 hover:bg-white/[0.03]"
+        data-pack={entry.id}
+        className={`flex flex-col rounded-xl border p-4 transition-colors ${
+          connected
+            ? "border-emerald-500/20 bg-emerald-500/[0.03] hover:border-emerald-500/30"
+            : "border-white/[0.06] bg-white/[0.015] hover:border-white/10 hover:bg-white/[0.03]"
+        }`}
       >
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <Plug size={14} className="text-accent-soft" />
-            <span className="truncate text-sm font-semibold text-zinc-100">
-              {entry.name}
-            </span>
-          </div>
+        {/* 1. WHAT IT DOES. */}
+        <div className="flex items-start gap-2">
+          <Plug size={14} className="mt-1 shrink-0 text-accent-soft" aria-hidden />
+          <span className="min-w-0 flex-1 text-sm font-semibold text-zinc-100">
+            {entry.name}
+          </span>
+          {/* 2. STATUS — including the runtime, promoted from a grey pill to
+              a real state the user can act on. */}
+          <StatusChip
+            status={connected ? "added" : entry.needs ? "blocked" : "available"}
+            needs={entry.needs}
+          />
+        </div>
+
+        <p className="mt-2 text-[13px] leading-relaxed text-zinc-400">
+          {entry.description}
+        </p>
+
+        {/* 3. RISK, plus provenance said once. */}
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+          <RiskChips caps={caps} />
+          <SourceChip official={official} />
+        </div>
+
+        {/* 4. ACTION. */}
+        <div className="mt-auto pt-3">
           {connected ? (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-500/[0.1] px-2 py-1 text-[11px] font-medium text-emerald-300">
-              <Check size={12} /> Added
-            </span>
+            <PrimaryAction
+              tone="quiet"
+              label="Disconnect"
+              icon={<X size={13} />}
+              title={`Disconnect "${entry.name}"`}
+              testId={`pack-remove-${entry.id}`}
+              disabled={mcpBusy === `del:${entry.id}`}
+              onClick={() => void removeServer(entry.id)}
+            />
           ) : (
-            <button
-              type="button"
-              onClick={() =>
-                needsConfig
-                  ? toggleConfig(entry)
-                  : void addMcpServer(entry.id, entry.command, entry.args, {}, entry.id)
-              }
+            <PrimaryAction
+              label={isBusy ? <LoaderInline label="Enabling…" /> : "Add"}
+              icon={isBusy ? undefined : <Plus size={13} />}
               disabled={isBusy}
-              title={`Add "${entry.name}"`}
-              className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-accent/30 bg-accent/[0.08] px-2 py-1 text-[11px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
-            >
-              {isBusy ? (
-                <LoaderInline label="Adding…" />
-              ) : open ? (
-                <>
-                  <X size={12} /> Close
-                </>
-              ) : (
-                <>
-                  <Plus size={12} /> Add
-                </>
-              )}
-            </button>
+              title={`Review and enable "${entry.name}"`}
+              testId={`pack-add-${entry.id}`}
+              onClick={() => {
+                setPendingError(null);
+                setPending(planForPack(entry));
+              }}
+            />
           )}
         </div>
 
-        <p className="mt-2 text-[13px] text-zinc-400">{entry.description}</p>
-
-        {entry.needs && (
-          <div className="mt-2">
-            <span className="inline-flex items-center gap-1 rounded-md border border-white/[0.07] bg-white/[0.03] px-1.5 py-0.5 text-[10px] font-medium text-zinc-400">
-              needs {entry.needs}
-            </span>
-          </div>
-        )}
-
-        {/* Raw launch command tucked away — plain description leads. */}
-        <details className="group mt-3">
+        {/* The launch command, default closed. */}
+        <details className="group mt-2.5">
           <summary className="flex cursor-pointer select-none items-center gap-1 text-[11px] font-medium text-zinc-500 transition-colors hover:text-zinc-300 [&::-webkit-details-marker]:hidden">
             <ChevronRight
               size={12}
               className="transition-transform duration-200 group-open:rotate-90"
             />
             Show command
+            <span className="ml-1 font-mono text-zinc-600">{entry.id}</span>
           </summary>
           <div className="mt-2">
             <ArgvChips argv={[entry.command, ...entry.args]} />
           </div>
         </details>
-
-        {/* Placeholder / env config before connecting */}
-        {open && !connected && (
-          <div className="mt-3 space-y-2 rounded-lg border border-white/[0.05] bg-ink-900/40 p-2.5">
-            {phs.map((ph) => (
-              <label key={ph} className="block">
-                <span className="mb-1 block font-mono text-[11px] text-accent-soft/80">
-                  {ph}
-                </span>
-                <input
-                  value={cfgValues[ph] ?? ""}
-                  onChange={(e) => setCfgValues((v) => ({ ...v, [ph]: e.target.value }))}
-                  placeholder="value"
-                  className="field px-2 py-1.5 font-mono text-xs"
-                />
-              </label>
-            ))}
-            {envKeys.map((k) => (
-              <label key={k} className="block">
-                <span className="mb-1 block font-mono text-[11px] text-zinc-400">
-                  {k} <span className="text-zinc-600">(env)</span>
-                </span>
-                <input
-                  value={cfgEnv[k] ?? ""}
-                  onChange={(e) => setCfgEnv((v) => ({ ...v, [k]: e.target.value }))}
-                  placeholder="value"
-                  className="field px-2 py-1.5 font-mono text-xs"
-                />
-              </label>
-            ))}
-            <button
-              type="button"
-              disabled={!canConnect || isBusy}
-              onClick={() =>
-                void addMcpServer(
-                  entry.id,
-                  entry.command,
-                  substituteArgs(entry.args, cfgValues),
-                  Object.fromEntries(envKeys.map((k) => [k, (cfgEnv[k] ?? "").trim()])),
-                  entry.id,
-                )
-              }
-              className="btn-accent w-full"
-            >
-              {isBusy ? (
-                <LoaderInline label="Connecting…" />
-              ) : (
-                <>
-                  <Plug size={14} /> Connect
-                </>
-              )}
-            </button>
-          </div>
-        )}
       </div>
     );
   }
@@ -1010,6 +990,213 @@ export default function ToolsPage() {
     if (okAdd) setSuggestion(null);
   }
 
+
+  /* ------------------------------------------------------------------ */
+  /*  ONE CATALOG, TWO DEPTHS (v1.216.0)                                  */
+  /* ------------------------------------------------------------------ */
+  /**
+   * The review's §2: "You have two nearly duplicate products… People will add
+   * both and not know why." Fetch a web page / Fetch web pages. List what's in
+   * a folder / Files & folders. See what changed in a project / Git
+   * repositories.
+   *
+   * They are not merged — they really are different things (an argv command
+   * the daemon runs vs a server that exposes a whole toolset) — but they are
+   * now DESCRIBED as one model with two depths, filtered by one control, and
+   * a built-in whose ground a pack also covers says so on its own card.
+   */
+
+  const [filters, setFilters] = useState<ToolFilters>(EMPTY_FILTERS);
+
+  /** How many built-ins are actually saved with the daemon — the "Enabled"
+   *  half of the summary. Counted from the daemon's own tool list, never from
+   *  a local optimistic flag, so the strip cannot claim an add that failed. */
+  const enabledBuiltins = TOOL_SUITE.filter((t) => installed.has(t.name)).length;
+
+  /** Everything a filter needs to decide, for either kind of item. */
+  type FilterItem = {
+    kind: "builtin" | "extension";
+    id: string;
+    title: string;
+    text: string;
+    caps: Capability[];
+    added: boolean;
+    needs?: string;
+  };
+
+  function matchesFilters(it: FilterItem): boolean {
+    const q = filters.q.trim().toLowerCase();
+    if (q && !`${it.title} ${it.id} ${it.text}`.toLowerCase().includes(q)) return false;
+    if (filters.status === "added" && !it.added) return false;
+    if (filters.status === "available" && it.added) return false;
+    if (filters.kind !== "all" && filters.kind !== it.kind) return false;
+    if (filters.readyOnly && it.needs) return false;
+    if (filters.caps.length > 0 && !filters.caps.some((c) => it.caps.includes(c)))
+      return false;
+    return true;
+  }
+
+  /** What the current filter leaves visible. The filter bar reports these so
+   *  a filter that hides everything reads as a filter, not as an empty app. */
+  const shownBuiltinCount = TOOL_SUITE.filter((t) =>
+    matchesFilters({
+      kind: "builtin",
+      id: t.name,
+      title: t.title,
+      text: t.blurb,
+      caps: suiteCaps(t.name),
+      added: installed.has(t.name),
+    }),
+  ).length;
+  const shownPackCount = catalog.filter(
+    (e) =>
+      e.id !== VERIFY_PACK_ID &&
+      matchesFilters({
+        kind: "extension",
+        id: e.id,
+        title: e.name,
+        text: e.description,
+        caps: packCaps(e.id),
+        added: serverNames.has(e.id),
+        needs: e.needs,
+      }),
+  ).length;
+
+  /* ------------------------------------------------------------------ */
+  /*  The consequence preview (review §6)                                 */
+  /* ------------------------------------------------------------------ */
+  /**
+   * "Clicking Add on 'Files & folders' is a trust moment." Nothing is enabled
+   * from a grid button any more; the button opens a dialog that says what the
+   * agent will be able to do, collects the values the pack needs BEFORE it
+   * starts, states the runtime, names who gets it, and asks ask-vs-allow.
+   *
+   * ONE HONEST LIMIT, stated in the dialog rather than faked: a built-in like
+   * "List what's in a folder" takes its path PER CALL — the agent supplies it
+   * when it runs. There is no folder to pick at enable time, and a picker that
+   * implied the tool was confined to one folder would be a lie. So those cards
+   * say the agent chooses the folder each time, which is the fact the risk
+   * chip is warning about.
+   */
+  type Pending =
+    | { kind: "suite"; tool: SuiteTool; replacing: boolean; plan: EnablePlan }
+    | { kind: "pack"; entry: McpCatalogEntry; plan: EnablePlan };
+  const [pending, setPending] = useState<Pending | null>(null);
+  const [pendingError, setPendingError] = useState<string | null>(null);
+  const pendingBusy =
+    pending?.kind === "suite"
+      ? adding === pending.tool.name
+      : pending?.kind === "pack"
+        ? mcpBusy === pending.entry.id
+        : false;
+
+  function planForSuite(t: SuiteTool, replacing: boolean): Pending {
+    const caps = suiteCaps(t.name);
+    const perCall = t.parameters.filter((prm) =>
+      /path|dir|repo|source|dest/i.test(prm.name),
+    );
+    const summary = replacing
+      ? `${t.blurb} This replaces the copy you already have, which runs an older command.`
+      : t.blurb;
+    return {
+      kind: "suite",
+      tool: t,
+      replacing,
+      plan: {
+        kind: "builtin",
+        title: t.title,
+        id: t.name,
+        summary:
+          perCall.length > 0
+            ? `${summary} The agent chooses the ${perCall
+                .map((prm) => prm.name)
+                .join(" and ")} when it runs this — it is not limited to one folder.`
+            : summary,
+        caps,
+        offerAutoApprove: false,
+      },
+    };
+  }
+
+  function planForPack(entry: McpCatalogEntry): Pending {
+    const phs = placeholdersOf(entry.args);
+    const envKeys = entry.env_keys ?? [];
+    return {
+      kind: "pack",
+      entry,
+      plan: {
+        kind: "extension",
+        title: entry.name,
+        id: entry.id,
+        summary: entry.description,
+        caps: packCaps(entry.id),
+        needs: entry.needs,
+        official: isOfficial(entry.category),
+        offerAutoApprove: true,
+        fields: [
+          ...phs.map((ph) => ({
+            key: `ph:${ph}`,
+            label: ph,
+            kind: /path|dir|folder|root/i.test(ph) ? ("path" as const) : ("text" as const),
+            hint: /path|dir|folder|root/i.test(ph)
+              ? "The extension may only work inside this folder."
+              : undefined,
+          })),
+          ...envKeys.map((k) => ({
+            key: `env:${k}`,
+            label: k,
+            kind: "text" as const,
+            hint: "Stored with the extension and passed to it as an environment variable.",
+          })),
+        ],
+      },
+    };
+  }
+
+  /** The dialog's one primary button. */
+  async function confirmEnable(values: Record<string, string>, auto: boolean) {
+    if (!pending) return;
+    setPendingError(null);
+    if (pending.kind === "suite") {
+      await addFromSuite(pending.tool, pending.replacing);
+      setPending(null);
+      return;
+    }
+    const entry = pending.entry;
+    const phValues: Record<string, string> = {};
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(values)) {
+      if (k.startsWith("ph:")) phValues[k.slice(3)] = v;
+      else if (k.startsWith("env:")) env[k.slice(4)] = v;
+    }
+    const ok = await addMcpServer(
+      entry.id,
+      entry.command,
+      substituteArgs(entry.args, phValues),
+      env,
+      entry.id,
+    );
+    if (!ok) {
+      setPendingError("The extension could not be connected — see the note above.");
+      return;
+    }
+    // THE PER-EXTENSION GRANT, applied after the connect rather than stamped
+    // into it. `addMcpServer` deliberately sends no auto_approve (a stamp used
+    // to survive the user later clearing the global box); this is a separate,
+    // scoped write that the Permissions panel shows by name and can revoke.
+    if (auto) {
+      try {
+        await patch(`/mcp/servers/${encodeURIComponent(entry.id)}`, {
+          auto_approve: true,
+        });
+        reloadServers();
+      } catch {
+        /* connected either way; the panel shows the real state */
+      }
+    }
+    setPending(null);
+  }
+
   return (
     <PageShell>
       <Reveal>
@@ -1024,218 +1211,61 @@ export default function ToolsPage() {
         </Reveal>
       )}
 
+      {/* WHAT IS LIVE RIGHT NOW (review §1). "Users cannot answer 'what is live
+          right now?' without hunting." Two counts and the fleet scope, as the
+          first line of content, before any catalog — and the filter that acts
+          on both catalogs sits with them so the answer and the way to narrow it
+          are the same control surface. */}
+      <Reveal>
+        <div
+          data-testid="tools-summary"
+          className="rounded-2xl border border-white/[0.06] bg-white/[0.015] p-4"
+        >
+          <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <span className="text-[13px] font-semibold tracking-wide text-zinc-200">
+              Enabled: {enabledBuiltins} built-in ·{" "}
+              {servers.length} extension{servers.length === 1 ? "" : "s"} ·{" "}
+              {tools.length} of your own
+            </span>
+            <span className="text-[12px] text-zinc-500">
+              available to every agent in this fleet
+            </span>
+          </div>
+          {/* ONE JOB STORY, replacing the two similar blurbs (review §7). */}
+          <p className="mb-3.5 text-[12.5px] leading-relaxed text-zinc-500">
+            Built-in tools work immediately. Extensions add bigger abilities —
+            files, repositories, memory — and may need Node or Python. You choose
+            the folder or account when you enable one.
+          </p>
+          <FilterBar
+            value={filters}
+            onChange={setFilters}
+            counts={{ builtin: shownBuiltinCount, extension: shownPackCount }}
+          />
+        </div>
+      </Reveal>
+
       {/* ------------------------------------------------------------------ */}
       {/*  Hero — describe a tool in plain language, an LLM builds it        */}
       {/* ------------------------------------------------------------------ */}
-      <Reveal>
-        <Card title="Teach Iron Jarvis something new" icon={<Sparkles size={15} />}>
-          <p className="mb-3.5 text-sm text-zinc-400">
-            Say what you want it to be able to do, in plain language. Iron Jarvis
-            designs the command, names it, and saves it — every agent can use it
-            right away.
-          </p>
-          <form onSubmit={generate} className="space-y-3">
-            <textarea
-              value={genDesc}
-              onChange={(e) => setGenDesc(e.target.value)}
-              rows={3}
-              placeholder="e.g. A tool that converts a CSV to a formatted summary table"
-              className="field resize-y"
-            />
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="submit"
-                disabled={genBusy || !genDesc.trim()}
-                className="btn-accent"
-              >
-                {genBusy ? (
-                  <LoaderInline label="Designing your tool…" />
-                ) : (
-                  <>
-                    <Sparkles size={14} /> Build
-                  </>
-                )}
-              </button>
-              <span className="text-[11px] text-zinc-600">
-                Usually takes 5–20 seconds.
-              </span>
-            </div>
-          </form>
-
-          {genError && (
-            <div className="mt-3.5">
-              <ErrorNote>{genError}</ErrorNote>
-            </div>
-          )}
-          {genResult && (
-            <div className="mt-3.5 space-y-3">
-              <SuccessNote>{genResult.reply}</SuccessNote>
-              <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-3.5">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Wrench size={14} className="text-accent-soft" />
-                  <span className="font-mono text-sm font-semibold text-zinc-100">
-                    {genResult.spec.name}
-                  </span>
-                  <span className="inline-flex items-center gap-1 text-[11px] text-zinc-500">
-                    <Clock size={11} /> {genResult.spec.timeout_seconds}s
-                  </span>
-                </div>
-                {genResult.spec.description && (
-                  <p className="mt-1.5 text-sm text-zinc-400">
-                    {genResult.spec.description}
-                  </p>
-                )}
-                <div className="mt-3">
-                  <ArgvChips argv={genResult.spec.command} />
-                </div>
-                {genResult.spec.parameters.length > 0 && (
-                  <div className="mt-2.5">
-                    <ParamChips params={genResult.spec.parameters} />
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </Card>
-      </Reveal>
-
-      {/* ------------------------------------------------------------------ */}
-      {/*  Capability requests (v1.178.0) — the other direction of the hero  */}
-      {/*  above: there YOU ask for a tool, here an AGENT does. It sits      */}
-      {/*  directly under it for that reason, and above "Your tools" because */}
-      {/*  a pending request is work waiting on the user, not reference.     */}
-      {/*  No <Reveal> wrapper: the card carries its own, so a daemon        */}
-      {/*  without /capability/proposals leaves no empty gap behind.         */}
-      {/* ------------------------------------------------------------------ */}
-      <ProposalsCard />
-
-      {/* ------------------------------------------------------------------ */}
-      {/*  Existing custom tools                                             */}
-      {/* ------------------------------------------------------------------ */}
+      {/* CATALOGS FIRST, AUTHORING AFTER (v1.216.0). The filter bar acts on
+          these two sections, and it used to sit three cards above them — you
+          narrowed the list at the top of the page and then scrolled past the
+          authoring cards to see what the filter had done. Reading order now
+          matches the review's §1 question: what is live, what can I add, and
+          only then how do I make one of my own. */}
       <Reveal>
         <Card
-          title={`Your tools${tools.length ? ` · ${tools.length}` : ""}`}
-          icon={<Wrench size={15} />}
-        >
-          <p className="mb-3.5 text-sm text-zinc-400">
-            Commands you&apos;ve taught Iron Jarvis — every agent can use them by name.
-          </p>
-          {loading && !data ? (
-            <SkeletonRows rows={4} />
-          ) : tools.length === 0 ? (
-            <Empty icon={<Wrench size={24} />}>
-              You haven&apos;t taught Iron Jarvis any commands yet. Describe one above
-              and hit Build — every agent will be able to use it.
-            </Empty>
-          ) : (
-            <div className="space-y-3">
-              {formError && <ErrorNote>{formError}</ErrorNote>}
-              {tools.map((tool) => (
-                <div
-                  key={tool.name}
-                  className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-3.5 transition-colors hover:border-white/10 hover:bg-white/[0.03]"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Wrench size={14} className="text-accent-soft" />
-                        <span className="font-mono text-sm font-semibold text-zinc-100">
-                          {tool.name}
-                        </span>
-                        <span className="inline-flex items-center gap-1 text-[11px] text-zinc-500">
-                          <Clock size={11} /> {tool.timeout_seconds}s
-                        </span>
-                        {/* A saved command that pastes a parameter into a shell
-                            script is an injection (v1.192.0). The page cannot
-                            fix a stored record, but it must not stay quiet
-                            about one — this reaches user-written and
-                            model-generated tools too, not just the gallery. */}
-                        {interpolatesIntoShell(tool.command) && (
-                          <span
-                            title="This command pastes a parameter value into a shell script, so a value containing a quote or a ';' can run commands of its own. Re-add it from Ready-made tools, or delete it."
-                            className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/[0.1] px-1.5 py-0.5 text-[11px] font-medium text-amber-300"
-                          >
-                            <ShieldAlert size={11} /> value goes into a shell
-                          </span>
-                        )}
-                      </div>
-                      {tool.description && (
-                        <p className="mt-1.5 text-sm text-zinc-400">
-                          {tool.description}
-                        </p>
-                      )}
-                    </div>
-                    <ConfirmButton
-                      onConfirm={() => remove(tool.name)}
-                      label="Delete"
-                      title={`Delete tool "${tool.name}"`}
-                    />
-                  </div>
-
-                  {/* argv command preview */}
-                  <div className="mt-3 overflow-x-auto rounded-lg border border-white/[0.06] bg-ink-900/60 px-3 py-2">
-                    <code className="whitespace-pre font-mono text-[12px]">
-                      {tool.command.map((tok, i) => {
-                        const isPh = /^\{.+\}$/.test(tok);
-                        return (
-                          <span
-                            key={i}
-                            className={isPh ? "text-accent-soft" : "text-zinc-300"}
-                          >
-                            {tok}
-                            {i < tool.command.length - 1 ? " " : ""}
-                          </span>
-                        );
-                      })}
-                    </code>
-                  </div>
-
-                  {/* parameter chips */}
-                  {tool.parameters.length > 0 && (
-                    <div className="mt-2.5">
-                      <ParamChips params={tool.parameters} />
-                    </div>
-                  )}
-
-                  <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-600">
-                    <span className="inline-flex items-center gap-1">
-                      <User size={11} />
-                      {tool.created_by || "unknown"}
-                    </span>
-                    <span>·</span>
-                    <span>{timeAgo(tool.created_at)}</span>
-                    {tool.parameters.length > 0 && (
-                      <>
-                        <span>·</span>
-                        <Badge
-                          value={`${tool.parameters.length} param${
-                            tool.parameters.length === 1 ? "" : "s"
-                          }`}
-                          tone="violet"
-                        />
-                      </>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
-      </Reveal>
-
-      {/* ------------------------------------------------------------------ */}
-      {/*  Tool suite — curated, one-click ready-made tools                  */}
-      {/* ------------------------------------------------------------------ */}
-      <Reveal>
-        <Card
-          title={`Ready-made tools · ${TOOL_SUITE.length}`}
+          title={`Built-in tools · ${TOOL_SUITE.length}`}
           icon={<Boxes size={15} />}
         >
+          {/* Renamed from "Ready-made tools" (review §2: name the two sections
+              in user language — "Built-in tools (no runtime)" vs "Extensions
+              (MCP — needs Node or Python)"). */}
           <p className="mb-4 text-sm text-zinc-400">
-            One-click helpers for everyday jobs — checking a website, zipping a
-            folder, seeing what&apos;s eating your disk. Click{" "}
-            <span className="font-medium text-accent-soft">Add</span> and every agent
-            can use it — no setup, built for Windows.
+            <span className="text-zinc-300">Built-in tools work immediately</span>{" "}
+            — no runtime, no setup. One-click helpers for everyday jobs: checking
+            a website, zipping a folder, seeing what&apos;s eating your disk.
           </p>
           {suiteOk && (
             <div className="mb-3">
@@ -1248,94 +1278,184 @@ export default function ToolsPage() {
             </div>
           )}
 
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {TOOL_SUITE.map((t) => {
+          {(() => {
+            const rows = TOOL_SUITE.map((t) => {
               const saved = savedCommands.get(t.name);
               const added = installed.has(t.name);
               // Saved under this name, but not THIS command (an install that
               // still holds a pre-v1.192.0 definition).
               const stale =
                 saved !== undefined && JSON.stringify(saved) !== JSON.stringify(t.command);
-              const isAdding = adding === t.name;
+              return { t, added, stale, caps: suiteCaps(t.name) };
+            });
+            const shown = rows.filter((r) =>
+              matchesFilters({
+                kind: "builtin",
+                id: r.t.name,
+                title: r.t.title,
+                text: r.t.blurb,
+                caps: r.caps,
+                added: r.added,
+              }),
+            );
+            if (shown.length === 0) {
               return (
-                <div
-                  key={t.name}
-                  data-suite-tool={t.name}
-                  data-argv={JSON.stringify(t.command)}
-                  className="flex flex-col rounded-xl border border-white/[0.06] bg-white/[0.015] p-4 transition-colors hover:border-white/10 hover:bg-white/[0.03]"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex min-w-0 items-start gap-2">
-                      <span className="mt-0.5 shrink-0">{t.icon}</span>
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-zinc-100">
+                <p className="text-[13px] text-zinc-500">
+                  No built-in tools match this filter.
+                </p>
+              );
+            }
+            // ENABLED FIRST (review §1 + §8: "Group 'Enabled' first"; "Don't
+            // make the only installed plugin the same visual weight as five
+            // uninstalled ones"). Within each group the curated order stands.
+            const ordered = [
+              ...shown.filter((r) => r.added),
+              ...shown.filter((r) => !r.added),
+            ];
+            return (
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {ordered.map(({ t, added, stale, caps }) => {
+                  const isAdding = adding === t.name;
+                  const richer = RICHER_PACK[t.name];
+                  return (
+                    <div
+                      key={t.name}
+                      data-suite-tool={t.name}
+                      data-argv={JSON.stringify(t.command)}
+                      className={`flex flex-col rounded-xl border p-4 transition-colors ${
+                        added
+                          ? "border-emerald-500/20 bg-emerald-500/[0.03] hover:border-emerald-500/30"
+                          : "border-white/[0.06] bg-white/[0.015] hover:border-white/10 hover:bg-white/[0.03]"
+                      }`}
+                    >
+                      {/* 1. WHAT IT DOES. The technical name is demoted to the
+                          command disclosure (review §4: "Demote http_get /
+                          list_dir… casual users do not choose tools by function
+                          name"). */}
+                      <div className="flex items-start gap-2">
+                        <span className="mt-0.5 shrink-0">{t.icon}</span>
+                        <div className="min-w-0 flex-1 text-sm font-semibold text-zinc-100">
                           {t.title}
                         </div>
-                        <div className="truncate font-mono text-[11px] text-zinc-500">
-                          {t.name}
-                        </div>
+                        {/* 2. STATUS. */}
+                        <StatusChip status={added && !stale ? "added" : "available"} />
                       </div>
-                    </div>
-                    {added && !stale ? (
-                      <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-500/[0.1] px-2 py-1 text-[11px] font-medium text-emerald-300">
-                        <Check size={12} /> Added
-                      </span>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => addFromSuite(t, stale)}
-                        disabled={isAdding}
-                        title={
-                          stale
-                            ? `Replace the saved "${t.name}" with this command`
-                            : `Add "${t.name}"`
-                        }
-                        className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 ${
-                          stale
-                            ? "border-amber-500/30 bg-amber-500/[0.1] text-amber-300 hover:bg-amber-500/[0.16]"
-                            : "border-accent/30 bg-accent/[0.08] text-accent-soft hover:bg-accent/[0.14]"
-                        }`}
-                      >
-                        {isAdding ? (
-                          <LoaderInline label={stale ? "Updating…" : "Adding…"} />
-                        ) : stale ? (
-                          <>
-                            <RefreshCw size={12} /> Update
-                          </>
+
+                      <p className="mt-2 text-[13px] leading-relaxed text-zinc-400">
+                        {t.blurb}
+                      </p>
+
+                      {/* 3. RISK. */}
+                      <div className="mt-2.5">
+                        <RiskChips caps={caps} />
+                      </div>
+
+                      {stale && (
+                        <p className="mt-2 text-[11px] text-amber-300/90">
+                          The saved copy runs an older command. Update replaces it.
+                        </p>
+                      )}
+
+                      {/* ONE MODEL, TWO DEPTHS (review §2). Where a capability
+                          pack covers the same ground with more reach, the card
+                          says so instead of leaving the user to add both and
+                          wonder why. */}
+                      {richer && (
+                        <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
+                          Need more?{" "}
+                          <span className="text-zinc-300">{richer.name}</span> (an
+                          extension) {richer.why}.
+                        </p>
+                      )}
+
+                      <div className="mt-auto pt-3">
+                        {/* 4. ACTION — the primary visual, not a corner chip. */}
+                        {added && !stale ? (
+                          <PrimaryAction
+                            tone="quiet"
+                            label="Remove"
+                            icon={<X size={13} />}
+                            title={`Remove "${t.name}" from your tools`}
+                            testId={`suite-remove-${t.name}`}
+                            disabled={isAdding}
+                            onClick={() => void remove(t.name)}
+                          />
                         ) : (
-                          <>
-                            <Plus size={12} /> Add
-                          </>
+                          <PrimaryAction
+                            label={
+                              isAdding ? (
+                                <LoaderInline label={stale ? "Updating…" : "Adding…"} />
+                              ) : stale ? (
+                                "Update"
+                              ) : (
+                                "Add"
+                              )
+                            }
+                            icon={
+                              isAdding ? undefined : stale ? (
+                                <RefreshCw size={13} />
+                              ) : (
+                                <Plus size={13} />
+                              )
+                            }
+                            disabled={isAdding}
+                            title={
+                              stale
+                                ? `Replace the saved "${t.name}" with this command`
+                                : `Add "${t.name}"`
+                            }
+                            testId={`suite-add-${t.name}`}
+                            onClick={() => {
+                              setPendingError(null);
+                              setPending(planForSuite(t, stale));
+                            }}
+                          />
                         )}
-                      </button>
-                    )}
-                  </div>
+                      </div>
 
-                  <p className="mt-2 text-[13px] text-zinc-400">{t.blurb}</p>
-                  {stale && (
-                    <p className="mt-2 text-[11px] text-amber-300/90">
-                      The saved copy runs an older command. Update replaces it.
-                    </p>
-                  )}
-
-                  {/* Command tucked away — the use-case leads, the jargon hides. */}
-                  <details className="group mt-3">
-                    <summary className="flex cursor-pointer select-none items-center gap-1 text-[11px] font-medium text-zinc-500 transition-colors hover:text-zinc-300 [&::-webkit-details-marker]:hidden">
-                      <ChevronRight
-                        size={12}
-                        className="transition-transform duration-200 group-open:rotate-90"
-                      />
-                      Show command
-                    </summary>
-                    <div className="mt-2 space-y-2">
-                      <ArgvChips argv={t.command} />
-                      {t.parameters.length > 0 && <ParamChips params={t.parameters} />}
+                      {/* Command tucked away — default closed, jargon last. */}
+                      <details className="group mt-2.5">
+                        <summary className="flex cursor-pointer select-none items-center gap-1 text-[11px] font-medium text-zinc-500 transition-colors hover:text-zinc-300 [&::-webkit-details-marker]:hidden">
+                          <ChevronRight
+                            size={12}
+                            className="transition-transform duration-200 group-open:rotate-90"
+                          />
+                          Show command
+                          <span className="ml-1 font-mono text-zinc-600">{t.name}</span>
+                        </summary>
+                        <div className="mt-2 space-y-2">
+                          <ArgvChips argv={t.command} />
+                          {t.parameters.length > 0 && <ParamChips params={t.parameters} />}
+                        </div>
+                      </details>
                     </div>
-                  </details>
-                </div>
-              );
-            })}
-          </div>
+                  );
+                })}
+
+                {/* THE HOLE IN THE LAST ROW (review §4: "Fill the hole in the
+                    last row (8 items in 3 columns)… or a 'Create custom tool'
+                    tile so the grid does not look unfinished"). It is a real
+                    door, not filler: it jumps to the authoring card below. */}
+                {!filtersActive(filters) && (
+                  <a
+                    href="#teach"
+                    data-testid="create-custom-tile"
+                    className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-white/[0.10] p-4 text-center transition-colors hover:border-accent/40 hover:bg-white/[0.03]"
+                  >
+                    <span className="grid h-9 w-9 place-items-center rounded-full border border-white/[0.10] text-accent-soft">
+                      <Plus size={16} aria-hidden />
+                    </span>
+                    <span className="text-sm font-semibold text-zinc-200">
+                      Create your own
+                    </span>
+                    <span className="text-[11.5px] leading-relaxed text-zinc-500">
+                      Describe a command in plain language and Iron Jarvis builds it.
+                    </span>
+                  </a>
+                )}
+              </div>
+            );
+          })()}
         </Card>
       </Reveal>
 
@@ -1345,11 +1465,19 @@ export default function ToolsPage() {
       <Reveal>
         {/* ?focus=packs lands here — Card doesn't forward refs, so wrap it. */}
         <div ref={packsFocusRef}>
-        <Card title="Plug-ins (MCP)" icon={<Plug size={15} />}>
-          <p className="mb-4 text-sm text-zinc-400">
-            Plug-ins bundle whole new abilities — talking to databases, browsing
-            the web, using cloud apps. Connect one and everything inside it becomes
-            available to your agents.
+        <Card
+          title={`Extensions${servers.length ? ` · ${servers.length} connected` : ""}`}
+          icon={<Plug size={15} />}
+        >
+          {/* "Plug-ins (MCP)" was insider jargon on a first-run screen (review
+              §2). The parenthetical keeps the word for people who know it and
+              states the one thing that decides whether an extension will even
+              start. */}
+          <p className="mb-3 text-sm text-zinc-400">
+            <span className="text-zinc-300">Extensions</span> add bigger abilities —
+            files, repositories, memory, cloud apps. Each one runs as its own
+            program (MCP), so it may need Node or Python, and you choose the
+            folder or account when you enable it.
           </p>
 
           {mcpOk && (
@@ -1363,69 +1491,132 @@ export default function ToolsPage() {
             </div>
           )}
 
-          {/* Auto-approve — a persisted setting; saves the moment it's clicked */}
-          <label className="mb-4 flex cursor-pointer items-start gap-3 rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-3 transition-colors hover:border-white/10">
-            <input
-              type="checkbox"
-              checked={autoApprove}
-              disabled={autoApproveBusy || mcpLoading}
-              onChange={(e) => saveAutoApprove(e.target.checked)}
-              className="mt-0.5 h-4 w-4 shrink-0 accent-accent disabled:opacity-50"
+          {/* PERMISSIONS (review §3). The essay that used to sit inline is
+              behind the global switch's confirm step; the per-extension
+              grants the daemon has always supported are now visible and
+              revocable by name instead of being folded into one checkbox that
+              read as global. See PermissionsPanel for the conflation bug this
+              fixes. */}
+          <div className="mb-4">
+            <PermissionsPanel
+              rows={servers.map((sv) => ({
+                name: sv.name,
+                autoApprove: Boolean(sv.auto_approve),
+                tools: sv.tools_loaded ?? 0,
+              }))}
+              globalOn={mcpData?.auto_approve_global ?? false}
+              busyKey={
+                autoApproveBusy ? "global" : mcpBusy && mcpBusy.startsWith("auto:") ? mcpBusy : null
+              }
+              onToggleServer={(name, next) => {
+                const sv = servers.find((x) => x.name === name);
+                if (sv) void toggleAutoApprove({ ...sv, auto_approve: !next });
+              }}
+              onSetGlobal={(next) => void saveAutoApprove(next)}
             />
-            <span className="min-w-0 text-sm">
-              <span className="font-medium text-zinc-200">
-                Let agents use plug-in tools without asking
-              </span>
-              <span className="mt-1 block text-[12px] leading-relaxed text-zinc-500">
-                Saves the moment you click — no separate save step. This is{" "}
-                <span className="text-amber-200/90">coarse</span>: MCP shares one
-                permission, so it applies to{" "}
-                <span className="text-amber-200/90">every</span> connected plug-in
-                (including ones you connect later), and unchecking it makes every
-                plug-in ask again. Takes effect after the next Iron Jarvis restart.
-                Chat is unaffected — arming a tool there is already your approval.
-              </span>
-            </span>
-          </label>
+          </div>
+
+          {/* VERIFY SETUP (review §8) — the demo server is a diagnostic, so it
+              is an action at the top of Extensions rather than a card sitting
+              between Long-term memory and Git repositories as though it were a
+              capability of its own. */}
+          {(() => {
+            const probe = catalog.find((e) => e.id === VERIFY_PACK_ID);
+            if (!probe) return null;
+            const on = serverNames.has(probe.id);
+            return (
+              <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-white/[0.06] bg-white/[0.015] px-3.5 py-2.5">
+                <Lightbulb size={14} className="shrink-0 text-accent-soft/80" aria-hidden />
+                <span className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-zinc-400">
+                  Not sure extensions work on this machine?{" "}
+                  <span className="text-zinc-300">{probe.name}</span> connects a
+                  harmless test server and reports what loaded.
+                </span>
+                <button
+                  type="button"
+                  data-testid="verify-setup"
+                  disabled={mcpBusy === probe.id || mcpBusy === `del:${probe.id}`}
+                  onClick={() => {
+                    if (on) {
+                      void removeServer(probe.id);
+                      return;
+                    }
+                    setPendingError(null);
+                    setPending(planForPack(probe));
+                  }}
+                  className="shrink-0 rounded-lg border border-white/10 px-2.5 py-1 text-[11.5px] font-medium text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft disabled:opacity-50"
+                >
+                  {mcpBusy === probe.id ? "…" : on ? "Remove test server" : "Verify setup"}
+                </button>
+              </div>
+            );
+          })()}
 
           {/* Catalog grid ------------------------------------------------- */}
-          <div className="mb-2.5">
-            <SectionLabel>Popular plug-ins</SectionLabel>
-          </div>
           {catError ? (
             <p className="text-[13px] text-zinc-600">
               Pack list unavailable{catError.status !== 0 ? ` — ${catError.message}` : ""}.
             </p>
           ) : catalog.length === 0 ? (
-            <p className="text-[13px] text-zinc-600">No plug-ins to show.</p>
+            <p className="text-[13px] text-zinc-600">No extensions to show.</p>
           ) : (
-            <div className="space-y-5">
-              {catalog.some((e) => (e.category ?? "reference") === "reference") && (
-                <div>
-                  <p className="mb-2 text-[12px] text-zinc-500">
-                    Official reference servers — safe, first-party building blocks.
+            (() => {
+              // The verify-setup probe has its own action above; it is a
+              // diagnostic, not a capability, and listing it beside Long-term
+              // memory invited people to install a demo and wonder what it gave
+              // them (review §8).
+              const listed = catalog.filter((e) => e.id !== VERIFY_PACK_ID);
+              const shown = listed.filter((e) =>
+                matchesFilters({
+                  kind: "extension",
+                  id: e.id,
+                  title: e.name,
+                  text: e.description,
+                  caps: packCaps(e.id),
+                  added: serverNames.has(e.id),
+                  needs: e.needs,
+                }),
+              );
+              if (shown.length === 0) {
+                return (
+                  <p className="text-[13px] text-zinc-500">
+                    No extensions match this filter.
                   </p>
-                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                    {catalog
-                      .filter((e) => (e.category ?? "reference") === "reference")
-                      .map(catalogCard)}
-                  </div>
+                );
+              }
+              // ENABLED FIRST (review §1, §8). The old grid split by
+              // reference/integration, which is a provenance question the
+              // source chip now answers on the card — and it buried the one
+              // connected extension among five uninstalled ones.
+              const on = shown.filter((e) => serverNames.has(e.id));
+              const off = shown.filter((e) => !serverNames.has(e.id));
+              return (
+                <div className="space-y-5">
+                  {on.length > 0 && (
+                    <div data-testid="packs-enabled">
+                      <div className="mb-2">
+                        <SectionLabel>Enabled · {on.length}</SectionLabel>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {on.map(catalogCard)}
+                      </div>
+                    </div>
+                  )}
+                  {off.length > 0 && (
+                    <div data-testid="packs-available">
+                      <div className="mb-2">
+                        <SectionLabel>Available to add · {off.length}</SectionLabel>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {off.map(catalogCard)}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
-              {catalog.some((e) => e.category === "integration") && (
-                <div>
-                  <p className="mb-2 text-[12px] text-zinc-500">
-                    Popular integrations — connect an app or service.
-                  </p>
-                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                    {catalog.filter((e) => e.category === "integration").map(catalogCard)}
-                  </div>
-                </div>
-              )}
-            </div>
+              );
+            })()
           )}
 
-          {/* Add from npm / GitHub — the deterministic "paste a package" flow */}
           <div className="mb-2.5 mt-6">
             <SectionLabel>Add from npm or GitHub</SectionLabel>
           </div>
@@ -1660,7 +1851,7 @@ export default function ToolsPage() {
                             title={
                               s.auto_approve
                                 ? "Autonomous agents may run MCP tools without asking. Click to require approval again."
-                                : "Agents ask before each MCP tool call. Click to let them run without asking (applies to ALL connected plug-ins after a restart)."
+                                : "Agents ask before each MCP tool call. Click to let this extension run without asking (takes effect after a restart)."
                             }
                             className={`rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-50 ${
                               s.auto_approve
@@ -1763,6 +1954,207 @@ export default function ToolsPage() {
 
       {/* ------------------------------------------------------------------ */}
       {/*  Manual tool builder (advanced) — the original hand-rolled form    */}
+      {/* ------------------------------------------------------------------ */}
+      <Reveal>
+        {/* `id` is the "Create your own" tile's target in the built-in grid. */}
+        <Card title="Teach Iron Jarvis something new" icon={<Sparkles size={15} />}>
+        <span id="teach" className="sr-only" />
+          <p className="mb-3.5 text-sm text-zinc-400">
+            Say what you want it to be able to do, in plain language. Iron Jarvis
+            designs the command, names it, and saves it — every agent can use it
+            right away.
+          </p>
+          <form onSubmit={generate} className="space-y-3">
+            <textarea
+              value={genDesc}
+              onChange={(e) => setGenDesc(e.target.value)}
+              rows={3}
+              placeholder="e.g. A tool that converts a CSV to a formatted summary table"
+              className="field resize-y"
+            />
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="submit"
+                disabled={genBusy || !genDesc.trim()}
+                className="btn-accent"
+              >
+                {genBusy ? (
+                  <LoaderInline label="Designing your tool…" />
+                ) : (
+                  <>
+                    <Sparkles size={14} /> Build
+                  </>
+                )}
+              </button>
+              <span className="text-[11px] text-zinc-600">
+                Usually takes 5–20 seconds.
+              </span>
+            </div>
+          </form>
+
+          {genError && (
+            <div className="mt-3.5">
+              <ErrorNote>{genError}</ErrorNote>
+            </div>
+          )}
+          {genResult && (
+            <div className="mt-3.5 space-y-3">
+              <SuccessNote>{genResult.reply}</SuccessNote>
+              <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-3.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Wrench size={14} className="text-accent-soft" />
+                  <span className="font-mono text-sm font-semibold text-zinc-100">
+                    {genResult.spec.name}
+                  </span>
+                  <span className="inline-flex items-center gap-1 text-[11px] text-zinc-500">
+                    <Clock size={11} /> {genResult.spec.timeout_seconds}s
+                  </span>
+                </div>
+                {genResult.spec.description && (
+                  <p className="mt-1.5 text-sm text-zinc-400">
+                    {genResult.spec.description}
+                  </p>
+                )}
+                <div className="mt-3">
+                  <ArgvChips argv={genResult.spec.command} />
+                </div>
+                {genResult.spec.parameters.length > 0 && (
+                  <div className="mt-2.5">
+                    <ParamChips params={genResult.spec.parameters} />
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </Card>
+      </Reveal>
+
+      {/* ------------------------------------------------------------------ */}
+      {/*  Capability requests (v1.178.0) — the other direction of the hero  */}
+      {/*  above: there YOU ask for a tool, here an AGENT does. It sits      */}
+      {/*  directly under it for that reason, and above "Your tools" because */}
+      {/*  a pending request is work waiting on the user, not reference.     */}
+      {/*  No <Reveal> wrapper: the card carries its own, so a daemon        */}
+      {/*  without /capability/proposals leaves no empty gap behind.         */}
+      {/* ------------------------------------------------------------------ */}
+      <ProposalsCard />
+
+      {/* ------------------------------------------------------------------ */}
+      {/*  Existing custom tools                                             */}
+      {/* ------------------------------------------------------------------ */}
+      <Reveal>
+        <Card
+          title={`Your tools${tools.length ? ` · ${tools.length}` : ""}`}
+          icon={<Wrench size={15} />}
+        >
+          <p className="mb-3.5 text-sm text-zinc-400">
+            Commands you&apos;ve taught Iron Jarvis — every agent can use them by name.
+          </p>
+          {loading && !data ? (
+            <SkeletonRows rows={4} />
+          ) : tools.length === 0 ? (
+            <Empty icon={<Wrench size={24} />}>
+              You haven&apos;t taught Iron Jarvis any commands yet. Describe one above
+              and hit Build — every agent will be able to use it.
+            </Empty>
+          ) : (
+            <div className="space-y-3">
+              {formError && <ErrorNote>{formError}</ErrorNote>}
+              {tools.map((tool) => (
+                <div
+                  key={tool.name}
+                  className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-3.5 transition-colors hover:border-white/10 hover:bg-white/[0.03]"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Wrench size={14} className="text-accent-soft" />
+                        <span className="font-mono text-sm font-semibold text-zinc-100">
+                          {tool.name}
+                        </span>
+                        <span className="inline-flex items-center gap-1 text-[11px] text-zinc-500">
+                          <Clock size={11} /> {tool.timeout_seconds}s
+                        </span>
+                        {/* A saved command that pastes a parameter into a shell
+                            script is an injection (v1.192.0). The page cannot
+                            fix a stored record, but it must not stay quiet
+                            about one — this reaches user-written and
+                            model-generated tools too, not just the gallery. */}
+                        {interpolatesIntoShell(tool.command) && (
+                          <span
+                            title="This command pastes a parameter value into a shell script, so a value containing a quote or a ';' can run commands of its own. Re-add it from Ready-made tools, or delete it."
+                            className="inline-flex items-center gap-1 rounded-md border border-amber-500/30 bg-amber-500/[0.1] px-1.5 py-0.5 text-[11px] font-medium text-amber-300"
+                          >
+                            <ShieldAlert size={11} /> value goes into a shell
+                          </span>
+                        )}
+                      </div>
+                      {tool.description && (
+                        <p className="mt-1.5 text-sm text-zinc-400">
+                          {tool.description}
+                        </p>
+                      )}
+                    </div>
+                    <ConfirmButton
+                      onConfirm={() => remove(tool.name)}
+                      label="Delete"
+                      title={`Delete tool "${tool.name}"`}
+                    />
+                  </div>
+
+                  {/* argv command preview */}
+                  <div className="mt-3 overflow-x-auto rounded-lg border border-white/[0.06] bg-ink-900/60 px-3 py-2">
+                    <code className="whitespace-pre font-mono text-[12px]">
+                      {tool.command.map((tok, i) => {
+                        const isPh = /^\{.+\}$/.test(tok);
+                        return (
+                          <span
+                            key={i}
+                            className={isPh ? "text-accent-soft" : "text-zinc-300"}
+                          >
+                            {tok}
+                            {i < tool.command.length - 1 ? " " : ""}
+                          </span>
+                        );
+                      })}
+                    </code>
+                  </div>
+
+                  {/* parameter chips */}
+                  {tool.parameters.length > 0 && (
+                    <div className="mt-2.5">
+                      <ParamChips params={tool.parameters} />
+                    </div>
+                  )}
+
+                  <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-600">
+                    <span className="inline-flex items-center gap-1">
+                      <User size={11} />
+                      {tool.created_by || "unknown"}
+                    </span>
+                    <span>·</span>
+                    <span>{timeAgo(tool.created_at)}</span>
+                    {tool.parameters.length > 0 && (
+                      <>
+                        <span>·</span>
+                        <Badge
+                          value={`${tool.parameters.length} param${
+                            tool.parameters.length === 1 ? "" : "s"
+                          }`}
+                          tone="violet"
+                        />
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </Reveal>
+
+      {/* ------------------------------------------------------------------ */}
+      {/*  Tool suite — curated, one-click ready-made tools                  */}
       {/* ------------------------------------------------------------------ */}
       <Reveal>
         <details className="card-surface group">
@@ -1974,6 +2366,22 @@ export default function ToolsPage() {
           </div>
         </details>
       </Reveal>
+
+      {/* THE TRUST MOMENT (review §6). Every Add on this page opens this —
+          built-in and extension alike — so the commitment step is the same
+          shape whichever depth the user picked. */}
+      {pending && (
+        <EnableDialog
+          plan={pending.plan}
+          busy={pendingBusy}
+          error={pendingError}
+          onCancel={() => {
+            setPending(null);
+            setPendingError(null);
+          }}
+          onEnable={(values, auto) => void confirmEnable(values, auto)}
+        />
+      )}
     </PageShell>
   );
 }
