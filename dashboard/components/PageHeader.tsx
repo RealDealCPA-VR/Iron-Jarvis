@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * The module header: the NAME, and the explanation on demand (v1.214.1).
+ * The module title: the NAME, and the explanation on demand (v1.214.1).
  *
  * Reported: "in all the modules there is a title like Overview (with a
  * subtitle that tells you about) … lets make it so the only thing present is
@@ -34,22 +34,31 @@
  * can never reach. So the a11y behaviour is unchanged from when the subtitle
  * was printed in full: the trigger is described by it, always. Only the
  * PIXELS are conditional.
+ *
+ * v1.214.3 — `ModuleTitle` is EXTRACTED from `PageHeader`, because the Agents
+ * module now carries its title inside the thread rail rather than above the
+ * page ("the title Agents should be on the top left inside the card of the
+ * threads"). Two copies of this would be two copies of the a11y wiring, and
+ * the half that is easy to get wrong is the half nobody looks at. One
+ * component, two sizes.
  */
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { motion } from "framer-motion";
 import { Info } from "lucide-react";
 
-export function PageHeader({
+export function ModuleTitle({
   title,
-  subtitle,
-  actions,
+  hint,
+  className = "text-2xl font-semibold tracking-tight text-zinc-50",
+  iconSize = 13,
 }: {
   title: string;
-  /** Kept as a prop on all 38 callers — it is not gone, it is behind the
-   *  title. Absent (Chat, Build) and the title is simply a title. */
-  subtitle?: string;
-  actions?: ReactNode;
+  /** The description, shown on demand. Absent = a plain heading, no trigger. */
+  hint?: string;
+  /** Styling for the <h1> itself — a rail wants it far smaller than a page. */
+  className?: string;
+  iconSize?: number;
 }) {
   const tipId = useId();
   const [open, setOpen] = useState(false);
@@ -76,82 +85,97 @@ export function PageHeader({
   }, [open]);
 
   return (
+    <div ref={hostRef} className="relative">
+      <h1 className={className}>
+        {hint ? (
+          <span
+            // Focusable so Tab reaches it, `role="button"` because clicking
+            // it does something (it toggles the popover) — an interactive
+            // control that claimed no role would be a control a screen
+            // reader user is never told they can operate.
+            role="button"
+            tabIndex={0}
+            aria-describedby={tipId}
+            aria-expanded={open}
+            data-testid="page-title"
+            onMouseEnter={() => setOpen(true)}
+            onMouseLeave={() => setOpen(false)}
+            onFocus={() => setOpen(true)}
+            onBlur={() => setOpen(false)}
+            onClick={() => setOpen((v) => !v)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setOpen((v) => !v);
+              }
+            }}
+            className="group inline-flex cursor-help items-center gap-1.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            {title}
+            {/* THE AFFORDANCE. Without it the popover is a secret: nothing
+                about a bare heading says "there is more here". Quiet by
+                default, accent on hover/focus, and `aria-hidden` because the
+                description it hints at is already wired to the trigger. */}
+            <Info
+              size={iconSize}
+              aria-hidden
+              className={`shrink-0 transition-colors ${
+                open ? "text-accent-soft" : "text-zinc-600 group-hover:text-zinc-400"
+              }`}
+            />
+          </span>
+        ) : (
+          title
+        )}
+      </h1>
+      {hint && (
+        <p
+          id={tipId}
+          role="tooltip"
+          data-testid="page-subtitle"
+          data-open={open ? "true" : "false"}
+          // RENDERED ALWAYS, SHOWN ON DEMAND — see the header note. It is
+          // `absolute`, so an invisible popover costs the page no layout,
+          // which is the whole point of the change; and `opacity` rather
+          // than `hidden`, so it stays resolvable by `aria-describedby`.
+          //
+          // OPAQUE, and that is a correction rather than a preference. The
+          // first cut used the app's dialog surface — `bg-ink-850/95` over
+          // `backdrop-blur-xl` — which is right for a modal, because a modal
+          // sits on a dimming backdrop. This popover sits on nothing, and
+          // driven in a real browser the card behind it read THROUGH the
+          // words. `z-40` for the same reason: it has to clear what it
+          // overlaps, and inside a 17rem rail it overlaps the conversation.
+          className={`absolute left-0 top-full z-40 mt-2 w-max max-w-md rounded-xl border border-white/10 bg-ink-850 px-3 py-2 text-sm leading-relaxed text-zinc-200 shadow-card-hover transition-opacity duration-150 ${
+            open ? "opacity-100" : "pointer-events-none opacity-0"
+          }`}
+        >
+          {hint}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function PageHeader({
+  title,
+  subtitle,
+  actions,
+}: {
+  title: string;
+  /** Kept as a prop on all 38 callers — it is not gone, it is behind the
+   *  title. Absent and the title is simply a title. */
+  subtitle?: string;
+  actions?: ReactNode;
+}) {
+  return (
     <motion.div
       initial={{ opacity: 0, y: -8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
       className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"
     >
-      <div ref={hostRef} className="relative">
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-50">
-          {subtitle ? (
-            <span
-              // Focusable so Tab reaches it, `role="button"` because clicking
-              // it does something (it toggles the popover) — an interactive
-              // control that claimed no role would be a control a screen
-              // reader user is never told they can operate.
-              role="button"
-              tabIndex={0}
-              aria-describedby={tipId}
-              aria-expanded={open}
-              data-testid="page-title"
-              onMouseEnter={() => setOpen(true)}
-              onMouseLeave={() => setOpen(false)}
-              onFocus={() => setOpen(true)}
-              onBlur={() => setOpen(false)}
-              onClick={() => setOpen((v) => !v)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  setOpen((v) => !v);
-                }
-              }}
-              className="group inline-flex cursor-help items-center gap-1.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            >
-              {title}
-              {/* THE AFFORDANCE. Without it the popover is a secret: nothing
-                  about a bare heading says "there is more here". Quiet by
-                  default, accent on hover/focus, and `aria-hidden` because the
-                  description it hints at is already wired to the trigger. */}
-              <Info
-                size={13}
-                aria-hidden
-                className={`shrink-0 transition-colors ${
-                  open ? "text-accent-soft" : "text-zinc-600 group-hover:text-zinc-400"
-                }`}
-              />
-            </span>
-          ) : (
-            title
-          )}
-        </h1>
-        {subtitle && (
-          <p
-            id={tipId}
-            role="tooltip"
-            data-testid="page-subtitle"
-            data-open={open ? "true" : "false"}
-            // RENDERED ALWAYS, SHOWN ON DEMAND — see the header note. It is
-            // `absolute`, so an invisible popover costs the page no layout,
-            // which is the whole point of the change; and `opacity` rather
-            // than `hidden`, so it stays resolvable by `aria-describedby`.
-            // OPAQUE, and that is a correction rather than a preference. The
-            // first cut used the app's dialog surface — `bg-ink-850/95` over
-            // `backdrop-blur-xl` — which is right for a modal, because a modal
-            // sits on a dimming backdrop. This popover sits on nothing: driven
-            // in a real browser it landed over the round-table card and the
-            // thread title behind it was legible THROUGH the description. A
-            // box whose only job is to be read must not composite the page
-            // into the words. `z-40` for the same reason — it has to clear the
-            // cards it will inevitably overlap.
-            className={`absolute left-0 top-full z-40 mt-2 w-max max-w-md rounded-xl border border-white/10 bg-ink-850 px-3 py-2 text-sm leading-relaxed text-zinc-200 shadow-card-hover transition-opacity duration-150 ${
-              open ? "opacity-100" : "pointer-events-none opacity-0"
-            }`}
-          >
-            {subtitle}
-          </p>
-        )}
-      </div>
+      <ModuleTitle title={title} hint={subtitle} />
       {actions && <div className="flex items-center gap-2">{actions}</div>}
     </motion.div>
   );

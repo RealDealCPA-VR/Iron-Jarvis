@@ -37,6 +37,7 @@
 
 import { Check, Plus, Trash2 } from "lucide-react";
 import { ErrorNote } from "@/components/ui";
+import { ModuleTitle } from "@/components/PageHeader";
 import { timeAgo } from "@/lib/format";
 import { FaceStack } from "./FaceStack";
 import { GearFace } from "./RosterStrip";
@@ -56,6 +57,8 @@ export function ThreadRail({
   agentCount,
   pickedName,
   agentsOpen = false,
+  title,
+  titleHint,
 }: {
   threads: ThreadRow[];
   selectedId: string | null;
@@ -75,6 +78,12 @@ export function ThreadRail({
    *  does not vanish along with the roster it used to be made in. */
   pickedName?: string | null;
   agentsOpen?: boolean;
+  /** The MODULE's name, rendered top-left inside this card. Omitted on the
+   *  older-daemon page, which still has a `PageHeader` above the flow — two
+   *  <h1>s on one page is not a tidier header, it is a broken outline. */
+  title?: string;
+  /** Its description, shown on hover/focus/tap (see ModuleTitle). */
+  titleHint?: string;
 }) {
   return (
     // `card-surface` directly rather than <Card>: this rail is a flex COLUMN
@@ -85,7 +94,31 @@ export function ThreadRail({
       data-testid="agents-thread-rail"
       className="card-surface flex h-full min-h-0 flex-col overflow-hidden"
     >
-      <div className="flex shrink-0 items-center justify-between border-b hairline px-3 py-2">
+      {/* THE MODULE'S NAME, TOP LEFT, INSIDE THIS CARD (v1.214.3). Reported:
+          "the title Agents should be on the top left inside the card of the
+          threads and the chat box pushed up so it looks more clean." It used
+          to be a `PageHeader` spanning the conversation column, which pushed
+          the transcript down by a heading's height on every visit and left the
+          rail starting below nothing. With the title in here the two columns
+          begin on the same line and the conversation gets that space back.
+          `ModuleTitle` is the SAME component the other 37 pages use, at a
+          smaller size — the hover/focus/tap popover and its a11y wiring have
+          one implementation, not two. */}
+      {title && (
+        <div className="flex shrink-0 items-start justify-between gap-2 px-3 pt-2.5">
+          <ModuleTitle
+            title={title}
+            hint={titleHint}
+            className="text-[15px] font-semibold tracking-tight text-zinc-50"
+            iconSize={11}
+          />
+        </div>
+      )}
+      <div
+        className={`flex shrink-0 items-center justify-between border-b hairline px-3 pb-2 ${
+          title ? "pt-1.5" : "pt-2"
+        }`}
+      >
         <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
           Round-table · {threads.length}
         </span>

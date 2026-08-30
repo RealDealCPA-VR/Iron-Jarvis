@@ -387,14 +387,56 @@ describe("starting a thread has exactly one door", () => {
     expect(screen.getAllByTitle("Start a new agent thread")).toHaveLength(1);
   });
 
-  it("the header is a title and nothing else", async () => {
-    // The other half of this release's clean-up: the module header carries no
-    // action and no printed subtitle.
+  it("the module's name is top-left INSIDE the thread rail", async () => {
+    // v1.214.3: "the title Agents should be on the top left inside the card of
+    // the threads and the chat box pushed up so it looks more clean." It used
+    // to be a PageHeader spanning the conversation column.
     render(<AgentsPage />);
     await waitFor(() => expect(threadRail()).toBeTruthy());
     const h1 = screen.getByRole("heading", { level: 1 });
     expect(h1.textContent).toContain("Agents");
-    expect(within(h1).queryByRole("link")).toBeNull();
+    expect(threadRail().contains(h1)).toBe(true);
+    // ONE h1. Rendering the rail's title while leaving the page header
+    // standing would be a tidier-looking page with a broken outline.
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
+  it("nothing stands above the conversation any more", async () => {
+    // The other half of the report — "the chat box pushed up". The transcript
+    // used to begin a heading's height below the top of its column while the
+    // rail beside it began at zero, so the two never lined up. Asserted
+    // structurally: the conversation's column carries no heading at all, and
+    // the transcript is its FIRST element.
+    // The column is addressed by TESTID, not by `closest("div.flex-1")` — the
+    // transcript's own wrapper carries `flex-1` too, so that selector stopped
+    // one level short and the assertion could never have seen a heading above
+    // it. Caught by mutation: restoring the page header left this green while
+    // its two siblings went red.
+    render(<AgentsPage />);
+    await waitFor(() => expect(table()).toBeTruthy());
+    const column = screen.getByTestId("agents-conversation");
+    expect(column.contains(table())).toBe(true);
+    expect(within(column).queryByRole("heading")).toBeNull();
+    // ...and the transcript is the column's FIRST child, so nothing at all
+    // stands between the top of the module and the conversation.
+    expect(column.firstElementChild!.contains(table())).toBe(true);
+  });
+
+  it("the name still explains itself on demand, the same way every module does", async () => {
+    // Moving the title must not cost it the popover that replaced the printed
+    // subtitle in v1.214.1 — it is the SAME `ModuleTitle`, so this is really a
+    // guard against someone re-writing a plain <h1> into the rail.
+    render(<AgentsPage />);
+    await waitFor(() => expect(threadRail()).toBeTruthy());
+    const trigger = screen.getByTestId("page-title");
+    const tip = screen.getByTestId("page-subtitle");
+    expect(threadRail().contains(trigger)).toBe(true);
+    expect(tip.getAttribute("data-open")).toBe("false");
+    // ...and it is wired as the title's description even while invisible.
+    expect(trigger.getAttribute("aria-describedby")).toBe(tip.getAttribute("id"));
+    fireEvent.mouseEnter(trigger);
+    await waitFor(() => expect(tip.getAttribute("data-open")).toBe("true"));
+    expect(tip.textContent).toMatch(/round-table of agents/);
   });
 });
 

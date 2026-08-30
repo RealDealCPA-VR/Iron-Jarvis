@@ -126,6 +126,12 @@ function bareRosterName(name: string): string {
   return name;
 }
 
+/** What the module is, said once. The room shows it inside the thread rail
+ *  (v1.214.3); the older-daemon page still shows it through `PageHeader`. Two
+ *  copies of this sentence would be two chances for them to drift. */
+const AGENTS_HINT =
+  "Assemble a round-table of agents — built-in, yours, and agents on other computers — give each a role, and talk it out together.";
+
 /** A sensible thread title when none is typed — named after the panel. */
 function defaultTitle(participants: Participant[]): string {
   const names = participants.map((p) => p.name);
@@ -511,10 +517,7 @@ export default function AgentsPage() {
    * The panel now POINTS at the rail instead of duplicating it.
    */
   const header = (
-    <PageHeader
-      title="Agents"
-      subtitle="Assemble a round-table of agents — built-in, yours, and agents on other computers — give each a role, and talk it out together."
-    />
+    <PageHeader title="Agents" subtitle={AGENTS_HINT} />
   );
 
   const modals = (
@@ -606,6 +609,11 @@ export default function AgentsPage() {
         >
           <div className="shrink-0 md:h-full md:w-[17rem]">
             <ThreadRail
+              // THE MODULE'S NAME LIVES HERE NOW (v1.214.3), which is why the
+              // conversation column below carries no PageHeader: one <h1> per
+              // page, and it is this one.
+              title="Agents"
+              titleHint={AGENTS_HINT}
               threads={threads}
               selectedId={selectedId}
               onSelect={setSelectedId}
@@ -627,12 +635,17 @@ export default function AgentsPage() {
             />
           </div>
 
-          {/* The conversation, with the page header above it in the SAME
-              column — so the left card starts at the top of the module and is
-              genuinely full height, rather than starting under a header that
-              spans the page. */}
-          <div className="flex min-w-0 flex-1 flex-col gap-4 md:min-h-0 md:overflow-y-auto">
-            <Reveal>{header}</Reveal>
+          {/* THE CONVERSATION STARTS AT THE TOP (v1.214.3). "the chat box
+              pushed up so it looks more clean" — the page header used to stand
+              in this column, so the transcript began a heading's height down
+              while the rail beside it began at zero, and the two columns never
+              lined up. The title moved into the rail; this column opens on the
+              work. The notes below are transient by nature: when one is on
+              screen it has earned the space it takes. */}
+          <div
+            data-testid="agents-conversation"
+            className="flex min-w-0 flex-1 flex-col gap-4 md:min-h-0 md:overflow-y-auto"
+          >
             {offline && (
               <Reveal>
                 <OfflineHint />
