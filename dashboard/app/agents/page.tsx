@@ -62,7 +62,7 @@
 // spare them.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { MessagesSquare, Plus } from "lucide-react";
+import { MessagesSquare } from "lucide-react";
 import { del, post, put, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import type { AgentsResponse, ModelOption } from "@/lib/types";
@@ -498,21 +498,22 @@ export default function AgentsPage() {
     reloadRoster();
   }
 
+  /**
+   * ONE DOOR TO A NEW THREAD (v1.214.1). Reported: "in the agents module there
+   * are 2 areas to start a new thread and it should be one."
+   *
+   * There were three. The header carried a "New thread" button, the thread
+   * rail's own header carries "+ New", and the empty conversation panel
+   * carried a third. The rail is the one that keeps it: starting a thread is a
+   * LIST operation, its control belongs on the list, and the rail is on screen
+   * at every width and every state — including the empty one, which is why the
+   * panel's button could go without recreating the dead end v1.180.0 closed.
+   * The panel now POINTS at the rail instead of duplicating it.
+   */
   const header = (
     <PageHeader
       title="Agents"
       subtitle="Assemble a round-table of agents — built-in, yours, and agents on other computers — give each a role, and talk it out together."
-      actions={
-        !threadsMissing ? (
-          <button
-            type="button"
-            onClick={() => setPicker({ mode: "create" })}
-            className="btn-accent"
-          >
-            <Plus size={14} /> New thread
-          </button>
-        ) : undefined
-      }
     />
   );
 
@@ -584,18 +585,9 @@ export default function AgentsPage() {
       <Card>
         <Empty icon={<MessagesSquare size={22} />}>
           {threads.length === 0
-            ? "The round-table is empty. Start a thread and pick which agents sit at the table — a planner, your own skeptic, and an agent on another computer can all talk it out."
-            : "Pick a thread from the rail — or start a new one."}
+            ? "The round-table is empty. Press New in the rail to start a thread and pick who sits at the table — a planner, your own skeptic, and an agent on another computer can all talk it out."
+            : "Pick a thread from the rail — or press New there to start one."}
         </Empty>
-        <div className="flex justify-center pb-2">
-          <button
-            type="button"
-            onClick={() => setPicker({ mode: "create" })}
-            className="btn-accent"
-          >
-            <Plus size={14} /> New thread
-          </button>
-        </div>
       </Card>
     );
 
@@ -774,17 +766,9 @@ export default function AgentsPage() {
                       ) : (
                         <Card>
                           <Empty icon={<MessagesSquare size={22} />}>
-                            Pick a thread from the rail — or start a new one.
+                            Pick a thread from the rail — or press New there to
+                            start one.
                           </Empty>
-                          <div className="flex justify-center pb-2">
-                            <button
-                              type="button"
-                              onClick={() => setPicker({ mode: "create" })}
-                              className="btn-accent"
-                            >
-                              <Plus size={14} /> New thread
-                            </button>
-                          </div>
                         </Card>
                       )}
                     </div>

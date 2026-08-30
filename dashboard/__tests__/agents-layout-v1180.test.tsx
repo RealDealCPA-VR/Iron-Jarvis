@@ -345,6 +345,59 @@ describe("the left card is the THREAD list, and it fills the app", () => {
   });
 });
 
+/* ------------------------------------------- one door to a new thread ----- */
+
+describe("starting a thread has exactly one door", () => {
+  // Reported (v1.214.1): "in the agents module there are 2 areas to start a
+  // new thread and it should be one." There were THREE — the page header, the
+  // thread rail's own header, and the empty conversation panel — and NOTHING
+  // in this suite touched any of them, which is how three of one control
+  // accumulated without anyone noticing. The rail keeps it: starting a thread
+  // is a list operation and the rail is on screen at every width and in every
+  // state, including the empty one.
+
+  it("offers ONE control, and it is in the thread rail", async () => {
+    render(<AgentsPage />);
+    await waitFor(() => expect(threadRail()).toBeTruthy());
+    const doors = screen.getAllByTitle("Start a new agent thread");
+    expect(doors).toHaveLength(1);
+    expect(threadRail().contains(doors[0])).toBe(true);
+    // ...and no second one wearing different words anywhere on the page.
+    expect(screen.queryByRole("button", { name: /New thread/ })).toBeNull();
+  });
+
+  it("that one control opens the panel picker", async () => {
+    render(<AgentsPage />);
+    await waitFor(() => expect(threadRail()).toBeTruthy());
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByTitle("Start a new agent thread"));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.getAttribute("aria-label")).toBe("New agent thread");
+  });
+
+  it("the empty conversation panel points AT the rail instead of repeating it", async () => {
+    // v1.180.0 put a button here so the empty state was "not a dead end". The
+    // dead end it was closing does not exist any more: the rail — with its New
+    // — is beside this panel at md and above it below md, in the same view. So
+    // the panel says where to go rather than being a third of the same button.
+    hooks.api["/agents/threads"] = { threads: [] };
+    render(<AgentsPage />);
+    await waitFor(() => expect(threadRail()).toBeTruthy());
+    expect(screen.getByText(/Press New in the rail/)).toBeTruthy();
+    expect(screen.getAllByTitle("Start a new agent thread")).toHaveLength(1);
+  });
+
+  it("the header is a title and nothing else", async () => {
+    // The other half of this release's clean-up: the module header carries no
+    // action and no printed subtitle.
+    render(<AgentsPage />);
+    await waitFor(() => expect(threadRail()).toBeTruthy());
+    const h1 = screen.getByRole("heading", { level: 1 });
+    expect(h1.textContent).toContain("Agents");
+    expect(within(h1).queryByRole("link")).toBeNull();
+  });
+});
+
 /* ------------------------------------------------ the icon, bottom left ---- */
 
 describe("the agents icon at the foot of the rail", () => {

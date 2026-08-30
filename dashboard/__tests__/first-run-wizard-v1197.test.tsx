@@ -264,8 +264,17 @@ describe("the key door — pre-v1.197.0 mechanics, untouched", () => {
     expect(hooks.posts[0].body).toEqual({ key: "sk-ant-test-123" });
     // THE LATCH, exercised for real: the connect's refreshAll() reloaded
     // /onboarding, which — as in production, where a connected provider ends
-    // first_run — flipped the fixture. The wizard must still be standing.
-    expect((hooks.api["/onboarding"] as { first_run: boolean }).first_run).toBe(false);
+    // first_run — flips the fixture. WAITED FOR, not asserted on the next line
+    // (v1.214.1): the note above renders when the handler's last `await`
+    // resolves, and `refreshAll()` lands in a separate commit after it, so
+    // this was a race that a loaded runner loses. Waiting is also the truer
+    // shape of the claim — the guarantee is "the wizard is still standing
+    // AFTER the flip", which cannot be checked before the flip has happened.
+    await waitFor(() =>
+      expect((hooks.api["/onboarding"] as { first_run: boolean }).first_run).toBe(
+        false,
+      ),
+    );
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
 });
@@ -351,8 +360,21 @@ describe("the finale — finishing lands on /chat", () => {
     // time the celebration renders. A wizard whose show condition re-read
     // first_run unmounted right now, making this button unreachable; the old
     // no-op reload stub could never see that.
-    expect((hooks.api["/onboarding"] as { first_run: boolean }).first_run).toBe(false);
+    // SEEN RED TWICE on a loaded runner before this was awaited (v1.214.1):
+    // the celebration renders as soon as the run reports completed, and the
+    // `refreshAll()` that flips the fixture lands in a later commit. Same
+    // correction as its sibling above, and the same reason it is the better
+    // shape: the button has to survive the flip, so the flip has to have
+    // happened before "still reachable" means anything.
+    await waitFor(() =>
+      expect((hooks.api["/onboarding"] as { first_run: boolean }).first_run).toBe(
+        false,
+      ),
+    );
     expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /Start using Iron Jarvis/ }),
+    ).toBeTruthy();
     fireEvent.click(start);
     await waitFor(() => {
       expect(window.localStorage.getItem("ij_first_run_choice")).toBe("done");
