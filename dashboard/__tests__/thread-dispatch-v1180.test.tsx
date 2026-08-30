@@ -537,7 +537,15 @@ describe("a dispatch is visibly distinct from a chat round", () => {
     await waitFor(() => {
       expect(screen.getByText(/Session started/i)).toBeInTheDocument();
     });
-    const receipt = screen.getByRole("status");
+    // By what it SAYS, not "the status region" (v1.214.0). `LoaderInline` has
+    // carried `role="status"` since v1.185.0, so while a dispatch is in flight
+    // there are two of them and `getByRole` throws on the ambiguity — a race
+    // this file has been winning rather than avoiding. Its sibling in
+    // job-post-v1166 lost it on CI; the shape is fixed here before it can.
+    const receipt = screen
+      .getAllByRole("status")
+      .find((el) => /builder is doing the work/i.test(el.textContent ?? ""))!;
+    expect(receipt).toBeTruthy();
     expect(receipt).toHaveTextContent(/builder is doing the work/i);
     // THE SENTENCE THAT MAKES THE TWO ACTS DISTINGUISHABLE.
     expect(receipt).toHaveTextContent(/not a round/i);

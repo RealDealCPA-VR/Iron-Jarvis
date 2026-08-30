@@ -447,7 +447,15 @@ describe("the Files tab follows the PANE, not the view", () => {
 describe("run-in-pane plumbing (BC2)", () => {
   it("panes register their writers on attach and unregister on dispose", async () => {
     await renderPage();
-    expect(counters.registered).toEqual(expect.arrayContaining(["t1", "t2"]));
+    // WAITED FOR, not asserted on the next line (v1.214.0). Registration
+    // happens in each pane's attach EFFECT, and `renderPage` resolves on the
+    // page being ready rather than on every pane having attached — so with two
+    // panes this was a race against React flushing the second one. Seen red
+    // once under a full parallel suite run, green 6/6 in isolation, which is
+    // exactly the profile of the job-post failure CI reported this release.
+    await waitFor(() =>
+      expect(counters.registered).toEqual(expect.arrayContaining(["t1", "t2"])),
+    );
     expect(counters.unregistered).toEqual([]);
     cleanup();
     expect(counters.unregistered).toEqual(expect.arrayContaining(["t1", "t2"]));

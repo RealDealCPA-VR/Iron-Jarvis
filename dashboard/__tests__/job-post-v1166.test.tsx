@@ -19,6 +19,8 @@ const hooks = vi.hoisted(() => ({
   posts: [] as Array<{ path: string; body: Record<string, unknown> }>,
   postResult: { id: "s-new", status: "active" } as unknown,
   postFail: null as string | null,
+  /** Milliseconds before the mocked POST settles. 0 = immediately. */
+  postDelayMs: 0,
   // Every usePolledApi registration: the mock must CAPTURE the interval, or
   // the cadence is untestable — a mutation turning 8s into 80ms (hammering
   // the daemon) or 800s (a stale list) would pass every dispatch test.
@@ -59,9 +61,18 @@ vi.mock("@/lib/api", () => {
     del: () => Promise.resolve({}),
     post: (path: string, body: Record<string, unknown>) => {
       hooks.posts.push({ path, body });
-      return hooks.postFail
-        ? Promise.reject(new ApiError(hooks.postFail))
-        : Promise.resolve(hooks.postResult);
+      // `postDelayMs` exists for ONE test (see "still in flight" below): it
+      // reproduces a loaded runner, where the card is still busy on the line
+      // after a `postJob`. Zero by default, so every other test keeps the
+      // immediate resolution it was written against.
+      const settle = hooks.postDelayMs
+        ? new Promise((r) => setTimeout(r, hooks.postDelayMs))
+        : Promise.resolve();
+      return settle.then(() =>
+        hooks.postFail
+          ? Promise.reject(new ApiError(hooks.postFail))
+          : hooks.postResult,
+      );
     },
   };
 });
@@ -176,6 +187,7 @@ beforeEach(() => {
   hooks.posts = [];
   hooks.postResult = { id: "s-new", status: "active" };
   hooks.postFail = null;
+  hooks.postDelayMs = 0;
   hooks.pollIntervals = [];
   // jsdom has no scrollIntoView, and these components are rendered inside
   // pages that call it — stubbed so a stray call is never the failure.
@@ -193,7 +205,34 @@ async function postJob(task: string, target?: string) {
   if (target !== undefined)
     fireEvent.change(targetSelect(), { target: { value: target } });
   fireEvent.click(postButton());
+  // NOTE: this resolves when the POST is ISSUED, not when it settles — which
+  // is the whole reason the card can still be in its busy state on the line
+  // after a `postJob`. See `successNote` below.
   await waitFor(() => expect(hooks.posts.length).toBeGreaterThan(0));
+}
+
+/** The live region that SAYS a given thing, rather than "the live region".
+ *
+ *  The card has two of them and they are both correct: `SuccessNote` and the
+ *  Post button's `LoaderInline` (`role="status"` since v1.185.0 — a spinner
+ *  frozen by `prefers-reduced-motion` has to announce itself in words). A
+ *  role query alone therefore names whichever happens to be mounted, which is
+ *  a timing question, and CI answered it "Posting…" once. */
+function queryStatusSaying(text: RegExp): HTMLElement | null {
+  return (
+    screen.queryAllByRole("status").find((el) => text.test(el.textContent ?? "")) ??
+    null
+  );
+}
+
+/** …and the awaited form, for the success line. */
+async function successNote(): Promise<HTMLElement> {
+  let found: HTMLElement | null = null;
+  await waitFor(() => {
+    found = queryStatusSaying(/Job posted/);
+    expect(found).not.toBeNull();
+  });
+  return found!;
 }
 
 /* ------------------------------------------------- jobRequest (the shapes) */
@@ -437,11 +476,50 @@ describe("JobPostCard — dispatch", () => {
     hooks.postResult = { id: "s-42", status: "active" };
     render(<JobPostCard roster={ROSTER} />);
     await postJob("Ship it");
-    const note = await screen.findByRole("status");
+    // NOT `findByRole("status")` — WENT RED ON CI (v1.214.0), and the reason
+    // is worth keeping. TWO live regions carry that role: the SuccessNote
+    // below, and the Post button's `LoaderInline`, which has had
+    // `role="status"` since v1.185.0 (a stopped spinner with no text reads as
+    // an idle icon, so it announces itself). `findByRole` resolves on the
+    // FIRST match that exists, so which one it returns is a race between the
+    // mocked POST settling and the query — and on a loaded runner the answer
+    // is "Posting…". Green here for nine releases, then red once.
+    // Naming the note by what it SAYS removes the ambiguity outright.
+    const note = await successNote();
     expect(note.textContent).toContain("Job posted");
     const link = screen.getByRole("link", { name: "watch it run" });
     expect(link.getAttribute("href")).toBe("/sessions/s-42");
     expect(taskBox().value).toBe("");
+  });
+
+  it("finds the success line even when the POST is still in flight", async () => {
+    /* THE REGRESSION GUARD for the v1.214.0 CI failure, and the reason the two
+     * assertions above name their note by its TEXT.
+     *
+     * The mock above resolves immediately, so on a quiet machine the card is
+     * already out of its busy state by the time the next line runs and a bare
+     * `findByRole("status")` gets the success note by luck. Here the POST
+     * settles LATE, which is what a loaded CI runner does to every test at
+     * once — so the Post button's spinner (`LoaderInline`, `role="status"`
+     * since v1.185.0) is definitely mounted when the query first runs.
+     *
+     * MUTATION-PROVEN: with `await screen.findByRole("status")` in place of
+     * `successNote()`, this fails with exactly the message CI produced —
+     * `expected 'Posting…' to contain 'Job posted'`. */
+    hooks.postResult = { id: "s-slow", status: "active" };
+    const immediate = hooks.postDelayMs;
+    hooks.postDelayMs = 60;
+    try {
+      render(<JobPostCard roster={ROSTER} />);
+      await postJob("Ship it");
+      // The spinner IS up — this is the state the old assertion tripped on.
+      expect(queryStatusSaying(/Posting/)).not.toBeNull();
+      expect(queryStatusSaying(/Job posted/)).toBeNull();
+      const note = await successNote();
+      expect(note.textContent).toContain("Job posted");
+    } finally {
+      hooks.postDelayMs = immediate;
+    }
   });
 
   it("a failed post shows the server's error and no success line", async () => {
@@ -450,7 +528,11 @@ describe("JobPostCard — dispatch", () => {
     await postJob("Ship it");
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("supervisor is busy");
-    expect(screen.queryByRole("status")).toBeNull();
+    // Same ambiguity, from the other side: a bare `queryByRole("status")`
+    // would also match the Post button's spinner, so this asserted "the post
+    // has finished" as much as "there is no success line". It is the second
+    // one that matters here, and it is the one the test's name claims.
+    expect(queryStatusSaying(/Job posted/)).toBeNull();
     // The task box keeps the text — the user should not have to retype it.
     expect(taskBox().value).toBe("Ship it");
   });
