@@ -56,6 +56,8 @@ const api = vi.hoisted(() => {
     fetches: [] as { path: string; method?: string; body?: unknown }[],
     responses: {} as Record<string, unknown>,
     postResponses: {} as Record<string, unknown>,
+    /** Set to a promise to keep POSTs in flight; null resolves immediately. */
+    hold: null as Promise<unknown> | null,
     FakeApiError,
   };
 });
@@ -85,7 +87,11 @@ vi.mock("@/lib/api", () => ({
   post: (path: string, body?: unknown) => {
     api.posts.push({ path, body });
     const r = api.postResponses[path];
-    return Promise.resolve(r === undefined ? { goal: {} } : r);
+    const value = r === undefined ? { goal: {} } : r;
+    // `hold` lets ONE test keep a POST in flight (see "one action at a time").
+    // Null for every other test, which keeps the immediate resolution they
+    // were written against.
+    return api.hold ? api.hold.then(() => value) : Promise.resolve(value);
   },
   put: () => Promise.resolve({}),
   del: () => Promise.resolve({}),
@@ -125,6 +131,9 @@ afterEach(() => {
   api.fetches = [];
   api.responses = {};
   api.postResponses = {};
+  // A held POST must never outlive its test — a leaked hold would leave every
+  // later action in flight forever, and the failure would land somewhere else.
+  api.hold = null;
   bus.events = [];
   window.localStorage.clear(); // "Not now" dismissals must not leak across tests
 });
@@ -357,27 +366,88 @@ describe("Autonomy page — Goals section", () => {
       }),
     ]);
     render(<AutonomyPage />);
-    const active = within(await screen.findByTestId("goal-card-g_active"));
+    await screen.findByTestId("goal-card-g_active");
     const before = goalGets(); // the section + the legacy card both GET /goals
 
-    fireEvent.click(active.getByRole("button", { name: "Run now" }));
+    /* WAIT FOR THE BUTTON, NOT JUST FOR THE POST (v1.214.1).
+     *
+     * ONE ACTION AT A TIME is a deliberate product rule: every goal button in
+     * this section is `disabled={busy !== null}` (app/autonomy/page.tsx), and
+     * `busy` clears in the handler's `finally`, AFTER the action's refetch has
+     * resolved. So an action in flight disables every OTHER goal's buttons
+     * too — and `fireEvent.click` on a disabled button reaches no handler and
+     * fails silently, leaving nothing to wait for.
+     *
+     * MEASURED on CI: this test went red with `[run, pause]` and no `resume`,
+     * because on a loaded runner the pause was still settling when the Resume
+     * click was fired. Waiting for each button to be ENABLED is waiting for
+     * the previous action to finish, which is the thing that actually has to
+     * be true before the next click means anything. */
+    const enabled = (card: string, name: string) => {
+      const btn = within(screen.getByTestId(card)).getByRole("button", { name });
+      return (btn as HTMLButtonElement).disabled === false ? btn : null;
+    };
+    const clickWhenReady = async (card: string, name: string) => {
+      await waitFor(() => expect(enabled(card, name)).not.toBeNull());
+      fireEvent.click(enabled(card, name)!);
+    };
+
+    await clickWhenReady("goal-card-g_active", "Run now");
     await waitFor(() =>
       expect(api.posts.map((p) => p.path)).toContain("/goals/g_active/run"),
     );
     // The action refetches — the card must show the daemon's truth, not a guess.
     await waitFor(() => expect(goalGets()).toBeGreaterThan(before));
 
-    fireEvent.click(active.getByRole("button", { name: "Pause" }));
+    await clickWhenReady("goal-card-g_active", "Pause");
     await waitFor(() =>
       expect(api.posts.map((p) => p.path)).toContain("/goals/g_active/pause"),
     );
 
     // Resume on a tripped goal clears the breaker per the API — same POST verb.
-    const tripped = within(screen.getByTestId("goal-card-g_tripped"));
-    fireEvent.click(tripped.getByRole("button", { name: "Resume" }));
+    await clickWhenReady("goal-card-g_tripped", "Resume");
     await waitFor(() =>
       expect(api.posts.map((p) => p.path)).toContain("/goals/g_tripped/resume"),
     );
+  });
+
+  it("one action at a time — an action in flight disables EVERY goal's buttons", async () => {
+    /* The rule the test above has to wait for, asserted directly rather than
+     * left as a thing that makes another test flaky. `busy` is ONE value for
+     * the whole section (app/autonomy/page.tsx) and every action button reads
+     * `disabled={busy !== null}`, so starting an action on one goal locks the
+     * others too — deliberately: these POST to a daemon that serializes them
+     * anyway, and a half-sent pair of actions is worse than a moment's wait.
+     *
+     * It is asserted ACROSS two goals on purpose. A per-goal lock would look
+     * identical on a single card and is the plausible "fix" someone reaches
+     * for after being surprised by this. */
+    let release: (v: unknown) => void = () => {};
+    const held = new Promise((r) => {
+      release = r;
+    });
+    const realPost = api.postResponses;
+    primeAutonomy([
+      goal({ id: "g_active", name: "Inbox shepherd", state: "active" }),
+      goal({ id: "g_tripped", name: "Ad optimizer", state: "tripped", trip_reason: TRIP_REASON }),
+    ]);
+    render(<AutonomyPage />);
+    const card = await screen.findByTestId("goal-card-g_active");
+    const other = screen.getByTestId("goal-card-g_tripped");
+    const resume = within(other).getByRole("button", {
+      name: "Resume",
+    }) as HTMLButtonElement;
+    expect(resume.disabled).toBe(false);
+
+    // Hold the POST open, so the action is genuinely in flight.
+    api.hold = held;
+    fireEvent.click(within(card).getByRole("button", { name: "Run now" }));
+    await waitFor(() => expect(resume.disabled).toBe(true));
+
+    release({ goal: {} });
+    api.hold = null;
+    await waitFor(() => expect(resume.disabled).toBe(false));
+    expect(realPost).toBe(api.postResponses); // fixtures untouched
   });
 
   it("Stop asks for confirmation — one click arms, only the second POSTs", async () => {
