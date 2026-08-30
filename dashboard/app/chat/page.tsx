@@ -171,9 +171,22 @@ import {
 } from "@/lib/useChatStream";
 import { useRunStream } from "@/lib/useRunStream";
 import { appendDictation } from "@/components/VoiceInput";
-import { Card, Empty, ErrorNote, LoaderInline, OfflineHint } from "@/components/ui";
-import { PageHeader } from "@/components/PageHeader";
+import { Empty, ErrorNote, LoaderInline, OfflineHint } from "@/components/ui";
+import { ModuleTitle } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+
+/** What the module is, said once (v1.215.0). Shown behind the title in the
+ *  thread rail — see `ModuleTitle`. It absorbs the standing blurb that used to
+ *  sit under the page header ("Answers come back in seconds… Attach files or
+ *  drop them anywhere on the page"): that sentence earned its line on a user's
+ *  first visit and cost one on every visit after, which is the whole reason
+ *  this module's chrome is being taken down. The drop affordance it named is
+ *  not lost — the card draws a dashed drop target the moment a file is over
+ *  it, which says the same thing at the moment it matters. */
+const CHAT_HINT =
+  "Talk to Iron Jarvis. Ask anything — quick answers come straight back, and " +
+  "work that needs files, tools or several steps just gets done. Attach files, " +
+  "or drop them anywhere on the page.";
 import { DocPreview } from "@/components/chat/DocPreview";
 import { FilesPanel } from "@/components/terminal/FilesPanel";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
@@ -4847,284 +4860,155 @@ export default function ChatPage() {
     !!curPersona &&
     (!curPersona.builtin || curPersona.overridden);
 
+  /**
+   * THE MODULE'S CONTROLS, which used to be the page header's `actions`
+   * (v1.215.0). Reported: "the buttons that sit above the chat window to
+   * the right, they can be contained in the chat card at the top right and
+   * fixed so scrolling doesnt remove them".
+   *
+   * They now ride in the chat card's own header row — which is a `shrink-0`
+   * child of a flex COLUMN whose only scrolling child is the transcript. So
+   * "fixed" is structural rather than `position: sticky`: there is no
+   * scroll for them to be carried out of.
+   */
+  const chatActions = (
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Voice: hands-free Voice Chat + spoken-replies toggle. */}
+          <button
+            type="button"
+            onClick={toggleVoiceMode}
+            disabled={!dictation.supported}
+            aria-pressed={voiceMode}
+            title={
+              voiceMode
+                ? "End voice chat"
+                : dictation.supported
+                  ? "Voice chat — speak, hear replies, hands-free"
+                  : dictation.reason || "Voice isn't available here yet"
+            }
+            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[13px] font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50 ${
+              voiceMode
+                ? "border-rose-500/50 bg-rose-500/15 text-rose-300 shadow-[0_0_18px_-4px_rgba(244,63,94,0.7)]"
+                : "border-white/10 bg-white/[0.02] text-zinc-400 hover:border-accent/50 hover:text-accent-soft"
+            }`}
+          >
+            <AudioLines size={14} /> {voiceMode ? "Voice on" : "Voice"}
+          </button>
+          {tts.supported && (
+            <button
+              type="button"
+              onClick={tts.toggle}
+              aria-pressed={tts.enabled}
+              title={
+                tts.enabled
+                  ? "Spoken replies on — click to mute"
+                  : "Read replies aloud"
+              }
+              className={`btn-ghost px-2.5 py-1.5 text-[13px] ${
+                tts.enabled ? "text-accent-soft" : ""
+              }`}
+            >
+              {tts.enabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
+            </button>
+          )}
+          {(
+            <div className="flex items-center gap-1">
+              <select
+                aria-label="Persona"
+                value={persona}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setPersonaEditorOpen(false);
+                  if (v === NEW_PERSONA) startNewPersona();
+                  else choosePersona(v);
+                }}
+                disabled={busy}
+                title={
+                  persona === NEW_PERSONA
+                    ? "Create a new persona"
+                    : selectedPersonaDesc || "Persona for replies"
+                }
+                className="field w-auto py-1.5 text-[13px]"
+              >
+                {/* Tolerate a saved persona the daemon no longer lists. */}
+                {!personaNames.includes(persona) && persona !== NEW_PERSONA && (
+                  <option value={persona}>{personaTitle(persona)}</option>
+                )}
+                {personas.map((p) => (
+                  <option key={p.name} value={p.name} title={p.description}>
+                    {p.title || capitalize(p.name)}
+                    {p.overridden ? " ·" : ""}
+                  </option>
+                ))}
+                <option value={NEW_PERSONA}>+ New persona…</option>
+              </select>
+              <button
+                type="button"
+                onClick={() =>
+                  personaEditorOpen ? closePersonaEditor() : openPersonaEditor()
+                }
+                disabled={busy || persona === NEW_PERSONA}
+                aria-pressed={personaEditorOpen}
+                title="Modify this persona"
+                aria-label="Modify persona"
+                className={`btn-ghost px-2.5 py-1.5 text-[13px] ${
+                  personaEditorOpen ? "text-accent-soft" : ""
+                }`}
+              >
+                <Pencil size={14} />
+              </button>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => setWorkspaceOpenPersisted(!workspaceOpen)}
+            aria-pressed={workspaceOpen}
+            title={
+              activeProject
+                ? `Project: ${activeProject.name} — replies ground in its knowledge; the panel holds its folder + files`
+                : workspaceOpen
+                  ? "Hide the project panel"
+                  : "Pick a project (or just a folder) — armed file tools run there"
+            }
+            className={`btn-ghost py-1.5 text-[13px] ${
+              workspaceOpen || workspaceDir || activeProject ? "text-accent-soft" : ""
+            }`}
+          >
+            {activeProject ? <FolderKanban size={14} /> : <PanelRight size={14} />}{" "}
+            <span className="max-w-[9rem] truncate">
+              {activeProject ? activeProject.name : "Project"}
+            </span>
+          </button>
+          {/* NO "New chat" HERE (v1.215.0). The thread rail's header already
+              carries one, and with both surfaces on screen at once that is two
+              buttons doing one thing — the exact duplication the user called
+              out in the Agents module ("there are 2 areas to start a new
+              thread and it should be one"). Starting a conversation is a LIST
+              operation; its control belongs on the list, which is visible at
+              every width and in every state. */}
+        </div>
+  );
+
   return (
-    <PageShell>
+    <PageShell className="space-y-0">
+      {/* NOTHING STANDS ABOVE THE WORK (v1.215.0). The page header and the
+          standing blurb that followed it are both gone: the title moved into
+          the thread rail, its explanation moved behind that title, and the
+          controls moved into the chat card's own header. What is left starts
+          at the top of the module. */}
       <Reveal>
-        <PageHeader
-          title="Chat"
-          subtitle="Talk to Iron Jarvis. Ask anything — quick answers come straight back, and work that needs files, tools or several steps just gets done."
-          actions={
-            <div className="flex flex-wrap items-center gap-2">
-              {/* Voice: hands-free Voice Chat + spoken-replies toggle. */}
-              <button
-                type="button"
-                onClick={toggleVoiceMode}
-                disabled={!dictation.supported}
-                aria-pressed={voiceMode}
-                title={
-                  voiceMode
-                    ? "End voice chat"
-                    : dictation.supported
-                      ? "Voice chat — speak, hear replies, hands-free"
-                      : dictation.reason || "Voice isn't available here yet"
-                }
-                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[13px] font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50 ${
-                  voiceMode
-                    ? "border-rose-500/50 bg-rose-500/15 text-rose-300 shadow-[0_0_18px_-4px_rgba(244,63,94,0.7)]"
-                    : "border-white/10 bg-white/[0.02] text-zinc-400 hover:border-accent/50 hover:text-accent-soft"
-                }`}
-              >
-                <AudioLines size={14} /> {voiceMode ? "Voice on" : "Voice"}
-              </button>
-              {tts.supported && (
-                <button
-                  type="button"
-                  onClick={tts.toggle}
-                  aria-pressed={tts.enabled}
-                  title={
-                    tts.enabled
-                      ? "Spoken replies on — click to mute"
-                      : "Read replies aloud"
-                  }
-                  className={`btn-ghost px-2.5 py-1.5 text-[13px] ${
-                    tts.enabled ? "text-accent-soft" : ""
-                  }`}
-                >
-                  {tts.enabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
-                </button>
-              )}
-              {(
-                <div className="flex items-center gap-1">
-                  <select
-                    aria-label="Persona"
-                    value={persona}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setPersonaEditorOpen(false);
-                      if (v === NEW_PERSONA) startNewPersona();
-                      else choosePersona(v);
-                    }}
-                    disabled={busy}
-                    title={
-                      persona === NEW_PERSONA
-                        ? "Create a new persona"
-                        : selectedPersonaDesc || "Persona for replies"
-                    }
-                    className="field w-auto py-1.5 text-[13px]"
-                  >
-                    {/* Tolerate a saved persona the daemon no longer lists. */}
-                    {!personaNames.includes(persona) && persona !== NEW_PERSONA && (
-                      <option value={persona}>{personaTitle(persona)}</option>
-                    )}
-                    {personas.map((p) => (
-                      <option key={p.name} value={p.name} title={p.description}>
-                        {p.title || capitalize(p.name)}
-                        {p.overridden ? " ·" : ""}
-                      </option>
-                    ))}
-                    <option value={NEW_PERSONA}>+ New persona…</option>
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      personaEditorOpen ? closePersonaEditor() : openPersonaEditor()
-                    }
-                    disabled={busy || persona === NEW_PERSONA}
-                    aria-pressed={personaEditorOpen}
-                    title="Modify this persona"
-                    aria-label="Modify persona"
-                    className={`btn-ghost px-2.5 py-1.5 text-[13px] ${
-                      personaEditorOpen ? "text-accent-soft" : ""
-                    }`}
-                  >
-                    <Pencil size={14} />
-                  </button>
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={() => setWorkspaceOpenPersisted(!workspaceOpen)}
-                aria-pressed={workspaceOpen}
-                title={
-                  activeProject
-                    ? `Project: ${activeProject.name} — replies ground in its knowledge; the panel holds its folder + files`
-                    : workspaceOpen
-                      ? "Hide the project panel"
-                      : "Pick a project (or just a folder) — armed file tools run there"
-                }
-                className={`btn-ghost py-1.5 text-[13px] ${
-                  workspaceOpen || workspaceDir || activeProject ? "text-accent-soft" : ""
-                }`}
-              >
-                {activeProject ? <FolderKanban size={14} /> : <PanelRight size={14} />}{" "}
-                <span className="max-w-[9rem] truncate">
-                  {activeProject ? activeProject.name : "Project"}
-                </span>
-              </button>
-              <button
-                onClick={newChat}
-                disabled={
-                  !started &&
-                  attachments.length === 0 &&
-                  selectedTools.length === 0 &&
-                  activeSkill === ""
-                }
-                className="btn-ghost py-1.5 text-[13px]"
-              >
-                <Plus size={14} /> New chat
-              </button>
-            </div>
-          }
-        />
-      </Reveal>
-
-      <Reveal>
-        <p className="flex items-center gap-2 text-xs text-zinc-500">
-          <Sparkles size={13} className="shrink-0 text-accent-soft/70" />
-          Answers come back in seconds; when something needs real work — files,
-          tools, several steps — it takes that on by itself. Attach files or
-          drop them anywhere on the page.
-        </p>
-      </Reveal>
-
-      {personaEditorOpen && (
-        <Reveal>
-          <div className="rounded-2xl border border-accent/20 bg-accent/[0.03] p-4">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-2 text-[13px] font-medium text-zinc-200">
-                <Pencil size={13} className="shrink-0 text-accent-soft" />
-                <span className="truncate">
-                  {isNewPersona ? "New persona" : `Editing ${personaTitle(persona)}`}
-                </span>
-                {!isNewPersona && curPersona?.builtin && (
-                  <span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">
-                    {curPersona.overridden ? "customized built-in" : "built-in"}
-                  </span>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={closePersonaEditor}
-                aria-label="Close persona editor"
-                title="Close without saving"
-                className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
-              >
-                <X size={15} />
-              </button>
-            </div>
-            <div className="grid gap-3">
-              <div>
-                <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-400">
-                  Title
-                </label>
-                <input
-                  value={draftTitle}
-                  onChange={(e) => {
-                    setDraftTitle(e.target.value);
-                    setPersonaSaved(false);
-                  }}
-                  placeholder="e.g. Tax Accountant"
-                  aria-label="Persona title"
-                  className="field w-full py-1.5 text-[13px]"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-400">
-                  Description <span className="text-zinc-600">(optional)</span>
-                </label>
-                <input
-                  value={draftDescription}
-                  onChange={(e) => {
-                    setDraftDescription(e.target.value);
-                    setPersonaSaved(false);
-                  }}
-                  placeholder="A short line shown in the picker tooltip"
-                  aria-label="Persona description"
-                  className="field w-full py-1.5 text-[13px]"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-400">
-                  Prompt
-                </label>
-                <textarea
-                  value={draftPrompt}
-                  onChange={(e) => {
-                    setDraftPrompt(e.target.value);
-                    setPersonaSaved(false);
-                  }}
-                  rows={5}
-                  aria-label="Persona prompt"
-                  placeholder="You are a sharp tax accountant. Be concise and cite the code section."
-                  className="field w-full resize-y text-[13px]"
-                />
-              </div>
-            </div>
-            {personaError && (
-              <div className="mt-3">
-                <ErrorNote>{personaError}</ErrorNote>
-              </div>
-            )}
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={savePersona}
-                disabled={personaSaving || !draftPrompt.trim()}
-                className="btn-accent py-1.5 text-[13px]"
-              >
-                {personaSaving ? (
-                  <LoaderInline />
-                ) : (
-                  <>
-                    <Save size={14} /> Save
-                  </>
-                )}
-              </button>
-              {personaSaved && (
-                <span className="inline-flex items-center gap-1 text-[12px] text-emerald-400">
-                  <Check size={13} /> Saved
-                </span>
-              )}
-              {showRevertDelete && (
-                <button
-                  type="button"
-                  onClick={deletePersona}
-                  disabled={personaSaving}
-                  title={
-                    curPersona?.builtin
-                      ? "Discard your changes to this built-in persona"
-                      : "Delete this custom persona"
-                  }
-                  className="btn-ghost ml-auto py-1.5 text-[13px] text-rose-300 hover:text-rose-200"
-                >
-                  {curPersona?.builtin ? (
-                    <>
-                      <RotateCcw size={14} /> Revert to default
-                    </>
-                  ) : (
-                    <>
-                      <Trash2 size={14} /> Delete
-                    </>
-                  )}
-                </button>
-              )}
-            </div>
-            <p className="mt-2 text-[11px] text-zinc-500">
-              Unsaved prompt edits still apply to your next message — but Save to keep
-              this persona for next time.
-            </p>
-          </div>
-        </Reveal>
-      )}
-
-      {offline && (
-        <Reveal>
-          <OfflineHint detail="Chat needs it running to reach your agent." />
-        </Reveal>
-      )}
-
-      <Reveal>
-        <div className="flex flex-col gap-4 md:flex-row md:items-start">
+        {/* THE MODULE FILLS THE APP (v1.215.0), the same frame the Agents room
+            uses: `md:h-[calc(100vh-4.5rem)]` is the title bar (2.5rem) plus
+            MainContent's own `py-4` (2rem), so the row ends exactly where the
+            window does and only the panes inside it scroll. `items-stretch`
+            (was `items-start`) is what lets all three columns take that
+            height. Below md it is a plain stack — three columns on a phone is
+            three unusable columns — and each pane carries its own capped
+            height there instead. */}
+        <div
+          data-testid="chat-room"
+          className="flex flex-col gap-4 md:h-[calc(100vh-4.5rem)] md:min-h-[28rem] md:flex-row md:items-stretch"
+        >
           {/* Mobile-only sidebar toggle (the sidebar is always visible on md+). */}
           <button
             type="button"
@@ -5140,10 +5024,26 @@ export default function ChatPage() {
 
           {/* Threads sidebar */}
           <aside
-            className={`${sidebarOpen ? "" : "hidden"} w-full shrink-0 md:block md:w-60`}
+            className={`${sidebarOpen ? "" : "hidden"} w-full shrink-0 md:block md:h-full md:w-60`}
           >
-            <Card pad={false} className="overflow-hidden">
-              <div className="border-b hairline px-3 py-2">
+            <section
+              data-testid="chat-thread-rail"
+              className="card-surface flex h-full min-h-0 flex-col overflow-hidden"
+            >
+              {/* THE MODULE'S NAME, TOP LEFT, INSIDE THIS CARD (v1.215.0) —
+                  "We can also put the chat title in the card on the left just
+                  like in agents". `ModuleTitle` is the SAME component the other
+                  pages use, at a smaller size: the hover/focus/tap popover and
+                  its a11y wiring have one implementation, not two. */}
+              <div className="shrink-0 px-3 pt-2.5">
+                <ModuleTitle
+                  title="Chat"
+                  hint={CHAT_HINT}
+                  className="text-[15px] font-semibold tracking-tight text-zinc-50"
+                  iconSize={11}
+                />
+              </div>
+              <div className="shrink-0 border-b hairline px-3 pb-2 pt-1.5">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
                     Threads
@@ -5173,7 +5073,12 @@ export default function ChatPage() {
                   </div>
                 )}
               </div>
-              <div className="max-h-[70vh] overflow-y-auto p-1.5">
+              {/* THE ONLY SCROLLING PART of the rail. `min-h-0` is load-bearing:
+                  a flex child's default `min-height:auto` refuses to shrink
+                  below its content, so without it the list grows the card past
+                  the bottom of the window. The `max-h` is the narrow-width
+                  floor, where the card has no height to fill. */}
+              <div className="max-h-[50vh] min-h-0 flex-1 overflow-y-auto p-1.5 md:max-h-none">
                 {threadsLoading && threads.length === 0 ? (
                   <div className="space-y-1 p-1">
                     {[0, 1, 2, 3].map((i) => (
@@ -5294,7 +5199,7 @@ export default function ChatPage() {
                   </div>
                 )}
               </div>
-            </Card>
+            </section>
           </aside>
 
           {/* ⋯ thread menu popout (v1.114.0) — portaled to <body> so neither
@@ -5487,8 +5392,148 @@ export default function ChatPage() {
               document.body,
             )}
 
-          {/* Conversation pane */}
-          <div className="min-w-0 flex-1">
+          {/* Conversation pane. A flex COLUMN that fills the row's height, so
+              the card inside it can put a fixed header above a scrolling
+              transcript above a fixed composer — "the cards can be pushed up
+              making the chat seem more minimalistic". */}
+          <div className="flex min-w-0 flex-1 flex-col gap-3 md:min-h-0">
+            {/* Both of these are CONDITIONAL and both moved in here
+                (v1.215.0). Left in the page flow above the row, either one
+                appearing would push a `100vh`-tall layout off the bottom of
+                the window. Inside the column they simply take room from the
+                card, which is what a flex column is for. */}
+            {offline && (
+              <OfflineHint detail="Chat needs it running to reach your agent." />
+            )}
+            {personaEditorOpen && (
+              <Reveal>
+                <div className="rounded-2xl border border-accent/20 bg-accent/[0.03] p-4">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2 text-[13px] font-medium text-zinc-200">
+                      <Pencil size={13} className="shrink-0 text-accent-soft" />
+                      <span className="truncate">
+                        {isNewPersona ? "New persona" : `Editing ${personaTitle(persona)}`}
+                      </span>
+                      {!isNewPersona && curPersona?.builtin && (
+                        <span className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-zinc-400">
+                          {curPersona.overridden ? "customized built-in" : "built-in"}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={closePersonaEditor}
+                      aria-label="Close persona editor"
+                      title="Close without saving"
+                      className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
+                  <div className="grid gap-3">
+                    <div>
+                      <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-400">
+                        Title
+                      </label>
+                      <input
+                        value={draftTitle}
+                        onChange={(e) => {
+                          setDraftTitle(e.target.value);
+                          setPersonaSaved(false);
+                        }}
+                        placeholder="e.g. Tax Accountant"
+                        aria-label="Persona title"
+                        className="field w-full py-1.5 text-[13px]"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-400">
+                        Description <span className="text-zinc-600">(optional)</span>
+                      </label>
+                      <input
+                        value={draftDescription}
+                        onChange={(e) => {
+                          setDraftDescription(e.target.value);
+                          setPersonaSaved(false);
+                        }}
+                        placeholder="A short line shown in the picker tooltip"
+                        aria-label="Persona description"
+                        className="field w-full py-1.5 text-[13px]"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] uppercase tracking-[0.12em] text-zinc-400">
+                        Prompt
+                      </label>
+                      <textarea
+                        value={draftPrompt}
+                        onChange={(e) => {
+                          setDraftPrompt(e.target.value);
+                          setPersonaSaved(false);
+                        }}
+                        rows={5}
+                        aria-label="Persona prompt"
+                        placeholder="You are a sharp tax accountant. Be concise and cite the code section."
+                        className="field w-full resize-y text-[13px]"
+                      />
+                    </div>
+                  </div>
+                  {personaError && (
+                    <div className="mt-3">
+                      <ErrorNote>{personaError}</ErrorNote>
+                    </div>
+                  )}
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={savePersona}
+                      disabled={personaSaving || !draftPrompt.trim()}
+                      className="btn-accent py-1.5 text-[13px]"
+                    >
+                      {personaSaving ? (
+                        <LoaderInline />
+                      ) : (
+                        <>
+                          <Save size={14} /> Save
+                        </>
+                      )}
+                    </button>
+                    {personaSaved && (
+                      <span className="inline-flex items-center gap-1 text-[12px] text-emerald-400">
+                        <Check size={13} /> Saved
+                      </span>
+                    )}
+                    {showRevertDelete && (
+                      <button
+                        type="button"
+                        onClick={deletePersona}
+                        disabled={personaSaving}
+                        title={
+                          curPersona?.builtin
+                            ? "Discard your changes to this built-in persona"
+                            : "Delete this custom persona"
+                        }
+                        className="btn-ghost ml-auto py-1.5 text-[13px] text-rose-300 hover:text-rose-200"
+                      >
+                        {curPersona?.builtin ? (
+                          <>
+                            <RotateCcw size={14} /> Revert to default
+                          </>
+                        ) : (
+                          <>
+                            <Trash2 size={14} /> Delete
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                  <p className="mt-2 text-[11px] text-zinc-500">
+                    Unsaved prompt edits still apply to your next message — but Save to keep
+                    this persona for next time.
+                  </p>
+                </div>
+              </Reveal>
+            )}
             {/* Project surface strip — the old project screen's tabs, inside
                 the chat module. Chat stays mounted (hidden) so the thread and
                 composer state survive a Tasks/Board detour untouched. */}
@@ -5517,9 +5562,18 @@ export default function ChatPage() {
                 view={projectView}
               />
             )}
-            <Card
-              pad={false}
-              className={`relative overflow-hidden transition-shadow ${
+            {/* `card-surface` DIRECTLY, not <Card> (v1.215.0). Card wraps its
+                children in an unstyled `<div>` (`ui.tsx`: `{pad ? "p-4" : ""}`),
+                so a flex column declared on the Card had exactly ONE flex child
+                — that wrapper — which sized to its content and left the rest of
+                the column empty. Measured: the card was 828px tall and its
+                content stopped at 740, with 144px of dead space under the
+                composer. The header, the transcript and the composer have to be
+                DIRECT children of the flex column for `flex-1` to divide the
+                height between them. */}
+            <section
+              data-testid="chat-card"
+              className={`card-surface relative flex h-full min-h-0 flex-col overflow-hidden transition-shadow ${
                 activeProject && projectView !== "chat" ? "hidden" : ""
               }`}
             >
@@ -5570,11 +5624,35 @@ export default function ChatPage() {
                   onClose={() => setCompactionOpen(false)}
                 />
               )}
-              {/* Message thread */}
+              {/* THE CONTROLS, TOP RIGHT, AND THEY DO NOT MOVE (v1.215.0).
+                  Reported: "the buttons that sit above the chat window to the
+                  right, they can be contained in the chat card at the top
+                  right and fixed so scrolling doesnt remove them."
+
+                  NOT `position: sticky` — `shrink-0` in a flex column whose
+                  only scrolling child is the transcript below. There is no
+                  scroll for them to be carried out of, so there is no sticky
+                  edge case to get wrong either (a sticky header inside an
+                  `overflow-hidden` card with a `backdrop-filter` is exactly
+                  the kind of thing this codebase has been bitten by).
+
+                  `justify-end` puts them right; they wrap rather than
+                  overflow, because the persona <select> alone can be wide. */}
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-b hairline px-3 py-2">
+                {chatActions}
+              </div>
+
+              {/* Message thread — THE ONLY SCROLLING PART of the card.
+                  `min-h-0 flex-1` replaces `max-h-[60vh] min-h-[24rem]`: the
+                  transcript now takes exactly the room the header and composer
+                  leave it, instead of a guessed fraction of the viewport that
+                  left dead space under short conversations and a second
+                  scrollbar under long ones. The `max-h` is the narrow-width
+                  floor, where the column has no height to divide up. */}
               <div
                 ref={scrollRef}
                 onScroll={onThreadScroll}
-                className="flex max-h-[60vh] min-h-[24rem] flex-col gap-4 overflow-y-auto p-4 sm:p-5"
+                className="flex max-h-[60vh] min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 sm:p-5 md:max-h-none"
               >
                 {messages.length === 0 && !busy ? (
                   <div className="flex flex-1 flex-col items-center justify-center gap-4">
@@ -7058,7 +7136,7 @@ export default function ChatPage() {
                   )}
                 </div>
               </div>
-            </Card>
+            </section>
           </div>
 
           {/* Project panel (right): the context spine. Pick a project to scope
@@ -7068,7 +7146,7 @@ export default function ChatPage() {
               armed file tools write here and their output surfaces live below. */}
           {workspaceOpen ? (
             <aside
-              className="relative w-full shrink-0 md:w-[var(--rail-w)]"
+              className="relative w-full shrink-0 md:h-full md:w-[var(--rail-w)]"
               style={{ "--rail-w": `${railW}px` } as CSSProperties}
             >
               {/* Drag grip (desktop): widen the preview/workspace column or
@@ -7084,7 +7162,10 @@ export default function ChatPage() {
               >
                 <span className="h-12 w-1 rounded-full bg-white/10 transition-colors group-hover/resize:bg-accent/60" />
               </div>
-              <div className="flex h-[26rem] flex-col gap-2 md:h-[60vh]">
+              {/* `md:h-full` (was `md:h-[60vh]`): the third column takes the
+                  row's height like the other two, so the three line up top and
+                  bottom instead of ending at three different places. */}
+              <div className="flex h-[26rem] flex-col gap-2 md:h-full">
                 <div className="shrink-0 rounded-xl border border-white/[0.06] bg-ink-850/60 px-3 py-2">
                   <div className="flex items-center gap-2">
                     <FolderKanban size={13} className="shrink-0 text-accent-soft/80" />
