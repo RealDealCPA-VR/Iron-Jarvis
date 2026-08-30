@@ -38,6 +38,23 @@ cd dashboard && pnpm dev           # dashboard
 
 ## Release flow (how the user receives your work)
 
+**EVERY PUSH GETS A VERSION BUMP. No exceptions, and the exceptions are the
+point.** Not "every user-visible change", not "every product change" — every
+change you push. A test-only fix, a comment, a doc edit, a CI tweak: bump it.
+
+This is a standing instruction from the user, given after v1.214.0 shipped and
+two follow-up commits went to master WITHOUT a bump. The reasoning that
+produced those commits sounded good — "no product code changed, so a bump would
+push an identical installer to the daily driver" — and it is exactly the
+reasoning this rule exists to overrule. Do not re-derive it. The version is how
+the user knows what is on master and what they are running; a commit with no
+version is a change they cannot name, and deciding on their behalf which of
+their changes deserve a number is not your call to make.
+
+So: if you are about to `git push`, you have already edited the three files
+below. If you find yourself writing a commit message that explains why this one
+does not need a bump, stop and bump it.
+
 1. Bump the version in **three files, with ANCHORED edits** (never blanket
    search/replace — it once rewrote a dependency pin): `pyproject.toml`
    (`version = `), `src/iron_jarvis/__init__.py` (`__version__`),
@@ -46,8 +63,10 @@ cd dashboard && pnpm dev           # dashboard
    bump, RUNS THE OFFLINE SUITE AS A GATE (the `suite` job; the installer job
    `needs:` it), PRE-CREATES the tag+release (electron-builder 422s otherwise),
    builds the frozen daemon + installer, publishes `Iron-Jarvis-Setup-X.Y.Z.exe`
-   + blockmap + `latest.yml` (~35 min now that the gate runs first; a push with
-   NO version bump still costs nothing — the gate script skips the suite too).
+   + blockmap + `latest.yml` (~35 min now that the gate runs first). A push with
+   no version bump skips the gate AND the installer entirely — which is why an
+   unbumped push is not a cheap shortcut but a change that never reaches the
+   user at all, and why the rule above is absolute.
    **The gate is new in v1.177.0 and this file used to claim it already
    existed.** It did not: `Tests` and `Release` are separate workflows and ran
    CONCURRENTLY, so on v1.176.0 Release published a green installer in 8 minutes
