@@ -23,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { ApiError, post } from "@/lib/api";
+import { Modal } from "@/components/Modal";
 
 type ShareMode = "full" | "compact";
 
@@ -153,17 +154,17 @@ export function ShareChatDialog({
   const tooLong = "too long for this channel — use Copy or a download instead";
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-      onClick={onClose}
+    // PORTALLED (v1.216.1) — same class as the Projects folder picker this
+    // release fixes: a `fixed inset-0` overlay is pinned to the nearest
+    // ancestor with a `backdrop-filter` (every `.card-surface` in this app),
+    // not to the viewport. `Modal` renders into document.body and owns the
+    // backdrop, Escape and the scroll lock.
+    <Modal
+      label={`Share ${title}`}
+      onClose={onClose}
+      className="w-full max-w-[38rem]"
+      testId="share-chat"
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Share ${title}`}
-        onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[80vh] w-full max-w-[38rem] flex-col overflow-hidden rounded-2xl border border-white/10 bg-ink-850/95 shadow-card-hover backdrop-blur-xl"
-      >
         <header className="flex shrink-0 items-center gap-2 border-b hairline px-4 py-3">
           <Share2 size={16} className="text-accent-soft/80" />
           <h2 className="min-w-0 truncate text-[13px] font-semibold tracking-wide text-zinc-200">
@@ -315,7 +316,6 @@ export function ShareChatDialog({
             </p>
           )}
         </footer>
-      </div>
-    </div>
+    </Modal>
   );
 }

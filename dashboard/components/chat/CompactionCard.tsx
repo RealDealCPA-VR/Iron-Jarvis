@@ -32,6 +32,7 @@
 
 import { useEffect } from "react";
 import { EyeOff, Layers, X } from "lucide-react";
+import { Modal } from "@/components/Modal";
 
 /** GET /chat/threads/{id}/compaction — the wire shape (routes/chat.py). */
 export interface CompactionInfo {
@@ -130,15 +131,6 @@ export function CompactionCard({
   info: CompactionInfo;
   onClose: () => void;
 }) {
-  // Escape closes (matches the other modals).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   const claims = (info.stripped_claims ?? []).filter(
     (c) => typeof c === "string" && c.trim().length > 0,
   );
@@ -158,17 +150,17 @@ export function CompactionCard({
   ].filter(Boolean);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Compaction summary"
-      onClick={onClose}
+    // PORTALLED (v1.216.1) — same class as the Projects folder picker this
+    // release fixes: a `fixed inset-0` overlay is pinned to the nearest
+    // ancestor with a `backdrop-filter` (every `.card-surface` in this app),
+    // not to the viewport. `Modal` renders into document.body and owns the
+    // backdrop, Escape and the scroll lock.
+    <Modal
+      label="Compaction summary"
+      onClose={onClose}
+      className="w-full max-w-2xl bg-zinc-900"
+      testId="compaction-modal"
     >
-      <div
-        className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-zinc-900 shadow-2xl shadow-black/50"
-        onClick={(e) => e.stopPropagation()}
-      >
         <div className="flex items-center gap-2 border-b hairline px-4 py-3">
           <Layers size={15} className="shrink-0 text-accent-soft" />
           <h2 className="min-w-0 truncate text-[13.5px] font-medium text-zinc-200">
@@ -237,7 +229,6 @@ export function CompactionCard({
             {meta.join(" · ")}
           </div>
         )}
-      </div>
-    </div>
+    </Modal>
   );
 }

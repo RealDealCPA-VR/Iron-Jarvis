@@ -51,15 +51,25 @@ scope. None is speculative.
   and its `overflow-hidden` clipped the footer (the Save button). Fixed by
   `components/Modal.tsx`, which portals to `document.body` and owns the
   backdrop, Escape and the scroll lock.
-- [ ] **The same trap is latent in six other overlays.** `CompactionCard`,
-  `ShareChatDialog`, `FilePickerModal`, `memory/LongTerm`,
-  `terminal/FilesPanel` and the creative lightbox each write `fixed inset-0`
-  inline rather than going through `Modal`. Whether any of them is currently
-  rendered inside a `.card-surface` was NOT measured — the report was about the
-  Agents module and only that module was driven in a browser. The predicate to
-  check per site is exactly the one above: does the overlay have an ancestor
-  with `backdrop-filter`, `transform`, `filter`, `perspective` or
-  `contain: paint`? The fix, where it bites, is one component swap.
+- [x] **The same trap bit a second surface — PARTLY CLOSED v1.216.1.** The
+  Projects folder picker was reported as "cut off by the top", and it was this
+  exact defect. MEASURED on /projects at 1440x760 with the New-project box
+  open: the overlay was `x=17 y=167 w=1406 h=411` — the `<Card>`, not the
+  window — and the dialog moved from `y=106` to `y=6` when the page scrolled
+  200px, because a `fixed` element pinned to a card travels with it. After the
+  fix: overlay `0,0,1440,760` and the dialog at `y=103` at every scroll
+  position. `FilePickerModal` (6 render sites across documents, filesearch,
+  projects and projects/[id]), `CompactionCard` (proven inside the chat card)
+  and `ShareChatDialog` now go through `Modal`.
+- [ ] **Two overlays still write `fixed inset-0` inline:**
+  `terminal/FilesPanel`'s preview and the creative lightbox. Both were left
+  deliberately, not overlooked: each puts `role="dialog"` on the OVERLAY rather
+  than an inner box and carries its own tab trap (`onKeyDown={trapTab}`), so
+  converting them is a focus-management change rather than a wrapper swap, and
+  neither has been MEASURED as currently affected. The predicate is unchanged:
+  does the overlay have an ancestor with `backdrop-filter`, `transform`,
+  `filter`, `perspective` or `contain: paint`? Drive the surface and read the
+  overlay's `getBoundingClientRect()` — if it is not the viewport, it bites.
 
 - [ ] **v1.213.0 reviewer nits (all bounded, dated 2026-08-24):** Pi/opencode
   usage folds count an unknown hosted vendor as local (fails-open on

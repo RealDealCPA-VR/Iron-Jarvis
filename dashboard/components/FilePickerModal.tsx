@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { ApiError, get } from "@/lib/api";
+import { Modal } from "@/components/Modal";
 import { useApi } from "@/lib/useApi";
 import type { Drive, FsEntry, FsListing } from "@/lib/types";
 
@@ -178,16 +179,6 @@ export function FilePickerModal({
     };
   }, [open, cur, pickFolders]);
 
-  // Escape closes.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
   if (!open) return null;
 
   const heading = title ?? (pickFolders ? "Pick a folder" : "Pick a file");
@@ -208,17 +199,29 @@ export function FilePickerModal({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
-      onClick={onClose}
+    // PORTALLED (v1.216.1). This was `fixed inset-0` written inline, which
+    // everyone reads as "the viewport" — and it was not. Reported: in the
+    // Projects module "the pop-up for selection is being cut off by the top".
+    //
+    // MEASURED against the shipping build, 1440x760, /projects with the
+    // New-project box open:
+    //   overlay   x=17 y=167 w=1406 h=411      (the CARD, not the 1440x760 window)
+    //   dialog    y=106 … and y=6 after scrolling the page 200px
+    // The picker is rendered inside that Card, `.card-surface` carries
+    // `backdrop-filter: blur(18px) saturate(1.5)`, and a non-`none`
+    // backdrop-filter makes an element the CONTAINING BLOCK for its
+    // fixed-position descendants. So the overlay was pinned to the card: it
+    // travelled with the scroll, centred the dialog in a 411px box, and pushed
+    // its top off the screen. `Modal` renders into document.body, where
+    // `fixed` means the viewport, and owns the backdrop, Escape and the
+    // scroll lock. See components/Modal.tsx for the full diagnosis — this is
+    // the fourth surface of the same class this release.
+    <Modal
+      label={heading}
+      onClose={onClose}
+      className="w-full max-w-[34rem]"
+      testId="file-picker"
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={heading}
-        onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[70vh] w-full max-w-[34rem] flex-col overflow-hidden rounded-2xl border border-white/10 bg-ink-850/95 shadow-card-hover backdrop-blur-xl"
-      >
         {/* Header ---------------------------------------------------------- */}
         <header className="flex shrink-0 items-center gap-2 border-b hairline px-4 py-3">
           <FolderOpen size={16} className="text-accent-soft/80" />
@@ -431,7 +434,6 @@ export function FilePickerModal({
             </span>
           )}
         </footer>
-      </div>
-    </div>
+    </Modal>
   );
 }

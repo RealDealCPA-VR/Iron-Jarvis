@@ -194,7 +194,13 @@ describe("CompactionCard", () => {
     render(<CompactionCard info={STANDING} onClose={onClose} />);
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalledTimes(1);
-    fireEvent.keyDown(window, { key: "Escape" });
+    // DISPATCHED ON `document` since v1.216.1. The card is portalled through
+    // `Modal` now, whose Escape listener is on document — and a keydown
+    // dispatched directly ON window never reaches a document listener, because
+    // window sits ABOVE document in the propagation path. Real keystrokes
+    // target the focused element and bubble document → window, so document is
+    // the honest place both to listen and to dispatch.
+    fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 

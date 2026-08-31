@@ -154,6 +154,68 @@ describe("Modal — it leaves the card it was rendered from", () => {
   });
 });
 
+describe("every dialog that lives inside a card (v1.216.1)", () => {
+  /**
+   * THE SECOND REPORT OF THIS CLASS: "in the projects module when i go to
+   * select a folder the pop-up for selection is being cut off by the top."
+   *
+   * MEASURED against the shipping build, /projects with the New-project box
+   * open, 1440x760:
+   *
+   *   overlay   x=17 y=167 w=1406 h=411      ← the CARD, not the window
+   *   dialog    y=106 … and y=6 after scrolling the page 200px
+   *
+   * The picker is rendered inside that `<Card>`, `.card-surface` carries
+   * `backdrop-filter: blur(18px) saturate(1.5)`, and the overlay was therefore
+   * pinned to the card: it travelled with the scroll and centred a 554px
+   * dialog inside a 411px box, pushing its top off the screen.
+   *
+   * After the fix, at scroll 0 / 200 / 400: overlay 0,0,1440,760 and the
+   * dialog at y=103 every time.
+   *
+   * v1.214.0 recorded this class as latent in six other overlays and noted
+   * that none of them had been measured. One of them then bit. These tests
+   * pin the escape for each converted surface, because the fix is invisible
+   * from the JSX — `fixed inset-0` reads correct either way.
+   */
+
+  it("the projects folder picker escapes the card it is rendered in", async () => {
+    const { FilePickerModal } = await import("@/components/FilePickerModal");
+    render(
+      <InACard>
+        <FilePickerModal open onClose={vi.fn()} onPick={vi.fn()} pickFolders />
+      </InACard>,
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(screen.getByTestId("host-card").contains(dialog)).toBe(false);
+    expect(dialog.parentElement?.parentElement).toBe(document.body);
+  });
+
+  it("renders nothing at all when closed", async () => {
+    const { FilePickerModal } = await import("@/components/FilePickerModal");
+    render(
+      <InACard>
+        <FilePickerModal open={false} onClose={vi.fn()} onPick={vi.fn()} />
+      </InACard>,
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("the compaction card escapes the chat card it is rendered in", async () => {
+    const { CompactionCard } = await import("@/components/chat/CompactionCard");
+    render(
+      <InACard>
+        <CompactionCard
+          info={{ found: true, summary: "s", covers: 2, stripped: 0, stripped_claims: [] }}
+          onClose={vi.fn()}
+        />
+      </InACard>,
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(screen.getByTestId("host-card").contains(dialog)).toBe(false);
+  });
+});
+
 describe("the add-agent picker — the popup from the report", () => {
   const catalog = {
     builtin: [{ source: "builtin" as const, name: "builder" }],
