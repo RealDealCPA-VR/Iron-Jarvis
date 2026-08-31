@@ -48,18 +48,48 @@ class CaptureMock(MockLLMAdapter):
 
 
 class _OrderTool(Tool):
-    """A tool that sleeps then records its completion order, so concurrency is
-    observable: with descending delays, completion order REVERSES call order."""
+    """A tool that records that it ran, and — when given a `gate` — proves it
+    ran AT THE SAME TIME as its siblings.
 
-    def __init__(self, name: str, delay: float, completions: list[str]) -> None:
+    THE GATE REPLACED A RACE ON THE CLOCK (2026-08-31). This tool used to take
+    descending delays and the test asserted the completion order was the exact
+    reverse of the call order, on the theory that only concurrency could
+    produce it. CI disagreed:
+
+        AssertionError: assert ['tB', 'tC', 'tA'] == ['tC', 'tB', 'tA']
+
+    The tools ran concurrently — the assertion was simply not entitled to that
+    ordering. `asyncio.sleep` guarantees *at least* the delay, never a finish
+    order, and the deltas here were 10ms while Windows' default timer
+    granularity is ~15.6ms. On a loaded runner (this suite takes 17 minutes
+    across 8 xdist workers) a 10ms gap is inside the scheduler's noise, so the
+    0.02 and 0.01 sleeps can resolve in the same tick or invert.
+
+    A barrier proves the same property with no clock in it at all: every
+    sibling must ARRIVE before any may proceed, so the assertion passes if and
+    only if all three were in flight together. If the runtime ever ran them
+    serially the first would wait forever, which the caller's `wait_for` turns
+    into a clean, fast failure instead of a hang.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        delay: float,
+        completions: list[str],
+        gate: "asyncio.Barrier | None" = None,
+    ) -> None:
         self.name = name
         self.permission_key = name
         self.description = name
         self.input_schema = {"type": "object", "properties": {}}
         self._delay = delay
         self._completions = completions
+        self._gate = gate
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        if self._gate is not None:
+            await self._gate.wait()
         await asyncio.sleep(self._delay)
         self._completions.append(self.name)
         return ToolResult(ok=True, output=f"done:{self.name}")
@@ -82,10 +112,18 @@ def _allow(platform, names: list[str]) -> None:
 
 
 async def _run_three_calls(platform, completions: list[str]) -> CaptureMock:
-    """Register tA/tB/tC + script a turn that calls all three, then run it."""
-    platform.registry.register(_OrderTool("tA", 0.03, completions))
-    platform.registry.register(_OrderTool("tB", 0.02, completions))
-    platform.registry.register(_OrderTool("tC", 0.01, completions))
+    """Register tA/tB/tC behind a shared barrier + script a turn that calls all
+    three, then run it.
+
+    The barrier is what makes concurrency an assertion rather than a hope: the
+    turn cannot finish unless all three tools were in flight at once. The
+    delays that remain are only there to keep the tools genuinely awaiting —
+    nothing reads their ORDER any more (see `_OrderTool`).
+    """
+    gate = asyncio.Barrier(3)
+    platform.registry.register(_OrderTool("tA", 0.03, completions, gate))
+    platform.registry.register(_OrderTool("tB", 0.02, completions, gate))
+    platform.registry.register(_OrderTool("tC", 0.01, completions, gate))
     _allow(platform, ["tA", "tB", "tC"])
 
     adapter = CaptureMock(
@@ -111,7 +149,9 @@ async def _run_three_calls(platform, completions: list[str]) -> CaptureMock:
     agent_def = AgentDefinition(
         type=AgentType.BUILDER, system_prompt="x", tools=["tA", "tB", "tC"]
     )
-    await AgentRuntime(platform).run(session, agent_def)
+    # A serial runtime would park on the barrier forever; the timeout turns
+    # that into a failure with a name instead of a hung worker.
+    await asyncio.wait_for(AgentRuntime(platform).run(session, agent_def), timeout=30)
     return adapter
 
 
@@ -122,10 +162,17 @@ async def test_tool_calls_run_concurrently_and_results_stay_in_call_order(platfo
     completions: list[str] = []
     adapter = await _run_three_calls(platform, completions)
 
-    # Concurrency: with descending delays the FAST call finishes first, so the
-    # completion order is the REVERSE of the call order — only possible if the
-    # three ran together rather than serially.
-    assert completions == ["tC", "tB", "tA"]
+    # CONCURRENCY IS PROVEN BY THE BARRIER, not by which sleep lands first:
+    # `_run_three_calls` gates all three tools on an `asyncio.Barrier(3)`, so
+    # reaching this line at all means the three were in flight together. What
+    # is asserted here is only that each one really ran.
+    #
+    # This used to assert `completions == ["tC", "tB", "tA"]` — the reverse of
+    # the call order — and CI produced `["tB", "tC", "tA"]`. The tools WERE
+    # concurrent; the assertion was claiming an ordering `asyncio.sleep` does
+    # not promise, over deltas (10ms) below the OS timer granularity (~15.6ms
+    # on Windows). See `_OrderTool` for the full note.
+    assert sorted(completions) == ["tA", "tB", "tC"]
 
     # ...yet the tool RESULTS handed to the model on the next turn are in the
     # ORIGINAL call order (the model maps results to calls positionally).
