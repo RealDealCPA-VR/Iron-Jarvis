@@ -25,7 +25,7 @@ import {
   Workflow,
   X,
 } from "lucide-react";
-import { ApiError, get, post, wsUrl } from "@/lib/api";
+import { ApiError, get, patch, post, wsUrl } from "@/lib/api";
 import { waitForStableSize } from "@/lib/layout";
 import {
   CLI_IMAGE_BUDGET_BYTES,
@@ -37,6 +37,7 @@ import {
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 import { outputNotifyAt } from "@/components/terminal/paneStatusCore";
 import type { AiCli, ModelOption, Skill, TerminalInfo } from "@/lib/types";
+import { PaneStateChip, type PaneState } from "@/components/terminal/PaneState";
 
 type AIResult = {
   reply: string;
@@ -277,6 +278,12 @@ function decodeFrame(data: unknown): string {
 export function TerminalPane({
   info,
   focused,
+  paneName,
+  onRenamed,
+  onLaunched,
+  paneState,
+  agentCli,
+  paneStateLine,
   onFocus,
   onClose,
   onWriterReady,
@@ -288,6 +295,19 @@ export function TerminalPane({
 }: {
   info: TerminalInfo;
   focused: boolean;
+  /** The pane's human handle, when it has one — agents address panes by
+   *  it, and it reads better in the header than the shell's name. */
+  paneName?: string | null;
+  /** Told when the user renames this pane, so the page can update its own
+   *  copy without waiting for the next activity poll. */
+  onRenamed?: (name: string) => void;
+  /** Told which CLI was just launched here, for the same reason. */
+  onLaunched?: (cli: string) => void;
+  /** v1.217.0: what the agent occupying this pane is doing. */
+  paneState?: PaneState | null;
+  /** Which coding CLI Build believes occupies this pane. */
+  agentCli?: string | null;
+  paneStateLine?: string | null;
   onFocus: () => void;
   onClose: () => void;
   /** v1.207.0: receives this pane's "type into the live shell" writer on
@@ -435,6 +455,23 @@ export function TerminalPane({
   // Studio's `_studio_cli`). "" = a plain shell — the server falls back to a
   // bare quoted path.
   const [paneCli, setPaneCli] = useState("");
+
+  // --- naming this pane (v1.217.0) -----------------------------------------
+  const [renaming, setRenaming] = useState(false);
+  const [draftName, setDraftName] = useState("");
+  const commitRename = useCallback(() => {
+    setRenaming(false);
+    const next = draftName.trim();
+    if (next === (paneName || "")) return;
+    // Optimistic: the header shows the new name immediately and the daemon is
+    // told after. A rename that waits on a round-trip feels broken on a field
+    // the user is still looking at, and the failure mode is cosmetic — the
+    // next list refresh restores the truth.
+    onRenamed?.(next);
+    patch(`/terminals/${info.id}`, { name: next }).catch(() => {
+      /* offline / pane gone — the list poll is the source of truth */
+    });
+  }, [draftName, paneName, info.id, onRenamed]);
   const installedClis = aiClis.filter((c) => c.installed);
   const notInstalledClis = aiClis.filter((c) => !c.installed);
 
@@ -445,6 +482,14 @@ export function TerminalPane({
     // actually start it (a last look, same as the AI "Run" suggestion).
     ws.send(cli.command);
     setPaneCli(cli.id); // remember it for snippet delivery
+    // …and TELL THE DAEMON (v1.217.0). The launch is typed into an already
+    // running shell, so the server never learns what started — which left the
+    // pane-state classifier's "the catalog knows what it started" path
+    // permanently unreachable and every launched CLI sniffed from scrollback.
+    onLaunched?.(cli.id);
+    patch(`/terminals/${info.id}`, { agent_cli: cli.id }).catch(() => {
+      /* the classifier falls back to sniffing — a worse answer, not a wrong one */
+    });
     termRef.current?.focus();
     setLaunchHint(cli.label);
     window.setTimeout(() => setLaunchHint(null), 5000);
@@ -1097,9 +1142,54 @@ export function TerminalPane({
           size={13}
           className={focused ? "text-accent" : "text-zinc-500"}
         />
-        <span className="shrink-0 font-mono text-[11px] font-semibold text-zinc-200">
-          {info.shell}
-        </span>
+        {/* THE PANE'S NAME, EDITABLE IN PLACE (v1.217.0). Agents address panes
+            by name and the state summary lists them by name, so a name the
+            user cannot set is a feature only an API caller has. Editing here
+            rather than in a dialog because the name IS the header — a modal to
+            change one word would be heavier than the thing it changes. */}
+        {renaming ? (
+          <input
+            autoFocus
+            aria-label="Pane name"
+            value={draftName}
+            onChange={(e) => setDraftName(e.target.value)}
+            onMouseDown={(e) => e.stopPropagation()}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitRename();
+              // Escape ABANDONS — a rename you cannot back out of makes the
+              // field something people avoid clicking.
+              if (e.key === "Escape") {
+                setDraftName(paneName || "");
+                setRenaming(false);
+              }
+            }}
+            placeholder={info.shell}
+            className="field w-28 shrink-0 py-0.5 font-mono text-[11px]"
+          />
+        ) : (
+          <button
+            type="button"
+            data-testid="pane-name"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => {
+              setDraftName(paneName || "");
+              setRenaming(true);
+            }}
+            title={paneName ? "Rename this pane" : "Name this pane"}
+            className="shrink-0 cursor-text rounded px-1 font-mono text-[11px] font-semibold text-zinc-200 hover:bg-white/[0.06]"
+          >
+            {paneName || info.shell}
+          </button>
+        )}
+        {/* WHAT THE AGENT IN HERE IS DOING (v1.217.0). Next to the pane's own
+            name, because it is a fact about this pane rather than about the
+            connection — the ws state below still answers "is it attached".
+            Renders nothing for `unknown`, so a plain shell keeps the header it
+            has always had. */}
+        {paneState && (
+          <PaneStateChip state={paneState} cli={agentCli} line={paneStateLine} />
+        )}
         <span
           className="min-w-0 flex-1 truncate font-mono text-[11px] text-zinc-500"
           title={info.cwd}

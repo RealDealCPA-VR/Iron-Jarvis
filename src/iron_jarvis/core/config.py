@@ -67,6 +67,16 @@ def default_permissions() -> dict[str, str]:
         "web_fetch": "allow",
         "browser_use": "deny",  # computer-control capability — never default-allow
         "mcp_call": "ask",
+        # The Build canvas (v1.217.0). Reading which panes exist and what they
+        # are doing is the same tier as any other read; ACTING on a pane is
+        # not. `pane_send` types into a live terminal and `pane_spawn` starts a
+        # process, so both sit at "ask" AND on the deny floor — an agent
+        # definition may lower them, never raise them.
+        "pane_list": "allow",
+        "pane_read": "allow",
+        "pane_wait": "allow",
+        "pane_send": "ask",
+        "pane_spawn": "ask",
         "create_document": "deny",  # superseded by write_document — fail-closed
         "image_analysis": "deny",  # no tool yet — fail-closed
         "delete_file": "ask",

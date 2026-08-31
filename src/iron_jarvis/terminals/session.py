@@ -6,7 +6,10 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .agent_state import PaneActivity
 
 from ..core.ids import new_id, utcnow
 from .backend import PtyBackend, default_backend
@@ -224,7 +227,43 @@ class TerminalSession:
     def exit_code(self) -> int | None:
         return self.backend.exit_code
 
+    # ---- what the agent in this pane is doing (v1.217.0) ------------------
+    #: What the Launch catalog started here, when it knows ("claude" /
+    #: "codex" / "pi"). Set by the caller; beats sniffing the scrollback.
+    #: None for an ordinary shell.
+    agent_cli: str | None = None
+    #: A human handle for this pane, unique among live panes. Agents address
+    #: panes by name; the id stays the stable machine handle.
+    pane_name: str | None = None
+    #: Identity this pane exports to anything it runs (v1.217.0) — see
+    #: `TerminalManager.create`. A plain dict, not the process environment:
+    #: the shell is already spawned by the time we know the pane's id.
+    pane_env_extra: dict[str, str] | None = None
+
+    def pane_env(self) -> dict[str, str]:
+        """The `IRONJARVIS_*` identity for this pane, or `{}` for a pane that
+        predates it (a restored snapshot, a hand-made session)."""
+        return dict(self.pane_env_extra or {})
+
+    def activity(self, *, seen: bool = True) -> "PaneActivity":
+        """Classify what is happening in this pane, from its own output tail.
+
+        `seen` is a fact about the UI (has the user looked since the last
+        output?), so the caller supplies it — it is the only thing separating
+        `done` from `idle`. See `terminals/agent_state.py` for why an
+        unrecognised pane reports `unknown` rather than `idle`.
+        """
+        from .agent_state import classify
+
+        return classify(
+            self.output_tail(),
+            cli=self.agent_cli,
+            seen=seen,
+            alive=self.alive,
+        )
+
     def info(self) -> dict[str, Any]:
+        act = self.activity()
         return {
             "id": self.id,
             "cwd": self.cwd,
@@ -236,4 +275,11 @@ class TerminalSession:
             "exit_code": self.exit_code,
             "degraded": self.degraded,
             "created_at": self.created_at.isoformat(),
+            # v1.217.0 additive. `state` is never absent and never guesses:
+            # "unknown" is a real answer meaning "we cannot tell", NOT a
+            # missing field and NOT completion.
+            "name": self.pane_name,
+            "agent_cli": act.cli,
+            "state": act.state.value,
+            "state_line": act.line,
         }

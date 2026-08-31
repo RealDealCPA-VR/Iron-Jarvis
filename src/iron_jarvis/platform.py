@@ -671,6 +671,27 @@ def build_platform(
     # panes come back (same id + cwd + prior scrollback, fresh shell).
     terminals = TerminalManager(state_path=config.home / "terminals.json")
 
+    # THE BUILD CANVAS IS ADDRESSABLE (v1.217.0). Agents can see which panes
+    # exist and what each one is doing, read one, open a sibling, type into it,
+    # and wait for it to settle. The manager is injected because ToolContext
+    # deliberately carries no platform handle (the ReplTool pattern).
+    #
+    # REGISTERED HERE, not with the other tools further up: `terminals` is
+    # constructed on the line above, and the earlier block ran before it
+    # existed — the tools would have been handed None and reported the Build
+    # module missing on a machine that has it.
+    #
+    # Best-effort like the REPL: a build without a terminal manager keeps
+    # working, minus these five tools, rather than failing to boot.
+    try:
+        from .tools.pane_tools import PANE_TOOLS
+
+        for _cls in PANE_TOOLS:
+            registry.register(_cls(terminals))
+    except Exception:  # noqa: BLE001 — never let a surface break boot
+        pass
+
+
     # --- Robust feature set ----------------------------------------------
 
     # Secrets vault (built above) — expose its agent tools.

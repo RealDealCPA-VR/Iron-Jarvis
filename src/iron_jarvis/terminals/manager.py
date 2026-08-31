@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import logging
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
+from ..core.ids import new_id
 from .backend import PipeBackend, PtyBackend
 from .session import TerminalSession
 from .shells import resolve_shell
@@ -32,6 +34,20 @@ MAX_DEAD_RETAINED = 10
 #: to reveal itself before trusting it. Only paid ONCE per daemon run (the
 #: result is cached in ``_pty_ok``), so steady-state creates have no extra cost.
 _PTY_VERIFY_SECONDS = 0.7
+
+
+def _with_pane_env(env: dict | None, pane_env: dict[str, str]) -> dict:
+    """`env` plus the pane's identity, preserving the caller's semantics.
+
+    The backends REPLACE the child environment when handed one
+    (`dict(env) if env is not None else os.environ.copy()`), so returning just
+    the pane vars would spawn a shell with no PATH. Copying whichever base the
+    backend would have used keeps behaviour identical for every existing
+    caller and adds four variables on top.
+    """
+    base = dict(env) if env is not None else os.environ.copy()
+    base.update(pane_env)
+    return base
 
 
 class TerminalManager:
@@ -77,6 +93,8 @@ class TerminalManager:
         *,
         backend: PtyBackend | None = None,
         env: dict | None = None,
+        name: str | None = None,
+        agent_cli: str | None = None,
     ) -> TerminalSession:
         """Create, start, and register a new session.
 
@@ -84,7 +102,10 @@ class TerminalManager:
         :func:`resolve_shell`. Raises :class:`RuntimeError` at the cap.
         """
         cwd = cwd or str(Path.home())
-        name, argv = resolve_shell(shell)
+        # `shell_name` (was `name`): the PARAMETER `name` is the pane's
+        # human handle now, and shadowing it here would silently label
+        # every pane after its shell.
+        shell_name, argv = resolve_shell(shell)
         with self._lock:
             # Evict stale dead sessions first so the dict can't grow without bound,
             # then enforce the cap. (Registration happens after the possibly-slow
@@ -97,7 +118,38 @@ class TerminalManager:
                     f"terminal session cap reached ({self.max_sessions})"
                 )
 
-        session = self._spawn(cwd, name, argv, cols, rows, backend, env)
+        # THE PANE KNOWS WHERE IT IS (v1.217.0). A coding CLI started in here
+        # otherwise has no way to tell it is inside Build, which pane it
+        # occupies, or which project folder it was opened against — so a skill
+        # running in it cannot address its siblings and cannot refuse to act
+        # when it is NOT inside Build. Adapted from herdr, which injects
+        # HERDR_WORKSPACE_ID / HERDR_TAB_ID / HERDR_PANE_ID for the same reason
+        # and gates its agent skill on `test "${HERDR_ENV:-}" = 1`.
+        #
+        # THE ID IS MINTED BEFORE THE SPAWN, and that ordering is the feature.
+        # The first cut set these on the session AFTER `_spawn` returned, with
+        # a comment saying they were "applied to anything the pane starts
+        # next" — nothing applied them. `pane_env()` had no consumer anywhere
+        # in the codebase, so the shell (and therefore every CLI the user
+        # launches into it) inherited none of them and a skill gating on
+        # IRONJARVIS_BUILD would have refused to run inside Build forever.
+        pane_id = new_id("term")
+        pane_env = {
+            "IRONJARVIS_BUILD": "1",
+            "IRONJARVIS_PANE_ID": pane_id,
+            "IRONJARVIS_PANE_CWD": cwd,
+        }
+        if name:
+            pane_env["IRONJARVIS_PANE_NAME"] = name
+        if agent_cli:
+            pane_env["IRONJARVIS_PANE_CLI"] = agent_cli
+        session = self._spawn(
+            cwd, shell_name, argv, cols, rows, backend, _with_pane_env(env, pane_env)
+        )
+        session.id = pane_id
+        session.pane_name = name
+        session.agent_cli = agent_cli
+        session.pane_env_extra = pane_env
         with self._lock:
             self._sessions[session.id] = session
         self._persist()  # keep the restart-survival snapshot current
@@ -235,6 +287,13 @@ class TerminalManager:
                         "cwd": s.cwd,
                         "cols": s.cols,
                         "rows": s.rows,
+                        # v1.217.0: the pane's identity is part of the pane.
+                        # Dropping it here would silently un-name every pane
+                        # on restart, and an agent addressing panes by name
+                        # would find none of them after a daemon restart —
+                        # which is exactly when it most needs to.
+                        "name": s.pane_name,
+                        "agent_cli": s.agent_cli,
                         "scrollback_b64": base64.b64encode(sb).decode("ascii"),
                     }
                 )
@@ -266,9 +325,31 @@ class TerminalManager:
             self.purge_dead()
             if sum(1 for s in self._sessions.values() if s.alive) >= self.max_sessions:
                 return None
-        session = self._spawn(cwd, name or "shell", list(argv), cols, rows, backend, env)
-        rid = entry.get("id") or session.id
+        rid = entry.get("id") or new_id("term")
+        pane_name = entry.get("name") or None
+        agent_cli = entry.get("agent_cli") or None
+        pane_env = {
+            "IRONJARVIS_BUILD": "1",
+            "IRONJARVIS_PANE_ID": rid,
+            "IRONJARVIS_PANE_CWD": cwd,
+        }
+        if pane_name:
+            pane_env["IRONJARVIS_PANE_NAME"] = pane_name
+        if agent_cli:
+            pane_env["IRONJARVIS_PANE_CLI"] = agent_cli
+        session = self._spawn(
+            cwd,
+            name or "shell",
+            list(argv),
+            cols,
+            rows,
+            backend,
+            _with_pane_env(env, pane_env),
+        )
         session.id = rid
+        session.pane_name = pane_name
+        session.agent_cli = agent_cli
+        session.pane_env_extra = pane_env
         sb = entry.get("scrollback_b64")
         if sb:
             try:

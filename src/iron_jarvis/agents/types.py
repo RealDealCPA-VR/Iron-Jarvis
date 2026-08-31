@@ -147,6 +147,17 @@ _COLLAB_TOOLS = ["blackboard_post", "blackboard_read", "message_agent", "consult
 # (ask by default; a per-server auto_approve or chat-arming grants it).
 _EXTERNAL_TOOLS = ["mcp:*"]
 
+#: The Build canvas, as seen from an agent (v1.217.0). An agent that can only
+#: `shell` gets a fresh, blind subprocess each time; these let it work WITH the
+#: panes the user is already looking at — list them, read one, start a CLI in a
+#: named pane, type into it, and wait for it to settle or block.
+#:
+#: `pane_send` and `pane_spawn` are on the DENY FLOOR (`tools/permissions.py`),
+#: so carrying them here grants the ABILITY to ask, never unattended reach: the
+#: pane may hold a CLI already authenticated to something this agent never had
+#: to ask for, which is precisely why typing into it stays a human decision.
+_PANE_TOOLS = ["pane_list", "pane_read", "pane_spawn", "pane_send", "pane_wait"]
+
 # A warm, human voice shared across agents. Accumulated lessons are appended to
 # this prompt at runtime (see LearningEngine.apply_to_prompt), so it improves
 # every time the user interacts.
@@ -178,7 +189,14 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
             "done inside your workspace — one concrete action at a time."
         ),
         tools=(
-            _FILE_TOOLS + ["shell"] + _KNOWLEDGE_TOOLS + _SELF_SERVICE_TOOLS
+            # v1.217.0: `_PANE_TOOLS` beside `shell`, and the pairing is the
+            # point — `shell` runs a command in a blind subprocess that dies
+            # with the call, while a pane is a LIVE session the user can see,
+            # already `cd`-ed and often already logged in. A long build, an
+            # interactive CLI, or anything the user may need to answer belongs
+            # in a pane where they can watch it and take over.
+            _FILE_TOOLS + ["shell"] + _PANE_TOOLS + _KNOWLEDGE_TOOLS
+            + _SELF_SERVICE_TOOLS
             + _DOCUMENT_TOOLS + _LEARNING_TOOLS + _COLLAB_TOOLS + _EXTERNAL_TOOLS
         ),
     ),
@@ -306,7 +324,11 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
             # not in the tree. No `mcp:*`: an agent that edits code and runs
             # `shell` gets no extra external reach for a brain it can already
             # read through the LTM pair.
-            _FILE_TOOLS + ["shell"] + ["file_search"] + _BRAIN_TOOLS
+            # v1.217.0: the pane tools for the same reason the maintainer has
+            # `shell` — the suite it runs to verify itself takes minutes, and a
+            # pane is where a run that long can be watched, interrupted, and
+            # answered by the human whose approval `shell` already requires.
+            _FILE_TOOLS + ["shell"] + _PANE_TOOLS + ["file_search"] + _BRAIN_TOOLS
             + _DOCUMENT_TOOLS + _KNOWLEDGE_TOOLS + _LEARNING_TOOLS + _COLLAB_TOOLS
         ),
     ),

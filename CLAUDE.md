@@ -265,6 +265,26 @@ does not need a bump, stop and bump it.
   `tests/test_event_loop_offload_v1175.py` asserts the worker thread AND that
   the loop kept ticking. When a rule cites a class, confirm that class is the
   one the registry actually holds.
+- **An injected value must be injected, and a field must have a way IN**
+  (v1.217.0). Two halves of the same lesson, both found by DRIVING the product
+  rather than reading it. (a) The pane identity (`IRONJARVIS_BUILD`,
+  `_PANE_ID`, `_PANE_CWD`, `_PANE_NAME`, `_PANE_CLI`) was set on the session
+  AFTER the shell was spawned, with a comment claiming it applied to "anything
+  the pane starts next" — nothing applied it, `pane_env()` had no caller in the
+  codebase, and every test passed because every test asked the DICT what it
+  held. The id is now minted before the spawn and the variables are merged into
+  the child environment (`_with_pane_env` — the backends REPLACE the
+  environment when handed one, so the merge must start from the base they would
+  have used or the shell loses its PATH), and
+  `tests/test_pane_identity_v1217.py` asserts the env the BACKEND RECEIVED.
+  (b) `name` was settable only at creation and the New-terminal button never
+  asks; `agent_cli` was known only to the browser, because `launchCli` types
+  into an already-running shell. Both were reachable from `curl` and from
+  nowhere else, which is the Raster Studio lesson restated: a green suite
+  proves the library works, not that a user can reach it. `PATCH
+  /terminals/{id}` is PARTIAL (omitted = keep, `""` = clear) for the same
+  reason the remote-agent update is — a re-post silently destroys the field it
+  does not carry.
 - **Frozen-build verification**: anything touching native deps or subprocess
   spawning MUST be verified in the packaged daemon, not just source. The
   terminals feature shipped dead once because PyInstaller dropped
@@ -368,8 +388,12 @@ does not need a bump, stop and bump it.
 - `agents/` — orchestrator (sessions/reviews/continue), runtime (the
   perceive→act loop), dynamic agents. `providers/` — manager (per-provider
   factories), router (routing/failover), adapters/. `terminals/` — manager
-  (+ restart-survival snapshot), session (scrollback), ai_clis (Launch
-  detection), shells, backend (ConPTY/pipe/Fake).
+  (+ restart-survival snapshot, pane NAME + `agent_cli`, and the pane's
+  `IRONJARVIS_*` identity merged into the shell's own env at spawn), session
+  (scrollback, `activity()`), `agent_state.py` (v1.217.0: the pure
+  tail→`working`/`blocked`/`idle`/`done`/`unknown` classifier), ai_clis (Launch
+  detection), shells, backend (ConPTY/pipe/Fake). `tools/pane_tools.py` is the
+  agent-facing side (list/read/spawn/send/wait; send+spawn on the deny floor).
 - `repl/` — the session NAMESPACE (v1.159.0). `worker.py` is the child:
   stdlib-only (it is spawned from a frozen binary), newline-JSON on
   stdin/stdout, one persistent globals dict, output capped and truncation

@@ -71,6 +71,56 @@ scope. None is speculative.
   `filter`, `perspective` or `contain: paint`? Drive the surface and read the
   overlay's `getBoundingClientRect()` — if it is not the viewport, it bites.
 
+## Build / herdr wave (v1.217.0)
+
+Ported from herdr (a terminal multiplexer built for coding agents) in the app's
+own shape, after the user asked to compare Build against it. What landed: a
+pane-state classifier (`terminals/agent_state.py`), a per-pane chip and a
+"needs you" summary strip, named panes, an injected `IRONJARVIS_*` identity,
+and five agent-facing pane tools on the Builder and Maintainer rosters.
+
+- [x] **`blocked` missed an approval that had no selection caret — FIXED in
+  this wave.** Found by driving a REAL PTY, not by reading the regexes: every
+  phrase pattern keys off wording ("do you want to proceed"), and the one shape
+  rule wanted `❯`, which is absent on unselected rows and sometimes lost with
+  the ANSI. A CLI drawing `Edit src/app.py?` / `  1. Yes` / `  2. No` reported
+  `unknown` — the one wrong answer this feature cannot afford. Now a question
+  plus ≥2 numbered options counts, and BOTH halves are required so ordinary
+  prose ending in "?" cannot arm it.
+- [x] **An ANSWERED approval outranked live work — FIXED in this wave.** Same
+  PTY drive, two commands later: a resolved prompt sat in the scanned window
+  and kept the pane pinned to "needs you" while a spinner ran below it. BLOCKED
+  now loses to any progress printed BELOW it; progress ABOVE it is the turn
+  that led up to the question and still reads as blocked.
+- [x] **The injected identity reached nothing — FIXED in this wave.** The first
+  cut set `pane_env_extra` AFTER the spawn with a comment saying it applied to
+  "anything the pane starts next". Nothing applied it; `pane_env()` had no
+  caller in the codebase. The id is now minted before the spawn and the
+  variables go into the shell's own environment, so every CLI launched in the
+  pane inherits them. `tests/test_pane_identity_v1217.py` asserts the ENV THE
+  BACKEND WAS HANDED, because a dict-shaped assertion is what let the gap
+  through.
+- [x] **`name` and `agent_cli` had no way in from the product — FIXED in this
+  wave.** `name` was settable only at creation and the New-terminal button does
+  not ask for one; `agent_cli` was known only to the browser, because
+  `launchCli` types into an already-running shell. `PATCH /terminals/{id}`
+  (partial, empty string clears) plus an in-header rename and a launch report
+  close both. Same reachability lesson as Raster Studio: a green suite proves
+  the library, not that a user can get to it.
+- [ ] **The "needs you" summary is Build-page-only.** herdr's framing is "never
+  hunt for the stuck one", and a user on Chat or Documents still learns nothing
+  about a blocked pane. A sidebar count is the obvious completion and was left
+  out deliberately: this wave was scoped to the Build module, and it would add
+  a global poll plus an edit to the shared `Sidebar.tsx`. Do it as its own
+  change, with the poll folded into an existing app-wide fetch rather than a
+  new one.
+- [ ] **`seen`-ness is per-browser, so `done` is too.** The daemon reports the
+  settled state as `idle` and the page downgrades it to `done` using its own
+  unseen-output tracking. Two windows open on Build therefore disagree about
+  which panes finished unwatched. Correct for the single-window daily driver
+  and wrong for nothing today; worth naming before anyone moves the downgrade
+  server-side, where it would be wrong for everyone.
+
 - [ ] **v1.213.0 reviewer nits (all bounded, dated 2026-08-24):** Pi/opencode
   usage folds count an unknown hosted vendor as local (fails-open on
   unrecognised, documented convention); Pi CACHE tokens (310M real on this

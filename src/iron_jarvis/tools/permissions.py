@@ -54,7 +54,21 @@ DENY_FLOOR_TOOLS: frozenset[str] = frozenset(
     # Fail-closed at `ask` was already the default for an unknown tool,
     # but without the floor an agent definition could raise it to allow
     # and hand an unattended headless run a live interpreter.
-    {"shell", "browser_use", "web_action", "mcp_call", "repl"}
+    # `pane_send`/`pane_spawn` joined in v1.217.0. `pane_send` types into a
+    # LIVE PTY, which is strictly more reach than `shell`: the shell it types
+    # into is already running, already in a folder, and may already be
+    # authenticated to something the agent never had to ask for. `pane_spawn`
+    # starts a host process. The read-only three (`pane_list`, `pane_read`,
+    # `pane_wait`) are NOT here — they observe and cannot act.
+    {
+        "shell",
+        "browser_use",
+        "web_action",
+        "mcp_call",
+        "repl",
+        "pane_send",
+        "pane_spawn",
+    }
 )
 
 # READ-ONLY web retrieval — classified allow-by-default, same tier as the other

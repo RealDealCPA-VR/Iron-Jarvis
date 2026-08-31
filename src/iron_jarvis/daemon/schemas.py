@@ -672,6 +672,27 @@ class TerminalCreate(BaseModel):
     shell: str | None = None
     cols: int = 80
     rows: int = 24
+    #: v1.217.0 additive. `name` is the pane's human handle (agents address
+    #: panes by it); `agent_cli` is what the caller is about to start in it,
+    #: which beats sniffing the scrollback for the same answer. Both optional
+    #: — an ordinary hand-opened terminal carries neither.
+    name: str | None = None
+    agent_cli: str | None = None
+
+
+class TerminalUpdate(BaseModel):
+    """A PARTIAL update to a live pane (v1.217.0).
+
+    Partial, not a re-POST of the create body: `None` means "leave it", so a
+    rename cannot drop the pane's `agent_cli` and recording a launch cannot
+    wipe the name the user typed. The remote-agent registry learned this the
+    expensive way — a re-post there silently destroyed a credential — and the
+    same shape of bug here would quietly un-name the pane an agent is
+    addressing. To CLEAR a field, send an empty string.
+    """
+
+    name: str | None = None
+    agent_cli: str | None = None
 
 
 class CodeArtifactSave(BaseModel):

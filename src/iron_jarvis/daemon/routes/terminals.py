@@ -15,7 +15,12 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from typing import Any
 
 from ..app import _first_code_block, _ws_token_ok
-from ..schemas import TerminalAIBody, TerminalCreate, TerminalWorkflowBody
+from ..schemas import (
+    TerminalAIBody,
+    TerminalCreate,
+    TerminalUpdate,
+    TerminalWorkflowBody,
+)
 
 #: Screen-snippet uploads (Win+Shift+S -> a Build pane). Both Claude Code and
 #: Codex cap an attached image around 5MB, so accepting more would only hand
@@ -134,14 +139,84 @@ def register(app: FastAPI, d) -> None:
 
         return {"clis": detect_ai_clis()}
 
+    @app.get("/terminals/activity")
+    def terminal_activity() -> dict[str, Any]:
+        """What the agent in each pane is DOING (v1.217.0).
+
+        A SEPARATE, tiny endpoint rather than polling `GET /terminals`: the
+        page loads its terminal list once and then mutates it locally on
+        add/close, so re-polling that list would fight those local edits. This
+        returns only the volatile part, which is exactly the shape the page
+        already uses for its chat-status map.
+
+        `seen` is deliberately NOT decided here. Whether the user has looked at
+        a pane is a fact about the UI, so the daemon reports the settled state
+        as `idle` and the client downgrades it to `done` when it knows the
+        output arrived unwatched (herdr's rule: focusing marks a pane seen, a
+        programmatic read does not).
+        """
+        panes = []
+        for info in d.platform.terminals.list():
+            panes.append(
+                {
+                    "id": info["id"],
+                    "name": info.get("name"),
+                    "agent_cli": info.get("agent_cli"),
+                    "state": info.get("state"),
+                    "state_line": info.get("state_line"),
+                    "alive": info.get("alive"),
+                }
+            )
+        return {"panes": panes}
+
     @app.post("/terminals")
     def create_terminal(body: TerminalCreate) -> dict[str, Any]:
         try:
             session = d.platform.terminals.create(
-                cwd=body.cwd, shell=body.shell, cols=body.cols, rows=body.rows
+                cwd=body.cwd,
+                shell=body.shell,
+                cols=body.cols,
+                rows=body.rows,
+                name=getattr(body, "name", None),
+                agent_cli=getattr(body, "agent_cli", None),
             )
         except RuntimeError as exc:  # session cap reached
             raise HTTPException(status_code=429, detail=str(exc))
+        return session.info()
+
+    @app.patch("/terminals/{term_id}")
+    def update_terminal(term_id: str, body: TerminalUpdate) -> dict[str, Any]:
+        """Rename a pane, or record which CLI was just launched into it.
+
+        Both halves exist because the pane identity had no way IN. `name` was
+        settable only by whoever created the pane — and the Build page's New
+        terminal button does not ask for one — while `agent_cli` was known
+        only to the browser: `launchCli` types the command into an already
+        running shell, so the daemon never learned what started, and the
+        classifier's "the catalog knows what it started" fallback was
+        unreachable from the product. A feature only an API caller can use is
+        not shipped.
+        """
+        session = d.platform.terminals.get(term_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="no such terminal")
+        if body.name is not None:
+            session.pane_name = body.name.strip() or None
+        if body.agent_cli is not None:
+            session.agent_cli = body.agent_cli.strip() or None
+        # The exported identity follows the rename, so a CLI started AFTER it
+        # sees the current name rather than the one the pane was born with.
+        env = dict(session.pane_env_extra or {})
+        for key, value in (
+            ("IRONJARVIS_PANE_NAME", session.pane_name),
+            ("IRONJARVIS_PANE_CLI", session.agent_cli),
+        ):
+            if value:
+                env[key] = value
+            else:
+                env.pop(key, None)
+        session.pane_env_extra = env or None
+        d.platform.terminals.snapshot()  # a rename must survive a restart
         return session.info()
 
     @app.delete("/terminals/{term_id}")

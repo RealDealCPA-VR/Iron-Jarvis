@@ -5,7 +5,7 @@
 // like windows on a desktop), and a directory tree on the right for picking a
 // project folder to open a terminal in. xterm is dynamically imported (no SSR).
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { Rnd } from "react-rnd";
 import {
@@ -23,6 +23,7 @@ import {
 import { ApiError, del, get, post } from "@/lib/api";
 import type { AiCli, ModelOption, Shell, Skill, TerminalInfo } from "@/lib/types";
 import { Card, OfflineHint, ErrorNote, Spinner, ConfirmButton } from "@/components/ui";
+import { usePolledApi } from "@/lib/useApi";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
@@ -33,6 +34,12 @@ import {
   lastLine,
   type PaneChatStatus,
 } from "@/components/terminal/paneStatusCore";
+import {
+  PaneStateSummary,
+  resolveState,
+  type PaneActivity,
+  type PaneState,
+} from "@/components/terminal/PaneState";
 
 // xterm only runs in the browser — never during SSR / `next build`.
 const TerminalPane = dynamic(
@@ -90,6 +97,37 @@ function rectsOverlap(a: Rect, b: Rect, gutter = 6): boolean {
 
 export default function TerminalsPage() {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
+
+  // ---- what each pane's agent is doing (v1.217.0) --------------------------
+  // A SMALL, SEPARATE poll. The terminal list is loaded once and then mutated
+  // locally on add/close, so re-polling it would fight those edits; this asks
+  // only for the volatile part, exactly as `chatStatus` already does for the
+  // hidden chat layer. 2.5s is a human-noticing cadence for "that pane stopped
+  // and needs me", not a progress bar.
+  const { data: activityData } = usePolledApi<{ panes: PaneActivity[] }>(
+    "/terminals/activity",
+    2500,
+  );
+  // A RENAME MUST LAND ON THE FIRST FRAME. The activity poll is the source of
+  // truth for a pane's name, but it runs every 2.5s — long enough that typing
+  // a name and watching the header snap back to the shell reads as a failed
+  // save. These are the local echo, and the poll overwrites them as soon as
+  // the daemon agrees.
+  const [paneOverrides, setPaneOverrides] = useState<
+    Record<string, { name?: string; cli?: string }>
+  >({});
+  const notePaneOverride = useCallback(
+    (id: string, patchIn: { name?: string; cli?: string }) =>
+      setPaneOverrides((prev) => ({ ...prev, [id]: { ...prev[id], ...patchIn } })),
+    [],
+  );
+
+  const paneActivity = useMemo(() => {
+    const m = new Map<string, PaneActivity>();
+    for (const p of activityData?.panes ?? []) m.set(p.id, p);
+    return m;
+  }, [activityData]);
+
   const [shells, setShells] = useState<Shell[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]); // per-pane AI picker
   const [aiClis, setAiClis] = useState<AiCli[]>([]); // per-pane "Launch CLI" menu
@@ -159,6 +197,24 @@ export default function TerminalsPage() {
   // The views map, readable from onOutput callbacks: TerminalPane wires
   // ws.onmessage once per session id, so a closure over `views` would pin
   // the map from that render forever — the ref always holds the latest.
+  /** The summary's rows. Built from the SAME resolve the panes use, so the
+   *  strip can never disagree with the chip on the pane it points at. */
+  const paneSummary = useMemo(
+    () =>
+      terminals
+        .filter((t) => t.alive)
+        .map((t) => {
+          const a = paneActivity.get(t.id);
+          return {
+            id: t.id,
+            name: paneOverrides[t.id]?.name ?? a?.name ?? null,
+            state: resolveState(a?.state, Boolean(unseenTermOutput[t.id])),
+          };
+        })
+        .filter((p) => p.state !== "unknown" && p.state !== "idle"),
+    [terminals, paneActivity, unseenTermOutput, paneOverrides],
+  );
+
   const viewsRef = useRef<Record<string, PaneView>>({});
   viewsRef.current = views;
 
@@ -634,6 +690,18 @@ export default function TerminalsPage() {
         />
       </Reveal>
 
+      {/* NEVER HUNT FOR THE STUCK ONE (v1.217.0). One line, directly under the
+          header, answering the question the canvas could not: which pane
+          stopped and needs a human? Each blocked pane is a button that brings
+          it to the front. It renders ONLY when it has something to say — a
+          strip that is always there becomes furniture, and "0 blocked" is not
+          a status. */}
+      {paneSummary.length > 0 && (
+        <Reveal>
+          <PaneStateSummary panes={paneSummary} onFocus={bringToFront} />
+        </Reveal>
+      )}
+
       {offline && (
         <Reveal>
           <OfflineHint detail="Terminals and the directory tree both need it running." />
@@ -675,6 +743,17 @@ export default function TerminalsPage() {
                     // OUTRANKS mere streaming (it blocks the turn for up to
                     // 180s and needs the user). Terminal side only while the
                     // chat is showing and unseen output arrived.
+                    // WHAT THE AGENT IN THIS PANE IS DOING (v1.217.0). The
+                    // daemon reports the settled state as `idle`; whether the
+                    // user has LOOKED is a fact about this browser, and the
+                    // page already tracks it for the peek strip — so the
+                    // idle→done downgrade reuses that rather than inventing a
+                    // second notion of seen-ness on the server.
+                    const act = paneActivity.get(t.id);
+                    const paneState: PaneState = resolveState(
+                      act?.state,
+                      Boolean(unseenTermOutput[t.id]),
+                    );
                     const status = chatStatus[t.id];
                     const chatBadge =
                       view !== "chat" && status
@@ -776,6 +855,14 @@ export default function TerminalsPage() {
                             <TerminalPane
                               info={t}
                               focused={focusedId === t.id}
+                              paneName={paneOverrides[t.id]?.name ?? act?.name}
+                              paneState={paneState}
+                              agentCli={paneOverrides[t.id]?.cli ?? act?.agent_cli}
+                              paneStateLine={act?.state_line}
+                              onRenamed={(name) =>
+                                notePaneOverride(t.id, { name: name || undefined })
+                              }
+                              onLaunched={(cli) => notePaneOverride(t.id, { cli })}
                               onFocus={() => bringToFront(t.id)}
                               onClose={() => setPendingClose(t.id)}
                               onWriterReady={(w) => registerWriter(t.id, w)}
