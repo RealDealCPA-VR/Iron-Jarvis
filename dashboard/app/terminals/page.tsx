@@ -14,6 +14,7 @@ import {
   LayoutGrid,
   Loader2,
   MessageSquare,
+  PanelLeft,
   PanelLeftOpen,
   PanelRightClose,
   Plus,
@@ -34,8 +35,10 @@ import {
   lastLine,
   type PaneChatStatus,
 } from "@/components/terminal/paneStatusCore";
+import { PaneRail, type RailPane } from "@/components/terminal/PaneRail";
 import {
   PaneStateSummary,
+  displayState,
   resolveState,
   type PaneActivity,
   type PaneState,
@@ -80,6 +83,9 @@ type PaneView = "terminal" | "chat";
 
 const paneViewKey = (id: string) => `ij.pane.view.${id}`;
 
+/** Rail or canvas. Its own key — "ij_term_layout" is the RECT map. */
+const SHAPE_KEY = "ij.build.shape";
+
 // Cascading default (fallback only) so freshly opened panes stagger.
 function cascadeRect(i: number): Rect {
   return { x: 24 + (i % 5) * 34, y: 24 + (i % 5) * 34, width: 620, height: 380 };
@@ -108,6 +114,30 @@ export default function TerminalsPage() {
     "/terminals/activity",
     2500,
   );
+  // HOW BUILD IS LAID OUT (v1.218.0). "rail" is a list of every pane with its
+  // live state and ONE pane in focus; "canvas" is the free-form drag-and-drop
+  // workspace Build has always been. The rail is the default because it is the
+  // shape the state work was for — but the canvas is not deleted: seeing three
+  // panes at once is a real way to work, and taking it away to add a list would
+  // trade one workflow for another rather than adding one.
+  const [shape, setShape] = useState<"rail" | "canvas">("rail");
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(SHAPE_KEY);
+      if (saved === "canvas" || saved === "rail") setShape(saved);
+    } catch {
+      /* private mode / blocked storage — the default stands */
+    }
+  }, []);
+  const chooseShape = useCallback((next: "rail" | "canvas") => {
+    setShape(next);
+    try {
+      window.localStorage.setItem(SHAPE_KEY, next);
+    } catch {
+      /* the choice still applies to this session */
+    }
+  }, []);
+
   // A RENAME MUST LAND ON THE FIRST FRAME. The activity poll is the source of
   // truth for a pane's name, but it runs every 2.5s — long enough that typing
   // a name and watching the header snap back to the shell reads as a failed
@@ -197,6 +227,39 @@ export default function TerminalsPage() {
   // The views map, readable from onOutput callbacks: TerminalPane wires
   // ws.onmessage once per session id, so a closure over `views` would pin
   // the map from that render forever — the ref always holds the latest.
+  /** The RAIL's rows (v1.218.0) — every live pane, in a stable order.
+   *
+   *  Built from the same `resolveState` the panes themselves use, so a row can
+   *  never disagree with the chip inside the pane it selects, and NOT filtered:
+   *  unlike the summary strip, a list that drops the quiet panes is not a list
+   *  of panes. `displayState` is what turns the classifier's silence into a
+   *  row that says something honest — "shell" for a pane with no agent in it,
+   *  "can't tell" for one we cannot read.
+   */
+  const railPanes: RailPane[] = useMemo(
+    () =>
+      terminals
+        .filter((t) => t.alive)
+        .map((t) => {
+          const a = paneActivity.get(t.id);
+          const cli = paneOverrides[t.id]?.cli ?? a?.agent_cli ?? null;
+          return {
+            id: t.id,
+            label:
+              paneOverrides[t.id]?.name ?? a?.name ?? t.shell ?? t.id,
+            state: displayState(
+              resolveState(a?.state, Boolean(unseenTermOutput[t.id])),
+              cli,
+            ),
+            cli,
+            cwd: t.cwd,
+            unseen: Boolean(unseenTermOutput[t.id]),
+            chatApproval: Boolean(chatStatus[t.id]?.approval),
+          };
+        }),
+    [terminals, paneActivity, unseenTermOutput, paneOverrides, chatStatus],
+  );
+
   /** The summary's rows. Built from the SAME resolve the panes use, so the
    *  strip can never disagree with the chip on the pane it points at. */
   const paneSummary = useMemo(
@@ -485,6 +548,22 @@ export default function TerminalsPage() {
   }
 
   // Focus + raise a pane to the front of the stack.
+  /** The pane the rail is showing (v1.218.0).
+   *
+   *  On the canvas, "nothing focused" is a fine state — every pane is on screen
+   *  regardless. In the rail it is not: focus decides what is VISIBLE, so a
+   *  null would render an empty workspace. That is not hypothetical — it is
+   *  every page load (focus starts null) and every close of the focused pane
+   *  (it resets to null). Falling back to the first live pane means the rail
+   *  always has something in it, and the fallback is derived rather than
+   *  written into state so it cannot go stale against the list.
+   */
+  const activeId = useMemo(() => {
+    const live = terminals.filter((t) => t.alive);
+    if (focusedId && live.some((t) => t.id === focusedId)) return focusedId;
+    return live[0]?.id ?? null;
+  }, [terminals, focusedId]);
+
   const bringToFront = useCallback((id: string) => {
     setFocusedId(id);
     zTop.current += 1;
@@ -643,7 +722,23 @@ export default function TerminalsPage() {
           subtitle="Live terminals on a free-form canvas — drag a pane by its header to move it, drag its edges to resize. Pick a project folder on the right and open a terminal there, or hit + to add one."
           actions={
             <div className="flex flex-wrap items-center gap-2">
+              {/* Back to the rail. Only on the canvas — in the rail its own
+                  footer holds the other direction, so the switch always lives
+                  in the shape you are leaving. */}
+              {shape === "canvas" && (
+                <button
+                  type="button"
+                  data-testid="shape-rail"
+                  onClick={() => chooseShape("rail")}
+                  title="Rail — every pane in a list with its state, one in focus"
+                  className="btn-ghost flex items-center gap-1.5 py-1.5 text-[13px]"
+                >
+                  <PanelLeft size={14} />
+                  Rail
+                </button>
+              )}
               {/* Tidy — re-tile every pane into a neat grid when it gets messy. */}
+              {shape === "canvas" && (
               <button
                 type="button"
                 onClick={tidy}
@@ -654,6 +749,7 @@ export default function TerminalsPage() {
                 <LayoutGrid size={14} className="text-accent-soft/80" />
                 Tidy
               </button>
+              )}
               <span className="mx-1 h-5 w-px bg-white/10" />
               <label className="flex items-center gap-2 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                 <SquareTerminal size={13} className="text-accent-soft/70" />
@@ -690,13 +786,13 @@ export default function TerminalsPage() {
         />
       </Reveal>
 
-      {/* NEVER HUNT FOR THE STUCK ONE (v1.217.0). One line, directly under the
-          header, answering the question the canvas could not: which pane
-          stopped and needs a human? Each blocked pane is a button that brings
-          it to the front. It renders ONLY when it has something to say — a
-          strip that is always there becomes furniture, and "0 blocked" is not
-          a status. */}
-      {paneSummary.length > 0 && (
+      {/* NEVER HUNT FOR THE STUCK ONE — the CANVAS's version (v1.217.0, scoped
+          to the canvas in v1.218.0). One line under the header naming the panes
+          that stopped and need a human, each a button that brings one to the
+          front. In the rail this is redundant: the list already shows every
+          pane's state and carries its own jump, and saying it twice is how a
+          surface teaches people to stop reading it. */}
+      {shape === "canvas" && paneSummary.length > 0 && (
         <Reveal>
           <PaneStateSummary panes={paneSummary} onFocus={bringToFront} />
         </Reveal>
@@ -715,7 +811,41 @@ export default function TerminalsPage() {
 
       <Reveal>
         <div className="flex flex-col gap-5 lg:flex-row">
-          {/* Terminals workspace (left / center) — free-form canvas. */}
+          {/* THE RAIL (v1.218.0) — Build's spine. Every pane in one column with
+              its live state; clicking one brings it into focus in the workspace
+              beside it. Hidden on the canvas, which has its own way of showing
+              you everything at once. */}
+          {shape === "rail" && !loading && (
+            <div
+              className="w-full shrink-0 lg:w-56 xl:w-64"
+              style={{ height: "calc(100vh - 12rem)", minHeight: 480 }}
+            >
+              <PaneRail
+                panes={railPanes}
+                focusedId={activeId}
+                onFocus={bringToFront}
+                onClose={(id) => setPendingClose(id)}
+                onNew={() => addTerminal(selectedPath)}
+                busy={busy}
+                footer={
+                  <button
+                    type="button"
+                    data-testid="shape-canvas"
+                    onClick={() => chooseShape("canvas")}
+                    title="Free-form canvas — drag and resize panes, several visible at once"
+                    className="flex w-full items-center gap-2 rounded-xl border border-white/[0.06] px-2 py-1.5 text-[11.5px] text-zinc-500 transition-colors hover:border-white/[0.14] hover:text-zinc-300"
+                  >
+                    <LayoutGrid size={13} className="shrink-0" />
+                    Canvas
+                  </button>
+                }
+              />
+            </div>
+          )}
+
+          {/* The workspace. On the canvas it is a free-form surface of movable
+              panes; in the rail it is one box that every pane fills, with the
+              focused one visible. */}
           <div className="min-w-0 flex-1">
             {loading ? (
               <Card>
@@ -810,32 +940,13 @@ export default function TerminalsPage() {
                         Date.now() - peek.at < TERM_PEEK_QUIET_MS)
                         ? peek.lastLine
                         : null;
-                    return (
-                      <Rnd
-                        key={t.id}
-                        size={{ width: r.width, height: r.height }}
-                        position={{ x: r.x, y: r.y }}
-                        bounds="parent"
-                        minWidth={280}
-                        minHeight={200}
-                        dragHandleClassName="ij-term-drag"
-                        cancel="button, select, input, textarea, .xterm, .xterm-viewport, .xterm-screen"
-                        style={{ zIndex: zOrder[t.id] ?? 1 }}
-                        onMouseDown={() => bringToFront(t.id)}
-                        onDragStart={() => bringToFront(t.id)}
-                        // Free movement: a pane goes exactly where you drop it
-                        // (windows may overlap — the focused one comes to the
-                        // front). No snap-back; use Tidy to re-pack into a grid.
-                        onDragStop={(_e, d) => setRect(t.id, { x: d.x, y: d.y })}
-                        onResizeStop={(_e, _dir, ref, _delta, pos) =>
-                          setRect(t.id, {
-                            x: pos.x,
-                            y: pos.y,
-                            width: ref.offsetWidth,
-                            height: ref.offsetHeight,
-                          })
-                        }
-                      >
+                    // ONE pane body, TWO frames (v1.218.0). Everything below
+                    // — both layers, the toggle, the peek strip, the close
+                    // confirm — is identical in the rail and on the canvas;
+                    // only what holds it differs. Building it once is not
+                    // tidiness: the two frames would drift, and the drift
+                    // would land in the pane the user works in.
+                    const inner = (
                         <div className="relative h-full w-full">
                           {/* Terminal layer — ALWAYS mounted. Flipping to chat
                               hides it with visibility (NEVER display:none and
@@ -856,6 +967,7 @@ export default function TerminalsPage() {
                               info={t}
                               focused={focusedId === t.id}
                               paneName={paneOverrides[t.id]?.name ?? act?.name}
+                              draggable={shape === "canvas"}
                               paneState={paneState}
                               agentCli={paneOverrides[t.id]?.cli ?? act?.agent_cli}
                               paneStateLine={act?.state_line}
@@ -905,7 +1017,11 @@ export default function TerminalsPage() {
                                   : "border-white/[0.07] hover:border-white/[0.14]"
                               }`}
                             >
-                              <header className="ij-term-drag flex shrink-0 cursor-move items-center gap-2 border-b border-white/[0.06] bg-ink-900/60 px-3 py-2">
+                              <header
+                                className={`flex shrink-0 items-center gap-2 border-b border-white/[0.06] bg-ink-900/60 px-3 py-2 ${
+                                  shape === "canvas" ? "ij-term-drag cursor-move" : ""
+                                }`}
+                              >
                                 <MessageSquare
                                   size={13}
                                   className={focusedId === t.id ? "text-accent" : "text-zinc-500"}
@@ -1103,13 +1219,67 @@ export default function TerminalsPage() {
                             </div>
                           )}
                         </div>
-                      </Rnd>
+                    );
+                    if (shape === "canvas") {
+                      return (
+                        <Rnd
+                          key={t.id}
+                          size={{ width: r.width, height: r.height }}
+                          position={{ x: r.x, y: r.y }}
+                          bounds="parent"
+                          minWidth={280}
+                          minHeight={200}
+                          dragHandleClassName="ij-term-drag"
+                          cancel="button, select, input, textarea, .xterm, .xterm-viewport, .xterm-screen"
+                          style={{ zIndex: zOrder[t.id] ?? 1 }}
+                          onMouseDown={() => bringToFront(t.id)}
+                          onDragStart={() => bringToFront(t.id)}
+                          // Free movement: a pane goes exactly where you drop
+                          // it (windows may overlap — the focused one comes to
+                          // the front). No snap-back; Tidy re-packs the grid.
+                          onDragStop={(_e, d) => setRect(t.id, { x: d.x, y: d.y })}
+                          onResizeStop={(_e, _dir, ref, _delta, pos) =>
+                            setRect(t.id, {
+                              x: pos.x,
+                              y: pos.y,
+                              width: ref.offsetWidth,
+                              height: ref.offsetHeight,
+                            })
+                          }
+                        >
+                          {inner}
+                        </Rnd>
+                      );
+                    }
+                    // RAIL: every pane fills the SAME box and only the focused
+                    // one is visible. Not `display:none` and not an unmount —
+                    // both are forbidden here for the reason v1.190.0 records:
+                    // a terminal whose holder has no size wraps its replay into
+                    // a default-sized buffer that no later fit can re-wrap, so
+                    // a hidden pane must keep a real box. `visibility` also
+                    // takes the hidden panes out of hit-testing and focus, so
+                    // they cannot sit invisibly over the live one.
+                    return (
+                      <div
+                        key={t.id}
+                        data-testid={`rail-pane-${t.id}`}
+                        className="absolute inset-0"
+                        style={{
+                          visibility: activeId === t.id ? "visible" : "hidden",
+                          zIndex: activeId === t.id ? 2 : 1,
+                        }}
+                      >
+                        {inner}
+                      </div>
                     );
                   })
                 )}
 
                 {/* Compact floating add button — a small, always-there way to
-                    open a terminal without hunting for the header button. */}
+                    open a terminal without hunting for the header button. The
+                    rail has "New pane" in its own footer, so on the rail this
+                    would be the third button doing one job. */}
+                {shape === "canvas" && (
                 <button
                   onClick={() => addTerminal(selectedPath)}
                   disabled={busy}
@@ -1123,6 +1293,7 @@ export default function TerminalsPage() {
                   )}
                   Add
                 </button>
+                )}
               </div>
             )}
           </div>

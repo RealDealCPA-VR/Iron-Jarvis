@@ -45,6 +45,37 @@ export interface PaneActivity {
  * tracks that (`unseenTermOutput`, v1.212.0), so the downgrade happens here —
  * one source of seen-ness, reused rather than reinvented on the server.
  */
+/**
+ * What a pane ROW says when the classifier had no answer (v1.218.0).
+ *
+ * `unknown` is deliberately silent on the pane header — a badge reading
+ * "unknown" on every plain shell is noise, and on a pane we cannot read it
+ * looks like an answer. But the RAIL lists every pane, and a list where half
+ * the rows say nothing looks broken rather than honest. So `unknown` splits by
+ * what we know about the pane's occupant, and neither half is a completion
+ * claim:
+ *
+ *   `shell`    nothing launched an agent here and the scrollback shows none.
+ *              A plain shell, stated as such.
+ *   `unclear`  an agent IS here (the Launch catalog started it, or the
+ *              scrollback names it) and we cannot read what it is doing.
+ *              "We cannot tell" — never "ready", never "finished".
+ *
+ * The split is honest because `agent_cli` is not a guess: the daemon fills it
+ * from what Launch started, falling back to sniffing the scrollback. With
+ * neither, calling the pane a shell is a statement about evidence we have, not
+ * a claim about work we cannot see.
+ */
+export type PaneDisplay = PaneState | "shell" | "unclear";
+
+export function displayState(
+  state: PaneState,
+  cli?: string | null,
+): PaneDisplay {
+  if (state !== "unknown") return state;
+  return cli ? "unclear" : "shell";
+}
+
 export function resolveState(
   raw: PaneState | null | undefined,
   unseen: boolean,
@@ -54,7 +85,7 @@ export function resolveState(
 }
 
 const LOOK: Record<
-  Exclude<PaneState, "unknown">,
+  Exclude<PaneDisplay, "unknown">,
   { label: string; cls: string; icon: ReactNode }
 > = {
   working: {
@@ -74,6 +105,19 @@ const LOOK: Record<
     cls: "border-white/10 bg-white/[0.02] text-zinc-500",
     icon: null,
   },
+  // The two quiet ones. Muted on purpose: they are the ABSENCE of a claim,
+  // and dressing them like the states that mean something would spend the
+  // user's attention on the panes that have nothing to report.
+  shell: {
+    label: "shell",
+    cls: "border-white/[0.06] bg-white/[0.01] text-zinc-600",
+    icon: null,
+  },
+  unclear: {
+    label: "can't tell",
+    cls: "border-white/[0.06] bg-white/[0.01] text-zinc-500",
+    icon: null,
+  },
   done: {
     label: "finished",
     cls: "border-emerald-500/30 bg-emerald-500/[0.08] text-emerald-300",
@@ -87,15 +131,18 @@ export function PaneStateChip({
   line,
   className = "",
 }: {
-  state: PaneState;
+  state: PaneDisplay;
   cli?: string | null;
   line?: string | null;
   className?: string;
 }) {
-  // `unknown` renders NOTHING. A chip saying "unknown" on every plain shell
-  // would be noise on the panes that are not agents at all, and a reassuring
-  // grey badge on the ones we simply cannot read.
-  if (state === "unknown") return null;
+  // `unknown` renders NOTHING, and so does `shell`: on the pane HEADER the
+  // shell's own name sits immediately to the left, so a chip repeating "shell"
+  // is the same word twice. `unclear` DOES render there — "an agent is in here
+  // and I cannot read it" is information the header has no other way to give.
+  // The rail (v1.218.0) shows all of them, because a list is a different job:
+  // there, a row with nothing in it reads as broken.
+  if (state === "unknown" || state === "shell") return null;
   const look = LOOK[state];
   return (
     <span
@@ -106,7 +153,9 @@ export function PaneStateChip({
           ? "waiting on an approval or a question"
           : state === "done"
             ? "finished while you were looking elsewhere"
-            : look.label) +
+            : state === "unclear"
+              ? "an agent is here and its output does not say what it is doing — NOT a claim that it finished"
+              : look.label) +
         (line ? `\n${line}` : "")
       }
       className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${look.cls} ${className}`}
@@ -175,4 +224,33 @@ export function PaneStateSummary({
       )}
     </div>
   );
+}
+
+/**
+ * The rail's per-row marker (v1.218.0). A dot, because a row already carries
+ * the state in words beside it — this is the thing the eye finds when scanning
+ * a column of ten panes, not the thing that says what the state IS.
+ */
+export function PaneDot({ state }: { state: PaneDisplay }) {
+  const cls =
+    state === "blocked"
+      ? "bg-amber-400 animate-pulse"
+      : state === "working"
+        ? "bg-accent"
+        : state === "done"
+          ? "bg-emerald-400"
+          : state === "idle"
+            ? "bg-zinc-500"
+            : "bg-zinc-700";
+  return (
+    <span
+      aria-hidden
+      data-testid={`pane-dot-${state}`}
+      className={`h-1.5 w-1.5 shrink-0 rounded-full ${cls}`}
+    />
+  );
+}
+
+export function stateWord(state: PaneDisplay): string {
+  return state === "unknown" ? "" : LOOK[state].label;
 }

@@ -279,6 +279,7 @@ export function TerminalPane({
   info,
   focused,
   paneName,
+  draggable = true,
   onRenamed,
   onLaunched,
   paneState,
@@ -298,6 +299,8 @@ export function TerminalPane({
   /** The pane's human handle, when it has one — agents address panes by
    *  it, and it reads better in the header than the shell's name. */
   paneName?: string | null;
+  /** False in the rail, where the pane fills its box and does not move. */
+  draggable?: boolean;
   /** Told when the user renames this pane, so the page can update its own
    *  copy without waiting for the next activity poll. */
   onRenamed?: (name: string) => void;
@@ -1137,7 +1140,14 @@ export function TerminalPane({
       {/* Pane header: shell · cwd · connection state · close. The `ij-term-drag`
           class marks this as the drag handle for react-rnd on the Terminals
           page (buttons/selects inside are excluded via react-rnd's `cancel`). */}
-      <header className="ij-term-drag flex shrink-0 cursor-move items-center gap-2 border-b border-white/[0.06] bg-ink-900/60 px-3 py-2">
+      {/* The drag handle is CONDITIONAL (v1.218.0). In the rail a pane fills
+          its box and cannot be moved, so `cursor-move` and the react-rnd
+          handle class would both be promises the layout does not keep. */}
+      <header
+        className={`flex shrink-0 items-center gap-2 border-b border-white/[0.06] bg-ink-900/60 px-3 py-2 ${
+          draggable ? "ij-term-drag cursor-move" : ""
+        }`}
+      >
         <TerminalIcon
           size={13}
           className={focused ? "text-accent" : "text-zinc-500"}

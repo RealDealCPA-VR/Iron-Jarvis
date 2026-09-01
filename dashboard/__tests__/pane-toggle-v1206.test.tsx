@@ -285,6 +285,15 @@ afterEach(() => {
   cleanup();
 });
 
+
+/** Build opens on the RAIL since v1.218.0, where one pane is visible and the
+ *  rest are `visibility:hidden` (and so out of the accessibility tree). The
+ *  three tests below are about the CANVAS specifically — the react-rnd
+ *  wrapper, its drag exemptions, and two panes reachable at once — so they say
+ *  so rather than quietly depending on whichever shape happens to be default.
+ *  Rail behaviour has its own file. */
+const useCanvas = () => localStorage.setItem("ij.build.shape", "canvas");
+
 /* ---- rendered behavior ------------------------------------------------------ */
 
 describe("default view", () => {
@@ -385,6 +394,7 @@ describe("persistence", () => {
 
 describe("the toggle never starts a drag", () => {
   it("sits OUTSIDE every ij-term-drag region, as buttons the Rnd cancel exempts", async () => {
+    useCanvas();
     await renderPage();
     const toggle = screen.getByTestId("pane-view-toggle-t1");
     // Not inside the drag handle: a mousedown here can never begin a drag.
@@ -413,6 +423,7 @@ describe("a pane without a cwd", () => {
     // Even a stale persisted "chat" must not strand a cwd-less pane in a chat
     // view that has nothing to ground itself in — and must not mount PaneChat.
     localStorage.setItem("ij.pane.view.t3", "chat");
+    useCanvas();
     await renderPage();
     await screen.findByTestId("terminal-pane-t3");
 
@@ -428,6 +439,7 @@ describe("a pane without a cwd", () => {
 
 describe("the Files tab follows the PANE, not the view", () => {
   it("a chat-view pane is still focusable and its cwd drives the Files tab", async () => {
+    useCanvas();
     await renderPage();
     // Initial focus lands on t1 → the Files tab auto-follows its cwd.
     await waitFor(() =>

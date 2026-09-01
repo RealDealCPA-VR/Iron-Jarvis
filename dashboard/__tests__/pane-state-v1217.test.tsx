@@ -151,7 +151,13 @@ describe("the pane identity has a way IN (source-pinned)", () => {
     // Agents address panes by name and the summary strip lists them by name,
     // so a name only an API caller can set is not a shipped feature. The
     // rename lives in the header itself — the name IS the header.
-    const header = pane.slice(pane.indexOf("ij-term-drag flex shrink-0"), pane.indexOf("Per-pane AI model"));
+    // Anchored on the header's conditional drag class (v1.218.0 made the
+    // handle conditional, which moved the old literal), and closed at the
+    // model select — a window that spans only the header row.
+    const header = pane.slice(
+      pane.indexOf('draggable ? "ij-term-drag cursor-move"'),
+      pane.indexOf("Per-pane AI model"),
+    );
     expect(header).toContain('data-testid="pane-name"');
     expect(header).toContain("setRenaming(true)");
     expect(pane).toContain("patch(`/terminals/${info.id}`, { name: next })");

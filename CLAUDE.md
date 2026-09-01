@@ -265,6 +265,17 @@ does not need a bump, stop and bump it.
   `tests/test_event_loop_offload_v1175.py` asserts the worker thread AND that
   the loop kept ticking. When a rule cites a class, confirm that class is the
   one the registry actually holds.
+- **Shipping the mechanism is not shipping the feature** (v1.218.0). v1.217.0
+  built a real pane-state classifier, proved it against a live PTY, and put the
+  answer into a chip that renders NOTHING for `unknown` — on a canvas where
+  every pane holds a plain shell, which classifies as `unknown`. The user
+  opened Build and correctly reported it "looks the exact same". Everything
+  measured was true and the feature did not exist for them. Two checks that
+  would have caught it, both cheap: open the surface in the state the USER's
+  machine is in (not the staged one the test drove), and ask what the feature
+  changes for someone who does nothing differently. The same wave had already
+  applied this reasoning to the pane NAME and missed applying it to its own
+  headline.
 - **An injected value must be injected, and a field must have a way IN**
   (v1.217.0). Two halves of the same lesson, both found by DRIVING the product
   rather than reading it. (a) The pane identity (`IRONJARVIS_BUILD`,
@@ -457,6 +468,18 @@ does not need a bump, stop and bump it.
   markdown.py (the shared block parser), tools (read/write/extract_pdf/
   convert_document). `tools/images.py` — view_image (vision via the router),
   image_convert/resize/info (Pillow). `tools/pixio.py` — generative media.
+- **Build (`app/terminals/page.tsx`) has TWO shapes** (v1.218.0), chosen by
+  `ij.build.shape` and defaulting to `rail`. `rail` is
+  `components/terminal/PaneRail.tsx` — every live pane in a column with its
+  state, one pane focused beside it; `canvas` is the original free-form
+  react-rnd surface. ONE pane body serves both: only the wrapper differs, and
+  keeping it that way is the point (two copies would drift inside the pane the
+  user works in). In the rail every pane still RENDERS — same box, all mounted,
+  `visibility` toggled — because the v1.190.0 rule stands: a terminal whose
+  holder has no size wraps its replay into a buffer no later fit can re-wrap,
+  so a hidden pane must keep a real box. Never `display:none`, never an
+  unmount. The rail also needs a fallback focus (`activeId`): on the canvas a
+  null focus is harmless, in the rail it renders an empty workspace.
 - `dashboard/app/<route>/page.tsx` per page; shared in `dashboard/components/`
   (`ui.tsx` primitives, `Sidebar.tsx` nav incl. Simple/Advanced mode,
   `ModelSwitcher.tsx` quality dial) and `dashboard/lib/` (`api.ts` fetch+auth,

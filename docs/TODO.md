@@ -107,6 +107,19 @@ and five agent-facing pane tools on the Builder and Maintainer rosters.
   (partial, empty string clears) plus an in-header rename and a launch report
   close both. Same reachability lesson as Raster Studio: a green suite proves
   the library, not that a user can get to it.
+- [x] **v1.217.0 shipped the STATES and not the SHAPE — FIXED v1.218.0.** The
+  user opened Build and said "it looks the exact same, no tabs to see different
+  terminals with a status pane on the left", and that was exactly right: the
+  classifier was real, and it was wired into a free-form canvas of overlapping
+  windows — the thing "never hunt for the stuck one" exists to replace. Worse,
+  it was invisible by construction, because a chip renders nothing for
+  `unknown` and every pane holding a plain shell IS `unknown`. Build now opens
+  on `components/terminal/PaneRail.tsx`: every live pane in one column with its
+  state, one pane in focus beside it. The canvas survives as a mode
+  (`ij.build.shape`) because seeing three panes at once is a real way to work.
+  THE LESSON, and it is not a UI lesson: shipping the mechanism is not shipping
+  the feature. Reachability was checked for the pane NAME in v1.217.0 and not
+  for the thing the whole wave was about.
 - [ ] **The "needs you" summary is Build-page-only.** herdr's framing is "never
   hunt for the stuck one", and a user on Chat or Documents still learns nothing
   about a blocked pane. A sidebar count is the obvious completion and was left
@@ -114,6 +127,12 @@ and five agent-facing pane tools on the Builder and Maintainer rosters.
   a global poll plus an edit to the shared `Sidebar.tsx`. Do it as its own
   change, with the poll folded into an existing app-wide fetch rather than a
   new one.
+- [ ] **The rail does not preview a pane you are not on.** herdr's list shows a
+  live snippet per agent; ours shows the state and the CLI. The parts already
+  exist — `termPeek` keeps each pane's last output line for the peek strip —
+  but the rail rows would need it lifted per-pane rather than for the focused
+  one. Worth doing once the rail has been lived in; skipped here to keep the
+  first cut of the shape legible.
 - [ ] **`seen`-ness is per-browser, so `done` is too.** The daemon reports the
   settled state as `idle` and the page downgrades it to `done` using its own
   unseen-output tracking. Two windows open on Build therefore disagree about
