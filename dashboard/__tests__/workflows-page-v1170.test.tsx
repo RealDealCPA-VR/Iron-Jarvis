@@ -532,3 +532,17 @@ describe("WorkflowsPage", () => {
     expect(await screen.findByText(/No workflow runs yet/)).toBeInTheDocument();
   });
 });
+
+/* --------------------------------------------- v1.222.0: saved list mounts */
+
+describe("saved workflows list (v1.222.0)", () => {
+  it("the page MOUNTS the saved list with a visible Delete per row", async () => {
+    api.responses["/workflows"] = {
+      workflows: [{ name: "mine", steps_json: "[]" }],
+    };
+    api.responses[RUNS_PATH] = { runs: [] };
+    render(<WorkflowsPage />);
+    expect(await screen.findByTestId("saved-workflows")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete mine" })).toBeInTheDocument();
+  });
+});

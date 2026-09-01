@@ -6,6 +6,8 @@ reached through ``d`` (see the deps object built in create_app).
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, HTTPException
 from sqlmodel import select
 from typing import Any
@@ -20,6 +22,49 @@ from ..schemas import (
     WorkflowSaveBody,
 )
 from ...core.db import session_scope
+
+log = logging.getLogger("iron_jarvis.workflows")
+
+
+def _workflow_references(d, name: str) -> list[dict[str, Any]]:
+    """Every automation that will FIRE the saved workflow ``name`` by name —
+    and so fails with "no saved workflow" the moment it is deleted.
+
+    Two stores resolve a workflow by name at fire time: a ``kind="workflow"``
+    schedule whose payload names it (``workflow``/``name``) without carrying
+    inline ``steps`` (platform ``_run_scheduled_workflow``), and a reflex rule
+    with ``action="workflow"`` (``reflex/router.py``). Goals and sessions
+    never do. Best-effort per store: a store that cannot answer is logged and
+    skipped, and the UI says the check failed rather than "nothing uses it".
+    """
+    refs: list[dict[str, Any]] = []
+    try:
+        for row in d.platform.scheduler.list():
+            if row.kind != "workflow":
+                continue
+            payload = row.decoded_payload()
+            if payload.get("steps"):
+                continue  # inline steps run as given; the name is a label
+            if (payload.get("workflow") or payload.get("name")) == name:
+                refs.append(
+                    {"kind": "schedule", "name": row.name, "enabled": bool(row.enabled)}
+                )
+    except Exception:  # noqa: BLE001 — a references check must never 500 a delete
+        log.exception("workflow references: schedules could not be read")
+    try:
+        for rule in d.platform.reflex.list():
+            if rule.action == "workflow" and rule.target == name:
+                refs.append(
+                    {
+                        "kind": "reflex",
+                        "id": rule.id,
+                        "name": rule.name,
+                        "enabled": bool(rule.enabled),
+                    }
+                )
+    except Exception:  # noqa: BLE001
+        log.exception("workflow references: reflex rules could not be read")
+    return refs
 
 
 def register(app: FastAPI, d) -> None:
@@ -390,14 +435,31 @@ def register(app: FastAPI, d) -> None:
         out["project_id"] = store.get_project_id(rec.name)
         return out
 
-    @app.delete("/workflows/{name}")
-    def delete_workflow(name: str) -> dict[str, Any]:
-        """Delete a saved workflow definition by name (404 when absent)."""
+    @app.get("/workflows/{name}/references")
+    def workflow_references(name: str) -> dict[str, Any]:
+        """What still fires this saved workflow by name (schedules, reflex
+        rules) — the preflight the delete confirm shows, so the user learns
+        BEFORE deleting that a nightly schedule is about to start failing.
+        404 when the workflow itself does not exist."""
         from ...workflows.store import WorkflowStore
 
+        if WorkflowStore(d.platform.engine).get(name) is None:
+            raise HTTPException(status_code=404, detail="no such workflow")
+        return {"name": name, "references": _workflow_references(d, name)}
+
+    @app.delete("/workflows/{name}")
+    def delete_workflow(name: str) -> dict[str, Any]:
+        """Delete a saved workflow definition by name (404 when absent). The
+        schedules / reflex rules that still name it are NOT touched — they are
+        the user's automations and re-pointing them is their call — but they
+        are reported as ``referenced_by`` so an API caller learns what just
+        started failing (the dashboard asks the same question up front)."""
+        from ...workflows.store import WorkflowStore
+
+        referenced_by = _workflow_references(d, name)
         if not WorkflowStore(d.platform.engine).remove(name):
             raise HTTPException(status_code=404, detail="no such workflow")
-        return {"deleted": name}
+        return {"deleted": name, "referenced_by": referenced_by}
 
     @app.post("/workflows/generate")
     async def generate_workflow(body: WorkflowGenerateBody) -> dict[str, Any]:

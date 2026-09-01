@@ -29,6 +29,7 @@ import { Card, Badge, Empty, SkeletonRows } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import WorkflowCanvas from "@/components/workflow/WorkflowCanvas";
+import { SavedWorkflows } from "@/components/workflow/SavedWorkflows";
 import { timeAgo } from "@/lib/format";
 
 export default function WorkflowsPage() {
@@ -80,6 +81,12 @@ export default function WorkflowsPage() {
       </Reveal>
       <Reveal>
         <WorkflowCanvas />
+      </Reveal>
+      {/* v1.222.0: the saved workflows, visible — with Load and Delete on
+          every row. Delete used to exist only as a hover icon inside the
+          canvas's Load ▾ dropdown, which the user could not find. */}
+      <Reveal>
+        <SavedWorkflows />
       </Reveal>
       <Reveal>
         <StarterTemplates />

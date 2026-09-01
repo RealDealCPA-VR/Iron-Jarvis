@@ -878,3 +878,73 @@ describe("Canvas pin lifecycle (Save as new / delete)", () => {
     }
   });
 });
+
+/* ------------------------- v1.222.0: the page's Saved list deletes a row */
+
+import { WORKFLOWS_LIST_EVENT } from "@/components/workflow/SavedWorkflows";
+
+describe("Canvas hears a delete from the page's Saved-workflows list (v1.222.0)", () => {
+  const PARENT_STEPS = [{ name: "A", agent: "builder", task: "t" }];
+  const RUN_DONE = {
+    id: "r1",
+    workflow_name: "parent",
+    status: "completed",
+    steps_json: JSON.stringify(PARENT_STEPS),
+    outputs_json: "{}",
+  };
+
+  async function lastRunBody() {
+    const before = postMock.mock.calls.filter((c) => c[0] === "/workflows/run").length;
+    fireEvent.click(screen.getByRole("button", { name: /Run workflow/ }));
+    await waitFor(() =>
+      expect(
+        postMock.mock.calls.filter((c) => c[0] === "/workflows/run").length,
+      ).toBe(before + 1),
+    );
+    const calls = postMock.mock.calls.filter((c) => c[0] === "/workflows/run");
+    return calls[calls.length - 1][1] as { project_id?: string };
+  }
+
+  it("forgets the loaded def: no pin on Run, a plain create on Save, list refreshed", async () => {
+    getMock.mockImplementation(async () => ({ workflows: [] }));
+    postMock.mockImplementation(async (path: string) =>
+      path === "/workflows/run" ? RUN_DONE : {},
+    );
+    render(<WorkflowCanvas />);
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent("ij:load-workflow", {
+          detail: {
+            id: 1,
+            name: "parent",
+            description: "",
+            steps_json: JSON.stringify(PARENT_STEPS),
+            project_id: "proj-1",
+          },
+        }),
+      );
+    });
+    await screen.findByDisplayValue("parent");
+    expect((await lastRunBody()).project_id).toBe("proj-1");
+    const listCalls = () => getMock.mock.calls.filter((c) => c[0] === "/workflows").length;
+    const before = listCalls();
+
+    // The page's list deleted "parent" — no click on this canvas at all.
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent(WORKFLOWS_LIST_EVENT, { detail: { deleted: "parent" } }),
+      );
+    });
+
+    await waitFor(() => expect(listCalls()).toBeGreaterThan(before));
+    expect("project_id" in (await lastRunBody())).toBe(false);
+    fireEvent.change(screen.getByLabelText("Workflow name"), {
+      target: { value: "reborn" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(postMock.mock.calls.some((c) => c[0] === "/workflows")).toBe(true),
+    );
+    expect(patchMock).not.toHaveBeenCalled();
+  });
+});

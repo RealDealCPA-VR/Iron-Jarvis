@@ -99,7 +99,9 @@ def test_delete_workflow_and_404(tmp_path):
             json={"name": "saved", "steps": [{"name": "s", "agent": "builder", "task": "t"}]},
         )
         r = client.delete("/workflows/saved")
-        assert r.status_code == 200 and r.json() == {"deleted": "saved"}
+        assert r.status_code == 200
+        # v1.222.0: the response also names what still fires the workflow.
+        assert r.json() == {"deleted": "saved", "referenced_by": []}
         # Second delete: gone -> 404.
         assert client.delete("/workflows/saved").status_code == 404
 

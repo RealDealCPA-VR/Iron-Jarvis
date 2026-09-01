@@ -68,6 +68,11 @@ import { TriggerNode } from "./TriggerNode";
 import { NodeInspector } from "./NodeInspector";
 import { TriggerInspector } from "./TriggerInspector";
 import {
+  announceWorkflowsChanged,
+  WORKFLOWS_LIST_EVENT,
+  type WorkflowsListDetail,
+} from "./SavedWorkflows";
+import {
   agentMeta,
   type StepExpect,
   type StepNodeData,
@@ -995,6 +1000,32 @@ function Canvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // v1.222.0: the page's Saved-workflows list can delete a row this canvas
+  // is editing. Refresh the Load ▾ list, and if the deleted def is the one
+  // loaded here, stop treating it as saved — a later Save must be a fresh
+  // create (never a rename PATCH against a deleted row) and a Run must not
+  // carry the deleted def's pin. Same clearing the dropdown's own delete does.
+  useEffect(() => {
+    const onListChanged = (e: Event) => {
+      const detail = (e as CustomEvent).detail as WorkflowsListDetail | undefined;
+      refreshDefs();
+      const gone = detail?.deleted;
+      if (!gone) return;
+      try {
+        localStorage.removeItem(layoutKey(gone));
+      } catch {
+        /* ignore */
+      }
+      if (gone === loadedName) {
+        setLoadedName(null);
+        setLoadedPin(null);
+        pinFetchRef.current = null;
+      }
+    };
+    window.addEventListener(WORKFLOWS_LIST_EVENT, onListChanged);
+    return () => window.removeEventListener(WORKFLOWS_LIST_EVENT, onListChanged);
+  }, [refreshDefs, loadedName]);
+
   // Close the Load dropdown on an outside click.
   useEffect(() => {
     if (!loadOpen) return;
@@ -1122,6 +1153,8 @@ function Canvas() {
         } catch {
           /* ignore */
         }
+        // The page's Saved-workflows list shows the new/renamed row at once.
+        announceWorkflowsChanged({ saved: wfName });
         await refreshDefs();
       } catch (err) {
         if (err instanceof ApiError && err.status === 0)
@@ -1232,10 +1265,12 @@ function Canvas() {
         }
         clearIfLoaded();
         setSuccess(`Deleted “${defName}”.`);
+        announceWorkflowsChanged({ deleted: defName });
         await refreshDefs();
       } catch (err) {
         if (err instanceof ApiError && err.status === 404) {
           clearIfLoaded();
+          announceWorkflowsChanged({ deleted: defName });
           await refreshDefs();
         } else setError(err instanceof ApiError ? err.message : String(err));
       }
@@ -1355,7 +1390,10 @@ function Canvas() {
                           onClick={() => deleteDef(d.name)}
                           aria-label={`Delete ${d.name}`}
                           title={`Delete “${d.name}”`}
-                          className="shrink-0 rounded-md p-1.5 text-zinc-600 opacity-0 transition-all hover:bg-rose-500/10 hover:text-rose-300 focus-visible:opacity-100 group-hover:opacity-100"
+                          // Always visible (v1.222.0): at opacity 0 until hover
+                          // nobody found it — the user reported having no way
+                          // to delete a workflow while this button existed.
+                          className="shrink-0 rounded-md p-1.5 text-zinc-500 transition-colors hover:bg-rose-500/10 hover:text-rose-300"
                         >
                           <Trash2 size={13} />
                         </button>
