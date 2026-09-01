@@ -478,8 +478,21 @@ export const NAV: NavSectionDef[] = [
         href: "/help",
         label: "Help",
         icon: LifeBuoy,
-        aliases: ["how does this work", "support", "docs", "guide", "getting started"],
-        blurb: "What Iron Jarvis is and how to get your first result out of it.",
+        aliases: [
+          "how does this work",
+          "support",
+          "docs",
+          "guide",
+          "getting started",
+          // v1.223.0: the built-in Iron Jarvis Guide lives on this page.
+          "ask the guide",
+          "ask about iron jarvis",
+          "how do i",
+          "what does",
+          "expert",
+        ],
+        blurb:
+          "What Iron Jarvis is, how to get your first result out of it, and the Guide — ask it anything about this app.",
       },
     ],
   },

@@ -13,6 +13,7 @@ Run the daemon (offline, mock provider):
 """
 
 import os
+import sys
 
 from PyInstaller.utils.hooks import (
     collect_all,
@@ -49,13 +50,20 @@ hiddenimports += collect_submodules("iron_jarvis")
 # Bundled non-Python data (skills/builtin/*/SKILL.md, py.typed).
 datas += collect_data_files("iron_jarvis")
 
-# --- Help-page guides (v1.198.0) ---------------------------------------------
-# routes/helpdocs.py serves these to the dashboard's Help page, reading from
-# sys._MEIPASS/ijdocs when frozen — a frozen build without them would 404
-# every guide forever. EXACTLY the three allowlisted files, never a docs/*.md
-# glob: the TOFIX/audit/plan files in docs/ must not ship to users.
-for _doc in ("HANDBOOK.md", "RECOMMENDED-SETTINGS.md", "LOCAL-MODELS.md"):
-    datas.append((os.path.join(SPECPATH, os.pardir, "docs", _doc), "ijdocs"))
+# --- Help-page guides (v1.198.0) + the Guide's corpus (v1.223.0) ------------
+# routes/helpdocs.py serves the first three to the dashboard's Help page and
+# guide/corpus.py retrieves over ALL of them for the built-in Iron Jarvis
+# Guide persona, both reading from sys._MEIPASS/ijdocs when frozen — a frozen
+# build without them would 404 every guide forever and leave the Guide
+# answering from nothing (it says so, but it is a worse product). The list is
+# `iron_jarvis.guide.BUNDLED_DOCS`, imported here so the bundle can never
+# drift from what the Guide expects. EXACTLY these allowlisted files, never a
+# docs/*.md glob: the TOFIX/audit/plan files in docs/ must not ship to users.
+sys.path.insert(0, os.path.join(SPECPATH, os.pardir, "src"))
+from iron_jarvis.guide.corpus import BUNDLED_DOCS as _GUIDE_DOCS  # noqa: E402
+
+for _slug, _rel, _title in _GUIDE_DOCS:
+    datas.append((os.path.join(SPECPATH, os.pardir, *_rel.split("/")), "ijdocs"))
 
 # --- Core runtime stack (collect everything: submodules + data + metadata) --
 for pkg in (

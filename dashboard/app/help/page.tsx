@@ -539,6 +539,89 @@ const TROUBLE: { symptom: string; fix: ReactNode }[] = [
   },
 ];
 
+/* ------------------------------------------------------------ the Guide */
+
+/** GET /guide/status — what the built-in Guide can draw on for this install. */
+interface GuideStatus {
+  docs: { slug: string; title: string; sections: number }[];
+  missing: { slug: string; file: string }[];
+  doc_sections: number;
+  live_sections: number;
+}
+
+/** Ask the Iron Jarvis Guide (v1.223.0): one box that lands in Chat with the
+ *  `guide` persona selected for that conversation and the question prefilled
+ *  (never auto-sent — the consent rule: side effects wait for Enter in the
+ *  composer). The persona is grounded server-side in the bundled docs + live
+ *  catalogs; the line under the box says how much of that this install
+ *  actually carries, and names a missing doc rather than implying the Guide
+ *  knows a chapter it does not have. */
+function AskGuideCard() {
+  const [q, setQ] = useState("");
+  const linkRef = useRef<HTMLAnchorElement>(null);
+  const status = useApi<GuideStatus>("/guide/status");
+  const s = status.data;
+  const href = `/chat?persona=guide${q.trim() ? `&ask=${encodeURIComponent(q.trim())}` : ""}`;
+  const knows =
+    s
+      ? `${s.docs.length} reference doc${s.docs.length === 1 ? "" : "s"} (${s.doc_sections} sections) plus ${s.live_sections} live catalogs of this install`
+      : null;
+  return (
+    <Card title="Ask the Guide" icon={<Bot size={15} />}>
+      <p className="text-[13px] text-zinc-400">
+        The built-in expert on Iron Jarvis. Ask how anything here works — a page, a
+        setting, what a word means, what a tool does — and it answers from the app’s
+        own docs and this install’s live catalogs, and says when it doesn’t know.
+      </p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              linkRef.current?.click();
+            }
+          }}
+          placeholder="e.g. How do updates install? What is a memory base?"
+          aria-label="Ask the Guide"
+          className="field min-w-0 flex-1 text-sm"
+        />
+        <Link
+          ref={linkRef}
+          href={href}
+          className="btn-accent shrink-0"
+          data-testid="ask-guide-link"
+        >
+          <Bot size={13} /> Ask the Guide <ArrowRight size={13} />
+        </Link>
+      </div>
+      <p className="mt-2 text-[11px] text-zinc-500">
+        {status.error ? (
+          status.error.status === 0 ? (
+            "Guide status unavailable — the daemon looks offline."
+          ) : (
+            `Guide status unavailable — the daemon returned an error (HTTP ${status.error.status}).`
+          )
+        ) : !s ? (
+          "Checking what the Guide knows…"
+        ) : (
+          <>
+            Knows {knows}.
+            {s.missing.length > 0 && (
+              <span className="text-amber-300/90">
+                {" "}
+                Missing from this install: {s.missing.map((m) => m.file).join(", ")} — those
+                topics will be answered as unknown.
+              </span>
+            )}
+          </>
+        )}
+      </p>
+    </Card>
+  );
+}
+
 export default function HelpPage() {
   return (
     <PageShell>
@@ -547,6 +630,12 @@ export default function HelpPage() {
           title="What can Iron Jarvis do?"
           subtitle="Iron Jarvis is a local-first AI operating system: you give it a goal, an agent does the work on an isolated workspace, and you stay in control by reviewing what it changes."
         />
+      </Reveal>
+
+      {/* Ask the Guide — the built-in expert, first, because "how do I…"
+          is the question most people arrive here with. */}
+      <Reveal>
+        <AskGuideCard />
       </Reveal>
 
       {/* The core loop */}

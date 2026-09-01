@@ -454,6 +454,23 @@ does not need a bump, stop and bump it.
   should inherit its parent's summary for free) — and it is registered in
   `core.db._LATE_MODEL_MODULES`, without which its lazily-created table lands
   on fresh test DBs and on no real install (the v1.151.2 lesson).
+- `guide/` — THE IRON JARVIS GUIDE (v1.223.0): the built-in expert on the app
+  itself. A chat persona (`guide`, in `personas/builtins.py`) whose every
+  turn is grounded — at BOTH chat seams via `chat_turn._guide_section` — in a
+  block retrieved from `corpus.py`: the bundled docs (`BUNDLED_DOCS`, shipped
+  into `_MEIPASS/ijdocs` by the .spec, which IMPORTS that list so the bundle
+  cannot drift) plus live catalogs generated from the running daemon (version,
+  providers, tools, skills, personas, agent types, every API route with its
+  docstring). Retrieval is lexical BM25 + phrase bonus + a user-facing doc
+  prior — deterministic, no embedder — so a wrong answer is reproducible.
+  The persona is told to answer ONLY from the block and to say "I don't know,
+  look here" otherwise. `routes/guide.py` is the inspection surface
+  (`/guide/status|search|ground`); the Help page's "Ask the Guide" box lands
+  in `/chat?persona=guide&ask=…` (persona local to the conversation, never
+  the saved default). The Guide knows what the DOCS know: when a surface
+  ships, the Handbook is part of the change set, or the Guide will answer
+  "not covered" about a feature that exists (the doctor check `guide_docs`
+  catches a missing FILE, not a stale one).
 - `profile/` — the user profile (ONE row): `models` (record), `store`
   (read-never-writes, partial save), `presets` (vocabularies; unknown key =
   free text), `language` (pure script-level leakage detector), `block`

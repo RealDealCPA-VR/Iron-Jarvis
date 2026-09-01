@@ -20,6 +20,7 @@ from . import (  # noqa: F401
     fleet,
     fsbrowse,
     goals,
+    guide,
     helpdocs,
     knowledge,
     learning,

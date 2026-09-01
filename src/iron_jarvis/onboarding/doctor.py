@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+from pathlib import Path
 
 #: Minimum Python the platform supports (matches pyproject's requires-python).
 MIN_PYTHON: tuple[int, int] = (3, 12)
@@ -214,6 +215,32 @@ def check_pdf_classifier() -> dict:
     )
 
 
+def check_guide_docs() -> dict:
+    """The Guide's bundled reference docs are all present (v1.223.0).
+
+    RECOMMENDED, not required: the app runs without them, but the built-in
+    Iron Jarvis Guide then answers from the live catalogs alone and says so.
+    In a packaged build a missing file means the .spec's ``ijdocs`` bundle
+    drifted from ``guide.BUNDLED_DOCS`` — the silent-degradation shape this
+    project keeps meeting (pikepdf, the pdf classifier), caught here instead.
+    """
+    from ..guide import BUNDLED_DOCS, doc_path
+
+    missing = [Path(rel).name for _slug, rel, _title in BUNDLED_DOCS if not doc_path(rel).is_file()]
+    ok = not missing
+    return _result(
+        "guide_docs",
+        ok,
+        f"all {len(BUNDLED_DOCS)} Guide reference docs present."
+        if ok
+        else f"Guide reference docs missing: {', '.join(missing)} — the Guide cannot answer from them.",
+        fix=""
+        if ok
+        else "Reinstall the current release; if running from source, restore the files in the repo.",
+        level=RECOMMENDED,
+    )
+
+
 #: Ordered list of every check callable — callers may render this directly.
 CHECKS = [
     check_python,
@@ -223,6 +250,7 @@ CHECKS = [
     check_pnpm,
     check_browser,
     check_pdf_classifier,
+    check_guide_docs,
 ]
 
 

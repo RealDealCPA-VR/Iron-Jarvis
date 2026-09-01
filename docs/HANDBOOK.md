@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.167.2 (2026-08-12).*
+holds itself to. Current as of v1.223.0 (2026-09-01).*
 
 ---
 
@@ -114,7 +114,12 @@ formulas by computing them.
   (project-bound, outcome recorded on the row, delivered to your channels).
 - **Workflows**: multi-step (agent/tool/ask/notify steps, parallel groups,
   retries); a run parks on an *ask* step and waits for your answer — from the
-  chat card or the Workflows page.
+  chat card or the Workflows page. The Workflows page has the visual editor
+  (Load ▾, Save, Run), a **Saved workflows** list under it with **Load** and
+  **Delete** on every row — Delete asks first and names any schedule or
+  reflex rule that still fires that workflow, since those would fail until
+  re-pointed — starter templates, a "build with chat" box, and the run
+  history with Resume for interrupted runs.
 - **Reflexes**: webhook-triggered actions. **Sentinels**: watched folders.
   **Autonomy**: off by default; when on, starts at *suggest* level with hard
   daily action/token caps and a kill switch.
@@ -149,6 +154,19 @@ seam); Train (teach it your writing voice, suggest-only).
    paths (the vault, the DB) are refused both ways.
 6. **One event loop, never blocked.** Heavy work runs off-thread — a big
    render or a cold OneDrive folder can't freeze the app.
+
+## Ask the Guide
+
+The **Guide** is the built-in expert on Iron Jarvis itself. It is a chat
+persona (pick *Guide* in the chat persona menu, or use the **Ask the Guide**
+box at the top of the Help page, which opens a chat with the Guide selected
+for that conversation and your question ready to send). Every answer is
+grounded in this Handbook, the other guides, the vocabulary and product
+reference, and live catalogs of your install — the running version, connected
+models, tools, skills, and every API route — so it can tell you which page,
+button or setting does what. It cites the section it drew on, and when the
+reference does not cover a question it says so and points you to the nearest
+place to look instead of guessing.
 
 ## Troubleshooting in one minute
 

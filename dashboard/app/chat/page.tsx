@@ -836,6 +836,17 @@ const DEFAULT_PERSONAS: PersonaOption[] = [
     builtin: true,
     overridden: false,
   },
+  {
+    // v1.223.0: the built-in Iron Jarvis expert — listed here too so a
+    // /chat?persona=guide landing has something to select before the
+    // catalog answers.
+    name: "guide",
+    title: "Guide",
+    description: "The Iron Jarvis Guide — ask anything about this app",
+    prompt: "",
+    builtin: true,
+    overridden: false,
+  },
 ];
 
 // stepLabel (the event -> progress-line renderer) lives in
@@ -2011,12 +2022,18 @@ export default function ChatPage() {
   //   ?ask=<text>    the "Ask Iron Jarvis: …" fallback row — prefill the composer
   //   ?skill=<name>  a skill picked in search — arm it (chip shows; nothing runs)
   //   ?thread=<id>   a saved conversation picked in search — open it
+  //   ?persona=<n>   (v1.223.0) select a persona for THIS conversation — the
+  //                  Help page's "Ask the Guide" lands here with persona=guide.
+  //                  Local to the conversation on purpose: it must not become
+  //                  the saved default just because someone asked the Guide.
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
       const ask = (params.get("ask") || "").trim();
       const skill = (params.get("skill") || "").trim();
       const thread = (params.get("thread") || "").trim();
+      const wantPersona = (params.get("persona") || "").trim();
+      if (wantPersona) selectPersonaLocal(wantPersona);
       if (ask) {
         setInput(ask);
         setCaret(ask.length);
@@ -2031,13 +2048,14 @@ export default function ChatPage() {
         inputRef.current?.focus();
       }
       if (thread) void openThread(thread);
-      if (ask || skill || thread) {
+      if (ask || skill || thread || wantPersona) {
         // Strip the params so a refresh doesn't resurrect stale state over
         // whatever the user has done since.
         const url = new URL(window.location.href);
         url.searchParams.delete("ask");
         url.searchParams.delete("skill");
         url.searchParams.delete("thread");
+        url.searchParams.delete("persona");
         window.history.replaceState(null, "", url.toString());
       }
     } catch {
