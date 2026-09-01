@@ -171,7 +171,24 @@ export function ProjectTasks({
         setTaskSession(d.session);
         setTaskPollError(null);
       } catch (err) {
-        if (alive) setTaskPollError(errText(err));
+        if (!alive) return;
+        if (err instanceof ApiError && err.status === 404) {
+          // The session no longer exists (deleted from the Sessions page, or
+          // the database was reset). The run is rehydrated from localStorage
+          // on every mount, so without this the strip would retry a 404
+          // every 2s forever — "status check failed — retrying…" with no way
+          // out short of clearing browser storage. Drop the run and forget it.
+          try {
+            window.localStorage.removeItem(runKey);
+          } catch {
+            /* storage unavailable — nothing to forget */
+          }
+          setTaskRun(null);
+          setTaskSession(null);
+          setTaskPollError(null);
+          return;
+        }
+        setTaskPollError(errText(err));
       }
     };
     void tick();
@@ -180,7 +197,7 @@ export function ProjectTasks({
       alive = false;
       clearInterval(timer);
     };
-  }, [taskRun, taskDone]);
+  }, [taskRun, taskDone, runKey]);
 
   // On completion, VERIFY the file deliverable actually exists — the strip used
   // to assert "Saved: <path>" from the intended path even if the agent never

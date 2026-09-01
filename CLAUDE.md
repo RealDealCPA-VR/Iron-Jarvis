@@ -265,6 +265,25 @@ does not need a bump, stop and bump it.
   `tests/test_event_loop_offload_v1175.py` asserts the worker thread AND that
   the loop kept ticking. When a rule cites a class, confirm that class is the
   one the registry actually holds.
+- **A rule that lives in one page's JSX is not a rule, and a delete must
+  untag what SPAWNS** (v1.220.0, projects-module review). "An archived project
+  takes no new tasks" was enforced by hiding the composer on
+  `projects/[id]` — the chat module's Tasks surface and `POST
+  /projects/{id}/task` never heard of it. Put the refusal in the route (it
+  now answers "unarchive the project first", like `/activate`). Same review:
+  `DELETE /projects/{id}` untagged sessions/threads/runs but left task
+  schedules (payload `project_id`), goal contracts and reflex rules bound —
+  each of those CREATES sessions with its project id, so the ghost project
+  kept accruing work while `_project_context` found no row and grounded
+  nothing, silently. Anything that carries a project id AND spawns must be
+  untagged on delete (the response's `untagged` map is the checklist). Also
+  found there: a project root skipped the `usable_workspace_root` door that
+  `POST /sessions` applies to an explicit `workspace_root` (now
+  `_root_problem`, checked at create/patch AND at task time for older rows);
+  a knowledge file was staged at `<home>/uploads/<name>` — the exact path
+  `/documents/upload` keeps the user's documents at — and clobbered them
+  (now a one-off staging dir, removed after extraction); and a deliverable
+  stem kept `:*?"<>|` and `..` (`_deliverable_stem`).
 - **Shipping the mechanism is not shipping the feature** (v1.218.0). v1.217.0
   built a real pane-state classifier, proved it against a live PTY, and put the
   answer into a chip that renders NOTHING for `unknown` — on a canvas where

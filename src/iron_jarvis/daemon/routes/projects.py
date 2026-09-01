@@ -12,6 +12,8 @@ from sqlmodel import select
 from typing import Any
 
 import json as _json
+import logging
+import re
 
 from .. import app as _app
 from ..app import _agent_type, _session_view
@@ -25,6 +27,8 @@ from ..schemas import (
 )
 from ...core.db import session_scope
 
+log = logging.getLogger("iron_jarvis.projects")
+
 
 class ProjectKnowledgePatch(BaseModel):
     """Rename (``name``) or edit (``text``) one knowledge item. Only the fields
@@ -34,26 +38,71 @@ class ProjectKnowledgePatch(BaseModel):
     text: str | None = None
 
 
+def _root_problem(root: str) -> str | None:
+    """Why a NON-empty project folder cannot be worked in, or None when it can.
+
+    Three honest answers, in the order a user would fix them: not absolute,
+    not a folder on this machine, or a folder the app's file policy refuses
+    (a protected root such as the secrets/undo stores, or a path outside the
+    ``IRONJARVIS_FS_ALLOWLIST``). The third is the SAME predicate
+    ``POST /sessions`` applies to an explicit ``workspace_root`` — a project
+    task runs with its root as ``workspace_root`` and used to skip that door
+    entirely, so a project pinned to a protected folder ran every task with
+    every write refused as outside-workspace and no error naming why."""
+    from pathlib import Path
+
+    from ...core.fs_policy import usable_workspace_root
+
+    p = Path(root)
+    if not p.is_absolute():
+        return "folder must be an absolute path"
+    if not p.is_dir():
+        return f"folder does not exist on this machine: {root}"
+    if not usable_workspace_root(p):
+        return (
+            f"folder is protected or outside the app's allowed file roots: {root} "
+            "— pick a folder this app may read and write in"
+        )
+    return None
+
+
 def _validate_root(root: str) -> str:
     """Normalise + validate a project folder root. Empty is allowed (a project
     without a folder does chat-only tasks). A NON-empty root must be an absolute
-    path to an existing directory — a typo silently degraded every file task,
-    Studio launch, and terminal cwd downstream, so reject it HERE with an honest
-    error. Returns the cleaned root (empty string when none)."""
+    path to an existing directory the file policy lets the app work in — a typo
+    silently degraded every file task, Studio launch, and terminal cwd
+    downstream, so reject it HERE with an honest error (``_root_problem``).
+    Returns the cleaned root (empty string when none)."""
     from pathlib import Path
 
     root = (root or "").strip()
     if not root:
         return ""
-    p = Path(root)
-    if not p.is_absolute():
-        raise HTTPException(status_code=400, detail="folder must be an absolute path")
-    if not p.is_dir():
-        raise HTTPException(
-            status_code=400,
-            detail=f"folder does not exist on this machine: {root}",
-        )
-    return str(p)
+    problem = _root_problem(root)
+    if problem:
+        raise HTTPException(status_code=400, detail=problem)
+    return str(Path(root))
+
+
+#: Characters no deliverable filename may carry: the Windows-reserved set plus
+#: path separators and control characters. ``Path(name).stem`` keeps all of
+#: them, so a filename like ``re:port?`` used to sail through to the agent,
+#: which then worked the whole task and failed on the final write_document.
+_UNSAFE_STEM = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
+
+
+def _deliverable_stem(filename: str, task_text: str) -> str:
+    """The file stem a project task writes to: the caller's ``filename`` with
+    its extension and any path dropped, unsafe characters replaced, and
+    leading/trailing dots+spaces stripped (``..`` must not survive); falls back
+    to a slug of the task text when nothing usable remains."""
+    from pathlib import Path
+
+    stem = Path((filename or "").strip()).stem
+    stem = _UNSAFE_STEM.sub("-", stem).strip(". -")
+    if not stem:
+        stem = re.sub(r"[^A-Za-z0-9]+", "-", task_text[:40]).strip("-").lower() or "task"
+    return stem[:120]
 
 
 def _validate_project_model(d, provider: str, model: str) -> None:
@@ -241,12 +290,27 @@ def register(app: FastAPI, d) -> None:
         """Remove a project from Iron Jarvis ONLY — the folder it pointed at
         and every file on disk are untouched (the root is just a reference).
         Sessions that were tagged to it keep their history; they simply lose
-        the project association."""
+        the project association. So does every AUTOMATION bound to it: task
+        schedules, goal contracts and reflex rules keep running, ungrounded,
+        instead of spawning session after session tagged to a ghost id."""
+        from sqlalchemy.exc import OperationalError
+
         from ...core.models import ChatThreadRecord, Project, ProjectKnowledge
         from ...core.models import Session as SessionModel
+        from ...goals.models import GoalContractRecord
+        from ...reflex.models import ReflexRule
+        from ...scheduling.models import ScheduledTaskRecord
         from ...workflows.models import WorkflowRunRecord
 
         knowledge_deleted = 0
+        untagged: dict[str, int] = {
+            "sessions": 0,
+            "threads": 0,
+            "workflow_runs": 0,
+            "goals": 0,
+            "reflex_rules": 0,
+            "schedules": 0,
+        }
         with session_scope(d.platform.engine) as db:
             proj = db.get(Project, project_id)
             if proj is None:
@@ -254,10 +318,48 @@ def register(app: FastAPI, d) -> None:
             # Untag sessions, chat threads, and workflow runs (history preserved,
             # association dropped) — otherwise their project_id dangles at a
             # project that no longer exists and the UI 404s following it.
-            for model in (SessionModel, ChatThreadRecord, WorkflowRunRecord):
-                for row in db.exec(select(model).where(model.project_id == project_id)):
+            # Goal contracts and reflex rules are untagged for a stronger
+            # reason: each one SPAWNS sessions with its project_id, so left
+            # bound they would tag new work into the deleted project forever
+            # (the runtime's _project_context finds no row and grounds nothing,
+            # silently). ``platform.reflex`` / the goal store are the owners,
+            # but both read this engine, so one transaction covers all of it.
+            for key, model in (
+                ("sessions", SessionModel),
+                ("threads", ChatThreadRecord),
+                ("workflow_runs", WorkflowRunRecord),
+                ("goals", GoalContractRecord),
+                ("reflex_rules", ReflexRule),
+            ):
+                try:
+                    rows = list(db.exec(select(model).where(model.project_id == project_id)))
+                except OperationalError:
+                    # The table is created by its own package's boot step; a
+                    # build without that package has no rows to untag. Say so
+                    # in the log rather than 500 the whole delete.
+                    log.warning("project delete: no %s table to untag", key)
+                    continue
+                for row in rows:
                     row.project_id = None
                     db.add(row)
+                    untagged[key] += 1
+            # A task schedule carries its project INSIDE payload_json (the
+            # scheduler re-reads the row on every fire, so rewriting the row is
+            # enough — no in-memory job to refresh). Workflow/event/goal kinds
+            # carry one too, for the pin their action inherits.
+            try:
+                scheds = list(db.exec(select(ScheduledTaskRecord)))
+            except OperationalError:
+                log.warning("project delete: no schedules table to untag")
+                scheds = []
+            for sched in scheds:
+                payload = sched.decoded_payload()
+                if payload.get("project_id") != project_id:
+                    continue
+                payload.pop("project_id", None)
+                sched.payload_json = _json.dumps(payload, default=str)
+                db.add(sched)
+                untagged["schedules"] += 1
             # Knowledge belongs TO the project — delete it (no home without it).
             for k in db.exec(
                 select(ProjectKnowledge).where(ProjectKnowledge.project_id == project_id)
@@ -273,6 +375,7 @@ def register(app: FastAPI, d) -> None:
             "deleted": project_id,
             "files_touched": 0,
             "knowledge_deleted": knowledge_deleted,
+            "untagged": untagged,
         }
 
     @app.post("/projects/{project_id}/activate")
@@ -341,21 +444,35 @@ def register(app: FastAPI, d) -> None:
             if not data:
                 raise HTTPException(status_code=400, detail="empty file")
             # extract_text dispatches by suffix, so the decoded bytes need to live
-            # in a real file with the original name/extension first.
+            # in a real file with the original name/extension first. STAGED in
+            # a private one-off directory and removed afterwards: this used to
+            # write ``<home>/uploads/<name>`` — the exact path POST
+            # /documents/upload stores the user's documents at — so adding
+            # "report.pdf" to a project's knowledge silently overwrote a
+            # "report.pdf" the user had uploaded (and two same-named knowledge
+            # files raced on one path), and every staged copy stayed on disk
+            # for good although only its extracted text is ever used again.
+            import shutil
+            import tempfile
+
             safe = (
                 re.sub(r"[^A-Za-z0-9._-]", "_", body.filename or "").strip("._")
                 or "upload"
             )
-            uploads = d.platform.config.home / "uploads"
-            uploads.mkdir(parents=True, exist_ok=True)
-            target = uploads / safe
-            target.write_bytes(data)
+            staging_root = d.platform.config.home / "uploads" / ".knowledge-staging"
+            staging_root.mkdir(parents=True, exist_ok=True)
+            staging = Path(tempfile.mkdtemp(prefix="pk-", dir=staging_root))
             try:
-                extracted = (extract_text(target) or "").strip()
-            except Exception as exc:  # noqa: BLE001 — report the real reason, don't fabricate
-                raise HTTPException(
-                    status_code=400, detail=f"could not read {safe}: {exc}"
-                )
+                target = staging / safe
+                target.write_bytes(data)
+                try:
+                    extracted = (extract_text(target) or "").strip()
+                except Exception as exc:  # noqa: BLE001 — report the real reason, don't fabricate
+                    raise HTTPException(
+                        status_code=400, detail=f"could not read {safe}: {exc}"
+                    )
+            finally:
+                shutil.rmtree(staging, ignore_errors=True)
             if not extracted:
                 raise HTTPException(
                     status_code=400, detail=f"no extractable text in {safe}"
@@ -467,7 +584,6 @@ def register(app: FastAPI, d) -> None:
         (markdown structure becomes real docx/pdf/pptx/html structure; rows
         become real xlsx/csv cells). Returns the STARTED session (flat, like
         POST /sessions with wait:false) plus target_path for file outputs."""
-        import re
         from pathlib import Path
 
         from ...core.models import Project
@@ -485,7 +601,27 @@ def register(app: FastAPI, d) -> None:
             project = db.get(Project, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="no such project")
+        if project.status != "active":
+            # The workspace page hides the task composer on an archived project
+            # ("unarchive it to start new tasks here"), but that was the ONLY
+            # enforcement: the chat module's Tasks surface and any API caller
+            # could still spawn new work into a project the user closed out.
+            # Same refusal + wording as /activate, where the rule already lived.
+            raise HTTPException(status_code=400, detail="unarchive the project first")
         root = Path(project.root) if project.root else None
+        if root is not None and root.is_dir():
+            # A folder that exists but the file policy refuses (a protected
+            # root; outside the allowlist) is a THIRD failure: the session
+            # would start in it and have every write refused as
+            # outside-workspace. Older rows predate this check at create/patch
+            # time, so it has to be asked here too — for every deliverable,
+            # because a chat task runs in the folder as well.
+            problem = _root_problem(project.root)
+            if problem:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"This project's {problem}. Update it on the project page.",
+                )
         if output != "chat" and (root is None or not root.is_dir()):
             # A root that IS set but points at a missing/moved folder is a
             # different failure than never setting one — say so, so the user
@@ -528,9 +664,7 @@ def register(app: FastAPI, d) -> None:
                 "unless the task itself requires them."
             )
         else:
-            stem = Path(body.filename or "").stem.strip()
-            if not stem:
-                stem = re.sub(r"[^A-Za-z0-9]+", "-", text[:40]).strip("-").lower() or "task"
+            stem = _deliverable_stem(body.filename, text)
             rel_name = f"{stem}.{output}"
             target_path = str(root / rel_name)
             lines.append(
