@@ -29,7 +29,8 @@
  * where the list is long enough to scroll.
  */
 
-import { Plus, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Pencil, Plus, X } from "lucide-react";
 
 import {
   PaneDot,
@@ -42,7 +43,8 @@ export interface RailPane {
   /** The pane's human handle, else its shell's name. */
   label: string;
   state: PaneDisplay;
-  /** "claude" / "codex" / "pi", when something is known to be running. */
+  /** The CLI's own name — "Claude Code", "Grok CLI", "Pi" — not its id.
+   *  Empty when the pane is a plain shell. */
   cli?: string | null;
   /** The pane's folder — the second line, and often the real identifier. */
   cwd?: string | null;
@@ -57,6 +59,7 @@ export function PaneRail({
   focusedId,
   onFocus,
   onClose,
+  onRename,
   onNew,
   busy = false,
   footer,
@@ -65,12 +68,43 @@ export function PaneRail({
   focusedId: string | null;
   onFocus: (id: string) => void;
   onClose: (id: string) => void;
+  /** Commit a new name for a pane. "" clears it back to the shell's name. */
+  onRename: (id: string, name: string) => void;
   onNew: () => void;
   busy?: boolean;
   /** The layout switch, supplied by the page so the rail owns no modes. */
   footer?: React.ReactNode;
 }) {
   const blocked = panes.filter((p) => p.state === "blocked");
+
+  // RENAMING FROM THE RAIL (v1.219.0). The name was editable in the pane
+  // header, which is the one place you are already looking at that pane — so
+  // naming the OTHER four meant visiting each one. The rail is where you see
+  // them all, so it is where naming them belongs.
+  //
+  // A single click must keep selecting the pane: that is what the rail is for,
+  // and the click-to-edit the header uses would fight it. So renaming has its
+  // own two doors — the pencil that appears on hover, and a double-click on the
+  // name for anyone who expects that — and neither steals the plain click.
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (editing) inputRef.current?.select();
+  }, [editing]);
+
+  const begin = useCallback((p: RailPane) => {
+    setDraft(p.label);
+    setEditing(p.id);
+  }, []);
+  const commit = useCallback(
+    (id: string, previous: string) => {
+      setEditing(null);
+      const next = draft.trim();
+      if (next !== previous) onRename(id, next);
+    },
+    [draft, onRename],
+  );
 
   return (
     <div
@@ -120,9 +154,31 @@ export function PaneRail({
                       : "border-white/[0.05] hover:border-white/[0.12] hover:bg-white/[0.03]"
                 }`}
               >
+                {editing === p.id ? (
+                  <>
+                    <PaneDot state={p.state} />
+                    <input
+                      ref={inputRef}
+                      autoFocus
+                      data-testid="rail-rename-input"
+                      aria-label={`Rename pane ${p.label}`}
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      onBlur={() => commit(p.id, p.label)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commit(p.id, p.label);
+                        // Escape ABANDONS. A rename you cannot back out of is
+                        // one people stop starting.
+                        if (e.key === "Escape") setEditing(null);
+                      }}
+                      className="field min-w-0 flex-1 py-0.5 font-mono text-[11.5px]"
+                    />
+                  </>
+                ) : (
                 <button
                   type="button"
                   onClick={() => onFocus(p.id)}
+                  onDoubleClick={() => begin(p)}
                   aria-current={active ? "true" : undefined}
                   title={p.cwd || undefined}
                   className="flex min-w-0 flex-1 items-center gap-2 text-left"
@@ -151,10 +207,22 @@ export function PaneRail({
                       >
                         {stateWord(p.state)}
                       </span>
-                      {p.cli ? <span className="truncate">· {p.cli}</span> : null}
                     </span>
+                    {/* The CLI on its OWN line, by the name the Launch menu
+                        used. The first cut appended the daemon's id — "claude",
+                        "grok" — beside the state, which is the internal key,
+                        not what the user picked. */}
+                    {p.cli ? (
+                      <span
+                        data-testid={`rail-cli-${p.id}`}
+                        className="block truncate text-[10px] text-zinc-500"
+                      >
+                        {p.cli}
+                      </span>
+                    ) : null}
                   </span>
                 </button>
+                )}
 
                 {/* Two things the pane's own header cannot tell you from here:
                     output you have not seen, and an approval waiting in the
@@ -175,6 +243,16 @@ export function PaneRail({
                       className="h-1.5 w-1.5 rounded-full bg-accent"
                     />
                   ) : null}
+                  <button
+                    type="button"
+                    onClick={() => begin(p)}
+                    title="Rename this pane"
+                    aria-label={`Rename ${p.label}`}
+                    data-testid={`rail-rename-${p.id}`}
+                    className="grid h-4 w-4 place-items-center rounded text-zinc-700 opacity-0 transition-colors hover:bg-white/[0.08] hover:text-zinc-300 focus:opacity-100 group-hover:opacity-100"
+                  >
+                    <Pencil size={10} />
+                  </button>
                   <button
                     type="button"
                     onClick={() => onClose(p.id)}

@@ -39,6 +39,8 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
+from .ai_clis import AI_CLIS
+
 __all__ = [
     "AgentState",
     "PaneActivity",
@@ -109,8 +111,23 @@ _BLOCK_LINES = 8
 
 
 def known_clis() -> tuple[str, ...]:
-    """The CLIs this build can classify. Anything else stays `unknown`."""
-    return ("claude", "codex", "pi")
+    """Every CLI the Launch catalog can start, and whose hint we therefore
+    trust.
+
+    NOT the same set as `_CLI_MARKS`. Sniffing a CLI out of scrollback needs a
+    pattern written against that CLI's real output, and there are three of
+    those; the CATALOG, by contrast, knows exactly what it typed into the pane.
+    The first cut conflated the two and gated the hint on the sniffable three,
+    so launching Grok or Gemini from the catalog — reported by the browser the
+    moment it launches — was thrown away, and the pane fell back to "no agent
+    here". The user launched a CLI from a menu this app owns and the app said
+    it saw a shell.
+
+    Read the catalog rather than restating it: a CLI added to `AI_CLIS` becomes
+    launchable and classifiable in one edit, which is the only way the two
+    lists cannot drift.
+    """
+    return tuple(str(cli["id"]) for cli in AI_CLIS)
 
 
 # --------------------------------------------------------------------------
@@ -178,7 +195,11 @@ _PROMPT = re.compile(
     re.I,
 )
 
-#: The CLI is present at all. Used only to decide `cli`, never the state.
+#: SNIFFING — how we recognise a CLI nobody told us about, because the user
+#: typed its name themselves instead of using Launch. A small set on purpose:
+#: each pattern is written against that CLI's real output. `known_clis()` is
+#: the much longer list of what the catalog can START, and a hint from there
+#: beats anything here. Used only to decide `cli`, never the state.
 _CLI_MARKS: dict[str, re.Pattern[str]] = {
     "claude": re.compile(r"\b(?:claude code|anthropic|/help for help)\b", re.I),
     "codex": re.compile(r"\bcodex\b", re.I),

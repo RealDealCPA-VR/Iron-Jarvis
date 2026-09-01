@@ -21,7 +21,7 @@ import {
   SquareTerminal,
   X,
 } from "lucide-react";
-import { ApiError, del, get, post } from "@/lib/api";
+import { ApiError, del, get, patch, post } from "@/lib/api";
 import type { AiCli, ModelOption, Shell, Skill, TerminalInfo } from "@/lib/types";
 import { Card, OfflineHint, ErrorNote, Spinner, ConfirmButton } from "@/components/ui";
 import { usePolledApi } from "@/lib/useApi";
@@ -236,6 +236,18 @@ export default function TerminalsPage() {
    *  row that says something honest — "shell" for a pane with no agent in it,
    *  "can't tell" for one we cannot read.
    */
+  /** The CLI's own name, by its id. Read off the SAME catalog the Launch menu
+   *  renders, so the rail says exactly what the user clicked ("Grok CLI", not
+   *  "grok"). Falls back to the id for a CLI sniffed out of scrollback that the
+   *  catalog has never heard of — a name we half-know beats none. */
+  const cliLabel = useCallback(
+    (id: string | null | undefined) => {
+      if (!id) return null;
+      return aiClis.find((c) => c.id === id)?.label ?? id;
+    },
+    [aiClis],
+  );
+
   const railPanes: RailPane[] = useMemo(
     () =>
       terminals
@@ -251,13 +263,13 @@ export default function TerminalsPage() {
               resolveState(a?.state, Boolean(unseenTermOutput[t.id])),
               cli,
             ),
-            cli,
+            cli: cliLabel(cli),
             cwd: t.cwd,
             unseen: Boolean(unseenTermOutput[t.id]),
             chatApproval: Boolean(chatStatus[t.id]?.approval),
           };
         }),
-    [terminals, paneActivity, unseenTermOutput, paneOverrides, chatStatus],
+    [terminals, paneActivity, unseenTermOutput, paneOverrides, chatStatus, cliLabel],
   );
 
   /** The summary's rows. Built from the SAME resolve the panes use, so the
@@ -564,6 +576,25 @@ export default function TerminalsPage() {
     return live[0]?.id ?? null;
   }, [terminals, focusedId]);
 
+  /** Rename a pane from the rail (v1.219.0).
+   *
+   *  The same two steps the pane header already does, in the same order and for
+   *  the same reason: the local echo lands on this frame so the row does not
+   *  snap back to the old name while a 2.5s poll catches up, and the PATCH is
+   *  fire-and-forget because the poll is the source of truth and a failed
+   *  rename is cosmetic. It is PARTIAL — `name` only — so renaming a pane
+   *  cannot drop the `agent_cli` a launch recorded on it.
+   */
+  const renamePane = useCallback(
+    (id: string, name: string) => {
+      notePaneOverride(id, { name: name || undefined });
+      patch(`/terminals/${id}`, { name }).catch(() => {
+        /* offline / pane gone — the activity poll restores the truth */
+      });
+    },
+    [notePaneOverride],
+  );
+
   const bringToFront = useCallback((id: string) => {
     setFocusedId(id);
     zTop.current += 1;
@@ -825,6 +856,7 @@ export default function TerminalsPage() {
                 focusedId={activeId}
                 onFocus={bringToFront}
                 onClose={(id) => setPendingClose(id)}
+                onRename={renamePane}
                 onNew={() => addTerminal(selectedPath)}
                 busy={busy}
                 footer={

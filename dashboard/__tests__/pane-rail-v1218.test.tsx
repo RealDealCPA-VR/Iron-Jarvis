@@ -34,7 +34,11 @@ const api = vi.hoisted(() => {
       this.status = status;
     }
   }
-  return { responses: {} as Record<string, unknown>, FakeApiError };
+  return {
+    responses: {} as Record<string, unknown>,
+    patches: [] as [string, unknown][],
+    FakeApiError,
+  };
 });
 
 vi.mock("@/lib/api", () => ({
@@ -47,7 +51,10 @@ vi.mock("@/lib/api", () => ({
     return Promise.resolve(r);
   },
   post: () => Promise.resolve({}),
-  patch: () => Promise.resolve({}),
+  patch: (path: string, body: unknown) => {
+    api.patches.push([path, body]);
+    return Promise.resolve({});
+  },
   del: () => Promise.resolve({}),
 }));
 
@@ -134,7 +141,12 @@ function seedApi(terminals: unknown[], panes: unknown[] = []) {
     "/terminals": { terminals },
     "/terminals/shells": { shells: [] },
     "/models": { models: [] },
-    "/terminals/ai-clis": { clis: [] },
+    "/terminals/ai-clis": {
+      clis: [
+        { id: "claude", label: "Claude Code", command: "claude", provider: "Anthropic", url: "", installed: true },
+        { id: "grok", label: "Grok CLI", command: "grok", provider: "xAI", url: "", installed: true },
+      ],
+    },
     "/skills": { skills: [] },
     "/terminals/activity": { panes },
   };
@@ -151,6 +163,7 @@ const shell = (id: string) => screen.getByTestId(`rail-pane-${id}`);
 beforeEach(() => {
   localStorage.clear();
   counters.termMounts = {};
+  api.patches = [];
   seedApi([term("t1", "C:\\proj\\alpha"), term("t2", "C:\\proj\\beta")]);
 });
 
@@ -322,5 +335,114 @@ describe("the canvas is still there", () => {
 
     fireEvent.click(screen.getByTestId("shape-canvas"));
     await waitFor(() => expect(screen.getByTestId("pane-summary")).toBeTruthy());
+  });
+});
+
+
+describe("naming a pane from the rail (v1.219.0)", () => {
+  const seedTwo = () =>
+    seedApi(
+      [term("t1", "C:\\proj\\alpha"), term("t2", "C:\\proj\\beta")],
+      [
+        { id: "t1", name: null, agent_cli: "claude", state: "idle", alive: true },
+        { id: "t2", name: null, agent_cli: "grok", state: "idle", alive: true },
+      ],
+    );
+
+  it("names the CLI the way the Launch menu did, not by its id", async () => {
+    // "grok" is the daemon's key. "Grok CLI" is what the user clicked, and the
+    // only one of the two they have ever been shown.
+    seedTwo();
+    await renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("rail-cli-t2").textContent).toBe("Grok CLI"),
+    );
+    expect(screen.getByTestId("rail-cli-t1").textContent).toBe("Claude Code");
+  });
+
+  it("falls back to the id for a CLI the catalog has never heard of", async () => {
+    // A CLI sniffed out of the scrollback, or one dropped from the catalog: a
+    // name we half-know beats no name at all.
+    seedApi(
+      [term("t1", "C:\\proj\\alpha")],
+      [{ id: "t1", agent_cli: "aider", state: "idle", alive: true }],
+    );
+    await renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("rail-cli-t1").textContent).toBe("aider"),
+    );
+  });
+
+  it("says nothing about a CLI on a pane that has none", async () => {
+    seedApi(
+      [term("t1", "C:\\proj\\alpha")],
+      [{ id: "t1", agent_cli: null, state: "unknown", alive: true }],
+    );
+    await renderPage();
+    await waitFor(() => expect(row("t1").textContent).toContain("shell"));
+    expect(screen.queryByTestId("rail-cli-t1")).toBeNull();
+  });
+
+  it("renames from the rail and tells the daemon", async () => {
+    // The name was editable in the pane HEADER, which is the one place you are
+    // already looking at that pane — so naming the other four meant visiting
+    // each one. The rail is where you see them all.
+    seedTwo();
+    await renderPage();
+    fireEvent.click(screen.getByTestId("rail-rename-t2"));
+    const input = await screen.findByTestId("rail-rename-input");
+    fireEvent.change(input, { target: { value: "tester" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(row("t2").textContent).toContain("tester"));
+    expect(api.patches).toContainEqual(["/terminals/t2", { name: "tester" }]);
+  });
+
+  it("shows the new name at once instead of waiting on the poll", async () => {
+    // The activity poll is the source of truth and runs every 2.5s. Without a
+    // local echo the row snaps back to the old name in the meantime, which
+    // reads as a failed save.
+    seedTwo();
+    await renderPage();
+    fireEvent.click(screen.getByTestId("rail-rename-t1"));
+    const input = await screen.findByTestId("rail-rename-input");
+    fireEvent.change(input, { target: { value: "builder" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(row("t1").textContent).toContain("builder");
+  });
+
+  it("abandons on Escape, and asks the daemon for nothing", async () => {
+    seedTwo();
+    await renderPage();
+    fireEvent.click(screen.getByTestId("rail-rename-t1"));
+    const input = await screen.findByTestId("rail-rename-input");
+    fireEvent.change(input, { target: { value: "discarded" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("rail-rename-input")).toBeNull());
+    expect(row("t1").textContent).not.toContain("discarded");
+    expect(api.patches).toEqual([]);
+  });
+
+  it("opens the editor on a double-click, and a single click still selects", async () => {
+    // Selecting is what the rail is FOR, so renaming needs its own doors: the
+    // plain click must never be one of them.
+    seedTwo();
+    await renderPage();
+    const rowBtn = row("t2").querySelector("button")!;
+    fireEvent.click(rowBtn);
+    await waitFor(() => expect(shell("t2").style.visibility).toBe("visible"));
+    expect(screen.queryByTestId("rail-rename-input")).toBeNull();
+
+    fireEvent.doubleClick(rowBtn);
+    expect(await screen.findByTestId("rail-rename-input")).toBeTruthy();
+  });
+
+  it("sends nothing when the name comes back unchanged", async () => {
+    seedTwo();
+    await renderPage();
+    fireEvent.click(screen.getByTestId("rail-rename-t1"));
+    const input = await screen.findByTestId("rail-rename-input");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(api.patches).toEqual([]);
   });
 });

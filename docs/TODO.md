@@ -120,6 +120,22 @@ and five agent-facing pane tools on the Builder and Maintainer rosters.
   THE LESSON, and it is not a UI lesson: shipping the mechanism is not shipping
   the feature. Reachability was checked for the pane NAME in v1.217.0 and not
   for the thing the whole wave was about.
+- [x] **A launched Grok/Gemini/Aider pane reported as a plain shell — FIXED
+  v1.219.0.** `known_clis()` returned the three CLIs with SNIFF PATTERNS, and
+  `_detect_cli` gated the Launch catalog's hint on that same list. So the
+  browser reported "I just started grok here", the daemon threw it away, and
+  the rail said `shell` — for a CLI started from a menu this app owns. It read
+  the sniffable set as if it were the knowable set. `known_clis()` now reads
+  `AI_CLIS`, so a CLI added to the catalog becomes classifiable in the same
+  edit, and the two lists cannot drift.
+- [x] **The rail named the CLI by its internal id — FIXED v1.219.0.** Rows read
+  `· grok` rather than `Grok CLI`. The label comes from the same catalog the
+  Launch menu renders, so the rail says what the user clicked; an id the
+  catalog does not know still shows, because a name we half-know beats none.
+- [x] **A pane could only be renamed from its own header — FIXED v1.219.0.**
+  Which meant naming five panes required visiting five panes. The rail is where
+  you see them all, so it renames them: a pencil on hover and a double-click on
+  the name, both leaving the plain click to do what the rail is for.
 - [ ] **The "needs you" summary is Build-page-only.** herdr's framing is "never
   hunt for the stuck one", and a user on Chat or Documents still learns nothing
   about a blocked pane. A sidebar count is the obvious completion and was left

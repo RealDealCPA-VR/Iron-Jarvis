@@ -24,7 +24,7 @@ from typing import Any
 
 import pytest
 
-from iron_jarvis.terminals.agent_state import AgentState, classify
+from iron_jarvis.terminals.agent_state import AgentState, classify, known_clis
 from iron_jarvis.tools.base import ToolContext
 from iron_jarvis.tools.pane_tools import (
     PaneListTool,
@@ -169,6 +169,40 @@ def test_the_launch_hint_beats_sniffing():
     guesswork by comparison."""
     assert classify("> ", cli="codex").cli == "codex"
     assert classify("welcome to Claude Code\n> ").cli == "claude"
+
+
+def test_the_hint_is_honoured_for_every_cli_the_catalog_can_LAUNCH():
+    """Not just the three we can sniff (v1.219.0).
+
+    Sniffing needs a pattern written against a CLI's real output and there are
+    three of those; the Launch catalog, by contrast, knows exactly what it
+    typed into the pane. The first cut gated the hint on the sniffable set, so
+    a user launching Grok or Gemini from a menu THIS APP OWNS had the answer
+    thrown away and the pane reported as a plain shell. `known_clis()` reads
+    the catalog now, so adding a CLI there makes it classifiable in one edit.
+    """
+    from iron_jarvis.terminals.ai_clis import AI_CLIS
+
+    ids = {str(c["id"]) for c in AI_CLIS}
+    assert {"grok", "gemini", "opencode", "aider"} <= ids, "catalog shrank"
+    assert set(known_clis()) == ids
+
+    for cli in ("grok", "gemini", "cursor-agent"):
+        act = classify("> ", cli=cli, seen=True)
+        assert act.cli == cli, cli
+        # …and knowing a CLI is there is what lets a prompt read as `idle`
+        # rather than as an unreadable shell.
+        assert act.state is AgentState.IDLE, cli
+
+
+def test_an_unknown_hint_is_still_refused():
+    """The hint is trusted because it comes from the catalog, not because it
+    is a string. Anything else falls back to sniffing, and a bare prompt with
+    no CLI in sight stays `unknown` — the rule that keeps every idle shell on
+    the canvas from claiming to be an agent standing by."""
+    act = classify("> ", cli="definitely-not-a-cli", seen=True)
+    assert act.cli is None
+    assert act.state is AgentState.UNKNOWN
 
 
 def test_unknown_is_never_reported_as_finished():
