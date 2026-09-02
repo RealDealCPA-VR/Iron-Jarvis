@@ -270,16 +270,44 @@ export default function AgentsPage() {
    * claiming the selection, `null` = nobody is.
    */
   const deepLinkRef = useRef<string | null | undefined>(undefined);
+  // `/agents?talk=<builtin>&ask=<text>` (v1.224.0): open (or start) the 1:1
+  // thread with a built-in agent and prefill the composer — the Help page's
+  // "Ask the Guide" lands here with talk=guide. Read at mount; acted on once
+  // the thread list has answered (Talk needs it to find an existing 1:1).
+  // The params are stripped after use so a refresh does not re-open.
+  const [pendingTalk, setPendingTalk] = useState<string | null>(null);
+  const [pendingAsk, setPendingAsk] = useState<string>("");
   useEffect(() => {
     let wanted: string | null = null;
     try {
-      wanted = new URLSearchParams(window.location.search).get("thread");
+      const params = new URLSearchParams(window.location.search);
+      wanted = params.get("thread");
+      const talk = (params.get("talk") || "").trim();
+      const ask = (params.get("ask") || "").trim();
+      if (talk) setPendingTalk(talk);
+      if (ask) setPendingAsk(ask);
+      if (talk || ask) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("talk");
+        url.searchParams.delete("ask");
+        window.history.replaceState(null, "", url.toString());
+      }
     } catch {
       /* a malformed query string is no deep link, not a broken page */
     }
     deepLinkRef.current = wanted;
     if (wanted) setSelectedId(wanted);
   }, []);
+  // Act on ?talk= once the thread list has answered: Talk reuses an existing
+  // 1:1 thread when there is one, which it can only know from the list.
+  useEffect(() => {
+    if (!pendingTalk || !threadsData) return;
+    const name = pendingTalk;
+    setPendingTalk(null);
+    void talkWith("builtin", name);
+    // talkWith is a stable function declaration in this component.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingTalk, threadsData]);
 
   // Auto-select the most recent thread so the star of the page is never blank.
   useEffect(() => {
@@ -583,6 +611,7 @@ export default function AgentsPage() {
         // second opinion about who can take work.
         roster={rosterEntries}
         assign={assign}
+        initialInput={pendingAsk}
       />
     ) : (
       <Card>
@@ -775,6 +804,7 @@ export default function AgentsPage() {
                           onRoundDone={reloadThreads}
                           roster={rosterEntries}
                           assign={assign}
+                          initialInput={pendingAsk}
                         />
                       ) : (
                         <Card>

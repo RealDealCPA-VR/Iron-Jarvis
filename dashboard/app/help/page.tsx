@@ -549,19 +549,19 @@ interface GuideStatus {
   live_sections: number;
 }
 
-/** Ask the Iron Jarvis Guide (v1.223.0): one box that lands in Chat with the
- *  `guide` persona selected for that conversation and the question prefilled
- *  (never auto-sent — the consent rule: side effects wait for Enter in the
- *  composer). The persona is grounded server-side in the bundled docs + live
- *  catalogs; the line under the box says how much of that this install
- *  actually carries, and names a missing doc rather than implying the Guide
- *  knows a chapter it does not have. */
+/** Ask the Iron Jarvis Guide (v1.224.0): one box that opens a Talk with the
+ *  built-in Guide AGENT on the Agents page, the question prefilled (never
+ *  auto-sent — the consent rule: side effects wait for Enter in the
+ *  composer). The Guide answers grounded in the app's docs + this install's
+ *  live catalogs and can search your own things in the app; the line under
+ *  the box says how much reference material this install carries, naming a
+ *  missing doc rather than implying the Guide knows a chapter it lacks. */
 function AskGuideCard() {
   const [q, setQ] = useState("");
   const linkRef = useRef<HTMLAnchorElement>(null);
   const status = useApi<GuideStatus>("/guide/status");
   const s = status.data;
-  const href = `/chat?persona=guide${q.trim() ? `&ask=${encodeURIComponent(q.trim())}` : ""}`;
+  const href = `/agents?talk=guide${q.trim() ? `&ask=${encodeURIComponent(q.trim())}` : ""}`;
   const knows =
     s
       ? `${s.docs.length} reference doc${s.docs.length === 1 ? "" : "s"} (${s.doc_sections} sections) plus ${s.live_sections} live catalogs of this install`
@@ -569,9 +569,10 @@ function AskGuideCard() {
   return (
     <Card title="Ask the Guide" icon={<Bot size={15} />}>
       <p className="text-[13px] text-zinc-400">
-        The built-in expert on Iron Jarvis. Ask how anything here works — a page, a
-        setting, what a word means, what a tool does — and it answers from the app’s
-        own docs and this install’s live catalogs, and says when it doesn’t know.
+        The Guide is a built-in agent on the Agents page — the expert on Iron Jarvis
+        itself. Ask how anything here works, or where something of yours is (a
+        project, a workflow, a schedule): it looks it up in the app’s own docs and in
+        this install, and says when it doesn’t know.
       </p>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <input

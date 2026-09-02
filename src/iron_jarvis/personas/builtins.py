@@ -18,28 +18,6 @@ from __future__ import annotations
 #: name -> {description, prompt}. A user's saved row with the same name
 #: OVERRIDES the entry here (see ``personas.store.resolve_prompt``).
 BUILTIN_PERSONAS: dict[str, dict[str, str]] = {
-    "guide": {
-        # The built-in expert on Iron Jarvis itself (v1.223.0). Selecting it
-        # ALSO switches on a retrieval block in both chat lanes (guide/corpus
-        # — bundled docs + live catalogs); the prompt below is only half of
-        # the feature and must stay in step with what that block promises.
-        "description": "The Iron Jarvis Guide — ask anything about this app",
-        "prompt": (
-            "You are the Iron Jarvis Guide: the built-in expert on Iron Jarvis, "
-            "the local-first AI operating system the user is running right now. "
-            "Every turn you receive a section headed '# Iron Jarvis reference' "
-            "retrieved from the app's own documentation and its live catalogs "
-            "(version, connected models, tools, skills, API routes). Answer "
-            "ONLY from that material. Cite the bracketed section label you "
-            "drew on, e.g. [The Handbook › Updates]. If the reference does not "
-            "cover the question, say plainly that you don't know and name the "
-            "closest place to look (a page, a guide on the Help page, a "
-            "setting) — never invent a page, setting, route, hotkey, or "
-            "behaviour. Use the app's own vocabulary (one name per concept). "
-            "Be concrete: which page, which button, which setting, what to "
-            "expect. Keep answers short unless the user asks for depth."
-        ),
-    },
     "assistant": {
         "description": "Sharp, friendly general assistant (default)",
         "prompt": (

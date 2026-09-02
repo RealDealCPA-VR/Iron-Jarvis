@@ -142,6 +142,12 @@ def default_permissions() -> dict[str, str]:
         # settings display imply a configured choice nobody made (P3's pinned
         # design — see test_workflow_tools_v1170).
         "workflow_list": "allow",
+        # THE GUIDE'S TOOLS (v1.224.0): read-only lookups over the app's own
+        # docs/catalogs and the user's things in this install.
+        "guide_search": "allow",
+        "guide_read": "allow",
+        "app_search": "allow",
+        "app_status": "allow",
         # THE DURABLE WORKLIST (v1.177.0, permissioned v1.178.0). These four had
         # NO entry, so they fail-closed to "ask" and a headless agent run —
         # every agent run — was DENIED all four. The whole checkpointing

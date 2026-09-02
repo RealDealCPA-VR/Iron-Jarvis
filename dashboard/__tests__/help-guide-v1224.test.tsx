@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 /**
- * v1.223.0 — "Ask the Guide" on the Help page.
+ * v1.224.0 — "Ask the Guide" on the Help page.
  *
- * The built-in Iron Jarvis expert is a chat persona grounded server-side; the
- * Help page is its front door. What is pinned: the box lands in Chat with
- * `persona=guide` selected for that conversation and the question PREFILLED
+ * The built-in Iron Jarvis expert is an AGENT on the Agents page; the Help
+ * page is its front door. What is pinned: the box lands on the Agents page
+ * with `talk=guide` (open/start the 1:1 thread) and the question PREFILLED
  * (never sent — consent waits for Enter in the composer); Enter in the box is
  * the same navigation as the button; and the status line tells the truth
  * about what this install carries, naming a missing doc instead of implying
@@ -79,18 +79,18 @@ afterEach(() => {
 });
 
 describe("Ask the Guide (v1.223.0)", () => {
-  it("lands in Chat with the guide persona and the question prefilled, never sent", () => {
+  it("lands on the Agents page talking to the Guide, the question prefilled, never sent", () => {
     hooks.responses["/guide/status"] = STATUS;
     hooks.responses["/helpdocs"] = { docs: [] };
     render(<HelpPage />);
     const link = screen.getByTestId("ask-guide-link");
-    expect(link).toHaveAttribute("href", "/chat?persona=guide");
+    expect(link).toHaveAttribute("href", "/agents?talk=guide");
     fireEvent.change(screen.getByLabelText("Ask the Guide"), {
       target: { value: "How do updates install?" },
     });
     expect(link).toHaveAttribute(
       "href",
-      "/chat?persona=guide&ask=How%20do%20updates%20install%3F",
+      "/agents?talk=guide&ask=How%20do%20updates%20install%3F",
     );
   });
 
@@ -107,7 +107,7 @@ describe("Ask the Guide (v1.223.0)", () => {
     const box = screen.getByLabelText("Ask the Guide");
     fireEvent.change(box, { target: { value: "what is a memory base" } });
     fireEvent.keyDown(box, { key: "Enter" });
-    expect(clicked).toEqual(["/chat?persona=guide&ask=what%20is%20a%20memory%20base"]);
+    expect(clicked).toEqual(["/agents?talk=guide&ask=what%20is%20a%20memory%20base"]);
   });
 
   it("says what the Guide knows, and names a missing doc rather than hiding it", () => {

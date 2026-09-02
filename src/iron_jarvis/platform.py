@@ -1521,6 +1521,19 @@ def build_platform(
     platform.permissions._base.setdefault("workflow_list", "allow")
     platform.config.permissions.setdefault("workflow_list", "allow")
 
+    # THE IRON JARVIS GUIDE (v1.224.0): the built-in expert's tools — the
+    # reference (guide_search/guide_read) and the user's own things in this
+    # install (app_search/app_status). All read-only, all "allow" (both copies,
+    # same reason as workflow_list above). Registered here because app_search
+    # reads the scheduler, reflex store and goal engine wired just above.
+    from .guide.tools import GUIDE_TOOL_NAMES, guide_tools
+
+    for tool in guide_tools(platform):
+        platform.registry.register(tool)
+    for _guide_key in GUIDE_TOOL_NAMES:
+        platform.permissions._base.setdefault(_guide_key, "allow")
+        platform.config.permissions.setdefault(_guide_key, "allow")
+
     # Motivation Layer ("the pulse"): standing goals + off-by-default deliberation.
     # The orchestrator (the executor) is wired in by the daemon after build; the
     # engine is safe with it unset (deliberation stays propose-only). Its EventBus

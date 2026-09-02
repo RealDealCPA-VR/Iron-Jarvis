@@ -156,6 +156,7 @@ _BUILTIN_STRENGTHS: dict[str, str] = {
     "memory": "curates and tidies the platform's stored knowledge",
     "maintainer": "carefully edits and tests Iron Jarvis's own code",
     "automation": "wires up schedules, webhooks, workflows, and integrations",
+    "guide": "the Iron Jarvis expert — explains the app, finds your things in it",
 }
 
 #: Character cap for one rendered line inside :func:`roster_block` — keeps

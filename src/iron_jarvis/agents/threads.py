@@ -827,6 +827,17 @@ class AgentThreads:
             except Exception:  # noqa: BLE001 — never break a round
                 pass
 
+        # THE GUIDE AT THE TABLE (v1.224.0). Panelists have no tools, and the
+        # Guide's whole value is looking things up — so the retrieval its
+        # tools would have run is done for it here: the reference block for
+        # the conversation's tail plus an app_search over the user's own
+        # things, appended AFTER the no-tools rule so the model treats them as
+        # material it already holds ("what you already know"), which is
+        # exactly what they now are. Best-effort; the seat still answers
+        # without them, and its prompt says to admit what it cannot see.
+        if p["source"] == "builtin" and str(p["name"]).strip().lower() == "guide":
+            system += await self._guide_material(transcript, d)
+
         resp, _p, _m = await d._one_shot_complete(
             provider,
             adapter,
@@ -837,6 +848,32 @@ class AgentThreads:
         if not text:
             raise RuntimeError("the model returned an empty reply")
         return text
+
+    @staticmethod
+    async def _guide_material(transcript: str, d: Any) -> str:
+        """The Guide's looked-up material for one round: reference sections
+        for the transcript's tail (the latest question dominates) and the
+        user's matching things in this install. ``""`` when nothing could be
+        gathered — never raises."""
+        query = " ".join((transcript or "")[-600:].split())
+        out = ""
+        try:
+            from ..guide import ground
+
+            block = ground(d.platform, query)
+            if block:
+                out += "\n\n" + block
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from ..guide.tools import AppSearchTool
+
+            res = await AppSearchTool(d.platform).execute({"query": query, "k": 8}, None)
+            if res.ok and res.data and res.data.get("hits"):
+                out += "\n\n# Matching things in this install (from app_search)\n" + res.output
+        except Exception:  # noqa: BLE001
+            pass
+        return out
 
     @staticmethod
     def _remote_record(name: str, d: Any) -> Any:

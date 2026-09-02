@@ -23,6 +23,7 @@ class AgentType(str, enum.Enum):
     MEMORY = "memory"
     AUTOMATION = "automation"
     MAINTAINER = "maintainer"  # self-development: edits Iron Jarvis's own source
+    GUIDE = "guide"  # v1.224.0: the built-in expert on Iron Jarvis itself
 
 
 class AgentState(str, enum.Enum):

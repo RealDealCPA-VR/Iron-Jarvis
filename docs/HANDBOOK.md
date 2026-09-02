@@ -157,16 +157,21 @@ seam); Train (teach it your writing voice, suggest-only).
 
 ## Ask the Guide
 
-The **Guide** is the built-in expert on Iron Jarvis itself. It is a chat
-persona (pick *Guide* in the chat persona menu, or use the **Ask the Guide**
-box at the top of the Help page, which opens a chat with the Guide selected
-for that conversation and your question ready to send). Every answer is
-grounded in this Handbook, the other guides, the vocabulary and product
-reference, and live catalogs of your install — the running version, connected
-models, tools, skills, and every API route — so it can tell you which page,
-button or setting does what. It cites the section it drew on, and when the
-reference does not cover a question it says so and points you to the nearest
-place to look instead of guessing.
+The **Guide** is a built-in agent — it sits in the roster on the Agents page
+beside the builder, researcher and the rest — and it is the expert on Iron
+Jarvis itself. **Talk** to it there (or use the **Ask the Guide** box at the
+top of the Help page, which opens that conversation with your question ready
+to send), **Give work** to it for a longer lookup, or run a session as the
+*guide* agent. It starts every session knowing what the app is and how your
+install is set up, and it looks the rest up with its own tools: the reference
+(this Handbook, the other guides, the vocabulary and product reference, and
+live catalogs of your install — version, connected models, tools, skills, and
+every API route) and your own things inside the app (projects, saved
+workflows, schedules, reflex rules, goals, skills, agents, threads, sessions,
+memory bases), each answer naming the page that opens it. It cites the section
+it drew on, and when neither the reference nor the app holds an answer it
+says so and points you to the nearest place to look instead of guessing. It
+reads; it never writes, runs commands, or starts work on its own.
 
 ## Troubleshooting in one minute
 

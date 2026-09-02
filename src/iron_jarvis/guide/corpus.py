@@ -475,6 +475,39 @@ class GuideIndex:
             used += len(block)
         return body if hits else (body + "\n\n(No reference material is available on this install.)")
 
+    def base_knowledge(self, *, char_budget: int = 6000) -> str:
+        """What the Guide AGENT starts every session knowing (v1.224.0): the
+        Handbook's opening (what the app is, the three processes, hotkeys,
+        where state lives) and its surfaces tour, the live version/install
+        facts, and the list of live catalogs its tools can search. Everything
+        else it looks up with guide_search / app_search — this block is the
+        map, not the territory."""
+        parts: list[Section] = [s for s in self.docs if s.doc == "handbook"][:4]
+        live = self.live()
+        parts += [s for s in live if s.heading.startswith("Version")]
+        lines = [
+            "# Iron Jarvis reference (base knowledge)",
+            "(From the app's own Handbook and this install's live facts. For "
+            "anything beyond it, call guide_search / guide_read; for the user's "
+            "own things call app_search / app_status. Do not invent what is not "
+            "here or in a tool result.)",
+        ]
+        if self.missing:
+            names = ", ".join(m["file"] for m in self.missing)
+            lines.append(f"(Note: reference file(s) missing from this install: {names}.)")
+        body = "\n".join(lines)
+        used = len(body)
+        for s in parts:
+            block = f"\n\n## [{s.label}]\n{s.text}"
+            if used + len(block) > char_budget:
+                break
+            body += block
+            used += len(block)
+        heads = [s.heading for s in live]
+        if heads:
+            body += "\n\nLive catalogs guide_search can reach: " + "; ".join(heads)
+        return body
+
     # -- status --------------------------------------------------------------
 
     def status(self) -> dict[str, Any]:
@@ -509,3 +542,7 @@ def index_for(platform, app=None) -> GuideIndex:
 
 def ground(platform, query: str, *, app=None, char_budget: int = DEFAULT_GROUND_CHARS) -> str:
     return index_for(platform, app).ground(query, char_budget=char_budget)
+
+
+def base_knowledge(platform, *, app=None, char_budget: int = 6000) -> str:
+    return index_for(platform, app).base_knowledge(char_budget=char_budget)

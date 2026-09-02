@@ -836,17 +836,6 @@ const DEFAULT_PERSONAS: PersonaOption[] = [
     builtin: true,
     overridden: false,
   },
-  {
-    // v1.223.0: the built-in Iron Jarvis expert — listed here too so a
-    // /chat?persona=guide landing has something to select before the
-    // catalog answers.
-    name: "guide",
-    title: "Guide",
-    description: "The Iron Jarvis Guide — ask anything about this app",
-    prompt: "",
-    builtin: true,
-    overridden: false,
-  },
 ];
 
 // stepLabel (the event -> progress-line renderer) lives in

@@ -454,23 +454,33 @@ does not need a bump, stop and bump it.
   should inherit its parent's summary for free) — and it is registered in
   `core.db._LATE_MODEL_MODULES`, without which its lazily-created table lands
   on fresh test DBs and on no real install (the v1.151.2 lesson).
-- `guide/` — THE IRON JARVIS GUIDE (v1.223.0): the built-in expert on the app
-  itself. A chat persona (`guide`, in `personas/builtins.py`) whose every
-  turn is grounded — at BOTH chat seams via `chat_turn._guide_section` — in a
-  block retrieved from `corpus.py`: the bundled docs (`BUNDLED_DOCS`, shipped
-  into `_MEIPASS/ijdocs` by the .spec, which IMPORTS that list so the bundle
-  cannot drift) plus live catalogs generated from the running daemon (version,
-  providers, tools, skills, personas, agent types, every API route with its
-  docstring). Retrieval is lexical BM25 + phrase bonus + a user-facing doc
-  prior — deterministic, no embedder — so a wrong answer is reproducible.
-  The persona is told to answer ONLY from the block and to say "I don't know,
-  look here" otherwise. `routes/guide.py` is the inspection surface
-  (`/guide/status|search|ground`); the Help page's "Ask the Guide" box lands
-  in `/chat?persona=guide&ask=…` (persona local to the conversation, never
-  the saved default). The Guide knows what the DOCS know: when a surface
-  ships, the Handbook is part of the change set, or the Guide will answer
-  "not covered" about a feature that exists (the doctor check `guide_docs`
-  catches a missing FILE, not a stale one).
+- `guide/` — THE IRON JARVIS GUIDE (v1.224.0; v1.223.0 shipped it as a chat
+  persona, which the user rejected — it belongs in the AGENTS module). A
+  built-in agent, `AgentType.GUIDE` in `agents/types.py`, in the roster
+  beside the other builtins. BASE KNOWLEDGE: `agents/runtime` injects
+  `guide.base_knowledge` (the Handbook's overview + this install's live
+  version facts) into every Guide session. TOOLS (`guide/tools.py`, all
+  read-only, all `allow`): `guide_search`/`guide_read` over `corpus.py` — the
+  bundled docs (`BUNDLED_DOCS`, shipped into `_MEIPASS/ijdocs` by the .spec,
+  which IMPORTS that list so the bundle cannot drift) plus live catalogs from
+  the running daemon (version, providers, tools, skills, personas, agent
+  types, every API route with its docstring) — and `app_search`/`app_status`
+  over the user's OWN things in this install (projects, workflows,
+  schedules, reflex rules, goals, skills, agents, threads, sessions, memory
+  bases, custom tools), each hit with the dashboard path that opens it, and
+  an unreadable store NAMED rather than reported empty. Retrieval is BM25 +
+  phrase bonus + a user-facing doc prior — deterministic, no embedder. THE
+  ROUND TABLE HAS NO TOOLS (`PANEL_NO_TOOLS`), so for a Talk with the Guide
+  `threads._speak_local` runs the retrieval + app_search itself and appends
+  the material AFTER the no-tools rule (`_guide_material`); Give-work and a
+  `guide` session get the real tools. `routes/guide.py` is the inspection
+  surface (`/guide/status|search|ground`); the Help page's "Ask the Guide"
+  box lands in `/agents?talk=guide&ask=…`. Chat can also arm
+  `guide_search`/`app_search`/`app_status` (autoselect, narrow vocabulary).
+  The Guide knows what the DOCS know: when a surface ships, the Handbook is
+  part of the change set, or the Guide answers "not covered" about a feature
+  that exists (the doctor check `guide_docs` catches a missing FILE, not a
+  stale one).
 - `profile/` — the user profile (ONE row): `models` (record), `store`
   (read-never-writes, partial save), `presets` (vocabularies; unknown key =
   free text), `language` (pure script-level leakage detector), `block`

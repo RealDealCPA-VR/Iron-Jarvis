@@ -61,7 +61,6 @@ from ..chat_turn import (
     _profile_section,
     _resolve_armed_tools,
     _resolve_connectors,
-    _guide_section,
     _resolve_persona,
     _resolve_tool_workspace,
     _sanitize_draft,
@@ -1248,11 +1247,6 @@ def register(app: FastAPI, d) -> None:
         # an email; if the instruction reached only the non-streaming lane the
         # feature would look broken exactly where it is most used.
         system += DRAFT_BLOCK
-        # THE IRON JARVIS GUIDE (v1.223.0) — lock-step copy of chat_turn's
-        # injection; the streaming lane is the one the Help page's "Ask the
-        # Guide" box lands in, so a Guide that grounded only the other lane
-        # would be ungrounded exactly where it is used.
-        system += _guide_section(d.platform, want, recall_query)
         pid = (body.project_id or "").strip() or None
         resolved_proj = None
         if pid:

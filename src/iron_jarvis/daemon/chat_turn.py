@@ -154,28 +154,6 @@ def _compose_recall_query(messages) -> str:
     return " \n ".join(parts)
 
 
-def _guide_section(platform, want: str, query: str) -> str:
-    """The Guide's reference block, or ``""`` when the turn is not a Guide
-    turn. The persona NAME decides (an explicit pick, else the configured
-    default): a user override of the ``guide`` prompt keeps the grounding,
-    because the block is what makes the persona honest. Never raises — a
-    retrieval failure yields an ungrounded Guide turn whose prompt already
-    tells the model to say it does not know."""
-    from ..guide import GUIDE_PERSONA, ground
-
-    name = (want or "").strip() or str(
-        getattr(platform.config, "default_persona", "") or ""
-    ).strip()
-    if name.lower() != GUIDE_PERSONA:
-        return ""
-    try:
-        block = ground(platform, query)
-    except Exception:  # noqa: BLE001 — grounding must never break a turn
-        log.exception("guide grounding failed (turn continues)")
-        return ""
-    return f"\n\n{block}" if block else ""
-
-
 def _resolve_persona(store, builtins, want: str, default: str) -> str:
     """Persona resolution with the configured DEFAULT persona (Pair Z's
     ``config.default_persona`` — consulted only when the turn carries no
@@ -2142,13 +2120,6 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     # MIRROR NOTE (lock-step): stream copy in routes/chat.py. Added here, before
     # the budget planner runs, so its cost is priced like every other section.
     system += DRAFT_BLOCK
-    # THE IRON JARVIS GUIDE (v1.223.0): with the `guide` persona selected —
-    # explicitly, or as the configured default — the turn is grounded in a
-    # retrieved block from the app's own bundled docs + live catalogs
-    # (guide/corpus.py), keyed off the same composed recall query the memory
-    # fabric uses. Injected here, before the planner, so it is budgeted.
-    # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
-    system += _guide_section(platform, want, recall_query)
     # A project only applies INSIDE the Projects module: the in-project chat
     # sends an explicit project_id and grounds in that project's
     # instructions + brief + knowledge. The MAIN chat sends none and stays

@@ -140,6 +140,13 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         # real side effects, so it stays behind explicit arming + its "ask"
         # gate (the same tier split as code_search vs code_run).
         "workflow_list",
+        # The Guide's lookups (v1.224.0): READ-ONLY searches over the app's
+        # own docs/catalogs and the user's things in this install. Chat can
+        # answer "where is my…" / "how does this page work" from the stores
+        # instead of from memory of the conversation.
+        "guide_search",
+        "app_search",
+        "app_status",
     }
 )
 
@@ -1899,6 +1906,22 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
     (
         re.compile(r"\bworkflows?\b", re.IGNORECASE),
         {"workflow_list": 7},
+    ),
+    # --- the app itself (v1.224.0) ------------------------------------------
+    # "how do I turn on computer use", "where in the app is the undo page",
+    # "what does the Reflex page do", "do I have a schedule for …" — questions
+    # ABOUT Iron Jarvis or about the user's own things inside it. Narrow on
+    # purpose: a bare "what is" must not arm a lookup on every chat question.
+    (
+        re.compile(
+            r"\b(?:iron\s*jarvis|this\s+app|the\s+app|the\s+dashboard|"
+            r"which\s+page|what\s+page|where\s+in\s+the\s+app|"
+            r"how\s+do\s+i\s+(?:use|set|find|open|turn|enable|disable|change|configure)|"
+            r"do\s+i\s+have\s+(?:a|an|any)\s+(?:project|workflow|schedule|reflex|goal|skill|agent)|"
+            r"where\s+(?:is|are)\s+my\s+(?:project|workflow|schedule|reflex|goal|skill|agent)s?)\b",
+            re.IGNORECASE,
+        ),
+        {"guide_search": 6, "app_search": 5, "app_status": 3},
     ),
     # --- images -----------------------------------------------------------
     # v1.196.0 round 5 fronts this with `_imperative()` too: `image_convert` and

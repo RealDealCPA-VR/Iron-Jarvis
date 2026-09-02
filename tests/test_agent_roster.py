@@ -27,6 +27,7 @@ _BUILTIN_NAMES = {
     "memory",
     "automation",
     "maintainer",
+    "guide",  # v1.224.0: the Iron Jarvis expert
 }
 
 
@@ -229,7 +230,7 @@ def test_block_shape_health_filtering_and_offline_note():
     assert "remote:mini" in lines[-1]
 
 
-def test_block_compact_at_thirteen_entries():
+def test_block_compact_at_fourteen_entries():
     long = "a genuinely verbose description of what this agent does " * 2
     p = _platform(
         dynamic=[_dyn(f"agent-number-{i}", long) for i in range(5)],
@@ -239,9 +240,10 @@ def test_block_compact_at_thirteen_entries():
     )
     block = roster_block(p)
     bullets = [line for line in block.splitlines() if line.startswith("- ")]
-    # 6 delegable builtins (planner became a delegator in v1.166.0, so it left
-    # the delegable list alongside supervisor) + 5 dynamic + 2 healthy remotes.
-    assert len(bullets) == 13
+    # 7 delegable builtins (planner became a delegator in v1.166.0, so it left
+    # the delegable list alongside supervisor; the guide joined in v1.224.0)
+    # + 5 dynamic + 2 healthy remotes — exactly the 14-entry limit.
+    assert len(bullets) == 14
     assert len(block) <= 1200
     assert "offline:" in block
 

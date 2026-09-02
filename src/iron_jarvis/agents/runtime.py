@@ -1072,6 +1072,23 @@ class AgentRuntime:
                 system_prompt += self._project_context(session)
             except Exception:  # noqa: BLE001 — the spine must never break a run
                 pass
+        # THE GUIDE'S BASE KNOWLEDGE (v1.224.0): a Guide session starts knowing
+        # what the app is and how this install is set up (guide/corpus
+        # base_knowledge — the Handbook's overview + live version facts), and
+        # looks everything else up with its tools. Bounded; never breaks a run.
+        if session.agent_type == AgentType.GUIDE:
+            try:
+                from ..guide import base_knowledge as _guide_base
+
+                _base = _guide_base(self.p)
+                if _base:
+                    system_prompt += "\n\n" + _base
+            except Exception:  # noqa: BLE001 — the Guide still has its tools
+                import logging
+
+                logging.getLogger("iron_jarvis.guide").exception(
+                    "guide base knowledge unavailable (run continues)"
+                )
         # ENVIRONMENT: agents kept mistaking the scratch workspace for the
         # user's real files ("list my Downloads" -> listing an empty sandbox,
         # burning tokens). Spell out the split + the real home directory.

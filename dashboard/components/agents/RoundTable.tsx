@@ -787,8 +787,13 @@ export function RoundTable({
   onRoundDone,
   roster = [],
   assign = null,
+  initialInput = "",
 }: {
   threadId: string;
+  /** v1.224.0: a question to PREFILL the composer with (never sent) — the
+   *  Help page's "Ask the Guide" arrives with one. Applied once, and only
+   *  onto an empty composer, so it never clobbers what the user is typing. */
+  initialInput?: string;
   /** Bump to refetch the transcript (e.g. after the panel was edited). */
   reloadNonce: number;
   onEditPanel: (detail: ThreadDetail) => void;
@@ -806,6 +811,11 @@ export function RoundTable({
   const [detail, setDetail] = useState<ThreadDetail | null>(null);
   const [loadError, setLoadError] = useState<ApiError | null>(null);
   const [input, setInput] = useState("");
+  useEffect(() => {
+    if (!initialInput) return;
+    setInput((cur) => (cur.trim() ? cur : initialInput));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialInput]);
   const [round, setRound] = useState<RoundState | null>(null);
   const [pendingUser, setPendingUser] = useState<string | null>(null);
   const [sayError, setSayError] = useState<string | null>(null);
