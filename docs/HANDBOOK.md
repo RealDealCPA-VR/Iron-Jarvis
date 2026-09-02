@@ -119,7 +119,16 @@ formulas by computing them.
   **Delete** on every row — Delete asks first and names any schedule or
   reflex rule that still fires that workflow, since those would fail until
   re-pointed — starter templates, a "build with chat" box, and the run
-  history with Resume for interrupted runs.
+  history with Resume for interrupted runs. Workflows are born three ways:
+  describe a repeatable process in Chat and a **draft card** appears (Save,
+  Run once, or Open in the editor — a card born inside a project is pinned to
+  that project, so its runs use the project's folder and knowledge); type a
+  description into the Workflows page's "build with chat" box; or build one
+  step by step in the editor. Every door accepts what a local model actually
+  writes — JSON with a stray comma, steps as sentences, the workflow written
+  in prose — and a step that could never run is refused when you save, by
+  name. A run whose pinned project folder has gone missing says so on its
+  run-history row instead of quietly working in a scratch folder.
 - **Reflexes**: webhook-triggered actions. **Sentinels**: watched folders.
   **Autonomy**: off by default; when on, starts at *suggest* level with hard
   daily action/token caps and a kill switch.

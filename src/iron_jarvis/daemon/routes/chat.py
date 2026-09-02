@@ -63,6 +63,8 @@ from ..chat_turn import (
     _resolve_connectors,
     _resolve_persona,
     _resolve_tool_workspace,
+    _draft_from_calls,
+    _draft_from_text,
     _sanitize_draft,
     _workspace_grounding_block,
     _saved_workflows_block,
@@ -1881,13 +1883,14 @@ def register(app: FastAPI, d) -> None:
                     usage_out += int(_u.get("output_tokens", 0) or 0)
                     completions += 1
                     calls = final_resp.tool_calls or []
-                    draft_call = next(
-                        (c for c in calls if c.name == _WORKFLOW_DRAFT_TOOL), None
-                    )
-                    if draft_call is not None:
-                        workflow_draft = _sanitize_draft(draft_call.arguments)
-                        if workflow_draft is not None:
-                            break
+                    # THE DRAFT, THREE WAYS (v1.225.0) — lock-step copy of
+                    # chat_turn: the exit tool, an unarmed workflow_create,
+                    # or JSON written in a text-only reply.
+                    workflow_draft = _draft_from_calls(calls, armed)
+                    if workflow_draft is None and not calls:
+                        workflow_draft = _draft_from_text(reply_text)
+                    if workflow_draft is not None:
+                        break
                     esc_call = next(
                         (c for c in calls if c.name == _ESCALATE_TOOL), None
                     )
@@ -2219,6 +2222,10 @@ def register(app: FastAPI, d) -> None:
 
             # Reply honesty (mirrors chat_complete): synthesize from the last tool
             # output when the model returned no final text; note denied tools.
+            # THE DRAFT CARRIES THE CHAT'S PROJECT (v1.225.0) — lock-step copy
+            # of chat_turn's stamp; this is the lane the card is born in.
+            if workflow_draft is not None and resolved_proj is not None and pid:
+                workflow_draft["project_id"] = pid
             reply = reply_text or ""
             if workflow_draft is not None:
                 # Mirrors chat_complete: a draft exit is a success — no

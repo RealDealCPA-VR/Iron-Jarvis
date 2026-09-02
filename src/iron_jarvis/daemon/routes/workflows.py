@@ -362,6 +362,7 @@ def register(app: FastAPI, d) -> None:
             if not isinstance(raw, dict):
                 continue  # the loader ignores non-dict entries; keep parity
             kind_raw = raw.get("kind")
+            kind = "agent"
             if kind_raw:  # falsy = absent/empty = the default, never a rewrite
                 kind = str(kind_raw).strip().lower()
                 if kind not in STEP_KINDS:
@@ -370,6 +371,30 @@ def register(app: FastAPI, d) -> None:
                         detail=f"steps[{i}].kind: {kind_raw!r} is not one of "
                         + "|".join(STEP_KINDS),
                     )
+            # CONTENT (v1.225.0): a step that cannot possibly run is refused at
+            # save time, naming the step — an agent step with no task ran an
+            # agent on an empty instruction, a tool step with no tool failed
+            # at its turn mid-run, an ask with no question parked the run on
+            # "Continue past “x”?". Each used to be discovered minutes into a
+            # run instead of at the moment of saving.
+            label = str(raw.get("name") or "").strip() or f"#{i + 1}"
+            has_task = bool(str(raw.get("task") or "").strip())
+            has_msg = bool(str(raw.get("message") or "").strip())
+            if kind == "agent" and not has_task and not str(raw.get("name") or "").strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"steps[{i}] ({label}): an agent step needs a task",
+                )
+            if kind == "tool" and not str(raw.get("tool") or "").strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"steps[{i}] ({label}): a tool step needs a tool name",
+                )
+            if kind in ("ask", "notify") and not has_msg and not has_task:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"steps[{i}] ({label}): an {kind} step needs a message",
+                )
             failure_raw = raw.get("on_failure")
             if failure_raw:
                 on_failure = str(failure_raw).strip().lower()

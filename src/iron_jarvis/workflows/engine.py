@@ -437,7 +437,11 @@ class WorkflowEngine:
         run_id = record.id
         # Resolve the pinned project's folder ONCE for the whole run (None when
         # unpinned, or when the folder is missing on disk — see the helper).
-        workspace_root = self._project_workspace_root(workflow.project_id)
+        workspace_root, folder_note = self._project_folder(workflow.project_id)
+        if folder_note:
+            # Said ON THE RECORD, before the first step, so a run the user
+            # opens mid-way already explains where its files are going.
+            self._update_record(run_id, notes=[folder_note])
         # Tool steps share ONE workspace per run (not one per step/retry): a
         # write_document -> read_file chain must see its own files, and a per-
         # step mkdtemp litters %TEMP% forever. Lazy so agent-only runs make none.
@@ -1258,14 +1262,36 @@ class WorkflowEngine:
         degrades to a normal per-session workspace instead of failing the run —
         the pin's project context still applies; only the folder is skipped.
         """
+        return self._project_folder(project_id)[0]
+
+    def _project_folder(self, project_id: str | None) -> tuple[str | None, str | None]:
+        """``(folder, note)`` for a pinned run (v1.225.0). The folder is the
+        same answer :meth:`_project_workspace_root` gives; the note is the
+        sentence the run record now carries when that answer is a silent
+        degradation — the project row is gone, or its folder is set but
+        missing on disk — so "it ran but nothing landed in my folder" has a
+        reason the user can read on the run instead of a mystery."""
         if not project_id:
-            return None
+            return None, None
         with session_scope(self.platform.engine) as db:
             project = db.get(Project, project_id)
-        if project is None or not (project.root or "").strip():
-            return None
-        root = Path(project.root)
-        return str(root) if root.is_dir() else None
+        if project is None:
+            return None, (
+                f"this workflow is pinned to project {project_id}, which no longer "
+                "exists — its steps ran ungrounded, in a scratch workspace; unpin "
+                "or re-pin the workflow on the Workflows page"
+            )
+        root_raw = (project.root or "").strip()
+        if not root_raw:
+            return None, None  # a project without a folder: by design, no note
+        root = Path(root_raw)
+        if root.is_dir():
+            return str(root), None
+        return None, (
+            f"project “{project.name}” has no folder at {root_raw} any more — its "
+            "steps ran in a scratch workspace, NOT in the project folder; update "
+            "the folder on the project page and run again"
+        )
 
     def _get_record(self, run_id: str) -> WorkflowRunRecord | None:
         with session_scope(self.platform.engine) as db:
@@ -1290,6 +1316,8 @@ class WorkflowEngine:
                 rec.finished_at = fields["finished_at"]
             if "waiting_json" in fields:
                 rec.waiting_json = fields["waiting_json"]
+            if "notes" in fields:
+                rec.notes_json = dumps(list(fields["notes"]))
             db.add(rec)
             db.commit()
             db.refresh(rec)

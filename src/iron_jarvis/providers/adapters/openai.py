@@ -250,6 +250,16 @@ class OpenAIAdapter(LLMAdapter):
             try:
                 args = json.loads(args_str) if args_str else {}
             except json.JSONDecodeError:
+                # v1.225.0: a local model behind an OpenAI-compatible endpoint
+                # emits slightly broken argument JSON (a trailing comma, a
+                # fence, prose) often enough that `{}` here was the single
+                # most common way a workflow_draft call arrived EMPTY and the
+                # card never rendered. Recover what is recoverable; `{}` only
+                # when nothing parses.
+                from ...core.jsonish import loads_object
+
+                args = loads_object(args_str) or {}
+            if not isinstance(args, dict):
                 args = {}
             tool_calls.append(
                 ToolCall(id=raw.get("id", ""), name=fn.get("name", ""), arguments=args)

@@ -42,6 +42,11 @@ class WorkflowRunRecord(SQLModel, table=True):
     steps_json: str = "[]"
     session_ids_json: str = "[]"
     outputs_json: str = "{}"
+    #: v1.225.0 — run-level HONESTY NOTES, a JSON list of sentences: things
+    #: the engine decided silently before this column existed, chiefly "the
+    #: pinned project's folder is missing, steps ran in a scratch workspace".
+    #: Additive column (older DBs self-heal); "[]" = nothing to say.
+    notes_json: str = "[]"
     #: The step session currently executing, so the cancel route can stop it
     #: mid-run. Nullable; cleared once the run settles.
     current_session_id: str | None = None

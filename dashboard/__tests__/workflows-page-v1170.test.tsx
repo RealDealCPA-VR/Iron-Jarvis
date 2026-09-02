@@ -546,3 +546,34 @@ describe("saved workflows list (v1.222.0)", () => {
     expect(screen.getByRole("button", { name: "Delete mine" })).toBeInTheDocument();
   });
 });
+
+/* ------------------------------------------- v1.225.0: run honesty notes */
+
+describe("run notes (v1.225.0)", () => {
+  it("a run whose pinned folder was missing says so when expanded", async () => {
+    api.responses["/workflows"] = { workflows: [{ name: "mine", steps_json: "[]" }] };
+    api.responses[RUNS_PATH] = {
+      runs: [
+        run({
+          status: "completed",
+          notes_json: JSON.stringify([
+            "project “Acme” has no folder at C:\gone any more — its steps ran in a scratch workspace, NOT in the project folder; update the folder on the project page and run again",
+          ]),
+        }),
+      ],
+    };
+    render(<WorkflowsPage />);
+    expect(screen.queryByTestId("run-note")).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByText("intake"));
+    expect(await screen.findByTestId("run-note")).toHaveTextContent(/scratch workspace/);
+  });
+
+  it("an older daemon without notes_json shows nothing extra", async () => {
+    api.responses["/workflows"] = { workflows: [{ name: "mine", steps_json: "[]" }] };
+    api.responses[RUNS_PATH] = { runs: [run({ status: "completed" })] };
+    render(<WorkflowsPage />);
+    fireEvent.click(await screen.findByText("intake"));
+    await waitFor(() => expect(screen.getByText("Scan")).toBeInTheDocument());
+    expect(screen.queryByTestId("run-note")).not.toBeInTheDocument();
+  });
+});

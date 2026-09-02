@@ -284,6 +284,25 @@ does not need a bump, stop and bump it.
   `/documents/upload` keeps the user's documents at — and clobbered them
   (now a one-off staging dir, removed after extraction); and a deliverable
   stem kept `:*?"<>|` and `..` (`_deliverable_stem`).
+- **Model output is ALMOST JSON; recover it in ONE place** (v1.225.0). The
+  daily driver's default model is a local fleet endpoint, and every workflow
+  creation door assumed exact JSON: the OpenAI-compatible adapter turned a
+  tool call with a trailing comma into `arguments={}`, the draft sanitizer
+  returned None for a JSON-string `steps`, the chat lanes only made the card
+  from the `workflow_draft` tool call, and the page generator 422'd "try
+  rephrasing" on a numbered list. Each near-miss read as "workflows from
+  chat are unreliable". `core/jsonish.loads_object` is the one recovery
+  ladder (fences, prose around the object, trailing commas, single quotes,
+  first balanced object — never invented content); the adapter, the
+  sanitizer (`_sanitize_draft`: string args, string/numbered/sentence
+  steps, key aliases) and `_draft_from_text` all use it; both chat lanes
+  also accept an UNARMED `workflow_create` call as the card
+  (`_draft_from_calls`), and the generator takes one repair round. A draft
+  born in a project CARRIES the project (`workflow_draft["project_id"]`,
+  both lanes) — Save used to write it unpinned and Run forced `""`. A step
+  that cannot run is refused at SAVE time (`_validate_step_shapes`), and a
+  run whose pinned folder is gone says so on the record (`notes_json`,
+  `engine._project_folder`) instead of silently using a scratch workspace.
 - **Shipping the mechanism is not shipping the feature** (v1.218.0). v1.217.0
   built a real pane-state classifier, proved it against a live PTY, and put the
   answer into a chip that renders NOTHING for `unknown` — on a canvas where

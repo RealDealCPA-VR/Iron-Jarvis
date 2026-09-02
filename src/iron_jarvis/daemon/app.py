@@ -1749,37 +1749,64 @@ def create_app(project_root: str | None = None) -> FastAPI:
         )
 
         # Extract the workflow JSON from the reply (string-aware; tolerant of
-        # stray prose, fenced blocks, and braces inside step text).
-        try:
-            wf = _extract_workflow_json(resp.text or "")
-            raw_steps = wf.get("steps")
-        except Exception:  # noqa: BLE001 — no parseable object (garbled/truncated)
-            raise HTTPException(
-                status_code=422,
-                detail="the model did not return a valid workflow — try rephrasing",
-            )
-        if not isinstance(raw_steps, list) or not raw_steps:
-            raise HTTPException(
-                status_code=422,
-                detail="the model did not return a valid workflow — try rephrasing",
-            )
+        # stray prose, fenced blocks, and braces inside step text), and pass
+        # the steps through the SAME sanitizer chat's draft card uses — one
+        # hardened shape (deduped names, bounded fields, the engine's own
+        # kind/on_failure vocabularies) whichever door a workflow came in by.
+        from .chat_turn import _sanitize_draft
 
-        valid_agents = {"builder", "planner", "researcher", "reviewer", "supervisor"}
-        steps: list[dict[str, Any]] = []
-        for s in raw_steps:
-            if not isinstance(s, dict) or not (s.get("task") or s.get("name")):
-                continue
-            agent = str(s.get("agent") or "builder").lower()
-            steps.append(
-                {
-                    "name": str(s.get("name") or s.get("task") or "step")[:80],
-                    "agent": agent if agent in valid_agents else "builder",
-                    "task": str(s.get("task") or ""),
-                    "tool": s.get("tool") or None,
-                }
+        def _steps_from(text: str) -> list[dict[str, Any]]:
+            try:
+                wf_obj = _extract_workflow_json(text or "")
+            except Exception:  # noqa: BLE001 — no parseable object (garbled/truncated)
+                return []
+            draft = _sanitize_draft(
+                {"name": wf_obj.get("name") or name or "x", "steps": wf_obj.get("steps")}
             )
+            if draft is None:
+                return []
+            _steps_from.obj = wf_obj  # type: ignore[attr-defined]
+            return draft["steps"]
+
+        _steps_from.obj = {}  # type: ignore[attr-defined]
+        steps = _steps_from(resp.text or "")
         if not steps:
-            raise HTTPException(status_code=422, detail="no usable steps were generated")
+            # ONE REPAIR ROUND (v1.225.0). Local models answer the design
+            # prompt with a numbered list or an explanation first, then the
+            # JSON — or only the list. Hand the reply back and ask for the
+            # exact shape once, instead of 422-ing "try rephrasing" at the
+            # user, whose phrasing was never the problem. The repair is
+            # deterministic in intent: it may only RESTATE what the reply
+            # already said, never add steps.
+            repair_system = (
+                "Convert the workflow described below into ONLY a JSON object "
+                "(no prose, no code fence) of the exact shape "
+                '{"name": "kebab-case-name", "description": "one line", '
+                '"steps": [{"name": "Step name", "agent": "builder", "task": '
+                '"instruction", "tool": null}]}. agent MUST be one of: builder, '
+                "planner, researcher, reviewer, supervisor. Keep every step the "
+                "text describes; add none."
+            )
+            try:
+                resp2, _p2, _m2 = await _one_shot_complete(
+                    provider,
+                    adapter,
+                    system=repair_system,
+                    messages=[LLMMessage(role="user", content=(resp.text or "")[:8000])],
+                )
+                steps = _steps_from(resp2.text or "")
+            except Exception:  # noqa: BLE001 — the repair is best-effort
+                steps = []
+        if not steps:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "the model did not return a valid workflow (no steps could be "
+                    "read from its reply, even after asking it to restate them as "
+                    "JSON) — try again, or describe the steps one per line"
+                ),
+            )
+        wf = _steps_from.obj  # type: ignore[attr-defined]
 
         from ..workflows.store import WorkflowStore
 

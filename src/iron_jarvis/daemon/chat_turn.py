@@ -1232,17 +1232,38 @@ def _sanitize_draft(args: dict | None) -> dict | None:
     engine's templating treats as an opaque string), and message is bounded.
     A pre-v1.170.0 agent-only draft sanitizes to the same name/agent/task
     values as before — the new keys just carry their defaults."""
+    from ..core.jsonish import loads_lenient, loads_object
     from ..workflows.engine import ON_FAILURE, STEP_KINDS
 
-    args = args or {}
+    # v1.225.0 — LENIENT INTAKE. Local models hand the arguments over as a
+    # JSON STRING, hand `steps` over as a string, or list the steps as bare
+    # sentences; every one of those used to sanitize to None, and the user saw
+    # a turn that "forgot" to make the card. Recover the shapes that are
+    # unambiguous; still return None when nothing usable survives.
+    if isinstance(args, str):
+        args = loads_object(args) or {}
+    args = args if isinstance(args, dict) else {}
+    raw_steps = args.get("steps")
+    if isinstance(raw_steps, str):
+        raw_steps = loads_lenient(raw_steps, want=list) or []
+    if isinstance(raw_steps, dict):  # {"1": {...}, "2": {...}} — numbered map
+        raw_steps = list(raw_steps.values())
     steps: list[dict] = []
     seen_names: set[str] = set()
-    for s in (args.get("steps") or [])[:12]:
+    for s in (raw_steps or [])[:12]:
+        if isinstance(s, str):
+            # A bare SENTENCE is an agent step ("Collect the week's receipts");
+            # a bare word is noise ("junk", "TODO") and drops as it always did.
+            if len(s.split()) < 2:
+                continue
+            s = {"task": s}
         if not isinstance(s, dict):
             continue
-        task = str(s.get("task") or "").strip()[:4000]
-        name = str(s.get("name") or "").strip()
-        message = str(s.get("message") or "").strip()[:2000]
+        task = str(
+            s.get("task") or s.get("instruction") or s.get("description") or ""
+        ).strip()[:4000]
+        name = str(s.get("name") or s.get("title") or "").strip()
+        message = str(s.get("message") or s.get("question") or "").strip()[:2000]
         # An ask/notify step legitimately carries ONLY a message — it must
         # survive; a step with none of the three has nothing to run.
         if not task and not name and not message:
@@ -1296,13 +1317,59 @@ def _sanitize_draft(args: dict | None) -> dict | None:
         )
     if not steps:
         return None
-    raw = str(args.get("name") or "").strip()[:80]
+    raw = str(args.get("name") or args.get("title") or "").strip()[:80]
     name = _re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-._") or "drafted-workflow"
     return {
         "name": name,
         "description": str(args.get("description") or "")[:200],
         "steps": steps,
     }
+
+
+#: The agent-lane tool a model reaches for when it means "save this as a
+#: workflow" — never armed in chat, so the call used to be refused as
+#: "permission denied" and the process the user described was lost.
+_WORKFLOW_CREATE_TOOL = "workflow_create"
+
+
+def _draft_from_calls(calls, armed) -> dict | None:
+    """A draft from THIS round's tool calls: the ``workflow_draft`` exit
+    first; else an UNARMED ``workflow_create`` call, which carries the same
+    ``{name, steps, description}`` shape and the same intent — it becomes the
+    card (suggest-don't-act) instead of a refusal. An ARMED workflow_create
+    (an agent lane that granted it) is left to execute as the tool it is.
+    MIRROR NOTE (lock-step): both chat lanes call this."""
+    for c in calls or []:
+        if c.name == _WORKFLOW_DRAFT_TOOL:
+            draft = _sanitize_draft(c.arguments)
+            if draft is not None:
+                return draft
+    for c in calls or []:
+        if c.name == _WORKFLOW_CREATE_TOOL and c.name not in (armed or []):
+            draft = _sanitize_draft(c.arguments)
+            if draft is not None:
+                return draft
+    return None
+
+
+def _draft_from_text(text: str) -> dict | None:
+    """A draft from a reply that WROTE the workflow instead of calling the
+    tool (v1.225.0): a JSON object — fenced, or inside prose — carrying a
+    ``steps`` list and a ``name``/``title`` (the two keys the draft tool's
+    schema requires; an unrelated JSON answer that happens to hold a "steps"
+    key but no name is left alone). Local models do this constantly; before
+    this the process the user described arrived as a paragraph the card
+    never saw. MIRROR NOTE (lock-step): both chat lanes call this."""
+    from ..core.jsonish import loads_object
+
+    if not text or "steps" not in text:
+        return None
+    obj = loads_object(text)
+    if not isinstance(obj, dict) or not obj.get("steps"):
+        return None
+    if not (obj.get("name") or obj.get("title")):
+        return None
+    return _sanitize_draft(obj)
 
 
 #: Tools whose output is a FILE the user should see. redact_pii joined in
@@ -2666,13 +2733,16 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
             usage_out += int(_u.get("output_tokens", 0) or 0)
             completions += 1
             calls = route.response.tool_calls or []
-            draft_call = next(
-                (c for c in calls if c.name == _WORKFLOW_DRAFT_TOOL), None
-            )
-            if draft_call is not None:
-                workflow_draft = _sanitize_draft(draft_call.arguments)
-                if workflow_draft is not None:
-                    break
+            # THE DRAFT, THREE WAYS (v1.225.0): the workflow_draft exit; an
+            # unarmed workflow_create call (same shape, same intent); or the
+            # workflow WRITTEN as JSON in a text-only reply — local models do
+            # all three, and only the first used to become the card.
+            # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
+            workflow_draft = _draft_from_calls(calls, armed)
+            if workflow_draft is None and not calls:
+                workflow_draft = _draft_from_text(route.response.text or "")
+            if workflow_draft is not None:
+                break
             esc_call = next(
                 (c for c in calls if c.name == _ESCALATE_TOOL), None
             )
@@ -2855,6 +2925,13 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     # with output, synthesize a short summary from the last result rather
     # than the bare "(no reply)" placeholder (which reads like the turn did
     # nothing). Denied armed tools get an honest footer note.
+    # THE DRAFT CARRIES THE CHAT'S PROJECT (v1.225.0). Save from the card used
+    # to write an UNPINNED workflow and Run used to force-unpin (`project_id:
+    # ""`), so a process drafted inside a project ran with no folder, no
+    # instructions and no knowledge — "works outside a project, not inside".
+    # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
+    if workflow_draft is not None and resolved_proj is not None and pid:
+        workflow_draft["project_id"] = pid
     reply = model_text
     if workflow_draft is not None:
         # A draft exit SUCCEEDED by proposing — the card is the reply. No

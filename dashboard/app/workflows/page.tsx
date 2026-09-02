@@ -418,6 +418,18 @@ function parseWaiting(r: WorkflowRun): { question?: string } | null {
   }
 }
 
+/** Run-level honesty notes (v1.225.0, `notes_json`): what the engine decided
+ *  silently before — chiefly "the pinned project's folder is missing, steps
+ *  ran in a scratch workspace". Absent on an older daemon → []. */
+function parseNotes(r: WorkflowRun): string[] {
+  try {
+    const n = JSON.parse(String((r as { notes_json?: string }).notes_json ?? "[]"));
+    return Array.isArray(n) ? n.map(String).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Count the sessions a run spawned — from `session_ids_json`, falling back to
  *  the per-step outputs (each completed step carries its session id). */
 function sessionCount(r: WorkflowRun): number {
@@ -622,6 +634,15 @@ function RunHistory() {
                     {isOpen && (
                       <tr className="border-b border-white/[0.04] bg-ink-950/30">
                         <td colSpan={5} className="px-3 py-2.5">
+                          {parseNotes(r).map((note) => (
+                            <div
+                              key={note}
+                              data-testid="run-note"
+                              className="mb-2 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-2.5 py-2 text-[12.5px] text-amber-200"
+                            >
+                              {note}
+                            </div>
+                          ))}
                           {r.status === "interrupted" && (
                             <div className="mb-2 text-[12px] text-amber-300/80">
                               This run was interrupted (the daemon restarted
