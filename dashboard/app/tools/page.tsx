@@ -1190,8 +1190,17 @@ export default function ToolsPage() {
           auto_approve: true,
         });
         reloadServers();
-      } catch {
-        /* connected either way; the panel shows the real state */
+      } catch (e) {
+        // v1.226.0: the server IS connected, but the grant the user just
+        // ticked did not land — closing as success would leave them believing
+        // it did. Keep the dialog open and say exactly what happened.
+        reloadServers();
+        setPendingError(
+          `Connected, but auto-approve could not be saved: ${
+            e instanceof ApiError ? e.message : String(e)
+          }`,
+        );
+        return;
       }
     }
     setPending(null);

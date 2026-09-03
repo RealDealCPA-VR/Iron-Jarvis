@@ -6,6 +6,7 @@ reached through ``d`` (see the deps object built in create_app).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import FastAPI, HTTPException
@@ -137,7 +138,9 @@ def register(app: FastAPI, d) -> None:
         if body.inputs is not None:
             run_kwargs["inputs"] = dict(body.inputs)
         try:
-            rec = engine.create_record(wf, **run_kwargs)
+            # v1.226.0: the INSERT waits behind any long writer (VACUUM) for
+            # up to busy_timeout — on a worker thread, never on the loop.
+            rec = await asyncio.to_thread(engine.create_record, wf, **run_kwargs)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         _spawn_run_or_interrupt(rec.id, engine.run_record(rec, wf, **run_kwargs))
@@ -261,25 +264,29 @@ def register(app: FastAPI, d) -> None:
         # sessions, duplicate notify sends, interleaved record writes.
         from sqlalchemy import update as _sql_update
 
-        with session_scope(d.platform.engine) as db:
-            rec = db.get(WorkflowRunRecord, run_id)
-            if rec is None:
-                raise HTTPException(status_code=404, detail="no such run")
-            claimed = db.exec(
-                _sql_update(WorkflowRunRecord)
-                .where(
-                    WorkflowRunRecord.id == run_id,
-                    WorkflowRunRecord.status == "waiting",
+        def _claim() -> WorkflowRunRecord:  # v1.226.0: the write runs off the loop
+            with session_scope(d.platform.engine) as db:
+                rec = db.get(WorkflowRunRecord, run_id)
+                if rec is None:
+                    raise HTTPException(status_code=404, detail="no such run")
+                claimed = db.exec(
+                    _sql_update(WorkflowRunRecord)
+                    .where(
+                        WorkflowRunRecord.id == run_id,
+                        WorkflowRunRecord.status == "waiting",
+                    )
+                    .values(status="resuming")
                 )
-                .values(status="resuming")
-            )
-            db.commit()
-            if getattr(claimed, "rowcount", 0) != 1:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"run is {rec.status}, not waiting — it may already be answered",
-                )
-            db.refresh(rec)
+                db.commit()
+                if getattr(claimed, "rowcount", 0) != 1:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"run is {rec.status}, not waiting — it may already be answered",
+                    )
+                db.refresh(rec)
+                return rec
+
+        rec = await asyncio.to_thread(_claim)
         engine = WorkflowEngine(d.platform, d.orchestrator)
         _spawn_run_or_interrupt(rec.id, engine.resume_after_answer(rec, answer))
         return {"id": run_id, "status": "running", "answered": True}
@@ -302,39 +309,45 @@ def register(app: FastAPI, d) -> None:
         from sqlalchemy import update as _sql_update
 
         engine = WorkflowEngine(d.platform, d.orchestrator)
-        with session_scope(d.platform.engine) as db:
-            rec = db.get(WorkflowRunRecord, run_id)
-            if rec is None:
-                raise HTTPException(status_code=404, detail="no such run")
-            # Pre-validate BEFORE claiming (coordinator, v1.170.0): an
-            # unreconstructable record (corrupt steps_json) that we claimed
-            # first would sit in 'resuming' until the next boot's reconcile.
-            # Validate sync, refuse honest, claim only what can actually run.
-            if rec.status == "interrupted":
-                try:
-                    engine.rebuild_run(rec)
-                except ValueError as exc:
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"this run cannot be reconstructed: {exc}",
+
+        def _claim() -> tuple[WorkflowRunRecord, dict[str, Any]]:
+            # v1.226.0: validate + claim on a worker thread (the write may wait
+            # behind a long writer for up to busy_timeout).
+            with session_scope(d.platform.engine) as db:
+                rec = db.get(WorkflowRunRecord, run_id)
+                if rec is None:
+                    raise HTTPException(status_code=404, detail="no such run")
+                # Pre-validate BEFORE claiming (coordinator, v1.170.0): an
+                # unreconstructable record (corrupt steps_json) that we claimed
+                # first would sit in 'resuming' until the next boot's reconcile.
+                # Validate sync, refuse honest, claim only what can actually run.
+                if rec.status == "interrupted":
+                    try:
+                        engine.rebuild_run(rec)
+                    except ValueError as exc:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=f"this run cannot be reconstructed: {exc}",
+                        )
+                claimed = db.exec(
+                    _sql_update(WorkflowRunRecord)
+                    .where(
+                        WorkflowRunRecord.id == run_id,
+                        WorkflowRunRecord.status == "interrupted",
                     )
-            claimed = db.exec(
-                _sql_update(WorkflowRunRecord)
-                .where(
-                    WorkflowRunRecord.id == run_id,
-                    WorkflowRunRecord.status == "interrupted",
+                    .values(status="resuming", finished_at=None, current_session_id=None)
                 )
-                .values(status="resuming", finished_at=None, current_session_id=None)
-            )
-            db.commit()
-            if getattr(claimed, "rowcount", 0) != 1:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"run is {rec.status}, not interrupted — only "
-                    f"interrupted runs can be resumed",
-                )
-            db.refresh(rec)
-            out = rec.model_dump()
+                db.commit()
+                if getattr(claimed, "rowcount", 0) != 1:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"run is {rec.status}, not interrupted — only "
+                        f"interrupted runs can be resumed",
+                    )
+                db.refresh(rec)
+                return rec, rec.model_dump()
+
+        rec, out = await asyncio.to_thread(_claim)
         _spawn_run_or_interrupt(rec.id, engine.resume_interrupted(rec))
         return out
 

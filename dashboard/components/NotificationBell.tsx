@@ -503,6 +503,13 @@ export function NotificationBell() {
   // Parked workflow questions and paused agent asks wait on the user exactly
   // like reviews/approvals.
   const count = reviewish + waiting.length + agentAsks.length;
+  // v1.226.0: a polled source that FAILED (non-0 status, e.g. a 500) makes the
+  // badge under-count — "You're all caught up" would then be a false empty
+  // state. Offline (status 0) is the banner's story, not the bell's.
+  const pollError =
+    [cu.error, diag.error, runsApi.error, agentAsksApi.error].find(
+      (e) => e && e.status !== 0,
+    ) ?? null;
 
   // Desktop notifications + browser tab title are owned here, app-wide.
   const { permission, requestPermission, notify } = useDesktopNotifications();
@@ -621,7 +628,13 @@ export function NotificationBell() {
               {count === 0 && activity.length === 0 && conflicts.length === 0 ? (
                 <div className="flex flex-col items-center gap-2 px-4 py-8 text-center">
                   <Inbox size={22} className="text-zinc-600" />
-                  <div className="text-sm text-zinc-500">You&apos;re all caught up.</div>
+                  {pollError ? (
+                    <div role="alert" className="text-sm text-rose-200">
+                      Could not load pending work: {pollError.message}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-zinc-500">You&apos;re all caught up.</div>
+                  )}
                   <div className="max-w-[15rem] text-[11px] text-zinc-600">
                     Reviews, approvals, and workflow questions that need you will
                     show up here.

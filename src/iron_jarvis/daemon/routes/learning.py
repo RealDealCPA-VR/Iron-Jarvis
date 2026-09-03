@@ -6,6 +6,8 @@ reached through ``d`` (see the deps object built in create_app).
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import FastAPI, HTTPException
 from typing import Any
 
@@ -306,29 +308,43 @@ def register(app: FastAPI, d) -> None:
 
         candidates: list[dict[str, Any]] = []
         embedder = d.platform.embedder
-        for idx, fact in enumerate(facts):
-            dup = False
-            try:
-                # k=5 across the MERGED stores: with k=1 the round-robin gave
-                # the single slot to the brain's top lexical hit, so the
-                # import base's own copy was never consulted and re-imports
-                # sailed through unflagged on any lived-in install.
-                for h in d.platform.ltm.search(fact, k=5):
-                    known = f"{h.get('title', '')}\n{h.get('snippet', '')}"
-                    # Exact containment catches the common case (re-importing
-                    # the same dump) deterministically; the embedder adds
-                    # fuzzy matches when a real one is connected.
-                    if fact.lower() in known.lower():
-                        dup = True
-                        break
-                    if embedder is not None and (
-                        _cos(embedder.embed(fact), embedder.embed(known)) >= 0.93
-                    ):
-                        dup = True
-                        break
-            except Exception:  # noqa: BLE001 — a flaky embedder never blocks preview
+
+        def _dedup_flags() -> list[bool]:
+            """v1.226.0: the whole pass (an LTM search + embed HTTP round-trips
+            per fact) runs on ONE worker thread — inline in this async handler
+            it parked the loop for the sum of every embed call. A fact is
+            embedded at most once (was once per hit)."""
+            flags: list[bool] = []
+            for fact in facts:
                 dup = False
-            cand: dict[str, Any] = {"text": fact, "duplicate": dup}
+                try:
+                    fact_vec: list[float] | None = None
+                    # k=5 across the MERGED stores: with k=1 the round-robin gave
+                    # the single slot to the brain's top lexical hit, so the
+                    # import base's own copy was never consulted and re-imports
+                    # sailed through unflagged on any lived-in install.
+                    for h in d.platform.ltm.search(fact, k=5):
+                        known = f"{h.get('title', '')}\n{h.get('snippet', '')}"
+                        # Exact containment catches the common case (re-importing
+                        # the same dump) deterministically; the embedder adds
+                        # fuzzy matches when a real one is connected.
+                        if fact.lower() in known.lower():
+                            dup = True
+                            break
+                        if embedder is not None:
+                            if fact_vec is None:
+                                fact_vec = embedder.embed(fact)
+                            if _cos(fact_vec, embedder.embed(known)) >= 0.93:
+                                dup = True
+                                break
+                except Exception:  # noqa: BLE001 — a flaky embedder never blocks preview
+                    dup = False
+                flags.append(dup)
+            return flags
+
+        dup_flags = await asyncio.to_thread(_dedup_flags)
+        for idx, fact in enumerate(facts):
+            cand: dict[str, Any] = {"text": fact, "duplicate": dup_flags[idx]}
             if structured:
                 cand["category"] = entries[idx]["category"]
                 cand["date"] = entries[idx]["date"]

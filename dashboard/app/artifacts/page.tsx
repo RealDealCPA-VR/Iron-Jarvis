@@ -100,6 +100,7 @@ export default function ArtifactsPage() {
   const [running, setRunning] = useState(false);
   const [run, setRun] = useState<RunResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
+  const [removeError, setRemoveError] = useState<string | null>(null);
 
   const offline = list.error && list.error.status === 0;
   const items = list.data?.artifacts ?? [];
@@ -129,7 +130,15 @@ export default function ArtifactsPage() {
   }
 
   async function remove(id: string) {
-    await del(`/code-artifacts/${encodeURIComponent(id)}`);
+    // v1.226.0: this was the one truly uncaught mutation on the dashboard — a
+    // failed delete surfaced as an unhandled rejection and NOTHING on screen.
+    setRemoveError(null);
+    try {
+      await del(`/code-artifacts/${encodeURIComponent(id)}`);
+    } catch (e) {
+      setRemoveError(e instanceof ApiError ? e.message : String(e));
+      return;
+    }
     if (selected === id) {
       setSelected(null);
       setRun(null);
@@ -262,6 +271,11 @@ export default function ArtifactsPage() {
                 ) : null
               }
             >
+              {removeError && (
+                <div className="mb-3">
+                  <ErrorNote>Could not delete this script: {removeError}</ErrorNote>
+                </div>
+              )}
               {detail.loading && !detail.data ? (
                 <Spinner />
               ) : detail.data ? (

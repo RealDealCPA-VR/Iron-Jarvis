@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -284,6 +285,25 @@ def _backfill_index(platform) -> "Any | None":
     return index
 
 
+def _checkpoint_wal(engine) -> None:
+    """Fold the WAL back into the main file at shutdown (v1.226.0).
+
+    Best-effort and skipped for in-memory engines. Without it a hard kill
+    right after the drain leaves a -wal sidecar the next boot must replay, and
+    a backup/copy taken in between misses every write still in the WAL."""
+    if getattr(engine.url, "database", None) in (None, "", ":memory:"):
+        return
+    try:
+        with engine.connect() as conn:
+            # This runs ON the loop thread at lifespan exit: a worker still
+            # writing must not hold exit for the pool's 30s busy_timeout
+            # (Electron force-kills at 5s — the very thing F-B-3 targets).
+            conn.exec_driver_sql("PRAGMA busy_timeout=1000")
+            conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
+    except Exception:  # noqa: BLE001 — best-effort; shutdown never raises
+        log.debug("wal checkpoint at shutdown skipped", exc_info=True)
+
+
 async def _fts_backfill_loop(
     index,
     loop_health: "dict[str, dict[str, Any]]",
@@ -404,6 +424,31 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # silent failure (e.g. backups failing) is visible in /diagnostics, not just
     # buried in the log. Keyed by loop name.
     loop_health: dict[str, dict[str, Any]] = {}
+
+    def _tick(name: str, ok: bool, err: BaseException | None = None) -> None:
+        """v1.226.0: ONE line per loop pass. Before this only auto_backup and
+        fts_backfill reported; the other eight loops (autonomy, sentinels,
+        calendar, inbound, lesson compaction, slack socket, fleet arm, the
+        scheduler start) logged and vanished — a loop that failed every pass
+        for a week was invisible on /diagnostics."""
+        from ..core.ids import utcnow
+
+        # Never raises: this runs inside every loop's except branch, so an
+        # exception whose __str__ itself raises would escape it and kill the
+        # loop this helper exists to keep visible.
+        try:
+            now = utcnow().isoformat()
+            if ok:
+                loop_health[name] = {"ok": True, "last_success_at": now}
+                return
+            try:
+                detail = f"{type(err).__name__}: {err}" if err is not None else "failed"
+            except Exception:  # noqa: BLE001 — __str__ raised; keep the type
+                detail = f"{type(err).__name__}: <unprintable>"
+            loop_health[name] = {"ok": False, "last_error": detail[:300], "at": now}
+        except Exception:  # noqa: BLE001 — health bookkeeping never kills a loop
+            loop_health[name] = {"ok": bool(ok), "last_error": "unrecordable"}
+
     # Wire the executor into the Motivation Layer so an auto-approved (or
     # human-approved) proposal can become a real session. The engine is safe
     # with this unset; setting it does NOT enable autonomy (that's config-gated).
@@ -493,8 +538,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
     async def lifespan(_app: FastAPI):
         try:  # start the cron scheduler when the daemon boots
             platform.scheduler.start()
-        except Exception:  # pragma: no cover - never block boot
-            pass
+            _tick("scheduler", True)
+        except Exception as exc:  # noqa: BLE001 — never block boot (v1.226.0: but SAY so)
+            log.exception("scheduler failed to start — schedules will not fire")
+            _tick("scheduler", False, exc)
         # Restart survival. Each step is INDEPENDENT: a failure in one (e.g. a
         # review rehydrate tripping on a bad worktree) must NOT skip the others —
         # previously a single try-block meant a session/review failure silently
@@ -740,10 +787,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
                                 res = await platform.learning.distill(_complete)
                                 log.info("lesson distillation: %s", res)
+                        _tick("lesson_compaction", True)
                     except asyncio.CancelledError:
                         raise
-                    except Exception:  # noqa: BLE001 - a pass must never kill the daemon
+                    except Exception as exc:  # noqa: BLE001 - a pass must never kill the daemon
                         log.exception("lesson compaction pass failed")
+                        _tick("lesson_compaction", False, exc)
                     await asyncio.sleep(24 * 3600)
 
             compact_task = asyncio.create_task(_lesson_compact_loop())
@@ -766,10 +815,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
             while True:
                 try:
                     await platform.intent.deliberate()
+                    _tick("autonomy", True)
                 except asyncio.CancelledError:
                     raise
-                except Exception:  # noqa: BLE001 - a tick must never kill the daemon
+                except Exception as exc:  # noqa: BLE001 - a tick must never kill the daemon
                     log.exception("autonomy deliberation tick failed")
+                    _tick("autonomy", False, exc)
                 await asyncio.sleep(interval)
 
         def _arm_autonomy() -> None:
@@ -810,10 +861,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     await asyncio.to_thread(
                         platform.sentinels.poll_once, platform.intent
                     )
+                    _tick("sentinels", True)
                 except asyncio.CancelledError:
                     raise
-                except Exception:  # noqa: BLE001 - a poll must never kill the daemon
+                except Exception as exc:  # noqa: BLE001 - a poll must never kill the daemon
                     log.exception("sentinel poll failed")
+                    _tick("sentinels", False, exc)
                 await asyncio.sleep(interval)
 
         def _arm_sentinels() -> None:
@@ -854,18 +907,28 @@ def create_app(project_root: str | None = None) -> FastAPI:
             while True:
                 try:
                     await calendar_poller.poll_once()
+                    _tick("calendar", True)
                 except asyncio.CancelledError:
                     raise
-                except Exception:  # noqa: BLE001 - a poll must never kill the daemon
+                except Exception as exc:  # noqa: BLE001 - a poll must never kill the daemon
                     log.exception("calendar trigger poll failed")
+                    _tick("calendar", False, exc)
                 await asyncio.sleep(interval)
 
         def _arm_calendar() -> None:
             task = bg_tasks.pop("calendar", None)
             if task is not None:
                 task.cancel()
+            # v1.226.0: the enabled() probe reads a secret — a boot-time raise
+            # here (mismatched key, bad row) aborted the whole lifespan. Same
+            # posture as _arm_fleet: a probe failure disarms, never bricks.
+            try:
+                cal_enabled = bool(calendar_poller.enabled())
+            except Exception:  # noqa: BLE001 — a probe never breaks boot
+                log.exception("calendar trigger: enabled() probe failed; not armed")
+                cal_enabled = False
             if (
-                calendar_poller.enabled()
+                cal_enabled
                 and os.environ.get("IRONJARVIS_CALENDAR", "on").strip().lower()
                 not in {"0", "false", "no", "off"}
             ):
@@ -889,10 +952,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     )
                     bg_tasks["fleet"] = asyncio.create_task(fleet_sampler.start())
                     log.info("fleet sampler (re)armed")
+                    _tick("fleet", True)
                 else:
                     bg_tasks["fleet"] = asyncio.create_task(fleet_sampler.stop())
-            except Exception:  # noqa: BLE001 — telemetry never breaks boot
+            except Exception as exc:  # noqa: BLE001 — telemetry never breaks boot
                 log.debug("fleet sampler arm failed", exc_info=True)
+                _tick("fleet", False, exc)
 
         _arm_fleet()
 
@@ -958,10 +1023,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
                         # pass sees without touching this task.
                         if inbound_poller.enabled():
                             await inbound_poller.poll_once()
+                            _tick("inbound", True)
                     except asyncio.CancelledError:
                         raise
-                    except Exception:  # noqa: BLE001 - a poll must never kill the daemon
+                    except Exception as exc:  # noqa: BLE001 - a poll must never kill the daemon
                         log.exception("inbound comm poll failed")
+                        _tick("inbound", False, exc)
                     await asyncio.sleep(interval)
 
             inbound_task = asyncio.create_task(_inbound_loop())
@@ -984,17 +1051,24 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 platform.secrets.get,
                 lambda: platform.config.comm or {},
             )
-            if _socket.enabled():
+            try:  # v1.226.0: a secret read in here must never abort boot
+                _socket_enabled = bool(_socket.enabled())
+            except Exception:  # noqa: BLE001 — a probe never breaks boot
+                log.exception("slack socket mode: enabled() probe failed; not armed")
+                _socket_enabled = False
+            if _socket_enabled:
                 slack_socket_stop = asyncio.Event()
 
                 async def _slack_socket_loop() -> None:
                     await asyncio.sleep(15)  # let boot settle first
                     try:
+                        _tick("slack_socket", True)  # armed and dialling out
                         await _socket.run(stop=slack_socket_stop)
                     except asyncio.CancelledError:
                         raise
-                    except Exception:  # noqa: BLE001 — never kill the daemon
+                    except Exception as exc:  # noqa: BLE001 — never kill the daemon
                         log.exception("slack socket mode loop failed")
+                        _tick("slack_socket", False, exc)
 
                 slack_socket_task = asyncio.create_task(_slack_socket_loop())
         try:
@@ -1046,6 +1120,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 if br is not None and hasattr(br, "aclose"):
                     await br.aclose()
             except Exception:  # pragma: no cover
+                pass
+            # v1.226.0: last, once nothing above can write any more — checkpoint
+            # the WAL, then release every pooled connection. Each best-effort.
+            try:
+                _checkpoint_wal(platform.engine)
+            except Exception:  # noqa: BLE001 — shutdown never raises
+                log.debug("wal checkpoint at shutdown failed", exc_info=True)
+            try:
+                platform.engine.dispose()
+            except Exception:  # noqa: BLE001 — shutdown never raises
                 pass
 
     app = FastAPI(title="Iron Jarvis", version=__version__, lifespan=lifespan)
@@ -1125,6 +1209,25 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     for _exc_type in (ValueError, KeyError, _tomllib.TOMLDecodeError, _json.JSONDecodeError):
         app.add_exception_handler(_exc_type, _input_error)
+
+    from fastapi.exceptions import RequestValidationError
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error(request: Request, exc: RequestValidationError):  # noqa: ANN202
+        # v1.226.0 (contract C4): pydantic's list-of-dicts detail rendered as
+        # "[object Object]" in every dashboard error note. Flatten it to the
+        # STRING shape every other error envelope in this app uses:
+        # "<field>: <msg>; <field>: <msg>" (the leading body/query/path token
+        # of each location is dropped — it names the transport, not the field).
+        parts: list[str] = []
+        for err in exc.errors():
+            loc = [str(x) for x in (err.get("loc") or ())]
+            if loc and loc[0] in ("body", "query", "path", "header", "cookie"):
+                loc = loc[1:]
+            parts.append(f"{'.'.join(loc) or 'request'}: {err.get('msg', 'invalid')}")
+        return JSONResponse(
+            status_code=422, content={"detail": "; ".join(parts) or "invalid request"}
+        )
 
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception):  # noqa: ANN202
@@ -1330,23 +1433,32 @@ def create_app(project_root: str | None = None) -> FastAPI:
             slug = _re.sub(r"[^a-zA-Z0-9_-]+", "-", doc.name.lower()).strip("-") or "doc"
             path = out_dir / f"{slug}.{doc.format}"
             write_document(path, resp.text or "(empty)")
-            with session_scope(platform.engine) as db:
-                row = db.get(LiveDocRecord, doc_id)
-                row.path = str(path)
-                row.updated_at = _now()
-                row.last_error = ""
-                db.add(row)
-                db.commit()
+
+            def _mark_written() -> None:  # v1.226.0: SQLite write off the loop
+                with session_scope(platform.engine) as db:
+                    row = db.get(LiveDocRecord, doc_id)
+                    row.path = str(path)
+                    row.updated_at = _now()
+                    row.last_error = ""
+                    db.add(row)
+                    db.commit()
+
+            await asyncio.to_thread(_mark_written)
             return {"id": doc_id, "path": str(path), "ok": True}
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001 — record the failure honestly
-            with session_scope(platform.engine) as db:
-                row = db.get(LiveDocRecord, doc_id)
-                if row is not None:
-                    row.last_error = f"{type(exc).__name__}: {exc}"[:300]
-                    db.add(row)
-                    db.commit()
+            err_text = f"{type(exc).__name__}: {exc}"[:300]
+
+            def _mark_failed() -> None:  # v1.226.0: SQLite write off the loop
+                with session_scope(platform.engine) as db:
+                    row = db.get(LiveDocRecord, doc_id)
+                    if row is not None:
+                        row.last_error = err_text
+                        db.add(row)
+                        db.commit()
+
+            await asyncio.to_thread(_mark_failed)
             raise HTTPException(status_code=502, detail=str(exc))
 
     app.state.regenerate_livedoc = _regenerate_livedoc  # for the schedule handler
@@ -2115,6 +2227,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
     d = SimpleNamespace(
         platform=platform,
         orchestrator=orchestrator,
+        # v1.226.0 (contract C5): one random uid per create_app, echoed by
+        # /health so the desktop shell can tell its own daemon from a stale one.
+        instance=uuid.uuid4().hex,
         loop_health=loop_health,
         inbound_poller=inbound_poller,
         comm_thread_store=comm_thread_store,

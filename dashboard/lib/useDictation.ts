@@ -420,6 +420,16 @@ export function useDictation(lang = "en-US"): UseDictation {
         }
       };
       ws.onerror = () => setError("Voice stream error — is the daemon running?");
+      // v1.226.0: a SERVER-side close (bad frame, daemon restart) used to leave
+      // the mic on and the button "listening" forever — nothing tore down.
+      // Our own teardown nulls wsRef before closing, so that path is skipped.
+      ws.onclose = () => {
+        if (wsRef.current !== ws) return;
+        if (wantRef.current) {
+          setError("Voice stream closed");
+          teardown();
+        }
+      };
 
       // Wait for the socket to open (with a timeout) before wiring audio.
       await new Promise<void>((resolve, reject) => {

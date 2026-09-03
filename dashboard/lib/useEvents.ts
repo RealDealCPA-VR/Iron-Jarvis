@@ -19,6 +19,11 @@ export function useEvents(max = 100): EventsState {
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closedRef = useRef(false);
+  // v1.226.0 (contract C1): the id of the LAST frame received. A reconnect
+  // passes it as `?since=` so the daemon replays what happened in the gap
+  // (an approval card or a finished-run toast that fired while the socket
+  // was down). Never sent on the first connect — there is nothing to resume.
+  const lastIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     closedRef.current = false;
@@ -27,7 +32,10 @@ export function useEvents(max = 100): EventsState {
       if (closedRef.current) return;
       let ws: WebSocket;
       try {
-        ws = new WebSocket(wsUrl("/events"));
+        const since = lastIdRef.current;
+        ws = new WebSocket(
+          wsUrl(since ? `/events?since=${encodeURIComponent(since)}` : "/events"),
+        );
       } catch {
         scheduleRetry();
         return;
@@ -36,14 +44,20 @@ export function useEvents(max = 100): EventsState {
 
       ws.onopen = () => setConnected(true);
       ws.onmessage = (ev) => {
+        // v1.226.0 (F-D-7): a socket this hook no longer owns (a StrictMode
+        // remount closed it, but its events are still in flight) must not
+        // feed the list or schedule a retry that orphans the live socket.
+        if (ws !== wsRef.current) return;
         try {
           const data = JSON.parse(ev.data) as IJEvent;
+          if (typeof data.id === "string" && data.id) lastIdRef.current = data.id;
           setEvents((prev) => [data, ...prev].slice(0, max));
         } catch {
           /* ignore malformed frame */
         }
       };
       ws.onclose = () => {
+        if (ws !== wsRef.current) return;
         setConnected(false);
         scheduleRetry();
       };

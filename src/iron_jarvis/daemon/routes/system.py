@@ -7,6 +7,7 @@ reached through ``d`` (see the deps object built in create_app).
 from __future__ import annotations
 
 import asyncio
+import json
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from typing import Any
@@ -16,6 +17,50 @@ from ..app import _ws_token_ok
 from ..schemas import DesktopIncidentBody, ScheduleAdd, UpdateBody
 from ... import __version__
 from ...core.db import session_scope
+
+
+def activity_snapshot(d) -> dict[str, Any]:
+    """What the daemon is busy with RIGHT NOW (v1.226.0, contract C6).
+
+    ``active_sessions`` counts session rows the orchestrator considers live
+    (``active`` + ``queued`` — this app's names for running/pending);
+    ``running_workflow_runs`` counts run records in ``running`` / ``waiting`` /
+    ``cancelling`` (+ the transient ``resuming``). ``writing_workflow_runs``
+    is the subset that actually holds work open (a ``waiting`` run is parked
+    on a human answer and writes nothing) — the VACUUM gate keys off it.
+    Both surfaces read this: ``GET /system/activity`` (Electron warns before
+    killing the daemon for an update) and the Repair actions' 409."""
+    from sqlmodel import select
+
+    from ...core.models import Session, SessionStatus
+    from ...workflows.models import WorkflowRunRecord
+
+    with session_scope(d.platform.engine) as db:
+        sessions = len(
+            list(
+                db.exec(
+                    select(Session.id).where(
+                        Session.status.in_([SessionStatus.ACTIVE, SessionStatus.QUEUED])  # type: ignore[attr-defined]
+                    )
+                )
+            )
+        )
+        run_states = list(
+            db.exec(
+                select(WorkflowRunRecord.status).where(
+                    WorkflowRunRecord.status.in_(  # type: ignore[attr-defined]
+                        ["running", "waiting", "cancelling", "resuming"]
+                    )
+                )
+            )
+        )
+    writing = sum(1 for st in run_states if st != "waiting")
+    return {
+        "active_sessions": sessions,
+        "running_workflow_runs": len(run_states),
+        "writing_workflow_runs": writing,
+        "busy": bool(sessions or run_states),
+    }
 
 
 def register(app: FastAPI, d) -> None:
@@ -39,11 +84,20 @@ def register(app: FastAPI, d) -> None:
         return {
             "status": "ok",
             "version": __version__,
+            # v1.226.0 (contract C5): minted once per process in create_app so
+            # the desktop shell can tell ITS daemon from a stale/foreign one.
+            "instance": d.instance,
             "default_provider": d.platform.config.default_provider,
             "default_model": d.platform.config.default_model,
             "active_project": active_project,
             "providers": d._visible_providers(),
         }
+
+    @app.get("/system/activity")
+    def system_activity() -> dict[str, Any]:
+        """v1.226.0 (contract C6): is the daemon mid-work? Electron's update
+        install reads this to warn before it kills the process."""
+        return activity_snapshot(d)
 
     @app.get("/diagnostics/reliability")
     def diagnostics_reliability() -> dict[str, Any]:
@@ -332,7 +386,24 @@ def register(app: FastAPI, d) -> None:
         it = d.platform.event_bus.subscribe()
         recv_task = asyncio.ensure_future(ws.receive())
         next_task = asyncio.ensure_future(it.__anext__())
+        # v1.226.0 (contract C1): ``?since=<event id>`` replays every LATER
+        # bus-history entry before going live, so a reconnect gap (daemon
+        # restart, sleeping laptop) no longer silently drops approval cards,
+        # toasts and project surfaces. Unknown / evicted id → no replay. The
+        # snapshot is taken with no await in between, and ids replayed are
+        # skipped once if the live queue also carries them.
+        since = (ws.query_params.get("since") or "").strip()
+        replay: list = []
+        if since:
+            hist = list(d.platform.event_bus.history)
+            for i, ev in enumerate(hist):
+                if ev.id == since:
+                    replay = hist[i + 1 :]
+                    break
+        replayed_ids = {ev.id for ev in replay}
         try:
+            for ev in replay:
+                await ws.send_text(json.dumps(ev.to_dict(), default=str))
             while True:
                 done, _ = await asyncio.wait(
                     {recv_task, next_task}, return_when=asyncio.FIRST_COMPLETED
@@ -348,7 +419,13 @@ def register(app: FastAPI, d) -> None:
                     continue
                 if next_task in done:
                     event = next_task.result()
-                    await ws.send_json(event.to_dict())
+                    if event.id in replayed_ids:
+                        replayed_ids.discard(event.id)
+                    else:
+                        # v1.226.0 (contract C3): default=str — one payload
+                        # carrying a datetime/Path used to raise TypeError past
+                        # the except below and close EVERY dashboard socket.
+                        await ws.send_text(json.dumps(event.to_dict(), default=str))
                     next_task = asyncio.ensure_future(it.__anext__())
         except (WebSocketDisconnect, StopAsyncIteration, RuntimeError):
             pass

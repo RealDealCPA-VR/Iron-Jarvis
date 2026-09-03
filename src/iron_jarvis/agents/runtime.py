@@ -868,7 +868,7 @@ class AgentRuntime:
         run.state = state
         if state in _TERMINAL:
             run.finished_at = utcnow()
-        self._save(run)
+        await asyncio.to_thread(self._save, run)  # v1.226.0: SQLite write off the loop
         await self.p.event_bus.publish(
             EventType.AGENT_STATE_CHANGED,
             {"run_id": run.id, "from": prev.value, "to": state.value},
@@ -915,7 +915,7 @@ class AgentRuntime:
             model=session.model,
             state=AgentState.CREATED,
         )
-        self._save(run)
+        await asyncio.to_thread(self._save, run)  # v1.226.0: SQLite write off the loop
         # FX-01 side-channel: resolve the ephemeral per-run stream sink (token
         # deltas + live tool frames -> SSE). A no-op when no browser is subscribed,
         # and absent entirely when the platform exposes no stream hub.
@@ -1069,7 +1069,8 @@ class AgentRuntime:
         # of "what the user is working on". Bounded; never blocks a run.
         if session.project_id:
             try:
-                system_prompt += self._project_context(session)
+                # v1.226.0: DB reads + a knowledge embed round-trip — off the loop.
+                system_prompt += await asyncio.to_thread(self._project_context, session)
             except Exception:  # noqa: BLE001 — the spine must never break a run
                 pass
         # THE GUIDE'S BASE KNOWLEDGE (v1.224.0): a Guide session starts knowing
@@ -1128,7 +1129,11 @@ class AgentRuntime:
         fabric = getattr(self.p, "fabric", None)
         if fabric is not None:
             try:
-                grounding = fabric.ground(session.task, project_id=session.project_id)
+                # v1.226.0: the v1.173.0 chat-lane offload never reached this
+                # lane — fabric.ground does DB + remote (RAG/MCP) reads.
+                grounding = await asyncio.to_thread(
+                    fabric.ground, session.task, project_id=session.project_id
+                )
                 if grounding:
                     system_prompt += grounding
             except Exception:  # noqa: BLE001 — grounding must never break a run
@@ -1534,7 +1539,8 @@ class AgentRuntime:
             # mid-step (the read cache's "already read at step N" note, a live
             # dashboard) quoted a step that had already passed. One extra merge
             # per step buys a number that is true while the step is happening.
-            self._save(run)
+            # v1.226.0: the most frequent write in the app — off the loop.
+            await asyncio.to_thread(self._save, run)
             # TX-01 audit: one persisted event PER LLM call so every token is
             # individually replayable on the timeline (the per-run aggregate lives
             # on AgentRun). Best-effort — never let telemetry break a run.
@@ -1561,7 +1567,7 @@ class AgentRuntime:
                 pass
 
             if not resp.wants_tools:
-                self._save(run)
+                await asyncio.to_thread(self._save, run)  # v1.226.0: off the loop
                 return True, resp.text
 
             messages.append(
@@ -1731,7 +1737,7 @@ class AgentRuntime:
                         content=content,
                     )
                 )
-            self._save(run)
+            await asyncio.to_thread(self._save, run)  # v1.226.0: off the loop
             if sink:
                 sink.step_end(run.steps)
         # Round budget spent before the model finalized — the CALLER owns what

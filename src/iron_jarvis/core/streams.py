@@ -49,15 +49,27 @@ class StreamHub:
 
     def __init__(self) -> None:
         self._subs: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
+        # v1.226.0: the loop each subscriber queue belongs to (EventBus keeps the
+        # same map). A scheduled task session runs under asyncio.run on the
+        # APScheduler thread, so its RunSink publishes from a FOREIGN loop; a
+        # bare put_nowait there appends to the queue without waking the SSE
+        # reader parked in q.get() on the main loop (it woke on the 15s
+        # keepalive instead — every token arrived 15s late).
+        self._queue_loops: dict[int, asyncio.AbstractEventLoop] = {}
 
     def subscribe(self, session_id: str) -> "asyncio.Queue[dict[str, Any]]":
         """Register a subscriber for ``session_id``; the SSE endpoint drains the
         returned queue. Always pair with :meth:`unsubscribe` in a ``finally``."""
         q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=_SUBSCRIBER_QUEUE_MAX)
         self._subs.setdefault(session_id, set()).add(q)
+        try:
+            self._queue_loops[id(q)] = asyncio.get_running_loop()
+        except RuntimeError:  # subscribed off-loop (tests): deliver inline
+            pass
         return q
 
     def unsubscribe(self, session_id: str, q: "asyncio.Queue[dict[str, Any]]") -> None:
+        self._queue_loops.pop(id(q), None)
         subs = self._subs.get(session_id)
         if not subs:
             return
@@ -71,8 +83,22 @@ class StreamHub:
     def publish(self, session_id: str, frame: dict[str, Any]) -> None:
         """SYNC, non-blocking. Deliver ``frame`` to every subscriber of
         ``session_id`` (no-op when there are none). NEVER await this."""
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
         for q in list(self._subs.get(session_id, ())):
-            _enqueue_drop_oldest(q, frame)
+            owner = self._queue_loops.get(id(q))
+            if owner is not None and owner is not running and owner.is_running():
+                # v1.226.0: hop to the queue's own loop (the EventBus pattern).
+                # The owner may close between is_running() and the call —
+                # publish never raises, so fall back to the inline put.
+                try:
+                    owner.call_soon_threadsafe(_enqueue_drop_oldest, q, frame)
+                except RuntimeError:
+                    _enqueue_drop_oldest(q, frame)
+            else:
+                _enqueue_drop_oldest(q, frame)
 
     def sink(self, session_id: str, run_id: str) -> "RunSink":
         return RunSink(self, session_id, run_id)

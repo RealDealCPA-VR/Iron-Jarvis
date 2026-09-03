@@ -219,6 +219,13 @@ interface ChatMessage {
   /** Uploaded paths of those attachments, so a Regenerate can re-ground on them
    *  (the reply is otherwise silently ungrounded while the chip still shows). */
   attachmentPaths?: string[];
+  /** The agent session this (last) bubble is still waiting on (v1.226.0).
+   *  Set by sendAgent once POST /sessions answers and stripped by finalize/
+   *  Stop with the reply — so a thread reopened mid-run resumes the wait
+   *  instead of losing the answer. Lives on the MESSAGE, not `setup`: the
+   *  daemon whitelists setup keys (routes/chat.py _clean_setup) but stores
+   *  bubbles verbatim. */
+  awaitingSession?: string;
   /** Registry tools the reply actually ran (assistant messages) — footer line. */
   toolsUsed?: string[];
   /** Web sources the reply's web tool calls actually surfaced (assistant
@@ -1287,6 +1294,28 @@ function ToolCardList({ cards }: { cards: readonly ToolCard[] }) {
   );
 }
 
+/** Drop the agent-lane wait mark (v1.226.0) — every path that ENDS a turn
+ *  (finalize, Stop, a hard finalize failure) saves through this, so the mark
+ *  never outlives the wait it describes. */
+function stripAwaiting(msgs: ChatMessage[]): ChatMessage[] {
+  if (!msgs.some((m) => m.awaitingSession)) return msgs;
+  return msgs.map((m) => {
+    if (!m.awaitingSession) return m;
+    const { awaitingSession: _drop, ...rest } = m;
+    return rest;
+  });
+}
+
+/** The session a stored thread was still waiting on when it was last saved
+ *  (v1.226.0) — only the LAST bubble counts: a reply after it means the wait
+ *  already ended. */
+function pendingSessionOf(msgs: ChatMessage[]): string | null {
+  const last = msgs[msgs.length - 1];
+  return last && typeof last.awaitingSession === "string" && last.awaitingSession
+    ? last.awaitingSession
+    : null;
+}
+
 /** Streamed assistant markdown with a blinking caret pinned after the last line
  *  (a `::after` on the final block, so it sits inline with the running text). */
 function StreamingText({ content }: { content: string }) {
@@ -1311,6 +1340,13 @@ export default function ChatPage() {
   const [failedTurn, setFailedTurn] = useState<{
     history: ChatMessage[];
     atts: UploadedFile[];
+  } | null>(null);
+  // AUTOSAVE FAILED (v1.226.0): the chip by the composer. `retry` re-queues
+  // the exact save that failed; cleared by a later successful save, Dismiss,
+  // or leaving the conversation (the retry targets THIS conversation's box).
+  const [saveFailure, setSaveFailure] = useState<{
+    detail: string;
+    retry: () => void;
   } | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [choice, setChoice] = useState(""); // "" => server default model
@@ -1836,6 +1872,11 @@ export default function ChatPage() {
   // Mirrors awaitingId so an in-flight finalize() can tell the turn was torn
   // down (Stop / New chat / thread switch) while its fetch was airborne.
   const awaitingIdRef = useRef<string | null>(null);
+  // The session a thread-open RESUMED waiting on (v1.226.0) — finalize treats
+  // "no such session" for it as a pruned record (strip the mark quietly),
+  // not as an error the user caused by opening a conversation. Compared to
+  // the finalize id, so a stale value can never misfile a live turn.
+  const resumedSessionRef = useRef<string | null>(null);
   // Bumped by "New chat" so an in-flight /chat reply from the OLD thread can't
   // land in the fresh one.
   const chatGenRef = useRef(0);
@@ -2479,14 +2520,52 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setupVersion]);
 
+  /** Autosave failure handling (v1.226.0). A 404 means the thread is gone
+   *  (deleted from another surface): reset the box so the NEXT save re-creates
+   *  it via /chat/threads/new, and drop the stale id from the page when it is
+   *  the open conversation — before this, every later PUT 404'd silently
+   *  forever. Status 0 stays silent (the offline banner covers it); anything
+   *  else raises the chip by the composer with a Retry, but only for the
+   *  conversation on screen (a retry must never write into another box). */
+  function noteSaveFailure(
+    e: unknown,
+    target: { id: string | null },
+    retry: () => void,
+  ) {
+    const status = e instanceof ApiError ? e.status : -1;
+    if (status === 404) {
+      const hadId = target.id !== null;
+      target.id = null;
+      if (saveTargetRef.current === target) setThreadId(null);
+      void refreshThreads(); // the sidebar drops the thread that is gone
+      // Re-queue the SAME save once into the reset box: /chat/threads/new
+      // cannot 404 (hadId guards the impossible repeat, so no loop), and the
+      // turn whose save just failed is on disk NOW, not at the next turn.
+      if (hadId) retry();
+      return;
+    }
+    if (status === 0 || saveTargetRef.current !== target) return;
+    setSaveFailure({
+      detail: e instanceof Error ? e.message : String(e),
+      retry,
+    });
+  }
+
   /**
-   * Queue ONE autosave for a completed turn. Called exactly once per turn
-   * (chat success, regenerate success, agent finalize, Stop) with the full
-   * bubble array — never from render — so a turn can never double-PUT.
+   * Queue ONE autosave of the full bubble array — never from render. Called
+   * at turn START (the typed message is durable before the model is asked,
+   * v1.226.0) and once at turn END (chat success, regenerate success, agent
+   * finalize, Stop); the chain serializes, so the end save reuses the id the
+   * start save minted and a turn can never mint two threads.
    */
-  function queueSave(msgs: ChatMessage[]) {
+  function queueSave(
+    msgs: ChatMessage[],
+    // The conversation this save belongs to — passed explicitly when the
+    // caller's conversation may no longer be the open one (a 404 re-queue,
+    // sendAgent's hand-off mark after a torn-down POST; v1.226.0).
+    target: { id: string | null; daemon?: boolean } = saveTargetRef.current,
+  ) {
     if (msgs.length === 0) return;
-    const target = saveTargetRef.current; // the conversation this save belongs to
     // MESSAGING threads (owner === "daemon") are the server's to write: the
     // daemon has already persisted every message, and PUT would 409. The next
     // chat.thread_updated refetch reconciles the view instead.
@@ -2511,10 +2590,15 @@ export default function ChatPage() {
           body,
         );
         target.id = res.id; // "new" → real id; later saves in this convo reuse it
-        if (saveTargetRef.current === target) setThreadId(res.id);
+        if (saveTargetRef.current === target) {
+          setThreadId(res.id);
+          setSaveFailure(null); // on disk again — retire the chip
+        }
         await refreshThreads();
-      } catch {
-        /* autosave is best-effort — never disturb the conversation itself */
+      } catch (e) {
+        // Best-effort for the CONVERSATION (the bubbles stay), never silent
+        // (v1.226.0): a swallowed failure was data loss the user never saw.
+        noteSaveFailure(e, target, () => queueSave(msgs, target));
       }
     });
   }
@@ -2533,6 +2617,7 @@ export default function ChatPage() {
     setAwaitingId(null);
     setChatBusy(false);
     setFailedTurn(null);
+    setSaveFailure(null); // its Retry belonged to the conversation being left
     setSessionId(null);
     setAttachments([]);
     setSelectedTools([]); // armed tools are per-conversation
@@ -2569,7 +2654,8 @@ export default function ChatPage() {
     setShowJump(false);
     try {
       const t = await get<ThreadDetail>(`/chat/threads/${id}`);
-      setMessages(t.messages ?? []);
+      const msgs = t.messages ?? [];
+      setMessages(msgs);
       setThreadId(t.id);
       // Does a compaction summary stand over this thread? Server-checked on
       // every open (v1.169.0) — the chip must reflect the store, not memory.
@@ -2583,6 +2669,20 @@ export default function ChatPage() {
           : null,
       );
       saveTargetRef.current = { id: t.id, daemon: isDaemon };
+      // A TURN LEFT IN FLIGHT (v1.226.0): the last bubble names the session
+      // the agent lane was waiting on when the page went away (see sendAgent).
+      // Resume exactly the wait the page would have kept: the 1.5s poll +
+      // event watcher below terminate because the daemon reconciles
+      // interrupted sessions at boot, and a session that already finished
+      // appends its reply right now, through the same finalize.
+      const pending = pendingSessionOf(msgs);
+      if (pending) {
+        messagesRef.current = msgs; // finalize may read the ref before React re-renders
+        resumedSessionRef.current = pending;
+        awaitingIdRef.current = pending;
+        setAwaitingId(pending);
+        void finalize(pending);
+      }
       // Context follows the conversation: a project-tagged thread scopes the
       // chat to its project; an untagged one unscopes it. armDefaults stays
       // off — the thread's own saved setup (restored below) wins; without a
@@ -3309,7 +3409,7 @@ export default function ChatPage() {
         /* no card; the reply still lands */
       }
       const full: ChatMessage[] = [
-        ...messagesRef.current,
+        ...stripAwaiting(messagesRef.current), // the wait is over (v1.226.0)
         { role: "assistant", content, fromSession: id, ...(runResult ? { runResult } : {}) },
       ];
       setMessages(full);
@@ -3333,9 +3433,29 @@ export default function ChatPage() {
         setOffline(true);
         return;
       }
+      if (
+        e instanceof ApiError &&
+        e.status === 404 &&
+        resumedSessionRef.current === id
+      ) {
+        // A RESUMED wait whose session record is gone (pruned since the
+        // thread was saved; v1.226.0): merely opening the thread must not
+        // shout "no such session". Strip the mark quietly and save it so the
+        // next open doesn't ask again.
+        const kept = stripAwaiting(messagesRef.current);
+        setMessages(kept);
+        queueSave(kept);
+        awaitingIdRef.current = null;
+        setAwaitingId(null);
+        return;
+      }
       // Hard failure: surface it and stop waiting so the turn doesn't hang forever.
       setError(e instanceof ApiError ? e.message : String(e));
-      queueSave(messagesRef.current); // the typed message still survives navigation
+      // The typed message still survives navigation — minus the wait mark
+      // (v1.226.0), or a reopen would resume a wait that already failed.
+      const kept = stripAwaiting(messagesRef.current);
+      setMessages(kept);
+      queueSave(kept);
       awaitingIdRef.current = null;
       setAwaitingId(null);
     } finally {
@@ -3661,8 +3781,10 @@ export default function ChatPage() {
    *  the serialized save chain means the turn's own save has already resolved
    *  the thread id (the chain mutates the shared target) by the time this
    *  PUT runs. */
-  function queueSaveDocs(docs: string[]) {
-    const target = saveTargetRef.current;
+  function queueSaveDocs(
+    docs: string[],
+    target: { id: string | null; daemon?: boolean } = saveTargetRef.current, // see queueSave
+  ) {
     if (target.daemon) return; // messaging threads: server-owned, never PUT
     const personaValue = personaForSend();
     const setup = { ...currentSetup(), documents: docs.slice(-MAX_THREAD_DOCS) };
@@ -3682,9 +3804,14 @@ export default function ChatPage() {
           body,
         );
         target.id = res.id;
-        if (saveTargetRef.current === target) setThreadId(res.id);
-      } catch {
-        /* autosave is best-effort — never disturb the conversation itself */
+        if (saveTargetRef.current === target) {
+          setThreadId(res.id);
+          setSaveFailure(null);
+        }
+      } catch (e) {
+        // Same contract as queueSave (v1.226.0): 404 resets, 0 is silent,
+        // the rest raise the chip — Retry re-queues THIS doc save.
+        noteSaveFailure(e, target, () => queueSaveDocs(docs, target));
       }
     });
   }
@@ -3963,6 +4090,11 @@ export default function ChatPage() {
   async function completeChat(history: ChatMessage[], atts: UploadedFile[]) {
     const gen = chatGenRef.current;
     setMessages(history);
+    // DURABLE AT SEND (v1.226.0): the typed message is on disk BEFORE the
+    // model is asked — a reload or route change mid-stream aborted the fetch
+    // and lost the question with the partial. The end-of-turn save below
+    // still runs; the chain serializes, so it reuses the id this one mints.
+    queueSave(history);
     pinnedRef.current = true; // a fresh turn always scrolls into view
     setShowJump(false);
     setFailedTurn(null); // a fresh attempt — retire any prior failure
@@ -4452,29 +4584,41 @@ export default function ChatPage() {
       picked && !picked.includes(":") && picked !== "builder" ? picked : "";
     // The hand-off bubble names ONLY what will truly run.
     const target = customSlug ? picked : builtinPick || null;
-    setMessages((prev) =>
+    const withBubble: ChatMessage[] = [
+      ...messagesRef.current,
       esc
         ? // The bubble is already there — mark WHY the turn grew instead, so the
           // hand-off is visible rather than an unexplained pause. When a
           // specialist was chosen, name it (v1.139.0).
-          [
-            ...prev,
-            {
-              role: "assistant" as const,
-              content: "",
-              escalated: esc.reason,
-              ...(target ? { escalatedTo: agentPhrase(target) } : {}),
-            },
-          ]
-        : [
-            ...prev,
-            {
-              role: "user" as const,
-              content: message,
-              ...(atts.length ? { attachmentNames: atts.map((a) => a.name) } : {}),
-            },
-          ],
-    );
+          {
+            role: "assistant" as const,
+            content: "",
+            escalated: esc.reason,
+            ...(target ? { escalatedTo: agentPhrase(target) } : {}),
+          }
+        : {
+            role: "user" as const,
+            content: message,
+            ...(atts.length ? { attachmentNames: atts.map((a) => a.name) } : {}),
+          },
+    ];
+    setMessages(withBubble);
+    // The ref is written NOW (v1.226.0): the saves below and a finalize that
+    // beats React's re-render must both see the bubble.
+    messagesRef.current = withBubble;
+    // DURABLE BEFORE THE DAEMON IS ASKED (v1.226.0): an agent turn runs for
+    // minutes and the page used to save nothing until finalize — leave for
+    // the Sessions page and the question was gone with the answer. The gen
+    // and the box are captured HERE: everything after the POST's await must
+    // prove it still belongs to this conversation (New chat / a thread switch
+    // is clickable while the POST is airborne — chatBusy is already false).
+    const gen = chatGenRef.current;
+    const box = saveTargetRef.current;
+    queueSave(withBubble, box);
+    // The POST goes out only once that PUT has settled (a local round trip;
+    // the chain never rejects) — "on disk before the daemon is asked" is then
+    // a fact, not a microtask race the session could win.
+    await saveChainRef.current;
     // Files given to an AGENT turn land on the rail too (v1.166.0) — same
     // "made or was given" rule as chat mode. Escalations skip it: their
     // attachments were already merged by the chat lane that escalated.
@@ -4568,11 +4712,35 @@ export default function ChatPage() {
       // ALWAYS chain forward to the returned session id: `continue` spawns a NEW
       // session (recapping the old one), so the next turn must continue from it —
       // sticking with the first id would silently drop the intermediate turns.
+      // THE HAND-OFF IS ON DISK (v1.226.0): the last bubble names the session
+      // this turn now waits on, so openThread can resume the wait after a
+      // reload or route change (see ChatMessage.awaitingSession for why it is
+      // a message field, not `setup`). finalize/Stop strip it with the reply.
+      // Built from withBubble, never from messagesRef — the ref is whatever
+      // conversation is open NOW.
+      const marked: ChatMessage[] = [
+        ...withBubble.slice(0, -1),
+        { ...withBubble[withBubble.length - 1], awaitingSession: session.id },
+      ];
+      if (chatGenRef.current !== gen) {
+        // TORN DOWN while the POST was airborne (New chat / thread switch):
+        // nothing here may touch the open conversation. The session still
+        // runs, so the mark goes into the ORIGINAL box — reopening that
+        // thread resumes the wait and lands the reply where it belongs.
+        queueSave(marked, box);
+        return;
+      }
       setSessionId(session.id);
+      setMessages(marked);
+      messagesRef.current = marked;
+      queueSave(marked, box);
       // Hand off to the event watcher + polling fallback to surface the reply.
       awaitingIdRef.current = session.id;
       setAwaitingId(session.id);
     } catch (e) {
+      // Torn down mid-POST (v1.226.0): the bubble was saved into its own box
+      // before the POST; the open conversation is somebody else's now.
+      if (chatGenRef.current !== gen) return;
       // Keep the typed thread intact and RESTORE the optimistically-cleared
       // attachments so a failed send never silently eats the user's files.
       if (atts.length) setAttachments(atts);
@@ -4718,7 +4886,7 @@ export default function ChatPage() {
     post(`/sessions/${awaitingId}/cancel`).catch(() => {});
     const partial = runStream.text.trim();
     const full: ChatMessage[] = [
-      ...messagesRef.current,
+      ...stripAwaiting(messagesRef.current), // the wait is over (v1.226.0)
       {
         role: "assistant",
         content: partial || "Stopped.",
@@ -4741,6 +4909,7 @@ export default function ChatPage() {
     setAwaitingId(null); // also tears down any polling interval
     setChatBusy(false);
     setFailedTurn(null);
+    setSaveFailure(null); // its Retry belonged to the conversation being left
     setAttachments([]);
     // A selected project keeps its file essentials armed on a fresh
     // conversation (its folder stays live); otherwise nothing is armed.
@@ -6049,6 +6218,41 @@ export default function ChatPage() {
                 )}
                 <div ref={bottomRef} />
               </div>
+
+              {/* AUTOSAVE FAILED (v1.226.0): persistent + dismissible. What
+                  is on screen is NOT on disk until Retry succeeds; a silent
+                  catch was the bug. Offline (status 0) never lands here —
+                  the OfflineHint above already says it. */}
+              {saveFailure && (
+                <div
+                  role="status"
+                  className="flex flex-wrap items-center gap-2 border-t hairline px-3 py-2 text-[12px]"
+                >
+                  <span className="min-w-0 flex-1 text-amber-300">
+                    Couldn&apos;t save this conversation: {saveFailure.detail}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const { retry } = saveFailure;
+                      setSaveFailure(null);
+                      retry();
+                    }}
+                    title="Save this conversation again"
+                    className="btn-ghost shrink-0 py-1 text-[12px]"
+                  >
+                    <RefreshCw size={12} /> Retry
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Dismiss save warning"
+                    onClick={() => setSaveFailure(null)}
+                    className="btn-ghost shrink-0 py-1 text-[12px]"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              )}
 
               {(error || (failedTurn && !busy)) && (
                 <div className="flex flex-wrap items-center gap-2 border-t hairline p-3">

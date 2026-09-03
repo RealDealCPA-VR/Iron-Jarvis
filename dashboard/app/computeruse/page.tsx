@@ -36,6 +36,7 @@ import {
   OfflineHint,
   SkeletonRows,
   ErrorNote,
+  DataError,
   Empty,
   LoaderInline,
   Dot,
@@ -888,7 +889,11 @@ export default function ComputerUsePage() {
             The last 20 runs, newest first. Click a run to inspect its recorded trace —
             every action, result, screenshot reference, and error, in order.
           </p>
-          {runsState.loading && !runsState.data ? (
+          {runsState.error && runsState.error.status !== 0 && runsState.error.status !== 404 ? (
+            // v1.226.0: a real error (e.g. 500) is not "no runs yet". 404 stays the
+            // quiet empty state on purpose — see the runsState comment above.
+            <DataError error={runsState.error} what="run history" />
+          ) : runsState.loading && !runsState.data ? (
             <SkeletonRows rows={3} />
           ) : runs.length === 0 ? (
             <Empty icon={<History size={28} />}>

@@ -6,6 +6,7 @@ builds the list for registration in the tool registry.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from ..tools.base import Tool, ToolContext, ToolResult
@@ -42,7 +43,9 @@ class NotifyTool(Tool):
             return ToolResult(ok=False, error="notify: `message` is required")
         channel = args.get("channel")
         channels = [channel] if channel else None
-        results = self._notifier.notify(message, channels)
+        # v1.226.0: the fan-out is serial blocking HTTP/SMTP (15s timeouts) —
+        # run it on a worker thread so a slow channel never parks the daemon.
+        results = await asyncio.to_thread(self._notifier.notify, message, channels)
         if not results:
             return ToolResult(ok=False, error="notify: no channels configured")
         any_ok = any(r.get("ok") for r in results.values())

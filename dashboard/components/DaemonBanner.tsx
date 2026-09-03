@@ -6,6 +6,7 @@ import { ServerCrash, ShieldAlert, X, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { API_BASE } from "@/lib/api";
 import { useDaemon } from "@/lib/daemon";
+import { DESKTOP_OFFLINE_HINT, isDesktopShell } from "@/lib/desktopShell";
 
 /** The port the dashboard is pointed at, surfaced in the "start it" hint. */
 function apiPort(): string {
@@ -75,10 +76,18 @@ export function DaemonBanner() {
             <div className="min-w-0 flex-1 text-sm">
               <span className="notice-warn-title font-semibold">Daemon offline.</span>{" "}
               <span className="notice-warn-body">
-                Start it with{" "}
-                <code className="notice-warn-code rounded px-1.5 py-0.5 font-mono text-xs">
-                  uv run ironjarvis serve --port {port} --root .
-                </code>
+                {/* v1.226.0: the packaged app supervises its own daemon — the
+                    CLI line only makes sense in a browser tab. */}
+                {isDesktopShell() ? (
+                  DESKTOP_OFFLINE_HINT
+                ) : (
+                  <>
+                    Start it with{" "}
+                    <code className="notice-warn-code rounded px-1.5 py-0.5 font-mono text-xs">
+                      uv run ironjarvis serve --port {port} --root .
+                    </code>
+                  </>
+                )}
               </span>
             </div>
             <button

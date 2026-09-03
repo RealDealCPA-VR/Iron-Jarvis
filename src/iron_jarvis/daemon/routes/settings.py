@@ -191,6 +191,28 @@ def register(app: FastAPI, d) -> None:
         from sqlalchemy import text
 
         action = body.action
+        if action in ("db_vacuum", "prune_events"):
+            # v1.226.0: VACUUM holds an EXCLUSIVE lock for its whole duration;
+            # every write a live session / workflow run makes meanwhile waits
+            # up to busy_timeout (30s) and then FAILS the step. Refuse honestly
+            # while anything is actually writing, naming what is running.
+            from .system import activity_snapshot
+
+            act = activity_snapshot(d)
+            if act["active_sessions"] or act["writing_workflow_runs"]:
+                what = []
+                if act["active_sessions"]:
+                    what.append(f"{act['active_sessions']} session(s) running")
+                if act["writing_workflow_runs"]:
+                    what.append(f"{act['writing_workflow_runs']} workflow run(s) running")
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"cannot {action} while work is in flight ({', '.join(what)}) — "
+                        "it would lock the database out from under them; wait for "
+                        "them to finish or cancel them, then retry"
+                    ),
+                )
         if action == "db_integrity":
             with d.platform.engine.connect() as conn:
                 res = conn.execute(text("PRAGMA integrity_check")).scalar()

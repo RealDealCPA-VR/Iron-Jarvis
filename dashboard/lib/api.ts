@@ -72,6 +72,27 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * v1.226.0 (contract C4): a pydantic 422 from an older daemon carries a LIST
+ * detail (`[{loc: ["body","steps"], msg: "..."}]`), which `String()` renders as
+ * "[object Object]". Flatten it to "field: msg; field: msg" (loc minus the
+ * leading "body"), the same string shape the daemon now emits itself.
+ */
+export function flattenDetail(detail: unknown): string {
+  if (!Array.isArray(detail)) return String(detail);
+  return detail
+    .map((item) => {
+      if (!item || typeof item !== "object") return String(item);
+      const rec = item as { loc?: unknown; msg?: unknown };
+      const loc = Array.isArray(rec.loc)
+        ? rec.loc.filter((p, i) => !(i === 0 && p === "body")).map(String).join(".")
+        : "";
+      const msg = rec.msg === undefined ? JSON.stringify(item) : String(rec.msg);
+      return loc ? `${loc}: ${msg}` : msg;
+    })
+    .join("; ");
+}
+
 // App-wide auth signal: a 401/403 from any DATA request means the bearer token is
 // missing/stale. The /health poll is auth-EXEMPT so it can't detect this — without
 // this, every page silently renders a false "empty install" on a bad token.
@@ -98,6 +119,22 @@ function signalError(failing: boolean): void {
   errorListeners.forEach((fn) => fn(failing));
 }
 
+// v1.226.0: "a request could not REACH the daemon" signal (the catch below
+// that mints ApiError status 0). The /health poll alone misses a restart that
+// falls BETWEEN two 5s polls: a page's one GET dies, the daemon is back before
+// the next poll, and the offline->online edge never happens. DaemonProvider
+// subscribes, marks itself offline and re-polls, so the next good poll walks
+// the edge and status-0 hooks refetch.
+type NetworkListener = () => void;
+const networkListeners = new Set<NetworkListener>();
+export function onNetworkError(fn: NetworkListener): () => void {
+  networkListeners.add(fn);
+  return () => networkListeners.delete(fn);
+}
+function signalNetworkError(): void {
+  networkListeners.forEach((fn) => fn());
+}
+
 // OPT-IN request timeout. Applied ONLY when a caller passes `timeoutMs` (the
 // /health poll + list polls, to detect a frozen-but-connected daemon). NEVER
 // blanket-applied: a user-initiated GET like a whole-drive file search or the first
@@ -122,6 +159,7 @@ export async function api<T>(path: string, init?: ApiInit): Promise<T> {
     });
   } catch {
     // Network error or (opt-in) timeout => daemon offline / not responding.
+    signalNetworkError();
     throw new ApiError("daemon offline", 0);
   } finally {
     if (timer) clearTimeout(timer);
@@ -134,7 +172,7 @@ export async function api<T>(path: string, init?: ApiInit): Promise<T> {
     let detail = `${res.status} ${res.statusText}`;
     try {
       const body = await res.json();
-      if (body?.detail) detail = String(body.detail);
+      if (body?.detail) detail = flattenDetail(body.detail);
     } catch {
       /* ignore */
     }

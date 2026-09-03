@@ -441,7 +441,7 @@ class WorkflowEngine:
         if folder_note:
             # Said ON THE RECORD, before the first step, so a run the user
             # opens mid-way already explains where its files are going.
-            self._update_record(run_id, notes=[folder_note])
+            await asyncio.to_thread(self._update_record, run_id, notes=[folder_note])
         # Tool steps share ONE workspace per run (not one per step/retry): a
         # write_document -> read_file chain must see its own files, and a per-
         # step mkdtemp litters %TEMP% forever. Lazy so agent-only runs make none.
@@ -466,7 +466,7 @@ class WorkflowEngine:
             # settled, so a daemon death during the first step lost any
             # in-memory-only seed and the resumed run silently rendered
             # {{Trigger}} as '' — different behavior from the original run.
-            self._update_record(run_id, outputs=outputs)
+            await asyncio.to_thread(self._update_record, run_id, outputs=outputs)
 
         def _completed_chain() -> list[tuple[str, str]]:
             chain = []
@@ -542,7 +542,8 @@ class WorkflowEngine:
                 elif st == "failed" and not res.get("handled"):
                     batch_failed = True
 
-            self._update_record(
+            await asyncio.to_thread(
+                self._update_record,
                 run_id,
                 current_session_id=None,
                 session_ids=session_ids,
@@ -559,7 +560,8 @@ class WorkflowEngine:
                         outputs.setdefault(s.name, {"status": "skipped"})
                     break
                 # PARK (v1.121.0): the run waits durably for the user.
-                self._update_record(
+                await asyncio.to_thread(
+                    self._update_record,
                     run_id,
                     status="waiting",
                     waiting_json=dumps(
@@ -575,9 +577,10 @@ class WorkflowEngine:
                         "question": ask.question,
                     },
                 )
-                self._deliver(
+                await asyncio.to_thread(  # v1.226.0: network send off the loop
+                    self._deliver,
                     f"Workflow “{workflow.name}” needs you: {ask.question} "
-                    f"— answer it in chat or on the Workflows page."
+                    f"— answer it in chat or on the Workflows page.",
                 )
                 refreshed = self._get_record(run_id)
                 return refreshed if refreshed is not None else record
@@ -600,7 +603,8 @@ class WorkflowEngine:
         latest = self._get_record(run_id)
         if latest is not None and latest.status == "cancelling":
             final_status = "cancelled"
-        final = self._update_record(
+        final = await asyncio.to_thread(
+            self._update_record,
             run_id,
             status=final_status,
             current_session_id=None,
@@ -666,7 +670,8 @@ class WorkflowEngine:
             # The user cancelled between answering and the resume starting —
             # the answer must not resurrect the run.
             if latest.status == "cancelling":
-                self._update_record(
+                await asyncio.to_thread(
+                    self._update_record,
                     record.id, status="cancelled", finished_at=utcnow(), waiting_json=""
                 )
             return latest
@@ -681,7 +686,8 @@ class WorkflowEngine:
                     question = str(waiting.get("question") or "") or (
                         f"Continue past “{name}”?"
                     )
-                    self._update_record(
+                    await asyncio.to_thread(
+                        self._update_record,
                         record.id,
                         status="waiting",
                         waiting_json=dumps(
@@ -702,10 +708,11 @@ class WorkflowEngine:
                             "question": question,
                         },
                     )
-                    self._deliver(
+                    await asyncio.to_thread(  # v1.226.0: network send off the loop
+                        self._deliver,
                         f"Workflow “{record.workflow_name}” needs you again — "
                         f"the answer didn't satisfy the gate ({problem}). "
-                        f"{question}"
+                        f"{question}",
                     )
                     refreshed = self._get_record(record.id)
                     return refreshed if refreshed is not None else record
@@ -738,7 +745,8 @@ class WorkflowEngine:
             # halt (or an exhausted retry): the run fails, the tail never ran.
             for s in wf.steps[idx + 1 :]:
                 outputs.setdefault(s.name, {"status": "skipped"})
-            final = self._update_record(
+            final = await asyncio.to_thread(
+                self._update_record,
                 record.id,
                 status="failed",
                 current_session_id=None,
@@ -756,7 +764,8 @@ class WorkflowEngine:
                 },
             )
             return final if final is not None else record
-        self._update_record(
+        await asyncio.to_thread(
+            self._update_record,
             record.id, status="running", outputs=outputs, waiting_json=""
         )
         return await self.run_record(
@@ -830,14 +839,16 @@ class WorkflowEngine:
         if latest is not None and latest.status in ("cancelling", "cancelled"):
             # A cancel must never be resurrected by a queued resume.
             if latest.status == "cancelling":
-                self._update_record(
+                await asyncio.to_thread(
+                    self._update_record,
                     record.id,
                     status="cancelled",
                     finished_at=utcnow(),
                     waiting_json="",
                 )
             return self._get_record(record.id) or latest
-        self._update_record(
+        await asyncio.to_thread(
+            self._update_record,
             record.id, status="running", finished_at=None, waiting_json=""
         )
         return await self.run_record(
@@ -888,7 +899,10 @@ class WorkflowEngine:
                     run_id, step, outputs, workspace_root, tool_workspace
                 )
             elif step.kind == "notify":
-                out = self._run_notify_step(step, outputs)
+                # v1.226.0: delivery is a serial Slack/Telegram/SMTP round-trip
+                # (15s timeout per channel) — off the loop, or a slow webhook
+                # parks the whole daemon (/health included) for the duration.
+                out = await asyncio.to_thread(self._run_notify_step, step, outputs)
             else:
                 out = await self._run_agent_step(
                     orch, run_id, workflow, step, outputs, completed,
@@ -953,7 +967,8 @@ class WorkflowEngine:
         session_ids.append(session.id)
         # Record the live session id BEFORE running, so a cancel arriving
         # mid-step can find and stop it.
-        self._update_record(
+        await asyncio.to_thread(
+            self._update_record,
             run_id,
             current_session_id=session.id,
             session_ids=session_ids,
@@ -1299,7 +1314,13 @@ class WorkflowEngine:
 
     def _update_record(self, run_id: str, **fields: Any) -> WorkflowRunRecord | None:
         """Apply the given fields to the record and persist. ``session_ids`` and
-        ``outputs`` are JSON-encoded; other keys map straight onto the column."""
+        ``outputs`` are JSON-encoded; other keys map straight onto the column.
+
+        SYNC on purpose; every caller in the async run/resume paths hops it
+        through ``asyncio.to_thread`` (v1.226.0): a write that lands while
+        another writer holds the file (Settings → Compact runs VACUUM; a big
+        import) waits up to busy_timeout — 30s — and inline that wait parked
+        the daemon's one event loop, /health included ("Daemon offline")."""
         with session_scope(self.platform.engine) as db:
             rec = db.get(WorkflowRunRecord, run_id)
             if rec is None:

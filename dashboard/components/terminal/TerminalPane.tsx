@@ -35,7 +35,8 @@ import {
   shrinkToFit,
 } from "@/lib/snippet";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
-import { outputNotifyAt } from "@/components/terminal/paneStatusCore";
+import { outputNotifyAt, terminalReconnectDelayMs } from "@/components/terminal/paneStatusCore";
+import { useDaemon } from "@/lib/daemon";
 import type { AiCli, ModelOption, Skill, TerminalInfo } from "@/lib/types";
 import { PaneStateChip, type PaneState } from "@/components/terminal/PaneState";
 
@@ -342,6 +343,18 @@ export function TerminalPane({
   // The live xterm instance, so we can refocus it after typing a launch command.
   const termRef = useRef<{ focus: () => void } | null>(null);
   const [state, setState] = useState<ConnState>("connecting");
+  // v1.226.0 (F-D-4): why the pane is "closed" — the shell EXITED (code 4000,
+  // nothing to reconnect to) or the link was LOST (retries exhausted). Only
+  // the latter offers a Reconnect action.
+  const [lostLink, setLostLink] = useState(false);
+  // The daemon's reachability per the shared /health poll, read through a ref
+  // inside the attach effect (which is keyed on the session id only).
+  const { online: daemonOnline } = useDaemon();
+  const daemonOnlineRef = useRef(daemonOnline);
+  daemonOnlineRef.current = daemonOnline;
+  // Set by the attach effect: re-runs `connect` from a clean attempt counter
+  // without re-wiring xterm. Null while no session is attached.
+  const reconnectRef = useRef<(() => void) | null>(null);
   // The live WS, exposed to the AI bar so "Run" can type into THIS shell.
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -854,6 +867,7 @@ export function TerminalPane({
       ws.binaryType = "arraybuffer";
       ws.onopen = () => {
         attempts = 0;
+        setLostLink(false);
         // Every (re)attach replays the session's full scrollback — reset so it
         // lands on a clean screen instead of appending to a buffer that already
         // holds the same history (doubled output after a silent reconnect), and
@@ -935,14 +949,20 @@ export function TerminalPane({
         // nothing to reconnect to — retrying just re-attached to a dead PTY in
         // a crash loop that also stole focus every cycle.
         if (ev.code === 4000) {
+          setLostLink(false);
           setState("closed");
           return;
         }
-        if (attempts < 4) {
+        // v1.226.0: quick retries, then keep going with capped backoff while
+        // the daemon is offline (a restart rehydrates this same terminal id);
+        // see terminalReconnectDelayMs for the schedule.
+        const delay = terminalReconnectDelayMs(attempts, daemonOnlineRef.current);
+        if (delay !== null) {
           attempts += 1;
           setState("reconnecting");
-          reconnectTimer = setTimeout(connect, 500 * attempts);
+          reconnectTimer = setTimeout(connect, delay);
         } else {
+          setLostLink(true);
           setState("closed");
         }
       };
@@ -1060,9 +1080,21 @@ export function TerminalPane({
       connect();
     })();
 
+    // The overlay's Reconnect action (v1.226.0): a fresh attempt counter and
+    // one more connect on the SAME xterm instance (the replay lands on it).
+    reconnectRef.current = () => {
+      if (disposed) return;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      attempts = 0;
+      setLostLink(false);
+      setState("reconnecting");
+      connect();
+    };
+
     return () => {
       disposed = true;
       onWriterReady?.(null); // the session is going away — no writer to offer
+      reconnectRef.current = null;
       wsRef.current = null;
       termRef.current = null;
       if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -1617,7 +1649,18 @@ export function TerminalPane({
                 </>
               ) : (
                 <>
-                  <Plug size={13} /> Session closed
+                  <Plug size={13} /> {lostLink ? "Connection lost" : "Session closed"}
+                  {/* v1.226.0: a lost link (not an exited shell) gets a visible
+                      lever instead of a dead end. */}
+                  {lostLink && (
+                    <button
+                      type="button"
+                      onClick={() => reconnectRef.current?.()}
+                      className="pointer-events-auto ml-1 rounded-md border border-rose-400/40 px-2 py-0.5 text-[11px] font-medium text-rose-100 transition-colors hover:bg-rose-500/20"
+                    >
+                      Reconnect
+                    </button>
+                  )}
                 </>
               )}
             </div>

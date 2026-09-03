@@ -363,7 +363,8 @@ class ToolRegistry:
             # Only a caller-supplied refusal may relabel itself; a decision the
             # engine really made is always "permission denied".
             label = deny_label if deny_reason else "permission denied"
-            inv_id = self._record(
+            inv_id = await asyncio.to_thread(
+                self._record,
                 ctx, name, args, decision.mode, ok=False,
                 output=decision.reason, reversibility=rev_value,
             )
@@ -409,7 +410,8 @@ class ToolRegistry:
                 if hit is not None:
                     self._read_cache.move_to_end(cache_key)
                     cached = self._cached_result(hit)
-                    inv_id = self._record(
+                    inv_id = await asyncio.to_thread(
+                        self._record,
                         ctx, name, args, decision.mode, ok=True,
                         output=cached.output, reversibility=rev_value,
                     )
@@ -458,7 +460,8 @@ class ToolRegistry:
             except Exception:  # noqa: BLE001 — telemetry/guard must never break the tool
                 pass
 
-        inv_id = self._record(
+        inv_id = await asyncio.to_thread(
+            self._record,
             ctx,
             name,
             args,
@@ -831,7 +834,11 @@ class ToolRegistry:
         created_paths: "list[str] | None" = None,
     ) -> str:
         """Persist the ToolInvocation (+ an UndoJournal row when an inverse was
-        captured) and return the invocation id so the caller can tag its event."""
+        captured) and return the invocation id so the caller can tag its event.
+
+        SYNC; ``invoke`` hops every call through ``asyncio.to_thread`` (v1.226.0)
+        so a per-tool-call write blocked behind a long writer (VACUUM) waits on
+        a worker thread instead of parking the event loop."""
         # Redact secret-bearing args BEFORE persisting — args_json is stored in the
         # DB at rest, returned by /sessions/{id}/export, and included in backups, so
         # a plaintext credential here would defeat the encrypted vault.

@@ -162,7 +162,18 @@ seam); Train (teach it your writing voice, suggest-only).
    (your project's folder when grounded); reads are policy-gated; protected
    paths (the vault, the DB) are refused both ways.
 6. **One event loop, never blocked.** Heavy work runs off-thread — a big
-   render or a cold OneDrive folder can't freeze the app.
+   render or a cold OneDrive folder can't freeze the app. Since v1.226.0 that
+   includes notifications going out, project-knowledge lookups, and every
+   run-record write, so a slow Slack or a busy database never shows up as
+   "Daemon offline".
+7. **Self-healing supervision (v1.226.0).** The desktop app watches the
+   daemon's health every 30 s, not just its process: a daemon that is alive but
+   wedged is restarted, a crash-restart gets the full boot grace, and a daemon
+   left over from a hard crash is adopted (after proving it is *this*
+   install's, by token) instead of fought over. A lost secrets key, a
+   hand-edited `[comm]` section, or a slow notifier can no longer stop the
+   daemon from booting; `/diagnostics` → `background_loops` now reports every
+   background loop and the scheduler, not just backups.
 
 ## Ask the Guide
 
@@ -185,7 +196,20 @@ reads; it never writes, runs commands, or starts work on its own.
 ## Troubleshooting in one minute
 
 - **"Daemon offline"** → almost always a provider/endpoint issue, not the
-  daemon: check Connections. The tray can restart both processes.
+  daemon: check Connections. The tray can restart both processes. In the
+  desktop app the banner says the service is restarting; pages reload
+  themselves the moment it is back (v1.226.0) — no need to navigate away.
+- **"Couldn't save this conversation"** (a chip above the composer, v1.226.0)
+  → the thread could not be written; Retry re-sends it. If the thread was
+  deleted elsewhere the next save quietly re-creates it. Your message is saved
+  *before* the model is asked, so a reload mid-answer keeps the question, and
+  an agent hand-off resumes when you reopen the thread.
+- **A terminal says "Connection lost"** → the daemon restarted; it keeps
+  retrying while the daemon is down, or press **Reconnect** — the pane and its
+  scrollback come back under the same id.
+- **"Restart to update" asks before installing** (v1.226.0) → agent sessions
+  or workflow runs are still running; **Later** leaves them alone, **Install
+  now** marks them interrupted.
 - **A model "isn't answering"** → read the TurnReceipt: it names what ran and
   why. A red PreflightNote above the composer means your pick is unreachable
   *before* you type.

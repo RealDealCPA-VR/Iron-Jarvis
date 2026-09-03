@@ -21,12 +21,15 @@ Expected ``config.comm`` shape::
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 from .base import HttpGet, HttpPost, SecretResolver, httpx_get, httpx_post
 from .channels import CHANNEL_TYPES, MockChannel
 from .notifier import DEFAULT_ALERT_EVENTS, Notifier
+
+log = logging.getLogger("iron_jarvis.comm")
 
 
 @dataclass
@@ -128,7 +131,25 @@ def build_notifier(
     )
 
     channels = comm_config.get("channels") or {}
+    # v1.226.0: config.toml is hand-editable and load_config only type-checks
+    # TOP-level keys — `channels = "x"` or `tg = "hook"` used to raise here and
+    # abort the whole boot. Wrong-shaped entries are logged and skipped; the
+    # notifier still gets its offline default below.
+    if not isinstance(channels, dict):
+        log.error(
+            "[comm] channels must be a table of channel tables, got %s — "
+            "ignoring every configured channel",
+            type(channels).__name__,
+        )
+        channels = {}
     for reg_name, spec in channels.items():
+        if spec is not None and not isinstance(spec, dict):
+            log.error(
+                "[comm.channels.%s] must be a table (type = ..., ...), got %s — skipped",
+                reg_name,
+                type(spec).__name__,
+            )
+            continue
         spec = dict(spec or {})
         ctype = spec.pop("type", reg_name)
         cls = CHANNEL_TYPES.get(ctype)

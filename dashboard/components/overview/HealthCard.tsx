@@ -82,8 +82,8 @@ export function HealthCard({
         <Figure
           icon={<Activity size={12} />}
           label="Sessions evaluated"
-          value={m ? m.sessions_evaluated.toLocaleString() : "—"}
-          sub={m ? `${m.event_count.toLocaleString()} events` : undefined}
+          value={m ? Number(m.sessions_evaluated ?? 0).toLocaleString() : "—"}
+          sub={m ? `${Number(m.event_count ?? 0).toLocaleString()} events` : undefined}
           loading={loading && !m}
         />
         <Figure
@@ -107,7 +107,7 @@ export function HealthCard({
           value={m ? pct(m.avg_tool_success_rate) : "—"}
           sub={
             m
-              ? `${m.total_tool_invocations.toLocaleString()} tool call${
+              ? `${Number(m.total_tool_invocations ?? 0).toLocaleString()} tool call${
                   m.total_tool_invocations === 1 ? "" : "s"
                 }`
               : undefined

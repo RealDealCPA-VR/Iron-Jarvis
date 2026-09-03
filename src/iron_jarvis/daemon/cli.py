@@ -299,7 +299,10 @@ def serve(
                 f"[yellow]Iron Jarvis is already running[/yellow] on http://{host}:{port} "
                 "— not starting a second instance."
             )
-            raise typer.Exit(code=0)
+            # v1.226.0 (contract C2): 75, not 0. Exit 0 read as "my child died
+            # cleanly" to the desktop shell, which restarted it every 60s
+            # forever while the UI talked to a daemon it did not own.
+            raise typer.Exit(code=75)
         # A FOREIGN program holds the port — the packaged client is hard-wired to
         # it, so this is a real failure, not a benign "already running". Exit
         # non-zero so the desktop shell surfaces a clear error instead of assuming
@@ -323,7 +326,13 @@ def serve(
         os.environ["IRONJARVIS_GIT_NATIVE"] = "1"
     from .app import create_app
 
-    uvicorn.run(create_app(resolved_root), host=host, port=port)
+    # v1.226.0: bound the drain. Without it uvicorn waits FOREVER for an open
+    # SSE stream (a running session's live view) to end, so POST /shutdown never
+    # reached the lifespan finally and Electron force-killed at 2s — terminal
+    # snapshot skipped, scheduler never stopped, no WAL checkpoint.
+    uvicorn.run(
+        create_app(resolved_root), host=host, port=port, timeout_graceful_shutdown=1.0
+    )
 
 
 # The packaged daemon requires a bearer token. DaemonClient discovers it

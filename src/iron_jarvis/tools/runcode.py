@@ -266,7 +266,8 @@ class RunCodeTool(Tool):
         kept_rel = f"scripts/{script.name}" if keep else None
         # The script file is gone (or dies with the workspace) — persist the
         # SOURCE so it stays browsable + re-runnable from the Artifacts page.
-        self._record(
+        await asyncio.to_thread(  # v1.226.0: SQLite write off the loop
+            self._record,
             script.stem, lang, code, ctx, rc, combined,
             purpose=str(args.get("purpose") or "").strip(),
         )

@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import Engine
 from sqlmodel import select
 
@@ -232,9 +232,38 @@ class SecretsManager:
 
     # -- read (server-side only) -------------------------------------------
     def get(self, name: str) -> str | None:
-        """Decrypt and return the plaintext value, or ``None`` if absent."""
+        """Decrypt and return the plaintext value, or ``None`` if absent.
+
+        NEVER raises on a mismatched / regenerated key (v1.226.0): the first
+        decrypt of a key-less restore used to happen DURING boot (Notion LTM in
+        build_platform, the calendar poller and the Slack socket in lifespan),
+        so ``InvalidToken`` escaped, "Application startup failed", and the
+        packaged daemon crash-looped under Electron's restart ladder — with the
+        ``/diagnostics secrets_key_valid`` flag meant to surface exactly this
+        loss unreachable. A secret the key cannot open reads as absent; the
+        loss is logged ONCE per process and ``key_valid()`` carries the truth.
+        """
         row = self._find(name)
-        return self._decrypt(row.enc_value) if row is not None else None
+        if row is None:
+            return None
+        try:
+            return self._decrypt(row.enc_value)
+        except InvalidToken:
+            self._warn_undecryptable_once(name)
+            return None
+
+    def _warn_undecryptable_once(self, name: str) -> None:
+        if getattr(self, "_warned_undecryptable", False):
+            return
+        self._warned_undecryptable = True
+        _log.error(
+            "secret %r cannot be decrypted with %s — the key was regenerated or "
+            "restored from another install; stored credentials read as ABSENT "
+            "until the original .secrets.key is restored or the keys are "
+            "re-entered. See /diagnostics secrets_key_valid.",
+            name,
+            self.root / ".secrets.key",
+        )
 
     def get_oauth(self, name: str) -> dict | None:
         """Decrypt and JSON-parse an OAuth token dict, or ``None`` if absent."""

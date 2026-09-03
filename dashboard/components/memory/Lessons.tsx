@@ -206,13 +206,21 @@ export function Lessons() {
 
   // The user curates what sticks: forget a lesson -> it stops shaping runs.
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [forgetError, setForgetError] = useState<string | null>(null);
   async function forget(id: string) {
     setDeleting(id);
+    setForgetError(null);
     try {
       await del(`/lessons/${encodeURIComponent(id)}`);
       reload();
-    } catch {
-      /* already gone / offline — the list refresh reflects reality */
+    } catch (err) {
+      // v1.226.0: the list must reflect reality EITHER way (a 404 = already
+      // gone — refresh drops it); a real daemon error (non-0) is shown, an
+      // offline failure stays with the OfflineHint above.
+      reload();
+      if (!(err instanceof ApiError && err.status === 0)) {
+        setForgetError(err instanceof ApiError ? err.message : String(err));
+      }
     } finally {
       setDeleting(null);
     }
@@ -260,6 +268,11 @@ export function Lessons() {
                   {compactResult.note ? ` Note: ${compactResult.note}.` : ""}
                 </SuccessNote>
               )}
+            </div>
+          )}
+          {forgetError && (
+            <div className="mb-3">
+              <ErrorNote>Could not forget that lesson: {forgetError}</ErrorNote>
             </div>
           )}
           {loading && !data ? (

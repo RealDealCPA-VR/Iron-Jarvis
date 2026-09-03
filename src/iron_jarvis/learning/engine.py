@@ -20,6 +20,7 @@ distilled experience, not a transcript of past summaries.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Awaitable, Callable
@@ -274,14 +275,17 @@ class LearningEngine:
         if not distilled:
             raise ValueError("distillation reply contained no usable lessons")
 
-        with session_scope(self.engine) as db:
-            for text in distilled:
-                db.add(LessonRecord(text=text, scope="user", source="distilled", weight=2))
-            for r in raws:
-                row = db.get(LessonRecord, r.id)
-                if row is not None:
-                    db.delete(row)
-            db.commit()
+        def _commit():  # v1.226.0: SQLite write off the loop
+            with session_scope(self.engine) as db:
+                for text in distilled:
+                    db.add(LessonRecord(text=text, scope="user", source="distilled", weight=2))
+                for r in raws:
+                    row = db.get(LessonRecord, r.id)
+                    if row is not None:
+                        db.delete(row)
+                db.commit()
+
+        await asyncio.to_thread(_commit)
         return {"reviewed": len(raws), "distilled": len(distilled), "removed": len(raws)}
 
     # -- internals ----------------------------------------------------------

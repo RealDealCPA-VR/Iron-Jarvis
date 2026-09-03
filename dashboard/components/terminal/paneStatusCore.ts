@@ -144,3 +144,27 @@ export function outputNotifyAt(
   if (now - lastNotified < OUTPUT_NOTIFY_MS) return null;
   return now;
 }
+
+// ---- Terminal attach reconnect schedule (v1.226.0) ------------------------
+/** Quick retries before the schedule consults the daemon's reachability. */
+export const TERM_QUICK_RETRIES = 4;
+/** Cap for the slow lane's backoff (ms) while the daemon is offline. */
+export const TERM_RECONNECT_MAX_MS = 10_000;
+
+/**
+ * Delay before the NEXT attach attempt, or null to stop and show "Session
+ * closed". `attempt` is the number of failed attempts so far (0-based on the
+ * first close). The first four retries are quick (0.5/1/1.5/2s) whatever the
+ * daemon says — a blip. After that the pane used to give up, but an Electron
+ * daemon restart takes longer than ~5s and rehydrates the SAME terminal id
+ * (tests/test_terminal_restart_survival.py), so while `/health` reports the
+ * daemon offline we keep retrying with a capped backoff instead of
+ * dead-ending. Only a reachable daemon that still refuses the attach stops
+ * the schedule (then the overlay's Reconnect button is the user's lever).
+ */
+export function terminalReconnectDelayMs(attempt: number, daemonOnline: boolean): number | null {
+  const next = attempt + 1;
+  if (attempt < TERM_QUICK_RETRIES) return 500 * next;
+  if (!daemonOnline) return Math.min(TERM_RECONNECT_MAX_MS, 500 * next);
+  return null;
+}

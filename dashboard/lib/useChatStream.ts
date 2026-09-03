@@ -19,7 +19,7 @@
 // POST /chat path is untouched.
 
 import { useCallback, useRef, useState } from "react";
-import { API_BASE, ApiError, ijToken } from "./api";
+import { API_BASE, ApiError, flattenDetail, ijToken } from "./api";
 import type { WorkflowDraft } from "@/lib/types";
 
 // ------------------------------------------------------------------ wire types
@@ -375,7 +375,8 @@ export async function* streamSSE(
     let detail = `${res.status} ${res.statusText}`;
     try {
       const parsed = (await res.json()) as { detail?: unknown };
-      if (parsed?.detail) detail = String(parsed.detail);
+      // v1.226.0: a list-shaped pydantic 422 flattens to "field: msg" (C4).
+      if (parsed?.detail) detail = flattenDetail(parsed.detail);
     } catch {
       /* body wasn't JSON — keep the status line */
     }
@@ -392,7 +393,21 @@ export async function* streamSSE(
   let buffer = "";
   try {
     for (;;) {
-      const { value, done } = await reader.read();
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch (e) {
+        // v1.226.0: the daemon dying MID-TURN surfaces HERE, as a rejected
+        // read() ("Failed to fetch" / "network error"), not in the pre-fetch
+        // catch above. Flag it offline the same way so the page shows the
+        // OfflineHint instead of raw transport text. Scoped to the transport
+        // call only: a parser fault on a bad frame (below) is NOT offline.
+        if (!isAbort(e)) {
+          yield { type: "error", detail: "daemon offline", status: 0, offline: true };
+        }
+        return;
+      }
+      const { value, done } = chunk;
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       let sep: number;

@@ -215,6 +215,14 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
   // an autosave would PUT two bubbles over the stored transcript.
   const [loadError, setLoadError] = useState<string | null>(null);
   const [threadId, setThreadId] = useState<string | null>(null);
+  // AUTOSAVE FAILED (v1.226.0): the chip by the composer; `msgs` is the exact
+  // array whose save failed, so Retry re-queues it through the CURRENT
+  // queueSave (cwd/project-fresh). Cleared by a later successful save,
+  // Dismiss, or a pane identity change.
+  const [saveFailure, setSaveFailure] = useState<{
+    detail: string;
+    msgs: PaneMsg[];
+  } | null>(null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -278,6 +286,7 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
     setMessages([]);
     setThreadId(null);
     setLoadError(null);
+    setSaveFailure(null);
     setError(null);
     setAttachments([]);
     setInput("");
@@ -523,9 +532,32 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
           } catch {
             /* ignore */
           }
-          if (saveTargetRef.current === target) setThreadId(res.id);
-        } catch {
-          /* autosave is best-effort — never disturb the conversation */
+          if (saveTargetRef.current === target) {
+            setThreadId(res.id);
+            setSaveFailure(null); // on disk again — retire the chip
+          }
+        } catch (e) {
+          // Best-effort for the CONVERSATION (the bubbles stay), never silent
+          // (v1.226.0): a swallowed failure was data loss nobody saw.
+          if (e instanceof ApiError && e.status === 404) {
+            // The thread is gone (deleted from the chat page) — the same
+            // reset the load path makes: the next save re-creates it.
+            target.id = null;
+            try {
+              window.localStorage.removeItem(paneThreadKey(paneId));
+            } catch {
+              /* ignore */
+            }
+            if (saveTargetRef.current === target) setThreadId(null);
+          } else if (
+            !(e instanceof ApiError && e.status === 0) && // offline: the hint covers it
+            saveTargetRef.current === target // never a Retry into another box
+          ) {
+            setSaveFailure({
+              detail: e instanceof Error ? e.message : String(e),
+              msgs,
+            });
+          }
         }
       });
     },
@@ -1060,6 +1092,37 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
 
       {/* --------------------------------------------------------- composer */}
       <div className="border-t border-white/[0.06] px-3 pb-3 pt-2">
+        {/* AUTOSAVE FAILED (v1.226.0): persistent + dismissible — what is on
+            screen is NOT on disk until Retry succeeds. */}
+        {saveFailure ? (
+          <div
+            role="status"
+            className="mb-2 flex items-center gap-2 text-[11px] text-amber-300"
+          >
+            <span className="min-w-0 flex-1">
+              Couldn&apos;t save this conversation: {saveFailure.detail}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                const { msgs } = saveFailure;
+                setSaveFailure(null);
+                queueSave(msgs);
+              }}
+              className="shrink-0 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-0.5 text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
+            >
+              Retry
+            </button>
+            <button
+              type="button"
+              aria-label="Dismiss save warning"
+              onClick={() => setSaveFailure(null)}
+              className="shrink-0 text-zinc-500 hover:text-zinc-200"
+            >
+              <X size={10} />
+            </button>
+          </div>
+        ) : null}
         {attachments.length > 0 ? (
           <div className="mb-2 flex flex-wrap gap-1.5">
             {attachments.map((a, i) => (

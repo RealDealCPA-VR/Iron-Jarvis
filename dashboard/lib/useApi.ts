@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, get } from "./api";
+import { useDaemon } from "./daemon";
 
 export interface ApiState<T> {
   data: T | null;
@@ -21,6 +22,23 @@ export function useApi<T>(path: string | null, deps: unknown[] = []): ApiState<T
   const [nonce, setNonce] = useState(0);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
+
+  // v1.226.0 (contract C7): when the daemon comes back (DaemonProvider's
+  // `epoch` ticks on each offline->online edge) re-fetch ONLY if our last
+  // error was status 0 — the request that died in the restart gap. A page
+  // whose data loaded fine is left alone (no refetch storm on a transition),
+  // and a real 4xx/5xx is not retried by a health flip either. Implemented as
+  // an epoch->nonce edge rather than a raw dep so recovery itself (error
+  // clearing after the retry) cannot trigger a second fetch.
+  const { epoch } = useDaemon();
+  const errorRef = useRef<ApiError | null>(null);
+  errorRef.current = error;
+  const seenEpochRef = useRef(epoch);
+  useEffect(() => {
+    if (epoch === seenEpochRef.current) return;
+    seenEpochRef.current = epoch;
+    if (errorRef.current && errorRef.current.status === 0) setNonce((n) => n + 1);
+  }, [epoch]);
 
   useEffect(() => {
     if (path === null) {

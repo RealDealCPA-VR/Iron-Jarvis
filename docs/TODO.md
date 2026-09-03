@@ -5,6 +5,57 @@ the deep-review wow track, deferred backlogs across waves, and known limits.
 The deep review's 11 confirmed bugs are all FIXED (v1.166.2–v1.167.0) — this
 file is what remains.*
 
+## Carried out of the v1.226.0 reliability wave (reviewer-graded, not speculative)
+
+The six-dimension audit (contract, boot/loops, event loop, streaming, desktop
+supervisor, dashboard error handling) closed 1 S1 + 12 S2 + 21 S3 in
+v1.226.0. These are what the reviewers graded "defer" or "note":
+
+- [ ] `/diagnostics` `background_loops.slack_socket` reads `ok: true` when the
+  loop is ARMED (`daemon/app.py` `_tick("slack_socket", True)` before
+  `_socket.run` connects); a socket that never connects but retries internally
+  reads healthy forever. Record ok only on the first successful connect.
+- [ ] `POST /diagnostics/repair` `db_vacuum` / `prune_events` 409 gate keys off
+  DB rows (`GET /system/activity`), not `orchestrator._running`; a session
+  stranded `active` inside a live process (only `_finalize_failed._save`
+  failing can do that) would block Compact until restart. Intersect with
+  `_running`.
+- [ ] `useEvents` replay (`?since=`) covers reconnect gaps; the chat page's
+  `approval.requested` card and `DesktopNotifyBridge` toasts still have no
+  poll fallback of their own if the id was evicted (1000-event history).
+- [ ] `core/streams.py` `SessionStream.reset()` and the `reset` frame are dead
+  on both lanes (no router emits it, `useChatStream` has no case) — remove or
+  wire.
+- [ ] Chat: regenerate's pre-send save drops the previous reply from disk
+  before the new one lands (a reload mid-regenerate loses it); a torn-down
+  escalation POST that then FAILS leaves the original thread with an empty
+  hand-off bubble and no error when reopened.
+- [ ] Desktop: a session that adopted/swept a daemon sweeps by image name on
+  Quit, so a dev daemon started later in that session on another port is
+  collateral. Quit worst case ≈10 s (drain 5 s + probes), all timer-bounded.
+- [ ] UNCONFIRMED from the audit (would need a packaged build): cold boot of
+  the frozen daemon with the user's real DB vs the 90 s gate (`prune_events`
+  bulk DELETE + `terminals.rehydrate` run before bind); NSIS silent install vs
+  an orphaned Next server under `ELECTRON_RUN_AS_NODE` (`installer.nsh` kills
+  only `ironjarvis.exe`); SQLAlchemy QueuePool (5+10, 30 s) exhaustion under
+  VACUUM + 20 concurrent sessions; tzlocal `ZoneInfoNotFoundError` aborting
+  `build_platform` on an exotic Windows zone.
+- [ ] Agent cancel race (introduced by the v1.226.0 write offload, graded S3):
+  `task.cancel()` can interrupt a per-step `_save(run)` that is mid-flight in
+  the executor; `_finalize_cancelled` → `_persist_cancel` then settles
+  CANCELLED while the stale merge thread is still pending, so a RUNNING
+  AgentRun row can land after the settle (AgentRun badge only — Session
+  status is the orchestrator's). Fix: keep the in-flight save future on the
+  runtime and `await asyncio.shield(...)` it before `_persist_cancel`.
+- [ ] Desktop: the "port went quiet after exit 75 → start our own" path has
+  no cycle cap (a contrived /health-refuses-Node-but-not-Python split cycles
+  every ~19 s with no toast; no realistic trigger found). A
+  `rec.quietRestarts` counter with `notifyCrashLoop` at 3 closes it. Also
+  `foreignWhy` says "not ours" when `foreignNotified` was latched by the
+  "our stale daemon still held after a sweep" branch — mislabels our orphan.
+- [ ] `put_settings` filters unknown keys silently — a future UI key that is
+  not in `_SETTINGS_KEYS` is dropped without an error (contract audit note).
+
 ## Carried out of the v1.195.0 / v1.196.0 document waves (all MEASURED)
 
 Each of these was reproduced during those waves and deliberately left out of

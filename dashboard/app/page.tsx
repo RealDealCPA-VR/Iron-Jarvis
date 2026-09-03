@@ -50,6 +50,7 @@ import {
   Skeleton,
   LoaderInline,
   ErrorNote,
+  DataError,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { EventStream } from "@/components/EventStream";
@@ -615,6 +616,15 @@ export default function OverviewPage() {
     () => (reflexes.data?.rules ?? []).filter((r) => r.enabled).length,
     [reflexes.data],
   );
+  // v1.226.0: a REAL daemon error (non-0, e.g. a 500) must not read as "No
+  // reflexes yet" / "No sessions yet" — the false-empty-state trap. Offline
+  // (status 0) stays with the OfflineHint; a stale-but-present payload keeps
+  // rendering (the global banner covers the refresh).
+  const reflexLoadError =
+    reflexes.error && reflexes.error.status !== 0 && !reflexes.data ? reflexes.error : null;
+  const sessionsLoadError =
+    sessions.error && sessions.error.status !== 0 && !sessions.data ? sessions.error : null;
+  const diagLoadError = diag.error && diag.error.status !== 0 && !diag.data ? diag.error : null;
   const reflexFires = useMemo(
     () => events.filter((e) => e.type === "reflex.fired").slice(0, 4),
     [events],
@@ -827,10 +837,16 @@ export default function OverviewPage() {
             <span className="text-sm text-zinc-300">
               {activeReflexes > 0
                 ? `${activeReflexes} active ${activeReflexes === 1 ? "reflex" : "reflexes"}`
-                : "No reflexes yet"}
+                : reflexLoadError
+                  ? "Reflexes could not be loaded"
+                  : "No reflexes yet"}
             </span>
             <span className="text-xs text-zinc-500">
-              {activeReflexes > 0 ? "webhooks & messages that run work on their own" : "Set one up →"}
+              {activeReflexes > 0
+                ? "webhooks & messages that run work on their own"
+                : reflexLoadError
+                  ? reflexLoadError.message
+                  : "Set one up →"}
             </span>
           </Link>
 
@@ -916,7 +932,9 @@ export default function OverviewPage() {
             </div>
           )}
 
-          {sessions.loading && !sessions.data ? (
+          {sessionsLoadError ? (
+            <DataError error={sessionsLoadError} what="sessions" />
+          ) : sessions.loading && !sessions.data ? (
             <SkeletonRows rows={4} />
           ) : finished.length > 0 ? (
             <ul className="space-y-2">
@@ -1086,7 +1104,9 @@ export default function OverviewPage() {
               </Link>
             }
           >
-            {sessions.loading && !sessions.data ? (
+            {sessionsLoadError ? (
+              <DataError error={sessionsLoadError} what="sessions" />
+            ) : sessions.loading && !sessions.data ? (
               <SkeletonRows rows={4} />
             ) : sessions.data && sessions.data.sessions.length > 0 ? (
               <ul className="space-y-2">
@@ -1133,7 +1153,9 @@ export default function OverviewPage() {
               <CountPill tone={diag.data?.db_integrity === "ok" ? "neutral" : "neutral"}>self-test</CountPill>
             }
           >
-            {diag.loading && !diag.data ? (
+            {diagLoadError ? (
+              <DataError error={diagLoadError} what="diagnostics" />
+            ) : diag.loading && !diag.data ? (
               <SkeletonRows rows={2} />
             ) : diag.data ? (
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">

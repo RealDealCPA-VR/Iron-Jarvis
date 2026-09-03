@@ -6,6 +6,8 @@ reached through ``d`` (see the deps object built in create_app).
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import FastAPI, HTTPException
 from sqlmodel import select
 from pathlib import Path
@@ -318,10 +320,14 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=400, detail="format must be md|html|docx|pdf")
         rec = LiveDocRecord(name=name, prompt=body.prompt.strip(), format=body.format,
                             provider=body.provider, model=body.model)
-        with session_scope(d.platform.engine) as db:
-            db.add(rec)
-            db.commit()
-            db.refresh(rec)
+
+        def _insert() -> None:  # v1.226.0: SQLite write off the loop
+            with session_scope(d.platform.engine) as db:
+                db.add(rec)
+                db.commit()
+                db.refresh(rec)
+
+        await asyncio.to_thread(_insert)
         # Optional auto-refresh: an event-kind schedule the lifespan handler
         # listens for. Manual-only docs simply skip this.
         if body.cron or body.interval_seconds:
@@ -333,11 +339,15 @@ def register(app: FastAPI, d) -> None:
                     kind="event",
                     payload={"type": "livedoc.regenerate", "livedoc_id": rec.id},
                 )
-                with session_scope(d.platform.engine) as db:
-                    row = db.get(LiveDocRecord, rec.id)
-                    row.schedule_name = sched_name
-                    db.add(row)
-                    db.commit()
+
+                def _link_schedule() -> None:  # v1.226.0: SQLite write off the loop
+                    with session_scope(d.platform.engine) as db:
+                        row = db.get(LiveDocRecord, rec.id)
+                        row.schedule_name = sched_name
+                        db.add(row)
+                        db.commit()
+
+                await asyncio.to_thread(_link_schedule)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=f"bad schedule: {exc}")
         # First generation now, so the doc exists immediately.

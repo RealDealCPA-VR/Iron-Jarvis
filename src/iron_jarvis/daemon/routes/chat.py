@@ -1276,7 +1276,8 @@ def register(app: FastAPI, d) -> None:
             try:
                 from ...projects.knowledge import ground
 
-                knowledge = ground(d.platform, pid, recall_query)
+                # v1.226.0: embed round-trip off the loop (mirror of chat_turn).
+                knowledge = await asyncio.to_thread(ground, d.platform, pid, recall_query)
                 if knowledge:
                     block += f"\n\nProject knowledge (reference):\n{knowledge}"
             except Exception:  # noqa: BLE001 — retrieval must never break a turn

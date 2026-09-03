@@ -44,6 +44,7 @@ expires them via :meth:`PendingPromptStore.expire_ref`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from typing import Any
@@ -373,22 +374,28 @@ async def answer_parked_run(
     answer = (answer or "").strip()
     if not answer:
         return {"ok": False, "status": "empty_answer"}
-    with session_scope(platform.engine) as db:
-        rec = db.get(WorkflowRunRecord, run_id)
-        if rec is None:
-            return {"ok": False, "status": "missing"}
-        claimed = db.exec(
-            _sql_update(WorkflowRunRecord)
-            .where(
-                WorkflowRunRecord.id == run_id,
-                WorkflowRunRecord.status == "waiting",
+    def _claim():  # v1.226.0: the CAS write runs off the loop (parity with the route)
+        with session_scope(platform.engine) as db:
+            rec = db.get(WorkflowRunRecord, run_id)
+            if rec is None:
+                return None, {"ok": False, "status": "missing"}
+            claimed = db.exec(
+                _sql_update(WorkflowRunRecord)
+                .where(
+                    WorkflowRunRecord.id == run_id,
+                    WorkflowRunRecord.status == "waiting",
+                )
+                .values(status="resuming")
             )
-            .values(status="resuming")
-        )
-        db.commit()
-        if getattr(claimed, "rowcount", 0) != 1:
-            return {"ok": False, "status": rec.status}
-        db.refresh(rec)
+            db.commit()
+            if getattr(claimed, "rowcount", 0) != 1:
+                return None, {"ok": False, "status": rec.status}
+            db.refresh(rec)
+            return rec, None
+
+    rec, refused = await asyncio.to_thread(_claim)
+    if refused is not None:
+        return refused
     engine = WorkflowEngine(platform, orchestrator)
     coro = engine.resume_after_answer(rec, answer)
     out: dict[str, Any] = {"ok": True, "run_name": rec.workflow_name or run_id}

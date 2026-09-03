@@ -12,6 +12,7 @@ normal session path). It never raises — a broken command replies with the erro
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from ..core.db import session_scope
@@ -133,16 +134,21 @@ class CommandInterpreter:
             return "Usage: /cancel <run_id>"
         from ..workflows.models import WorkflowRunRecord
 
-        with session_scope(self.p.engine) as db:
-            rec = db.get(WorkflowRunRecord, run_id)
-            if rec is None:
-                return f"No run '{run_id}'."
-            if rec.status in ("completed", "failed", "cancelled", "interrupted"):
-                return f"Run '{run_id}' already {rec.status}."
-            rec.status = "cancelling"
-            db.add(rec)
-            db.commit()
-            current = rec.current_session_id
+        def _flip():  # v1.226.0: the status write runs off the loop
+            with session_scope(self.p.engine) as db:
+                rec = db.get(WorkflowRunRecord, run_id)
+                if rec is None:
+                    return f"No run '{run_id}'.", None
+                if rec.status in ("completed", "failed", "cancelled", "interrupted"):
+                    return f"Run '{run_id}' already {rec.status}.", None
+                rec.status = "cancelling"
+                db.add(rec)
+                db.commit()
+                return None, rec.current_session_id
+
+        refused, current = await asyncio.to_thread(_flip)
+        if refused is not None:
+            return refused
         if current:
             try:
                 self.orch.cancel_session(current)

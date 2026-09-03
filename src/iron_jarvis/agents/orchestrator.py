@@ -841,19 +841,25 @@ class Orchestrator:
         session.status = SessionStatus.CANCELLED
         session.summary = session.summary or "Session cancelled by the user."
         session.finished_at = utcnow()
-        self._save(session)
-        # Settle any in-flight AgentRun rows so they don't linger in RUNNING.
-        with session_scope(self.p.engine) as db:
-            for r in db.exec(select(AgentRun).where(AgentRun.session_id == session.id)):
-                if r.state not in (
-                    AgentState.COMPLETED,
-                    AgentState.FAILED,
-                    AgentState.CANCELLED,
-                ):
-                    r.state = AgentState.CANCELLED
-                    r.finished_at = utcnow()
-                    db.add(r)
-            db.commit()
+
+        def _persist_cancel() -> None:
+            # v1.226.0: both writes off the loop — a cancel that lands while a
+            # long writer holds the file must not park the daemon.
+            self._save(session)
+            # Settle any in-flight AgentRun rows so they don't linger in RUNNING.
+            with session_scope(self.p.engine) as db:
+                for r in db.exec(select(AgentRun).where(AgentRun.session_id == session.id)):
+                    if r.state not in (
+                        AgentState.COMPLETED,
+                        AgentState.FAILED,
+                        AgentState.CANCELLED,
+                    ):
+                        r.state = AgentState.CANCELLED
+                        r.finished_at = utcnow()
+                        db.add(r)
+                db.commit()
+
+        await asyncio.to_thread(_persist_cancel)
         try:
             await self.p.event_bus.publish(
                 EventType.SESSION_COMPLETED,

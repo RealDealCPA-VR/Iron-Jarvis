@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
+import { DESKTOP_OFFLINE_HINT, isDesktopShell } from "@/lib/desktopShell";
 import {
   CircleCheck,
   CircleX,
@@ -329,10 +330,18 @@ export function OfflineHint({ detail }: { detail?: string }) {
       <div className="text-sm">
         <div className="notice-warn-title font-semibold">Daemon offline or unreachable.</div>
         <div className="notice-warn-body mt-1">
-          Start it with{" "}
-          <code className="notice-warn-code rounded px-1.5 py-0.5 font-mono text-xs">
-            uv run ironjarvis serve --port 8787 --root .
-          </code>
+          {/* v1.226.0: inside the desktop shell the daemon is supervised by
+              Electron — the CLI line is wrong advice there. */}
+          {isDesktopShell() ? (
+            DESKTOP_OFFLINE_HINT
+          ) : (
+            <>
+              Start it with{" "}
+              <code className="notice-warn-code rounded px-1.5 py-0.5 font-mono text-xs">
+                uv run ironjarvis serve --port 8787 --root .
+              </code>
+            </>
+          )}
           {detail ? ` — ${detail}` : null}
         </div>
       </div>
@@ -349,6 +358,29 @@ export function ErrorNote({ children }: { children: ReactNode }) {
       <TriangleAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
       <span>{children}</span>
     </div>
+  );
+}
+
+/**
+ * v1.226.0: the honest companion to `Empty`. A page that reads only
+ * `error.status === 0` renders "No X yet." on a 500 — a false empty state.
+ * Render this in the empty-state branch when `error` is a REAL daemon error
+ * (non-0); it renders nothing for the offline case (the OfflineHint owns that)
+ * so it is safe to place in front of `Empty` unconditionally.
+ */
+export function DataError({
+  error,
+  what = "this",
+}: {
+  error: { status: number; message: string } | null | undefined;
+  /** Short noun for the copy: "Could not load {what}: …". */
+  what?: string;
+}) {
+  if (!error || error.status === 0) return null;
+  return (
+    <ErrorNote>
+      Could not load {what}: {error.message}
+    </ErrorNote>
   );
 }
 

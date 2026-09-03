@@ -102,6 +102,7 @@ function sweepOrphanDaemons() { calls.push(["sweepOrphanDaemons"]); }
 function refreshTrayMenu() { calls.push(["refreshTrayMenu"]); }
 function friendlyUpdateError(m) { return m; }
 function _emitUpdateState(p) { calls.push(["updateState", p.status]); }
+function desktopLog() {} // v1.226.0: console.error -> desktopLog (file + console)
 console.error = () => {};
 
 __LIFTED__
@@ -331,7 +332,7 @@ def test_quit_installed_update_writes_the_recovery_marker():
     """
     src = _src()
     m = re.search(
-        r"requestDaemonShutdown\(2000\)\.finally\(\(\) => \{(.{0,900}?)\n    \}\);",
+        r"requestDaemonShutdown\(5000\)\.finally\(\(\) => \{(.{0,1600}?)\n    \}\);",
         src,
         re.S,
     )

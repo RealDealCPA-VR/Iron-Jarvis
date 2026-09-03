@@ -53,7 +53,7 @@ let integrity = null;
 try {
   integrity = require("./integrity");
 } catch (err) {
-  console.error("[integrity] module missing — install verification disabled:", err && err.message);
+  desktopLog("error", "[integrity] module missing — install verification disabled:", err && err.message);
 }
 
 // --- Configuration -------------------------------------------------------
@@ -193,7 +193,7 @@ function getOrCreateToken() {
   } catch (err) {
     // Non-fatal: a fresh token each launch is still internally consistent
     // (daemon env + browser localStorage both get THIS value this session).
-    console.error("[token] could not persist token.txt:", err && err.message);
+    desktopLog("error", "[token] could not persist token.txt:", err && err.message);
   }
   return token;
 }
@@ -226,7 +226,7 @@ function installAuthHeaderInjection() {
   } catch (err) {
     // Non-fatal: the renderer also carries the token via localStorage / ?token=.
     // Never let this stop the app from booting the daemon + dashboard.
-    console.error("[auth] header injection unavailable:", err && err.message);
+    desktopLog("error", "[auth] header injection unavailable:", err && err.message);
   }
 }
 
@@ -249,7 +249,7 @@ function installMediaPermissions() {
     ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(true));
     ses.setPermissionCheckHandler(() => true);
   } catch (err) {
-    console.error("[permissions] media handler unavailable:", err && err.message);
+    desktopLog("error", "[permissions] media handler unavailable:", err && err.message);
   }
 }
 
@@ -289,7 +289,7 @@ function writeDesktopSetting(key, value) {
     raw[key] = value;
     fs.writeFileSync(desktopSettingsFile(), JSON.stringify(raw), "utf8");
   } catch (err) {
-    console.error("[settings] could not persist desktop-settings.json:", err && err.message);
+    desktopLog("error", "[settings] could not persist desktop-settings.json:", err && err.message);
   }
 }
 
@@ -367,7 +367,7 @@ function setStartAtLogin(enabled) {
       args: ["--hidden"], // boot straight to the tray, no window flash at login
     });
   } catch (err) {
-    console.error("[login-item] could not update:", err && err.message);
+    desktopLog("error", "[login-item] could not update:", err && err.message);
   }
   refreshMenus();
 }
@@ -421,6 +421,34 @@ function fileLogger(label) {
   return write;
 }
 
+// Main-process errors went to the console ONLY — and a Start-Menu launch has
+// no console, so every console.error/warn in this file was written NOWHERE in
+// the packaged app (v1.226.0, F-E-6). Same sink as the children get:
+// userData/logs/desktop.log, plus the console for a dev run.
+function desktopLog(level, ...args) {
+  try {
+    (level === "warn" ? console.warn : console.error)(...args);
+  } catch {
+    /* console may be gone */
+  }
+  try {
+    const text = args
+      .map((a) => {
+        if (a instanceof Error) return a.stack || a.message;
+        if (typeof a === "string") return a;
+        try {
+          return JSON.stringify(a);
+        } catch {
+          return String(a);
+        }
+      })
+      .join(" ");
+    fileLogger("desktop")(`${new Date().toISOString()} [${level}] ${text}\n`);
+  } catch {
+    /* never throw from a logger */
+  }
+}
+
 // --- Child process helpers ----------------------------------------------
 
 function spawnChild(label, command, args, cwd, extraEnv, useShell = true) {
@@ -449,7 +477,7 @@ function spawnChild(label, command, args, cwd, extraEnv, useShell = true) {
   child.on("error", (err) => {
     // With shell:true the inner command (uv/pnpm) won't raise ENOENT here —
     // that's covered by the preflight check below. This catches shell failures.
-    console.error(`[${label}] spawn error:`, err.message);
+    desktopLog("error", `[${label}] spawn error:`, err.message);
     toFile(`[main] spawn error: ${err.message}\n`);
   });
   child.on("exit", (code, signal) => {
@@ -475,21 +503,51 @@ function startService(label, spawnFn) {
   const rec = _services[label] || (_services[label] = { restarts: 0, lastStart: 0 });
   rec.spawnFn = spawnFn;
   rec.lastStart = Date.now();
+  rec.adopted = false; // a child of our own is (being) started
   const child = spawnFn();
   if (label === "daemon") daemonProc = child;
   else if (label === "dashboard") dashboardProc = child;
-  child.on("exit", () => {
+  // The ladder hooks "close", not "exit" (v1.226.0, F-E-3): a spawn that FAILS
+  // (ENOENT — AV quarantined the frozen exe right after killing the daemon)
+  // emits error + close and never exit, so the old hook silently disarmed on
+  // that first restart and the app stayed dead with the tray saying running.
+  // close fires after a normal exit too; `gone` keeps the error-path fallback
+  // from counting the same death twice.
+  let gone = false;
+  const onGone = (code) => {
+    if (gone) return;
+    gone = true;
     if (shuttingDown || isQuitting) return; // expected teardown
+    // Contract C2 (v1.226.0, F-E-2): serve exits 75 when an Iron Jarvis daemon
+    // ALREADY listens on the port — it attached, it did not start. That is not
+    // a crash: restarting it looped forever against a stale daemon (13 spawns
+    // in 10 minutes and a false "keeps crashing" toast).
+    if (label === "daemon" && code === 75) {
+      adoptOrReplaceExistingDaemon(rec);
+      return;
+    }
     const uptime = Date.now() - rec.lastStart;
-    if (uptime > 5 * 60 * 1000) rec.restarts = 0; // ran healthy — reset the ladder
+    if (uptime > 5 * 60 * 1000) {
+      rec.restarts = 0; // ran healthy — reset the ladder
+      rec.swept = false;
+    }
     rec.restarts += 1;
     const delay = RESTART_BACKOFF_MS[Math.min(rec.restarts - 1, RESTART_BACKOFF_MS.length - 1)];
-    console.error(`[${label}] unexpected exit — restart #${rec.restarts} in ${delay}ms`);
+    desktopLog("error", `[${label}] unexpected exit — restart #${rec.restarts} in ${delay}ms`);
     fileLogger(label)(`[main] unexpected exit — restart #${rec.restarts} in ${delay}ms\n`);
     if (rec.restarts === 3) notifyCrashLoop(label);
     setTimeout(() => {
       if (!shuttingDown && !isQuitting) startService(label, rec.spawnFn);
     }, delay);
+  };
+  child.on("close", (code) => onGone(code));
+  child.on("error", () => {
+    // Fallback should close never arrive for a failed spawn. Only once the
+    // child is really dead: an error while it runs (a kill() failure) is not
+    // an exit.
+    setTimeout(() => {
+      if (child.exitCode !== null || child.signalCode !== null) onGone(child.exitCode);
+    }, 1000);
   });
   return child;
 }
@@ -505,6 +563,158 @@ function notifyCrashLoop(label) {
     new Notification({
       title: "Iron Jarvis — problem",
       body: `The ${label} keeps crashing and is being restarted. Logs: ${logsDir}`,
+    }).show();
+  } catch {
+    /* notifications unavailable */
+  }
+}
+
+// Exit 75 (contract C2 as amended, v1.226.0): an Iron Jarvis daemon already
+// owns the port. "Ours" is decided by the OWNERSHIP PROBE — never by version
+// alone, because a same-version dev daemon (no token) would have been adopted
+// silently: the wrong HOME on screen, then killed by our Quit.
+//   ours + our version      → adopt it: the user keeps working, no restart storm.
+//   ours + another version  → a stale orphan of THIS install (after an update):
+//                             sweep our image name and restart ONCE; a second
+//                             75 after the sweep means we could not kill it.
+//   not ours                → say so once (port + version); no restart, no sweep.
+let _daemonClaimedThisSession = false; // we adopted or swept a daemon: it is ours to sweep on Quit
+
+const OWNERSHIP_RETRY_MS = 2000;
+const OWNERSHIP_MAX_TRIES = 3;
+
+function adoptOrReplaceExistingDaemon(rec, attempt = 1) {
+  Promise.all([
+    probeDaemonHealth(DAEMON_WATCHDOG_PROBE_TIMEOUT_MS),
+    probeDaemonOwnership(DAEMON_WATCHDOG_PROBE_TIMEOUT_MS),
+  ]).then(([health, owner]) => {
+    if (shuttingDown || isQuitting) return;
+    const appVersion = app.getVersion();
+    const found = health ? `v${health.version}` : "no /health answer";
+    if (owner === "unknown") {
+      // Not proven either way (review S3). Re-run the decision shortly; the
+      // boot gate is doing the same. foreignNotified is NEVER latched here —
+      // an unverifiable daemon is not a foreign one.
+      if (attempt < OWNERSHIP_MAX_TRIES) {
+        fileLogger("daemon")(`[main] could not verify who owns port ${DAEMON_PORT} (${found}) — retrying (${attempt}/${OWNERSHIP_MAX_TRIES})\n`);
+        setTimeout(() => adoptOrReplaceExistingDaemon(rec, attempt + 1), OWNERSHIP_RETRY_MS);
+        return;
+      }
+      if (!health) {
+        // Nothing answers on the port any more — whoever held it is gone.
+        // Start our own (no sweep: nothing was proven ours); a still-held
+        // port comes back as another 75 or a 1 and is decided again.
+        desktopLog("warn", `[daemon] port ${DAEMON_PORT} went quiet after exit 75 — starting our own daemon`);
+        fileLogger("daemon")(`[main] port ${DAEMON_PORT} went quiet after exit 75 — starting our own daemon\n`);
+        startService("daemon", rec.spawnFn);
+        return;
+      }
+      desktopLog("error", `[daemon] could not verify who owns port ${DAEMON_PORT} (${found}) after ${OWNERSHIP_MAX_TRIES} tries — not adopting, not restarting`);
+      fileLogger("daemon")(`[main] could not verify who owns port ${DAEMON_PORT} (${found}) after ${OWNERSHIP_MAX_TRIES} tries — not adopting, not restarting\n`);
+      return;
+    }
+    if (owner === "foreign") {
+      desktopLog("error", `[daemon] port ${DAEMON_PORT} is held by an Iron Jarvis daemon that is not ours (${found}) — not adopting, not restarting`);
+      fileLogger("daemon")(`[main] port ${DAEMON_PORT} is held by an Iron Jarvis daemon that is not ours (${found}) — not adopting, not restarting\n`);
+      if (!rec.foreignNotified) {
+        rec.foreignNotified = true;
+        notifyForeignDaemon(found);
+      }
+      return;
+    }
+    if (health && health.version === appVersion) {
+      rec.adopted = true;
+      rec.restarts = 0;
+      rec.swept = false;
+      _daemonClaimedThisSession = true;
+      desktopLog("warn", `[daemon] adopted an existing daemon (v${health.version}) on port ${DAEMON_PORT}`);
+      fileLogger("daemon")(`[main] adopted an existing daemon (v${health.version}) on port ${DAEMON_PORT}\n`);
+      try {
+        if (tray) tray.setToolTip("Iron Jarvis — running");
+      } catch {
+        /* tray may be gone */
+      }
+      return;
+    }
+    if (rec.swept) {
+      desktopLog("error", `[daemon] port ${DAEMON_PORT} is still held by our stale daemon (${found}) after a sweep — not restarting again`);
+      fileLogger("daemon")(`[main] port ${DAEMON_PORT} still held by our stale daemon (${found}) after a sweep — giving up\n`);
+      if (!rec.foreignNotified) {
+        rec.foreignNotified = true;
+        notifyForeignDaemon(found);
+      }
+      return;
+    }
+    rec.swept = true;
+    _daemonClaimedThisSession = true;
+    desktopLog("warn", `[daemon] our stale daemon of another version (${found}; this app is v${appVersion}) holds port ${DAEMON_PORT} — sweeping orphans and restarting once`);
+    fileLogger("daemon")(`[main] our stale daemon of another version (${found}; this app is v${appVersion}) holds port ${DAEMON_PORT} — sweeping orphans and restarting once\n`);
+    sweepOrphanDaemons();
+    startService("daemon", rec.spawnFn);
+  });
+}
+
+// One GET, status only (null on any failure). Used by the ownership probe.
+function httpStatus(apiPath, bearer, timeoutMs) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      resolve(v);
+    };
+    try {
+      const req = http.get(
+        `http://127.0.0.1:${DAEMON_PORT}${apiPath}`,
+        { headers: { Authorization: `Bearer ${bearer}` } },
+        (res) => {
+          res.resume();
+          finish(res.statusCode);
+        }
+      );
+      req.on("error", () => finish(null));
+      req.setTimeout(timeoutMs, () => req.destroy(new Error("status probe timeout")));
+    } catch {
+      finish(null);
+    }
+  });
+}
+
+// The OWNERSHIP PROBE (contract C2 as amended, v1.226.0): the daemon on the
+// port is ours only if a token-guarded route answers 200 to OUR bearer AND
+// refuses (401/403) a deliberately wrong one. A token-less dev daemon says 200
+// to both → not ours. A stale orphan of this install shares token.txt → ours.
+// TRI-STATE (review S3): "ours" / "foreign" / "unknown". Foreign is PROVEN —
+// 200 to both bearers, or our own bearer refused. Anything with a missing
+// status (timeout, refused connection) is unknown: a transient 5s stall of one
+// localhost request must not be read as "someone else's daemon". Never
+// rejects; no token of our own means we cannot prove anything → unknown.
+function probeDaemonOwnership(timeoutMs) {
+  if (!authToken) return Promise.resolve("unknown");
+  const refused = (s) => s === 401 || s === 403;
+  return Promise.all([
+    httpStatus("/diagnostics/reliability", authToken, timeoutMs),
+    httpStatus("/diagnostics/reliability", "deliberately-wrong-token", timeoutMs),
+  ])
+    .then(([mine, wrong]) => {
+      if (mine === 200 && refused(wrong)) return "ours";
+      if (mine === 200 && wrong === 200) return "foreign";
+      if (refused(mine)) return "foreign";
+      return "unknown";
+    })
+    .catch(() => "unknown");
+}
+
+function notifyForeignDaemon(found) {
+  try {
+    if (tray) tray.setToolTip(`Iron Jarvis — another Iron Jarvis daemon (${found}) holds port ${DAEMON_PORT}`);
+  } catch {
+    /* tray may be gone */
+  }
+  try {
+    new Notification({
+      title: "Iron Jarvis — problem",
+      body: `Another Iron Jarvis daemon (${found}) is using port ${DAEMON_PORT} and could not be replaced. Close it, then Quit and relaunch.`,
     }).show();
   } catch {
     /* notifications unavailable */
@@ -540,7 +750,7 @@ function killChild(child, label) {
     }
     console.log(`[${label}] killed (pid=${pid})`);
   } catch (err) {
-    console.error(`[${label}] failed to kill (pid=${pid}):`, err.message);
+    desktopLog("error", `[${label}] failed to kill (pid=${pid}):`, err.message);
   }
 }
 
@@ -556,30 +766,101 @@ function shutdown() {
 // exited by itself; false means the caller should force-kill. The auto-update
 // path deliberately SKIPS this and calls shutdown() synchronously — NSIS needs
 // the process tree dead before it returns.
+// POST /shutdown, best-effort; true when the request was issued. A daemon that
+// is not answering is covered by the caller's force-kill fallback.
+function postDaemonShutdown() {
+  try {
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port: DAEMON_PORT,
+        path: "/shutdown",
+        method: "POST",
+        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+      },
+      (res) => res.resume()
+    );
+    req.on("error", () => {
+      /* daemon not answering — the force-kill fallback covers it */
+    });
+    req.setTimeout(1000, () => req.destroy(new Error("shutdown request timeout")));
+    req.end();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Poll /health until it stops answering (true) or the budget runs out (false).
+function waitForDaemonPortClosed(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve) => {
+    const poll = () => {
+      probeDaemonHealth(1000).then((health) => {
+        if (!health) return resolve(true);
+        if (Date.now() >= deadline) return resolve(false);
+        setTimeout(poll, 250);
+      });
+    };
+    setTimeout(poll, 250);
+  });
+}
+
+// Quit-time sweep (contract C2 as amended, v1.226.0): taskkill by image name
+// hits EVERY ironjarvis.exe on the machine — including a dev `uv run
+// ironjarvis serve` (.venv/Scripts/ironjarvis.exe) on any port. So never
+// blind: sweep only when this session adopted or swept a daemon (it is ours),
+// or when /health still answers AND the ownership probe says ours. Resolves
+// whether a sweep ran; never rejects.
+let _quitOwnershipVerdict = null; // requestDaemonShutdown's answer, reused so Quit probes at most once
+
+function sweepOwnDaemonOnQuit() {
+  if (_daemonClaimedThisSession) {
+    sweepOrphanDaemons();
+    return Promise.resolve(true);
+  }
+  if (_quitOwnershipVerdict) {
+    const ours = _quitOwnershipVerdict === "ours";
+    if (ours) sweepOrphanDaemons();
+    return Promise.resolve(ours);
+  }
+  return probeDaemonHealth(1000)
+    .then((health) => (health ? probeDaemonOwnership(1500) : "unknown"))
+    .then((owner) => {
+      const ours = owner === "ours";
+      if (ours) sweepOrphanDaemons();
+      return ours;
+    })
+    .catch(() => false);
+}
+
 function requestDaemonShutdown(timeoutMs) {
   return new Promise((resolve) => {
     if (!daemonProc || daemonProc.exitCode !== null || daemonProc.signalCode !== null) {
-      return resolve(true); // never started or already gone
-    }
-    try {
-      const req = http.request(
-        {
-          host: "127.0.0.1",
-          port: DAEMON_PORT,
-          path: "/shutdown",
-          method: "POST",
-          headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
-        },
-        (res) => res.resume()
-      );
-      req.on("error", () => {
-        /* daemon not answering — the force-kill fallback covers it */
+      // Our child is gone — the daemon may not be (v1.226.0, F-E-2): an
+      // ADOPTED daemon (exit 75) or a stale one from a session that died hard
+      // still owns the port, and resolving true here left it running after
+      // Quit — schedules and webhooks firing from a "closed" app. If /health
+      // still answers, ask it to stop too and wait (bounded) for the port to
+      // close; the caller's sweep covers one that ignores us.
+      probeDaemonHealth(1500).then((health) => {
+        if (!health) return resolve(true); // never started or already gone
+        // Only a daemon PROVEN ours gets the request (review S2): a token-less
+        // dev daemon accepts POST /shutdown from anyone, so posting on "it
+        // answers /health" killed the user's dev daemon by HTTP instead.
+        const owned = _daemonClaimedThisSession
+          ? Promise.resolve("ours")
+          : probeDaemonOwnership(1500);
+        owned.then((owner) => {
+          _quitOwnershipVerdict = owner; // the quit sweep reuses this — no second probe
+          if (owner !== "ours") return resolve(true); // not ours to stop
+          if (!postDaemonShutdown()) return resolve(false);
+          waitForDaemonPortClosed(timeoutMs).then(resolve);
+        });
       });
-      req.setTimeout(1000, () => req.destroy(new Error("shutdown request timeout")));
-      req.end();
-    } catch {
-      return resolve(false);
+      return;
     }
+    if (!postDaemonShutdown()) return resolve(false);
     const deadline = Date.now() + timeoutMs;
     const timer = setInterval(() => {
       const gone =
@@ -640,11 +921,28 @@ function waitForDashboard(timeoutMs, intervalMs) {
 // require a real /health 200 from OUR daemon (bearer token) before proceeding.
 function waitForDaemon(timeoutMs, intervalMs) {
   const deadline = Date.now() + timeoutMs;
+  let lastWhy = ""; // the most specific reason a probe was refused, for the timeout message
   return new Promise((resolve, reject) => {
     const attempt = () => {
       // Fail FAST if the daemon child already exited — e.g. serve()'s preflight
       // found a foreign program on the port and exited non-zero. Don't wait 30s.
-      if (daemonProc && daemonProc.exitCode !== null && daemonProc.exitCode !== 0) {
+      // 75 is contract C2 (v1.226.0): "attached to an existing Iron Jarvis
+      // daemon" — the supervisor adopts or replaces it; keep polling.
+      if (
+        daemonProc &&
+        daemonProc.exitCode !== null &&
+        daemonProc.exitCode !== 0 &&
+        daemonProc.exitCode !== 75
+      ) {
+        // A NEGATIVE code is a spawn failure (ENOENT/EACCES — v1.226.0, F-E-3):
+        // the daemon program itself, not the port, is the problem.
+        if (daemonProc.exitCode < 0) {
+          return reject(
+            new Error(
+              `the daemon program could not be started (missing or blocked file; spawn code ${daemonProc.exitCode})`
+            )
+          );
+        }
         return reject(new Error(`daemon exited early (code ${daemonProc.exitCode}) — port in use?`));
       }
       const req = http.get(
@@ -658,27 +956,220 @@ function waitForDaemon(timeoutMs, intervalMs) {
             // Require OUR daemon's health shape, not just any 200 — a foreign
             // server squatting on the baked port must not pass the gate.
             let ok = false;
+            let why = "";
             if (res.statusCode === 200) {
               try {
                 const d = JSON.parse(body);
                 ok = d && d.status === "ok" && !!d.version;
+                // A healthy daemon of ANOTHER version is not ours (v1.226.0,
+                // F-B-2): the daily driver would run against a stale or dev
+                // daemon's sessions and settings. The three version files are
+                // kept equal by the suite, so this compares like with like.
+                if (ok && d.version !== app.getVersion()) {
+                  ok = false;
+                  why = `an Iron Jarvis daemon of a different version (v${d.version}; this app is v${app.getVersion()}) answers on the port`;
+                }
+                // A version match is not ownership (review S1): a token-less
+                // dev daemon of the same version passed this gate at t=1s and
+                // the packaged app booted against ITS home. Require the
+                // ownership probe; once the supervisor has proven the holder
+                // foreign (exit 75 → foreignNotified) fail now, not at 90s.
+                if (ok) {
+                  const rec = _services.daemon;
+                  const foreignWhy = `port ${DAEMON_PORT} is held by an Iron Jarvis daemon that is not ours (v${d.version}) — stop it or change its port`;
+                  if (rec && rec.foreignNotified) return reject(new Error(foreignWhy));
+                  probeDaemonOwnership(2500).then((owner) => {
+                    if (owner === "ours") return resolve();
+                    retry(owner === "foreign" ? foreignWhy : `could not verify who owns port ${DAEMON_PORT} (v${d.version})`);
+                  });
+                  return;
+                }
               } catch {
                 ok = false;
               }
             }
-            ok ? resolve() : retry();
+            retry(why);
           });
         }
       );
-      req.on("error", retry);
+      req.on("error", () => retry());
       req.setTimeout(2500, () => req.destroy(new Error("probe timeout")));
-      function retry() {
-        if (Date.now() >= deadline) reject(new Error(`daemon /health not healthy within ${timeoutMs}ms`));
-        else setTimeout(attempt, intervalMs);
+      function retry(why) {
+        if (why) lastWhy = why;
+        if (Date.now() >= deadline) {
+          reject(
+            new Error(`daemon /health not healthy within ${timeoutMs}ms` + (lastWhy ? ` (${lastWhy})` : ""))
+          );
+        } else setTimeout(attempt, intervalMs);
       }
     };
     attempt();
   });
+}
+
+// --- Daemon liveness watchdog (v1.226.0, F-E-1) --------------------------
+// The crash supervisor only sees a daemon that DIES. One that stays bound on
+// the port but stops answering (a wedged event loop) was never detected: the
+// tray said running while schedules, webhooks, reflex and autonomy were dead
+// until a manual Quit + relaunch. After boot, probe /health every 30s; three
+// misses in a row with the child still alive → log, record the incident, kill
+// it, and let the exit ladder bring it back. A breaker like the renderer's:
+// three kills in 15 minutes means the cause is systemic — stop and say so.
+const DAEMON_WATCHDOG_MS = 30000;
+const DAEMON_WATCHDOG_PROBE_TIMEOUT_MS = 5000;
+const DAEMON_WATCHDOG_MISS_LIMIT = 3;
+const DAEMON_WATCHDOG_BREAKER_WINDOW_MS = 15 * 60 * 1000;
+const DAEMON_WATCHDOG_BREAKER_MAX = 3;
+let _dwTimer = null;
+let _dwMissed = 0;
+let _dwPid = null; // a fresh child (after a restart) gets a full grace period
+let _dwKills = []; // timestamps of watchdog kills (breaker)
+let _dwBreakerTripped = false;
+let _dwProbeInFlight = false;
+// A RESTARTED child gets the boot gate's grace (v1.226.0 review R4): no miss
+// is counted until it has answered /health once or STARTUP_TIMEOUT_MS has
+// passed since it was spawned — a cold packaged boot can take up to 90s and
+// the old 60-90s (tick-phase dependent) grace killed a booting daemon three
+// times in a row, tripped the breaker and left the app down for minutes.
+let _dwBooting = false;
+
+// GET /health with the bearer. Resolves the parsed body when it is OUR daemon's
+// healthy shape (status ok + version) — the same acceptance as the boot gate —
+// else null. Never rejects.
+function probeDaemonHealth(timeoutMs) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      resolve(v);
+    };
+    try {
+      const req = http.get(
+        `http://127.0.0.1:${DAEMON_PORT}/health`,
+        { headers: authToken ? { Authorization: `Bearer ${authToken}` } : {} },
+        (res) => {
+          let body = "";
+          res.setEncoding("utf8");
+          res.on("data", (c) => {
+            if (body.length < 64 * 1024) body += c;
+          });
+          res.on("end", () => {
+            let d = null;
+            if (res.statusCode === 200) {
+              try {
+                d = JSON.parse(body);
+              } catch {
+                d = null;
+              }
+            }
+            finish(d && d.status === "ok" && d.version ? d : null);
+          });
+          res.on("error", () => finish(null));
+        }
+      );
+      req.on("error", () => finish(null));
+      req.setTimeout(timeoutMs, () => req.destroy(new Error("health probe timeout")));
+    } catch {
+      finish(null);
+    }
+  });
+}
+
+function daemonWatchdogPaused() {
+  return shuttingDown || isQuitting || updateInstallInFlight;
+}
+
+function daemonWatchdogTick() {
+  if (daemonWatchdogPaused()) {
+    _dwMissed = 0;
+    return;
+  }
+  if (_dwProbeInFlight) return;
+  const pid = daemonProc ? daemonProc.pid : null;
+  if (pid !== _dwPid) {
+    _dwPid = pid;
+    _dwMissed = 0;
+    _dwBooting = true;
+  }
+  _dwProbeInFlight = true;
+  probeDaemonHealth(DAEMON_WATCHDOG_PROBE_TIMEOUT_MS).then((health) => {
+    _dwProbeInFlight = false;
+    if (daemonWatchdogPaused()) {
+      _dwMissed = 0;
+      return;
+    }
+    const rec = _services.daemon;
+    if (health) {
+      _dwMissed = 0;
+      _dwBooting = false;
+      return;
+    }
+    if (_dwBooting && rec && Date.now() - rec.lastStart < STARTUP_TIMEOUT_MS) return; // still booting
+    _dwMissed += 1;
+    if (_dwMissed < DAEMON_WATCHDOG_MISS_LIMIT) return;
+    _dwMissed = 0;
+    const alive = !!daemonProc && daemonProc.exitCode === null && daemonProc.signalCode === null;
+    if (!alive) {
+      // Nothing of ours to kill: a dead child is the exit ladder's job. An
+      // ADOPTED daemon (exit 75) has no child and no ladder, though — it went
+      // away, so start our own.
+      if (rec && rec.adopted && rec.spawnFn) {
+        rec.adopted = false;
+        desktopLog("warn", "[daemon] watchdog: the adopted daemon stopped answering /health — sweeping it and starting our own");
+        fileLogger("daemon")("[main] watchdog: the adopted daemon stopped answering /health — sweeping it and starting our own\n");
+        // It is OURS (adoption requires the ownership probe) and it may still
+        // hold the port while wedged: sweep first, or serve's preflight sees a
+        // held port with a dead /health, exits 1, and the ladder loops.
+        sweepOrphanDaemons();
+        startService("daemon", rec.spawnFn);
+      }
+      return;
+    }
+    const now = Date.now();
+    _dwKills = _dwKills.filter((t) => now - t < DAEMON_WATCHDOG_BREAKER_WINDOW_MS);
+    if (_dwKills.length >= DAEMON_WATCHDOG_BREAKER_MAX) {
+      if (!_dwBreakerTripped) {
+        _dwBreakerTripped = true;
+        desktopLog("error", `[daemon] watchdog: ${_dwKills.length} restarts in ${Math.round(DAEMON_WATCHDOG_BREAKER_WINDOW_MS / 60000)} minutes are not converging — breaker open, not killing again`);
+        fileLogger("daemon")(`[main] watchdog: ${_dwKills.length} restarts in ${Math.round(DAEMON_WATCHDOG_BREAKER_WINDOW_MS / 60000)} minutes — breaker open, not killing again\n`);
+        notifyWatchdogExhausted();
+      }
+      return;
+    }
+    _dwBreakerTripped = false;
+    _dwKills.push(now);
+    const detail = `/health missed ${DAEMON_WATCHDOG_MISS_LIMIT}x (~${Math.round((DAEMON_WATCHDOG_MS * DAEMON_WATCHDOG_MISS_LIMIT) / 1000)}s) while pid=${daemonProc.pid} was alive — killed for restart`;
+    desktopLog("error", `[daemon] watchdog: ${detail}`);
+    fileLogger("daemon")(`[main] watchdog: ${detail}\n`);
+    reportIncident("daemon-wedged", detail);
+    killChild(daemonProc, "daemon"); // the exit ladder restarts it
+  });
+}
+
+function notifyWatchdogExhausted() {
+  const logsDir = path.join(userDataDir || "", "logs");
+  try {
+    if (tray) tray.setToolTip("Iron Jarvis — the daemon keeps stalling (check logs)");
+  } catch {
+    /* tray may be gone */
+  }
+  try {
+    new Notification({
+      title: "Iron Jarvis — problem",
+      body: `The daemon stopped answering repeatedly and automatic restarts are paused. Quit and relaunch. Logs: ${logsDir}`,
+    }).show();
+  } catch {
+    /* notifications unavailable */
+  }
+}
+
+function installDaemonWatchdog() {
+  if (_dwTimer) clearInterval(_dwTimer);
+  _dwMissed = 0;
+  _dwBooting = false; // the boot gate just passed: this child has answered
+  _dwPid = daemonProc ? daemonProc.pid : null;
+  _dwTimer = setInterval(daemonWatchdogTick, DAEMON_WATCHDOG_MS);
 }
 
 // --- Failed-update recovery sentinel ------------------------------------
@@ -693,7 +1184,7 @@ function markUpdatePending(version) {
   try {
     fs.writeFileSync(updatePendingFile(), JSON.stringify({ version: version || null, attempts: 0 }), "utf8");
   } catch (err) {
-    console.error("[update] could not write pending marker:", err && err.message);
+    desktopLog("error", "[update] could not write pending marker:", err && err.message);
   }
 }
 function readAndBumpUpdatePending() {
@@ -819,7 +1310,7 @@ function handleCorruptInstall(result) {
       const child = spawn(cached, [], { detached: true, stdio: "ignore" });
       child.unref();
     } catch (err) {
-      console.error("[integrity] could not launch repair installer:", err && err.message);
+      desktopLog("error", "[integrity] could not launch repair installer:", err && err.message);
       shell.openExternal("https://github.com/RealDealCPA-VR/Iron-Jarvis/releases/latest");
     }
   } else if (choice === (cached ? 1 : 0)) {
@@ -995,7 +1486,7 @@ function createMainWindow() {
       })
       .catch((err) => {
         tokenEnsured = true;
-        console.error("[token] localStorage ensure failed:", err && err.message);
+        desktopLog("error", "[token] localStorage ensure failed:", err && err.message);
       });
   });
 
@@ -1078,7 +1569,7 @@ function createMainWindow() {
       .catch((err) => {
         // On a dialog failure don't tear anything down — hide to the tray; the
         // user can still Quit explicitly from the tray/app menu.
-        console.error("[close] prompt failed:", err && err.message);
+        desktopLog("error", "[close] prompt failed:", err && err.message);
         hideToTray();
       });
   });
@@ -1091,8 +1582,35 @@ function createMainWindow() {
   // (v1.130.0). Attached per-creation: hide-to-tray destroys the window and
   // showMainWindow rebuilds it, so the watchdog rides every incarnation.
   installRendererWatchdog(mainWin);
+  installDashboardReloadOnFailure(mainWin);
 
   mainWin.loadURL(DASHBOARD_URL);
+}
+
+// A dashboard-child outage used to strand the window on Chromium's error page
+// for good (v1.226.0, F-E-7): a reload during the 1-60s restart window failed
+// and nothing ever retried. Wait for the dashboard to answer with the Iron
+// Jarvis app again, then load it. -3 is ERR_ABORTED — a navigation superseded
+// by another one — not a failure.
+let _dashboardReloadPending = false;
+function installDashboardReloadOnFailure(win) {
+  const wc = win.webContents;
+  wc.on("did-fail-load", (_e, code, _desc, url, isMainFrame) => {
+    if (code === -3 || !isMainFrame || !isDashboardUrl(url)) return;
+    if (_dashboardReloadPending) return;
+    _dashboardReloadPending = true;
+    desktopLog("warn", `[window] dashboard load failed (${code}) — waiting for the dashboard to come back`);
+    waitForDashboard(60000, 500)
+      .then(() => {
+        if (!wc.isDestroyed()) wc.loadURL(DASHBOARD_URL);
+      })
+      .catch(() => {
+        /* still down after a minute — the next reload/attempt re-arms this */
+      })
+      .finally(() => {
+        _dashboardReloadPending = false;
+      });
+  });
 }
 
 // Show (and if necessary recreate) the main window — used by the tray, the
@@ -1409,11 +1927,11 @@ function installSpotlightIpc() {
     return _updateState;
   });
   // Sender-checked (v1.175.0): this quits the app and runs an installer. The
-  // tray item and the update notification call applyPendingUpdate() directly —
+  // tray item and the update notification call requestUpdateInstall() directly —
   // they are main-process code and never come through here.
   ipcMain.handle("update:apply", (event) => {
     if (!isTrustedDashboardSender(event)) return false;
-    if (pendingUpdateInfo) applyPendingUpdate();
+    if (pendingUpdateInfo) requestUpdateInstall();
     return true;
   });
 }
@@ -1430,7 +1948,7 @@ function buildTrayContextMenu() {
     template.push(
       {
         label: `Restart to update (v${pendingUpdateInfo.version})`,
-        click: () => applyPendingUpdate(),
+        click: () => requestUpdateInstall(),
       },
       { type: "separator" }
     );
@@ -1482,7 +2000,7 @@ function refreshTrayMenu() {
   try {
     tray.setContextMenu(buildTrayContextMenu());
   } catch (err) {
-    console.error("[tray] could not refresh menu:", err && err.message);
+    desktopLog("error", "[tray] could not refresh menu:", err && err.message);
   }
 }
 
@@ -1509,7 +2027,7 @@ function createTray() {
   try {
     tray = new Tray(image.isEmpty() ? nativeImage.createEmpty() : image);
   } catch (err) {
-    console.error("[tray] could not create tray:", err && err.message);
+    desktopLog("error", "[tray] could not create tray:", err && err.message);
     return;
   }
   tray.setToolTip("Iron Jarvis — running");
@@ -1578,7 +2096,7 @@ function safeAppVersion() {
 // so the teardown below still runs ahead of the quit and long before NSIS
 // reaches the extraction step.
 // Shared by the notification click, the tray item, and the in-app
-// "Restart to update" affordance.
+// "Restart to update" affordance — all through requestUpdateInstall() below.
 function applyPendingUpdate() {
   if (!pendingUpdateInfo || !_autoUpdater || updateInstallInFlight) return;
   updateInstallInFlight = true;
@@ -1610,12 +2128,102 @@ function applyPendingUpdate() {
   sweepOrphanDaemons();
 }
 
+// A ready update installs only when the USER asks (tray item, notification
+// click, Updates page) — but "Restart to update" used to taskkill the daemon
+// with agent sessions and workflow runs mid-flight and no warning, while the
+// Updates page promised the opposite (v1.226.0, F-E-4). Ask the daemon what is
+// running first (contract C6, GET /system/activity); if it is busy, let the
+// user choose. Best-effort: a daemon that cannot answer does not block the
+// install — that is exactly the behaviour this had before.
+const ACTIVITY_PROBE_TIMEOUT_MS = 3000;
+let updatePromptInFlight = false;
+
+// Resolves the parsed /system/activity body, or null on any failure. Never rejects.
+function probeDaemonActivity(timeoutMs) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      resolve(v);
+    };
+    try {
+      const req = http.get(
+        `http://127.0.0.1:${DAEMON_PORT}/system/activity`,
+        { headers: authToken ? { Authorization: `Bearer ${authToken}` } : {} },
+        (res) => {
+          let body = "";
+          res.setEncoding("utf8");
+          res.on("data", (c) => {
+            if (body.length < 64 * 1024) body += c;
+          });
+          res.on("end", () => {
+            let d = null;
+            if (res.statusCode === 200) {
+              try {
+                d = JSON.parse(body);
+              } catch {
+                d = null;
+              }
+            }
+            finish(d && typeof d === "object" ? d : null);
+          });
+          res.on("error", () => finish(null));
+        }
+      );
+      req.on("error", () => finish(null));
+      req.setTimeout(timeoutMs, () => req.destroy(new Error("activity probe timeout")));
+    } catch {
+      finish(null);
+    }
+  });
+}
+
+function requestUpdateInstall() {
+  if (!pendingUpdateInfo || updateInstallInFlight || updatePromptInFlight) return;
+  updatePromptInFlight = true;
+  probeDaemonActivity(ACTIVITY_PROBE_TIMEOUT_MS)
+    .then((activity) => {
+      if (!pendingUpdateInfo || updateInstallInFlight) return;
+      if (activity && activity.busy) {
+        const n = Number(activity.active_sessions) || 0;
+        const m = Number(activity.running_workflow_runs) || 0;
+        let choice = 0;
+        try {
+          choice = dialog.showMessageBoxSync({
+            type: "warning",
+            buttons: ["Install now", "Later"],
+            defaultId: 1,
+            cancelId: 1,
+            noLink: true,
+            title: "Iron Jarvis — work in progress",
+            message: `${n} agent session${n === 1 ? "" : "s"} / ${m} workflow run${m === 1 ? "" : "s"} are still running.`,
+            detail:
+              "Installing now restarts the local service and they will be marked interrupted. " +
+              "Later keeps the update ready in the tray until you choose to install it.",
+          });
+        } catch {
+          choice = 0; // a dialog failure must not block the install — proceed as before
+        }
+        if (choice !== 0) return; // Later
+      }
+      applyPendingUpdate();
+    })
+    .catch((err) => {
+      desktopLog("error", "[update] activity check failed:", err && err.message);
+      if (!updateInstallInFlight) applyPendingUpdate();
+    })
+    .finally(() => {
+      updatePromptInFlight = false;
+    });
+}
+
 // The installer never started, so the app is staying on this version. Put
 // everything back the way it was and SAY SO — silence here is what stranded the
 // user with a dead-looking app.
 function abortUpdateInstall(err) {
   const raw = (err && err.message) || String(err || "the installer did not start");
-  console.error("[update] install did not start:", raw);
+  desktopLog("error", "[update] install did not start:", raw);
   updateInstallInFlight = false;
   clearUpdatePending(); // no install happened; the marker would misreport the next boot
   // Ordering above means the children are normally still alive and the crash
@@ -1654,7 +2262,7 @@ function abortUpdateInstall(err) {
         "Releases page.",
     });
   } catch (dlgErr) {
-    console.error("[update] could not show the abort dialog:", dlgErr && dlgErr.message);
+    desktopLog("error", "[update] could not show the abort dialog:", dlgErr && dlgErr.message);
   }
   if (childrenGone) app.quit();
 }
@@ -1681,7 +2289,7 @@ function initUpdater() {
   try {
     ({ autoUpdater: _autoUpdater } = require("electron-updater"));
   } catch (err) {
-    console.error("[update] electron-updater unavailable:", err.message);
+    desktopLog("error", "[update] electron-updater unavailable:", err.message);
     return null;
   }
   const autoUpdater = _autoUpdater;
@@ -1699,7 +2307,7 @@ function initUpdater() {
   );
   autoUpdater.on("error", (err) => {
     const msg = (err && err.message) || "update failed";
-    console.error("[update] error:", msg);
+    desktopLog("error", "[update] error:", msg);
     _emitUpdateState({ status: "error", error: friendlyUpdateError(msg) });
   });
   autoUpdater.on("update-available", (info) => {
@@ -1729,10 +2337,10 @@ function initUpdater() {
         title: `Iron Jarvis v${pendingUpdateInfo.version} is ready`,
         body: "Click to restart and install now — or do it later from the tray icon.",
       });
-      note.on("click", () => applyPendingUpdate());
+      note.on("click", () => requestUpdateInstall());
       note.show();
     } catch (err) {
-      console.error("[update] notification unavailable:", err && err.message);
+      desktopLog("error", "[update] notification unavailable:", err && err.message);
     }
   });
   return autoUpdater;
@@ -1746,7 +2354,7 @@ function checkForUpdates() {
   // electron-updater's separate default notification competing with ours.
   autoUpdater
     .checkForUpdates()
-    .catch((err) => console.error("[update] check failed:", err && err.message));
+    .catch((err) => desktopLog("error", "[update] check failed:", err && err.message));
 }
 
 // --- Application menu ----------------------------------------------------
@@ -1937,7 +2545,10 @@ async function startup() {
       `The Iron Jarvis daemon did not answer on http://127.0.0.1:${DAEMON_PORT} within ` +
         `${Math.round(STARTUP_TIMEOUT_MS / 1000)}s.\n\n` +
         `Most common cause: another program is already using port ${DAEMON_PORT}. Close it, ` +
-        "then relaunch. Check the [daemon] logs for details.",
+        "then relaunch. Check the [daemon] logs for details." +
+        // v1.226.0: the gate now names spawn failures and version mismatches —
+        // say which one this was instead of blaming the port every time.
+        `\n\nDetails: ${(err && err.message) || "no details"}`,
       pendingUpdate
     );
     return;
@@ -1978,6 +2589,7 @@ async function startup() {
     createMainWindow();
   }
   showWindowWhenReady = false;
+  installDaemonWatchdog(); // v1.226.0: a daemon that is up but not answering gets restarted
   checkForUpdates();
   // Long-lived tray apps must keep looking for updates, not just at boot.
   setInterval(checkForUpdates, UPDATE_RECHECK_MS);
@@ -2017,12 +2629,12 @@ function registerHotkey() {
   try {
     globalShortcut.register(SPOTLIGHT_HOTKEY, () => toggleSpotlight());
   } catch (err) {
-    console.error("[hotkey] spotlight registration error:", err && err.message);
+    desktopLog("error", "[hotkey] spotlight registration error:", err && err.message);
   }
   try {
     const ok = globalShortcut.register(HOTKEY, () => showMainWindow());
     if (!ok) {
-      console.warn(`[hotkey] ${HOTKEY} registration failed (already taken?)`);
+      desktopLog("warn", `[hotkey] ${HOTKEY} registration failed (already taken?)`);
       // Tell the user instead of failing silently — the hotkey is a primary way
       // back to a window that closes to the tray.
       try {
@@ -2035,7 +2647,7 @@ function registerHotkey() {
       }
     }
   } catch (err) {
-    console.error("[hotkey] registration error:", err && err.message);
+    desktopLog("error", "[hotkey] registration error:", err && err.message);
   }
 }
 
@@ -2421,24 +3033,34 @@ if (!gotLock) {
     if (shuttingDown || quitProcessed) return; // teardown already done/in-flight
     event.preventDefault();
     quitProcessed = true;
-    requestDaemonShutdown(2000).finally(() => {
+    // 5s, not 2s (v1.226.0, F-E-5): uvicorn drains open streams before the
+    // lifespan runs, so a Quit with a chat/session stream open never finished
+    // in 2s and the terminal snapshot + browser close were routinely skipped.
+    requestDaemonShutdown(5000).finally(() => {
       shutdown(); // force-kills whatever is still alive (incl. the dashboard)
-      // autoInstallOnAppQuit runs NSIS after this quit — so this IS an update
-      // install, exactly like the explicit-update path, and it gets the same
-      // two preparations: the failed-update recovery marker (without it the
-      // whole readAndBumpUpdatePending -> handleStartupFailure recovery is
-      // bypassed for every quit-installed update) and the orphan sweep that
-      // frees resources/daemon's file locks before the installer extracts.
-      if (pendingUpdateInfo) {
-        markUpdatePending(pendingUpdateInfo.version);
-        sweepOrphanDaemons();
-      }
-      app.quit(); // re-enters before-quit; falls through this time
+      // A stale or adopted daemon that ignored /shutdown must not outlive Quit
+      // (v1.226.0, F-E-2) — but only OURS is swept (contract C2 as amended);
+      // a blind sweep killed every dev daemon on the machine.
+      sweepOwnDaemonOnQuit().finally(() => {
+        // autoInstallOnAppQuit runs NSIS after this quit — so this IS an update
+        // install, exactly like the explicit-update path, and it gets the same
+        // two preparations: the failed-update recovery marker (without it the
+        // whole readAndBumpUpdatePending -> handleStartupFailure recovery is
+        // bypassed for every quit-installed update) and the orphan sweep that
+        // frees resources/daemon's file locks before the installer extracts.
+        if (pendingUpdateInfo) {
+          markUpdatePending(pendingUpdateInfo.version);
+          sweepOrphanDaemons();
+        }
+        app.quit(); // re-enters before-quit; falls through this time
+      });
     });
   });
 
   app.on("will-quit", () => {
     globalShortcut.unregisterAll();
+    if (_dwTimer) clearInterval(_dwTimer);
+    _dwTimer = null;
     if (tray) {
       try {
         tray.destroy();

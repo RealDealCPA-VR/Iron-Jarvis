@@ -116,7 +116,7 @@ export function OnboardingWelcome() {
 
         {/* Checklist */}
         <ol className="mt-5 space-y-2">
-          {data.checklist.map((step) => {
+          {(data.checklist ?? []).map((step) => {
             const isNext = data.next_step?.key === step.key;
             const link = stepLink(step);
             return (
