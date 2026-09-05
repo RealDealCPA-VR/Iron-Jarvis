@@ -39,6 +39,19 @@ ENVELOPE_ADAPTED = "envelope.adapted"
 #: forever on a question nobody will answer.
 SESSION_APPROVAL_TIMEOUT_S = 300.0
 
+#: What the model reads when an ask-tier pause ran out of clock (v1.227.0,
+#: A11). The old text said "permission denied … ask the user to re-run, or
+#: grant the tool up front with allow_tools" — an instruction the model
+#: cannot act on mid-run, and the measured reason a 40-minute session spent
+#: 30 minutes re-batching the same asks after every timeout. This one names
+#: what happened (paused, unanswered, NOT run) and what to do instead.
+PAUSE_TIMEOUT_REASON = (
+    "the approval request timed out: paused for the user and not answered in"
+    " time — this call was NOT run. Do not retry it; continue with what does"
+    " not need it, or finish with an honest summary of what is blocked. (A"
+    " later run can carry this grant up front via allow_tools.)"
+)
+
 _TERMINAL = {AgentState.COMPLETED, AgentState.FAILED, AgentState.CANCELLED}
 
 
@@ -669,6 +682,11 @@ def _effective(messages, system_prompt: str, summary: str, covers: int):
 class AgentRuntime:
     def __init__(self, platform) -> None:
         self.p = platform
+        #: run id -> how many of its tool calls are parked on an approval
+        #: (v1.227.0, A4). Parallel asks share ONE WAITING state: the first
+        #: pause flips the run to WAITING, the last one to return flips it
+        #: back to RUNNING — so the kanban/session row never flickers per ask.
+        self._waiting_depth: dict[str, int] = {}
 
     async def _maybe_compact(
         self,
@@ -1256,9 +1274,17 @@ class AgentRuntime:
         tc,
         agent_def: AgentDefinition,
         session_allow: set[str],
+        run: "AgentRun | None" = None,
     ) -> tuple[str, set[str]]:
         """PAUSE this run on an ask-tier call and let the USER answer
         (v1.189.0) — the session half of chat's v1.187.0 mid-turn ask.
+
+        ``run`` (v1.227.0, A4): when given, the AgentRun is set to WAITING for
+        the length of the wait (``agent.state_changed {from, to}`` like every
+        other transition, persisted off-loop) and back to RUNNING on EVERY
+        exit — answer, timeout, deny, cancel — via the ``finally`` below. A
+        paused run used to be indistinguishable from a running one on every
+        surface but the bell.
 
         Returns ``(deny_reason, grant_extra)``: ``("", set())`` means proceed
         (nothing needed asking, or the user granted it), a non-empty reason
@@ -1315,19 +1341,26 @@ class AgentRuntime:
         ):
             return "", set()
         safe = tool.redact_args(tc.arguments) if tool is not None else tc.arguments
-        approval_id, fut = approvals.request(tc.name, safe)
-        await self.p.event_bus.publish(
-            EventType.APPROVAL_REQUESTED,
-            {
-                "approval_id": approval_id,
-                "tool": tc.name,
-                "args": safe,
-                "timeout_s": int(SESSION_APPROVAL_TIMEOUT_S),
-            },
-            session_id=session.id,
-        )
+        # The session id rides the request (v1.227.0) so the registry can
+        # answer "what is this run waiting on" (`pending_for`) and release a
+        # batch's siblings together (`resolve_where`).
+        approval_id, fut = approvals.request(tc.name, safe, session_id=session.id)
         decision = "timeout"
+        # WAITING is flipped (and persisted) BEFORE the ask is announced, so a
+        # surface that reacts to `approval.requested` by reading the row
+        # already finds it waiting — never a card over a "running" run.
+        await self._enter_waiting(run, session.id)
         try:
+            await self.p.event_bus.publish(
+                EventType.APPROVAL_REQUESTED,
+                {
+                    "approval_id": approval_id,
+                    "tool": tc.name,
+                    "args": safe,
+                    "timeout_s": int(SESSION_APPROVAL_TIMEOUT_S),
+                },
+                session_id=session.id,
+            )
             decision = await asyncio.wait_for(
                 fut, timeout=SESSION_APPROVAL_TIMEOUT_S
             )
@@ -1335,6 +1368,10 @@ class AgentRuntime:
             decision = "timeout"
         finally:
             approvals.pop(approval_id)
+            # Runs on the answer, the timeout AND a cancel: the row must never
+            # be left WAITING (a cancel then settles it CANCELLED, sequentially,
+            # in the orchestrator's finalizer).
+            await self._leave_waiting(run, session.id)
         await self.p.event_bus.publish(
             EventType.APPROVAL_RESOLVED,
             {"approval_id": approval_id, "tool": tc.name, "decision": decision},
@@ -1342,16 +1379,62 @@ class AgentRuntime:
         )
         if decision == "conversation":
             session_allow.update({tc.name, perm})
+            # RELEASE THE SIBLINGS (v1.227.0, A2 S2). Parallel asks pause PER
+            # CALL inside the gather, so a batch of N is N cards; the grant
+            # above widened the run's set, but the N-1 siblings were already
+            # parked in their own `wait_for` and never re-checked it — they
+            # timed out 300s later as "denied". Every other pending ask of
+            # THIS session for the SAME permission gets the same answer now;
+            # each wakes, pops itself, publishes its own `approval.resolved`.
+            self._release_siblings(approvals, session.id, perm)
             return "", set()
         if decision == "once":
             return "", {tc.name, perm}
         if decision == "deny":
             return "the user declined this call when asked", set()
-        return (
-            "the approval request timed out with no answer — ask the user to"
-            " re-run, or grant the tool up front with allow_tools",
-            set(),
-        )
+        return PAUSE_TIMEOUT_REASON, set()
+
+    def _release_siblings(self, approvals, session_id: str, perm: str) -> int:
+        """Resolve every other pending ask of ``session_id`` whose tool maps
+        to permission ``perm`` with 'conversation' (the grant just made covers
+        them). Matching is by PERMISSION KEY, resolved through the registry,
+        so two tool names sharing one key are released together."""
+        pending = getattr(approvals, "pending_for", None)
+        release = getattr(approvals, "resolve_where", None)
+        if pending is None or release is None:
+            return 0
+        names: set[str] = set()
+        for entry in pending(session_id):
+            name = str(entry.get("tool") or "")
+            if not name:
+                continue
+            tool = self.p.registry.get(name)
+            if (tool.perm_key() if tool is not None else name) == perm:
+                names.add(name)
+        if not names:
+            return 0
+        return int(release(session_id, names, "conversation"))
+
+    async def _enter_waiting(self, run, session_id: str) -> None:
+        """First pause of a run flips it RUNNING -> WAITING (v1.227.0, A4)."""
+        if run is None:
+            return
+        depth = self._waiting_depth.get(run.id, 0) + 1
+        self._waiting_depth[run.id] = depth
+        if depth == 1 and run.state is AgentState.RUNNING:
+            await self._set_state(run, AgentState.WAITING, session_id)
+
+    async def _leave_waiting(self, run, session_id: str) -> None:
+        """Last pause of a run to return flips it WAITING -> RUNNING."""
+        if run is None:
+            return
+        depth = self._waiting_depth.get(run.id, 0) - 1
+        if depth <= 0:
+            self._waiting_depth.pop(run.id, None)
+            if run.state is AgentState.WAITING:
+                await self._set_state(run, AgentState.RUNNING, session_id)
+        else:
+            self._waiting_depth[run.id] = depth
 
     async def perceive_act(
         self,
@@ -1598,6 +1681,15 @@ class AgentRuntime:
             # other denial — `agents/outcome` derives what a run did from that
             # ledger, and a refusal that never reached it would make the run's
             # own history disagree with the transcript.
+            # THE ARMED SET (v1.227.0, RT1): exactly the names this step
+            # showed the model. `registry.invoke` refuses anything else
+            # through its ledgered deny path — the roster used to be advisory.
+            armed_names = {
+                str(s.get("name") or "")
+                for s in tool_specs
+                if isinstance(s, dict)
+            }
+
             async def _invoke(tc):
                 deny_reason = broken_calls.get(
                     call_signature(tc.name, tc.arguments), ""
@@ -1608,16 +1700,27 @@ class AgentRuntime:
                 # below IS one — that is exactly what happened.
                 deny_label = "refused"
                 grant_extra: set[str] = set()
-                if not deny_reason:
+                # An UNARMED name never asks the user (v1.227.0): carding a
+                # tool the run may not call, then refusing it, would make the
+                # user's Allow a lie. The registry refuses it as "not armed".
+                if not deny_reason and tc.name in armed_names:
                     # MID-RUN APPROVAL (v1.189.0): an ask-tier call PAUSES for
                     # the user instead of dying on the headless resolver — the
                     # session half of chat's v1.187.0 ask. Per CALL, inside the
                     # gather, so parallel asks each get their own card.
                     deny_reason, grant_extra = await self._pause_for_approval(
-                        session, tc, agent_def, session_allow
+                        session, tc, agent_def, session_allow, run=run
                     )
                     if deny_reason:
-                        deny_label = "permission denied"
+                        # An unanswered pause is NOT a permission denial
+                        # (v1.227.0, A11): the ledger kind says "paused", so
+                        # neither the outcome nor the model reads a timeout
+                        # as the user having refused.
+                        deny_label = (
+                            "paused"
+                            if deny_reason == PAUSE_TIMEOUT_REASON
+                            else "permission denied"
+                        )
                 return await self.p.registry.invoke(
                     tc.name,
                     tc.arguments,
@@ -1631,6 +1734,7 @@ class AgentRuntime:
                     ),
                     deny_reason=deny_reason,
                     deny_label=deny_label,
+                    allowed_names=armed_names,
                 )
 
             # FX-01: announce each tool call BEFORE the fan-out, with args redacted

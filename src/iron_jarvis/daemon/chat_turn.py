@@ -2782,9 +2782,18 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
             for tc in calls:
                 ran = False
                 try:
+                    # THE ARMED SET IS THE GATE (v1.227.0, RT1). `armed` is
+                    # what this turn showed the model; a call naming any
+                    # other registered tool (history carries earlier turns'
+                    # calls, local models hallucinate names) is refused by
+                    # the registry as "not armed" and ledgered — it used to
+                    # run whenever ANY tool was armed. MIRROR NOTE
+                    # (lock-step): the stream loop in routes/chat.py passes
+                    # its own armed set the same way — edit both or neither.
                     result = await d.platform.registry.invoke(
                         tc.name, tc.arguments, ctx, d.platform.permissions,
                         overrides, session_allow=armed_grant,
+                        allowed_names=set(armed),
                     )
                     if result.ok:
                         content = result.output

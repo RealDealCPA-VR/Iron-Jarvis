@@ -25,9 +25,11 @@
 // Polls ~5s while the session is active so a long job's progress is watchable.
 
 import { useEffect, useState } from "react";
-import { ListChecks } from "lucide-react";
-import { get } from "@/lib/api";
-import { Card, Badge } from "@/components/ui";
+import Link from "next/link";
+import { ListChecks, RotateCcw } from "lucide-react";
+import { get, post, ApiError } from "@/lib/api";
+import { Card, Badge, LoaderInline } from "@/components/ui";
+import type { SessionView } from "@/lib/types";
 
 export interface WorklistItemView {
   id: string;
@@ -70,6 +72,13 @@ export function WorklistPanel({
 }) {
   const [board, setBoard] = useState<WorklistResponse | null>(null);
   const [shownFor, setShownFor] = useState(sessionId);
+  // "Re-run the N failed items" (v1.227.0, U1). The measured job left 25 rows
+  // failed and offered no control but "Try again" — which re-runs the WHOLE
+  // task. This flips only the failed rows back to todo (the daemon clears
+  // their claim) and continues the session with exactly those items.
+  const [rerun, setRerun] = useState<"" | "reset" | "continue">("");
+  const [rerunNote, setRerunNote] = useState<{ text: string; sessionId?: string } | null>(null);
+  const [rerunError, setRerunError] = useState<string | null>(null);
 
   if (shownFor !== sessionId) {
     // Drop the previous session's board AS THE PROP CHANGES (React's
@@ -83,6 +92,52 @@ export function WorklistPanel({
     // reason.
     setShownFor(sessionId);
     setBoard(null);
+    setRerunNote(null);
+    setRerunError(null);
+  }
+
+  async function rerunFailed() {
+    if (rerun) return;
+    setRerunError(null);
+    setRerunNote(null);
+    setRerun("reset");
+    try {
+      const r = await post<{ reset: number }>(
+        `/sessions/${encodeURIComponent(sessionId)}/worklist/reset-failed`,
+        {},
+      );
+      const n = Number(r?.reset ?? 0);
+      if (n <= 0) {
+        setRerunNote({ text: "Nothing to re-run — no failed items were re-opened." });
+        return;
+      }
+      setRerun("continue");
+      const s = await post<SessionView>(`/sessions/${encodeURIComponent(sessionId)}/continue`, {
+        message: `Continue with the ${n} worklist items that were re-opened.`,
+        wait: false,
+      });
+      setRerunNote({
+        text: `Re-opened ${n} item${n === 1 ? "" : "s"} — a new run is continuing them.`,
+        sessionId: s?.id,
+      });
+      // Refresh the board: the rows just flipped from failed to todo.
+      try {
+        const res = await get<WorklistResponse>(`/worklist/${sessionId}`);
+        setBoard(res ?? null);
+      } catch {
+        /* the note already says what happened */
+      }
+    } catch (e) {
+      setRerunError(
+        e instanceof ApiError && e.status === 404
+          ? "This session has no worklist to re-open."
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      );
+    } finally {
+      setRerun("");
+    }
   }
 
   useEffect(() => {
@@ -166,6 +221,47 @@ export function WorklistPanel({
           total={summary.failed}
           withNote
         />
+      )}
+      {/* Offered only once the run is over: re-opening rows under a live run
+          would race its own claims. */}
+      {summary.failed > 0 && !active && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void rerunFailed()}
+            disabled={!!rerun}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/30 bg-amber-400/[0.08] px-2.5 py-1 text-[11.5px] font-medium text-amber-200 transition-colors hover:bg-amber-400/[0.16] disabled:opacity-50"
+          >
+            {rerun === "reset" ? (
+              <LoaderInline label="Re-opening…" />
+            ) : rerun === "continue" ? (
+              <LoaderInline label="Continuing…" />
+            ) : (
+              <>
+                <RotateCcw size={12} />
+                Re-run the {summary.failed} failed item{summary.failed === 1 ? "" : "s"}
+              </>
+            )}
+          </button>
+        </div>
+      )}
+      {rerunNote && (
+        <div className="mt-2 text-[12px] text-emerald-300" data-testid="worklist-rerun-note">
+          {rerunNote.text}{" "}
+          {rerunNote.sessionId && (
+            <Link
+              href={`/sessions/${encodeURIComponent(rerunNote.sessionId)}`}
+              className="text-accent-soft transition-colors hover:text-accent"
+            >
+              open the new run →
+            </Link>
+          )}
+        </div>
+      )}
+      {rerunError && (
+        <div className="mt-2 text-[12px] text-rose-300" data-testid="worklist-rerun-error">
+          {rerunError}
+        </div>
       )}
       {outstanding.length > 0 && (
         <Group

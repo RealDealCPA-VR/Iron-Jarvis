@@ -36,10 +36,16 @@ describe("a paused run's ask reaches the chat", () => {
     expect(page).toMatch(/e\.session_id !== awaitingId/);
   });
 
-  it("renders the same ApprovalCard in the agent-mode bubble", () => {
-    expect(page).toMatch(/sessionApproval && \(\s*<ApprovalCard/);
-    // A resolution clears only ITS card — a stale one must not eat a newer
-    // question (same rule as the stream hook's).
-    expect(page).toMatch(/prev && prev\.id === rid \? null : prev/);
+  it("renders the same ApprovalCard in the agent-mode bubble — one per pending ask", () => {
+    // v1.227.0 (wave 1, A1): the single `sessionApproval` slot became a fold
+    // over the events — the runtime asks in parallel batches, and one slot
+    // showed one card of N. Behaviour is driven end-to-end in
+    // wave1-approvals.test.tsx; this pins the call site.
+    expect(page).toMatch(/sessionAsks\.map\(\(ask\) => \(\s*<ApprovalCard/);
+    // A resolution closes only ITS request — a stale one must not eat a newer
+    // question (same rule as the stream hook's), and a request whose id has
+    // already resolved never becomes a card.
+    expect(page).toMatch(/resolved\.add\(String\(e\.payload\?\.approval_id/);
+    expect(page).toMatch(/resolved\.has\(id\)/);
   });
 });

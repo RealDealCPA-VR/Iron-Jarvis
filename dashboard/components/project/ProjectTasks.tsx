@@ -22,6 +22,7 @@ import {
 import { get, post, ApiError, API_BASE, ijToken } from "@/lib/api";
 import type { SessionDetail, SessionView } from "@/lib/types";
 import { Card, Badge, ErrorNote, LoaderInline } from "@/components/ui";
+import { SessionStatusBadge } from "@/components/sessions/SessionStatusBadge";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 
 /** Deliverable choices for POST /projects/{id}/task (mirrors the backend). */
@@ -473,8 +474,13 @@ export function ProjectTasks({
                     <X size={11} /> {cancelling ? "Stopping…" : "Stop"}
                   </button>
                 </span>
+              ) : taskSession ? (
+                // Amber for "needs you" / "with failures" (v1.227.0) — a
+                // finished task that fell short must not wear green beside
+                // its own "Task NOT complete" summary.
+                <SessionStatusBadge session={taskSession} />
               ) : (
-                <Badge value={taskSession?.status ?? "unknown"} />
+                <Badge value="unknown" />
               )}
               <Link
                 href={`/sessions/${encodeURIComponent(taskRun.id)}`}
@@ -628,7 +634,7 @@ export function ProjectTasks({
                       href={`/sessions/${encodeURIComponent(s.id)}`}
                       className="group flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-white/[0.03]"
                     >
-                      <Badge value={s.status} />
+                      <SessionStatusBadge session={s} />
                       <span className="min-w-0 flex-1 truncate text-xs text-zinc-400">
                         {s.summary || s.task}
                       </span>

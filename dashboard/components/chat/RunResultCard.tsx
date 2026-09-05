@@ -30,6 +30,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
+import type { SessionOutcome } from "@/lib/types";
 
 export interface RunResult {
   found: boolean;
@@ -53,9 +54,32 @@ export interface RunResult {
   revertable: number;
   reverted?: number;
   duration_s: number | null;
+  /** How the run ENDED (v1.227.0) — `needs_you` when an ask for this session
+   *  expired unanswered, `completed_with_failures` when a mutating call
+   *  failed. Absent on an older daemon; the headline then falls back to the
+   *  pre-v1.227.0 wording. */
+  outcome?: SessionOutcome | null;
+  /** Asks for this session that resolved by TIMEOUT (v1.227.0). The measured
+   *  case: 24 rename calls "completed" with every one of them never approved,
+   *  and this card said "Task complete". */
+  unanswered_asks?: number;
 }
 
 const FAILED = new Set(["failed", "cancelled"]);
+
+/** The headline, as a pure function so the words are testable. A "completed"
+ *  status is NOT "Task complete" when the ledger says the job fell short. */
+export function resultHeadline(result: RunResult): string {
+  if (FAILED.has(result.status)) return "Task failed";
+  const asks = result.unanswered_asks ?? 0;
+  if (asks > 0) {
+    return `Finished — ${asks} call${asks === 1 ? " was" : "s were"} never approved`;
+  }
+  if (result.outcome === "needs_you") return "Finished — needs you";
+  if (result.outcome === "completed_with_failures") return "Finished with failures";
+  if (!result.tools_used.length) return "Finished — but nothing ran";
+  return "Task complete";
+}
 
 function Row({
   icon,
@@ -114,6 +138,12 @@ export function RunResultCard({
   const failed = FAILED.has(result.status);
   const didNothing = !result.tools_used.length;
   const canRevert = result.revertable > 0;
+  // Finished, but short of the job (v1.227.0): amber, never the green tick.
+  const short =
+    !failed &&
+    ((result.unanswered_asks ?? 0) > 0 ||
+      result.outcome === "needs_you" ||
+      result.outcome === "completed_with_failures");
 
   async function revert() {
     setBusy("revert");
@@ -160,12 +190,22 @@ export function RunResultCard({
       }`}
     >
       <div className="flex items-start gap-2.5 border-b border-white/[0.05] px-3.5 py-2.5">
-        <span className={`mt-0.5 shrink-0 ${failed ? "text-rose-400" : "text-emerald-400"}`}>
-          {failed ? <XCircle size={15} /> : <CheckCircle2 size={15} />}
+        <span
+          className={`mt-0.5 shrink-0 ${
+            failed ? "text-rose-400" : short ? "text-amber-300" : "text-emerald-400"
+          }`}
+        >
+          {failed ? (
+            <XCircle size={15} />
+          ) : short ? (
+            <AlertTriangle size={15} />
+          ) : (
+            <CheckCircle2 size={15} />
+          )}
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-medium text-zinc-200">
-            {failed ? "Task failed" : didNothing ? "Finished — but nothing ran" : "Task complete"}
+          <div className="text-[13px] font-medium text-zinc-200" data-testid="run-result-headline">
+            {resultHeadline(result)}
           </div>
           <div className="mt-0.5 text-[11.5px] text-zinc-500">
             {result.steps > 0 && `${result.steps} step${result.steps === 1 ? "" : "s"}`}
@@ -186,6 +226,16 @@ export function RunResultCard({
             No tools ran and no files changed — this turn described the work
             rather than doing it. Ask again more concretely, or check that the
             tools it needed were available.
+          </div>
+        )}
+        {/* The other honesty case (v1.227.0): the run ENDED, but calls it
+            needed were never answered, or mutating calls failed. Say what is
+            left for the user instead of a green tick. */}
+        {short && (
+          <div className="rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-2.5 py-2 text-[12px] leading-relaxed text-amber-300">
+            {(result.unanswered_asks ?? 0) > 0 || result.outcome === "needs_you"
+              ? "The run paused for your approval and the asks expired unanswered — those calls were not run. Open the session to re-run the failed items, or grant the tool and try again."
+              : "Some of the changes this run tried failed — check the errors below and the worklist on the session page."}
           </div>
         )}
 

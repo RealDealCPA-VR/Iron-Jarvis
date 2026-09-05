@@ -137,9 +137,22 @@ def _agent_type(name: str) -> AgentType:
         return AgentType.BUILDER
 
 
-def _session_view(session) -> dict[str, Any]:
+def _session_view(session, d=None) -> dict[str, Any]:
+    """One session row. v1.227.0 (audit A4/A5): every row carries the job's
+    ``outcome`` verdict; ``waiting_on`` (the ask a paused run is parked on) is
+    filled when the caller passes the deps object, because the live pause
+    lives in the approvals registry, not on the row. Additive — nothing that
+    read the old shape changes."""
+    waiting_on = None
+    if d is not None:
+        # Lazy: routes.sessions imports this module (import direction).
+        from .routes.sessions import _waiting_on
+
+        waiting_on = _waiting_on(d, session.id)
     return {
         "id": session.id,
+        "outcome": getattr(session, "outcome", None) or None,
+        "waiting_on": waiting_on,
         "project_id": getattr(session, "project_id", None),
         "task": session.task,
         # Where the session came from (v1.119.0): "schedule:<name>" for

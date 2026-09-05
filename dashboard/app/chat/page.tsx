@@ -203,6 +203,14 @@ import {
   type ChatSource,
 } from "@/components/chat/SourcesRow";
 
+/** One pending ask of an escalated run (v1.227.0) — folded from
+ *  approval.requested/approval.resolved events, one ApprovalCard each. */
+interface SessionAsk {
+  id: string;
+  tool: string;
+  args?: Record<string, unknown>;
+}
+
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
@@ -3485,38 +3493,41 @@ export default function ChatPage() {
   // visible artifact was a capability proposal on the Tools page. Same card,
   // same POST /chat/approvals/{id} route as chat's own mid-turn ask — the
   // registry is shared platform-side, so one answer path serves both pauses.
-  const [sessionApproval, setSessionApproval] = useState<{
-    id: string;
-    tool: string;
-    args?: Record<string, unknown>;
-  } | null>(null);
-  useEffect(() => {
-    if (!awaitingId) {
-      setSessionApproval(null);
-      return;
-    }
+  //
+  // ONE CARD PER PENDING ASK (v1.227.0, A1). The runtime asks in PARALLEL
+  // batches — the measured job published 4-5 `approval.requested` in the same
+  // microsecond — and the old single-slot state kept only the newest: the
+  // user answered one card, the rest stayed pending invisibly, and 300 s
+  // later each expired as "denied by the clock". The pending set is FOLDED
+  // from the events (newest-first, so a resolve is always seen before the
+  // request it closes): every request for this session whose id has no
+  // later resolve is a card, oldest first, and answering one leaves the
+  // others exactly where they were.
+  const sessionAsks = useMemo(() => {
+    if (!awaitingId) return [] as SessionAsk[];
     const boundary = sinceRef.current;
-    // Newest-first scan: the latest approval state for THIS session wins —
-    // a request that already resolved must not resurrect its card.
+    const resolved = new Set<string>();
+    const asks = new Map<string, SessionAsk>();
     for (const e of events) {
       if (e.id === boundary) break;
       if (e.session_id !== awaitingId) continue;
       if (e.type === "approval.resolved") {
-        const rid = String(e.payload?.approval_id ?? "");
-        setSessionApproval((prev) => (prev && prev.id === rid ? null : prev));
-        break;
+        resolved.add(String(e.payload?.approval_id ?? ""));
+        continue;
       }
       if (e.type === "approval.requested") {
-        setSessionApproval({
-          id: String(e.payload?.approval_id ?? ""),
+        const id = String(e.payload?.approval_id ?? "");
+        if (!id || resolved.has(id) || asks.has(id)) continue;
+        asks.set(id, {
+          id,
           tool: String(e.payload?.tool ?? ""),
           args: (e.payload?.args ?? undefined) as
             | Record<string, unknown>
             | undefined,
         });
-        break;
       }
     }
+    return Array.from(asks.values()).reverse(); // oldest ask first
   }, [events, awaitingId]);
 
   // FALLBACK: if the /events socket is down, poll the session until it finishes.
@@ -6190,17 +6201,18 @@ export default function ChatPage() {
                               "conversation" also arms the tool here so later
                               turns (and their escalations, via allow_tools)
                               carry the grant. */}
-                          {sessionApproval && (
+                          {sessionAsks.map((ask) => (
                             <ApprovalCard
+                              key={ask.id}
                               approval={{
-                                id: sessionApproval.id,
+                                id: ask.id,
                                 callId: "",
-                                tool: sessionApproval.tool,
-                                args: sessionApproval.args,
+                                tool: ask.tool,
+                                args: ask.args,
                               }}
                               onConversation={armFromApproval}
                             />
-                          )}
+                          ))}
                         </div>
                       </Bubble>
                     )}

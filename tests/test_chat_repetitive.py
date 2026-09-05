@@ -45,7 +45,7 @@ def _fake_invoke_ok(counter: dict):
     """A registry.invoke stand-in matching the chat loop's call shape."""
 
     async def fake_invoke(name, args, ctx, permissions, overrides=None, *,
-                          session_allow=None):
+                          session_allow=None, **kw):
         counter["n"] += 1
         return ToolResult(ok=True, output="ok")
 

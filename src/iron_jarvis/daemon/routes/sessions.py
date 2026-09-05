@@ -23,6 +23,43 @@ def _sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
+def _waiting_on(d, session_id: str) -> dict[str, Any] | None:
+    """``{approval_id, tool}`` for the OLDEST ask this session is paused on,
+    or None (v1.227.0, audit A4). Derived from the shared approvals registry
+    — the one place a live pause exists — via ``pending_for``, which the
+    approvals lane adds this release; until it lands (or on a bare platform)
+    the guard answers None rather than guessing. Read-only, in-memory: safe
+    on the loop."""
+    approvals = getattr(getattr(d, "platform", None), "approvals", None)
+    pending_for = getattr(approvals, "pending_for", None)
+    if pending_for is None:
+        return None
+    try:
+        rows = list(pending_for(session_id) or [])
+    except Exception:  # noqa: BLE001 — a listing must never break a row
+        return None
+    if not rows:
+        return None
+    first = rows[0] if isinstance(rows[0], dict) else {}
+    approval_id = first.get("approval_id")
+    if not approval_id:
+        return None
+    return {"approval_id": str(approval_id), "tool": str(first.get("tool") or "")}
+
+
+def _session_row(d, session) -> dict[str, Any]:
+    """``_session_view`` plus the two truth fields every row carries since
+    v1.227.0 — ADDITIVE, the base shape is untouched:
+
+    * ``outcome`` — ``completed`` | ``completed_with_failures`` | ``needs_you``
+      | None, the ledger's verdict on the JOB (``Session.outcome``);
+    * ``waiting_on`` — ``{approval_id, tool}`` while the run is paused on an
+      ask, else None — so the kanban and the session page can show a paused
+      run as waiting for the user instead of as ordinary running work.
+    """
+    return _session_view(session, d)
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.post("/sessions")
@@ -72,7 +109,7 @@ def register(app: FastAPI, d) -> None:
             # object here claimed "active" for work that never started.
             if d._spawn_bg(session.id, d.orchestrator.run_session(session.id)) is None:
                 session = d.orchestrator.get_session(session.id) or session
-        return _session_view(session)
+        return _session_row(d, session)
 
     @app.post("/sessions/{session_id}/cancel")
     def cancel_session(session_id: str) -> dict[str, Any]:
@@ -82,7 +119,7 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="session not found")
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
-        return _session_view(session)
+        return _session_row(d, session)
 
     @app.post("/sessions/{session_id}/rerun")
     async def rerun_session(session_id: str, wait: bool = True) -> dict[str, Any]:
@@ -100,7 +137,7 @@ def register(app: FastAPI, d) -> None:
             # object here claimed "active" for work that never started.
             if d._spawn_bg(session.id, d.orchestrator.run_session(session.id)) is None:
                 session = d.orchestrator.get_session(session.id) or session
-        return _session_view(session)
+        return _session_row(d, session)
 
     @app.post("/sessions/{session_id}/continue")
     async def continue_session(session_id: str, body: ContinueBody) -> dict[str, Any]:
@@ -118,7 +155,33 @@ def register(app: FastAPI, d) -> None:
             # object here claimed "active" for work that never started.
             if d._spawn_bg(session.id, d.orchestrator.run_session(session.id)) is None:
                 session = d.orchestrator.get_session(session.id) or session
-        return _session_view(session)
+        return _session_row(d, session)
+
+    @app.post("/sessions/{session_id}/worklist/reset-failed")
+    async def reset_failed_worklist_items(session_id: str) -> dict[str, Any]:
+        """Re-open this session's FAILED worklist items (v1.227.0).
+
+        Flips every ``failed`` row on the session's board back to ``todo``
+        (``pending``) with its claim cleared and answers ``{reset: N,
+        board_id}``; the dashboard then posts the existing
+        ``/sessions/{id}/continue`` so a follow-up run claims exactly those
+        rows through ``worklist_next``. Nothing ``done`` is touched. 404 when
+        the session is unknown OR has no worklist — an empty board is not a
+        board, and "reset 0" over nothing would read as success. The board is
+        resolved the way ``GET /worklist/{id}`` resolves it (root session ->
+        job), so the panel and this door always agree on which list. Store
+        calls hop off the loop like the worklist tools do.
+        """
+        if d.orchestrator.get_session(session_id) is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        store = getattr(d.platform, "worklist", None)
+        if store is None:  # pragma: no cover - a platform without the store
+            raise HTTPException(status_code=404, detail="this session has no worklist")
+        board_id = await asyncio.to_thread(store.root_session_for, session_id)
+        if await asyncio.to_thread(store.count, board_id) == 0:
+            raise HTTPException(status_code=404, detail="this session has no worklist")
+        reset = await asyncio.to_thread(store.reset_failed, board_id)
+        return {"reset": int(reset), "board_id": board_id}
 
     @app.post("/sessions/clear")
     def clear_sessions(body: SessionsClearBody) -> dict[str, Any]:
@@ -160,7 +223,7 @@ def register(app: FastAPI, d) -> None:
             ev = d.platform.evaluator.latest(session_id)
         except Exception:  # noqa: BLE001
             ev = None
-        view = _session_view(session)
+        view = _session_row(d, session)
         if format == "json":
             return {
                 "session": view,
@@ -223,8 +286,8 @@ def register(app: FastAPI, d) -> None:
                 if lim is not None:
                     stmt = stmt.limit(lim)
                 scoped = list(db.exec(stmt))
-            return {"sessions": [_session_view(s) for s in scoped]}
-        return {"sessions": [_session_view(s) for s in d.orchestrator.list_sessions(limit=lim)]}
+            return {"sessions": [_session_row(d, s) for s in scoped]}
+        return {"sessions": [_session_row(d, s) for s in d.orchestrator.list_sessions(limit=lim)]}
 
     @app.get("/sessions/teams")
     def sessions_teams() -> dict[str, Any]:
@@ -301,7 +364,7 @@ def register(app: FastAPI, d) -> None:
         if session is None:
             raise HTTPException(status_code=404, detail="session not found")
         return {
-            "session": _session_view(session),
+            "session": _session_row(d, session),
             "transcript": d.orchestrator.transcript(session_id),
         }
 
@@ -415,7 +478,7 @@ def register(app: FastAPI, d) -> None:
                     if child is None:  # run outlived its session — no child row
                         continue
                     children.append(
-                        {**_session_view(child), "parent_run_id": r.parent_id}
+                        {**_session_row(d, child), "parent_run_id": r.parent_id}
                     )
                     next_session_ids.append(sid)
                 frontier = _collect_runs(next_session_ids)

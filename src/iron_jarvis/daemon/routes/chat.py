@@ -1974,6 +1974,16 @@ def register(app: FastAPI, d) -> None:
                             and _perm_name not in armed_grant
                             and tc.name not in armed_grant
                         )
+                        # THE ARMED SET IS THE GATE (v1.227.0, RT1): this
+                        # turn's tools are `armed` + `ask_armed` (what the
+                        # model was shown). Anything else is refused by the
+                        # registry as "not armed" — so it must never CARD
+                        # either: asking the user to approve a call that
+                        # cannot run would make their Allow a lie.
+                        # MIRROR NOTE (lock-step): chat_turn.py passes its
+                        # armed set the same way — edit both or neither.
+                        _turn_tools = {*armed, *ask_armed}
+                        _unarmed = tc.name not in _turn_tools
                         if approval_mode == "yolo":
                             if _engine_asks:
                                 _grant_extra = {tc.name, _perm_name}
@@ -1986,6 +1996,8 @@ def register(app: FastAPI, d) -> None:
                             )
                         else:
                             _needs_card = _engine_asks
+                        if _unarmed:
+                            _needs_card = False
                         if _needs_card:
                             _apr = _approvals()
                             _ap_id, _fut = _apr.request(tc.name, safe_args)
@@ -2060,6 +2072,7 @@ def register(app: FastAPI, d) -> None:
                                 tc.name, tc.arguments, ctx, d.platform.permissions,
                                 overrides,
                                 session_allow=(armed_grant | _grant_extra),
+                                allowed_names=_turn_tools,
                                 **(
                                     {"deny_reason": _deny_reason}
                                     if _deny_reason

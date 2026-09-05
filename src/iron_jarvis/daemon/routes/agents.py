@@ -1724,4 +1724,4 @@ def register(app: FastAPI, d) -> None:
             )
             if parked is None:
                 session = d.orchestrator.get_session(session.id) or session
-        return _session_view(session)
+        return _session_view(session, d)

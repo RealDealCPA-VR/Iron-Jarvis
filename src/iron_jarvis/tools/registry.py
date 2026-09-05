@@ -313,10 +313,33 @@ class ToolRegistry:
         session_allow: "Iterable[str] | None" = None,
         deny_reason: str = "",
         deny_label: str = "permission denied",
+        allowed_names: "set[str] | None" = None,
     ) -> ToolResult:
         tool = self._tools.get(name)
         if tool is None:
             return ToolResult(ok=False, error=f"unknown tool '{name}'")
+
+        # THE ROSTER IS THE GATE, NOT A SUGGESTION (v1.227.0, RT1 S1). The
+        # names a caller ARMED for a step (`tool_specs`) were only ever what
+        # the model was SHOWN; the call went through this method by name
+        # against the FULL registry, so a read-only reviewer whose model
+        # hallucinated `rename_file` renamed the file (allow-tier by default)
+        # and a chat turn with only `read_file` armed wrote a file. Measured
+        # on the live default (a native tool-calling proxy, which does not go
+        # through the prompted-tools name filter). `allowed_names` is the
+        # armed set; a name outside it is refused THROUGH the deny path below
+        # so the refusal is ledgered (`ToolInvocation` + `tool.denied`) and
+        # the model reads plainly that nothing ran. ``None`` = no roster gate
+        # (callers not yet passing one keep today's behaviour).
+        if (
+            not deny_reason
+            and allowed_names is not None
+            and name not in allowed_names
+        ):
+            deny_reason = (
+                f"`{name}` is not one of this agent's tools — it was not run"
+            )
+            deny_label = "not armed"
 
         # `_store_as` (v1.159.0): put the RESULT IN A VARIABLE instead of in the
         # context window.

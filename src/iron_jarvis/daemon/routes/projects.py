@@ -223,7 +223,7 @@ def register(app: FastAPI, d) -> None:
                 "root_exists": bool(project.root) and Path(project.root).is_dir(),
                 "active": project.id == getattr(d.platform.config, "active_project_id", None),
             },
-            "sessions": [_session_view(s) for s in sessions],
+            "sessions": [_session_view(s, d) for s in sessions],
         }
 
     @app.patch("/projects/{project_id}")
@@ -708,7 +708,7 @@ def register(app: FastAPI, d) -> None:
         except (PermissionError, RuntimeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         d._spawn_bg(session.id, d.orchestrator.run_session(session.id))
-        view = _session_view(session)
+        view = _session_view(session, d)
         view["output"] = output
         if target_path:
             view["target_path"] = target_path

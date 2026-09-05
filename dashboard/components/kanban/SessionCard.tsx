@@ -22,6 +22,8 @@ import type { LaneId } from "@/lib/kanban";
 import { StatusDot, ConfirmButton, LoaderInline } from "@/components/ui";
 import AgentFace, { moodForStatus } from "@/components/agents/AgentFace";
 import OriginChip from "@/components/sessions/OriginChip";
+import { outcomeLabel, waitingLabel } from "@/components/sessions/SessionStatusBadge";
+import { Badge } from "@/components/ui";
 import { timeAgo } from "@/lib/format";
 
 export interface CardData {
@@ -116,7 +118,13 @@ export function CardInner({
   /** "Team of N" toggle chip (live card only — the drag ghost has no toggle). */
   teamBadge?: React.ReactNode;
 }) {
-  const reviewable = lane === "review";
+  // A PAUSED run (v1.227.0) also sits in the review lane, but it has no
+  // review to approve or reject — its ask is answered on the session page.
+  // The chip says what it is waiting for; a finished run that fell short of
+  // the job wears the same amber (outcomeLabel) instead of reading as done.
+  const waiting = waitingLabel(session);
+  const outcome = outcomeLabel(session);
+  const reviewable = lane === "review" && !waiting;
   return (
     <div
       className={`group/card relative rounded-xl border bg-ink-850/90 p-3.5 transition-all duration-200 ${
@@ -159,6 +167,16 @@ export function CardInner({
         {/* Provenance (v1.168.0): who dispatched this session. Renders nothing
             for the (historically most common) untagged user-started case. */}
         <OriginChip origin={session.origin} />
+        {waiting && (
+          <span data-testid="session-waiting-chip" className="contents">
+            <Badge value={waiting} tone="amber" />
+          </span>
+        )}
+        {!waiting && outcome && (
+          <span data-testid="session-outcome-chip" className="contents">
+            <Badge value={outcome} tone="amber" />
+          </span>
+        )}
         {teamBadge}
         <span className="ml-auto text-[11px] tabular-nums text-zinc-500">
           {timeAgo(session.created_at)}
@@ -238,6 +256,10 @@ export function SessionCard({
   const footer =
     effLane === "failed" ? (
       <FailedActions session={session} />
+    ) : session.waiting_on?.approval_id ? (
+      // Paused run (v1.227.0): "Add context" posts /continue, which a
+      // running session cannot take — the ask is answered on its page.
+      <WaitingFooter session={session} />
     ) : effLane === "review" ? (
       <AddContext session={session} />
     ) : undefined;
@@ -312,6 +334,25 @@ export function SessionCard({
           }
         />
       </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Paused run (v1.227.0): the ask is answered on the session page             */
+/* -------------------------------------------------------------------------- */
+
+function WaitingFooter({ session }: { session: SessionView }) {
+  return (
+    <div className="pointer-events-auto mt-2.5 border-t border-white/[0.06] pt-2.5">
+      <Link
+        href={`/sessions/${session.id}`}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/30 bg-amber-400/[0.08] px-2 py-1 text-[11px] font-medium text-amber-200 transition-colors hover:bg-amber-400/[0.16]"
+      >
+        Answer on the session page →
+      </Link>
     </div>
   );
 }

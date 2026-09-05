@@ -45,8 +45,25 @@ export interface SessionView {
   output_tokens?: number;
   /** Who dispatched this session (e.g. "job:agents", "schedule:<name>"). */
   origin?: string | null;
+  /** How the run ENDED, from the ledger (v1.227.0): a "completed" status can
+   *  still be `needs_you` (an ask expired unanswered) or
+   *  `completed_with_failures` (a mutating call failed). Null/absent on rows
+   *  finalised before the column existed and while the run is live. */
+  outcome?: SessionOutcome | null;
+  /** The ask this run is PAUSED on right now (v1.227.0), or null. Answered
+   *  through the same `POST /chat/approvals/{approval_id}` route chat uses. */
+  waiting_on?: SessionWaitingOn | null;
   created_at: string;
   finished_at: string | null;
+}
+
+/** `Session.outcome` — additive, set at finalize (see SessionStatusBadge). */
+export type SessionOutcome = "completed" | "completed_with_failures" | "needs_you";
+
+/** `Session.waiting_on` — the pending ask a paused run is blocked on. */
+export interface SessionWaitingOn {
+  approval_id: string;
+  tool: string;
 }
 
 export interface AgentRun {

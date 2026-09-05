@@ -5,6 +5,29 @@ the deep-review wow track, deferred backlogs across waves, and known limits.
 The deep review's 11 confirmed bugs are all FIXED (v1.166.2–v1.167.0) — this
 file is what remains.*
 
+## Carried out of the 2026-09-04 audit, Wave 1 (v1.227.0)
+
+Wave 1 closed RT1 (armed-name gate in `registry.invoke`, both chat lanes and
+the runtime), A1 (one approval card per ask), A2 (a conversation grant
+releases sibling asks), A11 (honest pause wording), A3 (the worklist re-offers
+a run's own claim), A8/RT2 (claims released on finish/cancel/reconcile), A4
+(`AgentState.WAITING` + `waiting_on` on every session row), A5/U1
+(`Session.outcome` + amber chips on four surfaces + "Re-run the N failed
+items"), RT5 (the claimed-write note on the escalation hand-off). Left open
+by the lanes:
+
+- [ ] RT4 cancel-race shield: the runtime keeps no handle to the in-flight
+  per-step `_save` future, so `_finalize_cancelled` cannot shield-await it
+  (the `release_run` half landed). Store it on the runtime, then shield.
+- [ ] A10: after a reload the chat page still shows no card for a paused run
+  until an event arrives (the bell covers it within 15 s). A9: the bell
+  answers one call at a time — add "Allow for this run".
+- [ ] `Badge` applies CSS `capitalize`, so the amber chips read "Needs You"
+  (`ui.tsx`, coordinator-owned).
+- [ ] `tests/test_bulk_job_repair_v1177.py::test_ordering_has_a_total_tiebreaker`
+  pins the count of `(key_norm, id)` orderings in `worklist/store.py`; bump it
+  when adding another.
+
 ## Carried out of the v1.226.0 reliability wave (reviewer-graded, not speculative)
 
 The six-dimension audit (contract, boot/loops, event loop, streaming, desktop
@@ -40,6 +63,9 @@ v1.226.0. These are what the reviewers graded "defer" or "note":
   only `ironjarvis.exe`); SQLAlchemy QueuePool (5+10, 30 s) exhaustion under
   VACUUM + 20 concurrent sessions; tzlocal `ZoneInfoNotFoundError` aborting
   `build_platform` on an exotic Windows zone.
+- [x] PARTLY CLOSED v1.227.0 (audit Wave 1): finished/failed/cancelled runs
+  and `reconcile_interrupted_sessions` now release worklist claims and settle
+  non-terminal `AgentRun` rows; the shield below is still open.
 - [ ] Agent cancel race (introduced by the v1.226.0 write offload, graded S3):
   `task.cancel()` can interrupt a per-step `_save(run)` that is mid-flight in
   the executor; `_finalize_cancelled` → `_persist_cancel` then settles

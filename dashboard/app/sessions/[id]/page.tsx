@@ -50,6 +50,8 @@ import OriginChip from "@/components/sessions/OriginChip";
 import { DocPreview } from "@/components/chat/DocPreview";
 import { BlackboardPanel } from "@/components/sessions/BlackboardPanel";
 import { WorklistPanel } from "@/components/sessions/WorklistPanel";
+import { SessionStatusBadge } from "@/components/sessions/SessionStatusBadge";
+import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { ReviewPanel } from "@/components/ReviewPanel";
 import { TracesPanel } from "@/components/TracesPanel";
 import { SessionFeedback } from "@/components/SessionFeedback";
@@ -66,6 +68,11 @@ const REFETCH_EVENTS = new Set([
   "tool.executed",
   "agent.state_changed",
   "session.completed",
+  // A pause/resume flips `waiting_on` on the session row (v1.227.0); refetch
+  // so the ApprovalCard appears the moment the run asks and leaves when it
+  // is answered (from here, chat, or the bell).
+  "approval.requested",
+  "approval.resolved",
 ]);
 
 export default function SessionDetailPage({
@@ -327,8 +334,11 @@ export default function SessionDetailPage({
                   {session.provider === "mock" && <MockChip />}
                   {/* "queued" predates statusTone's table — style it here so it
                       reads as "parked", not the slate unknown-status grey. */}
-                  <Badge
-                    value={session.status}
+                  {/* Amber "Waiting for you · tool" / "Completed · needs you"
+                      / "Completed · with failures" (v1.227.0); the plain
+                      status badge only when it tells the truth. */}
+                  <SessionStatusBadge
+                    session={session}
                     tone={isQueued ? "violet" : undefined}
                   />
                 </span>
@@ -379,6 +389,28 @@ export default function SessionDetailPage({
               )}
             </Card>
           </Reveal>
+
+          {/* PAUSED FOR THE USER (v1.227.0, A4). The run is holding a tool
+              call and waiting for a decision; until now this page showed it
+              as "active" and the only answer path was the bell (≤15 s poll)
+              or the chat thread that launched it. Same card, same
+              POST /chat/approvals/{id} route as chat's own ask — one answer
+              path serves every surface. Keyed on the approval id so a
+              second ask after the first is answered mounts a fresh card. */}
+          {session.waiting_on?.approval_id && (
+            <Reveal>
+              <div data-testid="session-approval" className="max-w-[640px]">
+                <ApprovalCard
+                  key={session.waiting_on.approval_id}
+                  approval={{
+                    id: session.waiting_on.approval_id,
+                    callId: "",
+                    tool: session.waiting_on.tool,
+                  }}
+                />
+              </div>
+            </Reveal>
+          )}
 
           {/* Worklist (v1.174.0, P3) — "12 of 26 done", counted from the
               durable per-item record rather than read out of the run's prose.

@@ -32,8 +32,81 @@ from typing import Any
 from sqlmodel import select
 
 from ..core.db import session_scope
-from ..core.models import AgentRun, Session, ToolInvocation, UndoJournal
+from ..core.events import EventType
+from ..core.models import AgentRun, EventRecord, Session, ToolInvocation, UndoJournal
 from ..tools.base import Reversibility
+
+#: The three verdicts ``Session.outcome`` may carry (v1.227.0, audit A5/U1).
+#: ``status`` says how the RUN ended; these say whether the JOB was done.
+OUTCOME_COMPLETED = "completed"
+OUTCOME_WITH_FAILURES = "completed_with_failures"
+OUTCOME_NEEDS_YOU = "needs_you"
+OUTCOMES = (OUTCOME_COMPLETED, OUTCOME_WITH_FAILURES, OUTCOME_NEEDS_YOU)
+
+#: The decision an ``approval.resolved`` event carries when the clock, not the
+#: user, answered (``agents/runtime._pause_for_approval``).
+_TIMEOUT_DECISION = "timeout"
+
+
+def _count_unanswered_asks(db, session_id: str) -> int:
+    """How many of this session's asks were answered by the CLOCK.
+
+    Counted from the persisted ``approval.resolved`` events with
+    ``decision == "timeout"`` — the same rows the bell and the audit timeline
+    read, so this number can never disagree with them. The approvals registry
+    itself is deliberately in-memory and holds no history (core/approvals.py),
+    which is why the event log is the record here.
+    """
+    count = 0
+    rows = db.exec(
+        select(EventRecord.payload_json).where(
+            EventRecord.type == EventType.APPROVAL_RESOLVED,
+            EventRecord.session_id == session_id,
+        )
+    )
+    for raw in rows:
+        raw = raw if isinstance(raw, str) else raw[0]
+        try:
+            payload = json.loads(raw or "{}")
+        except (TypeError, ValueError):
+            continue
+        if isinstance(payload, dict) and payload.get("decision") == _TIMEOUT_DECISION:
+            count += 1
+    return count
+
+
+def derive_outcome(result: dict[str, Any], status: Any = None) -> str | None:
+    """The verdict on the JOB, from a ``session_result`` payload. Pure.
+
+    * ``needs_you`` — any ask for the session resolved ``timeout``. The run
+      may read COMPLETED (it ended without an exception) or FAILED; either way
+      the job is waiting on the person, and that is the headline.
+    * ``completed_with_failures`` — the run completed, nobody was asked and
+      left unanswered, and at least one MUTATING tool call failed.
+    * ``completed`` — the run completed and nothing above applies.
+    * ``None`` — not found, not finished, or a status (failed with no
+      unanswered ask, cancelled) that already tells the truth on its own.
+
+    ``status`` overrides the payload's — the orchestrator derives the verdict
+    BEFORE it persists the terminal status, when the row still reads active.
+    """
+    if not result.get("found"):
+        return None
+    if int(result.get("unanswered_asks") or 0) > 0:
+        return OUTCOME_NEEDS_YOU
+    status_value = status if status is not None else result.get("status")
+    status_value = str(getattr(status_value, "value", status_value) or "").lower()
+    if status_value != "completed":
+        return None
+    if int(result.get("tools_failed_mutating") or 0) > 0:
+        return OUTCOME_WITH_FAILURES
+    return OUTCOME_COMPLETED
+
+
+def session_outcome(engine, session_id: str, status: Any = None) -> str | None:
+    """``derive_outcome`` over a fresh ledger read — the finalize-time call.
+    BLOCKING (SQLite reads); the orchestrator runs it off the loop."""
+    return derive_outcome(session_result(engine, session_id), status)
 
 #: Journal kinds that describe a FILE mutation, and what each one means the
 #: tool did. (The inverse is the mirror image: to undo a creation you delete.)
@@ -108,6 +181,10 @@ def session_result(engine, session_id: str) -> dict[str, Any]:
         "revertable": 0,
         "reverted": 0,
         "duration_s": None,
+        # v1.227.0 (A5/U1): the verdict on the JOB and the count of asks the
+        # clock answered — see ``derive_outcome``.
+        "outcome": None,
+        "unanswered_asks": 0,
     }
     try:
         with session_scope(engine) as db:
@@ -119,6 +196,8 @@ def session_result(engine, session_id: str) -> dict[str, Any]:
             out["task"] = (session.task or "")[:400]
             out["summary"] = (session.summary or "")[:2000]
             workspace = session.workspace_path or ""
+            stored_outcome = getattr(session, "outcome", None) or None
+            out["unanswered_asks"] = _count_unanswered_asks(db, session_id)
 
             runs = list(
                 db.exec(select(AgentRun).where(AgentRun.session_id == session_id))
@@ -150,6 +229,7 @@ def session_result(engine, session_id: str) -> dict[str, Any]:
             changed: list[str] = []
             revertable = 0
             already_reverted = 0
+            mutating_failed = 0
 
             for inv in invocations:
                 # An undo is itself a ledger row; counting it as work the agent
@@ -160,6 +240,14 @@ def session_result(engine, session_id: str) -> dict[str, Any]:
                 used[name] = used.get(name, 0) + 1
                 if not inv.ok:
                     failed[name] = failed.get(name, 0) + 1
+                    # A failed READ is a detour; a failed WRITE (or a denied
+                    # one) is work the job needed and did not get. The
+                    # registry stamps every row with the tool's declared
+                    # reversibility, so "not readonly" is the honest line —
+                    # an unstamped legacy row counts as mutating (the
+                    # direction that never calls a half-done job complete).
+                    if (inv.reversibility or "").lower() != Reversibility.READONLY.value:
+                        mutating_failed += 1
                     if len(errors) < _LIST_CAP:
                         errors.append(
                             {"tool": name, "error": (inv.output or "")[:_ERROR_CHARS]}
@@ -222,6 +310,12 @@ def session_result(engine, session_id: str) -> dict[str, Any]:
             out["errors"] = errors
             out["revertable"] = revertable
             out["reverted"] = already_reverted
+            out["tools_failed_mutating"] = mutating_failed
+            # The stored verdict wins (it was derived at finalize with the
+            # status the run actually ended in); a row from before the column
+            # existed gets the same derivation live, so an old card is not
+            # left blank where a new one would say "needs you".
+            out["outcome"] = stored_outcome or derive_outcome(out)
             try:
                 # ``finished_at`` is only set once the session ends, so a running
                 # session honestly reports no duration rather than a growing one.

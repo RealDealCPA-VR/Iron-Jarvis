@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.223.0 (2026-09-01).*
+holds itself to. Current as of v1.227.0 (2026-09-04).*
 
 ---
 
@@ -79,6 +79,19 @@ Chat is where most work happens, and it is wired into everything:
 - **Custom agents**: author your own (name, prompt, tool list, pinned
   provider/model). **Remote agents**: register an agent running elsewhere
   (URL + bearer token, encrypted at rest; edits never eat the credential).
+- **The roster is the contract** (v1.227.0): an agent may only call the tools
+  it was given. If the model names any other installed tool (a read-only
+  Reviewer inventing `rename_file`, a chat with only `read_file` armed calling
+  `write_file`), the call is refused, nothing runs, the refusal sits on the
+  run's ledger as "not armed", and the model is told plainly. Same rule in
+  chat: the tools you armed with "+" or Auto are the whole set.
+- **Approvals in a batch** (v1.227.0): when a run asks for permission several
+  times at once (a folder rename asks once per file), the chat thread shows
+  one card per pending ask; answering one leaves the others in place, and
+  **Allow for this conversation** on any one of them answers every other
+  pending ask for the same tool. An ask nobody answers in 5 minutes is
+  reported to the model as *paused, not run* (never as "the user declined"),
+  and the run carries a **needs you** verdict at the end.
 
 ### Sessions & Kanban
 Every agent run is a **session**: live token/tool streaming, the delegation
@@ -87,6 +100,22 @@ Every agent run is a **session**: live token/tool streaming, the delegation
 closing paragraph), transcript export, cancel/rerun/continue. Kanban shows
 the same sessions as lanes — including **Queued** when a concurrency limit is
 set. Cancel genuinely stops the agent, in every lane.
+
+- **Waiting for you** (v1.227.0): a run paused on a permission ask sits in
+  the **In review** column with an amber "Waiting for you · tool" chip, and
+  the session page shows the same approval card chat shows.
+- **The verdict is separate from the status** (v1.227.0): a finished run also
+  carries an **outcome** — *completed*, *completed · with failures* (a call
+  that changes files or state failed), or *completed · needs you* (an ask was
+  never answered). The session header, the sessions list, the kanban card and
+  a project's recent runs show it as an amber chip instead of a green badge,
+  and the result card headlines "Finished — N calls were never approved".
+  The Worklist panel offers **Re-run the N failed items**, which re-opens
+  them and continues the run.
+- **The worklist re-offers your own items** (v1.227.0): a run that claimed a
+  chunk and reported only part of it is handed its own remaining items back,
+  and finished, cancelled or interrupted runs release their claims at once
+  instead of holding them for 15 minutes.
 
 ### Documents
 Read/extract (PDF incl. scanned-with-OCR fallback, docx, xlsx, pptx, csv,

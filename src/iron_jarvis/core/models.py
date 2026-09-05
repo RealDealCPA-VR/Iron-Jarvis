@@ -157,6 +157,19 @@ class Session(SQLModel, table=True):
     #: i.e. exactly today's behavior. Bounded by SESSION_MAX_STEPS_MIN/MAX at
     #: both entry points. Additive nullable column (auto-reconciled).
     max_steps: int | None = None
+    #: THE HONEST VERDICT on a finished session (v1.227.0, audit A5/U1):
+    #: ``completed`` | ``completed_with_failures`` | ``needs_you`` | None.
+    #: ``status`` says whether the RUN ended cleanly; this says whether the
+    #: JOB was done. A run in which every mutating call was denied by the
+    #: approval clock ended without an exception and so read COMPLETED, with
+    #: "Task complete" as the card headline — ``needs_you`` is that case
+    #: (any ask for the session resolved ``timeout``), ``completed_with_
+    #: failures`` is a mutating tool that failed with nobody asked, and None
+    #: is "not finalized yet" or a status (cancelled) that already tells the
+    #: truth on its own. Derived from the ledger by ``agents/outcome`` at
+    #: finalize, never from prose. Additive nullable column (auto-reconciled
+    #: by ``core.db._reconcile_additive_columns`` on boot, like ``max_steps``).
+    outcome: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
     finished_at: datetime | None = None
 

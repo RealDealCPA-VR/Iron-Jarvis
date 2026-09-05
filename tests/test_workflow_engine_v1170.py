@@ -462,8 +462,11 @@ async def test_agent_expect_files_checks_the_session_ledger(tmp_path, monkeypatc
     )
     rec = await WorkflowEngine(platform).run(wf)
     assert rec.status == "completed"
-    # The check read THIS run's session, from the ledger derivation.
-    assert seen == json.loads(rec.session_ids_json)
+    # The check read THIS run's session, from the ledger derivation. Since
+    # v1.227.0 the orchestrator ALSO reads the ledger once at finalize (the
+    # honest ``outcome``), so the spy sees the same id more than once — the
+    # assertion is about WHICH session was read, never how many times.
+    assert set(seen) == set(json.loads(rec.session_ids_json))
 
 
 async def test_agent_expect_files_fails_when_the_ledger_disagrees(

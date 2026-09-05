@@ -32,6 +32,7 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { NewSessionForm } from "@/components/NewSessionForm";
 import OriginChip, { originKind } from "@/components/sessions/OriginChip";
+import { SessionStatusBadge } from "@/components/sessions/SessionStatusBadge";
 import { PageShell, Reveal } from "@/components/motion";
 import { timeAgo, shortId } from "@/lib/format";
 
@@ -475,7 +476,10 @@ export default function SessionsPage() {
                             </td>
                             <td className="px-2 py-2.5 text-zinc-400">{s.agent_type}</td>
                             <td className="px-2 py-2.5">
-                              <Badge value={s.status} />
+                              {/* Amber when the run is paused for the user or
+                                  finished short of the job (v1.227.0) —
+                                  green only when "completed" earned it. */}
+                              <SessionStatusBadge session={s} />
                             </td>
                             <td className="px-2 py-2.5 text-zinc-500">
                               {timeAgo(s.created_at)}

@@ -608,6 +608,65 @@ class WorklistStore:
             db.commit()
             return int(result.rowcount or 0)
 
+    def held_by(
+        self, board_id: str, agent_run_id: str, *, limit: int = MAX_CLAIM
+    ) -> list[WorklistItem]:
+        """The ``doing`` rows on ``board_id`` that ``agent_run_id`` ITSELF holds.
+
+        v1.227.0 (audit A3): ``worklist_next`` answered "still claimed … being
+        worked on right now, do NOT redo them" about rows the CALLER held —
+        session_2fd7 claimed 25 in one call, reported 7, and was then told four
+        times in a row that its own 18 were somebody else's. This is the read
+        that lets the tool tell a run "you already hold these" and hand them
+        back. Bounded by ``limit`` (a claim is at most ``MAX_CLAIM`` rows, so
+        the default covers everything one run can hold on one board).
+        """
+        if not agent_run_id:
+            return []
+        with session_scope(self.engine) as db:
+            rows = list(
+                db.exec(
+                    select(WorklistItem)
+                    .where(
+                        WorklistItem.board_id == board_id,
+                        WorklistItem.status == DOING,
+                        WorklistItem.claimed_by == agent_run_id,
+                    )
+                    # Total already: key_norm is unique per board (the
+                    # v1.177.0 rule), so no id tiebreaker is needed here.
+                    .order_by(WorklistItem.created_at, WorklistItem.key_norm)  # type: ignore[arg-type]
+                    .limit(max(1, int(limit)))
+                )
+            )
+            for row in rows:
+                db.expunge(row)
+        return rows
+
+    def reset_failed(self, board_id: str) -> int:
+        """Flip every FAILED item on ``board_id`` back to ``pending`` with its
+        claim cleared; returns how many. The "re-run the failed items" door
+        (v1.227.0): a follow-up run then claims exactly those rows through the
+        ordinary ``worklist_next`` path — nothing done is ever touched, and a
+        failed item's note is kept so the next holder can read why it failed.
+        """
+        with session_scope(self.engine) as db:
+            result = db.execute(
+                update(WorklistItem)
+                .where(
+                    WorklistItem.board_id == board_id,
+                    WorklistItem.status == FAILED,
+                )
+                .values(
+                    status=PENDING,
+                    claimed_by="",
+                    claimed_at=None,
+                    claim_token="",
+                    updated_at=utcnow(),
+                )
+            )
+            db.commit()
+            return int(result.rowcount or 0)
+
     def finish(
         self,
         board_id: str,

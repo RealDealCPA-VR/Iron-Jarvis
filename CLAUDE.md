@@ -284,6 +284,23 @@ does not need a bump, stop and bump it.
   `/documents/upload` keeps the user's documents at — and clobbered them
   (now a one-off staging dir, removed after extraction); and a deliverable
   stem kept `:*?"<>|` and `..` (`_deliverable_stem`).
+- **The roster is the CONTRACT, and the gate is in the registry** (v1.227.0,
+  audit Wave 1). For two years the tool list an agent was shown was the only
+  thing that limited it: `registry.invoke` looked the model's name up in the
+  FULL registry, so a read-only Reviewer that emitted `rename_file` renamed
+  the file, and chat with only `read_file` armed executed a `write_file` the
+  model invented — allow-tier tools need no ask, `safe_path` confined the
+  write, the undo journal caught it, and the green suite pinned only the
+  nothing-armed case. `registry.invoke(..., allowed_names=...)` now refuses a
+  name outside the armed set through the normal `deny_reason` path (ledgered,
+  `tool.denied` kind `not armed`); the runtime passes its step's `tool_specs`
+  names and BOTH chat lanes pass their armed set, lock-step. `None` keeps the
+  old behaviour for callers you have not audited — do not pass it from a new
+  lane. Same wave: every session row (`_session_view(session, d)`) carries
+  `outcome` (the ledger's verdict on the JOB, separate from `status`) and
+  `waiting_on` (the ask a paused run is parked on; `AgentState.WAITING` is
+  now really set), and every finalize path releases the run's worklist claims.
+  A test fake for `invoke` MUST take `**kw` (bit again this wave).
 - **Model output is ALMOST JSON; recover it in ONE place** (v1.225.0). The
   daily driver's default model is a local fleet endpoint, and every workflow
   creation door assumed exact JSON: the OpenAI-compatible adapter turned a

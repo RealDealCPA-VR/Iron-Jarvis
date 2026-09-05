@@ -17,9 +17,15 @@ export const LANES: LaneDef[] = [
   { id: "failed", title: "Failed", tone: "red", hint: "Errored or rejected" },
 ];
 
-/** A review takes precedence over the raw status — that is the "In Review" lane. */
+/** A review takes precedence over the raw status — that is the "In Review" lane.
+ *  So does a PAUSED run (v1.227.0): a session whose `waiting_on` names a
+ *  pending ask is waiting for the user, and "Running now" under Active was
+ *  the lie the approvals audit measured (30 of a 40-minute job spent waiting,
+ *  indistinguishable from work). It sits in the lane whose hint already reads
+ *  "Awaiting approval"; the card says which tool. */
 export function laneFor(session: SessionView, hasReview: boolean): LaneId {
   if (hasReview) return "review";
+  if (session.waiting_on?.approval_id) return "review";
   const s = session.status.toLowerCase();
   if (s === "completed") return "completed";
   // The backend emits exactly: active | completed | failed | cancelled.

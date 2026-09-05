@@ -273,11 +273,35 @@ class WorklistNextTool(_WorklistTool):
         )
         summary = await asyncio.to_thread(self.store.summary, board_id)
         if not items:
+            # THE CALLER'S OWN CLAIM IS NOT "ANOTHER RUN" (v1.227.0, audit A3).
+            # A run that claimed 25, reported 7 and asked for more was told the
+            # other 18 were "being worked on right now … do NOT redo them" —
+            # by itself. Rows this run still holds are handed back to it here,
+            # by name; only rows held by OTHER run ids get the wait-or-release
+            # wording below.
+            mine = await asyncio.to_thread(self.store.held_by, board_id, ctx.agent_run_id)
+            others = max(0, int(summary["doing"]) - len(mine))
             if summary["total"] == 0:
                 text = (
                     "The worklist is EMPTY — nothing has been queued yet. Survey "
                     "the job and call `worklist_add` first."
                 )
+            elif mine:
+                lines = [
+                    f"No unclaimed items. You already hold {len(mine)} of these — "
+                    "here they are again; finish and report each one with "
+                    "`worklist_done` (or hand one back with status='pending'):"
+                ]
+                for row in mine:
+                    label = f" — {row.label}" if row.label else ""
+                    lines.append(f"  - {row.key}{label}")
+                if others:
+                    lines.append(
+                        f"{others} more are held by another run — do NOT redo "
+                        "those; they are re-offered automatically if that run ends."
+                    )
+                lines.append(_tally(summary))
+                text = "\n".join(lines)
             elif summary["doing"]:
                 # HONEST, and actionable. The old wording ("in progress with
                 # another agent — wait for them") is advice about an agent that
@@ -288,12 +312,12 @@ class WorklistNextTool(_WorklistTool):
                 # see the state of, and the way out is named rather than implied.
                 minutes = max(1, DEFAULT_STALE_SECONDS // 60)
                 text = (
-                    f"No unclaimed items: {summary['doing']} are still claimed. A "
-                    "claim held by a run that has ENDED is handed back "
-                    "automatically, so these are either being worked on right "
-                    f"now or will be re-offered about {minutes} minutes after "
-                    "they were claimed. Do NOT redo them; the holder can release "
-                    "one immediately with `worklist_done` status='pending'.\n"
+                    f"No unclaimed items: {summary['doing']} are still claimed by "
+                    "another run. A claim held by a run that has ENDED is handed "
+                    "back automatically, so these are either being worked on "
+                    f"right now or will be re-offered about {minutes} minutes "
+                    "after they were claimed. Do NOT redo them; the holder can "
+                    "release one immediately with `worklist_done` status='pending'.\n"
                     + _tally(summary)
                 )
             else:
@@ -304,7 +328,17 @@ class WorklistNextTool(_WorklistTool):
             return ToolResult(
                 ok=True,
                 output=text,
-                data={"claimed": [], "reclaimed": 0, "summary": summary},
+                data={
+                    "claimed": [],
+                    "reclaimed": 0,
+                    "summary": summary,
+                    #: Rows THIS run still holds (re-offered above), and how
+                    #: many are held by other runs. ``claimed`` stays empty:
+                    #: nothing changed hands.
+                    "held_by_me": len(mine),
+                    "held": [item_view(r) for r in mine],
+                    "held_by_others": others,
+                },
             )
         lines = [f"Claimed {len(items)} item(s). They are yours until you report them:"]
         for row in items:

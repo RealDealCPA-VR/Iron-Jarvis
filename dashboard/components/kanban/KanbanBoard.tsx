@@ -370,6 +370,11 @@ export function KanbanBoard({
     const from = (e.active.data.current?.lane as LaneId) ?? null;
     const to = e.over.id as LaneId;
     if (!from) return;
+    // A PAUSED run sits in the review lane (laneFor, v1.227.0) but has no
+    // review record — a drop onto Completed/Failed would POST
+    // /reviews/{id}/approve and 404. Its answer lives on the card and the
+    // session page; the drop is purely visual.
+    if (byId.get(id)?.waiting_on?.approval_id) return;
     const action = dropAction(from, to);
     if (action) act(action, id);
     // Any other drop is purely visual — server state is the source of truth,

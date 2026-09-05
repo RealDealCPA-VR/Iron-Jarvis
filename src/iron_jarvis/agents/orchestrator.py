@@ -674,6 +674,32 @@ class Orchestrator:
                 )
                 session.provider, session.model = run.provider, run.model  # what actually ran
                 session.summary = run.result
+                # THE HAND-OFF BUBBLE IS CHECKED AGAINST THE LEDGER (v1.227.0,
+                # audit RT5). Both chat lanes already judged a reply's file
+                # claim against what actually ran; the agent lane stored
+                # ``run.result`` verbatim, so the escalated bubble said "I
+                # saved report.docx" while the result card beneath it said
+                # nothing was written. Same helper, same wording — and the
+                # settle read below also hands the run's worklist claims
+                # back and derives the honest ``outcome`` (A5/A8), all in ONE
+                # hop off the loop.
+                #
+                # Lazy import, by import DIRECTION: ``daemon/`` imports the
+                # agent layer (routes -> orchestrator), so a module-level
+                # import here would be the platform layer importing the daemon
+                # — the inversion v1.185.0 removed.
+                from ..daemon.chat_turn import _claimed_write_note
+
+                tools_used, outcome = await asyncio.to_thread(
+                    self._settle_finished_run,
+                    session,
+                    getattr(run, "id", None),  # test doubles carry no id
+                    session.status,
+                )
+                note = _claimed_write_note(run.result or "", tools_used)
+                if note:
+                    session.summary = f"{run.result}{note}"
+                session.outcome = outcome
                 session.input_tokens = run.input_tokens
                 session.output_tokens = run.output_tokens
                 session.finished_at = utcnow()
@@ -737,6 +763,57 @@ class Orchestrator:
                 self._running.pop(session_id, None)
                 self._governed.discard(session_id)
                 self._dequeue_next()  # the governed slot frees NOW, not at task end
+
+    # --- the truth about a finished run (v1.227.0) ------------------------
+
+    def _release_worklist_claims(self, session_id: str, run_ids=None) -> int:
+        """Hand back every worklist item this session's runs still hold.
+
+        BLOCKING (SQLite) — callers hop off the loop. ``WorklistStore.
+        release_run`` existed since v1.174.0 with ZERO callers (audit A8): 55
+        rows app-wide sat in ``doing``, every one claimed by a run that had
+        COMPLETED, and the next run on the board was told they were "being
+        worked on right now". Every finalize path lands here now: completion,
+        failure, cancel, and the boot reconcile. Never raises — a bookkeeping
+        miss must not strand a finalize.
+        """
+        store = getattr(self.p, "worklist", None)
+        if store is None:
+            return 0
+        try:
+            ids = [str(r) for r in (run_ids or []) if r]
+            if not ids:  # no run named -> every run of the session
+                with session_scope(self.p.engine) as db:
+                    ids = [
+                        r
+                        for r in db.exec(
+                            select(AgentRun.id).where(AgentRun.session_id == session_id)
+                        ).all()
+                        if r
+                    ]
+            return sum(int(store.release_run(rid) or 0) for rid in ids)
+        except Exception:  # noqa: BLE001 — bookkeeping must never break a finalize
+            log.exception("worklist release failed for session %s", session_id)
+            return 0
+
+    def _settle_finished_run(
+        self, session: Session, run_id: str, status: SessionStatus
+    ) -> tuple[list[str], str | None]:
+        """One off-loop read at finalize: release the run's worklist claims,
+        then read the ledger ONCE for both the claimed-write check and the
+        honest outcome. Returns ``(tools_used, outcome)``; a broken ledger
+        read degrades to ``([], None)`` rather than failing the run."""
+        from .outcome import derive_outcome, session_result
+
+        # An id-less run (a test double) releases every run of the session.
+        self._release_worklist_claims(session.id, [run_id] if run_id else None)
+        try:
+            result = session_result(self.p.engine, session.id)
+        except Exception:  # noqa: BLE001 — the card must never break the run
+            log.exception("ledger read failed at finalize for %s", session.id)
+            return [], None
+        tools = [str(t.get("tool") or "") for t in result.get("tools_used") or []]
+        return tools, derive_outcome(result, status)
 
     def _post_run_learning(self, session: Session) -> None:
         """Post-run learning pipeline: score -> record outcome -> reflect.
@@ -809,6 +886,16 @@ class Orchestrator:
         session.summary = session.summary or f"Session failed: {type(error).__name__}: {error}"
         session.finished_at = utcnow()
         try:
+            # v1.227.0: a crashed run hands its worklist claims back (A8) and
+            # still gets an honest verdict — ``needs_you`` when an ask timed
+            # out before the crash. Off the loop; never fatal to the teardown.
+            _tools, outcome = await asyncio.to_thread(
+                self._settle_finished_run, session, "", session.status
+            )
+            session.outcome = outcome
+        except Exception:  # noqa: BLE001 - never block teardown on bookkeeping
+            log.exception("failed to settle the ledger for %s", session.id)
+        try:
             self._save(session)
         except Exception:  # noqa: BLE001 - never block teardown on persistence
             log.exception("failed to persist FAILED state for %s", session.id)
@@ -847,8 +934,10 @@ class Orchestrator:
             # long writer holds the file must not park the daemon.
             self._save(session)
             # Settle any in-flight AgentRun rows so they don't linger in RUNNING.
+            run_ids: list[str] = []
             with session_scope(self.p.engine) as db:
                 for r in db.exec(select(AgentRun).where(AgentRun.session_id == session.id)):
+                    run_ids.append(r.id)
                     if r.state not in (
                         AgentState.COMPLETED,
                         AgentState.FAILED,
@@ -858,6 +947,10 @@ class Orchestrator:
                         r.finished_at = utcnow()
                         db.add(r)
                 db.commit()
+            # v1.227.0 (A8/RT4): a cancelled run's worklist claims go back on
+            # the board NOW — a rerun used to wait the 15-minute stale window
+            # for items "held" by the run the user had just stopped.
+            self._release_worklist_claims(session.id, run_ids)
 
         await asyncio.to_thread(_persist_cancel)
         try:
@@ -1291,6 +1384,7 @@ class Orchestrator:
         in-memory, so a restart discards their un-started coroutines."""
         active_ids = set(self._running.keys())
         marked = 0
+        interrupted: list[str] = []
         with session_scope(self.p.engine) as db:
             rows = list(
                 db.exec(
@@ -1310,8 +1404,34 @@ class Orchestrator:
                     s.summary = "interrupted by a daemon restart"
                 db.add(s)
                 marked += 1
+                interrupted.append(s.id)
+                # THE RUN ROWS ARE SETTLED WITH THE SESSION (v1.227.0, audit
+                # RT2/A8). This used to touch ``session`` only, so every
+                # AgentRun of an interrupted session stayed RUNNING forever:
+                # the team tree showed a live agent inside a FAILED session,
+                # and the worklist's dead-run reclaim (which keys on
+                # ``AgentRun.state``) treated the ghost's claims as live for
+                # the full 15-minute stale window.
+                for r in db.exec(select(AgentRun).where(AgentRun.session_id == s.id)):
+                    if r.state in (
+                        AgentState.COMPLETED,
+                        AgentState.FAILED,
+                        AgentState.CANCELLED,
+                    ):
+                        continue
+                    r.state = AgentState.FAILED
+                    r.finished_at = utcnow()
+                    if not r.result:
+                        r.result = "interrupted by a daemon restart"
+                    db.add(r)
             if marked:
                 db.commit()
+        # …and their worklist claims go back on the board, so a resumed job
+        # is handed the work instead of being told to wait for a run that no
+        # longer exists. Sync on purpose: this runs once at boot, before the
+        # loop serves requests.
+        for sid in interrupted:
+            self._release_worklist_claims(sid)
         return marked
 
     def rehydrate_reviews(self) -> int:

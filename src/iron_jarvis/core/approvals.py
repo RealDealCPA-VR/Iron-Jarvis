@@ -61,7 +61,11 @@ from __future__ import annotations
 
 import asyncio
 import secrets
-from typing import Any
+import time
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # pragma: no cover
+    from collections.abc import Iterable
 
 #: What a resolution may say. "once" grants THIS call; "conversation" grants
 #: the rest of the turn too (and the client re-arms the tool for later turns —
@@ -86,17 +90,90 @@ class ChatApprovals:
         self._pending: dict[
             str, tuple["asyncio.Future[str]", asyncio.AbstractEventLoop]
         ] = {}
+        #: id -> what was asked, for WHOM (v1.227.0, A2/A4). Recorded so a
+        #: 'conversation' answer on one of a batch of parallel asks can find
+        #: the siblings (``resolve_where``) and so a session row can say what
+        #: it is waiting on (``pending_for``). ``args`` here are whatever the
+        #: asker passed — both lanes pass the REDACTED args they already
+        #: publish/stream — never the raw call.
+        self._meta: dict[str, dict[str, Any]] = {}
 
-    def request(self, tool: str, args: dict[str, Any] | None) -> tuple[str, "asyncio.Future[str]"]:
+    def request(
+        self,
+        tool: str,
+        args: dict[str, Any] | None,
+        session_id: str | None = None,
+    ) -> tuple[str, "asyncio.Future[str]"]:
         """File one request; returns ``(id, future)``. The future resolves to a
-        DECISIONS value. ``tool``/``args`` are not stored here — the SSE frame
-        carries them to the one client that can answer, and a registry holding
-        argument payloads would just be a second place secrets could linger."""
+        DECISIONS value. ``tool``/``args`` are kept only as display/matching
+        metadata (the asker passes already-redacted args); the SSE frame /
+        event still carries them to the client that answers. ``session_id``
+        (v1.227.0) names the run that is waiting, so ``pending_for`` and
+        ``resolve_where`` can scope to it; a chat-lane ask passes none."""
         approval_id = f"apr_{secrets.token_hex(8)}"
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[str] = loop.create_future()
         self._pending[approval_id] = (fut, loop)
+        self._meta[approval_id] = {
+            "approval_id": approval_id,
+            "session_id": str(session_id) if session_id else None,
+            "tool": str(tool or ""),
+            "args": args,
+            "requested_at": time.time(),
+        }
         return approval_id, fut
+
+    def pending_for(self, session_id: str | None) -> list[dict[str, Any]]:
+        """The asks a session is currently waiting on, oldest first (v1.227.0).
+
+        Each entry: ``{approval_id, tool, args, requested_at}``. Only asks
+        filed WITH that session id match — a chat-lane ask (no session) is
+        never attributed to a run, and an empty/None id answers ``[]``."""
+        sid = str(session_id or "")
+        if not sid:
+            return []
+        rows = [
+            {
+                "approval_id": m["approval_id"],
+                "tool": m["tool"],
+                "args": m["args"],
+                "requested_at": m["requested_at"],
+            }
+            for m in self._meta.values()
+            if m.get("session_id") == sid
+        ]
+        rows.sort(key=lambda m: m["requested_at"])
+        return rows
+
+    def resolve_where(
+        self, session_id: str | None, tool: "str | Iterable[str]", decision: str
+    ) -> int:
+        """Answer EVERY pending ask for ``session_id`` whose tool is ``tool``
+        (a name or a set of names) with ``decision``; returns how many were
+        delivered (v1.227.0, A2).
+
+        The runtime pauses PER CALL inside a gather, so a batch of N parallel
+        asks for the same tool is N cards. 'Allow for this conversation' on
+        one used to widen the run's grant while the N-1 siblings stayed parked
+        in their own ``wait_for`` and were then denied by the clock. The
+        caller widens the grant, then calls this so the siblings wake with
+        the same answer. Same delivery rules as :meth:`resolve` (cross-loop
+        marshal, done-guard inside the marshal)."""
+        if decision not in DECISIONS:
+            return 0
+        sid = str(session_id or "")
+        if not sid:
+            return 0
+        names = {tool} if isinstance(tool, str) else {str(t) for t in tool}
+        names.discard("")
+        n = 0
+        for approval_id, m in list(self._meta.items()):
+            if m.get("session_id") != sid or m.get("tool") not in names:
+                continue
+            entry = self._pending.get(approval_id)
+            if entry is not None and self._deliver(entry, decision):
+                n += 1
+        return n
 
     def resolve(self, approval_id: str, decision: str) -> bool:
         """Answer a pending request. False = unknown/expired/already answered,
@@ -115,6 +192,16 @@ class ChatApprovals:
         entry = self._pending.get(approval_id)
         if entry is None:
             return False
+        return self._deliver(entry, decision)
+
+    @staticmethod
+    def _deliver(
+        entry: tuple["asyncio.Future[str]", asyncio.AbstractEventLoop],
+        decision: str,
+    ) -> bool:
+        """Set one future to ``decision`` on the loop that owns it — the body
+        ``resolve`` has carried since v1.209.0, shared with ``resolve_where``
+        so both answer paths marshal identically."""
         fut, home = entry
         try:
             current: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
@@ -150,6 +237,7 @@ class ChatApprovals:
         """The awaiter is done with this id (answered, timed out, or the stream
         died). After this, ``resolve`` honestly reports it unknown."""
         self._pending.pop(approval_id, None)
+        self._meta.pop(approval_id, None)
 
     def pending_count(self) -> int:
         return len(self._pending)
