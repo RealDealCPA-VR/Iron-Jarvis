@@ -30,6 +30,11 @@
  * "prompted-tools" means the CHOSEN adapter kept the request via the fenced
  * scaffold — same provider served, so it stays quiet; a capability REROUTE is
  * labelled "failover" by the router itself and therefore warns here.
+ * Since v1.228.0 a failover also carries `from` (the provider that failed)
+ * and `why` (the router's derived word: "http 500" | "timeout" |
+ * "unreachable" | "interrupted" | "transient error" | "error"), so the chip
+ * can say "answered by claude-cli — fleet-rtx6000ada returned HTTP 500"
+ * instead of a bare "failover" that never names the user's own endpoint.
  */
 
 import { useId, useState, type ReactNode } from "react";
@@ -106,6 +111,10 @@ export interface TurnRoute {
   model?: string;
   /** Router's own word for why: "default" | "explicit" | "failover" | … */
   reason?: string;
+  /** v1.228.0: on a failover, the provider that FAILED ("" otherwise). */
+  from?: string;
+  /** v1.228.0: on a failover, the router's derived reason for that failure. */
+  why?: string;
 }
 
 export interface TurnReceiptProps {
@@ -170,10 +179,48 @@ export function docBasename(path: string): string {
  * "auto-tier"/"local-oracle" with the requested provider serving is the
  * quiet path.
  */
+/**
+ * Plain words for the router's `why` token (v1.228.0). The router speaks in
+ * short derived tokens so the event ledger and the notifier stay greppable;
+ * the receipt is where a person reads it. Unknown tokens pass through
+ * verbatim — never silently dropped, since the token IS the disclosure.
+ */
+export function wordWhy(why: string | null | undefined): string {
+  const w = (why ?? "").trim();
+  if (!w) return "";
+  const http = /^http\s+(\d{3})$/i.exec(w);
+  if (http) return `returned HTTP ${http[1]}`;
+  switch (w) {
+    case "unreachable":
+      return "was unreachable";
+    case "timeout":
+      return "didn't respond in time";
+    case "interrupted":
+      return "dropped the connection";
+    case "transient error":
+      return "hit a transient error";
+    case "error":
+      return "returned an error";
+    default:
+      return w;
+  }
+}
+
 export function routeWarning(route: TurnRoute | null | undefined): string | null {
   if (!route) return null;
   if (route.provider === "mock") return "mock answer — no real model ran";
   if (route.reason === "failover") {
+    // v1.228.0: name the provider that FAILED and why, when the router said.
+    // This is what makes the DEFAULT route accountable — `requested` is ""
+    // there by contract, so `from` is the only way to name the user's own
+    // endpoint that was skipped.
+    const from = (route.from ?? "").trim();
+    if (from && from !== route.provider) {
+      const why = wordWhy(route.why);
+      return why
+        ? `answered by ${route.provider} — ${from} ${why}`
+        : `answered by ${route.provider} — failover from ${from}`;
+    }
     return route.requested && route.requested !== route.provider
       ? `answered by ${route.provider} — failover from ${route.requested}`
       : `answered by ${route.provider} — failover`;
@@ -346,6 +393,12 @@ export function TurnReceipt({
                   <span className="text-amber-300/90">
                     {" "}
                     — requested {rt.requested}
+                  </span>
+                )}
+                {rt.reason === "failover" && rt.from && rt.from !== rt.provider && (
+                  <span className="text-amber-300/90">
+                    {" "}
+                    — {rt.from} {wordWhy(rt.why) || "failed"}
                   </span>
                 )}
                 {rt.reason === "auto-tier" ? (

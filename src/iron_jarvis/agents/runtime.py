@@ -19,6 +19,7 @@ from ..core.ids import utcnow
 from ..core.models import AgentRun, AgentState, AgentType, PermissionMode, Session
 from ..envelope.profile import CapabilityProfile
 from ..providers.adapters.base import LLMMessage
+from ..sandbox.native import host_os_line
 from ..tools.base import ToolContext
 from . import decompose as _decompose
 from .types import AgentDefinition
@@ -79,6 +80,11 @@ def is_direct_workspace(config, workspace_path: str | Path | None) -> bool:
 #: DB transcript). Without it, a large read/shell/grep result is re-sent on every
 #: subsequent step of the loop — O(n^2) token growth at full input price.
 _MAX_TOOL_CONTEXT_CHARS = 16000
+#: Per-step STREAMED-OUTPUT ceiling (v1.228.0, RT6). A looping local model
+#: can stream forever (measured ~400k frames/s on a mock), and nothing ended
+#: the step but Cancel. Past this many characters the stream is closed and
+#: the run ends honestly as FAILED with the reason — never consumed forever.
+_MAX_STEP_STREAM_CHARS = 200_000
 
 #: REPEATED-FAILURE BREAKER (contract 2, v1.174.0).
 #:
@@ -481,6 +487,18 @@ def step_outcome_recorder(platform, provider: str, model: str):
 _TEAM_LIST_CAP = 10
 #: Distinct sender names named in the mail line before it collapses to "+N more".
 _TEAM_SENDERS_CAP = 4
+
+
+def _tool_deadline(config) -> float | None:
+    """``config.tool_call_timeout_s`` as the registry's ``deadline_s``
+    (v1.228.0, RT6): a positive number of seconds, else ``None`` (no
+    deadline). Read LIVE per call so a Settings change applies to the next
+    tool call, like every other numeric setting."""
+    try:
+        value = float(getattr(config, "tool_call_timeout_s", 600) or 0)
+    except (TypeError, ValueError):
+        value = 600.0
+    return value if value > 0 else None
 
 
 def board_tool_names() -> frozenset[str]:
@@ -1127,6 +1145,7 @@ class AgentRuntime:
             if is_direct_workspace(self.p.config, session.workspace_path):
                 system_prompt += (
                     "\n\n# Environment\n"
+                    f"- OS: {host_os_line()}\n"
                     f"- The user's real home directory: {Path.home()}\n"
                     "- Your file tools (read_file/write_file/list_files) operate "
                     f"directly in the project folder at {workspace} — these ARE "
@@ -1139,6 +1158,7 @@ class AgentRuntime:
             else:
                 system_prompt += (
                     "\n\n# Environment\n"
+                    f"- OS: {host_os_line()}\n"
                     f"- The user's real home directory: {Path.home()}\n"
                     "- Your file tools (read_file/write_file/list_files) operate in a "
                     "SCRATCH workspace — it is NOT where the user's files live.\n"
@@ -1254,7 +1274,9 @@ class AgentRuntime:
                 max_steps=resolve_max_steps(session, self.p.config),
             )
             if not finished:
-                run.result = "stopped: reached max steps before completion"
+                # A not-finished step may carry its OWN reason (v1.228.0: the
+                # streamed-output ceiling); the empty default is max steps.
+                run.result = final_text or "stopped: reached max steps before completion"
                 await self._set_state(run, AgentState.FAILED, session.id)
                 await self.p.event_bus.publish(
                     EventType.AGENT_COMPLETED,
@@ -1620,7 +1642,8 @@ class AgentRuntime:
             # complete() would have returned, so everything downstream (usage
             # accounting, the tool loop, the persisted result) stays byte-identical.
             route_resp = None
-            async for ev in self._route_stream(
+            streamed_chars = 0
+            stream = self._route_stream(
                 provider=session.provider,
                 model=session.model,
                 system=step_system,
@@ -1629,12 +1652,33 @@ class AgentRuntime:
                 session_id=session.id,
                 # Task class for the (opt-in) self-tuning router: the agent type.
                 task_class=agent_def.type.value,
-            ):
+            )
+            async for ev in stream:
                 if ev.get("type") == "text":
+                    streamed_chars += len(ev.get("text") or "")
                     if sink:
                         sink.token_delta(ev["text"])
+                    if streamed_chars > _MAX_STEP_STREAM_CHARS:
+                        break
                 elif ev.get("type") == "final":
                     route_resp = ev
+            if route_resp is None:
+                # THE STEP CEILING (v1.228.0, RT6): the model streamed past the
+                # cap without a final frame. Close the stream (the provider
+                # call is released) and end the run honestly — the caller's
+                # not-finished branch carries this reason instead of the
+                # max-steps wording.
+                try:
+                    await stream.aclose()
+                except Exception:  # noqa: BLE001 — closing is best-effort
+                    pass
+                run.steps += 1
+                await asyncio.to_thread(self._save, run)
+                return False, (
+                    f"stopped: the model streamed more than "
+                    f"{_MAX_STEP_STREAM_CHARS:,} characters in step {run.steps} "
+                    f"without finishing — the step was cut off"
+                )
             resp = route_resp["response"]
             run.steps += 1
             run.provider, run.model = route_resp["provider"], route_resp["model"]
@@ -1764,6 +1808,9 @@ class AgentRuntime:
                     deny_reason=deny_reason,
                     deny_label=deny_label,
                     allowed_names=armed_names,
+                    # THE DEADLINE (v1.228.0, RT6): a wedged tool becomes a
+                    # recorded failed result and the run goes on; 0 = none.
+                    deadline_s=_tool_deadline(self.p.config),
                 )
 
             # FX-01: announce each tool call BEFORE the fan-out, with args redacted

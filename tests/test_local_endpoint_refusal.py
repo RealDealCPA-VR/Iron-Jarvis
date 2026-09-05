@@ -20,8 +20,13 @@ Two halves, both pinned here:
   question the adapter will (see the false-negative guards below). A false
   "your endpoint isn't connected" is exactly as dishonest as the leak.
 
-The narrowing is pinned too: cloud→cloud failover, and a local endpoint that
-ANSWERED with a 429, must keep failing over exactly as before.
+The narrowing is pinned too: cloud→cloud failover must keep working exactly
+as before. A local endpoint that ANSWERED with a 429 used to fail over too —
+since v1.228.0 (audit Wave 2, R1) that is a POLICY, ``local_primary_policy``:
+``refuse`` (the default) refuses the answered error by name as well, because
+"it answered, so it is up" is false for a proxy whose GPU box is down (the
+live 2026-08-28 event); ``failover`` keeps the old table. Both are pinned
+below; the transport rule this file is about holds under either value.
 
 SECOND ROUND (the surviving leak): the guard was scoped to "never reached", but
 ``OpenAIAdapter._client()`` sets a 60s timeout and that one adapter serves BOTH
@@ -217,8 +222,10 @@ def _msgs():
     return [LLMMessage(role="user", content="here is my client's K-1")]
 
 
-def _router(mgr, default="anthropic") -> ModelRouter:
-    return ModelRouter(mgr, default_provider=default, event_bus=EventBus())
+def _router(mgr, default="anthropic", policy="refuse") -> ModelRouter:
+    return ModelRouter(
+        mgr, default_provider=default, event_bus=EventBus(), local_policy=lambda: policy
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -351,10 +358,12 @@ async def test_a_local_connection_that_breaks_MID_REQUEST_refuses() -> None:
     assert "custom" in str(err.value)
 
 
-async def test_timeout_refuses_but_a_429_from_the_SAME_local_box_fails_over() -> None:
-    """THE TWO RULES MUST NOT COLLAPSE INTO ONE. Silence is a privacy question
-    (nothing answered → refuse); a 429 came FROM the server, so the box is up
-    and rate-limit arbitrage is ordinary reliability work."""
+async def test_timeout_and_a_429_from_the_SAME_local_box_both_refuse_by_default() -> None:
+    """THE TWO RULES STAY DISTINCT IN WORDING, and since v1.228.0 agree in
+    outcome under the default policy: silence refuses because nothing
+    answered; a 429 refuses because ``local_primary_policy=refuse`` says a
+    local box that answered an error gets no stand-in either — worded
+    honestly as an ANSWER, never as "isn't connected"."""
     slow = _Manager({"ollama": _Down(exc=httpx.ReadTimeout("timed out")), "anthropic": _Cloud()})
     with pytest.raises(Exception, match="didn't respond in time"):
         await _router(slow, default="ollama").complete(
@@ -368,11 +377,29 @@ async def test_timeout_refuses_but_a_429_from_the_SAME_local_box_fails_over() ->
             "anthropic": _Cloud(),
         }
     )
-    res = await _router(busy, default="ollama").complete(
+    with pytest.raises(Exception, match="ollama answered HTTP 429") as err:
+        await _router(busy, default="ollama").complete(
+            system="", messages=_msgs(), tools=[]
+        )
+    assert "isn't connected" not in str(err.value)
+    assert busy.adapters["anthropic"].calls == 0
+
+
+async def test_a_429_from_a_local_box_fails_over_under_the_failover_policy() -> None:
+    """The pre-v1.228.0 table, one Settings flip away — and disclosed: the
+    result names what failed and why (audit R2)."""
+    busy = _Manager(
+        {
+            "ollama": _Boom("ollama", "llama3.1", ProviderError("busy", status_code=429)),
+            "anthropic": _Cloud(),
+        }
+    )
+    res = await _router(busy, default="ollama", policy="failover").complete(
         system="", messages=_msgs(), tools=[]
     )
     assert res.provider == "anthropic"
     assert res.reason == "failover"
+    assert (res.from_provider, res.why) == ("ollama", "http 429")
 
 
 async def test_a_CLOUD_primary_timeout_still_fails_over() -> None:
@@ -409,17 +436,33 @@ async def test_cloud_to_cloud_failover_is_untouched() -> None:
     assert cloud.calls == 1
 
 
-async def test_local_endpoint_that_ANSWERED_still_fails_over() -> None:
-    """A 429 came FROM the server, so the endpoint is up and reachable —
-    ordinary rate-limit arbitrage, not a privacy transfer."""
+async def test_local_endpoint_that_ANSWERED_refuses_under_the_default_policy() -> None:
+    """v1.228.0: a 429 came FROM the server, but "from the server" was the
+    LiteLLM proxy in the live event, not the GPU box — so under the default
+    policy an answered error is not a licence to move the chat. No failover
+    event, no cloud call, the refusal names the endpoint."""
     cloud = _Cloud()
     busy = _Boom("ollama", "llama3.1", ProviderError("rate limited", status_code=429))
     mgr = _Manager({"ollama": busy, "anthropic": cloud})
-    res = await _router(mgr, default="ollama").complete(
+    router = _router(mgr, default="ollama")
+    with pytest.raises(Exception, match="ollama answered HTTP 429"):
+        await router.complete(system="", messages=_msgs(), tools=[])
+    assert cloud.calls == 0
+    kinds = [e.type for e in router.event_bus.history]
+    assert EventType.PROVIDER_DOWNGRADED in kinds
+    assert EventType.PROVIDER_FAILOVER not in kinds
+
+
+async def test_local_endpoint_that_ANSWERED_fails_over_when_the_user_chose_failover() -> None:
+    cloud = _Cloud()
+    busy = _Boom("ollama", "llama3.1", ProviderError("rate limited", status_code=429))
+    mgr = _Manager({"ollama": busy, "anthropic": cloud})
+    res = await _router(mgr, default="ollama", policy="failover").complete(
         system="", messages=_msgs(), tools=[]
     )
     assert res.provider == "anthropic"
     assert res.reason == "failover"
+    assert cloud.calls == 1
 
 
 async def test_auto_route_may_still_replace_a_down_local_pick() -> None:

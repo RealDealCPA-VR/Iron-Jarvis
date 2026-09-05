@@ -268,6 +268,11 @@ class Config(BaseModel):
     # thread's own persona, and user overrides of this slug all still win.
     default_persona: str = "assistant"
     max_agent_steps: int = 12
+    #: THE TOOL-CALL DEADLINE (v1.228.0, RT6): seconds a single tool call in
+    #: an agent run may take before it is stopped and recorded as a failed
+    #: call ("<tool> did not finish within N s — it was stopped"); the run
+    #: continues to its next step. 0 = no deadline. Chat is not affected.
+    tool_call_timeout_s: int = 600
     # SESSION QUEUE (v1.166.0): cap on concurrently RUNNING managed agent
     # sessions — spawns beyond the cap park FIFO as QUEUED and start as slots
     # free (agents/orchestrator.spawn_managed). 0 (the default) = unlimited,
@@ -348,6 +353,20 @@ class Config(BaseModel):
     # The "my local models do the work, never a frontier substitute" guarantee.
     # OFF by default: the router's answer-if-anyone-can behavior is unchanged.
     strict_model_pin: bool = False
+    # LOCAL PRIMARY POLICY (v1.228.0) — what the router does when the PRIMARY
+    # provider is one of the user's own machines (ollama / custom / fleet-*)
+    # and it ANSWERS with an error (429, 5xx, 404 "model not found"):
+    #   "refuse"   (default) — the turn fails honestly, by name, and no other
+    #              provider stands in. This box holds client documents, and a
+    #              proxy answering 500 because its GPU box is down is not
+    #              "up" in any sense that should move a chat to a cloud API.
+    #   "failover" — the pre-v1.228.0 behaviour: an answered error is
+    #              ordinary reliability arbitrage across connected providers.
+    # A local endpoint that never ANSWERED (unreachable / no reply in time /
+    # dropped mid-request) refuses under BOTH values (v1.162.0), and the Auto
+    # route stays the one exception. Any value other than "failover" reads as
+    # "refuse" — the fail-closed direction. Settings toggle, no restart.
+    local_primary_policy: str = "refuse"
     # SPEECH-TO-TEXT (voice dictation) — an OPTIONAL dedicated transcription
     # backend, so a self-hosted whisper server (faster-whisper-server / Speaches /
     # LocalAI / a Groq endpoint) can be used INDEPENDENTLY of the chat endpoint.

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.227.0 (2026-09-04).*
+holds itself to. Current as of v1.228.0 (2026-09-05).*
 
 ---
 
@@ -58,7 +58,13 @@ Chat is where most work happens, and it is wired into everything:
   to a real background agent session when it outgrows a chat turn.
 - **Projects (the context spine)**: ground a chat in a project and every turn
   carries the project's folder, knowledge, and recap. File tools then operate
-  inside that folder.
+  inside that folder. A folder you cannot save in is refused when you pick it,
+  with the reason (missing, protected, not a directory, or not writable) —
+  the same door for a chat's folder, an escalated session's `workspace_root`,
+  and a project's folder (checked again when an older project runs a task).
+  If a bound folder turns read-only later, a write says "cannot write in
+  <folder>: the folder this session is bound to is not writable" instead of
+  naming a hidden temp file.
 - **Compaction**: when a long thread nears the context ceiling, chat *offers*
   a model-written summary of the older messages (you choose); every claim in
   the summary is checked against the ledger before it is trusted.
@@ -66,6 +72,12 @@ Chat is where most work happens, and it is wired into everything:
   output) can store results as variables (`_store_as`) instead of flooding
   the context; the model reaches them with the `repl` tool. The stored value
   is `{'output': the text, 'data': metadata}`.
+- **Malformed tool calls are corrected, not crashed**: a tool called with a
+  missing argument tells the model which one (`missing required: query —
+  file_search needs ['query']; got []`), ledgered like any failed call, so
+  the next step can fix it instead of relaying a Python error. A local model
+  that wraps its arguments one level down (`{"arguments": "{…}"}`) is
+  unwrapped before the tool ever sees it.
 
 ### Agents & jobs
 - **Post a job** on the Agents page: default target **"Team"** runs a
@@ -178,18 +190,42 @@ seam); Train (teach it your writing voice, suggest-only).
 
 1. **Ledger truth.** Every tool call is recorded; session results and file
    claims are derived from the ledger, and a reply that claims a file it
-   never wrote is called out under the reply itself.
+   never wrote is called out under the reply itself. Since v1.228.0 a tool
+   that was interrupted by a disconnect is still on the ledger: close the
+   window while a tool is mid-flight and its row reads "client disconnected
+   while the tool was running — its effect may have landed", so the ledger
+   never claims nothing ran (a call to a tool that does not exist is recorded
+   too). A tool call inside an agent run also has a deadline (Settings →
+   Automation, "Tool call deadline", default 600 s): a wedged tool is stopped,
+   recorded as "did not finish within N s — it was stopped", and the run
+   continues; a shell command that overruns its timeout is killed together
+   with everything it started; and a model that streams more than 200,000
+   characters in one step is cut off, with the reason on the run.
 2. **Real undo.** Reversible mutations capture the prior bytes *before* the
    write; undo restores or removes exactly what changed, refuses when the
    target changed since, and **never fabricates an inverse** — if a capture
    failed, the action is honestly not undoable.
 3. **No silent substitution.** A dead provider refuses by name. Mock output
    only ever appears on a fresh install that hasn't connected anything.
+   Since v1.228.0 that covers a local model that *answered* with an error
+   too (429, 500, "model not found"): under `local_primary_policy = refuse`
+   — the default, on Settings → Models as "If my local model answers with an
+   error" — the turn fails by name and nothing stands in, so a chat never
+   leaves this machine unless you switch it to `failover`. A dead local
+   endpoint is caught by a ~2 s liveness check before the turn starts
+   instead of after three 60 s timeouts. When a failover *does* happen, the
+   receipt under the reply names what failed and why ("answered by
+   claude-cli — fleet-rtx6000ada returned HTTP 500"), and the phone/desktop
+   alert carries the same reason. Auto is the one route that may substitute.
 4. **Fenced untrusted content.** Web pages, file text, MCP results, and
    agent replies are injection-fenced before a model sees them.
 5. **Confined writes.** File tools and the REPL write inside the workspace
    (your project's folder when grounded); reads are policy-gated; protected
-   paths (the vault, the DB) are refused both ways.
+   paths (the vault, the DB) are refused both ways. A workspace is probed
+   for writability before it is accepted (`C:\Users`, `C:\`, a read-only
+   share are refused up front), and agents are told which OS they are on
+   (Windows: cmd.exe, no POSIX `mv`/`ls`/`cp`) before they author a custom
+   tool or a shell command.
 6. **One event loop, never blocked.** Heavy work runs off-thread — a big
    render or a cold OneDrive folder can't freeze the app. Since v1.226.0 that
    includes notifications going out, project-knowledge lookups, and every

@@ -259,6 +259,12 @@ class OpenAIAdapter(LLMAdapter):
                 from ...core.jsonish import loads_object
 
                 args = loads_object(args_str) or {}
+            # v1.228.0 (T2): a local model may wrap the real arguments in an
+            # ``{"arguments": "<json>"}`` envelope — valid JSON, so the
+            # fallback above never fires and the tool crashed on KeyError.
+            from ...core.jsonish import unwrap_arguments
+
+            args = unwrap_arguments(args)
             if not isinstance(args, dict):
                 args = {}
             tool_calls.append(
@@ -393,6 +399,15 @@ class OpenAIAdapter(LLMAdapter):
                 try:
                     args = json.loads(args_str) if args_str else {}
                 except json.JSONDecodeError:
+                    # v1.228.0 (T2b): same recovery ladder as `_parse` — a
+                    # bare `{}` here silently emptied a near-miss call.
+                    from ...core.jsonish import loads_object
+
+                    args = loads_object(args_str) or {}
+                from ...core.jsonish import unwrap_arguments
+
+                args = unwrap_arguments(args)
+                if not isinstance(args, dict):
                     args = {}
                 tool_calls.append(
                     ToolCall(

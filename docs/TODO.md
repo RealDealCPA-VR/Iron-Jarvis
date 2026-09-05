@@ -5,6 +5,55 @@ the deep-review wow track, deferred backlogs across waves, and known limits.
 The deep review's 11 confirmed bugs are all FIXED (v1.166.2–v1.167.0) — this
 file is what remains.*
 
+## Carried out of the 2026-09-04 audit, Wave 2 (v1.228.0)
+
+- [x] R1 `local_primary_policy` (refuse | failover, default refuse): a LOCAL
+  primary that answered 429/5xx/404 refuses by name (kind `answered_error`),
+  both lanes; Auto stays the exception. R2 `provider.failover.reason` is
+  derived (`router.failure_reason`), `route.from`/`route.why` on both lanes,
+  TurnReceipt words it. R5 ~2.5 s `GET /v1/models` liveness pre-probe on a
+  local primary with a base_url (dead box refuses at once; a live box keeps
+  the cold-load retry ladder).
+- [x] T2/T2b/T1(RT7) the `{"arguments": "<json>"}` envelope a local model
+  emits is unwrapped (`jsonish.unwrap_arguments`) at BOTH OpenAI-compatible
+  parse sites, the Responses-API parser gets the same `loads_object`
+  fallback, and `registry.invoke` names a missing required / wrong-typed
+  top-level argument (`missing required: query — file_search needs
+  ['query']; got []`) through the normal `_record` + `tool.executed` path
+  instead of handing the model `KeyError: 'query'`.
+- [x] CL1 a client disconnect mid-tool leaves a failed ToolInvocation +
+  `tool.executed` ("client disconnected while the tool was running — its
+  effect may have landed"), written by an INDEPENDENT task because the anyio
+  cancel scope re-cancels every later await of the response task. An
+  unknown tool name is ledgered too (RT6's half).
+- [x] RT3 `sandbox/native.py` is Popen + communicate(timeout); on timeout the
+  whole tree is killed (`taskkill /T /F` on Windows, `killpg` elsewhere),
+  drained, and the tool returns at ~timeout with `timed_out=True` — proven
+  with a child + grandchild whose pids are gone.
+- [x] RT6 `config.tool_call_timeout_s` (default 600, Settings → Automation)
+  deadlines every tool call in an agent run via `registry.invoke(...,
+  deadline_s=)` → a recorded failed row "<tool> did not finish within N s —
+  it was stopped" and the run continues; a step streaming past 200k chars
+  (`_MAX_STEP_STREAM_CHARS`) ends the run FAILED with the reason. Still
+  open from RT6: a "waiting on <tool>" phase while a call is in flight.
+- [x] T3 `fs_policy.usable_workspace_root` probes writability (`dir_writable`:
+  a temp file created and deleted, off the loop at every route seam) —
+  `C:\Users`, `C:\` and an RX-only folder are refused by `POST /sessions`,
+  the agent spawn, and `_root_problem`'s fourth answer ("folder is not
+  writable by this app: <root>"); the chat grounding block says "not
+  writable"; `write_document`/`write_file`/`edit_file` say "cannot write in
+  <workspace>: ... not writable" instead of the hidden `.tmp-<pid>` file.
+- [x] T6 `tool_create`'s description and the runtime's `# Environment` block
+  name the OS (`sandbox/native.host_os_line`: on Windows "cmd.exe; no POSIX
+  mv/ls/cp") so a tool is authored for the machine it will run on.
+- [ ] R3 stream() after the first token: `if committed: raise` skips
+  `record_failure` + `provider.failed`; an empty `httpx.ReadError("")` reaches
+  the client as a blank error line; `provider.failover` is published only
+  after the failover stream is fully consumed.
+- [ ] R4 the circuit breaker never gates the PRIMARY (`_resolve` /
+  `complete()` never call `health.allow` for it); no surface can say "in
+  cooldown".
+
 ## Carried out of the 2026-09-04 audit, Wave 1 (v1.227.0)
 
 Wave 1 closed RT1 (armed-name gate in `registry.invoke`, both chat lanes and

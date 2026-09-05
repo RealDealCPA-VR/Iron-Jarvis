@@ -10,6 +10,7 @@ without a restart wherever the page says so.*
 |---|---|---|
 | `default_provider` / `default_model` | your real workhorse (local endpoint or a connected CLI) | The fresh-install default is `mock`. Leaving it there means scripted answers. Pick the model you actually want answering chat. |
 | `strict_model_pin` | `false` (on only if you demand exact ids) | With it on, a retired/renamed model id refuses instead of resolving. |
+| `local_primary_policy` | `refuse` (default) | v1.228.0: a local model (Ollama / custom / fleet node) that answers chat with an error refuses by name — nothing stands in, the chat never leaves the machine. `failover` lets another connected provider answer; the receipt then says who failed and why. |
 | `max_concurrent_sessions` | `2`–`3` | New in v1.166: caps how many agent sessions run at once; overflow parks as **Queued** honestly. `0` = unlimited (the default) is fine until a Team job fans out while a schedule fires. |
 | `max_agent_steps` | `12` (default) | Raise only for genuinely long tasks; each step is a model call. |
 | `git_native` | `true` for coding projects | Sessions run on a git worktree branch and finish as a **review** — never auto-merged. |

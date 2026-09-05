@@ -366,11 +366,16 @@ _SETTINGS_KEYS = [
     "default_persona",
     # Never substitute an explicitly-picked provider (see config.strict_model_pin).
     "strict_model_pin",
+    # A LOCAL primary that answered with an error: refuse (default) or fail
+    # over (see config.local_primary_policy, v1.228.0).
+    "local_primary_policy",
     # Auto model routing — the classifier + optional tier overrides. "auto" as
     # the default_provider is the ON switch.
     "routing_model",
     "routing_tiers_json",
     "max_agent_steps",
+    # v1.228.0: per-tool-call deadline inside an agent run (seconds, 0 = none).
+    "tool_call_timeout_s",
     "git_native",
     "self_dev_enabled",
     "self_dev_root",

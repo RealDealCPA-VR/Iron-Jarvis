@@ -159,15 +159,57 @@ def fs_path_allowed(path: str | Path) -> bool:
     return False
 
 
+def dir_writable(path: str | Path) -> bool:
+    """Can this app create a file in *path* RIGHT NOW? (v1.228.0, audit T3)
+
+    Probed, never inferred: ``os.access(W_OK)`` lies on Windows (it ignores
+    ACLs), so the one honest answer is to create a file and delete it. ONE
+    ``os.open(O_CREAT|O_EXCL)`` of a hidden ``.ij-probe-*`` name, unlinked
+    right after. Any ``OSError`` (EACCES/EPERM, a read-only mount, a
+    vanished folder) is "not writable".
+
+    NOT ``tempfile.NamedTemporaryFile``/``mkstemp``: on Windows they catch
+    ``PermissionError`` and RETRY up to ``TMP_MAX`` (10,000) times as long as
+    ``os.access(dir, W_OK)`` says writable — which, per the lie above, it
+    always does — so on a real RX-only folder the "probe" spun for minutes
+    (measured on this task's first cut).
+
+    BLOCKING: this touches the filesystem — a network share or an unhydrated
+    OneDrive path stalls for as long as the OS takes — so every caller on the
+    event loop goes through ``asyncio.to_thread`` (the v1.153.1 rule).
+    """
+    import secrets
+
+    probe = os.path.join(os.fspath(path), f".ij-probe-{os.getpid()}-{secrets.token_hex(4)}")
+    try:
+        fd = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except OSError:
+        return False
+    try:
+        os.close(fd)
+    finally:
+        try:
+            os.unlink(probe)
+        except OSError:
+            pass
+    return True
+
+
 def usable_workspace_root(path: str | Path) -> bool:
     """May a session/turn run DIRECTLY in this folder? (v1.189.0)
 
     The one predicate behind every "work in the user's own folder" door —
     chat's workspace pick, ``POST /sessions``' ``workspace_root``, the dynamic
-    spawn's. Absolute + an existing directory + allowlist-clean + not a
-    protected root. One definition, because the measured failure mode of this
-    area is two doors answering differently and a job losing its folder on
-    the way through the second one.
+    spawn's, a project root. Absolute + an existing directory +
+    allowlist-clean + not a protected root + WRITABLE (v1.228.0: a live chat
+    bound to ``C:\\Users`` passed every check here and then failed its
+    ``write_document`` naming a hidden ``.tmp`` file — a folder the app cannot
+    save in is refused at the door, with the reason). One definition, because
+    the measured failure mode of this area is two doors answering differently
+    and a job losing its folder on the way through the second one.
+
+    BLOCKING (the writability probe creates a file): call it off the event
+    loop — ``asyncio.to_thread`` at every route/lane seam.
     """
     try:
         p = Path(path)
@@ -176,6 +218,7 @@ def usable_workspace_root(path: str | Path) -> bool:
             and p.is_dir()
             and fs_path_allowed(str(p))
             and not is_protected_path(str(p))
+            and dir_writable(p)
         )
     except Exception:  # noqa: BLE001 — an unparseable path is not a workspace
         return False

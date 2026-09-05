@@ -24,7 +24,17 @@ Reliability spine (best-in-class routing):
   never ANSWERED — never reached, or reached and silent past the timeout —
   refuses instead of failing over (:meth:`ModelRouter._refuses_failover`,
   :func:`local_failure_kind`) — see v1.162.0 and
-  :meth:`ModelRouter._unavailable_error`.
+  :meth:`ModelRouter._unavailable_error`. Since v1.228.0 that rule is a
+  POLICY (``config.local_primary_policy``, default ``"refuse"``): under
+  ``refuse`` a local primary that ANSWERED with an error (429/5xx/404) refuses
+  too, so a conversation never leaves the machine unless the user chose
+  ``failover`` in Settings; and a local primary with a base_url is pre-probed
+  (:meth:`ModelRouter._local_liveness`, ``GET /v1/models``, ~2.5 s) so a dead
+  box refuses at once instead of after the same-adapter retry ladder.
+* **Honest failover reason** (v1.228.0) — ``provider.failover.reason``, and the
+  ``from``/``why`` fields on :class:`RouteResult` / the stream's final frame,
+  are DERIVED from the exception (:func:`failure_reason`), never guessed at
+  the publish site.
 """
 
 from __future__ import annotations
@@ -231,6 +241,31 @@ def local_failure_kind(exc: Exception) -> str | None:
     return None
 
 
+def failure_reason(exc: Exception) -> str:
+    """The one-phrase WHY for a provider failure, derived from the exception.
+
+    Before v1.228.0 the two failover publish sites hard-coded their reason
+    ("provider down" for the default fallback, "rate limited" for the
+    sideways hop), so a local box answering 500 was disclosed to the phone
+    and the ledger as "rate limited". The reason is now read off the
+    failure itself, in ONE place, and the same string rides the event, the
+    :class:`RouteResult` ``why`` field and the chat receipt:
+
+    * a transport shape → :func:`local_failure_kind`'s word
+      (``unreachable`` / ``timeout`` / ``interrupted``);
+    * a typed :class:`ProviderError` carrying a status → ``"http <status>"``;
+    * anything else → ``"transient error"`` when it classifies transient,
+      else ``"error"`` (the default fallback runs for permanent failures
+      too, and calling a 400 "transient" would be one more guess).
+    """
+    kind = local_failure_kind(exc)
+    if kind:
+        return kind
+    if isinstance(exc, ProviderError) and exc.status_code is not None:
+        return f"http {exc.status_code}"
+    return "transient error" if is_transient_error(exc) else "error"
+
+
 # --------------------------------------------------------------------------- #
 # Circuit breaker + capability helpers.
 # --------------------------------------------------------------------------- #
@@ -327,6 +362,22 @@ def wrap_prompted_tools(adapter: LLMAdapter) -> LLMAdapter:
     return PromptedToolsAdapter(adapter)
 
 
+#: Liveness pre-probe budget (v1.228.0): long enough for a busy box to list
+#: its models, short enough that a dead one refuses before the user wonders.
+_LIVENESS_TIMEOUT_S = 2.5
+
+
+def _short_detail(text: str, wanted: str, status: "int | None") -> str:
+    """The endpoint's own error detail for the answered-error refusal, minus
+    the adapter's ``"<provider> API error <status>:"`` prefix (the refusal
+    already says that) and capped so a proxy's stack dump stays readable."""
+    t = (text or "").strip()
+    t = re.sub(rf"^{re.escape(wanted)}\s+API error\s+\d+\s*:\s*", "", t, flags=re.I)
+    if status is not None:
+        t = re.sub(rf"^(?:HTTP\s+)?{status}\s*:\s*", "", t, flags=re.I)
+    return t[:240] + ("…" if len(t) > 240 else "")
+
+
 def _disclosed_reason(reason: str, serving_provider: str) -> str:
     """The route reason a caller may DISCLOSE to the user (v1.165.0).
 
@@ -360,7 +411,15 @@ class RouteResult:
       (see :func:`_disclosed_reason`).
 
     Both fields default (``""`` / ``"default"``) so every pre-existing
-    3-positional constructor call — including test stubs — keeps working."""
+    3-positional constructor call — including test stubs — keeps working.
+
+    Since v1.228.0 a ``"failover"`` answer also says WHAT failed and WHY
+    (additive, both ``""`` otherwise): ``from_provider`` is the primary that
+    failed (the wire key is ``from`` — a Python keyword, hence the attribute
+    name) and ``why`` is :func:`failure_reason`'s word for its failure. On the
+    default route ``requested`` is ``""`` by contract, so without these the
+    receipt could only say "answered by claude-cli — failover" and never name
+    the user's own endpoint that was skipped."""
 
     def __init__(
         self,
@@ -369,12 +428,16 @@ class RouteResult:
         model: str,
         requested: str = "",
         reason: str = "default",
+        from_provider: str = "",
+        why: str = "",
     ) -> None:
         self.response = response
         self.provider = provider
         self.model = model
         self.requested = requested
         self.reason = reason
+        self.from_provider = from_provider
+        self.why = why
 
 
 class ModelRouter:
@@ -389,6 +452,7 @@ class ModelRouter:
         health: ProviderHealth | None = None,
         deadline_s: float = 180.0,
         strict_pin: "Callable[[], bool] | None" = None,
+        local_policy: "Callable[[], str] | None" = None,
     ) -> None:
         self.manager = manager
         # Auto routing (opt-in): consulted only when the resolved provider is
@@ -420,6 +484,13 @@ class ModelRouter:
         #: swap, no cross-provider failover, no mock. Same-provider retries
         #: still apply. Default-route requests are unaffected.
         self._strict_pin: Callable[[], bool] = strict_pin or (lambda: False)
+        #: Live flag (config.local_primary_policy, v1.228.0): "refuse" (the
+        #: default, and what ANY value other than "failover" reads as — the
+        #: fail-closed direction) means a LOCAL primary that answered with an
+        #: error refuses by name instead of handing the turn to another
+        #: provider; "failover" keeps the pre-v1.228.0 arbitrage. Settings
+        #: toggle, no restart.
+        self._local_policy: Callable[[], str] = local_policy or (lambda: "refuse")
 
     @property
     def default_provider(self) -> str:
@@ -495,7 +566,12 @@ class ModelRouter:
         return self.manager.get(wanted, model), wanted, False
 
     def _unavailable_error(
-        self, wanted: str, pinned: bool, *, kind: str = "unreachable"
+        self,
+        wanted: str,
+        pinned: bool,
+        *,
+        kind: str = "unreachable",
+        exc: Exception | None = None,
     ) -> ProviderError:
         """The honest refusal for a REAL provider that isn't connected (v1.162.0).
 
@@ -524,7 +600,30 @@ class ModelRouter:
         knows it connected, and telling the user their endpoint is disconnected
         sends them to debug the wrong thing (they restart a server that was
         never down instead of waiting out a model load).
+
+        ``"answered_error"`` (v1.228.0, ``local_primary_policy=refuse``) is the
+        fourth kind: the endpoint is UP and said so — a 429/5xx/404 — and the
+        policy still forbids a stand-in. That refusal quotes the status and
+        the endpoint's own detail (*exc*) and names the setting, because the
+        user may legitimately want the old behaviour back and must be able to
+        find the switch from the error alone.
         """
+        if kind == "answered_error":
+            status = getattr(exc, "status_code", None) if exc is not None else None
+            what = f"answered HTTP {status}" if status else "answered with an error"
+            detail = _short_detail(str(exc) if exc is not None else "", wanted, status)
+            text = f"{wanted} {what}"
+            if detail:
+                text += f": {detail}"
+            text += " — no substitute used on purpose (local_primary_policy=refuse)."
+            if pinned:
+                text += " Strict model pin is on as well."
+            text += (
+                " Check that endpoint or pick another model for this chat and"
+                " retry; set local_primary_policy to failover in Settings if you"
+                " want another provider to stand in."
+            )
+            return ProviderError(text)
         lead = {
             "timeout": f"{wanted} didn't respond in time",
             "interrupted": f"the connection to {wanted} dropped mid-request",
@@ -579,10 +678,36 @@ class ModelRouter:
         :func:`is_unreachable_error` is left alone so the cloud side is
         untouched. Returns the kind (truthy) so the refusal can say which of
         the three actually happened.
+
+        v1.228.0 (audit R1): "a local endpoint that ANSWERED still fails
+        over" was the designed behaviour above, and it was wrong for the
+        daily driver — the live 2026-08-28 event was a LiteLLM proxy
+        answering 500 because ITS upstream GPU box was unreachable, and the
+        conversation went to claude-cli. The premise "it answered, so it is
+        up" is false for a proxy. So the answered case is now a POLICY:
+        under ``local_primary_policy=refuse`` (the default) a local primary
+        that failed for ANY reason refuses, kind ``"answered_error"`` for the
+        answered shapes; under ``failover`` the pre-v1.228.0 table stands.
+        Transport shapes refuse under both. Cloud primaries are untouched,
+        and Auto stays the one exception (guarded by the callers).
         """
         if not is_local_provider(provider):
             return None
-        return local_failure_kind(exc)
+        kind = local_failure_kind(exc)
+        if kind:
+            return kind
+        return "answered_error" if self._local_refuses_answered() else None
+
+    def _local_refuses_answered(self) -> bool:
+        """The live policy, read fail-closed: only the exact word
+        ``"failover"`` re-enables substitution for a local primary that
+        answered with an error; anything else (unset, a typo, a future value
+        this build does not know) refuses."""
+        try:
+            policy = str(self._local_policy() or "")
+        except Exception:  # noqa: BLE001 — a broken flag reads as the default
+            policy = ""
+        return policy.strip().lower() != "failover"
 
     async def _publish_not_connected(
         self, wanted: str, session_id: str | None, *, kind: str = "unreachable"
@@ -599,12 +724,111 @@ class ModelRouter:
             " connection but never replied",
             "interrupted": "the connection dropped mid-request — that endpoint"
             " stopped answering",
+            "answered_error": "answered with an error — that endpoint is up but"
+            " could not serve this turn; no substitute used"
+            " (local_primary_policy=refuse)",
         }.get(kind, "not connected — connect a model on the Connections page")
         await self.event_bus.publish(
             EventType.PROVIDER_DOWNGRADED,
             {"requested": wanted, "used": "none", "reason": reason},
             session_id=session_id,
         )
+
+    # -- liveness pre-probe (v1.228.0, audit R5) ---------------------------
+    @staticmethod
+    def _innermost(adapter: LLMAdapter) -> LLMAdapter:
+        """The real transport adapter under the prompted/guided tool wraps."""
+        inner = adapter
+        for _ in range(4):
+            nxt = getattr(inner, "inner", None)
+            if nxt is None:
+                return inner
+            inner = nxt
+        return inner
+
+    @staticmethod
+    def _models_url(endpoint: str) -> str | None:
+        """``{root}/v1/models`` for an OpenAI-compatible endpoint URL, given
+        either a bare host, a ``/v1`` base or the full ``/chat/completions``
+        URL the adapter holds (same stripping ladder as
+        ``fleet/probes.normalize_root``; the listing lives above ``/v1``)."""
+        u = (endpoint or "").strip().rstrip("/")
+        if not u.startswith(("http://", "https://")):
+            return None
+        if u.endswith("/chat/completions"):
+            u = u[: -len("/chat/completions")].rstrip("/")
+        if u.endswith("/v1"):
+            u = u[: -len("/v1")].rstrip("/")
+        return f"{u}/v1/models"
+
+    async def _local_liveness(self, adapter: LLMAdapter) -> str | None:
+        """A ~2.5 s ``GET /v1/models`` against a LOCAL primary BEFORE the
+        real attempt. Returns the refusal kind (``"unreachable"`` /
+        ``"timeout"``) when the endpoint is provably not serving, else None.
+
+        WHY: a dead local box used to cost the whole same-adapter retry
+        ladder — three 60 s read timeouts plus backoff, ~184 s — before the
+        honest refusal appeared, because the adapter's client only learns
+        the box is dead by waiting for it. The ladder itself STAYS: it is
+        what rescues a box that is up but cold-loading a 30B/70B (see
+        :func:`local_failure_kind`), and a live probe answer is exactly the
+        signal that the ladder is worth running.
+
+        Deliberately narrow so the offline suite and every cloud path are
+        untouched: only a local provider (``is_local_provider``), only when
+        the transport adapter carries an http(s) endpoint (fake adapters
+        have none), through the adapter's OWN client (a test that injected a
+        fake client probes the fake). Only a CONNECT-shaped failure or a
+        timeout counts as dead; any answer — 401, 404, 500 — means a server
+        is listening, and anything else (a fake client without ``get``, an
+        odd transport) is INCONCLUSIVE and lets the real attempt decide. A
+        false "isn't connected" would be as dishonest as the wait it saves.
+        """
+        if not is_local_provider(adapter.provider):
+            return None
+        inner = self._innermost(adapter)
+        url = self._models_url(str(getattr(inner, "_endpoint", "") or ""))
+        if url is None:
+            return None
+        make_client = getattr(inner, "_client", None)
+        if not callable(make_client):
+            return None
+        try:
+            client = make_client()
+            get = getattr(client, "get", None)
+            if not callable(get):
+                return None
+            await asyncio.wait_for(
+                get(url, timeout=_LIVENESS_TIMEOUT_S), timeout=_LIVENESS_TIMEOUT_S + 0.5
+            )
+            return None
+        except (asyncio.TimeoutError, TimeoutError):
+            return "timeout"
+        except ConnectionError:
+            return "unreachable"
+        except Exception as exc:  # noqa: BLE001 — classified by type below
+            if _httpx is not None:
+                if isinstance(exc, (_httpx.ConnectError, _httpx.ConnectTimeout)):
+                    return "unreachable"
+                if isinstance(exc, _httpx.TimeoutException):
+                    return "timeout"
+            return None
+
+    async def _refuse_if_dead(
+        self, adapter: LLMAdapter, *, auto_selected: bool, pinned: bool, session_id
+    ) -> None:
+        """Run :meth:`_local_liveness` for a non-Auto, non-mock primary and
+        raise the honest refusal (same event + wording as the run-stage
+        refusal) when the box is dead. Auto is skipped: it is the one route
+        where a dead local pick may be replaced, and the run-stage guard
+        already honours that. MIRROR NOTE (lock-step): called from BOTH
+        complete() and stream() right before ``provider.routed``."""
+        if auto_selected or adapter.provider == "mock":
+            return
+        dead = await self._local_liveness(adapter)
+        if dead:
+            await self._publish_not_connected(adapter.provider, session_id, kind=dead)
+            raise self._unavailable_error(adapter.provider, pinned, kind=dead)
 
     def _wrap_for_tools(self, adapter: LLMAdapter) -> LLMAdapter:
         """The v1.131.0 wrap decision, envelope-gated onto its two rungs
@@ -915,6 +1139,12 @@ class ModelRouter:
         # A structured provider.routed for EVERY real route (explicit/default/
         # auto-tier/local-oracle/failover). Mock offline/downgrade already emits
         # provider.downgraded, so we skip a redundant routed event there.
+        # LIVENESS PRE-PROBE (v1.228.0): a dead LOCAL primary refuses NOW, not
+        # after the retry ladder. MIRROR NOTE (lock-step): both lanes.
+        await self._refuse_if_dead(
+            adapter, auto_selected=auto_selected, pinned=pinned, session_id=session_id
+        )
+
         if adapter.provider != "mock":
             await self._emit_routed(provider, adapter, reason, routed_payload, session_id)
 
@@ -939,6 +1169,8 @@ class ModelRouter:
             )
         except Exception as exc:
             transient = is_transient_error(exc)
+            # The ONE derived reason every disclosure below carries (v1.228.0).
+            why = failure_reason(exc)
             self.health.record_failure(adapter.provider)
             tried_ids.add(id(adapter))
             tried_providers.add(adapter.provider)
@@ -962,7 +1194,9 @@ class ModelRouter:
             refusal = None if auto_selected else self._refuses_failover(adapter.provider, exc)
             if refusal:
                 await self._publish_not_connected(adapter.provider, session_id, kind=refusal)
-                raise self._unavailable_error(adapter.provider, pinned, kind=refusal) from exc
+                raise self._unavailable_error(
+                    adapter.provider, pinned, kind=refusal, exc=exc
+                ) from exc
             # (A) DEFAULT-PROVIDER FALLBACK — runs even for a NON-transient primary
             # failure: an explicit provider that ANSWERED WITH AN ERROR must
             # still reach the healthy default. (A local pick that was never
@@ -997,7 +1231,7 @@ class ModelRouter:
                         self.health.record_success(alt.provider)
                         await self.event_bus.publish(
                             EventType.PROVIDER_FAILOVER,
-                            {"from": adapter.provider, "to": alt.provider, "reason": "provider down"},
+                            {"from": adapter.provider, "to": alt.provider, "reason": why},
                             session_id=session_id,
                         )
                         # A failover answered — disclose it as such (v1.165.0).
@@ -1011,6 +1245,7 @@ class ModelRouter:
                             response, alt.provider, alt.model,
                             requested=provider or "",
                             reason=_disclosed_reason("failover", alt.provider),
+                            from_provider=adapter.provider, why=why,
                         )
                     except Exception as dexc:  # noqa: BLE001 — the default failed too
                         self.health.record_failure(alt.provider)
@@ -1048,7 +1283,7 @@ class ModelRouter:
                         self.health.record_success(alt.provider)
                         await self.event_bus.publish(
                             EventType.PROVIDER_FAILOVER,
-                            {"from": adapter.provider, "to": alt.provider, "reason": "rate limited"},
+                            {"from": adapter.provider, "to": alt.provider, "reason": why},
                             session_id=session_id,
                         )
                         # Sideways failover answered — disclose it (v1.165.0).
@@ -1059,6 +1294,7 @@ class ModelRouter:
                             response, alt.provider, alt.model,
                             requested=provider or "",
                             reason=_disclosed_reason("failover", alt.provider),
+                            from_provider=adapter.provider, why=why,
                         )
                     except Exception:  # noqa: BLE001 — try the next candidate
                         self.health.record_failure(alt.provider)
@@ -1159,6 +1395,8 @@ class ModelRouter:
         adapter: LLMAdapter,
         requested: str = "",
         reason: str = "default",
+        from_provider: str = "",
+        why: str = "",
     ) -> dict[str, Any]:
         """Tag the terminal ``final`` frame with the provider+model that ACTUALLY
         served it (which may differ from the primary after a failover) so a
@@ -1176,6 +1414,11 @@ class ModelRouter:
                 "model": adapter.model,
                 "requested": requested,
                 "reason": _disclosed_reason(reason, adapter.provider),
+                # v1.228.0: the failed primary + the derived reason (both ""
+                # unless this is a failover) — the stream twin of RouteResult's
+                # from_provider/why. Wire key is "from" to match the chat lanes.
+                "from": from_provider,
+                "why": why,
             }
         return frame
 
@@ -1279,6 +1522,12 @@ class ModelRouter:
                 session_id=session_id,
             )
 
+        # LIVENESS PRE-PROBE (v1.228.0): a dead LOCAL primary refuses NOW, not
+        # after the retry ladder. MIRROR NOTE (lock-step): both lanes.
+        await self._refuse_if_dead(
+            adapter, auto_selected=auto_selected, pinned=pinned, session_id=session_id
+        )
+
         if adapter.provider != "mock":
             await self._emit_routed(provider, adapter, reason, routed_payload, session_id)
 
@@ -1307,6 +1556,8 @@ class ModelRouter:
                 raise  # already streaming this provider — never swap mid-stream
             primary_exc = exc
             transient = is_transient_error(exc)
+            # The ONE derived reason every disclosure below carries (v1.228.0).
+            why = failure_reason(exc)
             self.health.record_failure(adapter.provider)
             tried_ids.add(id(adapter))
             tried_providers.add(adapter.provider)
@@ -1328,7 +1579,9 @@ class ModelRouter:
             refusal = None if auto_selected else self._refuses_failover(adapter.provider, exc)
             if refusal:
                 await self._publish_not_connected(adapter.provider, session_id, kind=refusal)
-                raise self._unavailable_error(adapter.provider, pinned, kind=refusal) from exc
+                raise self._unavailable_error(
+                    adapter.provider, pinned, kind=refusal, exc=exc
+                ) from exc
 
         # (A) DEFAULT-PROVIDER FALLBACK — runs for transient AND permanent primary
         # failures (an explicit pick that ANSWERED WITH AN ERROR must reach the
@@ -1361,12 +1614,14 @@ class ModelRouter:
                         committed = True
                         # A failover answered — disclose it as such (v1.165.0).
                         # MIRROR NOTE (lock-step): complete() fallback (A).
-                        yield self._enrich_final(frame, alt, provider or "", "failover")
+                        yield self._enrich_final(
+                            frame, alt, provider or "", "failover", adapter.provider, why
+                        )
                     self._record_stream_latency(alt, t0)
                     self.health.record_success(alt.provider)
                     await self.event_bus.publish(
                         EventType.PROVIDER_FAILOVER,
-                        {"from": adapter.provider, "to": alt.provider, "reason": "provider down"},
+                        {"from": adapter.provider, "to": alt.provider, "reason": why},
                         session_id=session_id,
                     )
                     return
@@ -1407,12 +1662,14 @@ class ModelRouter:
                         committed = True
                         # Sideways failover answered — disclose it (v1.165.0).
                         # MIRROR NOTE (lock-step): complete() fallback (B).
-                        yield self._enrich_final(frame, alt, provider or "", "failover")
+                        yield self._enrich_final(
+                            frame, alt, provider or "", "failover", adapter.provider, why
+                        )
                     self._record_stream_latency(alt, t0)
                     self.health.record_success(alt.provider)
                     await self.event_bus.publish(
                         EventType.PROVIDER_FAILOVER,
-                        {"from": adapter.provider, "to": alt.provider, "reason": "rate limited"},
+                        {"from": adapter.provider, "to": alt.provider, "reason": why},
                         session_id=session_id,
                     )
                     return

@@ -130,6 +130,8 @@ async def _router_frames(router, **kwargs):
         # getattr-guarded: a stream-less fake router may return bare results.
         "requested": getattr(route, "requested", ""),
         "reason": getattr(route, "reason", ""),
+        "from": getattr(route, "from_provider", ""),
+        "why": getattr(route, "why", ""),
     }
 
 
@@ -1805,6 +1807,10 @@ def register(app: FastAPI, d) -> None:
             # default route) so even an errored turn reports what was asked.
             route_requested = provider_choice or ""
             route_reason = ""
+            # v1.228.0: the failed primary + derived reason on a failover
+            # (both "" otherwise) — read off the same final frame.
+            route_from = ""
+            route_why = ""
             # USAGE LEDGER, EXACTLY ONE TERMINAL ROW. Every terminal path below
             # goes through this helper, so the cancellation guards can run
             # unconditionally without ever writing a second row for the same
@@ -1869,6 +1875,8 @@ def register(app: FastAPI, d) -> None:
                             if "requested" in frame:
                                 route_requested = str(frame.get("requested") or "")
                             route_reason = str(frame.get("reason") or route_reason)
+                            route_from = str(frame.get("from") or route_from)
+                            route_why = str(frame.get("why") or route_why)
                     if final_resp is None:
                         # The stream ended without an aggregate — honest error, not
                         # a fabricated reply. Completed rounds still get counted.
@@ -2292,6 +2300,10 @@ def register(app: FastAPI, d) -> None:
                     "provider": route_provider,
                     "model": route_model,
                     "reason": route_reason,
+                    # v1.228.0 (additive): which provider failed and why, on
+                    # a failover — same keys the non-stream lane emits.
+                    "from": route_from,
+                    "why": route_why,
                 },
                 "tools_used": tools_used,
                 # DOORS (v1.199.0): server-derived links into the surfaces

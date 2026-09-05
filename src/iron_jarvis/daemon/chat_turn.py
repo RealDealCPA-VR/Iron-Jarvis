@@ -1018,10 +1018,13 @@ def _workspace_grounding_block(
 
     * usable — name the ABSOLUTE folder and pin the deixis ("this codebase",
       "here") to it;
-    * NOT usable (missing/protected/not a dir, or the resolution itself
-      raised, passed as ``None``) — say honestly that the user bound the chat
-      to <path> but the folder is not accessible, and to say so rather than
-      guess. NEVER silently claim grounding in a folder tools cannot reach.
+    * NOT usable (missing/protected/not a dir/not writable — v1.228.0 added
+      the writability probe to the predicate, so a chat bound to ``C:\\Users``
+      no longer claims grounding and then fails its first write — or the
+      resolution itself raised, passed as ``None``) — say honestly that the
+      user bound the chat to <path> but the folder is not accessible, and to
+      say so rather than guess. NEVER silently claim grounding in a folder
+      tools cannot reach.
 
     Returns "" when no workspace was bound. Called by BOTH lanes (the
     documented lock-step mirror pair: ``run_chat_turn`` here and
@@ -1042,7 +1045,8 @@ def _workspace_grounding_block(
     return (
         "\n\n# Working folder (bound by the user)\n"
         f"The user bound this chat to the folder {ws}, but that folder is "
-        "not accessible right now (missing, protected, or not a directory). "
+        "not accessible right now (missing, protected, not a directory, or "
+        "not writable by this app). "
         "Say so plainly if asked about it — do not guess at or invent its "
         "contents."
     )
@@ -3003,6 +3007,12 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
             "provider": route.provider,
             "model": route.model,
             "reason": getattr(route, "reason", ""),
+            # v1.228.0 (additive): on a failover, WHICH provider failed and
+            # WHY (router.failure_reason's word) — the default route's
+            # `requested` is "" by contract, so these are the only way the
+            # receipt can name the user's own endpoint that was skipped.
+            "from": getattr(route, "from_provider", ""),
+            "why": getattr(route, "why", ""),
         },
         "attached": len(body.attachments or []),
         "images": len(images),

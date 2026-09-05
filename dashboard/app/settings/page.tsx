@@ -124,6 +124,19 @@ const FIELDS: FieldDef[] = [
       "to explicit picks; the default/auto route still fails over.",
   },
   {
+    key: "local_primary_policy",
+    label: "If my local model answers with an error",
+    type: "select",
+    section: "models",
+    options: ["refuse", "failover"],
+    hint:
+      "What happens when the model answering chat runs on YOUR machine (Ollama, a custom endpoint, a fleet " +
+      "node) and it replies with an error (429, 500, model not found). 'refuse' (default): the turn fails " +
+      "honestly by name and nothing stands in — the conversation never leaves this machine. 'failover': " +
+      "another connected provider answers, and the receipt under the reply says who and why. A local " +
+      "endpoint that never answered at all always refuses; Auto is the one route that may substitute.",
+  },
+  {
     key: "event_retention_days",
     label: "Keep activity history",
     type: "number",
@@ -221,6 +234,13 @@ const FIELDS: FieldDef[] = [
     type: "number",
     section: "automation",
     hint: "Safety ceiling on how many tool/loop steps a single agent run may take.",
+  },
+  {
+    key: "tool_call_timeout_s",
+    label: "Tool call deadline (seconds)",
+    type: "number",
+    section: "automation",
+    hint: "How long one tool call inside an agent run may take before it is stopped and recorded as failed; the run then continues. 0 = no deadline.",
   },
   {
     key: "autonomy_enabled",

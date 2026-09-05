@@ -8,6 +8,7 @@ requires the Docker runtime — see :mod:`docker_runtime`.
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -50,6 +51,24 @@ def scrubbed_env() -> dict[str, str]:
     return env
 
 
+def host_os_line(system: str | None = None) -> str:
+    """One model-facing line naming the OS this install runs on (v1.228.0,
+    audit T6). ``platform.system()`` by default; on Windows it also says what
+    a command will and will not resolve, because a tool authored around
+    POSIX ``mv`` on the dev box (Git's ``mv.EXE`` is on ITS PATH) died 22/22
+    on the packaged install. Lives beside :func:`scrubbed_env_description`
+    for the same reason it does: the words and the truth must not drift."""
+    import platform as _platform
+
+    name = system or _platform.system() or os.name
+    if name.lower().startswith("win"):
+        return (
+            "Windows (cmd.exe; no POSIX mv/ls/cp/rm/cat/grep — use the "
+            "built-in file tools or Windows commands)"
+        )
+    return f"{name} (POSIX shell)"
+
+
 def scrubbed_env_description(os_name: str | None = None) -> str:
     """Model-facing truth about what :func:`scrubbed_env` leaves resolvable
     (v1.205.0).
@@ -78,8 +97,43 @@ def scrubbed_env_description(os_name: str | None = None) -> str:
     )
 
 
+def _kill_tree(proc: "subprocess.Popen[str]") -> None:
+    """Kill ``proc`` AND every descendant (v1.228.0, RT3).
+
+    ``subprocess.run(shell=True, timeout=...)`` killed only the shell
+    (cmd.exe / sh): the command it had started kept running to completion,
+    held the pipes open, and ``communicate()`` blocked until it exited on its
+    own — measured 6 s for a 1 s timeout, marker file written after the
+    "timeout". Windows: ``taskkill /T /F`` walks the process tree. POSIX: the
+    child was started in its own session (``start_new_session=True``), so the
+    whole process group is one ``killpg`` away. Best-effort — a kill that
+    fails falls back to ``proc.kill()`` so the drain below can never hang on a
+    dead handle.
+    """
+    try:
+        if os.name == "nt":
+            windir = os.environ.get("SystemRoot", r"C:\Windows")
+            taskkill = os.path.join(windir, "System32", "taskkill.exe")
+            if not os.path.exists(taskkill):
+                taskkill = "taskkill"
+            subprocess.run(
+                [taskkill, "/T", "/F", "/PID", str(proc.pid)],
+                capture_output=True,
+                timeout=15,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except Exception:  # noqa: BLE001 — fall through to the plain kill
+        pass
+    try:
+        proc.kill()
+    except Exception:  # noqa: BLE001 — already gone
+        pass
+
+
 class NativeSandbox(Sandbox):
-    """Run commands via ``subprocess.run`` on the host (§16, best-effort)."""
+    """Run commands via ``subprocess.Popen`` on the host (§16, best-effort)."""
 
     def __init__(self, policy: SandboxPolicy | None = None) -> None:
         self.policy = policy or SandboxPolicy()
@@ -94,27 +148,42 @@ class NativeSandbox(Sandbox):
         limit = timeout if timeout is not None else self.policy.timeout_s
         env = scrubbed_env() if self.policy.modify_env == "deny" else None
         start = time.monotonic()
+        # Popen + communicate(timeout) instead of subprocess.run (v1.228.0,
+        # RT3): on a timeout the WHOLE tree is killed (see `_kill_tree`) and
+        # the pipes are then drained, so the tool returns at ~timeout and the
+        # command is genuinely gone — not merely reported as timed out while
+        # it keeps running.
+        popen_kw: dict = {}
+        if os.name != "nt":
+            popen_kw["start_new_session"] = True
+        proc = subprocess.Popen(
+            command,
+            shell=True,
+            cwd=str(cwd),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            **popen_kw,
+        )
         try:
-            proc = subprocess.run(
-                command,
-                shell=True,
-                cwd=str(cwd),
-                capture_output=True,
-                text=True,
-                timeout=limit,
-                env=env,
-            )
-        except subprocess.TimeoutExpired as exc:
+            out, err = proc.communicate(timeout=limit)
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc)
+            try:
+                out, err = proc.communicate(timeout=15)
+            except Exception:  # noqa: BLE001 — a wedged drain still returns
+                out, err = "", ""
             return SandboxResult(
-                stdout=_as_text(exc.stdout),
-                stderr=_as_text(exc.stderr) or f"timed out after {limit}s",
+                stdout=_as_text(out),
+                stderr=_as_text(err) or f"timed out after {limit}s",
                 returncode=-1,
                 timed_out=True,
                 duration_s=time.monotonic() - start,
             )
         return SandboxResult(
-            stdout=proc.stdout or "",
-            stderr=proc.stderr or "",
+            stdout=out or "",
+            stderr=err or "",
             returncode=proc.returncode,
             timed_out=False,
             duration_s=time.monotonic() - start,

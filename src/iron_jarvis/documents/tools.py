@@ -21,7 +21,14 @@ from pathlib import Path
 from typing import Any
 
 from ..core.fs_policy import fs_read_ok
-from ..tools.base import Reversibility, Tool, ToolContext, ToolResult, safe_path
+from ..tools.base import (
+    Reversibility,
+    Tool,
+    ToolContext,
+    ToolResult,
+    safe_path,
+    unwritable_workspace_error,
+)
 from ..tools.undo import make_file_descriptor, revert_workspace_file, sha256_bytes
 from .lint import lint_document
 from .pdf_markdown import MARKITDOWN_SUFFIXES, document_to_markdown
@@ -424,6 +431,13 @@ class WriteDocumentTool(Tool):
                 kind=args.get("kind"),
                 options=opts or None,
                 warnings=warns,
+            )
+        except PermissionError as exc:
+            # v1.228.0: the OS refusing the write used to reach the model as
+            # "Permission denied: '...\\.<name>.docx.tmp-4711'" — a hidden
+            # sibling temp file nobody can act on. Name the folder instead.
+            return ToolResult(
+                ok=False, error=unwritable_workspace_error(exc, ctx.workspace)
             )
         except Exception as exc:
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")

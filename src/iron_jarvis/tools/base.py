@@ -143,3 +143,24 @@ def safe_path(workspace: Path, rel: str) -> Path:
     if target != root and not target.is_relative_to(root):
         raise PermissionError(f"path '{rel}' escapes the session workspace")
     return target
+
+
+def unwritable_workspace_error(exc: PermissionError, workspace: Path) -> str:
+    """The model-facing text for a ``PermissionError`` raised by a WRITE tool
+    (v1.228.0, audit T3).
+
+    Two different things arrive as ``PermissionError``: the confinement
+    refusal :func:`safe_path` raises (no ``errno``; its message names the
+    escaping path and is kept verbatim) and the OS refusing the write itself
+    (``errno`` set — EACCES/EPERM). The OS message names whatever file the
+    writer was creating, which for an atomic write is a hidden sibling
+    ``.<name>.tmp-<pid>`` the user can neither see nor fix; say instead what
+    is true and actionable: the folder the session is bound to is not
+    writable.
+    """
+    if getattr(exc, "errno", None) is None:
+        return f"{type(exc).__name__}: {exc}"
+    return (
+        f"cannot write in {workspace}: the folder this session is bound to is "
+        "not writable — pick a folder you can save files in"
+    )

@@ -79,9 +79,10 @@ class _Manager:
         return self.adapters[provider]
 
 
-def _router(manager, *, pin: bool, default="anthropic"):
+def _router(manager, *, pin: bool, default="anthropic", local_policy="refuse"):
     return ModelRouter(
-        manager, default, EventBus(), strict_pin=lambda: pin
+        manager, default, EventBus(), strict_pin=lambda: pin,
+        local_policy=lambda: local_policy,
     )
 
 
@@ -154,7 +155,10 @@ async def test_pin_off_explicit_failure_still_fails_over():
         {"fleet-box": boom, "anthropic": ok, "mock": _Mock()},
         available={"fleet-box", "anthropic"},
     )
-    r = _router(manager, pin=False)
+    # fleet-box is LOCAL: since v1.228.0 an answered error on a local primary
+    # refuses under the default local_primary_policy; the pre-pin contract
+    # this test pins is the one the user gets by choosing "failover".
+    r = _router(manager, pin=False, local_policy="failover")
     res = await r.complete(
         provider="fleet-box", model=None, system="", messages=_MSG, tools=[]
     )

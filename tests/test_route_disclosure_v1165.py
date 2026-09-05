@@ -10,7 +10,11 @@ silent no matter who answered.
 
 WHAT BOTH LANES NOW RETURN (POST /chat response dict, POST /chat/stream done
 frame): ``route = {requested, provider, model, reason}`` — additive; top-level
-``provider``/``model`` are untouched for existing clients.
+``provider``/``model`` are untouched for existing clients. Since v1.228.0 the
+object also carries ``from`` (the provider that FAILED) and ``why`` (the
+router's derived reason, e.g. ``http 429``) — both ``""`` unless the turn was
+a failover — so the receipt can name what was skipped on the DEFAULT route,
+where ``requested`` is ``""`` by contract.
 
 THE SEMANTICS THIS FILE PINS (the one place they are documented as contract):
 
@@ -177,6 +181,8 @@ def test_default_route_discloses_default_with_empty_requested(tmp_path):
         "provider": "acme",
         "model": "acme-1",
         "reason": "default",
+        "from": "",
+        "why": "",
     }
 
 
@@ -223,6 +229,8 @@ def test_an_explicitly_chosen_mock_still_says_mock(tmp_path):
         "provider": "mock",
         "model": route["model"],  # whatever id the mock reports
         "reason": "mock",
+        "from": "",
+        "why": "",
     }
 
 
@@ -245,6 +253,8 @@ def test_stream_done_frame_route_is_identical_to_post_chat(tmp_path):
         "provider": "acme",
         "model": "acme-1",
         "reason": "default",
+        "from": "",
+        "why": "",
     }
 
 
@@ -436,6 +446,8 @@ def test_parity_explicit_pick_both_lanes_identical(tmp_path):
         "provider": "acme",
         "model": "acme-1",
         "reason": "explicit",
+        "from": "",
+        "why": "",
     }
 
 
@@ -498,6 +510,11 @@ def test_parity_failover_both_lanes_identical(tmp_path):
         "provider": "grok-cli",
         "model": "grok-m",
         "reason": "failover",
+        # v1.228.0: WHAT failed and WHY, derived from the 429 — identical on
+        # both lanes, and the only way the default route names the skipped
+        # provider (requested is "" here by contract).
+        "from": "anthropic",
+        "why": "http 429",
     }
     # Top-level provider/model tell the same story (old-client surface).
     assert flat.json()["provider"] == "grok-cli"

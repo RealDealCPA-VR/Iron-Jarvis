@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from sqlmodel import select
 from typing import Any
 
+import asyncio as _asyncio
 import json as _json
 import logging
 import re
@@ -41,27 +42,37 @@ class ProjectKnowledgePatch(BaseModel):
 def _root_problem(root: str) -> str | None:
     """Why a NON-empty project folder cannot be worked in, or None when it can.
 
-    Three honest answers, in the order a user would fix them: not absolute,
-    not a folder on this machine, or a folder the app's file policy refuses
+    Four honest answers, in the order a user would fix them: not absolute,
+    not a folder on this machine, a folder the app's file policy refuses
     (a protected root such as the secrets/undo stores, or a path outside the
-    ``IRONJARVIS_FS_ALLOWLIST``). The third is the SAME predicate
-    ``POST /sessions`` applies to an explicit ``workspace_root`` — a project
-    task runs with its root as ``workspace_root`` and used to skip that door
-    entirely, so a project pinned to a protected folder ran every task with
-    every write refused as outside-workspace and no error naming why."""
+    ``IRONJARVIS_FS_ALLOWLIST``), or a folder this app cannot save a file in
+    (v1.228.0, audit T3 — ``C:\\Users``, ``C:\\``, an RX-only share). The
+    last two together are the SAME predicate ``POST /sessions`` applies to an
+    explicit ``workspace_root`` (``fs_policy.usable_workspace_root``) — a
+    project task runs with its root as ``workspace_root`` and used to skip
+    that door entirely, so a project pinned to a protected folder ran every
+    task with every write refused as outside-workspace and no error naming
+    why. BLOCKING (the writability probe creates a file): the sync
+    create/patch handlers run in FastAPI's threadpool; the async task route
+    wraps this in ``asyncio.to_thread``."""
     from pathlib import Path
 
-    from ...core.fs_policy import usable_workspace_root
+    from ...core.fs_policy import dir_writable, fs_path_allowed, is_protected_path
 
     p = Path(root)
     if not p.is_absolute():
         return "folder must be an absolute path"
     if not p.is_dir():
         return f"folder does not exist on this machine: {root}"
-    if not usable_workspace_root(p):
+    if not fs_path_allowed(str(p)) or is_protected_path(str(p)):
         return (
             f"folder is protected or outside the app's allowed file roots: {root} "
             "— pick a folder this app may read and write in"
+        )
+    if not dir_writable(p):
+        return (
+            f"folder is not writable by this app: {root} "
+            "— pick a folder you can save files in"
         )
     return None
 
@@ -615,8 +626,9 @@ def register(app: FastAPI, d) -> None:
             # would start in it and have every write refused as
             # outside-workspace. Older rows predate this check at create/patch
             # time, so it has to be asked here too — for every deliverable,
-            # because a chat task runs in the folder as well.
-            problem = _root_problem(project.root)
+            # because a chat task runs in the folder as well. Off the loop:
+            # _root_problem probes writability (v1.228.0) in a user folder.
+            problem = await _asyncio.to_thread(_root_problem, project.root)
             if problem:
                 raise HTTPException(
                     status_code=400,

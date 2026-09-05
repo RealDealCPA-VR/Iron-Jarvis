@@ -98,3 +98,61 @@ def loads_object(text: Any) -> dict | None:
     """A JSON OBJECT recovered from model text, or None."""
     obj = loads_lenient(text, want=dict)
     return obj if isinstance(obj, dict) else None
+
+
+#: JSON-schema scalar/container names → the Python types a tool argument of
+#: that declared type may arrive as. ``bool`` is a subclass of ``int`` in
+#: Python, so integer/number exclude it explicitly (``true`` is not a count).
+JSON_TYPES: dict[str, tuple[type, ...]] = {
+    "string": (str,),
+    "integer": (int,),
+    "number": (int, float),
+    "boolean": (bool,),
+    "array": (list,),
+    "object": (dict,),
+}
+
+
+def json_type_ok(value: Any, declared: Any) -> bool:
+    """Cheap TOP-LEVEL check of *value* against a schema ``type`` name.
+
+    Only the six plain names are judged; anything else (a list of types,
+    ``null``, no type at all) is accepted — this is a guardrail for the
+    model's most common slip, not a validator. A STRING is accepted for every
+    declared type: models stringify ("5", "true", a newline-separated list)
+    and tools coerce those on purpose (``worklist_add`` takes ``items`` as
+    text, v1.174.0) — refusing them here would undo that leniency. What is
+    refused is a value that cannot be what the schema says: a number for a
+    path, a list for a string, a dict for an array.
+    """
+    kinds = JSON_TYPES.get(declared) if isinstance(declared, str) else None
+    if kinds is None or isinstance(value, str):
+        return True
+    if isinstance(value, bool) and bool not in kinds:
+        return False
+    return isinstance(value, kinds)
+
+
+def unwrap_arguments(obj: Any) -> Any:
+    """Peel the ``{"arguments": …}`` ENVELOPE a local model wraps a tool call in.
+
+    Live (2026-08-03 ``file_search``, 2026-08-16 ``shell``): the model put its
+    real arguments one level down — ``{"arguments": "{\\"query\\": \\"*\\"}"}``
+    — mirroring the wire field name. That is valid JSON, so ``json.loads``
+    succeeded, the recovery ladder never ran, and the tool crashed on
+    ``KeyError: 'query'``. An object whose ONLY key is ``arguments`` holding a
+    dict (or a string that :func:`loads_object` turns into one) is the
+    envelope, never the arguments: return the inner dict. Anything else comes
+    back untouched — a tool that genuinely takes an ``arguments`` parameter
+    alongside others is not affected.
+    """
+    if not isinstance(obj, dict) or set(obj) != {"arguments"}:
+        return obj
+    inner = obj["arguments"]
+    if isinstance(inner, dict):
+        return inner
+    if isinstance(inner, str):
+        loaded = loads_object(inner)
+        if isinstance(loaded, dict):
+            return loaded
+    return obj

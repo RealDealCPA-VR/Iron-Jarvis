@@ -265,6 +265,29 @@ does not need a bump, stop and bump it.
   `tests/test_event_loop_offload_v1175.py` asserts the worker thread AND that
   the loop kept ticking. When a rule cites a class, confirm that class is the
   one the registry actually holds.
+  **A CANCELLED AWAIT DOES NOT CANCEL THE THREAD, AND A DEADLINE IS A
+  RESULT** (v1.228.0, audit Wave 2). The offload above has a second half: a
+  client disconnect (or Cancel) lands as `CancelledError` at the `await`,
+  while the worker thread finishes and the write LANDS — and `_record` sat
+  after `execute`, so 597 live resets could each leave an effect with no
+  ledger row. `registry.invoke` now records a failed row + `tool.executed`
+  on `CancelledError` from ONE independent task created before any await
+  (Starlette's anyio cancel scope re-cancels EVERY later await of the
+  response task; a shielded await there landed the row and lost the event),
+  then re-raises. `sandbox/native.py` is Popen + `communicate(timeout)` and
+  kills the TREE (`taskkill /T /F` / `killpg`) — `subprocess.run(shell=True,
+  timeout=)` killed only cmd.exe and then blocked on pipes the command still
+  held. And a tool call in an agent run has a deadline
+  (`config.tool_call_timeout_s`, passed as `registry.invoke(deadline_s=)`):
+  the timeout is an ORDINARY failed ToolResult through the same `_record` +
+  `tool.executed` path, so it is one row with the right words and the run
+  continues; chat passes none. The deadline is `asyncio.timeout(...) as cm`
+  and only `cm.expired()` earns the deadline wording: on 3.11+
+  `asyncio.TimeoutError` IS the builtin, so a `TimeoutError` the TOOL raised
+  (socket.timeout, an inner wait_for) must keep its own message — a bare
+  `except TimeoutError` around `wait_for` misattributed it and, with no
+  deadline, crashed formatting `None`. A step streaming past `_MAX_STEP_STREAM_CHARS`
+  closes the stream and ends the run FAILED with the reason.
 - **A rule that lives in one page's JSX is not a rule, and a delete must
   untag what SPAWNS** (v1.220.0, projects-module review). "An archived project
   takes no new tasks" was enforced by hiding the composer on
@@ -320,6 +343,16 @@ does not need a bump, stop and bump it.
   that cannot run is refused at SAVE time (`_validate_step_shapes`), and a
   run whose pinned folder is gone says so on the record (`notes_json`,
   `engine._project_folder`) instead of silently using a scratch workspace.
+  **VALID JSON CAN STILL BE THE WRONG SHAPE** (v1.228.0, audit Wave 2): the
+  live `KeyError: 'query'` was a model wrapping its call in an
+  `{"arguments": "<json>"}` envelope — `json.loads` succeeded, so the ladder
+  never ran. `jsonish.unwrap_arguments` peels an object whose ONLY key is
+  `arguments` at BOTH adapter parse sites (`_parse` and `_parse_sse`, which
+  now share the `loads_object` fallback), and `registry.invoke` checks
+  `required` + top-level types BEFORE `execute`, answering `missing
+  required: <k> — <tool> needs [...]; got [...]` through the same `_record`
+  + `tool.executed` path as any failure. A traceback string names nothing
+  the model can correct; a missing key does.
 - **Shipping the mechanism is not shipping the feature** (v1.218.0). v1.217.0
   built a real pane-state classifier, proved it against a live PTY, and put the
   answer into a chip that renders NOTHING for `unknown` — on a canvas where
@@ -409,6 +442,28 @@ does not need a bump, stop and bump it.
   fallback (asked and confirmed 2026-08-11). Mid-call failures were already
   guarded by `if wanted != "mock": raise` in both lanes — the gap was the
   PRE-RUN availability check only.
+- **"It answered, so it is up" is false for a proxy** (v1.228.0, audit Wave
+  2). The v1.162.0 refusal was scoped to a local primary that never ANSWERED;
+  one that answered 429/5xx/404 "still fails over exactly as before" — by
+  design, docstring and pinned tests. The live 2026-08-28 event was a LiteLLM
+  proxy answering 500 because ITS GPU box was unreachable, and the
+  conversation went to claude-cli. The answered case is now
+  `config.local_primary_policy` (`refuse` default | `failover`), read live
+  and FAIL-CLOSED by `ModelRouter._refuses_failover` (kind
+  `answered_error`); transport shapes refuse under both values, cloud
+  primaries and Auto are untouched, both lanes lock-step. Same wave: the
+  failover reason is DERIVED (`failure_reason(exc)` → `unreachable` /
+  `timeout` / `interrupted` / `http <status>` / `transient error` / `error`),
+  never a string typed at the publish site — "rate limited" was a lie for
+  every 500 — and it rides `RouteResult.from_provider`/`why`, the final
+  frame's `from`/`why`, both chat lanes' `route` object and the TurnReceipt.
+  And a local primary with a base_url gets a ~2.5 s `GET /v1/models`
+  pre-probe (`_refuse_if_dead`, before `provider.routed`, both lanes) through
+  the adapter's OWN client: a dead box refuses at once; only connect-shaped
+  failures and timeouts count as dead, any answer or an inconclusive probe
+  (fake client, odd transport) lets the real attempt — and the cold-load
+  retry ladder — decide. Fake adapters have no `_endpoint`, so the offline
+  suite never probes.
 - **OpenAI ChatGPT-account backend retires model ids** (gpt-5-codex, gpt-5.1*,
   codex-mini-latest are all dead). The adapter
   (`providers/adapters/openai.py`) keeps a fallback ladder
@@ -439,6 +494,22 @@ does not need a bump, stop and bump it.
   handler (the success note, the re-enabled button), not on the first
   observable side effect. A handler that does `await x` and then sets state has
   a window between the two, and CI will find it eventually.
+- **A folder is WRITABLE when a file lands in it, and `tempfile` is not the
+  way to find out** (v1.228.0, audit Wave 2). `fs_policy.usable_workspace_root`
+  accepted `C:\Users` (absolute, a dir, allowlist-clean, not protected) and
+  the first `write_document` died naming a hidden `.tmp-<pid>` sibling. It
+  now probes (`dir_writable`: ONE `os.open(O_CREAT|O_EXCL)` of an
+  `.ij-probe-*` name, unlinked at once) — `os.access(W_OK)` ignores ACLs on
+  Windows, and BECAUSE it does, `tempfile.mkstemp`/`NamedTemporaryFile`
+  catch `PermissionError` and retry `TMP_MAX` (10,000) times on an RX-only
+  folder: this task's first cut hung the suite for minutes. The probe is
+  BLOCKING, so every route seam wraps it in `asyncio.to_thread`
+  (`_root_problem`'s sync create/patch callers already run in FastAPI's
+  threadpool). A write tool that still hits `PermissionError` says
+  `cannot write in <workspace>: ... not writable` via
+  `tools/base.unwritable_workspace_error` — but only for an errno-bearing
+  one; `safe_path`'s escape refusal is also a `PermissionError` and keeps
+  its own words.
 - **Windows dev shell**: PowerShell 5.1 — no `&&` chaining; Git Bash available.
   This machine lacks ffmpeg on PATH.
 

@@ -75,12 +75,17 @@ def register(app: FastAPI, d) -> None:
         if workspace_root:
             from ...core.fs_policy import usable_workspace_root
 
-            if not usable_workspace_root(workspace_root):
+            # v1.228.0: the predicate now PROBES writability (creates a file),
+            # so it leaves the loop — a user-picked share can stall.
+            if not await asyncio.to_thread(usable_workspace_root, workspace_root):
                 raise HTTPException(
                     status_code=400,
                     detail=(
                         "workspace_root must be an existing, absolute, "
-                        "non-protected folder this app may write in"
+                        "non-protected folder this app may write in "
+                        "(missing, protected, not a directory, or not "
+                        f"writable): {workspace_root} — pick a folder you can "
+                        "save files in"
                     ),
                 )
         try:

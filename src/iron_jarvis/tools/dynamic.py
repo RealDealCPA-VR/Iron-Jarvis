@@ -29,6 +29,7 @@ from sqlmodel import select
 
 from ..core.db import session_scope
 from ..core.models import DynamicToolRecord
+from ..sandbox.native import host_os_line
 from .base import Tool, ToolContext, ToolResult
 
 if TYPE_CHECKING:  # avoid importing the heavy SQLAlchemy symbol at runtime
@@ -372,7 +373,11 @@ class ToolCreateTool(Tool):
         "element, so there is no shell and values can't inject commands). Optional "
         "`timeout_seconds`. The definition is persisted and runs under permission "
         "'custom:<name>'. Example: name 'wc_lines', command ['wc','-l','{file}'], "
-        "parameters [{name:'file',type:'string',required:true}]."
+        "parameters [{name:'file',type:'string',required:true}]. "
+        # v1.228.0 (audit T6): the OS is part of the spec, evaluated once at
+        # registration — a tool is authored FOR this machine, and the model
+        # was never told which one it is.
+        f"This machine's OS: {host_os_line()} — author the command for it."
     )
     permission_key = "tool_create"
     input_schema = {

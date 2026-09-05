@@ -66,7 +66,15 @@ export type SSEEvent =
        *  answered, and why. The client used to infer this by comparing against
        *  the user's EXPLICIT pick, so a downgraded default-route turn (the
        *  mock's "Done. Wrote RESULT.md" incident) surfaced nothing. */
-      route?: { requested?: string; provider: string; model?: string; reason?: string };
+      route?: {
+        requested?: string;
+        provider: string;
+        model?: string;
+        reason?: string;
+        /** v1.228.0: on a failover, the provider that failed + why. */
+        from?: string;
+        why?: string;
+      };
       tools_used?: string[];
       denied_tools?: string[];
       /** SERVER-derived doors into the surfaces this turn touched (v1.199.0)
@@ -118,7 +126,15 @@ export interface ChatStreamResult {
    *  denial, which is how a silently-blocked tool stays invisible. */
   deniedTools?: string[];
   /** Server-side route disclosure (v1.165.0) — see the done-frame field. */
-  route?: { requested?: string; provider: string; model?: string; reason?: string };
+  route?: {
+        requested?: string;
+        provider: string;
+        model?: string;
+        reason?: string;
+        /** v1.228.0: on a failover, the provider that failed + why. */
+        from?: string;
+        why?: string;
+      };
   /** Server-derived doors into the surfaces this turn touched (v1.199.0). */
   doors?: { href: string; label: string }[];
   /** The envelope's adaptation disclosure (v1.202.0) — see the done-frame

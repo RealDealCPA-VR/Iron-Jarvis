@@ -20,6 +20,7 @@ from ..core.db import dumps, session_scope
 from ..core.events import EventType
 from ..core.ids import new_id
 from ..core.fs_policy import fs_read_ok
+from ..core.jsonish import json_type_ok
 from ..core.models import PermissionMode, ToolInvocation, UndoJournal
 from .base import Reversibility, Tool, ToolContext, ToolResult, safe_path
 from .permissions import PermissionDecision, PermissionEngine
@@ -195,6 +196,9 @@ class ToolRegistry:
         #: an agent can opt into user-authored tools without also inheriting
         #: every connected external integration (Gmail/Drive/GitHub/...).
         self._mcp: set[str] = set()
+        #: In-flight ledger jobs for calls cancelled mid-execute (v1.228.0,
+        #: CL1) — held so the tasks are not garbage-collected before they land.
+        self._interrupt_jobs: set = set()
         #: READ CACHE (contract 3, v1.174.0). ``key -> {output, data, tool,
         #: step}``, LRU-ordered. See ``CACHEABLE_READ_TOOLS``.
         self._read_cache: "OrderedDict[tuple, dict[str, Any]]" = OrderedDict()
@@ -314,10 +318,30 @@ class ToolRegistry:
         deny_reason: str = "",
         deny_label: str = "permission denied",
         allowed_names: "set[str] | None" = None,
+        deadline_s: float | None = None,
     ) -> ToolResult:
         tool = self._tools.get(name)
         if tool is None:
-            return ToolResult(ok=False, error=f"unknown tool '{name}'")
+            # An unknown name is still a call the model MADE (v1.228.0, RT6):
+            # it used to return before the ledger, so a run whose model kept
+            # inventing tools showed a clean transcript with nothing in it.
+            # Recorded as a failed row (no permission decision exists for a
+            # tool that does not, so the verdict is `deny`) through the same
+            # `_record` + `tool.executed` path as any failure.
+            error = f"unknown tool '{name}'"
+            inv_id = await asyncio.to_thread(
+                self._record,
+                ctx, name, args if isinstance(args, dict) else {},
+                PermissionMode.DENY, ok=False, output=error,
+                reversibility=None,
+            )
+            await ctx.event_bus.publish(
+                EventType.TOOL_EXECUTED,
+                {"tool": name, "ok": False, "mode": PermissionMode.DENY.value,
+                 "invocation_id": inv_id, "reversibility": None},
+                session_id=ctx.session_id,
+            )
+            return ToolResult(ok=False, error=error)
 
         # THE ROSTER IS THE GATE, NOT A SUGGESTION (v1.227.0, RT1 S1). The
         # names a caller ARMED for a step (`tool_specs`) were only ever what
@@ -400,6 +424,30 @@ class ToolRegistry:
             )
             return ToolResult(ok=False, error=f"{label}: {decision.reason}")
 
+        # THE SCHEMA IS CHECKED BEFORE THE TOOL RUNS (v1.228.0, T1/RT7). A call
+        # missing a declared-required argument used to reach `execute`, crash
+        # on `args["query"]`, and hand the model the string `KeyError: 'query'`
+        # (8 tools proven; live 2026-08-03 file_search, 2026-08-16 shell). A
+        # traceback names nothing the model can correct. Judged AFTER the
+        # permission decision — a refused call is still recorded as refused —
+        # and BEFORE the read cache / undo capture / execute, through the SAME
+        # `_record` + TOOL_EXECUTED path as any failure, so it is ledgered and
+        # the next step can fix the call. `_store_as` was stripped above.
+        shape_error = self._argument_shape_error(tool, args)
+        if shape_error:
+            inv_id = await asyncio.to_thread(
+                self._record,
+                ctx, name, args, decision.mode, ok=False,
+                output=shape_error, reversibility=rev_value,
+            )
+            await ctx.event_bus.publish(
+                EventType.TOOL_EXECUTED,
+                {"tool": name, "ok": False, "mode": decision.mode.value,
+                 "invocation_id": inv_id, "reversibility": rev_value},
+                session_id=ctx.session_id,
+            )
+            return ToolResult(ok=False, error=shape_error)
+
         # READ CACHE (contract 3, v1.174.0) — checked AFTER authorization, never
         # before it. The plan sketched this between the tool lookup and the
         # permission check; serving remembered file text to a call the engine
@@ -461,7 +509,77 @@ class ToolRegistry:
                 undo_desc = None
 
         try:
-            result = await tool.execute(args, ctx)
+            # THE DEADLINE (v1.228.0, RT6). A wedged subprocess/MCP/HTTP tool
+            # used to park the run until Cancel; `deadline_s` (the runtime
+            # passes `config.tool_call_timeout_s`) turns that into an ordinary
+            # failed result that flows through the SAME `_record` +
+            # `tool.executed` path below — one row, the right words, and the
+            # run continues to its next step. ``None`` = no deadline (chat and
+            # every caller not passing one keep today's behaviour).
+            # `asyncio.timeout` (not `wait_for`) so the deadline is told apart
+            # from a TimeoutError the TOOL raised (socket.timeout, an inner
+            # wait_for): on 3.11+ `asyncio.TimeoutError` IS the builtin, so a
+            # bare `except TimeoutError` would ledger the tool's own failure
+            # as "did not finish within N s" — or, with no deadline, crash on
+            # formatting ``None``. Only `cm.expired()` is OUR deadline; every
+            # other TimeoutError falls through to the generic clause below
+            # with its real message, exactly as before this deadline existed.
+            armed = deadline_s is not None and deadline_s > 0
+            async with asyncio.timeout(float(deadline_s) if armed else None) as cm:
+                result = await tool.execute(args, ctx)
+        except TimeoutError as exc:
+            if cm.expired():
+                result = ToolResult(
+                    ok=False,
+                    error=(
+                        f"{name} did not finish within {float(deadline_s):g} s"
+                        " — it was stopped"
+                    ),
+                )
+            else:
+                result = ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+        except asyncio.CancelledError:
+            # THE LEDGER SURVIVES A DISCONNECT (v1.228.0, CL1). The client
+            # closing the stream (or the user pressing Cancel) cancels this
+            # task at the `execute` await — while the tool's worker thread
+            # keeps running and its write LANDS. `_record` sat after
+            # `execute`, so the effect was on disk with no ToolInvocation, no
+            # undo inverse and no event: the usage ledger said "billed", the
+            # tool ledger said "nothing ran". Recorded here as a failed row,
+            # SHIELDED so a second cancel cannot strip it again, then the
+            # cancellation continues to unwind exactly as before.
+            # ONE INDEPENDENT TASK for row + event, created BEFORE any await:
+            # Starlette's disconnect runs under an anyio cancel scope that
+            # re-delivers CancelledError at EVERY later await of this task, so
+            # a shielded await here can be interrupted again after the row
+            # and before the event (measured: 1 row, 0 events). A task of its
+            # own is outside that scope and finishes regardless; the shield
+            # below merely lets us wait for it when we are allowed to.
+            # Chat runs every turn as session id "chat" (no Session row), and
+            # its only cancel source is the client going away; an agent run's
+            # is the user's Cancel. Say which — "client disconnected" on a
+            # cancelled run would misattribute the user's own action.
+            who = (
+                "client disconnected"
+                if ctx.session_id == "chat"
+                else "the run was cancelled"
+            )
+            job = asyncio.ensure_future(
+                self._ledger_interrupted(
+                    ctx, name, args, decision.mode, rev_value,
+                    f"{who} while the tool was running"
+                    " — its effect may have landed",
+                )
+            )
+            self._interrupt_jobs.add(job)
+            job.add_done_callback(self._interrupt_jobs.discard)
+            try:
+                await asyncio.shield(job)
+            except asyncio.CancelledError:
+                pass  # the job still completes; we still unwind
+            except Exception:  # noqa: BLE001 — the ledger must never mask a cancel
+                pass
+            raise
         except Exception as exc:  # tools must not crash the runtime
             result = ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
 
@@ -527,6 +645,33 @@ class ToolRegistry:
         if store_as and result.ok:
             result = await self._store_result(store_as, result, ctx)
         return result
+
+    async def _ledger_interrupted(
+        self,
+        ctx: ToolContext,
+        name: str,
+        args: dict[str, Any],
+        mode: PermissionMode,
+        rev_value: str,
+        note: str,
+    ) -> None:
+        """The failed row + ``tool.executed`` for a call that was CANCELLED
+        mid-execute (v1.228.0, CL1). Runs as its own task — see ``invoke``."""
+        try:
+            inv_id = await asyncio.to_thread(
+                self._record,
+                ctx, name, args, mode, ok=False,
+                output=note, reversibility=rev_value,
+            )
+            await ctx.event_bus.publish(
+                EventType.TOOL_EXECUTED,
+                {"tool": name, "ok": False, "mode": mode.value,
+                 "invocation_id": inv_id, "reversibility": rev_value,
+                 "interrupted": True},
+                session_id=ctx.session_id,
+            )
+        except Exception:  # noqa: BLE001 — best-effort; never raises into a cancel
+            pass
 
     async def _store_result(
         self, name: str, result: ToolResult, ctx: ToolContext
@@ -678,6 +823,44 @@ class ToolRegistry:
         if undo_desc is not None:
             return True
         return bool(getattr(result, "created_paths", None))
+
+    @staticmethod
+    def _argument_shape_error(tool: Tool, args: Any) -> str:
+        """``""`` when *args* satisfy the tool's top-level schema, else the
+        one-line diagnostic the model reads (v1.228.0).
+
+        Cheap by design: declared ``required`` keys must be present, and a
+        present key whose property declares one of the six plain JSON types
+        must hold that type (``json_type_ok``). Nested shapes, enums and
+        formats stay the tool's own business.
+        """
+        schema = getattr(tool, "input_schema", None) or {}
+        if not isinstance(schema, dict) or not isinstance(args, dict):
+            return ""
+        required = [k for k in (schema.get("required") or []) if isinstance(k, str)]
+        props = schema.get("properties") or {}
+        missing = [k for k in required if k not in args]
+        wrong: list[str] = []
+        if isinstance(props, dict):
+            for key, value in args.items():
+                prop = props.get(key)
+                declared = prop.get("type") if isinstance(prop, dict) else None
+                if not json_type_ok(value, declared):
+                    wrong.append(
+                        f"{key} (expected {declared}, got {type(value).__name__})"
+                    )
+        if not missing and not wrong:
+            return ""
+        got = sorted(str(k) for k in args)
+        parts: list[str] = []
+        if missing:
+            parts.append("missing required: " + ", ".join(missing))
+        if wrong:
+            parts.append("wrong type: " + ", ".join(wrong))
+        return (
+            "; ".join(parts)
+            + f" — {tool.name} needs {required}; got {got}"
+        )
 
     async def _read_cache_key(
         self, name: str, args: dict[str, Any], ctx: ToolContext

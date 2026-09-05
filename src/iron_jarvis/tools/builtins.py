@@ -16,7 +16,14 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .base import Reversibility, Tool, ToolContext, ToolResult, safe_path
+from .base import (
+    Reversibility,
+    Tool,
+    ToolContext,
+    ToolResult,
+    safe_path,
+    unwritable_workspace_error,
+)
 from .undo import (
     make_file_descriptor,
     read_envelope,
@@ -438,7 +445,14 @@ class WriteFileTool(Tool):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
 
-        await asyncio.to_thread(_write)
+        try:
+            await asyncio.to_thread(_write)
+        except PermissionError as exc:
+            # v1.228.0 (audit T3): say the FOLDER is not writable, not the
+            # OS's "Permission denied: '<path>'" the model then relays.
+            return ToolResult(
+                ok=False, error=unwritable_workspace_error(exc, ctx.workspace)
+            )
         return ToolResult(
             ok=True,
             output=f"wrote {len(content)} bytes to {args['path']}",
@@ -515,9 +529,14 @@ class EditFileTool(Tool):
         text = await asyncio.to_thread(path.read_text, encoding="utf-8")
         if args["old"] not in text:
             return ToolResult(ok=False, error="`old` text not found")
-        await asyncio.to_thread(
-            path.write_text, text.replace(args["old"], args["new"], 1), encoding="utf-8"
-        )
+        try:
+            await asyncio.to_thread(
+                path.write_text, text.replace(args["old"], args["new"], 1), encoding="utf-8"
+            )
+        except PermissionError as exc:  # v1.228.0: name the folder (audit T3)
+            return ToolResult(
+                ok=False, error=unwritable_workspace_error(exc, ctx.workspace)
+            )
         return ToolResult(ok=True, output=f"edited {args['path']}")
 
 

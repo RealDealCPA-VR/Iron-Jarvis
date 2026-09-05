@@ -520,6 +520,9 @@ def build_platform(
         # Live: an explicitly-picked provider must answer (or fail honestly)
         # while the pin is on — no substitution. Settings toggle, no restart.
         strict_pin=lambda: bool(getattr(config, "strict_model_pin", False)),
+        # Live (v1.228.0): a LOCAL primary that answered with an error refuses
+        # by name unless the user chose "failover" in Settings. No restart.
+        local_policy=lambda: str(getattr(config, "local_primary_policy", "refuse") or "refuse"),
     )
     registry = default_registry()
 
