@@ -42,8 +42,19 @@ def _card() -> str:
     return _CARD.read_text(encoding="utf-8")
 
 
+_MARKDOWN = _DASH / "components" / "Markdown.tsx"
+
+
 def _page() -> str:
-    return _PAGE.read_text(encoding="utf-8")
+    """The rendering seam the pins guard. v1.230.0 (audit Wave 4, U2) lifted
+    the chat page's Markdown renderer — and with it the draftFromFence call
+    site and the ``content={draft.markdown}`` render — into the shared
+    ``components/Markdown.tsx`` that chat/page.tsx now imports, so the pin
+    reads both files: the call must live in one of them."""
+    text = _PAGE.read_text(encoding="utf-8")
+    if _MARKDOWN.exists():
+        text += chr(10) + _MARKDOWN.read_text(encoding="utf-8")
+    return text
 
 
 def test_the_chat_page_actually_calls_the_draft_helper():
