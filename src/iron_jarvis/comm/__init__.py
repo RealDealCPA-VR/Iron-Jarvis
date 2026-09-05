@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from .base import (
     Channel,
+    ChannelAuthError,
     HttpGet,
     HttpPost,
     InboundMessage,
@@ -38,6 +39,7 @@ from .tools import NotifyTool, notify_tools
 
 __all__ = [
     "Channel",
+    "ChannelAuthError",
     "HttpGet",
     "HttpPost",
     "InboundMessage",

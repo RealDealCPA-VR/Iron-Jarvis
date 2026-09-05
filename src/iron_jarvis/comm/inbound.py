@@ -40,7 +40,7 @@ from ..core.events import EventType
 from ..core.ids import utcnow
 from ..core.logging import get_logger
 from ..core.models import AgentType
-from .base import Channel, InboundMessage, split_message
+from .base import Channel, ChannelAuthError, InboundMessage, split_message
 from .models import InboundOffsetRecord
 from .prompts import (
     ALREADY_ANSWERED_REPLY,
@@ -65,6 +65,9 @@ log = get_logger("comm.inbound")
 NEW_THREAD_REPLY = "Fresh start — next message begins a new conversation."
 ESCALATE_ACK = "On it — this needs real work. I'll send the result here."
 RATE_LIMIT_REPLY = "Getting a lot of messages — pausing for a minute."
+#: v1.231.0 (audit AE14): the honest side of at-most-once — what the chat
+#: hears when the daemon restarted while its last message was being handled.
+DROPPED_REPLY = "I was restarted while handling your last message — please resend it."
 
 #: Per-identity flood guard: more than this many handled chat turns inside the
 #: rolling window gets an honest "pausing" reply instead of a model call (a
@@ -139,6 +142,12 @@ class InboundPoller:
         #: authorized message that starts with ``/`` is handled as a fast,
         #: deterministic command instead of spawning a full agent session.
         self.command_interpreter = command_interpreter
+        #: v1.231.0 (audit AE8): per-channel ``{detail, at}`` of the LAST
+        #: failed poll (a refused token, a transport blow-up), cleared by the
+        #: next poll of that channel that comes back. ``GET /comm/channels``
+        #: reads it onto the row as ``last_poll_error``; the lifespan loop
+        #: ticks ``ok=False`` off the same verdict (:meth:`poll_verdict`).
+        self.poll_errors: dict[str, dict[str, str]] = {}
         #: The Reflex router. When set, an authorized NON-command message that
         #: matches a ``comm`` reflex rule (keyword) fires that rule instead of a
         #: free-form session — so "any message mentioning X → run workflow Y".
@@ -171,16 +180,96 @@ class InboundPoller:
             rec = db.get(InboundOffsetRecord, channel)
             return rec.offset if rec is not None else 0
 
-    def _set_offset(self, channel: str, offset: int) -> None:
+    def _set_offset(
+        self, channel: str, offset: int, *, inflight: InboundMessage | None = None
+    ) -> None:
+        """Persist the offset — and, when ``inflight`` is given, the update
+        about to be handled and its chat, IN THE SAME WRITE (v1.231.0, AE14):
+        a marker written in a second transaction could miss the crash the
+        marker exists to record."""
         with session_scope(self.engine) as db:
             rec = db.get(InboundOffsetRecord, channel)
             if rec is None:
                 rec = InboundOffsetRecord(channel=channel, offset=offset)
             else:
                 rec.offset = offset
+            if inflight is not None:
+                uid = inflight.update_id
+                rec.inflight_update_id = uid if isinstance(uid, int) else None
+                chat = inflight.reply_to if inflight.reply_to is not None else inflight.sender_id
+                rec.inflight_chat_id = str(chat or "")
             rec.updated_at = utcnow()
             db.merge(rec)
             db.commit()
+
+    def _clear_inflight(self, channel: str) -> None:
+        """Handling RETURNED (answered or failed in-process): nothing is in
+        flight any more. Deliberately not reached on ``CancelledError`` — a
+        shutdown mid-handling is exactly the case the marker must survive."""
+        with session_scope(self.engine) as db:
+            rec = db.get(InboundOffsetRecord, channel)
+            if rec is None or (rec.inflight_update_id is None and not rec.inflight_chat_id):
+                return
+            rec.inflight_update_id = None
+            rec.inflight_chat_id = ""
+            rec.updated_at = utcnow()
+            db.add(rec)
+            db.commit()
+
+    async def _recover_inflight(self, name: str, ch: Channel) -> dict[str, Any] | None:
+        """The honest half of at-most-once (v1.231.0, audit AE14).
+
+        If the last daemon died while handling an update on ``name``, the
+        offset already confirmed it server-side, so it will never be polled
+        again — the sender's message is GONE and nothing said so. Tell that
+        chat to resend, publish ``comm.dropped`` (the durable trace on the
+        timeline), and clear the marker. Returns the result row for the pass,
+        or ``None`` when nothing was in flight.
+        """
+        with session_scope(self.engine) as db:
+            rec = db.get(InboundOffsetRecord, name)
+            if rec is None or (rec.inflight_update_id is None and not rec.inflight_chat_id):
+                return None
+            update_id, chat_id = rec.inflight_update_id, rec.inflight_chat_id
+        self._clear_inflight(name)
+        notified = False
+        if chat_id:
+            try:
+                res = await asyncio.to_thread(
+                    ch.send, f"{self.reply_prefix}{DROPPED_REPLY}", chat_id=chat_id
+                )
+                notified = bool((res or {}).get("ok"))
+            except Exception:  # noqa: BLE001 — the trace below still lands
+                log.exception("inbound: could not send the dropped-message notice on %r", name)
+        log.warning(
+            "inbound: update %s on channel %r was in flight at the last shutdown and "
+            "was dropped (at-most-once); sender asked to resend",
+            update_id,
+            name,
+        )
+        await self._publish(
+            EventType.COMM_DROPPED,
+            {
+                "channel": name,
+                "update_id": update_id,
+                "chat_id": chat_id,
+                "notified": notified,
+                "reason": "daemon restarted while handling the message",
+            },
+        )
+        return {"channel": name, "status": "dropped", "update_id": update_id, "notified": notified}
+
+    @staticmethod
+    def poll_verdict(results: list[dict[str, Any]]) -> tuple[bool, Exception | None]:
+        """What one pass means for the loop's health line (v1.231.0, AE8):
+        ``(True, None)`` when no row is an error, else ``(False, exc)`` naming
+        the first failed channel and its detail — the lifespan loop feeds it
+        straight to ``_tick("inbound", ok, exc)``."""
+        for row in results:
+            if isinstance(row, dict) and row.get("status") == "error":
+                detail = str(row.get("detail") or "poll failed")
+                return False, RuntimeError(f"{row.get('channel') or 'channel'}: {detail}")
+        return True, None
 
     # -- full-chat plumbing (v1.136.0) -------------------------------------
     def _chat_ready(self, ch: Channel) -> bool:
@@ -344,6 +433,9 @@ class InboundPoller:
         """
         results: list[dict[str, Any]] = []
         for name, ch in self.inbound_channels():
+            dropped = await self._recover_inflight(name, ch)
+            if dropped is not None:
+                results.append(dropped)
             offset = self._get_offset(name)
             try:
                 # The poll is blocking HTTP — run it off the event loop so a
@@ -352,22 +444,44 @@ class InboundPoller:
                 messages, next_offset = await asyncio.to_thread(
                     ch.poll, offset, timeout=self.poll_timeout
                 )
-            except Exception:  # noqa: BLE001 — never let one channel kill the pass
-                log.exception("inbound poll failed for channel %r", name)
+            except ChannelAuthError as exc:
+                # A refused credential is NOT an empty batch (v1.231.0, AE8):
+                # record it where the row and the loop can read it.
+                detail = str(exc)[:300]
+                log.warning("inbound poll refused on channel %r: %s", name, detail)
+                self.poll_errors[name] = {"detail": detail, "at": utcnow().isoformat()}
+                results.append({"channel": name, "status": "error", "detail": detail})
                 continue
+            except Exception as exc:  # noqa: BLE001 — never let one channel kill the pass
+                log.exception("inbound poll failed for channel %r", name)
+                detail = f"{type(exc).__name__}: {exc}"[:300]
+                self.poll_errors[name] = {"detail": detail, "at": utcnow().isoformat()}
+                results.append({"channel": name, "status": "error", "detail": detail})
+                continue
+            self.poll_errors.pop(name, None)
             for msg in messages:
                 # AT-MOST-ONCE on a remote COMMAND surface: persist the offset
                 # BEFORE running, so a crash mid-handling drops the in-flight
                 # message rather than re-running a remote-triggered action on
                 # restart (duplicate side effects are worse than a dropped reply).
+                # The in-flight marker rides the SAME write (AE14): a restart
+                # that lands between here and the clear below finds it on boot
+                # and tells the chat to resend — the drop stays, the silence goes.
                 if isinstance(msg.update_id, int):
                     offset = max(offset, msg.update_id + 1)
-                    self._set_offset(name, offset)
+                self._set_offset(name, offset, inflight=msg)
                 try:
                     res = await self._handle(name, ch, msg)
-                except Exception:  # noqa: BLE001 — keep processing the batch
+                except Exception as exc:  # noqa: BLE001 — keep processing the batch
                     log.exception("inbound handling failed on channel %r", name)
-                    res = {"channel": name, "status": "error"}
+                    res = {
+                        "channel": name,
+                        "status": "error",
+                        "detail": f"handling failed: {type(exc).__name__}: {exc}"[:300],
+                    }
+                # Reached only when handling RETURNED — a CancelledError
+                # (shutdown) skips this on purpose and leaves the marker.
+                self._clear_inflight(name)
                 results.append(res)
             # Some channels report a high-water offset even with no text messages
             # (e.g. only non-text updates); persist it so we don't refetch them.
@@ -546,20 +660,41 @@ class InboundPoller:
                 )
             except Exception:  # noqa: BLE001 — a reflex must never break comm
                 fired = []
+            # v1.231.0 (audit AE6): a rule that MATCHED but could not start
+            # (its workflow was deleted, its remote agent is gone) is answered
+            # by name with the reason — it used to be filtered out here and
+            # the message fell through to a free-form session, so the phone
+            # got an unrelated agent answer instead of "that rule is broken".
+            failed = [f for f in fired if not f.get("ok")]
             fired = [f for f in fired if f.get("ok")]
-            if fired:
-                summary = "; ".join(
-                    f"{f.get('kind', 'action')} {f.get('rule', '')}".strip() for f in fired
+            if fired or failed:
+                parts: list[str] = []
+                if fired:
+                    parts.append(
+                        "Triggered: "
+                        + "; ".join(
+                            f"{f.get('kind', 'action')} {f.get('rule', '')}".strip()
+                            for f in fired
+                        )
+                    )
+                parts.extend(
+                    f'Rule "{f.get("rule", "")}" could not start: {f.get("error") or "failed"}'
+                    for f in failed
                 )
+                summary = " ".join(parts)
                 if chat_on:
-                    # The reflex-fired exchange lands on the thread too.
-                    self._append_exchange(name, msg, display, text, f"Triggered: {summary}")
-                body = f"{self.reply_prefix}Triggered: {summary}"[: self.max_reply_chars]
+                    # The reflex exchange lands on the thread too.
+                    self._append_exchange(name, msg, display, text, summary)
+                body = f"{self.reply_prefix}{summary}"[: self.max_reply_chars]
                 send_res = await asyncio.to_thread(ch.send, body, chat_id=msg.reply_to)
                 return {
                     "channel": name,
-                    "status": "reflex",
+                    "status": "reflex" if fired else "reflex_failed",
                     "fired": len(fired),
+                    "failed": [
+                        {"rule": f.get("rule", ""), "error": f.get("error") or "failed"}
+                        for f in failed
+                    ],
                     "sent": bool(send_res.get("ok")),
                 }
 
@@ -570,8 +705,12 @@ class InboundPoller:
             return await self._handle_chat(name, ch, msg, text, display)
 
         # Spawn a NORMAL supervised session (same orchestrator + permission
-        # engine as a local user) and await its result.
-        session = await self.orchestrator.create_session(text, self.agent_type)
+        # engine as a local user) and await its result. Origin ``comm:<channel>``
+        # (v1.231.0, audit AE17): the runtime's ask allowlist reads it, so a
+        # session the phone started may ask back through the phone.
+        session = await self.orchestrator.create_session(
+            text, self.agent_type, origin=f"comm:{name}"
+        )
         await self._publish(
             EventType.COMM_RECEIVED,
             {"channel": name, "sender": msg.sender_id, "task": text},
@@ -713,7 +852,11 @@ class InboundPoller:
         # kwarg the dashboard passes when escalating desktop chat), so the
         # run gets the project's brief/knowledge/recent-activity spine.
         session = await self.orchestrator.create_session(
-            task, agent_type, project_id=project_id or None, **_spawn_kwargs
+            task,
+            agent_type,
+            project_id=project_id or None,
+            origin=f"comm:{name}",  # v1.231.0 (AE17): may ask back via the phone
+            **_spawn_kwargs,
         )
         await self._publish(
             EventType.COMM_RECEIVED,

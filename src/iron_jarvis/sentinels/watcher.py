@@ -42,11 +42,19 @@ def default_scanner(path: str, pattern: str | None = None) -> dict[str, float]:
       * ``path`` is a dir     → its immediate file children.
       * ``path`` is a file    → just that file (if it exists).
 
-    Only regular files are returned. Unreadable entries are skipped (never raise).
+    Only regular files are returned. Unreadable entries are skipped. The ONE
+    exception raised on purpose (v1.231.0, audit AE7): a configured root that
+    does not exist raises ``FileNotFoundError`` — an empty ``{}`` for a
+    vanished USB stick / OneDrive folder read as "every file was deleted",
+    the service recorded it as the new baseline, and the replug re-fired for
+    every untouched file. A path that is itself a glob keeps the old
+    behaviour (it can legitimately match nothing).
     """
     if not path:
         return {}
     base = Path(path).expanduser()
+    if not any(ch in path for ch in _GLOB_CHARS) and not base.exists():
+        raise FileNotFoundError(f"watch root not found: {path}")
     if pattern:
         matches = base.glob(pattern)
     elif any(ch in path for ch in _GLOB_CHARS):

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.230.0 (2026-09-05).*
+holds itself to. Current as of v1.231.0 (2026-09-05).*
 
 ---
 
@@ -162,6 +162,16 @@ formulas by computing them.
 ### Automation
 - **Schedules**: cron/interval/date tasks that fire real agent sessions
   (project-bound, outcome recorded on the row, delivered to your channels).
+  The row tells the truth about fires that did NOT happen too (v1.231.0): a
+  fire missed while the PC slept or the app was closed shows as **missed** on
+  the row (with the time) and never fires late twice — a fire up to five
+  minutes late still runs, so a laptop that woke at 3:02 gets its 3:00 job;
+  a tick that lands while the previous fire is still running shows as
+  **skipped**, and Run-now on a task that is still running answers "already
+  running" instead of starting a second copy. Cancel on a schedule-fired
+  session stops it at once. On a Windows box whose time zone cannot be named,
+  the daemon still boots, schedules run on UTC, and the doctor says so
+  (`scheduler_timezone`).
 - **Workflows**: multi-step (agent/tool/ask/notify steps, parallel groups,
   retries); a run parks on an *ask* step and waits for your answer — from the
   chat card or the Workflows page. The Workflows page has the visual editor
@@ -178,12 +188,80 @@ formulas by computing them.
   writes — JSON with a stray comma, steps as sentences, the workflow written
   in prose — and a step that could never run is refused when you save, by
   name. A run whose pinned project folder has gone missing says so on its
-  run-history row instead of quietly working in a scratch folder.
+  run-history row instead of quietly working in a scratch folder (and the
+  note clears on a Resume that finds the folder back). A step that
+  **crashes** — the model endpoint down, a tool that raises — counts as
+  **failed** for retries and `on_failure`, exactly like a step that reports
+  a failure, so a `retry` re-attempts it and a `skip` continues past it
+  with the reason on the row. **Finished steps survive a restart**: each
+  step is written to the run record the moment it completes, so a Resume
+  after the daemon died mid-way never re-runs (or re-notifies) work that
+  was done. A later step that references a failed-and-skipped step gets
+  `[step Name failed: reason]` in place of `{{Name}}` — never the error
+  text passed off as the step's output — while `{{Name.data}}` of a failed
+  step is empty (a failed tool records no data). Saving refuses a
+  `{{Name.data}}` whose `Name` is not one of the workflow's steps (a typo
+  like `{{Scna.data}}` would render nothing on every run); a bare
+  `{{Name}}` naming no step is read as a run input.
 - **Reflexes**: webhook-triggered actions. **Sentinels**: watched folders.
   **Autonomy**: off by default; when on, starts at *suggest* level with hard
   daily action/token caps and a kill switch.
+- **A reflex rule that cannot start says so on its row and in the reply**
+  (v1.231.0). When a signal matches a rule whose workflow was deleted or
+  whose remote agent is gone, the rule's row on the Reflexes page shows
+  *could not start: <reason>* until a later fire succeeds, the webhook's
+  answer lists it under `failed` instead of counting it as fired, and a
+  phone message that matched it gets `Rule "<name>" could not start:
+  <reason>` back — it no longer falls through to an unrelated free-form
+  answer. A webhook POST with a bad or missing signature is refused with
+  **401** (unknown address: **404**) and the activity timeline records
+  `webhook.rejected` with the reason, so a probed or misconfigured secret
+  is visible rather than a silent 200.
+- **A sentinel whose folder vanished keeps its memory** (v1.231.0). When a
+  watched folder is unreachable (USB stick unplugged, OneDrive folder
+  offline), the Sentinels page shows *root unreachable since <time>* on the
+  row and the watcher keeps the files it had already seen; plugging the
+  drive back in proposes nothing for untouched files instead of treating
+  every one of them as new. You can add a sentinel for a folder that is not
+  there yet — it baselines the first time the folder appears.
+- **One execution seam** (v1.231.0): a scheduled task, a reflex rule, a goal
+  iteration or a phone message bound to a project runs **in the project's
+  folder** — the same folder, through the same check, as a task started
+  from the project page — and it **can ask you**: when it hits a tool that
+  needs approval, the bell and your phone get the question, and if nobody
+  answers within five minutes the run ends as **needs you** rather than
+  quietly skipping the work. Every such session is stamped with where it
+  came from (`schedule:<name>`, `reflex:<rule>`, `comm:<channel>`,
+  `autonomy`, `goal:<id>`, `workflow:<name>`), so the session list and the
+  activity timeline can answer "did I start this, or did it start itself?".
+  If a project's folder is set but cannot be used (missing, protected, not
+  writable), the run works in a scratch workspace and says so on its
+  session row instead of pretending it worked in your folder.
 - **Channels**: desktop notifications, Slack, Telegram (chat-id
   auto-detect), email — with per-destination event routing.
+- **A dead phone token is visible, and a dropped message says so**
+  (v1.231.0): if your Telegram bot token is revoked or rotated (or your
+  mailbox refuses the IMAP login), the Channels row turns red with **Not
+  listening — …** and the exact reason (for Telegram: paste the current
+  token from @BotFather), and the daemon's health line reports the inbound
+  loop as failing instead of "polling fine" — before this, a dead token
+  looked exactly like a quiet phone, forever. Separately, two-way messaging
+  is at-most-once on purpose (a message being handled when the app is
+  restarted is dropped rather than run twice); now the restart tells that
+  chat *"I was restarted while handling your last message — please resend
+  it"* and the Activity timeline records a `comm.dropped` event, so a lost
+  message is never silent.
+- **Goals trip on consecutive bad nights, and waiting is not work**
+  (v1.231.0): a goal's circuit breaker trips — the goal stops iterating
+  until you reopen it — after **3 failed iterations inside 30 minutes OR 3
+  failed iterations in a row at any spacing**; a goal scheduled "every
+  night at 3 am" that fails three nights running now trips on the third,
+  where before each night's failure aged out of the window and it failed
+  forever. One successful iteration resets the run. And the goal's
+  `max_wallclock_s` budget is charged only for the time the iteration
+  worked: minutes its session spent parked on an approval nobody was awake
+  to answer are not billed (the iteration still ends with the honest
+  "approval timed out" receipt).
 
 ### Terminals, Creative, and the rest
 Free-form terminal canvas with AI assist per pane; a Creative gallery for

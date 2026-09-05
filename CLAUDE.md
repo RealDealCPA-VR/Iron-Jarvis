@@ -288,6 +288,76 @@ does not need a bump, stop and bump it.
   `except TimeoutError` around `wait_for` misattributed it and, with no
   deadline, crashed formatting `None`. A step streaming past `_MAX_STEP_STREAM_CHARS`
   closes the stream and ends the run FAILED with the reason.
+- **Every door ends in `create_session`, so the folder and the ask live
+  THERE** (v1.231.0, audit Wave 5, AE1/AE17). Six doors (schedule, reflex,
+  goal, comm one-shot, comm escalation, autonomy) each handed the
+  orchestrator a different subset of project/root/origin, and the two
+  that mattered — the folder and the right to ask — were per-door: a
+  schedule bound to a project ran in `workspaces/<sid>` and refused its own
+  project files, and the runtime's ask allowlist (`ASKING_ORIGINS`) only
+  admitted origins nobody at those doors stamped, so a phone-started job
+  could never ask the phone. Now `create_session` resolves a project-tagged
+  session's folder through `fs_policy.root_problem` (the ONE definition;
+  `routes/projects._root_problem` and `usable_workspace_root` delegate to
+  it) and records an unusable root on the row (`Folder note:` in
+  `summary`, kept under the result by every finalizer); every door stamps
+  `<door>:<name>`; and the allowlist admits the doors whose asks the
+  v1.200.0 fan-out delivers. Do not add a door that passes `project_id`
+  and resolves its own folder, and do not stamp an origin the allowlist
+  has never heard of — `tests/test_execution_seam_v1231.py` drives each
+  door end to end. `delegate`/`spawn_agent` (`SAFE_HEADLESS_TOOLS`) are
+  exempt from the pause: the daemon grants them with nobody present, so
+  asking a human about them is five minutes of noise.
+- **A step that RAISES is a failed step, and a result is written when it
+  LANDS** (v1.231.0, audit Wave 5, AE3/AE4). The tool branch of the
+  workflow engine caught `Exception` and returned a failed output; the agent
+  branch beside it caught only `CancelledError`, so a session that re-raised
+  a provider error ("fleet down at 3am") escaped the attempt loop —
+  no retry, no `on_failure`, no `workflow.step_completed`, a silent halt —
+  and outputs were persisted once per BATCH, so a crash mid-parallel-group
+  dropped every finished member and Resume re-delivered them. Two sibling
+  branches that handle the same failure must handle it the same way, and a
+  record that claims to make resume honest must be written per step, not
+  per batch (`_exec_step` writes its own output; `_update_record` snapshots
+  the dict because siblings now mutate it). `tests/test_workflow_engine_v1231.py`.
+- **A cancel goes to the task's OWN loop, and a fire that did not happen is
+  written where the user reads** (v1.231.0, audit Wave 5, AE2/AE9/AE11/
+  AE12). A schedule fire runs under `asyncio.run` on the APScheduler thread;
+  `task.cancel()` from any other thread neither wakes that loop's selector
+  nor is thread-safe, so Cancel landed when the model call returned on its
+  own. `cancel_session` compares `task.get_loop()` with the running loop and
+  uses `loop.call_soon_threadsafe(task.cancel)` across loops (the cancel
+  route is a sync `def`, so every route cancel is cross-thread). The
+  scheduler's silent outcomes — APScheduler's 1 s default misfire grace
+  turned a PC asleep at 03:00 into a WARNING in its own logger; a skipped
+  overlap likewise; a fire the app was closed for left `next_run` in the
+  past under an `ok` — are now rows: `misfire_grace_time=300` on recurring
+  jobs, an `EVENT_JOB_MAX_INSTANCES | EVENT_JOB_MISSED` listener, and
+  `start()` reconciling recurring rows to `missed` WITHOUT firing. Two traps
+  in `scheduling/service.py`: cron/interval `next_run` is stored as the
+  scheduler zone's wall clock while `last_run` is UTC (SQLite drops tzinfo),
+  so each is read on its own clock; and `misfire_grace_time=None` means
+  UNLIMITED, not default. Every trigger is handed the scheduler's zone —
+  APScheduler re-resolves tzlocal per trigger, so a UTC fallback on the
+  scheduler alone would have booted the daemon and then aborted `start()` on
+  the first cron task. `tests/test_scheduler_trust_v1231.py`.
+- **A refused credential is not an empty batch, and at-most-once must
+  leave a trace** (v1.231.0, audit Wave 5, AE8/AE14). `TelegramChannel.poll`
+  mapped EVERY non-ok answer to `([], offset)` and the IMAP poll wrapped
+  `login` in the same blanket `except`, so a revoked bot token was a
+  healthy `_tick("inbound", True)` every 15 s forever — the same disease
+  as the v1.229.0 sampler, one layer down. A poll raises
+  `comm.base.ChannelAuthError` for 401/403 / a refused LOGIN only (a 5xx
+  keeps the fail-safe empty batch), `poll_once` turns it into an error
+  row + `poll_errors[name]`, and the loop ticks off `poll_verdict` — read
+  the status off the RAW response (`_get_raw` + `auth_refusal`), because
+  `interpret_json` flattens a 401 to `None` before anyone can see it. The
+  inbound offset is still persisted BEFORE handling (a duplicate remote
+  action is worse than a dropped reply), but the update in flight rides
+  the same write (`inflight_update_id`/`inflight_chat_id`) and is cleared
+  only when `_handle` RETURNS — a `CancelledError` at shutdown must leave
+  it — so the next boot apologises to that chat and publishes
+  `comm.dropped`. Do not "tidy" the clear into a `finally`.
 - **A rule that lives in one page's JSX is not a rule, and a delete must
   untag what SPAWNS** (v1.220.0, projects-module review). "An archived project
   takes no new tasks" was enforced by hiding the composer on

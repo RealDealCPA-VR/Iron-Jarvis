@@ -76,7 +76,11 @@ GOAL_TRANSITIONS: dict[str, frozenset[str]] = {
 
 #: Circuit breaker (the renderer-watchdog pattern): this many failed iterations
 #: inside the window trips the goal instead of letting it burn budget retrying
-#: a broken world state forever.
+#: a broken world state forever — OR this many CONSECUTIVE failures with no
+#: successful iteration between them, whatever their spacing (v1.231.0, audit
+#: AE5: a nightly goal's failures were each 24 h apart, so the 30-minute window
+#: could never hold three and "every night at 3 am" could fail forever). The
+#: counter lives at ``breaker_json.consecutive`` and resets on a success.
 BREAKER_MAX_FAILURES = 3
 BREAKER_WINDOW_S = 30 * 60
 
@@ -152,8 +156,10 @@ class GoalContractRecord(SQLModel, table=True):
     #: check is a workflows ``expect:`` shape ({files?, summary_contains?}).
     verifier_json: str = json.dumps({"kind": "manual"})
     state: str = Field(default="active", index=True)
-    #: JSON ``{failures: [iso...], last_reason?, tripped_at?}`` — failure
-    #: timestamps pruned to the breaker window on write.
+    #: JSON ``{failures: [iso...], consecutive?, last_reason?, tripped_at?}``
+    #: — failure timestamps pruned to the breaker window on write;
+    #: ``consecutive`` counts failures since the last success (never pruned,
+    #: reset by a successful iteration and by reopen).
     breaker_json: str = json.dumps({"failures": []})
     #: JSON carry-forward: ``{last_session_id?, running_session_id?, iteration?,
     #: files?, remaining?, at?}`` — DETERMINISTIC (session id + ledger files +

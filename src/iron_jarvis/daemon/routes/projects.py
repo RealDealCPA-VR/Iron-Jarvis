@@ -54,27 +54,15 @@ def _root_problem(root: str) -> str | None:
     task with every write refused as outside-workspace and no error naming
     why. BLOCKING (the writability probe creates a file): the sync
     create/patch handlers run in FastAPI's threadpool; the async task route
-    wraps this in ``asyncio.to_thread``."""
-    from pathlib import Path
+    wraps this in ``asyncio.to_thread``.
 
-    from ...core.fs_policy import dir_writable, fs_path_allowed, is_protected_path
+    v1.231.0 (audit AE1/T4): the body moved to ``fs_policy.root_problem`` so
+    that ``Orchestrator.create_session`` — where every automation door ends —
+    asks the SAME question of a project's root; this name stays for the
+    create/patch/task callers here."""
+    from ...core.fs_policy import root_problem
 
-    p = Path(root)
-    if not p.is_absolute():
-        return "folder must be an absolute path"
-    if not p.is_dir():
-        return f"folder does not exist on this machine: {root}"
-    if not fs_path_allowed(str(p)) or is_protected_path(str(p)):
-        return (
-            f"folder is protected or outside the app's allowed file roots: {root} "
-            "— pick a folder this app may read and write in"
-        )
-    if not dir_writable(p):
-        return (
-            f"folder is not writable by this app: {root} "
-            "— pick a folder you can save files in"
-        )
-    return None
+    return root_problem(root)
 
 
 def _validate_root(root: str) -> str:

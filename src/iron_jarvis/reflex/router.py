@@ -161,8 +161,14 @@ class ReflexRouter:
             log.exception("reflex rule %r failed", rule.name)
             result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
-        if result.get("ok"):
-            self.store.mark_fired(rule.id)
+        # v1.231.0 (audit AE6): the row carries the outcome either way — a
+        # failed start is written as ``last_error`` where the user looks,
+        # and is NOT counted as a fire.
+        self.store.mark_result(
+            rule.id,
+            ok=bool(result.get("ok")),
+            detail=str(result.get("error") or _result_detail(result)),
+        )
         await self._publish(rule, result)
         return {"rule": rule.name, "rule_id": rule.id, **result}
 
@@ -229,8 +235,15 @@ class ReflexRouter:
         # reflex work exactly as it does for a Projects task. An inbound
         # "client emailed the missing 1099" used to run with zero client
         # context. ``or None`` keeps a legacy ""/blank row honest.
+        # v1.231.0 (audit AE17): stamped ``reflex:<rule>`` — the origin is
+        # what the runtime's ask allowlist reads, so an unstamped reflex
+        # session could never pause on an ask-tier tool; and the project's
+        # own folder is resolved by create_session (AE1), not here.
         session = await self.orch.create_session(
-            task, AgentType.SUPERVISOR, project_id=rule.project_id or None
+            task,
+            AgentType.SUPERVISOR,
+            project_id=rule.project_id or None,
+            origin=f"reflex:{rule.name}",
         )
         self._launch(self.orch.run_session(session.id), session.id)
         return {"ok": True, "kind": "session", "session_id": session.id}
@@ -261,6 +274,30 @@ class ReflexRouter:
             )
         except Exception:  # noqa: BLE001 — the bus must never block a reflex
             pass
+
+
+def _result_detail(result: dict[str, Any]) -> str:
+    """One line naming what a successful fire started (for ``last_result``)."""
+    kind = str(result.get("kind") or "")
+    ref = result.get("run_id") or result.get("session_id") or result.get("agent") or ""
+    target = result.get("workflow") or ""
+    return " ".join(x for x in (kind, str(target), str(ref)) if x).strip()
+
+
+def summarize_fires(fired: list[dict[str, Any]]) -> dict[str, Any]:
+    """The honest ack fields for a signal that matched rules (v1.231.0, AE6).
+
+    ``fired`` counts only the rules that actually STARTED their action;
+    ``failed`` names each rule that matched but could not start, with the
+    reason. ``reflexes_fired`` is the pre-v1.231.0 key, kept (additive API)
+    but now equal to ``fired`` — it used to count failures as fires."""
+    ok = [f for f in fired if f.get("ok")]
+    failed = [
+        {"rule": str(f.get("rule") or ""), "error": str(f.get("error") or "failed")}
+        for f in fired
+        if not f.get("ok")
+    ]
+    return {"fired": len(ok), "failed": failed, "reflexes_fired": len(ok)}
 
 
 def _text_of(body: Any) -> str:

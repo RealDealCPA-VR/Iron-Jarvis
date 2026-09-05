@@ -18,8 +18,10 @@ acceptance job escalated from chat, 27 real tax documents):
   registry, the same `POST /chat/approvals/{id}` answer route as chat's
   v1.187.0 ask — publishing `approval.requested`/`approval.resolved` tagged
   with the session id so the card renders under the turn the user is watching.
-  Runs with nobody present (schedule/autonomy/comm/reflex origins) keep the
-  instant honest denial.
+  Runs with nobody present (schedule/autonomy/comm/reflex origins) kept the
+  instant honest denial until v1.231.0 (audit AE17): those doors deliver the
+  ask to the bell and the phone, so they may pause now — see
+  ``tests/test_execution_seam_v1231.py``; UNATTRIBUTED runs still never pause.
 """
 
 from __future__ import annotations
@@ -250,20 +252,19 @@ async def test_nobody_answering_is_a_bounded_honest_timeout(rt, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_headless_origins_never_pause(rt, monkeypatch):
-    """A 3am schedule parking five minutes per ask punishes the schedule for
-    the user being asleep — those lanes keep the instant honest denial whose
-    message already names allow_tools as the up-front grant path. And the
-    ALLOWLIST is the load-bearing half: the first cut deny-listed known
+async def test_unattributed_origins_never_pause(rt, monkeypatch):
+    """The ALLOWLIST is the load-bearing half: the first cut deny-listed known
     headless origins and treated UNATTRIBUTED as watched, which parked every
     origin-less session — headless API callers and the offline suite included
     — for five silent minutes per ask. Presence is asserted, never assumed.
+    (schedule/autonomy/comm/reflex left this list in v1.231.0, audit AE17:
+    their asks reach the bell and the phone, and an unanswered one ends as
+    ``needs_you`` — ``tests/test_execution_seam_v1231.py`` pins that half.)
 
     The timeout is patched tiny so a MUTATED gate fails this test in 0.1s with
-    a timeout-deny instead of hanging the suite for four unanswered pauses."""
+    a timeout-deny instead of hanging the suite for unanswered pauses."""
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 0.1)
-    for origin in ("schedule:nightly", "autonomy", "comm:telegram", "reflex:x",
-                   None, "", "mystery:new-surface"):
+    for origin in (None, "", "mystery:new-surface"):
         deny, extra = await rt.runtime._pause_for_approval(
             _session(origin=origin), _tc(), _agent_def(), set()
         )

@@ -56,3 +56,11 @@ class ReflexRule(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
     last_fired_at: datetime | None = None
     fire_count: int = 0
+    #: v1.231.0 (audit AE6): what the LAST fire did, on the row the user reads.
+    #: ``last_error`` is the reason the most recent matched signal could not
+    #: start the action ("no saved workflow 'x'"); ``last_result`` is the
+    #: kind/id of the last successful start. A fire that failed used to leave
+    #: no trace on the rule at all. Additive columns — existing DBs self-heal
+    #: via ``core.db._reconcile_additive_columns`` (same as ``project_id``).
+    last_error: str | None = None
+    last_result: str | None = None

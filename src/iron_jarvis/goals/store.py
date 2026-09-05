@@ -447,13 +447,36 @@ class GoalStore:
             db.refresh(row)
             return row
 
+    def record_success(self, goal_id: str) -> GoalContractRecord | None:
+        """A successful iteration RESETS the consecutive-failure counter
+        (v1.231.0, AE5). The windowed timestamps are left alone — three
+        failures inside 30 minutes still trip whatever landed between them."""
+        with session_scope(self.engine) as db:
+            row = db.get(GoalContractRecord, goal_id)
+            if row is None:
+                return None
+            breaker = row.decoded_breaker()
+            if int(breaker.get("consecutive") or 0) == 0:
+                return row
+            breaker["consecutive"] = 0
+            row.breaker_json = json.dumps(breaker)
+            row.updated_at = utcnow()
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+            return row
+
     def record_failure(self, goal_id: str, reason: str) -> tuple[GoalContractRecord | None, bool]:
-        """Append one failure to the breaker and trip if the window fills.
+        """Append one failure to the breaker and trip if the window fills —
+        or if this is the ``BREAKER_MAX_FAILURES``-th failure IN A ROW.
 
         Returns ``(record, tripped_now)``. Failure timestamps are PRUNED to the
         window on every write, so old failures age out instead of counting
-        forever. The state write happens here (durable before anything else
-        reads it); the EVENT is the engine's job — this store has no bus.
+        forever; the ``consecutive`` counter is not pruned — it resets only on
+        a success (:meth:`record_success`) or a reopen — so a goal that fails
+        every night trips on the third night (v1.231.0, AE5). The state write
+        happens here (durable before anything else reads it); the EVENT is
+        the engine's job — this store has no bus.
         """
         now = utcnow()
         cutoff = now - timedelta(seconds=BREAKER_WINDOW_S)
@@ -470,8 +493,15 @@ class GoalStore:
             failures.append(now.isoformat())
             breaker["failures"] = failures
             breaker["last_reason"] = str(reason or "")[:400]
+            try:
+                consecutive = int(breaker.get("consecutive") or 0) + 1
+            except (TypeError, ValueError):
+                consecutive = 1
+            breaker["consecutive"] = consecutive
             tripped_now = False
-            if len(failures) >= BREAKER_MAX_FAILURES and row.state == "active":
+            if (
+                len(failures) >= BREAKER_MAX_FAILURES or consecutive >= BREAKER_MAX_FAILURES
+            ) and row.state == "active":
                 breaker["tripped_at"] = now.isoformat()
                 row.state = "tripped"
                 tripped_now = True
@@ -552,6 +582,7 @@ def goal_view(record: GoalContractRecord) -> dict[str, Any]:
         "trip_reason": reason if tripped else None,
         "breaker": {
             "failures": list(breaker.get("failures", [])),
+            "consecutive": int(breaker.get("consecutive") or 0),
             "reason": reason,
             "tripped_at": breaker.get("tripped_at"),
         },

@@ -21,6 +21,7 @@ from ..envelope.profile import CapabilityProfile
 from ..providers.adapters.base import LLMMessage
 from ..sandbox.native import host_os_line
 from ..tools.base import ToolContext
+from ..tools.permissions import SAFE_HEADLESS_TOOLS
 from . import decompose as _decompose
 from .types import AgentDefinition
 
@@ -39,6 +40,18 @@ ENVELOPE_ADAPTED = "envelope.adapted"
 #: reaches the bell and the chat thread), still bounded: a run must never hang
 #: forever on a question nobody will answer.
 SESSION_APPROVAL_TIMEOUT_S = 300.0
+
+#: Origin PREFIXES whose sessions may PAUSE on an ask-tier tool and put the
+#: question where a person can answer it (chat card, bell, phone). Every door
+#: that stamps one of these has a channel: chat/job/project/user are watched
+#: surfaces, goal (v1.209.0) and schedule/workflow/reflex/comm/autonomy
+#: (v1.231.0, audit AE17) deliver through the v1.200.0 bell + phone fan-out.
+#: Anything else — None, "", an origin no door stamps — is unattributed and
+#: takes the instant headless denial (see ``_pause_for_approval``).
+ASKING_ORIGINS = (
+    "chat", "job", "project", "user", "goal",
+    "schedule", "workflow", "reflex", "comm", "autonomy",
+)
 
 #: What the model reads when an ask-tier pause ran out of clock (v1.227.0,
 #: A11). The old text said "permission denied … ask the user to re-run, or
@@ -62,7 +75,8 @@ def is_direct_workspace(config, workspace_path: str | Path | None) -> bool:
     dir under ``workspaces_dir``.
 
     The honest signal: ``create_session`` only ever places a session OUTSIDE the
-    managed ``workspaces_dir`` when the caller passed ``workspace_root``, so the
+    managed ``workspaces_dir`` when the caller passed ``workspace_root`` or
+    (v1.231.0) its project's own usable root resolved to one, so the
     stored ``Session.workspace_path`` alone answers it — no guessed flag. Shared
     by the runtime (environment prompt) and the orchestrator (rerun) so both
     always agree on which kind of workspace a session has."""
@@ -1331,12 +1345,14 @@ class AgentRuntime:
         ``approval.requested`` tagged with this session's id, so the chat page
         renders the same card under the escalated turn.
 
-        WHO PAUSES: only runs whose ORIGIN ASSERTS a watching human — a chat
-        escalation ("chat"), an Agents-page job ("job:…"), a Projects task
-        ("project:<project id>", stamped by ``routes/projects.py`` — this
-        branch was DEAD until v1.192.0 because nothing produced a
-        project-prefixed origin, so in-folder Projects tasks were denied
-        headlessly). An ALLOWLIST, not a denylist, and the first cut got
+        WHO PAUSES: only runs whose ORIGIN ASSERTS a channel to a human
+        (``ASKING_ORIGINS``) — a chat escalation ("chat"), an Agents-page job
+        ("job:…"), a Projects task ("project:<project id>", stamped by
+        ``routes/projects.py`` — this branch was DEAD until v1.192.0 because
+        nothing produced a project-prefixed origin, so in-folder Projects
+        tasks were denied headlessly), and since v1.231.0 every automation
+        door (schedule/workflow/reflex/comm/autonomy — the bell and the phone
+        carry the question). An ALLOWLIST, not a denylist, and the first cut got
         this backwards: treating "unattributed" as "somebody is watching"
         parked every origin-less session — headless API callers and the
         entire offline test suite included — for five silent minutes per
@@ -1359,7 +1375,25 @@ class AgentRuntime:
         # them to bell + phone); an unattended 3am ask times out into a
         # conservative timeout receipt that BLOCKS offers — the designed
         # trust-ladder behavior, not a hazard.
-        if not origin.startswith(("chat", "job", "project", "user", "goal")):
+        #
+        # schedule / workflow / reflex / comm / autonomy joined v1.231.0
+        # (audit AE17): the v1.200.0 machinery already carries every
+        # ``approval.requested`` to the bell AND the phone, so a session
+        # those doors start has a channel to ask through — yet this list
+        # kept them on the instant headless denial, and the phone-approval
+        # path was unreachable from a phone-STARTED session. They MAY pause
+        # now; an unanswered ask ends as the v1.227.0 ``needs_you`` outcome
+        # (the timeout receipt below), never as work silently not done.
+        # Still an ALLOWLIST: an unattributed run (None / "" / an origin no
+        # door stamps) keeps the instant honest denial — presence is a fact
+        # a door states, never a default.
+        if not origin.startswith(ASKING_ORIGINS):
+            return "", set()
+        if tc.name in SAFE_HEADLESS_TOOLS:
+            # The daemon's own resolver grants these with nobody present
+            # (``delegate``/``spawn_agent`` never touch the host), so a
+            # supervisor decomposing a phone or schedule job must not park
+            # five minutes on a question the app answers itself (v1.231.0).
             return "", set()
         tool = self.p.registry.get(tc.name)
         perm = tool.perm_key() if tool is not None else tc.name

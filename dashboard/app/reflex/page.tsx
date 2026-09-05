@@ -59,6 +59,10 @@ interface ReflexRule {
   created_at: string;
   last_fired_at: string | null;
   fire_count: number;
+  /** v1.231.0 (audit AE6): why the last matched signal could not start
+   *  (null once a later fire succeeds) / what the last fire started. */
+  last_error?: string | null;
+  last_result?: string | null;
 }
 
 /** POST /reflex/rules/{id}/test result. */
@@ -460,6 +464,15 @@ export default function ReflexPage() {
               </span>
               {r.last_fired_at && (
                 <span>last {new Date(r.last_fired_at).toLocaleString()}</span>
+              )}
+              {r.last_error && (
+                <span
+                  data-testid={`reflex-last-error-${r.id}`}
+                  className="max-w-[24rem] truncate text-amber-300"
+                  title={`Last signal matched but the rule could not start: ${r.last_error}`}
+                >
+                  could not start: {r.last_error}
+                </span>
               )}
               {templateShownFor(r) && r.task_template.trim() && (
                 <span className="max-w-[18rem] truncate" title={r.task_template}>

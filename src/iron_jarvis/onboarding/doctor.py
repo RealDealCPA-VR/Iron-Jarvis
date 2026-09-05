@@ -362,6 +362,30 @@ def runtime_checks(platform) -> list[dict]:
     except Exception as exc:  # noqa: BLE001
         checks.append(_result("mcp", False, f"mcp check failed: {exc}", level=RECOMMENDED))
 
+    # The scheduler runs on the LOCAL zone (v1.231.0, audit AE12). When tzlocal
+    # cannot name the Windows zone the daemon used to abort at build_platform;
+    # now the scheduler falls back to UTC and says so here — a "0 3 * * *"
+    # nightly on that box fires at 03:00 UTC, which the user must know.
+    try:
+        note = getattr(getattr(platform, "scheduler", None), "timezone_note", "") or ""
+        checks.append(
+            _result(
+                "scheduler_timezone",
+                not note,
+                "schedules run on the local time zone."
+                if not note
+                else f"local time zone could not be resolved ({note}) — schedules run on UTC.",
+                fix=""
+                if not note
+                else "Pick a standard zone in Windows Settings > Time & language, or set the TZ environment variable (e.g. America/New_York), then restart.",
+                level=RECOMMENDED,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        checks.append(
+            _result("scheduler_timezone", False, f"time-zone check failed: {exc}", level=RECOMMENDED)
+        )
+
     # The custom endpoint's configured model actually EXISTS on that gateway.
     # A renamed gateway alias otherwise 400s every request routed there with a
     # cryptic provider error (live-hit 2026-07-31: model 'brain' after the

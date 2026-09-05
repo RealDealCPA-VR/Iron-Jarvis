@@ -160,6 +160,53 @@ def _accepts_headers(transport: Any) -> bool:
     return True
 
 
+class ChannelAuthError(Exception):
+    """The service REFUSED the channel's credential (v1.231.0, audit AE8).
+
+    A revoked/rotated Telegram bot token answers ``getUpdates`` with 401/403
+    and an IMAP server refuses ``LOGIN``; both used to be flattened into
+    ``([], offset)`` — indistinguishable from "no new messages" — so the
+    inbound loop reported a healthy poll every 15 s forever while the phone
+    was dead. A poll raises this instead; the poller records it per channel
+    and the loop ticks ``ok=False`` with the words.
+    """
+
+
+def auth_refusal(resp: Any) -> str | None:
+    """``"HTTP 401: Unauthorized"``-style detail when ``resp`` is a credential
+    refusal (status 401/403 on an httpx-style response, or a Telegram body
+    ``{"ok": false, "error_code": 401|403}``), else ``None``."""
+    if resp is None:
+        return None
+    code: Any = None
+    desc = ""
+    if isinstance(resp, dict):
+        if resp.get("ok") is False:
+            code = resp.get("error_code", resp.get("status_code", resp.get("status")))
+            desc = str(resp.get("description") or resp.get("error") or resp.get("detail") or "")
+    else:
+        code = getattr(resp, "status_code", None)
+        if code is not None:
+            getter = getattr(resp, "json", None)
+            body: Any = None
+            if callable(getter):
+                try:
+                    body = getter()
+                except Exception:  # noqa: BLE001 — a non-JSON body still has a status
+                    body = None
+            if isinstance(body, dict):
+                desc = str(body.get("description") or body.get("error") or "")
+            if not desc:
+                desc = str(getattr(resp, "text", "") or "")[:120]
+    try:
+        code = int(code) if code is not None else None
+    except (TypeError, ValueError):
+        return None
+    if code not in (401, 403):
+        return None
+    return f"HTTP {code}: {desc or ('Forbidden' if code == 403 else 'Unauthorized')}"
+
+
 def interpret_json(resp: Any) -> dict[str, Any] | None:
     """Normalise an ``http_get`` return value into a JSON dict (or ``None``).
 
@@ -286,13 +333,20 @@ class Channel(ABC):
             return None
         return self._secret_resolver(secret_name)
 
-    def _get_json(self, url: str, params: dict[str, Any]) -> dict[str, Any] | None:
-        """GET via the injected transport and normalise to a JSON dict (or None)."""
+    def _get_raw(self, url: str, params: dict[str, Any]) -> Any:
+        """GET via the injected transport; the RAW response (or ``None`` when
+        the transport itself failed). A poll that must tell a refused
+        credential from an empty batch reads the status off this — see
+        :func:`auth_refusal` — before :func:`interpret_json` flattens a 401
+        into ``None`` (v1.231.0, audit AE8)."""
         try:
-            resp = self._http_get(url, params)
+            return self._http_get(url, params)
         except Exception:  # a transport failure must never raise to the poller
             return None
-        return interpret_json(resp)
+
+    def _get_json(self, url: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        """GET via the injected transport and normalise to a JSON dict (or None)."""
+        return interpret_json(self._get_raw(url, params))
 
     def _post(
         self,

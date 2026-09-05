@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..core.logging import get_logger
-from .base import Channel, InboundMessage
+from .base import Channel, ChannelAuthError, InboundMessage, auth_refusal, interpret_json
 
 _log = get_logger("comm")
 
@@ -144,7 +144,10 @@ class TelegramChannel(Channel):
         Passing ``offset`` confirms (and so DROPS server-side) every update with
         a lower id, which is what makes the durable offset dedupe across
         restarts. Returns ``(messages, next_offset)`` where ``next_offset`` is
-        ``max(update_id) + 1``; on any failure returns ``([], offset)``.
+        ``max(update_id) + 1``; on any failure returns ``([], offset)`` —
+        EXCEPT a refused token: a 401/403 (revoked or rotated bot token)
+        raises :class:`ChannelAuthError`, because an empty batch and a dead
+        phone must not look the same to the loop (v1.231.0, audit AE8).
         """
         token = self._resolve_secret(self.config.get("token_secret"))
         if not token:
@@ -153,7 +156,14 @@ class TelegramChannel(Channel):
         params: dict[str, Any] = {"timeout": timeout}
         if offset:
             params["offset"] = offset
-        data = self._get_json(url, params)
+        resp = self._get_raw(url, params)
+        refused = auth_refusal(resp)
+        if refused:
+            raise ChannelAuthError(
+                f"telegram: getUpdates refused ({refused}) — the bot token was "
+                "revoked or rotated; paste the current token from @BotFather"
+            )
+        data = interpret_json(resp)
         if not data or not data.get("ok"):
             return [], offset
 
@@ -471,7 +481,8 @@ class EmailChannel(Channel):
 
         ``imaplib``/``email`` are imported lazily and the whole pass is wrapped:
         on ANY error it returns ``([], offset)`` (mirrors :meth:`Channel.poll`),
-        so a transport/parse failure yields no messages and no offset advance.
+        so a transport/parse failure yields no messages and no offset advance —
+        except a refused LOGIN, which raises :class:`ChannelAuthError` (AE8).
         """
         cfg = self.config
         username = cfg.get("username")
@@ -491,7 +502,16 @@ class EmailChannel(Channel):
             # raising out of poll().
             port = int(cfg.get("imap_port") or 993)
             conn = _imap_connect(host, port)
-            conn.login(username, password)
+            try:
+                conn.login(username, password)
+            except Exception as exc:  # noqa: BLE001 — imaplib.IMAP4.error, mostly
+                # A refused LOGIN is a dead credential, not an empty inbox
+                # (v1.231.0, audit AE8): raise so the poller records it and
+                # the loop stops reporting a healthy poll.
+                raise ChannelAuthError(
+                    f"email: IMAP login refused for {username} at {host}: "
+                    f"{str(exc)[:200] or type(exc).__name__}"
+                ) from exc
             conn.select(mailbox)
             typ, search_data = conn.uid("SEARCH", None, f"UID {offset + 1}:*")
             if typ != "OK":
@@ -531,6 +551,8 @@ class EmailChannel(Channel):
                 max(int(m.update_id) for m in messages) + 1 if messages else offset
             )
             return messages, next_offset
+        except ChannelAuthError:
+            raise
         except Exception:  # noqa: BLE001 — a poll must never raise to the poller
             return [], offset
         finally:

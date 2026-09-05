@@ -97,6 +97,11 @@ class ChatApprovals:
         #: asker passed — both lanes pass the REDACTED args they already
         #: publish/stream — never the raw call.
         self._meta: dict[str, dict[str, Any]] = {}
+        #: session id -> seconds its run has spent PARKED on asks (v1.231.0,
+        #: audit AE13). Accumulated in :meth:`pop` from ``requested_at``, on
+        #: every exit — answer, timeout, cancel — so a budget that charges
+        #: wall-clock can subtract the time nobody was working.
+        self._waited: dict[str, float] = {}
 
     def request(
         self,
@@ -237,7 +242,18 @@ class ChatApprovals:
         """The awaiter is done with this id (answered, timed out, or the stream
         died). After this, ``resolve`` honestly reports it unknown."""
         self._pending.pop(approval_id, None)
-        self._meta.pop(approval_id, None)
+        meta = self._meta.pop(approval_id, None)
+        sid = str((meta or {}).get("session_id") or "")
+        if sid:
+            waited = max(0.0, time.time() - float((meta or {}).get("requested_at") or time.time()))
+            self._waited[sid] = self._waited.get(sid, 0.0) + waited
+
+    def waited_s(self, session_id: str | None) -> float:
+        """Seconds ``session_id``'s run has spent waiting on asks so far
+        (v1.231.0, AE13) — the goal engine subtracts this from an iteration's
+        wall-clock charge, because five minutes of an unattended 3 am ask is
+        not five minutes of work. ``0.0`` for a session that never asked."""
+        return float(self._waited.get(str(session_id or ""), 0.0))
 
     def pending_count(self) -> int:
         return len(self._pending)

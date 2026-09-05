@@ -51,6 +51,31 @@ from .types import AgentDefinition, get_agent_definition
 
 log = get_logger("orchestrator")
 
+#: A session whose project folder could NOT be used carries the reason in
+#: ``summary`` from creation until it finishes (v1.231.0, audit AE1 — the
+#: session-row twin of the workflow run's ``notes_json`` note, v1.225.0), so
+#: "it ran but nothing landed in my folder" has a reason on the row instead of
+#: a mystery. The finalizers keep it under the result via ``_with_folder_note``.
+FOLDER_NOTE_PREFIX = "Folder note: "
+
+
+def folder_note(summary: str | None) -> str:
+    """The create-time folder note a summary holds, or "" when it is prose."""
+    text = summary or ""
+    return text if text.startswith(FOLDER_NOTE_PREFIX) else ""
+
+
+def _with_folder_note(prior: str | None, text: str) -> str:
+    """``text`` with the create-time folder note (if ``prior`` was one) kept
+    under it — a finished summary must not erase why the folder was skipped."""
+    note = folder_note(prior)
+    return f"{text}\n\n{note}" if note else text
+
+
+def _prose(summary: str | None) -> str:
+    """A summary that is real prose (not the create-time folder note), or ""."""
+    return "" if folder_note(summary) else (summary or "")
+
 
 def is_managed_workspace(config, workspace_path: str | Path | None) -> bool:
     """True only when a workspace is PROVABLY a disposable dir the app made,
@@ -540,8 +565,23 @@ class Orchestrator:
         # its deliverables land where the user expects. workspace_root wins
         # over git-native for exactly this reason.
         direct_root = None
+        note = ""
         if workspace_root:
             direct_root = Path(workspace_root)
+        elif project_id and not self_dev:
+            # ONE execution seam (v1.231.0, audit AE1/T4): a session tagged to
+            # a project but handed no folder — a schedule, a reflex rule, a
+            # goal iteration, a phone escalation, a bare ``POST /sessions``
+            # — runs in the PROJECT'S folder through the same door the
+            # Projects route and ``POST /sessions`` apply to an explicit
+            # root (``fs_policy.root_problem``), so every door lands where
+            # the Projects door does with no per-door change. A root that is
+            # set but unusable is RECORDED on the row (``note``), never
+            # silently swapped for a scratch dir. Off the loop: the door
+            # probes writability.
+            root, note = await asyncio.to_thread(self._project_folder, project_id)
+            if root:
+                direct_root = Path(root)
         if direct_root is None and self_dev:
             # Gated self-development: edit Iron Jarvis itself on a worktree of its
             # OWN repo, as the Maintainer, still review-gated (never auto-merge).
@@ -574,6 +614,9 @@ class Orchestrator:
             # Contract 4 (v1.174.0): per-session step budget. None = the
             # configured ``max_agent_steps`` (today's behavior).
             max_steps=normalize_max_steps(max_steps),
+            # The folder note (see ``_project_folder``) rides ``summary`` until
+            # the run finishes; the finalizers keep it under the result.
+            summary=note,
         )
         if direct_root is not None:
             direct_root.mkdir(parents=True, exist_ok=True)
@@ -600,6 +643,42 @@ class Orchestrator:
             session_id=session.id,
         )
         return session
+
+    def _project_folder(self, project_id: str) -> tuple[str | None, str]:
+        """``(folder, note)`` for a project-tagged session with no explicit
+        root (v1.231.0, audit AE1/T4). The folder is the project's root when
+        it passes ``fs_policy.root_problem`` — the SAME door the Projects
+        route (``_root_problem``) and ``POST /sessions`` apply — else None
+        with a note the row carries (the twin of the workflow engine's
+        ``_project_folder`` note, v1.225.0): the project row is gone, or its
+        folder is set but missing / protected / not writable. A project
+        without a folder is chat-only by design: no folder, no note.
+        BLOCKING (the writability probe creates a file) — callers hop it
+        through ``asyncio.to_thread``."""
+        from ..core.fs_policy import root_problem
+
+        with session_scope(self.p.engine) as db:
+            project = db.get(Project, project_id)
+        if project is None:
+            return None, (
+                f"{FOLDER_NOTE_PREFIX}this run is tagged to project {project_id}, "
+                "which no longer exists — it worked in a scratch workspace, not "
+                "in a project folder"
+            )
+        root_raw = (project.root or "").strip()
+        if not root_raw:
+            return None, ""
+        try:
+            problem = root_problem(root_raw)
+        except Exception as exc:  # noqa: BLE001 — an unparseable root is a problem, not a crash
+            problem = f"folder cannot be checked: {exc}"
+        if problem is None:
+            return root_raw, ""
+        return None, (
+            f"{FOLDER_NOTE_PREFIX}project \u201c{project.name}\u201d folder could not be "
+            f"used ({problem}) — this run worked in a scratch workspace, NOT in "
+            "the project folder; fix the folder on the project page and run again"
+        )
 
     async def run_session(
         self, session_id: str, definition: "AgentDefinition | None" = None
@@ -673,7 +752,8 @@ class Orchestrator:
                     else SessionStatus.FAILED
                 )
                 session.provider, session.model = run.provider, run.model  # what actually ran
-                session.summary = run.result
+                prior_summary = session.summary  # "" or the create-time folder note
+                session.summary = _with_folder_note(prior_summary, run.result)
                 # THE HAND-OFF BUBBLE IS CHECKED AGAINST THE LEDGER (v1.227.0,
                 # audit RT5). Both chat lanes already judged a reply's file
                 # claim against what actually ran; the agent lane stored
@@ -698,7 +778,7 @@ class Orchestrator:
                 )
                 note = _claimed_write_note(run.result or "", tools_used)
                 if note:
-                    session.summary = f"{run.result}{note}"
+                    session.summary = _with_folder_note(prior_summary, f"{run.result}{note}")
                 session.outcome = outcome
                 session.input_tokens = run.input_tokens
                 session.output_tokens = run.output_tokens
@@ -883,7 +963,10 @@ class Orchestrator:
         its worktree — so an unexpected exception never leaves a zombie ACTIVE
         session the app can't see or recover."""
         session.status = SessionStatus.FAILED
-        session.summary = session.summary or f"Session failed: {type(error).__name__}: {error}"
+        session.summary = _with_folder_note(
+            session.summary,
+            _prose(session.summary) or f"Session failed: {type(error).__name__}: {error}",
+        )
         session.finished_at = utcnow()
         try:
             # v1.227.0: a crashed run hands its worklist claims back (A8) and
@@ -926,7 +1009,9 @@ class Orchestrator:
     async def _finalize_cancelled(self, session: Session) -> None:
         """Mark a cancelled run CANCELLED, persist, notify, and GC its worktree."""
         session.status = SessionStatus.CANCELLED
-        session.summary = session.summary or "Session cancelled by the user."
+        session.summary = _with_folder_note(
+            session.summary, _prose(session.summary) or "Session cancelled by the user."
+        )
         session.finished_at = utcnow()
 
         def _persist_cancel() -> None:
@@ -1002,12 +1087,38 @@ class Orchestrator:
             raise ValueError(f"session '{session_id}' is already {session.status.value}")
         task = self._running.get(session_id)
         if task is not None and not task.done():
-            task.cancel()  # -> CancelledError in run_session -> _finalize_cancelled
+            loop = task.get_loop()
+            try:
+                here = asyncio.get_running_loop()
+            except RuntimeError:
+                here = None
+            if loop is here:
+                task.cancel()  # -> CancelledError in run_session -> _finalize_cancelled
+            else:
+                # v1.231.0 (audit AE2): a schedule-fired session runs under
+                # asyncio.run on the APScheduler thread, and this call arrives
+                # from the daemon's loop (or FastAPI's threadpool — the cancel
+                # route is sync). Task.cancel() from a foreign thread is not
+                # thread-safe and does not wake the other loop's selector, so
+                # the cancel landed only when the model call returned on its
+                # own. Hand it to the task's OWN loop, and stamp the row now:
+                # the response is the only place the request shows until the
+                # run unwinds and _finalize_cancelled re-saves the same words.
+                loop.call_soon_threadsafe(task.cancel)
+                session.status = SessionStatus.CANCELLED
+                session.summary = _with_folder_note(
+                    session.summary, _prose(session.summary) or "Session cancelled by the user."
+                )
+                session.finished_at = utcnow()
+                self._save(session)
         elif self._remove_queued(session_id):
             # Parked, never started (v1.166.0): the un-started coroutine was
             # closed by _remove_queued; finalize honestly — no agent ever ran.
             session.status = SessionStatus.CANCELLED
-            session.summary = session.summary or "Cancelled while queued (never started)."
+            session.summary = _with_folder_note(
+                session.summary,
+                _prose(session.summary) or "Cancelled while queued (never started).",
+            )
             session.finished_at = utcnow()
             self._save(session)
         else:

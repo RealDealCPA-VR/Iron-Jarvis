@@ -23,6 +23,10 @@ const TYPE_COLOR: Record<string, string> = {
   // Inbound surfaces: webhooks + two-way comm (received spawns a session;
   // rejected = unauthorized sender refused by the allowlist).
   "webhook.received": "text-sky-300",
+  // v1.231.0 (audit AE15): a webhook POST refused before any handler ran —
+  // bad/replayed signature, unresolvable secret, unknown slug. Amber: a
+  // probed or misconfigured secret is something to look at, not an outage.
+  "webhook.rejected": "text-amber-300",
   "comm.received": "text-cyan-300",
   "comm.rejected": "text-rose-300",
   // Automation: a cron schedule fired an event-kind task.
@@ -104,6 +108,7 @@ function summarize(payload: Record<string, unknown>): string {
     "channel",
     "sender",
     "slug",
+    "reason",
     "workflow",
     "run_id",
     "task",

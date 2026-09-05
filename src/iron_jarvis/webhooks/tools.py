@@ -86,7 +86,9 @@ class WebhookAddTool(Tool):
                         fired = await router.on_webhook(_slug, body)
                     except Exception:  # noqa: BLE001 — never break the ack
                         pass
-                return {"ok": True, "reflexes_fired": len(fired)}
+                from ..reflex.router import summarize_fires  # AE6: failed != fired
+
+                return {"ok": True, **summarize_fires(fired)}
 
             self.platform.inbound_webhooks.register(
                 slug, handler, secret=secret, secret_name=secret_name

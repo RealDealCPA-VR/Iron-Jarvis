@@ -475,6 +475,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # the phone command grammar. ``spawn_bg`` is set once it's defined below (the
     # router only needs it at fire time, never at construction).
     from ..reflex import CommandInterpreter, ReflexRouter
+    from ..reflex.router import summarize_fires as _summarize_fires
 
     reflex_router = ReflexRouter(platform, orchestrator, spawn_bg=None)
     command_interpreter = CommandInterpreter(platform, orchestrator, reflex_router)
@@ -640,7 +641,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     fired = await app.state.reflex_router.on_webhook(_slug, body)
                 except Exception:  # noqa: BLE001 — never break the ack
                     log.exception("reflex on_webhook failed for %r", _slug)
-                return {"ok": True, "reflexes_fired": len(fired)}
+                return {"ok": True, **_summarize_fires(fired)}  # AE6: failed != fired
 
             return _handler
 
@@ -1061,8 +1062,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
                         # POST/DELETE /comm/channels changes what the next
                         # pass sees without touching this task.
                         if inbound_poller.enabled():
-                            await inbound_poller.poll_once()
-                            _tick("inbound", True)
+                            # v1.231.0 (AE8): a refused token comes back as an
+                            # error row, not an empty batch — tick honestly.
+                            ok, why = inbound_poller.poll_verdict(
+                                await inbound_poller.poll_once()
+                            )
+                            _tick("inbound", ok, why)
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:  # noqa: BLE001 - a poll must never kill the daemon
@@ -2030,6 +2035,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "config": s.decoded_config(), "task": s.task,
             "agent_type": s.agent_type, "risk": s.risk, "enabled": s.enabled,
             "last_checked_at": s.last_checked_at.isoformat() if s.last_checked_at else None,
+            # v1.231.0 (audit AE7): "root unreachable since <t>" / scan error.
+            "last_error": getattr(s, "last_error", None),
             "created_at": s.created_at.isoformat(),
         }
 

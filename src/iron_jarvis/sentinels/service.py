@@ -134,6 +134,11 @@ class SentinelService:
                 )
             try:
                 self.scanner(wpath, cfg.get("glob"))
+            except FileNotFoundError:
+                # v1.231.0 (AE7): a root that is not there YET (unplugged
+                # drive, folder created later) is a legal watch — the row
+                # says "root unreachable" until it appears, then baselines.
+                pass
             except Exception as exc:  # noqa: BLE001 — surface a bad glob/path now
                 raise ValueError(f"invalid watch path/glob: {exc}") from exc
 
@@ -194,16 +199,28 @@ class SentinelService:
             cfg = rec.decoded_config()
             try:
                 current = scan(cfg.get("path", ""), cfg.get("glob"))
-            except Exception:  # noqa: BLE001 — a bad scan must never break the tick
-                log.exception("sentinel %s scan failed", name)
+            except Exception as exc:  # noqa: BLE001 — a bad scan must never break the tick
+                # v1.231.0 (audit AE7): the OLD baseline is kept untouched, and
+                # the row says why on ``last_error`` — "root unreachable since
+                # <t>" for a vanished folder (the "since" is the FIRST failure,
+                # kept across ticks), else the scan error. When the drive is
+                # back the diff runs against the memory it had, so a replug
+                # proposes nothing for untouched files.
+                if isinstance(exc, FileNotFoundError):
+                    log.warning("sentinel %s: %s", name, exc)
+                    if not (rec.last_error or "").startswith("root unreachable since "):
+                        rec.last_error = f"root unreachable since {utcnow().isoformat()}"
+                else:
+                    log.exception("sentinel %s scan failed", name)
+                    rec.last_error = f"scan failed: {type(exc).__name__}: {exc}"[:500]
                 # Don't CONSUME the baseline on a transient first-scan failure: if
                 # last_checked_at is still None, leave it None so the next tick
                 # retries the baseline (else previous={} next time would flood the
                 # backlog with every pre-existing file as "new").
                 if rec.last_checked_at is not None:
                     rec.last_checked_at = utcnow()
-                    db.add(rec)
-                    db.commit()
+                db.add(rec)
+                db.commit()
                 return []
 
             first = rec.last_checked_at is None
@@ -212,6 +229,7 @@ class SentinelService:
 
             rec.last_state_json = json.dumps({"seen": current}, default=str)
             rec.last_checked_at = utcnow()
+            rec.last_error = None
             db.add(rec)
             db.commit()
         return changed

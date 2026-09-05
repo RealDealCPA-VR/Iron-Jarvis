@@ -193,7 +193,11 @@ class InboundWebhooks:
         """Verify (if signed) and invoke the handler registered for ``slug``.
 
         Returns the handler's result on success, or an ``{"ok": False, ...}``
-        error dict for an unknown slug or an invalid/missing signature.
+        error dict for an unknown slug or an invalid/missing signature. Those
+        dispatch-level refusals also carry ``rejected`` (``unknown_slug`` |
+        ``bad_signature`` | ``replayed`` | ``secret_unavailable``) so a route
+        can tell a REFUSED request from a handler that merely answered
+        ``ok: False`` (v1.231.0, audit AE15) and answer 401/404 + an event.
 
         When ``timestamp`` is supplied the hardened v2 path is used: the
         signature must cover the timestamp, fall within the freshness window,
@@ -203,23 +207,39 @@ class InboundWebhooks:
         """
         handler = self._handlers.get(slug)
         if handler is None:
-            return {"ok": False, "error": f"unknown webhook: {slug}"}
+            return {"ok": False, "error": f"unknown webhook: {slug}", "rejected": "unknown_slug"}
 
         secret_expected, secret = self._resolve_secret(slug)
         if secret:
             payload = raw if raw is not None else canonical_bytes(body)
             if timestamp is not None:
                 if not verify_signed(timestamp, payload, secret, signature):
-                    return {"ok": False, "error": "invalid webhook signature"}
+                    return {
+                        "ok": False,
+                        "error": "invalid webhook signature",
+                        "rejected": "bad_signature",
+                    }
                 if self._seen_recently(f"{slug}:{signature}"):
-                    return {"ok": False, "error": "replayed webhook signature"}
+                    return {
+                        "ok": False,
+                        "error": "replayed webhook signature",
+                        "rejected": "replayed",
+                    }
             elif not verify(payload, secret, signature):
-                return {"ok": False, "error": "invalid webhook signature"}
+                return {
+                    "ok": False,
+                    "error": "invalid webhook signature",
+                    "rejected": "bad_signature",
+                }
         elif secret_expected:
             # A secret was configured but can't be resolved (vault outage, or a
             # legacy row that stored the slug instead of the vault key). Reject
             # rather than run the handler on an UNVERIFIED request (fail closed).
-            return {"ok": False, "error": "webhook secret unavailable"}
+            return {
+                "ok": False,
+                "error": "webhook secret unavailable",
+                "rejected": "secret_unavailable",
+            }
 
         result = handler(body)
         if inspect.isawaitable(result):

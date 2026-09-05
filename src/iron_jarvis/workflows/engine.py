@@ -222,12 +222,22 @@ def render_template(text: str, outputs: dict[str, Any]) -> str:
     Unknown references render as an empty string rather than leaking the
     braces into an agent prompt or tool argument. Values are clipped so one
     verbose step can't blow up a downstream prompt.
+
+    A step that FAILED (and was skipped, so the run reached the reference)
+    renders its bare ref as ``[step <name> failed: <summary>]`` (v1.231.0,
+    AE10): its summary is an error message, and handing that to the next
+    step as if it were the step's output let a downstream tool run on a
+    quota error presented as content. ``{{name.data}}`` of a failed step
+    stays the empty string — a failed tool records no ``data`` (v1.170.0).
     """
     def _sub(m: re.Match) -> str:
         ref = m.group(1).strip()
         out = outputs.get(ref)
         if isinstance(out, dict):
-            return str(out.get("summary") or "")[:_MAX_STEP_SUMMARY]
+            summary = str(out.get("summary") or "")
+            if out.get("status") == "failed":
+                return f"[step {ref} failed: {summary}]"[:_MAX_STEP_SUMMARY]
+            return summary[:_MAX_STEP_SUMMARY]
         if ref.endswith(".data"):
             base = outputs.get(ref[: -len(".data")].strip())
             if isinstance(base, dict):
@@ -438,10 +448,14 @@ class WorkflowEngine:
         # Resolve the pinned project's folder ONCE for the whole run (None when
         # unpinned, or when the folder is missing on disk — see the helper).
         workspace_root, folder_note = self._project_folder(workflow.project_id)
-        if folder_note:
-            # Said ON THE RECORD, before the first step, so a run the user
-            # opens mid-way already explains where its files are going.
-            await asyncio.to_thread(self._update_record, run_id, notes=[folder_note])
+        # Said ON THE RECORD, before the first step, so a run the user opens
+        # mid-way already explains where its files are going — and written
+        # UNCONDITIONALLY (v1.231.0, AE16): a resume whose folder is back
+        # must clear the original run's "no folder" note, or the record keeps
+        # telling the user this resume's files went to a scratch dir.
+        await asyncio.to_thread(
+            self._update_record, run_id, notes=[folder_note] if folder_note else []
+        )
         # Tool steps share ONE workspace per run (not one per step/retry): a
         # write_document -> read_file chain must see its own files, and a per-
         # step mkdtemp litters %TEMP% forever. Lazy so agent-only runs make none.
@@ -927,6 +941,15 @@ class WorkflowEngine:
             # The failure stays VISIBLE on the step, but the run continues.
             out["handled"] = "skipped"
 
+        # Persist THIS step's output as it completes (v1.231.0, AE4), not
+        # only after the whole batch settles: a daemon death while a parallel
+        # sibling is still running used to drop every finished member, so
+        # Resume re-ran them — re-delivering a notify, re-writing files.
+        outputs[step.name] = out
+        await asyncio.to_thread(
+            self._update_record, run_id, session_ids=session_ids, outputs=outputs
+        )
+
         await self.platform.event_bus.publish(
             EventType.WORKFLOW_STEP_COMPLETED,
             {
@@ -983,6 +1006,18 @@ class WorkflowEngine:
                 "session_id": session.id,
                 "status": "cancelled",
                 "summary": "",
+                "tool": step.tool,
+                "kind": "agent",
+            }
+        except Exception as exc:  # noqa: BLE001 — a crashed session is a failed step
+            # Mirrors the tool branch (v1.231.0, AE3): ``run_session``
+            # re-raises provider/DB blow-ups after finalizing the session, and
+            # letting that escape the attempt loop skipped retries and
+            # on_failure entirely, fired no step event, and halted the run.
+            return {
+                "session_id": session.id,
+                "status": "failed",
+                "summary": f"{type(exc).__name__}: {exc}",
                 "tool": step.tool,
                 "kind": "agent",
             }
@@ -1332,7 +1367,9 @@ class WorkflowEngine:
             if "session_ids" in fields:
                 rec.session_ids_json = dumps(fields["session_ids"])
             if "outputs" in fields:
-                rec.outputs_json = dumps(fields["outputs"])
+                # Shallow snapshot: this runs OFF the loop while a parallel
+                # sibling on the loop may add its own key (v1.231.0, AE4).
+                rec.outputs_json = dumps(dict(fields["outputs"]))
             if "finished_at" in fields:
                 rec.finished_at = fields["finished_at"]
             if "waiting_json" in fields:

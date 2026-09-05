@@ -676,6 +676,13 @@ export default function SchedulesPage() {
                               <span className="text-[12px] text-emerald-300">✓ ok</span>
                             ) : s.last_status === "error" ? (
                               <span className="text-[12px] text-rose-300">✗ failed</span>
+                            ) : s.last_status === "missed" ? (
+                              /* v1.231.0: the app was closed or asleep at fire time —
+                                 recorded, never fired late (last_detail says when). */
+                              <span className="text-[12px] text-amber-300">missed</span>
+                            ) : s.last_status === "skipped" ? (
+                              /* v1.231.0: the previous fire was still running. */
+                              <span className="text-[12px] text-amber-300">skipped</span>
                             ) : (
                               <span className="text-[12px] text-zinc-600">
                                 not run yet

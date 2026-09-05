@@ -195,6 +195,40 @@ def dir_writable(path: str | Path) -> bool:
     return True
 
 
+def root_problem(root: str | Path) -> str | None:
+    """Why a folder cannot be worked in DIRECTLY, or None when it can — THE
+    one definition behind every "work in the user's own folder" door
+    (v1.231.0, audit AE1/T4; it used to live in ``routes/projects`` as
+    ``_root_problem`` while ``usable_workspace_root`` re-derived the same
+    predicate as a bool, and ``Orchestrator.create_session`` — the seam every
+    schedule, reflex, goal and phone door ends in — asked neither).
+
+    Four honest answers, in the order a user would fix them: not absolute,
+    not a folder on this machine, a folder the app's file policy refuses (a
+    protected root such as the secrets/undo stores, or a path outside the
+    ``IRONJARVIS_FS_ALLOWLIST``), or a folder this app cannot save a file in
+    (v1.228.0, audit T3 — ``C:\\Users``, ``C:\\``, an RX-only share).
+    BLOCKING (the writability probe creates a file): call it off the event
+    loop — ``asyncio.to_thread`` at every route/lane seam.
+    """
+    p = Path(root)
+    if not p.is_absolute():
+        return "folder must be an absolute path"
+    if not p.is_dir():
+        return f"folder does not exist on this machine: {root}"
+    if not fs_path_allowed(str(p)) or is_protected_path(str(p)):
+        return (
+            f"folder is protected or outside the app's allowed file roots: {root} "
+            "— pick a folder this app may read and write in"
+        )
+    if not dir_writable(p):
+        return (
+            f"folder is not writable by this app: {root} "
+            "— pick a folder you can save files in"
+        )
+    return None
+
+
 def usable_workspace_root(path: str | Path) -> bool:
     """May a session/turn run DIRECTLY in this folder? (v1.189.0)
 
@@ -212,14 +246,7 @@ def usable_workspace_root(path: str | Path) -> bool:
     loop — ``asyncio.to_thread`` at every route/lane seam.
     """
     try:
-        p = Path(path)
-        return bool(
-            p.is_absolute()
-            and p.is_dir()
-            and fs_path_allowed(str(p))
-            and not is_protected_path(str(p))
-            and dir_writable(p)
-        )
+        return root_problem(path) is None
     except Exception:  # noqa: BLE001 — an unparseable path is not a workspace
         return False
 

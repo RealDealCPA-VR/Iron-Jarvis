@@ -52,6 +52,11 @@ interface ChannelInfo {
   chat_enabled?: boolean;
   /** How many sender ids the fail-closed allowlist holds (0 = nobody). */
   allowed_senders_count?: number;
+  /** v1.231.0 (audit AE8): the LAST failed inbound poll — a revoked bot
+   *  token, a refused IMAP login — cleared by the next poll that comes back.
+   *  While set, the destination is NOT listening, whatever the last test said. */
+  last_poll_error?: string | null;
+  last_poll_error_at?: string | null;
 }
 
 /** A field the add-form must collect for a given channel type. */
@@ -938,11 +943,13 @@ export default function ChannelsPage() {
                           zinc = never tested. Built-ins are ready by nature. */}
                       <span
                         className={`h-2 w-2 shrink-0 rounded-full ${
-                          c.builtin || c.last_test_ok
-                            ? "bg-emerald-400"
-                            : c.last_test_ok === false
-                              ? "bg-rose-400"
-                              : "bg-zinc-600"
+                          c.last_poll_error
+                            ? "bg-rose-400"
+                            : c.builtin || c.last_test_ok
+                              ? "bg-emerald-400"
+                              : c.last_test_ok === false
+                                ? "bg-rose-400"
+                                : "bg-zinc-600"
                         }`}
                       />
                       <div className="min-w-0">
@@ -972,6 +979,18 @@ export default function ChannelsPage() {
                             ` · ${c.events!.length} alert kind${c.events!.length === 1 ? "" : "s"}`}
                           {c.chat_enabled && " · chat on"}
                         </span>
+                        {/* v1.231.0 (AE8): a dead token used to read "Working —
+                            tested 3 days ago" forever; the daemon's last failed
+                            poll now lands on the row, with the fix in its words. */}
+                        {c.last_poll_error && (
+                          <span
+                            data-testid={`channel-poll-error-${c.name}`}
+                            className="block text-[11px] text-rose-300"
+                          >
+                            Not listening — {c.last_poll_error}
+                            {c.last_poll_error_at ? ` (${timeAgo(c.last_poll_error_at)})` : ""}
+                          </span>
+                        )}
                       </div>
                     </div>
                     {!(c.builtin ?? BUILTIN.has(c.name)) && (

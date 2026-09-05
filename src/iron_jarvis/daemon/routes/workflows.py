@@ -369,11 +369,47 @@ def register(app: FastAPI, d) -> None:
         strict. Absent/empty values still mean "the default", exactly as the
         loader treats them.
         """
-        from ...workflows.engine import ON_FAILURE, STEP_KINDS
+        from ...workflows.engine import _TEMPLATE_RX, ON_FAILURE, STEP_KINDS
 
+        step_names = {
+            str(raw.get("name") or "").strip()
+            for raw in (steps or [])
+            if isinstance(raw, dict)
+        }
         for i, raw in enumerate(steps or []):
             if not isinstance(raw, dict):
                 continue  # the loader ignores non-dict entries; keep parity
+            # REFERENCES (v1.231.0, AE10): ``{{Ref.data}}`` resolves only a
+            # STEP's recorded data — a run input or the reflex ``Trigger``
+            # never carries ``data`` — so one whose ``Ref`` names no step
+            # (``{{Scna.data}}``) renders "" on every run, forever, and the
+            # run completes green on it. Refused at save time, naming the
+            # step and the reference. A bare ``{{Name}}`` naming no step is
+            # left alone: it is how a run input (``POST /workflows/run
+            # inputs`` / the ``workflow_run`` tool) is referenced, and a def
+            # declares none.
+            label = str(raw.get("name") or "").strip() or f"#{i + 1}"
+            templated = [str(raw.get("task") or ""), str(raw.get("message") or "")]
+            args = raw.get("args")
+            for v in (args.values() if isinstance(args, dict) else ()):
+                if isinstance(v, str):
+                    templated.append(v)
+                elif isinstance(v, list):
+                    templated.extend(x for x in v if isinstance(x, str))
+            for text in templated:
+                for m in _TEMPLATE_RX.finditer(text):
+                    ref = m.group(1).strip()
+                    if not ref.endswith(".data") or ref in step_names:
+                        continue  # a bare ref, or a step literally named X.data
+                    base = ref[: -len(".data")].strip()
+                    if base not in step_names:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=f"steps[{i}] ({label}): {{{{{ref}}}}} refers to "
+                            f"a step named {base!r} that this workflow does not "
+                            "have — .data resolves only a step's recorded data; "
+                            "check the spelling against the step names",
+                        )
             kind_raw = raw.get("kind")
             kind = "agent"
             if kind_raw:  # falsy = absent/empty = the default, never a rewrite
@@ -390,7 +426,6 @@ def register(app: FastAPI, d) -> None:
             # at its turn mid-run, an ask with no question parked the run on
             # "Continue past “x”?". Each used to be discovered minutes into a
             # run instead of at the moment of saving.
-            label = str(raw.get("name") or "").strip() or f"#{i + 1}"
             has_task = bool(str(raw.get("task") or "").strip())
             has_msg = bool(str(raw.get("message") or "").strip())
             if kind == "agent" and not has_task and not str(raw.get("name") or "").strip():

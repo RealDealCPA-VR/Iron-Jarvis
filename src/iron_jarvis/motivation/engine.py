@@ -580,8 +580,13 @@ class IntentEngine:
         # when self_dev_enabled is off, so approval FAILS CLOSED on that gate rather
         # than silently running a maintainer in a throwaway workspace.
         is_self_dev = agent_type == AgentType.MAINTAINER
+        # ``origin="autonomy"`` (v1.231.0, audit N4/AE17): the TX-01 stamp
+        # this door never applied; the runtime's ask allowlist reads it.
         session = await self.orchestrator.create_session(
-            action.get("task", goal.text), agent_type, self_dev=is_self_dev
+            action.get("task", goal.text),
+            agent_type,
+            self_dev=is_self_dev,
+            origin="autonomy",
         )
         # Book the action against the budget NOW (before the run finishes) so a
         # concurrent tick can't double-spend; mark the proposal executed durably.

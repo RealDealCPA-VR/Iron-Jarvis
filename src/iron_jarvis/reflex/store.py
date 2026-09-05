@@ -108,6 +108,28 @@ class ReflexStore:
             db.add(row)
             db.commit()
 
+    def mark_result(self, rule_id: str, *, ok: bool, detail: str = "") -> None:
+        """Record what the last matched signal did (v1.231.0, audit AE6).
+
+        A successful start counts as a fire (``fire_count``/``last_fired_at``,
+        as :meth:`mark_fired`) and clears ``last_error``; a failed start writes
+        the reason to ``last_error`` and touches nothing else — a fire that did
+        not happen is not counted as one. Unknown ids (the manual ``start``
+        path's unpersisted rule) are a no-op."""
+        with session_scope(self.engine) as db:
+            row = db.get(ReflexRule, rule_id)
+            if row is None:
+                return
+            if ok:
+                row.fire_count = (row.fire_count or 0) + 1
+                row.last_fired_at = utcnow()
+                row.last_result = (detail or "")[:500] or None
+                row.last_error = None
+            else:
+                row.last_error = (detail or "failed")[:500]
+            db.add(row)
+            db.commit()
+
     # -- matching ----------------------------------------------------------
     def matching_webhook(self, slug: str) -> list[ReflexRule]:
         """Enabled webhook rules whose ``match`` equals ``slug`` exactly."""

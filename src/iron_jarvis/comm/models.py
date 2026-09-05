@@ -25,6 +25,14 @@ class InboundOffsetRecord(SQLModel, table=True):
     channel: str = Field(primary_key=True)
     offset: int = 0
     updated_at: datetime = Field(default_factory=utcnow)
+    #: v1.231.0 (audit AE14) — the update being HANDLED right now, and the
+    #: chat to answer. At-most-once persists the offset BEFORE handling, so a
+    #: daemon restart mid-handling drops the message by design; this marker
+    #: is what makes the drop honest: set before ``_handle``, cleared when it
+    #: returns, and a boot that finds it still set tells that chat to resend
+    #: and publishes ``comm.dropped``. ``None`` / ``""`` = nothing in flight.
+    inflight_update_id: int | None = None
+    inflight_chat_id: str = ""
 
 
 class PendingPromptRecord(SQLModel, table=True):

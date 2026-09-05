@@ -39,7 +39,14 @@ signal. Leave it blank for a sensible default.
    the binding without waiting for a real POST).
 4. POST to the webhook URL for real; the workflow starts in the background and
    appears under Workflows → Runs. The webhook responds instantly
-   (`{"ok": true, "reflexes_fired": 1}`) — it never blocks on the run.
+   (`{"ok": true, "fired": 1, "failed": [], "reflexes_fired": 1}`) — it never
+   blocks on the run. `fired` counts only rules that actually STARTED; a rule
+   that matched but could not start (its workflow was deleted, its remote
+   agent is gone) is listed in `failed: [{rule, error}]` and written to the
+   rule's `last_error` on the Reflexes page (v1.231.0). A POST with a bad or
+   missing signature answers **401** and an unknown slug **404** (body
+   `{"ok": false, "error": ...}`), and the timeline records
+   `webhook.rejected {slug, reason}`.
 
 ```bash
 # once the rule exists, the external system just POSTs the webhook:

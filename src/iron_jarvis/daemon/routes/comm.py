@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from sqlmodel import select
 from typing import Any
 
@@ -187,6 +188,8 @@ def register(app: FastAPI, d) -> None:
                 allowed_count = len(live.allowed_senders()) if live is not None else 0
             except Exception:  # noqa: BLE001 — a config quirk never breaks the list
                 inbound_on, chat_on, allowed_count = False, False, 0
+            poller = getattr(d, "inbound_poller", None)
+            poll_err = (getattr(poller, "poll_errors", None) or {}).get(name) or {}
             out.append(
                 {
                     "name": name,
@@ -201,6 +204,13 @@ def register(app: FastAPI, d) -> None:
                     "inbound_enabled": inbound_on,
                     "chat_enabled": chat_on,
                     "allowed_senders_count": allowed_count,
+                    # v1.231.0 (audit AE8): the LAST failed poll of this
+                    # channel (a revoked bot token, a refused IMAP login),
+                    # cleared by the next poll that comes back — so a dead
+                    # phone reads "failing" here, not "working, tested
+                    # three days ago".
+                    "last_poll_error": poll_err.get("detail"),
+                    "last_poll_error_at": poll_err.get("at"),
                 }
             )
         return {"channels": out}
@@ -454,8 +464,17 @@ def register(app: FastAPI, d) -> None:
                 _spawn_kwargs["provider"] = esc_provider
             if esc_model:
                 _spawn_kwargs["model"] = esc_model
+            # v1.231.0 (audit N3/AE17): the escalated session carries the
+            # thread's project tag exactly as ``comm/inbound.py`` does — this
+            # door used to drop it, so the run lost the project's folder,
+            # brief and knowledge — and is stamped ``comm:<channel>`` so the
+            # runtime may pause it on an ask-tier tool (bell + phone).
             session = await d.orchestrator.create_session(
-                task, agent_type, **_spawn_kwargs
+                task,
+                agent_type,
+                project_id=str(getattr(rec, "project_id", "") or "") or None,
+                origin=f"comm:{channel_name}",
+                **_spawn_kwargs,
             )
 
             async def _finish() -> None:
@@ -760,7 +779,11 @@ def register(app: FastAPI, d) -> None:
                     get_logger("webhooks").exception(
                         "reflex on_webhook failed for %r", _slug
                     )
-                return {"ok": True, "slug": _slug, "reflexes_fired": len(fired)}
+                # v1.231.0 (audit AE6): a rule that could not start is
+                # ``failed: [{rule, error}]``, not a fire.
+                from ...reflex.router import summarize_fires
+
+                return {"ok": True, "slug": _slug, **summarize_fires(fired)}
 
             d.platform.inbound_webhooks.register(
                 body.slug, _handler, secret=secret, secret_name=body.secret_name or None
@@ -768,7 +791,15 @@ def register(app: FastAPI, d) -> None:
         return {"slug": body.slug, "direction": body.direction}
 
     @app.post("/webhooks/{slug}")
-    async def inbound_webhook(slug: str, request: Request) -> dict[str, Any]:
+    async def inbound_webhook(slug: str, request: Request) -> Any:
+        """Receive an external POST for ``slug``.
+
+        v1.231.0 (audit AE15): a request the dispatcher REFUSES — unknown slug
+        (404), bad/replayed signature or an unresolvable secret (401) — no
+        longer answers 200 ``{"ok": false}``: the caller gets the real status
+        (body keeps ``ok: false`` + ``error``) and the timeline gets
+        ``webhook.rejected {slug, reason}``, so a probed or misconfigured secret
+        is visible where the user looks."""
         raw = await request.body()
         sig = request.headers.get("X-IronJarvis-Signature") or request.headers.get(
             "X-Signature"
@@ -777,6 +808,17 @@ def register(app: FastAPI, d) -> None:
             body = json.loads(raw or b"{}")
         except Exception:
             body = {}
-        return await d.platform.inbound_webhooks.dispatch(
+        result = await d.platform.inbound_webhooks.dispatch(
             slug, body, raw=raw, signature=sig
         )
+        rejected = result.get("rejected") if isinstance(result, dict) else None
+        if rejected:
+            try:
+                await d.platform.event_bus.publish(
+                    "webhook.rejected", {"slug": slug, "reason": str(rejected)}
+                )
+            except Exception:  # noqa: BLE001 — the bus must never mask the refusal
+                pass
+            status = 404 if rejected == "unknown_slug" else 401
+            return JSONResponse(status_code=status, content=result)
+        return result

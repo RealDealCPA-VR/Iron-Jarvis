@@ -46,6 +46,11 @@ class SentinelRecord(SQLModel, table=True):
     # The watcher's durable memory, e.g. {"seen": {path: mtime}}. Compared on
     # each check so already-observed changes never re-fire across restarts.
     last_state_json: str = "{}"
+    # v1.231.0 (audit AE7): why the last check could not scan — "root
+    # unreachable since <t>" for a vanished folder (USB / OneDrive), else the
+    # scan error. Cleared by the next successful scan. Additive column;
+    # existing DBs self-heal via ``core.db._reconcile_additive_columns``.
+    last_error: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
     def decoded_config(self) -> dict:

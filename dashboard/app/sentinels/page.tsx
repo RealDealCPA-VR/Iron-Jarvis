@@ -41,6 +41,10 @@ interface Sentinel {
   risk: string;
   enabled: boolean;
   last_checked_at: string | null;
+  /** v1.231.0 (audit AE7): "root unreachable since <t>" while the watched
+   *  folder is gone (USB / OneDrive), else the last scan error; null when
+   *  the last scan succeeded. */
+  last_error?: string | null;
   created_at: string;
 }
 
@@ -526,6 +530,15 @@ export default function SentinelsPage() {
                         {s.last_checked_at
                           ? new Date(s.last_checked_at).toLocaleString()
                           : "never (baseline pending)"}
+                        {s.last_error && (
+                          <span
+                            data-testid={`sentinel-last-error-${s.id}`}
+                            className="block max-w-[16rem] truncate text-[11px] text-amber-300"
+                            title={s.last_error}
+                          >
+                            {s.last_error}
+                          </span>
+                        )}
                       </td>
                       <td className="px-2 py-2.5 text-right">
                         <ConfirmButton

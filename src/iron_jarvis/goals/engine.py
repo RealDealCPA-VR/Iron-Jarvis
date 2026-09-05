@@ -35,10 +35,16 @@ bookkeeping with teeth, in this order and nowhere else:
    checks-only). ``kind:"manual"`` NEVER auto-satisfies.
 5. **Checkpoint is deterministic**: session id, ledger-recorded files, the
    session's recorded summary — composed by code, never model-written in G1.
-6. **The breaker trips honestly**: 3 failed iterations inside 30 minutes →
+6. **The breaker trips honestly**: 3 failed iterations inside 30 minutes, OR
+   3 failed iterations in a row at any spacing (v1.231.0 — a nightly goal
+   fails 24 h apart and the window alone could never trip it) →
    ``state="tripped"`` + a ``goal.tripped`` event naming the reason (the
    renderer-watchdog pattern) — and a tripped goal refuses to iterate until
-   explicitly reopened.
+   explicitly reopened. A successful iteration resets the run of failures.
+7. **Waiting is not work** (v1.231.0, AE13): the wall-clock an iteration is
+   charged excludes the time its session sat parked on an approval
+   (``ChatApprovals.waited_s``) — an unattended 3 am ask is five minutes of
+   nobody working, and ``max_wallclock_s`` must not be eaten by it.
 
 NOTHING HERE RUNS ON ITS OWN TIMER. Cadence comes from OUTSIDE: the scheduler
 (a ``kind="goal"`` schedule dispatching :meth:`GoalEngine.run_iteration`) or a
@@ -328,7 +334,7 @@ class GoalEngine:
             # the session ROW (D8) — both are accounted; it is NOT a breaker
             # failure — a cancel is the user's decision, not evidence the
             # world is broken.
-            elapsed = time.monotonic() - started
+            elapsed, _waited = self._worked_s(started, session.id)
             row = self._session_row(session.id) or session
             self._settle_spend(goal, row, elapsed)
             checkpoint.pop("running_session_id", None)
@@ -363,7 +369,7 @@ class GoalEngine:
             # finalized the session FAILED (run_session's own handler) — this
             # is the goal-side half, and it returns the honest failure dict
             # rather than re-raising, exactly like a failed-but-completed run.
-            elapsed = time.monotonic() - started
+            elapsed, _waited = self._worked_s(started, session.id)
             reason = f"session {session.id} raised {type(exc).__name__}: {exc}"[:400]
             row = self._session_row(session.id) or session
             self._settle_spend(goal, row, elapsed)
@@ -406,7 +412,7 @@ class GoalEngine:
                 "reason": reason,
                 "state": current.state if current else ("tripped" if tripped else "active"),
             }
-        elapsed = time.monotonic() - started
+        elapsed, waited = self._worked_s(started, session.id)
 
         # Spend from RECORDED truth: the session row's token counts + the
         # pricing table. Never the transcript's own claims. The accounted
@@ -437,6 +443,9 @@ class GoalEngine:
         pending = ""
         tripped = False
         if completed:
+            # A completed iteration ends the run of failures (AE5): the
+            # consecutive counter resets, the 30-minute window is untouched.
+            self.store.record_success(goal.id)
             verifier = goal.decoded_verifier()
             kind = verifier["kind"]
             may_satisfy = False
@@ -501,6 +510,7 @@ class GoalEngine:
                 **({"unmet": unmet[:400]} if unmet else {}),
                 **({"pending": pending[:400]} if pending else {}),
                 **({"note": note} if note else {}),
+                **({"waited_s": round(waited, 3)} if waited > 0 else {}),
             },
             session_id=session.id,
         )
@@ -516,8 +526,31 @@ class GoalEngine:
             **({"unmet": unmet} if unmet else {}),
             **({"pending": pending} if pending else {}),
             **({"note": note} if note else {}),
+            **({"waited_s": round(waited, 3)} if waited > 0 else {}),
             "spent": current.decoded_spent() if current else {},
         }
+
+    def _worked_s(self, started: float, session_id: str) -> tuple[float, float]:
+        """``(worked, waited)``: the iteration's wall-clock MINUS the seconds
+        its session sat parked on approvals (v1.231.0, audit AE13).
+
+        An unattended ask pauses the run for ``SESSION_APPROVAL_TIMEOUT_S``
+        (300 s) and resolves "timeout"; billing that against
+        ``max_wallclock_s`` let six sleeping-owner asks exhaust a 30-minute
+        budget with zero work done. The registry accumulates the wait per
+        session on every exit (answer, timeout, cancel); a bare platform with
+        no registry waited nothing.
+        """
+        elapsed = max(0.0, time.monotonic() - started)
+        approvals = getattr(self.p, "approvals", None)
+        waited = 0.0
+        reader = getattr(approvals, "waited_s", None)
+        if callable(reader):
+            try:
+                waited = max(0.0, float(reader(session_id) or 0.0))
+            except Exception:  # noqa: BLE001 — accounting must never crash the iteration
+                waited = 0.0
+        return max(0.0, elapsed - waited), min(waited, elapsed)
 
     def _settle_spend(self, goal: GoalContractRecord, session: Session, elapsed: float) -> None:
         """Bill one iteration from the session ROW's recorded usage — shared by

@@ -102,10 +102,19 @@ class EventType:
     # sent it to a specific model. Carries {tier, provider, model, classifier}.
     PROVIDER_ROUTED = "provider.routed"
     WEBHOOK_RECEIVED = "webhook.received"
+    #: v1.231.0 (audit AE15): an inbound webhook POST was REFUSED before any
+    #: handler ran — bad/missing signature, replayed signature, unresolvable
+    #: secret, or an unknown slug. Carries {slug, reason}; the timeline shows
+    #: a probed or misconfigured secret instead of a 200 nobody reads.
+    WEBHOOK_REJECTED = "webhook.rejected"
     # Two-way comm (inbound): an authorized message arrived on a channel and a
     # session was spawned for it; or a sender was refused (not on the allowlist).
     COMM_RECEIVED = "comm.received"
     COMM_REJECTED = "comm.rejected"
+    #: v1.231.0 (audit AE14): an authorized message was in flight when the
+    #: daemon stopped and was dropped (at-most-once). Carries {channel,
+    #: update_id, chat_id, resent_notice}; the sender is asked to resend.
+    COMM_DROPPED = "comm.dropped"
     # Reflex Loop (the ambient operator): an inbound signal (webhook / comm)
     # matched a rule and fired a bound action (workflow / remote agent / session).
     REFLEX_FIRED = "reflex.fired"

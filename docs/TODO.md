@@ -5,6 +5,106 @@ the deep-review wow track, deferred backlogs across waves, and known limits.
 The deep review's 11 confirmed bugs are all FIXED (v1.166.2–v1.167.0) — this
 file is what remains.*
 
+## Carried out of the 2026-09-04 audit, Wave 5 (v1.231.0)
+
+- [x] AE1/T4 one execution seam — a project-tagged session with no explicit
+  folder (a schedule, a reflex `session` rule, a goal iteration, a phone
+  escalation, a bare `POST /sessions {project_id}`) now runs in the
+  PROJECT'S folder: `Orchestrator.create_session` resolves the root through
+  `fs_policy.root_problem`, the ONE definition the Projects route
+  (`_root_problem`) and `usable_workspace_root` now share, so every door
+  lands where the Projects door does with no per-door change (an explicit
+  `workspace_root` still wins). A root that is set but unusable (missing,
+  protected, not writable, project row gone) is recorded on the session row
+  (`summary` carries a `Folder note:` from creation; the finalizers keep it
+  under the result) — never a silent scratch dir. Tests:
+  `tests/test_execution_seam_v1231.py`.
+- [x] AE17 (+N2/N3/N4) every door stamps its origin and may ask —
+  `reflex:<rule>` (reflex/router), `comm:<channel>` (comm/inbound one-shot +
+  escalation, routes/comm send-escalation — which also carries the thread's
+  project_id now, like inbound), `autonomy` (motivation/engine).
+  `agents/runtime.ASKING_ORIGINS` widened to schedule/workflow/reflex/comm/
+  autonomy: those sessions PAUSE on an ask-tier tool (the v1.200.0 fan-out
+  puts the question on the bell and the phone) and an unanswered ask ends as
+  the v1.227.0 `needs_you` outcome; unattributed runs and a bare platform
+  with no approvals registry keep the instant honest denial; `delegate`/
+  `spawn_agent` (the headless-safe set) never pause anyone.
+- [x] AE3 an agent step whose session RAISES (provider/DB blow-up
+  re-raised by `run_session`) is a failed step: `_run_agent_step` catches
+  `Exception` beside `CancelledError` and returns
+  `{status: failed, summary: "<Type>: <msg>", kind: agent}`, mirroring the
+  tool branch, so the attempt loop, `retry`, `skip` and
+  `workflow.step_completed` all see it (it used to escape to the batch
+  `gather` as a silent halt).
+- [x] AE6 a reflex rule that cannot start is honest on every surface:
+  `ReflexRule.last_error`/`last_result` (written by `ReflexRouter.execute`
+  through `ReflexStore.mark_result`; a failed start is NOT counted as a
+  fire), every webhook ack answers `{ok, fired, failed: [{rule, error}],
+  reflexes_fired}` via `reflex.router.summarize_fires` (create route,
+  lifespan rehydrate and the agent's `webhook_add` handler), a phone keyword
+  rule that matched but failed replies `Rule "<name>" could not start:
+  <error>` (`status: reflex_failed`) and never falls through to a free-form
+  session, and the Reflexes page renders `could not start: …` on the row.
+- [x] AE15 an inbound webhook the dispatcher refuses answers 401 (bad or
+  replayed signature, unresolvable secret) or 404 (unknown slug) with
+  `{ok: false, error}` and publishes `webhook.rejected {slug, reason}`
+  (`InboundWebhooks.dispatch` marks refusals with `rejected`; the route
+  maps them; EventStream colours the event amber).
+- [x] AE7 `sentinels.watcher.default_scanner` raises `FileNotFoundError`
+  for a configured root that does not exist (a glob path keeps matching
+  nothing); `SentinelService.check` keeps the old baseline on any scan
+  failure and writes `SentinelRecord.last_error` ("root unreachable since
+  <t>", the FIRST failure's time; cleared by the next good scan), so a
+  replug proposes nothing for untouched files; `add()` accepts a root that
+  is not there yet; `/sentinels` rows carry `last_error` and the page
+  renders it. Tests: `tests/test_reflex_sentinel_honest_v1231.py`,
+  `dashboard/__tests__/reflex-sentinel-last-error-v1231.test.tsx`.
+- [x] AE8 a revoked/rotated Telegram bot token (401/403 on `getUpdates`)
+  and a refused IMAP `LOGIN` raise `comm.base.ChannelAuthError` instead of
+  flattening to an empty batch; `InboundPoller.poll_once` records
+  `{channel, status: error, detail}` + `poller.poll_errors[name]` (cleared
+  by the next poll that comes back), `poll_verdict` feeds the lifespan loop
+  `_tick("inbound", False, <channel: detail>)`, `GET /comm/channels` rows
+  carry `last_poll_error`/`last_poll_error_at`, and the Channels page turns
+  the dot red with "Not listening — <detail>". A 5xx/non-JSON answer keeps
+  the fail-safe empty batch (a flaky hour is not a dead-token alarm).
+- [x] AE14 at-most-once KEPT, made honest: `InboundOffsetRecord` gains
+  `inflight_update_id`/`inflight_chat_id`, written IN THE SAME transaction
+  as the pre-handling offset and cleared when `_handle` returns (a
+  `CancelledError` at shutdown leaves it); the next `poll_once` finds it,
+  sends `DROPPED_REPLY` ("I was restarted while handling your last message
+  — please resend it") to that chat, publishes `comm.dropped {channel,
+  update_id, chat_id, notified}` and clears the marker.
+- [x] AE5 the goal breaker also trips on `BREAKER_MAX_FAILURES`
+  CONSECUTIVE failures at any spacing (`breaker_json.consecutive`,
+  `GoalStore.record_failure`), reset by `record_success` (called for a
+  completed iteration) and by reopen; the 3-in-30-min window and its test
+  stand; `goal_view.breaker.consecutive` exposes it.
+- [x] AE13 an iteration's wall-clock charge excludes its approval wait:
+  `ChatApprovals.pop` accumulates `requested_at → pop` per session
+  (`waited_s(session_id)`), `GoalEngine._worked_s` subtracts it at every
+  ending (completed/failed/crashed/cancelled) and the iteration result +
+  `goal.iteration_completed` carry `waited_s` when non-zero. Tests:
+  `tests/test_comm_trust_v1231.py`, `tests/test_goals_trust_v1231.py`,
+  `dashboard/__tests__/channels-last-poll-error-v1231.test.tsx`.
+- [x] AE4 finished steps survive a restart: `_exec_step` writes its own
+  output to the record (off-loop `_update_record`) as it completes, not only
+  after the whole parallel batch settles; `_update_record` snapshots the
+  outputs dict since siblings now mutate it mid-batch. Resume after a crash
+  mid-group keeps the finished member and does not re-deliver its notify.
+- [x] AE16 the pinned-folder note is written on EVERY run start (`[]` when
+  the folder is fine), so a resume whose folder is back clears the stale
+  "no folder … scratch workspace" note.
+- [x] AE10 (validation half; `""` for an unknown/failed `.data` stays by
+  design) `POST /workflows` refuses a `{{Ref.data}}` whose `Ref` is not a
+  step name (422 naming the step and the reference; task, message and tool
+  args are all scanned); a bare `{{Ref}}` naming no step is a run input
+  (`workflow_run inputs`) and stays allowed. `render_template` renders a
+  FAILED step's bare ref as `[step Ref failed: <summary>]` instead of its
+  error text as content. Tests: `tests/test_workflow_engine_v1231.py`
+  (converted from the audit repros `test_a1_workflow_restart.py` +
+  `test_a2_step_failure.py`).
+
 ## Carried out of the 2026-09-04 audit, Wave 4 (v1.230.0)
 
 - [x] FP1 the preflight cache works again: `lib/api.ts` no longer sends
@@ -307,8 +407,17 @@ v1.226.0. These are what the reviewers graded "defer" or "note":
   bulk DELETE + `terminals.rehydrate` run before bind); NSIS silent install vs
   an orphaned Next server under `ELECTRON_RUN_AS_NODE` (`installer.nsh` kills
   only `ironjarvis.exe`); SQLAlchemy QueuePool (5+10, 30 s) exhaustion under
-  VACUUM + 20 concurrent sessions; tzlocal `ZoneInfoNotFoundError` aborting
-  `build_platform` on an exotic Windows zone.
+  VACUUM + 20 concurrent sessions. CLOSED v1.231.0 (audit Wave 5, AE12):
+  tzlocal `ZoneInfoNotFoundError` aborting `build_platform` on an exotic
+  Windows zone — the scheduler now falls back to UTC (`_safe_local_tz`, every
+  trigger handed the scheduler's zone) with a doctor `scheduler_timezone`
+  warning.
+- [x] v1.231.0 (audit Wave 5, AE9/N1/AE11/AE2): a recurring fire the app was
+  closed for is stamped `missed` on the row (never fired late, never twice);
+  cron/interval jobs carry a 300 s misfire grace so a PC that slept through
+  the minute fires on wake; an overlapping fire is stamped `skipped`; Run-now
+  refuses a second copy (`already running`); Cancel reaches a schedule-fired
+  session on the APScheduler thread's loop via `call_soon_threadsafe`.
 - [x] PARTLY CLOSED v1.227.0 (audit Wave 1): finished/failed/cancelled runs
   and `reconcile_interrupted_sessions` now release worklist claims and settle
   non-terminal `AgentRun` rows; the shield below is still open.
@@ -628,8 +737,10 @@ Still open from the workflows analysis:
   remotes beyond the supervisor bridge.
 - [ ] Agent-type selection on schedules (today every scheduled task runs as
   builder).
-- [ ] `origin` populated by the remaining callers (chat/user_task/comm/
-  reflex/workflow lanes pass None today).
+- [x] `origin` populated by the remaining callers — comm (`comm:<channel>`),
+  reflex (`reflex:<rule>`) and autonomy stamped in v1.231.0 (audit AE17);
+  workflow (`workflow:<name>`), schedule, goal, project and job were already
+  stamped; chat escalations pass `origin: "chat"` from the page.
 
 ## Known limits (documented, not bugs)
 
