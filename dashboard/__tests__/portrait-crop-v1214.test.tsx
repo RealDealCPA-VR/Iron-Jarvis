@@ -295,9 +295,19 @@ describe("AgentPortrait — the same row for every kind of agent", () => {
       ]),
     );
     expect(screen.queryByTestId("portrait-cropper")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /Remove/ }));
+    // Wait for the THING the next click needs, not for the proxy signal: the
+    // recorded POST lands before the handler clears `busy`, and Remove is
+    // `disabled={busy}` — on a contended CI runner the click used to hit a
+    // still-disabled button (v1.227.1 gate, CLAUDE.md's waitFor rule).
     await waitFor(() =>
-      expect(hooks.deletes).toEqual(["/agents/analyst/avatar"]),
+      expect(
+        (screen.getByRole("button", { name: /Remove/ }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Remove/ }));
+    await waitFor(
+      () => expect(hooks.deletes).toEqual(["/agents/analyst/avatar"]),
+      { timeout: 3000 },
     );
   });
 
