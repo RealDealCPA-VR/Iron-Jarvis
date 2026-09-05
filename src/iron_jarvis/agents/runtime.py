@@ -1357,8 +1357,13 @@ class AgentRuntime:
         # WAITING is flipped (and persisted) BEFORE the ask is announced, so a
         # surface that reacts to `approval.requested` by reading the row
         # already finds it waiting — never a card over a "running" run.
-        await self._enter_waiting(run, session.id)
         try:
+            # INSIDE the try (v1.227.3): the depth increment is synchronous,
+            # so a cancel thrown at the WAITING save/publish below still
+            # reaches the ``finally`` and restores RUNNING. Outside the try a
+            # cancel landing there left the row WAITING forever — seen twice
+            # on the CI runner, never locally.
+            await self._enter_waiting(run, session.id)
             await self.p.event_bus.publish(
                 EventType.APPROVAL_REQUESTED,
                 {
