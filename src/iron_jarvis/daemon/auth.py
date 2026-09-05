@@ -27,6 +27,7 @@ import os
 import uuid
 from urllib.parse import urlparse
 
+from starlette.datastructures import MutableHeaders
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse, Response
@@ -111,6 +112,35 @@ class HostOriginGuardMiddleware:
             await send({"type": "websocket.close", "code": 1008})
             return
         await JSONResponse({"detail": detail}, status_code=403)(scope, receive, send)
+
+
+class NoStoreMiddleware:
+    """``Cache-Control: no-store`` on EVERY HTTP response (v1.230.0, audit FP1).
+
+    The dashboard used to send ``cache: "no-store"`` on every fetch, which made
+    Chromium bypass its CORS *preflight* cache too — one OPTIONS per GET even
+    though CORSMiddleware answers ``access-control-max-age: 600``. That option
+    is gone client-side, and freshness moved HERE: without ``no-store`` on one
+    side or the other, Chromium writes session JSON (client file names) into
+    the Electron disk cache. Pure ASGI so streaming bodies and WebSockets pass
+    untouched, and added INSIDE CORSMiddleware so the preflight it short-
+    circuits keeps its max-age and stays cacheable.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+
+        async def _send(message) -> None:  # noqa: ANN001
+            if message.get("type") == "http.response.start":
+                MutableHeaders(scope=message)["Cache-Control"] = "no-store"
+            await send(message)
+
+        await self.app(scope, receive, _send)
+
 
 # Paths that must work without a token even when auth is enabled:
 #   - health/liveness probes (load balancers, `ironjarvis status`)

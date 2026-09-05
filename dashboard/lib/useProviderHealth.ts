@@ -5,8 +5,9 @@
 // they send a turn, not after the turn has already failed against a dead
 // endpoint (the fleet-custom incident this exists for).
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { get } from "@/lib/api";
+import { useDaemon } from "@/lib/daemon";
 import type { Health } from "@/lib/types";
 
 // Opt-in request timeout (see lib/api.ts): a hung fetch would otherwise pin
@@ -34,17 +35,15 @@ export interface ProviderHealthState {
 }
 
 /**
- * Poll GET /health every `intervalMs` and expose per-provider availability.
+ * Per-provider availability from GET /health.
  *
- * Default cadence is 5s — the SAME cadence as the topbar ModelSwitcher's own
- * /health poll, on purpose: the switcher's amber dot and a PreflightNote fed
- * by this hook read the same fact, and with mismatched intervals they could
- * visibly disagree for the whole slower period (dot amber, note silent — which
- * reads as a bug, and 30s is an eternity while the user is typing). /health is
- * cheap and already polled at 5s app-wide from the topbar, so matching it
- * bounds the disagreement to ~one tick without a meaningful new load.
+ * v1.230.0: inside a `DaemonProvider` (the whole app) this hook READS the
+ * shared /health poll — the same payload the topbar ModelSwitcher's amber dot
+ * and the offline banner use, so the three can never disagree and the window
+ * carries ONE /health poll. It polls for itself ONLY when mounted outside a
+ * provider (`provided === false`), at `intervalMs` (default 5 s).
  *
- * Guarantees:
+ * Guarantees (of the private poll):
  * - ONE interval per mount, cleaned up on unmount (no polling storm).
  * - Overlapping requests are skipped: an interval tick (or manual refresh)
  *   while a request is in flight does nothing.
@@ -52,6 +51,8 @@ export interface ProviderHealthState {
  *   emptying it — stale beats empty for a preflight indicator.
  */
 export function useProviderHealth(intervalMs = 5_000): ProviderHealthState {
+  const daemon = useDaemon();
+  const shared = daemon.provided;
   const [byProvider, setByProvider] = useState<Record<string, boolean>>({});
   const [defaultProvider, setDefaultProvider] = useState("");
   const [loading, setLoading] = useState(true);
@@ -87,6 +88,7 @@ export function useProviderHealth(intervalMs = 5_000): ProviderHealthState {
   }, []);
 
   useEffect(() => {
+    if (shared) return; // the DaemonProvider's poll is the source — no second one
     mounted.current = true; // re-armed on StrictMode remount
     refresh();
     const id = setInterval(refresh, intervalMs);
@@ -94,7 +96,26 @@ export function useProviderHealth(intervalMs = 5_000): ProviderHealthState {
       mounted.current = false;
       clearInterval(id);
     };
-  }, [refresh, intervalMs]);
+  }, [refresh, intervalMs, shared]);
 
+  // The shared payload, mapped the same way. DaemonProvider keeps the last
+  // successful /health across misses, so this is the same last-known map.
+  const sharedMap = useMemo(() => {
+    const map: Record<string, boolean> = {};
+    for (const p of daemon.health?.providers ?? []) map[p.provider] = p.available;
+    return map;
+  }, [daemon.health]);
+
+  if (shared) {
+    return {
+      byProvider: sharedMap,
+      defaultProvider: daemon.health?.default_provider ?? "",
+      loading: daemon.checking,
+      // The provider says offline after two consecutive misses (FP4); until
+      // then the map is live truth as far as the app knows.
+      stale: !daemon.checking && !daemon.online,
+      refresh: daemon.refresh,
+    };
+  }
   return { byProvider, defaultProvider, loading, stale, refresh };
 }

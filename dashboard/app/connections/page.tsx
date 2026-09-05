@@ -354,6 +354,13 @@ function metaFor(provider: string): ProviderMeta {
 /*  Status pill                                                                */
 /* -------------------------------------------------------------------------- */
 
+/** The CLI a keyless provider is served through ("claude-cli"), else null —
+ *  read off the daemon's `source` so this page and /health agree (v1.230.0). */
+function inheritedVia(conn: Pick<Connection, "source">): string | null {
+  const m = /^inherited from (\S+)/.exec(conn.source ?? "");
+  return m ? m[1] : null;
+}
+
 function StatusPill({ conn }: { conn: Connection }) {
   let tone: string;
   let label: string;
@@ -367,7 +374,11 @@ function StatusPill({ conn }: { conn: Connection }) {
     label = "0 tools — restart";
   } else if (conn.connected) {
     tone = "border-emerald-500/25 bg-emerald-500/10 text-emerald-300";
-    label = "Connected";
+    // Inherited (v1.230.0, U5): connected THROUGH the logged-in CLI, no key
+    // stored here — say so, instead of "Not connected" under an available
+    // provider (the audit's live finding).
+    const via = inheritedVia(conn);
+    label = via ? `Inherited from ${via}` : "Connected";
   } else if (conn.status === "needs_auth") {
     tone = "border-amber-500/25 bg-amber-500/10 text-amber-300";
     label = "Needs auth";
@@ -878,6 +889,12 @@ function ConnectionCard({
                 </>
               )}
               {conn.account && <span className="text-zinc-600">· {conn.account}</span>}
+              {inheritedVia(conn) && (
+                <span className="text-zinc-600">
+                  · signed in through the {inheritedVia(conn)!.replace(/-cli$/, "")} CLI — no key
+                  stored here
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -917,12 +934,16 @@ function ConnectionCard({
           <button onClick={runTest} disabled={busy} className="btn-ghost flex-1 py-1.5 text-xs">
             {busy ? <LoaderInline label="Testing…" /> : <><CheckCircle2 size={14} /> Test</>}
           </button>
-          <ConfirmButton
-            onConfirm={disconnect}
-            label="Disconnect"
-            title={`Disconnect ${conn.display_name}`}
-            className="py-1.5"
-          />
+          {/* Nothing to disconnect for an inherited login — the key lives in
+              the CLI; log out of that CLI to drop it (v1.230.0). */}
+          {!inheritedVia(conn) && (
+            <ConfirmButton
+              onConfirm={disconnect}
+              label="Disconnect"
+              title={`Disconnect ${conn.display_name}`}
+              className="py-1.5"
+            />
+          )}
         </div>
       ) : (
         <div className="space-y-3">

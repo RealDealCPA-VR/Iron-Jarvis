@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.229.0 (2026-09-05).*
+holds itself to. Current as of v1.230.0 (2026-09-05).*
 
 ---
 
@@ -33,7 +33,9 @@ the key that is live, or say "hotkey unavailable" when both are taken.
 `Ctrl+Shift+Space` opens Spotlight. State lives in `%APPDATA%/Iron Jarvis/.ironjarvis/` (SQLite DB,
 config.toml, secrets vault, skills, backups). Updates download automatically
 (checked at boot and every 30 min) and install only when you click
-**Restart to update**.
+**Restart to update**. While the window is hidden or minimised the dashboard
+stops polling the daemon (the daemon check itself slows to every 30 s) and
+refreshes everything the moment you bring it back.
 
 ---
 
@@ -131,6 +133,10 @@ set. Cancel genuinely stops the agent, in every lane.
   chunk and reported only part of it is handed its own remaining items back,
   and finished, cancelled or interrupted runs release their claims at once
   instead of holding them for 15 minutes.
+- **Summaries read like chat** (v1.230.0): the summary card on a session page
+  renders the agent's markdown the way a chat reply does — bold, lists, code —
+  and a project's **Recent runs** rows show the summary's words on one line,
+  never its asterisks.
 
 ### Documents
 Read/extract (PDF incl. scanned-with-OCR fallback, docx, xlsx, pptx, csv,
@@ -186,6 +192,20 @@ sessions, approval-gated); Connections (providers/health); Usage (token
 costs); Activity (the full undo-capable action ledger); the **/you** page
 (your profile, personas, accessibility presets — injected into every prompt
 seam); Train (teach it your writing voice, suggest-only).
+
+- **Connections tells one truth** (v1.230.0): a provider inherited from a
+  logged-in CLI shows as **Inherited from claude-cli** (or codex-cli) — it is
+  connected, the switcher and chat can use it, and the chat picker calls it
+  *included* rather than *metered*, because the subscription pays. There is
+  no Disconnect on that card (no key is stored here; log out of the CLI to
+  drop it), and **Test** says the same. A provider is "Not connected" only
+  when nothing — vault key, environment, or CLI login — can serve it, which
+  is exactly when the health dot says so too.
+- **The model switcher shows what is active first** (v1.230.0): the topbar
+  switcher pins your **Active model** as the first row, then lists **All
+  models** grouped by provider — your own hardware and flat-rate CLIs first,
+  metered APIs after — and folds anything offline under one **Show offline
+  (N)** line, so the active local brain is never 2,000 px down the list.
 
 ---
 
@@ -257,7 +277,12 @@ seam); Train (teach it your writing voice, suggest-only).
    names each pack that failed and a missing `npx`. **Test** on that row
    only proves the config (it loads nothing), so a green Test leaves the
    amber line and the "needs attention" note in place — press **Retry** to
-   actually bring the pack's tools back.
+   actually bring the pack's tools back. The dashboard keeps **one** live
+   connection to the daemon's event feed per window (v1.230.0) — every page
+   and widget shares it — and when the daemon is away it retries after
+   2.5 s, then waits twice as long each time up to 30 s (slightly
+   randomised, so several open windows don't all knock at once); the
+   reconnect asks for what it missed, and a replayed event shows once.
 
 ## Ask the Guide
 
@@ -282,7 +307,9 @@ reads; it never writes, runs commands, or starts work on its own.
 - **"Daemon offline"** → almost always a provider/endpoint issue, not the
   daemon: check Connections. In the desktop app the banner says the service
   is restarting; pages reload themselves the moment it is back (v1.226.0) —
-  no need to navigate away. The desktop app restarts a crashed daemon or
+  no need to navigate away. The banner needs two missed polls (v1.230.0);
+  one slow request never shows it, and a search you superseded by typing
+  is not counted as a miss at all. The desktop app restarts a crashed daemon or
   dashboard by itself with backoff (1 s → 60 s). It does not do so forever
   (v1.229.0): three deaths within seconds of a start make it verify the
   install first (a damaged install gets the Repair dialog), and after 10

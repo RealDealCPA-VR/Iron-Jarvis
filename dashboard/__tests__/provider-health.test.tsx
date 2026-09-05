@@ -45,11 +45,23 @@ vi.mock("@/lib/api", () => ({
   del: vi.fn(async () => ({})),
   API_BASE: "",
   ijToken: () => "",
+  onUnauthorizedChange: () => () => {},
+  onRequestErrorChange: () => () => {},
+  onNetworkError: () => () => {},
 }));
 
 import { useProviderHealth } from "@/lib/useProviderHealth";
+import { DaemonProvider } from "@/lib/daemon";
 import { PreflightNote } from "@/components/chat/PreflightNote";
 import { ModelSwitcher } from "@/components/ModelSwitcher";
+
+// v1.230.0: the switcher reads /health from the app's ONE shared poll, so it is
+// rendered the way the layout mounts it — inside DaemonProvider.
+const switcher = () => (
+  <DaemonProvider>
+    <ModelSwitcher />
+  </DaemonProvider>
+);
 
 // ---- fixtures ---------------------------------------------------------------
 
@@ -297,7 +309,7 @@ describe("PreflightNote", () => {
 
 describe("ModelSwitcher availability", () => {
   async function openSwitcher() {
-    render(<ModelSwitcher />);
+    render(switcher());
     const trigger = await screen.findByRole("button", {
       name: /switch the active model/i,
     });
@@ -340,7 +352,7 @@ describe("ModelSwitcher availability", () => {
 
   it("shows the amber dot on the trigger when the SELECTED provider is offline", async () => {
     mockDaemon(); // default_provider = fleet-custom, which /health says is down
-    render(<ModelSwitcher />);
+    render(switcher());
     const dot = await screen.findByTestId("ij-model-offline-dot");
     expect(dot.className).toContain("bg-amber-400");
   });
@@ -351,7 +363,7 @@ describe("ModelSwitcher availability", () => {
       default_provider: "anthropic",
       default_model: "claude-sonnet-4-6",
     });
-    render(<ModelSwitcher />);
+    render(switcher());
     await screen.findByRole("button", { name: /switch the active model/i });
     expect(screen.queryByTestId("ij-model-offline-dot")).toBeNull();
   });
@@ -365,7 +377,7 @@ describe("ModelSwitcher availability", () => {
       default_provider: "ollama",
       default_model: "llama3.1",
     });
-    render(<ModelSwitcher />);
+    render(switcher());
     await screen.findByRole("button", { name: /switch the active model/i });
     expect(screen.queryByTestId("ij-model-offline-dot")).toBeNull();
   });

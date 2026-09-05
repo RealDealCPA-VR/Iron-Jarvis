@@ -23,6 +23,7 @@ import { get, post, ApiError, API_BASE, ijToken } from "@/lib/api";
 import type { SessionDetail, SessionView } from "@/lib/types";
 import { Card, Badge, ErrorNote, LoaderInline } from "@/components/ui";
 import { SessionStatusBadge } from "@/components/sessions/SessionStatusBadge";
+import { plainText } from "@/components/Markdown";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 
 /** Deliverable choices for POST /projects/{id}/task (mirrors the backend). */
@@ -636,7 +637,9 @@ export function ProjectTasks({
                     >
                       <SessionStatusBadge session={s} />
                       <span className="min-w-0 flex-1 truncate text-xs text-zinc-400">
-                        {s.summary || s.task}
+                        {/* A one-line row: the summary's markdown markers are
+                            stripped (v1.230.0, U2), not printed. */}
+                        {plainText(s.summary || s.task)}
                       </span>
                       <span className="shrink-0 text-[11px] text-accent-soft opacity-0 transition-opacity group-hover:opacity-100">
                         open →

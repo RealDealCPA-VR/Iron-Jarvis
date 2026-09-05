@@ -161,6 +161,13 @@ def selectable_models(d) -> list[dict[str, Any]]:
             else "api"
         )
         m["size_b"] = model_size_b(str(m.get("model") or ""))
+        # v1.230.0 (U5): a keyless API provider served through the logged-in
+        # CLI is flat-rate — the picker says "included", not "metered". Same
+        # answer /health and /connections give (manager.inherited_from).
+        try:
+            m["inherited_from"] = d.platform.providers.inherited_from(prov)
+        except Exception:  # noqa: BLE001 — never breaks the picker
+            m["inherited_from"] = None
     return models
 
 

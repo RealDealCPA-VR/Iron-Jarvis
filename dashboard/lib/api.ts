@@ -1,6 +1,8 @@
 // Tiny runtime API client. All calls happen in the browser ('use client'),
 // so `next build` never touches the daemon.
 
+import { NOT_MODIFIED, rememberEtag } from "./etag";
+
 export const API_BASE = (
   process.env.NEXT_PUBLIC_IJ_API || "http://127.0.0.1:8787"
 ).replace(/\/$/, "");
@@ -65,9 +67,15 @@ export const put = <T>(path: string, body?: unknown) =>
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  /** v1.230.0 (FP5): true when the CALLER aborted the request (its own
+   *  AbortSignal fired). Status stays 0 so every "status 0 = no error UI"
+   *  consumer keeps working, but this is not the daemon being unreachable
+   *  and it fires no app-wide network signal. */
+  cancelled: boolean;
+  constructor(message: string, status: number, cancelled = false) {
     super(message);
     this.status = status;
+    this.cancelled = cancelled;
     this.name = "ApiError";
   }
 }
@@ -139,30 +147,56 @@ function signalNetworkError(): void {
 // /health poll + list polls, to detect a frozen-but-connected daemon). NEVER
 // blanket-applied: a user-initiated GET like a whole-drive file search or the first
 // cold-Ollama semantic search legitimately runs far longer than any poll timeout.
-export type ApiInit = RequestInit & { timeoutMs?: number };
+// `ifNoneMatch` (v1.230.0, FP3): send the ETag a previous response carried; a 304
+// then resolves to the NOT_MODIFIED marker instead of a body (never an error).
+export type ApiInit = RequestInit & { timeoutMs?: number; ifNoneMatch?: string };
 
 export async function api<T>(path: string, init?: ApiInit): Promise<T> {
-  const { timeoutMs, ...rest } = init || {};
+  const { timeoutMs, ifNoneMatch, ...rest } = init || {};
   const controller = timeoutMs ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   let res: Response;
   try {
+    // v1.230.0 (FP1): NO `cache: "no-store"` here. It made Chromium bypass its
+    // CORS preflight cache, so every GET cost an OPTIONS round-trip although the
+    // daemon answers `access-control-max-age: 600` (measured in Edge: 10 GET ->
+    // 10 OPTIONS with it, 1 without). Freshness is the DAEMON's job now: its
+    // NoStoreMiddleware puts `Cache-Control: no-store` on every response, which
+    // is what keeps session JSON (client file names) out of the Electron disk
+    // cache. Do not put the client-side option back to "be safe" — both sides
+    // were measured, and only the server header is load-bearing.
     res = await fetch(`${API_BASE}${path}`, {
       ...rest,
       headers: {
         "Content-Type": "application/json",
         ...authHeaders(),
+        ...(ifNoneMatch ? { "If-None-Match": ifNoneMatch } : {}),
         ...(rest.headers || {}),
       },
-      cache: "no-store",
       ...(controller ? { signal: controller.signal } : {}),
     });
   } catch {
+    // v1.230.0 (FP5): the CALLER's own abort (the command palette supersedes a
+    // search on every keystroke) is not an outage. Reporting it as "daemon
+    // offline" + the network signal restarted DaemonProvider's poll loop per
+    // keystroke. A distinct, quiet rejection instead.
+    if (rest.signal?.aborted) throw new ApiError("cancelled", 0, true);
     // Network error or (opt-in) timeout => daemon offline / not responding.
-    signalNetworkError();
+    // The /health poll is DaemonProvider's own probe: it judges misses itself
+    // (FP4, two in a row), so its timeout must not restart that loop from here.
+    if (path !== "/health") signalNetworkError();
     throw new ApiError("daemon offline", 0);
   } finally {
     if (timer) clearTimeout(timer);
+  }
+  // v1.230.0 (FP3): the daemon confirmed the caller's copy is current. Reachable
+  // and authorised, so the data signals clear like any 2xx; no body to parse.
+  if (res.status === 304 && ifNoneMatch) {
+    if (path !== "/health") {
+      signalAuth(false);
+      signalError(false);
+    }
+    return NOT_MODIFIED as unknown as T;
   }
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) signalAuth(true);
@@ -186,10 +220,14 @@ export async function api<T>(path: string, init?: ApiInit): Promise<T> {
     signalError(false);
   }
   if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+  const data = (await res.json()) as T;
+  // The tag travels with the payload (lib/etag.ts) so a hook can send it back.
+  rememberEtag(data, typeof res.headers?.get === "function" ? res.headers.get("etag") : null);
+  return data;
 }
 
-export const get = <T>(path: string, opts?: { timeoutMs?: number }) => api<T>(path, opts);
+export const get = <T>(path: string, opts?: { timeoutMs?: number; ifNoneMatch?: string }) =>
+  api<T>(path, opts);
 
 export const post = <T>(
   path: string,

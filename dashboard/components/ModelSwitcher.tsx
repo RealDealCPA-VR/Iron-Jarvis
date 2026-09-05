@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Cpu, Check, PlugZap, ChevronDown, Sparkles } from "lucide-react";
-import { usePolledApi, useApi } from "@/lib/useApi";
+import { useApi } from "@/lib/useApi";
+import { useDaemon } from "@/lib/daemon";
 import { put, post, ApiError } from "@/lib/api";
 import type { Health, ModelOption } from "@/lib/types";
 
@@ -132,7 +133,10 @@ function RoutingChoice({
  * where requests go; picking any specific model below turns Auto back off.
  */
 export function ModelSwitcher() {
-  const health = usePolledApi<Health>("/health", 5000);
+  // v1.230.0: /health comes from the app's ONE shared poll (DaemonProvider in
+  // the layout). This component used to run a second 5 s poll of the same
+  // endpoint in the same window; `refresh()` re-polls it at once after a pick.
+  const daemon = useDaemon();
   const modelsData = useApi<{ models: ModelOption[] }>("/models");
   const [open, setOpen] = useState(false);
   // The Auto — smart-routing detail is a collapsible disclosure (expands on
@@ -144,14 +148,12 @@ export function ModelSwitcher() {
   const [err, setErr] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
-  const h = health.data;
+  const h: Health | null = daemon.health;
   const models = useMemo(() => modelsData.data?.models ?? [], [modelsData.data]);
-  // Availability comes from the component's OWN 5s /health poll above — do NOT
-  // also mount lib/useProviderHealth here: that would add a second poller of
-  // the same endpoint in the same component. The hook exists for surfaces that
-  // don't already poll /health (e.g. the chat composer's PreflightNote); its
-  // default interval matches this component's 5s so the two can't visibly
-  // disagree for more than about one tick.
+  // Availability comes from the shared /health above — do NOT also mount
+  // lib/useProviderHealth here; that hook reads the same context (and only
+  // polls for itself outside a DaemonProvider), so the chat composer's
+  // PreflightNote and this dot can never disagree: same payload, same tick.
   const avail = useMemo(() => {
     const m = new Map<string, boolean>();
     for (const p of h?.providers ?? []) m.set(p.provider, p.available);
@@ -259,7 +261,7 @@ export function ModelSwitcher() {
       await put("/settings", {
         values: { default_provider: m.provider, default_model: m.model },
       });
-      await health.reload?.();
+      daemon.refresh();
       setOpen(false);
     } catch (e) {
       setOptimistic(null); // revert the label on failure
@@ -278,7 +280,7 @@ export function ModelSwitcher() {
     setOptimistic({ provider: "auto", model: h?.default_model ?? "" });
     try {
       await post("/routing/enable", { routing_model: routingModel });
-      health.reload?.();
+      daemon.refresh();
       routing.reload?.();
       if (close) setOpen(false);
     } catch (e) {
@@ -289,7 +291,155 @@ export function ModelSwitcher() {
     }
   }
 
+  // v1.230.0 (audit U3): the list used to be ~55 flat rows in catalog order
+  // under a heading that said "Active model" — and the active brain (a local
+  // endpoint) sat 2,000 px down a 320 px scroller. Now the ACTIVE entry is
+  // pinned as the first row, the rest is "All models" grouped by provider with
+  // your own hardware and flat-rate CLIs first, and offline providers fold
+  // under one "Show offline (N)" line.
+  const [showOffline, setShowOffline] = useState(false);
+  useEffect(() => {
+    if (!open) setShowOffline(false);
+  }, [open]);
+  const activeEntry = useMemo<ModelOption | null>(() => {
+    if (autoOn || !activeProvider) return null;
+    const found = models.find(
+      (m) => m.provider === activeProvider && m.model === activeModel,
+    );
+    // Not in the catalog (a model typed by hand, a slot the catalog omits):
+    // the user still sees what is active, first.
+    return found ?? { provider: activeProvider, model: activeModel ?? "" };
+  }, [models, activeProvider, activeModel, autoOn]);
+  const groups = useMemo(() => {
+    type Group = {
+      id: string;
+      label: string;
+      kind: string;
+      available: boolean;
+      size: number;
+      rows: ModelOption[];
+    };
+    const byProvider = new Map<string, Group>();
+    for (const m of models) {
+      if (
+        activeEntry &&
+        m.provider === activeEntry.provider &&
+        m.model === activeEntry.model
+      ) {
+        continue; // pinned above, not listed twice
+      }
+      const size = typeof m.size_b === "number" ? m.size_b : Number.POSITIVE_INFINITY;
+      let g = byProvider.get(m.provider);
+      if (!g) {
+        g = {
+          id: m.provider,
+          label: m.name || m.provider,
+          // An inherited login is served by a CLI: flat-rate, "included".
+          kind: m.inherited_from ? "cli" : (m.kind ?? "api"),
+          available: avail.get(m.provider) ?? false,
+          size,
+          rows: [],
+        };
+        byProvider.set(m.provider, g);
+      }
+      g.size = Math.min(g.size, size);
+      g.rows.push(m);
+    }
+    const RANK: Record<string, number> = { local: 0, cli: 1, api: 2 };
+    const sorted = [...byProvider.values()].sort((a, b) => {
+      const ra = RANK[a.kind] ?? 3;
+      const rb = RANK[b.kind] ?? 3;
+      if (ra !== rb) return ra - rb;
+      if (a.size !== b.size) return a.size - b.size; // smallest local rung first
+      return a.label.localeCompare(b.label);
+    });
+    const online = sorted.filter((g) => g.available);
+    const offline = sorted.filter((g) => !g.available);
+    const offlineCount = offline.reduce((n, g) => n + g.rows.length, 0);
+    return { online, offline, offlineCount };
+  }, [models, activeEntry, avail]);
+  const KIND_WORD: Record<string, string> = {
+    local: "local",
+    cli: "included",
+    api: "metered",
+  };
+
   if (!h) return null; // until /health loads (the offline banner covers downtime)
+
+  /** One selectable model row — the pinned active one and every listed one
+   *  render through this, so they cannot drift apart. */
+  function renderRow(m: ModelOption, pinned: boolean) {
+    const active = m.provider === activeProvider && m.model === activeModel;
+    const ok = avail.get(m.provider) ?? false;
+    const key = `${m.provider}|${m.model}`;
+    return (
+      <button
+        key={pinned ? `active|${key}` : key}
+        data-testid={pinned ? "ij-active-model-row" : undefined}
+        // Offline entries stay SELECTABLE on purpose (preflight,
+        // not a trap): the user may want to keep a briefly-down
+        // endpoint as their default. They are marked (dim, struck,
+        // "(offline)") and the trigger's amber dot warns while it
+        // stays selected.
+        onClick={() => choose(m)}
+        disabled={busy === key}
+        title={
+          ok
+            ? undefined
+            : `${m.name || m.provider} is offline — you can still select it, but turns will fail until it's back`
+        }
+        className={`flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors ${
+          ok ? "hover:bg-white/[0.06]" : "opacity-40 hover:bg-white/[0.06] hover:opacity-70"
+        } ${active ? "bg-accent/[0.1]" : ""}`}
+      >
+        <span className="min-w-0">
+          <span
+            className={`block truncate font-mono text-[11px] ${
+              ok ? "text-zinc-200" : "text-zinc-500 line-through"
+            }`}
+          >
+            {m.model}
+          </span>
+          <span className={`text-[10px] ${ok ? "text-zinc-500" : "text-amber-400/80"}`}>
+            {/* Friendly endpoint label over a raw "fleet-x7f2" id. */}
+            {m.name || m.provider}
+            {!ok && " (offline)"}
+          </span>
+        </span>
+        {active && <Check size={13} className="text-accent-soft" />}
+      </button>
+    );
+  }
+
+  /** A provider's rows under its name and where it runs (local / included /
+   *  metered) — the same words the chat picker uses. */
+  function renderGroup(g: {
+    id: string;
+    label: string;
+    kind: string;
+    available: boolean;
+    rows: ModelOption[];
+  }) {
+    return (
+      <div key={g.id} data-testid={`ij-model-group-${g.id}`}>
+        <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1.5 text-[10px] text-zinc-500">
+          <span className="truncate">{g.label}</span>
+          <span
+            className={
+              g.kind === "local"
+                ? "text-emerald-400/80"
+                : g.kind === "cli"
+                  ? "text-sky-400/80"
+                  : "text-zinc-600"
+            }
+          >
+            {KIND_WORD[g.kind] ?? g.kind}
+          </span>
+        </div>
+        {g.rows.map((m) => renderRow(m, false))}
+      </div>
+    );
+  }
 
   return (
     <div ref={ref} className="relative">
@@ -563,52 +713,30 @@ export function ModelSwitcher() {
               Pick a model to turn Auto off.
             </div>
           )}
-          <div className="max-h-80 overflow-y-auto">
+          <div data-testid="ij-model-list" className="max-h-80 overflow-y-auto">
+            {activeEntry && renderRow(activeEntry, true)}
             {models.length === 0 ? (
               <div className="px-2 py-2 text-[11px] text-zinc-500">No models.</div>
             ) : (
-              models.map((m) => {
-                const active =
-                  m.provider === activeProvider && m.model === activeModel;
-                const ok = avail.get(m.provider) ?? false;
-                const key = `${m.provider}|${m.model}`;
-                return (
-                  <button
-                    key={key}
-                    // Offline entries stay SELECTABLE on purpose (preflight,
-                    // not a trap): the user may want to keep a briefly-down
-                    // endpoint as their default. They are marked (dim, struck,
-                    // "(offline)") and the trigger's amber dot warns while it
-                    // stays selected.
-                    onClick={() => choose(m)}
-                    disabled={busy === key}
-                    title={
-                      ok
-                        ? undefined
-                        : `${m.name || m.provider} is offline — you can still select it, but turns will fail until it's back`
-                    }
-                    className={`flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors ${
-                      ok ? "hover:bg-white/[0.06]" : "opacity-40 hover:bg-white/[0.06] hover:opacity-70"
-                    } ${active ? "bg-accent/[0.1]" : ""}`}
-                  >
-                    <span className="min-w-0">
-                      <span
-                        className={`block truncate font-mono text-[11px] ${
-                          ok ? "text-zinc-200" : "text-zinc-500 line-through"
-                        }`}
-                      >
-                        {m.model}
-                      </span>
-                      <span className={`text-[10px] ${ok ? "text-zinc-500" : "text-amber-400/80"}`}>
-                        {/* Friendly endpoint label over a raw "fleet-x7f2" id. */}
-                        {m.name || m.provider}
-                        {!ok && " (offline)"}
-                      </span>
-                    </span>
-                    {active && <Check size={13} className="text-accent-soft" />}
-                  </button>
-                );
-              })
+              <>
+                <div className="mt-1 border-t border-white/[0.06] px-2 pb-0.5 pt-2 text-[10px] uppercase tracking-wider text-zinc-400">
+                  All models
+                </div>
+                {groups.online.map((g) => renderGroup(g))}
+                {groups.offline.length > 0 &&
+                  (showOffline ? (
+                    groups.offline.map((g) => renderGroup(g))
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setShowOffline(true)}
+                      className="mt-1 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[11px] text-zinc-500 transition-colors hover:bg-white/[0.04] hover:text-zinc-300"
+                    >
+                      <ChevronDown size={11} />
+                      Show offline ({groups.offlineCount})
+                    </button>
+                  ))}
+              </>
             )}
           </div>
           {err && <div className="px-2 py-1.5 text-[11px] text-rose-300">{err}</div>}

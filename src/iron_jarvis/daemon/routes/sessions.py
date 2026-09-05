@@ -7,10 +7,12 @@ reached through ``d`` (see the deps object built in create_app).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 
 from dataclasses import asdict
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from typing import Any
 
@@ -45,6 +47,43 @@ def _waiting_on(d, session_id: str) -> dict[str, Any] | None:
     if not approval_id:
         return None
     return {"approval_id": str(approval_id), "tool": str(first.get("tool") or "")}
+
+
+def _etag_matches(if_none_match: str | None, etag: str) -> bool:
+    """RFC 7232 weak comparison of an ``If-None-Match`` header against *etag*
+    (``*`` matches anything; a ``W/`` prefix on either side is ignored)."""
+    if not if_none_match:
+        return False
+    strip = lambda t: t[2:] if t.startswith("W/") else t  # noqa: E731
+    for tag in (t.strip() for t in if_none_match.split(",")):
+        if tag == "*" or strip(tag) == strip(etag):
+            return True
+    return False
+
+
+def _etagged_json(body: Any, request: Request) -> Response:
+    """Serialise *body* exactly as FastAPI's JSONResponse would and answer
+    it with a weak ETag — or a bodiless 304 when the caller's ``If-None-Match``
+    already names this content (v1.230.0, audit FP3).
+
+    The tag is a hash of the SERIALISED body, so it is the same across daemon
+    restarts and changes whenever any row does (status, outcome, waiting_on,
+    a new session). The Overview polls ``/sessions`` every 5 s and the list
+    rarely changes between ticks; a 304 costs no body (the default 200-row
+    listing was ~60 KB per tick, ~1 GB/day). ``Cache-Control: no-store`` stays
+    on every response — the dashboard sends the tag itself; the browser cache
+    is never involved.
+    """
+    raw = json.dumps(
+        jsonable_encoder(body),
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    etag = 'W/"%s"' % hashlib.sha1(raw).hexdigest()
+    if _etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers={"ETag": etag})
+    return Response(content=raw, media_type="application/json", headers={"ETag": etag})
 
 
 def _session_row(d, session) -> dict[str, Any]:
@@ -267,7 +306,12 @@ def register(app: FastAPI, d) -> None:
         return PlainTextResponse("\n".join(lines), media_type="text/markdown")
 
     @app.get("/sessions")
-    def list_sessions(limit: int = 200, project_id: str = "") -> dict[str, Any]:
+    def list_sessions(request: Request, limit: int = 200, project_id: str = "") -> Response:
+        """``{"sessions": [...]}`` — newest first, bounded by ``limit``.
+
+        Answers with a weak ``ETag``; repeat the GET with ``If-None-Match`` and
+        an unchanged list is a bodiless 304 (v1.230.0).
+        """
         # Bounded window (default 200 most-recent) so the polled list stays cheap as
         # sessions accumulate over weeks; clients page for more via ?limit=.
         lim = None if limit <= 0 else limit
@@ -291,8 +335,9 @@ def register(app: FastAPI, d) -> None:
                 if lim is not None:
                     stmt = stmt.limit(lim)
                 scoped = list(db.exec(stmt))
-            return {"sessions": [_session_row(d, s) for s in scoped]}
-        return {"sessions": [_session_row(d, s) for s in d.orchestrator.list_sessions(limit=lim)]}
+            return _etagged_json({"sessions": [_session_row(d, s) for s in scoped]}, request)
+        rows = [_session_row(d, s) for s in d.orchestrator.list_sessions(limit=lim)]
+        return _etagged_json({"sessions": rows}, request)
 
     @app.get("/sessions/teams")
     def sessions_teams() -> dict[str, Any]:

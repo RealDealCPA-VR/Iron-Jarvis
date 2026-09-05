@@ -441,13 +441,33 @@ class ProviderManager:
                 return bool(verdict)
         return None
 
+    def _inherit_alias_for(self, name: str) -> str | None:
+        """The logged-in CLI a KEYLESS ``name`` would be served through (no
+        presence check — callers decide whether a stored key comes first)."""
+        alias = self._INHERIT_ALIAS.get(name) if self._inherit_cli else None
+        return alias if alias and self.available(alias) else None
+
+    def inherited_from(self, name: str) -> str | None:
+        """The CLI an API provider is SERVED THROUGH right now, or ``None``.
+
+        v1.230.0 (audit U5): ``anthropic``/``openai`` with no stored key resolve
+        to the logged-in ``claude``/``codex`` CLI (``_INHERIT_ALIAS``), and
+        ``available()`` said so — while the Connections page read only the
+        ConnectionRecord and said "Not connected". This is the ONE answer every
+        surface reads: ``available()``, ``health()``'s row, the Connections
+        status (``ConnectionRegistry.inherited_from``) and the /models picker
+        rows. A stored key always wins (raw adapter, never the CLI).
+        """
+        if name not in API_PROVIDERS or self._present(name):
+            return None
+        return self._inherit_alias_for(name)
+
     def available(self, name: str) -> bool:
         if name in API_PROVIDERS:
             if self._present(name):
                 return True
             # Keyless inheritance: usable if the provider's own CLI is logged in.
-            alias = self._INHERIT_ALIAS.get(name) if self._inherit_cli else None
-            return bool(alias and self.available(alias))
+            return self._inherit_alias_for(name) is not None
         if name == "ollama":
             # Local provider: available only once a base_url is configured —
             # plus, when the oracle has a DIRECT opinion about this slot, the
@@ -694,6 +714,11 @@ class ProviderManager:
                     if name in ("claude-cli", "codex-cli", "grok-cli")
                     else "mock"
                 ),
+                # v1.230.0 (U5): the CLI a keyless API provider is served
+                # through (None otherwise) — same answer /connections and
+                # /models give, so `available: true` never stands beside
+                # "Not connected".
+                "inherited_from": self.inherited_from(name),
             }
             for name in sorted(self._factories)
         ]

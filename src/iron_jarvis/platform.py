@@ -392,6 +392,11 @@ def build_platform(
         # construction and never touch this store.
         envelope_home=config.home,
     )
+    # v1.230.0 (U5): the Connections status reads the SAME inheritance answer
+    # the router/health use, so a keyless Anthropic served through the
+    # logged-in `claude` CLI shows "Inherited from claude-cli", not
+    # "Not connected" beside an `available: true`.
+    connections.inherited_from = providers.inherited_from
     # LOCAL FLEET — the user's own inference machines. The registry derives nodes
     # from the two config endpoint slots (so it works with zero setup) plus any
     # the user added, and registers one provider per ROUTABLE node. Topology

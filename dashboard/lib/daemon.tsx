@@ -17,6 +17,11 @@ import {
   onUnauthorizedChange,
 } from "./api";
 import type { Health } from "./types";
+import { useDocumentVisible } from "./useDocumentVisible";
+
+/** /health cadence while the document is hidden (v1.230.0, FP2). A minimised
+ *  window still learns about an outage — six times a minute less often. */
+export const HIDDEN_HEALTH_INTERVAL_MS = 30_000;
 
 export interface DaemonState {
   /** True once a /health poll has succeeded; false when the daemon is offline. */
@@ -38,6 +43,10 @@ export interface DaemonState {
   epoch: number;
   /** Force an immediate re-poll. */
   refresh: () => void;
+  /** v1.230.0: true when a DaemonProvider is mounted above the caller — i.e.
+   *  `health` is the app's ONE shared /health poll. The fallback object says
+   *  false, and a hook that needs /health then polls for itself. */
+  provided: boolean;
 }
 
 const DaemonContext = createContext<DaemonState | null>(null);
@@ -58,6 +67,21 @@ export function DaemonProvider({ children }: { children: ReactNode }) {
   // Last KNOWN reachability, kept in a ref so the poll (a closure) can detect
   // the offline->online edge without re-subscribing on every flip.
   const onlineRef = useRef(false);
+  // v1.230.0 (FP4): the poll that was ISSUED last is the only one allowed to
+  // say online/offline. A poll that timed out after a newer one was issued
+  // (refresh() restarts the loop) is stale and its verdict is dropped.
+  const seqRef = useRef(0);
+  // Consecutive status-0 misses while we believed the daemon online. ONE slow
+  // /health (>8 s) on a healthy daemon used to commit an offline render (the
+  // banner flashed ~0.5 s) and bump the epoch (every status-0 page refetched).
+  // Now the first miss only triggers an immediate confirmation poll; the banner
+  // needs two misses in a row.
+  const missesRef = useRef(0);
+  // v1.230.0 (FP2): stretch to 30 s while the window is hidden. The loop below
+  // restarts on the edge; only the VISIBLE edge (and an explicit refresh) polls
+  // at once — going hidden must not cost a request.
+  const visible = useDocumentVisible();
+  const lastNonceRef = useRef(0);
 
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
 
@@ -94,43 +118,78 @@ export function DaemonProvider({ children }: { children: ReactNode }) {
       }
     };
 
+    // v1.230.0 (FP4): in-flight guard. A 5 s tick landing while the previous
+    // /health is still waiting on its 8 s timeout used to issue a SECOND request
+    // onto the same (possibly busy) daemon; now the tick is skipped.
+    let inFlight = false;
+
     const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      const seq = ++seqRef.current;
+      const latest = () => !cancelled && seq === seqRef.current;
+      let confirm = false;
       try {
         // Opt-in 8s timeout so a FROZEN-but-connected daemon (a blocking tool call)
         // trips "offline" instead of hanging the poll forever with a false-green dot.
         const h = await get<Health>("/health", { timeoutMs: 8000 });
-        if (cancelled) return;
+        if (!latest()) return;
+        missesRef.current = 0;
         setHealth(h);
         markOnline();
       } catch (err) {
-        if (cancelled) return;
+        if (!latest()) return;
         // status 0 === network error === daemon unreachable.
         if (err instanceof ApiError && err.status === 0) {
-          onlineRef.current = false;
-          setOnline(false);
+          missesRef.current += 1;
+          if (onlineRef.current && missesRef.current < 2) {
+            // First miss on a daemon we believe online: confirm before saying
+            // anything. A healthy daemon answers the re-poll at once and nothing
+            // renders; a dead one fails again and the second miss is honest.
+            confirm = true;
+          } else {
+            onlineRef.current = false;
+            setOnline(false);
+          }
         } else {
           // Reachable but erroring — still "online" enough to not show the banner.
+          missesRef.current = 0;
           markOnline();
         }
       } finally {
+        inFlight = false;
         if (!cancelled && firstRef.current) {
           firstRef.current = false;
           setChecking(false);
         }
       }
+      if (confirm && !cancelled) void poll();
     };
 
-    poll();
-    const id = setInterval(poll, 5000);
+    const kicked = lastNonceRef.current !== nonce;
+    lastNonceRef.current = nonce;
+    // First mount, a refresh(), or the hidden->visible edge: poll now. The
+    // visible->hidden edge only re-arms the slower interval.
+    if (visible || kicked || seqRef.current === 0) poll();
+    const id = setInterval(poll, visible ? 5000 : HIDDEN_HEALTH_INTERVAL_MS);
     return () => {
       cancelled = true;
       clearInterval(id);
     };
-  }, [nonce]);
+  }, [nonce, visible]);
 
   return (
     <DaemonContext.Provider
-      value={{ online, unauthorized, requestError, health, checking, epoch, refresh }}
+      value={{
+        online,
+        unauthorized,
+        requestError,
+        health,
+        checking,
+        epoch,
+        refresh,
+        provided: true,
+      }}
     >
       {children}
     </DaemonContext.Provider>
@@ -149,6 +208,7 @@ export function useDaemon(): DaemonState {
       checking: true,
       epoch: 0,
       refresh: () => {},
+      provided: false,
     };
   }
   return ctx;

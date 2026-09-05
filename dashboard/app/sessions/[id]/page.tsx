@@ -23,6 +23,7 @@ import { useEvents } from "@/lib/useEvents";
 import { useRunStream } from "@/lib/useRunStream";
 import { useTTS } from "@/lib/useTTS";
 import { post, del, API_BASE, ijToken, ApiError } from "@/lib/api";
+import { Markdown } from "@/components/Markdown";
 import type {
   SessionDetail,
   SessionView,
@@ -383,8 +384,14 @@ export default function SessionDetailPage({
                 </div>
               )}
               {session.summary && (
-                <div className="mt-4 rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2.5 text-sm text-zinc-300">
-                  {session.summary}
+                // The summary is model-written markdown (v1.230.0, U2): it
+                // renders through the shared chat renderer, never as raw text
+                // with its asterisks showing.
+                <div
+                  data-testid="session-summary"
+                  className="mt-4 rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2.5 text-sm text-zinc-300"
+                >
+                  <Markdown content={session.summary} />
                 </div>
               )}
             </Card>

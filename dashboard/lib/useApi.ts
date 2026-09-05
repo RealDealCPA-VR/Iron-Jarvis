@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, get } from "./api";
 import { useDaemon } from "./daemon";
+import { etagOf, isNotModified } from "./etag";
+import { useDocumentVisible } from "./useDocumentVisible";
 
 export interface ApiState<T> {
   data: T | null;
@@ -40,6 +42,13 @@ export function useApi<T>(path: string | null, deps: unknown[] = []): ApiState<T
     if (errorRef.current && errorRef.current.status === 0) setNonce((n) => n + 1);
   }, [epoch]);
 
+  // v1.230.0 (FP3): the ETag of the payload this hook currently HOLDS, with
+  // the path it came from. Sent as If-None-Match on the next fetch of the same
+  // path, so a poll whose answer has not changed costs a 304 and no body
+  // (/sessions was 60 KB every 5 s for a six-row widget). Only a path that
+  // emits an ETag ever fills this; everyone else keeps one-argument `get`.
+  const etagRef = useRef<{ path: string; etag: string } | null>(null);
+
   useEffect(() => {
     if (path === null) {
       setLoading(false);
@@ -47,11 +56,19 @@ export function useApi<T>(path: string | null, deps: unknown[] = []): ApiState<T
     }
     let cancelled = false;
     setLoading(true);
-    get<T>(path)
+    const held = etagRef.current && etagRef.current.path === path ? etagRef.current.etag : null;
+    (held ? get<T>(path, { ifNoneMatch: held }) : get<T>(path))
       .then((d) => {
         if (cancelled) return;
+        if (isNotModified(d)) {
+          // Nothing changed: keep the data we hold (it is what the ETag named).
+          setError(null);
+          return;
+        }
         setData(d);
         setError(null);
+        const etag = etagOf(d);
+        etagRef.current = etag ? { path, etag } : null;
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -69,17 +86,38 @@ export function useApi<T>(path: string | null, deps: unknown[] = []): ApiState<T
   return { data, error, loading, reload };
 }
 
-/** Poll a GET endpoint every `intervalMs`. */
+/**
+ * Poll a GET endpoint every `intervalMs` — while the document is VISIBLE.
+ *
+ * v1.230.0 (FP2): a hidden/minimised window issues no polls (the interval is
+ * torn down, not merely ignored) and gets ONE refetch the moment it is visible
+ * again, so the page is current when the user looks at it. An explicit
+ * `reload()` and the daemon's offline->online epoch still fetch while hidden.
+ */
 export function usePolledApi<T>(
   path: string | null,
   intervalMs = 5000,
   deps: unknown[] = [],
 ): ApiState<T> {
   const [tick, setTick] = useState(0);
+  const visible = useDocumentVisible();
   useEffect(() => {
-    if (path === null) return;
+    if (path === null || !visible) return;
     const id = setInterval(() => setTick((t) => t + 1), intervalMs);
     return () => clearInterval(id);
-  }, [path, intervalMs]);
+  }, [path, intervalMs, visible]);
+  // Refetch once on the hidden->visible edge (never on mount: the first
+  // fetch is useApi's own, and a window that mounts hidden should stay quiet).
+  const wasHiddenRef = useRef(false);
+  useEffect(() => {
+    if (!visible) {
+      wasHiddenRef.current = true;
+      return;
+    }
+    if (wasHiddenRef.current) {
+      wasHiddenRef.current = false;
+      setTick((t) => t + 1);
+    }
+  }, [visible]);
   return useApi<T>(path, [tick, ...deps]);
 }

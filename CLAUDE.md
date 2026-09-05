@@ -547,6 +547,58 @@ does not need a bump, stop and bump it.
   `tools/base.unwritable_workspace_error` — but only for an errno-bearing
   one; `safe_path`'s escape refusal is also a `PermissionError` and keeps
   its own words.
+- **Freshness is the SERVER's header, and a caller's abort is not an outage**
+  (v1.230.0, audit Wave 4). `lib/api.ts` sent `cache: "no-store"` on every
+  fetch, which made Chromium skip its CORS *preflight* cache too — one OPTIONS
+  per GET against a daemon answering max-age 600, half of all traffic. The
+  option is gone and `NoStoreMiddleware` (inside CORS, so the preflight stays
+  cacheable) puts `Cache-Control: no-store` on every response instead. Do
+  not remove EITHER the middleware or the test that pins it: with neither
+  side saying no-store, Chromium writes session JSON — client file names —
+  into the Electron disk cache. Same wave: `api()` used to map every fetch
+  rejection to "daemon offline" + the app-wide network signal, so the
+  palette's per-keystroke abort restarted DaemonProvider's poll loop and one
+  slow /health flashed the banner. A caller's own abort is
+  `ApiError("cancelled", 0, cancelled=true)` and signals nothing; the
+  provider owns its verdict (in-flight guard, sequence number, two misses
+  before offline) and the /health timeout does not signal either.
+- **Cost scales with attention, and a conditional GET is only as good as the
+  header the browser may READ** (v1.230.0, audit Wave 4, FP2/FP3). One window
+  ran THREE 5 s pollers of `/health` (DaemonProvider, ModelSwitcher, the
+  Overview) and none of them paused while minimised. Now `lib/useDocumentVisible`
+  feeds `usePolledApi` (interval torn down while hidden, ONE refetch on the
+  visible edge) and `DaemonProvider` (30 s while hidden; going hidden costs no
+  request), and `/health` has one reader: `useDaemon().health` + `refresh()`
+  (`provided` tells a hook whether a provider is above it — `useProviderHealth`
+  polls for itself only when it is not). `GET /sessions` answers a weak ETag and
+  a bodiless 304; the dashboard's `useApi` sends the tag it HOLDS (`lib/etag.ts`
+  keys the tag by the payload object — per response, never per path, or hook A
+  sends hook B's newer tag and 304s itself into stale data) and keeps its data on
+  the `NOT_MODIFIED` marker. Two traps: ETag is not a CORS-safelisted response
+  header, so without `expose_headers=["ETag"]` on BOTH CORSMiddleware branches
+  `res.headers.get("etag")` is null cross-origin and the path silently never
+  engages (pinned in `tests/test_sessions_etag_v1230.py`); and the marker
+  helpers live OUTSIDE `lib/api.ts` because 71 test files mock that module
+  wholesale — importing them from `./api` made every mocked `get` look failed.
+  Same wave (FP6): `/events` is ONE socket per window — `EventsProvider` in
+  `layout.tsx` owns the `EventsHub`, every `useEvents` is a fan-out subscriber
+  with its own window, reconnect is 2.5 s doubling to 30 s ±20% and resets on
+  open, and a hook never appends an id it holds. A test that counts sockets
+  mounts its hooks under ONE provider (each provider owns a socket).
+- **"Connected" is the ROUTER's answer, and a status row that reads its own
+  store is a second truth** (v1.230.0, audit Wave 4, U5). `available()` had
+  resolved a keyless `anthropic` to the logged-in `claude` CLI since the
+  OAuth compliance wave (`_INHERIT_ALIAS`), so /health said available and the
+  switcher offered claude-opus — while `ConnectionRegistry.status()` read only
+  the `ConnectionRecord` and printed "Not connected" on the same screen. Any
+  surface that says whether a provider works reads
+  `ProviderManager.inherited_from` / `available()`; the registry takes the
+  oracle as an attribute (`platform.py` assigns it after the manager exists —
+  the manager closes over the registry, so it cannot be a constructor arg)
+  and reports `source` beside `connected`. Same wave: `components/Markdown.tsx`
+  is the ONE markdown renderer — a surface that shows a model-written
+  paragraph renders through it (or `plainText` for a truncated row); do not
+  print `session.summary` raw again.
 - **Windows dev shell**: PowerShell 5.1 — no `&&` chaining; Git Bash available.
   This machine lacks ffmpeg on PATH.
 
@@ -677,7 +729,7 @@ does not need a bump, stop and bump it.
 - `dashboard/app/<route>/page.tsx` per page; shared in `dashboard/components/`
   (`ui.tsx` primitives, `Sidebar.tsx` nav incl. Simple/Advanced mode,
   `ModelSwitcher.tsx` quality dial) and `dashboard/lib/` (`api.ts` fetch+auth,
-  `useEvents.ts` WS, `types.ts`). Canvas editors: `components/workflow/`
+  `useEvents.ts` one socket per window (EventsProvider), `types.ts`). Canvas editors: `components/workflow/`
   (agents.ts lives HERE, not lib/). Terminals page = free-form react-rnd
   canvas; pane header class `ij-term-drag` is the drag handle.
 - `desktop/main.js` — supervisor (auto-restart children), tray, global

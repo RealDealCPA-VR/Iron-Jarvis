@@ -13,6 +13,9 @@ import { SimulatedBanner } from "@/components/SimulatedBanner";
 import { FirstRunWizard } from "@/components/FirstRunWizard";
 import { MainContent } from "@/components/MainContent";
 import { DaemonProvider } from "@/lib/daemon";
+// ONE /events socket per window (v1.230.0, FP6): every useEvents hook in
+// the tree fans out of this provider instead of opening its own.
+import { EventsProvider } from "@/lib/useEvents";
 // Face overrides are read ONCE here so every AgentFace in the app draws the
 // user's chosen shape/colour/eyes — not only the picker that sets them
 // (v1.180.0 review finding). Silent + best-effort: no route, no overrides,
@@ -66,6 +69,7 @@ export default function RootLayout({
           Skip to main content
         </a>
         <DaemonProvider>
+          <EventsProvider>
           <FaceStylesProvider>
           <div className="flex h-screen flex-col overflow-hidden">
             {/* Frontier-desktop chrome (v1.111.0): the TitleBar is the FIRST
@@ -118,6 +122,7 @@ export default function RootLayout({
               the user can actually go wire a model). */}
           <FirstRunWizard />
           </FaceStylesProvider>
+          </EventsProvider>
         </DaemonProvider>
       </body>
     </html>

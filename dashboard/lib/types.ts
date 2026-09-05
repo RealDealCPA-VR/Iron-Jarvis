@@ -4,6 +4,10 @@ export interface ProviderHealth {
   provider: string;
   available: boolean;
   class: string;
+  /** v1.230.0: the logged-in CLI a keyless API provider is served through
+   *  ("claude-cli" / "codex-cli"), else null/absent. Same answer /connections
+   *  (`source`) and /models (`inherited_from`) give. */
+  inherited_from?: string | null;
 }
 
 export interface Health {
@@ -477,6 +481,10 @@ export interface ModelOption {
   /** Parameter count in billions, parsed from the model id — orders a local
    *  fleet smallest-first. Absent when the id doesn't state one. */
   size_b?: number | null;
+  /** v1.230.0: a keyless API provider served through the logged-in CLI names
+   *  it here ("claude-cli" / "codex-cli") — flat-rate, so pickers label it
+   *  "included", never "metered". Null/absent otherwise. */
+  inherited_from?: string | null;
 }
 
 /* ---- Projects (context spine) -------------------------------------------- */
@@ -522,6 +530,9 @@ export interface Connection {
   /** Why a non-green status holds, in the user's words (v1.172.0). */
   detail?: string;
   account: string;
+  /** Where "connected" comes from (v1.230.0): "vault", "environment",
+   *  "inherited from claude-cli" / "codex-cli", or "" when not connected. */
+  source?: string;
   scopes: string[];
 }
 

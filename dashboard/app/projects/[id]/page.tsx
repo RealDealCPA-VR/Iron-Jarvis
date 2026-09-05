@@ -38,6 +38,7 @@ import {
   X,
 } from "lucide-react";
 import { useApi, usePolledApi } from "@/lib/useApi";
+import { useDocumentVisible } from "@/lib/useDocumentVisible";
 import { patch, post, del, ApiError, API_BASE, ijToken } from "@/lib/api";
 import { useReviews } from "@/lib/useReviews";
 import { KanbanBoard } from "@/components/kanban/KanbanBoard";
@@ -195,19 +196,6 @@ function ActiveBadge() {
       Active
     </span>
   );
-}
-
-/** Track page visibility so a hidden tab stops polling /sessions — cost should
- *  scale with attention, not wall-clock. SSR-safe: assumes visible until mounted. */
-function useDocumentVisible(): boolean {
-  const [visible, setVisible] = useState(true);
-  useEffect(() => {
-    const sync = () => setVisible(!document.hidden);
-    sync();
-    document.addEventListener("visibilitychange", sync);
-    return () => document.removeEventListener("visibilitychange", sync);
-  }, []);
-  return visible;
 }
 
 /** The per-project Kanban — mounted ONLY while the Board tab is active, so a

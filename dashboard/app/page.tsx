@@ -32,6 +32,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { usePolledApi, useApi } from "@/lib/useApi";
+import { useDaemon } from "@/lib/daemon";
 import { useEvents } from "@/lib/useEvents";
 import { post, ApiError } from "@/lib/api";
 import type { Health, Metrics, VaultProvider, SessionView, IJEvent } from "@/lib/types";
@@ -514,10 +515,15 @@ function CountPill({ children, tone = "neutral" }: { children: ReactNode; tone?:
 }
 
 export default function OverviewPage() {
-  const health = usePolledApi<Health>("/health", 5000);
+  // v1.230.0 (FP2/FP3): /health is the app's ONE shared poll (DaemonProvider)
+  // — this page ran a second one. /sessions asks for 50 rows, not the default
+  // 200 (a six-row widget pulled 60 KB every 5 s), and the daemon's ETag lets
+  // an unchanged list cost a 304 (usePolledApi keeps the data it holds).
+  const daemon = useDaemon();
+  const health = { data: daemon.health, loading: daemon.checking };
   const metrics = usePolledApi<Metrics>("/metrics", 5000);
   const vault = useApi<{ providers: VaultProvider[] }>("/vault");
-  const sessions = usePolledApi<{ sessions: SessionView[] }>("/sessions", 5000);
+  const sessions = usePolledApi<{ sessions: SessionView[] }>("/sessions?limit=50", 5000);
   // /diagnostics runs a full DB integrity scan — poll slowly.
   const diag = usePolledApi<Diagnostics>("/diagnostics", 30000);
   // Reliability signal (free disk + recent provider failures) — read-only.
@@ -541,7 +547,7 @@ export default function OverviewPage() {
     }
   }, []);
 
-  const offline = health.error && health.error.status === 0;
+  const offline = !daemon.checking && !daemon.online;
   const m = metrics.data;
 
   // Which first-win / template tile is currently starting a session.

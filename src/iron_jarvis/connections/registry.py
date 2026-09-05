@@ -93,9 +93,17 @@ class ConnectionRegistry:
         http_factory: Callable[[], object] | None = None,
         oauth_app: OAuthAppResolver | None = None,
         prober: "Callable[[str, str], tuple[bool, str]] | None" = None,
+        inherited_from: "Callable[[str], str | None] | None" = None,
     ) -> None:
         self.engine = engine
         self.secrets = secrets
+        # v1.230.0 (audit U5): ``inherited_from(provider) -> "claude-cli" | None``
+        # — the ProviderManager's answer to "is this keyless API provider served
+        # through a logged-in CLI?". The platform builds the manager AFTER this
+        # registry (the manager closes over ``credential``), so it assigns the
+        # attribute once the manager exists. None (tests, bare construction)
+        # keeps status() record-only, exactly as before.
+        self.inherited_from = inherited_from
         self._http_factory = http_factory or _default_http_factory
         self._oauth_app = oauth_app or _no_oauth_app
         # Optional live reachability probe (provider, credential) -> (ok, detail).
@@ -140,6 +148,7 @@ class ConnectionRegistry:
             # Pixio honors a PIXIO_API_KEY env fallback everywhere it's used
             # (tools, publish, the studio's env injection) — the card must not
             # call a working setup "disconnected" (live-hit 2026-07-07).
+            source = "vault" if connected else ""
             if (
                 spec.provider == "pixio"
                 and not connected
@@ -147,6 +156,16 @@ class ConnectionRegistry:
             ):
                 status, connected = "connected", True
                 account = "PIXIO_API_KEY (environment)"
+                source = "environment"
+            # v1.230.0 (U5): a keyless provider served through the logged-in
+            # CLI IS connected — /health already said `available: true` for
+            # it, and the switcher offered its models undimmed, while this
+            # row (reading only the ConnectionRecord) said "Not connected".
+            # One truth: the manager's inherited_from() decides for both.
+            alias = self._inherited(spec.provider) if not connected else None
+            if alias:
+                status, connected = "connected", True
+                source = f"inherited from {alias}"
             if record and record.scopes_json and record.scopes_json not in ("[]", ""):
                 scopes = _loads_list(record.scopes_json)
             else:
@@ -166,10 +185,25 @@ class ConnectionRegistry:
                     "connected": connected,
                     "status": status,
                     "account": account,
+                    # Where "connected" comes from: "vault" (a stored key /
+                    # token), "environment" (Pixio's env fallback),
+                    # "inherited from claude-cli" / "codex-cli", or "" when
+                    # not connected. Additive (v1.230.0).
+                    "source": source,
                     "scopes": scopes,
                 }
             )
         return out
+
+    def _inherited(self, provider: str) -> str | None:
+        """The CLI *provider* is served through, or None — never raises."""
+        if self.inherited_from is None:
+            return None
+        try:
+            alias = self.inherited_from(provider)
+        except Exception:  # noqa: BLE001 — a detection fault is "not inherited"
+            return None
+        return str(alias) if alias else None
 
     # --- API key ----------------------------------------------------------
 
@@ -461,6 +495,17 @@ class ConnectionRegistry:
             os.environ.get("PIXIO_API_KEY", "").strip() if provider == "pixio" else ""
         )
         if (record is None or record.status != "connected") and not env_key:
+            # Inherited (v1.230.0, U5): the status row calls this connected, so
+            # Test must not answer "not connected" for the same provider.
+            alias = self._inherited(provider)
+            if alias:
+                return {
+                    "ok": True,
+                    "detail": (
+                        f"{spec.display_name} is served through the logged-in "
+                        f"{alias.removesuffix('-cli')} CLI — no API key is stored"
+                    ),
+                }
             return {
                 "ok": False,
                 "detail": (

@@ -5,6 +5,82 @@ the deep-review wow track, deferred backlogs across waves, and known limits.
 The deep review's 11 confirmed bugs are all FIXED (v1.166.2–v1.167.0) — this
 file is what remains.*
 
+## Carried out of the 2026-09-04 audit, Wave 4 (v1.230.0)
+
+- [x] FP1 the preflight cache works again: `lib/api.ts` no longer sends
+  `cache: "no-store"` (it made Chromium skip its CORS preflight cache — one
+  OPTIONS per GET although the daemon answers max-age 600; Overview
+  168→84 requests/min, chat 104→52). Freshness moved to the daemon:
+  `NoStoreMiddleware` (`daemon/auth.py`, added INSIDE CORS in `app.py`)
+  puts `Cache-Control: no-store` on every response — 200s, the guards'
+  401/413, the JSON 500 — while the preflight keeps its max-age. The header
+  is load-bearing: without either side's no-store, Chromium wrote session
+  JSON (client file names) into the Electron disk cache. Tests:
+  `tests/test_no_store_v1230.py`, `dashboard/__tests__/fetch-seam-v1230.test.tsx`.
+- [x] FP4 a steady offline banner: `DaemonProvider` has an in-flight guard
+  (a 5 s tick never overlaps a /health still waiting on its 8 s timeout) and
+  a sequence number (only the latest-issued poll may set online/offline);
+  the first status-0 miss on a daemon believed online triggers an immediate
+  confirmation poll and the banner needs TWO misses in a row. One slow
+  /health on a healthy daemon no longer flashes "Daemon offline." or bumps
+  the epoch (which refetched every status-0 page). The /health poll's own
+  timeout no longer fires the app-wide network signal (the provider judges
+  its own misses).
+- [x] FP5 an abort is not an outage: a CALLER-aborted request (the command
+  palette supersedes its history search on every keystroke) rejects with
+  `ApiError("cancelled", 0, cancelled=true)` and fires no network signal, so
+  it no longer restarts the poll loop per keystroke.
+- [x] FP2 polling pauses while the window is hidden: `lib/useDocumentVisible`
+  (lifted out of the two project surfaces) feeds `usePolledApi`, which tears
+  its interval down while hidden and refetches ONCE on the hidden->visible
+  edge, and `DaemonProvider`, whose /health cadence stretches to 30 s while
+  hidden (going hidden costs no request; coming back polls at once). A
+  minimised window used to poll at full rate for as long as it was open.
+- [x] one /health poll per window: `ModelSwitcher` and the Overview read
+  `useDaemon().health` (+ `refresh()`) instead of each running a second 5 s
+  poll of the same endpoint; `useProviderHealth` reads the same context
+  (`provided`) and polls for itself only outside a DaemonProvider. Overview
+  /health went 39 → 13 requests/min.
+- [x] FP3 a light /sessions poll: the Overview asks `/sessions?limit=50` (was
+  the default 200 rows, ~60 KB every 5 s for a six-row widget); `GET /sessions`
+  answers a weak ETag (`routes/sessions._etagged_json`, sha1 of the serialised
+  body) and a bodiless 304 to `If-None-Match`, exposed through CORS; `lib/api`
+  resolves a 304 to the `NOT_MODIFIED` marker (never an error) and `useApi`
+  sends the tag it holds and keeps its data. Tests:
+  `tests/test_sessions_etag_v1230.py`, `dashboard/__tests__/polling-v1230.test.tsx`.
+- [x] FP6 `useEvents` flat 2.5 s reconnect, no shared socket: `lib/useEvents`
+  is now an `EventsHub` (ONE `/events` WebSocket per window, frames fanned
+  out to every hook, each keeping its own window + `connected`) behind an
+  `EventsProvider` mounted once in `app/layout.tsx` that keeps the socket and
+  the `?since=` cursor alive across route changes; reconnect is 2.5 s then
+  doubling to a 30 s cap with ±20% jitter, reset by a successful open (a 62 s
+  outage costs 4 attempts instead of 26 per hook); a hook never appends an id
+  it already holds. Hook API unchanged at all ~18 call sites. Test:
+  `dashboard/__tests__/events-socket-v1230.test.tsx`.
+- [x] U2 summaries render as markdown: `components/Markdown.tsx` is the one
+  renderer (lifted out of `app/chat/page.tsx` with `MD_COMPONENTS`, the draft
+  fence, the code copy button and the local-media rewrite intact); the
+  session page's summary card renders through it and a project's Recent runs
+  rows go through `plainText` (markers stripped, words kept). Test:
+  `dashboard/__tests__/markdown-surfaces-v1230.test.tsx`.
+- [x] U3 the switcher shows the active model first: `ModelSwitcher` pins the
+  active entry as the first row under "Active model" (with its check, even
+  when the catalog does not list it), titles the rest "All models" grouped by
+  provider — local, then included (CLI / inherited login), then metered — and
+  folds offline providers under "Show offline (N)". Test:
+  `dashboard/__tests__/model-switcher-v1230.test.tsx`.
+- [x] U5 connected means connected: `ProviderManager.inherited_from(name)` is
+  the one answer for a keyless `anthropic`/`openai` served through the
+  logged-in `claude`/`codex` CLI (`_INHERIT_ALIAS`); `available()`, the
+  `/health` row (`inherited_from`), `ConnectionRegistry.status()` (status
+  `connected`, `source: "inherited from claude-cli"`, wired by
+  `platform.py`), `test()` and the `/models` rows all read it. The
+  Connections pill says "Inherited from claude-cli" (no Disconnect, the CLI
+  named), the chat picker labels it "included" and ranks it with the CLIs.
+  Tests: `tests/test_inherited_connection_v1230.py`,
+  `dashboard/__tests__/inherited-provider-v1230.test.tsx`,
+  `dashboard/__tests__/chat-picker-inherited-v1230.test.tsx`.
+
 ## Carried out of the 2026-09-04 audit, Wave 3 (v1.229.0)
 
 - [x] OBS1 one logger tree under two names: `configure_logging` attaches the

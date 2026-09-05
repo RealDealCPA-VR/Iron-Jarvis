@@ -74,7 +74,7 @@ describe("Overview on a 500 from /sessions (v1.226.0)", () => {
   it("shows the daemon's error instead of the 'No sessions yet' empty copy", async () => {
     localStorage.setItem("ij_ov_admin", "1"); // expand "Systems & admin" (collapsed by default)
     render(<OverviewPage />);
-    await waitFor(() => expect(getMock).toHaveBeenCalledWith("/sessions"));
+    await waitFor(() => expect(getMock).toHaveBeenCalledWith("/sessions?limit=50"));
     await waitFor(() => {
       expect(screen.getAllByText(/OperationalError/).length).toBeGreaterThan(0);
     });

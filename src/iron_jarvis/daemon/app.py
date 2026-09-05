@@ -1182,6 +1182,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
         BodyLimitMiddleware,
         ErrorEnvelopeMiddleware,
         HostOriginGuardMiddleware,
+        NoStoreMiddleware,
         TokenAuthMiddleware,
     )
 
@@ -1208,6 +1209,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # refused before the token check and before the body is buffered — the DoS
     # property this guard exists for is unchanged.
     app.add_middleware(BodyLimitMiddleware)
+    # v1.230.0 (audit FP1): `Cache-Control: no-store` on every response — 200s,
+    # 401/413 from the guards above, the JSON 500 envelope. INSIDE CORS on
+    # purpose: the preflight CORSMiddleware answers itself keeps its max-age,
+    # which is the whole point (the dashboard dropped its client-side no-store
+    # so Chromium can cache that preflight again). See the class docstring.
+    app.add_middleware(NoStoreMiddleware)
     # CORS: default to loopback dashboard origins ONLY (never wildcard, since the
     # daemon is RCE-by-design); a public deployment sets IRONJARVIS_CORS_ORIGINS.
     _origins = os.environ.get("IRONJARVIS_CORS_ORIGINS", "").strip()
@@ -1215,12 +1222,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # per-goal dial + pause/activate). Without it the browser preflight fails and
     # the call surfaces as a misleading "daemon offline".
     _methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    # ETag is not a CORS-safelisted response header: without exposing it the
+    # dashboard's `res.headers.get("etag")` reads null cross-origin and the
+    # /sessions 304 path (v1.230.0, FP3) silently never engages.
+    _expose = ["ETag"]
     if _origins:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=[o.strip() for o in _origins.split(",") if o.strip()],
             allow_methods=_methods,
             allow_headers=["*"],
+            expose_headers=_expose,
         )
     else:
         # A browser can only present a loopback Origin from a locally-served page,
@@ -1230,6 +1242,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
             allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
             allow_methods=_methods,
             allow_headers=["*"],
+            expose_headers=_expose,
         )
     # OUTERMOST (added last): reject non-loopback Host (DNS rebinding) + untrusted
     # cross-origin browser requests (drive-by RCE) before anything — covers WS.

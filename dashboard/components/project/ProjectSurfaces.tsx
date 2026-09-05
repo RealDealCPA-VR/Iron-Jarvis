@@ -10,6 +10,7 @@ import Link from "next/link";
 import { Images, SquareKanban } from "lucide-react";
 import { API_BASE, get, ijToken } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
+import { useDocumentVisible } from "@/lib/useDocumentVisible";
 import { useEvents } from "@/lib/useEvents";
 import { useReviews } from "@/lib/useReviews";
 import type { SessionView } from "@/lib/types";
@@ -20,17 +21,6 @@ import { ProjectTasks } from "@/components/project/ProjectTasks";
 import { ProjectSchedules } from "@/components/project/ProjectSchedules";
 
 export type ProjectSurfaceView = "tasks" | "board" | "media";
-
-function useDocumentVisible(): boolean {
-  const [visible, setVisible] = useState(true);
-  useEffect(() => {
-    const onChange = () => setVisible(!document.hidden);
-    onChange();
-    document.addEventListener("visibilitychange", onChange);
-    return () => document.removeEventListener("visibilitychange", onChange);
-  }, []);
-  return visible;
-}
 
 /* ------------------------------------------------- mid-run approvals (P15) */
 
