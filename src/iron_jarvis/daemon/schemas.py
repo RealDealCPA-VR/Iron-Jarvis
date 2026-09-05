@@ -357,6 +357,13 @@ class RepairBody(BaseModel):
     older_than_days: int = 30
 
 
+class RestoreBody(BaseModel):
+    """``POST /maintenance/restore`` (v1.229.0): the archive's file NAME as
+    listed by ``GET /maintenance/backups`` — never a path."""
+
+    name: str
+
+
 #: Whitelist of config keys the Settings UI may read/write (safe, restart-light).
 _SETTINGS_KEYS = [
     "default_provider",

@@ -350,6 +350,18 @@ def runtime_checks(platform) -> list[dict]:
     except Exception as exc:  # noqa: BLE001
         checks.append(_result("disk_space", False, f"disk-space check failed: {exc}", level=RECOMMENDED))
 
+    # Every configured MCP server actually STARTED (v1.229.0, audit U4). A
+    # server skipped at boot left one WARNING in daemon.log; the Tools page
+    # said "0 tools" and the Overview said nominal. The load record now keeps
+    # the reason, and `npx` (what most catalog servers launch with) is resolved
+    # the way the Build page resolves CLIs — PATH first, then the per-user bin
+    # dirs a GUI-launched daemon never sees (`%LOCALAPPDATA%\pi-node\current`,
+    # beside the node that check found).
+    try:
+        checks.append(check_mcp(platform))
+    except Exception as exc:  # noqa: BLE001
+        checks.append(_result("mcp", False, f"mcp check failed: {exc}", level=RECOMMENDED))
+
     # The custom endpoint's configured model actually EXISTS on that gateway.
     # A renamed gateway alias otherwise 400s every request routed there with a
     # cryptic provider error (live-hit 2026-07-31: model 'brain' after the
@@ -395,6 +407,60 @@ def runtime_checks(platform) -> list[dict]:
         pass
 
     return checks
+
+
+def _find_npx() -> str | None:
+    """``npx`` on PATH, else beside a known node / in the per-user bin dirs."""
+    from ..terminals.ai_clis import _find
+
+    return _find("npx")
+
+
+def check_mcp(platform) -> dict:
+    """Each configured MCP server's last load result, plus the ``npx`` launcher
+    when any server needs it. RECOMMENDED: a pack that did not start costs the
+    agents its tools, not the install."""
+    from ..mcp.tools import load_status
+
+    servers = [
+        s for s in (getattr(platform.config, "mcp_servers", None) or []) if isinstance(s, dict)
+    ]
+    if not servers:
+        return _result("mcp", True, "no MCP servers configured.", level=RECOMMENDED)
+    problems: list[str] = []
+    needs_npx = [str(s.get("name") or "mcp") for s in servers if str(s.get("command") or "").lower() in ("npx", "npx.cmd")]
+    if needs_npx and _find_npx() is None:
+        problems.append(f"npx not found (needed by {', '.join(needs_npx)})")
+    # The registry is the ground truth of what agents can USE; the load record
+    # is the reason. A server that was attempted and holds no live tools is
+    # not started even when its record is clean (a probe, or a server that
+    # advertised nothing) — the record alone was fooled once.
+    registry = getattr(platform, "registry", None)
+    live_names = getattr(registry, "mcp_names", None) if registry is not None else None
+    for s in servers:
+        name = str(s.get("name") or "mcp")
+        status = load_status(name)
+        if status and status.get("last_error"):
+            problems.append(f"{name} didn't start: {status['last_error']}")
+        elif status and callable(live_names):
+            try:
+                live = len(live_names(name))
+            except Exception:  # noqa: BLE001 — a doctor check never raises
+                live = None
+            if live == 0:
+                problems.append(f"{name} didn't start: no tools loaded (attempted, none registered)")
+    ok = not problems
+    return _result(
+        "mcp",
+        ok,
+        f"all {len(servers)} MCP server{'s' if len(servers) != 1 else ''} started."
+        if ok
+        else "; ".join(problems),
+        fix=""
+        if ok
+        else "Open Tools → Connected packs and press Retry on the pack; if npx is missing, install Node.js LTS (https://nodejs.org) and restart Iron Jarvis.",
+        level=RECOMMENDED,
+    )
 
 
 def doctor(platform=None) -> dict:

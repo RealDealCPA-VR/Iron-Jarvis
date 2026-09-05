@@ -16,6 +16,10 @@ import { Keyboard, X } from "lucide-react";
  *    session (pnpm dev from source) has no Electron main process, so showing
  *    those two rows there would advertise keys that do nothing — we gate them
  *    on `window.ironjarvis`, which only the Electron preload exposes.
+ *  - v1.229.0 (audit D2): the desktop rows show the key that is REALLY
+ *    registered, read from `window.ironjarvis.shell.getState()` — main.js
+ *    tries Ctrl+Shift+J, then Ctrl+Alt+J, and another app can hold both. A
+ *    row for a taken key says so instead of naming a key that does nothing.
  */
 
 const DISMISS_KEY = "ij_power_tips_dismissed";
@@ -34,34 +38,71 @@ const UNIVERSAL_TIPS: Tip[] = [
   },
 ];
 
-/** True only inside the desktop app (global OS hotkeys from desktop/main.js). */
-const DESKTOP_TIPS: Tip[] = [
-  {
-    keys: ["Ctrl", "Shift", "J"],
-    label: "Reopen the Iron Jarvis window from anywhere",
-  },
-  {
-    keys: ["Ctrl", "Shift", "Space"],
-    label: "Spotlight — quick-ask an agent from anywhere",
-  },
-];
+/** What desktop/main.js reports through the preload bridge (`shell:getState`). */
+type ShellState = {
+  hotkeys?: { window?: string | null; spotlight?: string | null };
+  preferred?: { window?: string | null; spotlight?: string | null };
+};
+
+const WINDOW_TIP = "Reopen the Iron Jarvis window from anywhere";
+const SPOTLIGHT_TIP = "Spotlight — quick-ask an agent from anywhere";
+
+/** The desktop rows, built from the LIVE registration. `shell` undefined =
+ *  an older bridge with no getState: the defaults are the best knowledge we
+ *  have. `null` for a key = every rung of that ladder is taken by another app,
+ *  rendered as a sentence, not a keycap. */
+function desktopTips(shell: ShellState | undefined): Tip[] {
+  const keysOf = (label: string) => label.split("+");
+  const win = shell === undefined ? "Ctrl+Shift+J" : (shell.hotkeys?.window ?? null);
+  const spot = shell === undefined ? "Ctrl+Shift+Space" : (shell.hotkeys?.spotlight ?? null);
+  const preferredWin = shell?.preferred?.window ?? "Ctrl+Shift+J";
+  return [
+    win
+      ? { keys: keysOf(win), label: WINDOW_TIP }
+      : {
+          keys: [],
+          label: `Reopen the window: hotkey unavailable (${preferredWin} is taken by another app) — use the tray icon`,
+        },
+    spot
+      ? { keys: keysOf(spot), label: SPOTLIGHT_TIP }
+      : { keys: [], label: "Spotlight: hotkey unavailable (taken by another app) — use the tray’s Quick task" },
+  ];
+}
 
 export function PowerTips() {
   // null = storage not read yet. Rendering NOTHING until then avoids the
   // card flashing in and disappearing for a user who already dismissed it
   // (same null-until-read shape as FirstRunWizard / OnboardingWelcome).
-  const [state, setState] = useState<{ dismissed: boolean; desktop: boolean } | null>(
-    null,
-  );
+  const [state, setState] = useState<{
+    dismissed: boolean;
+    desktop: boolean;
+    shell?: ShellState;
+  } | null>(null);
 
   useEffect(() => {
     // Both reads happen client-side in one effect: localStorage is not
     // available during SSR, and `window.ironjarvis` (the Electron preload
     // bridge) decides whether the global-hotkey rows are true here.
-    setState({
-      dismissed: localStorage.getItem(DISMISS_KEY) === "1",
-      desktop: typeof window !== "undefined" && Boolean((window as any).ironjarvis),
-    });
+    const bridge = typeof window !== "undefined" ? (window as any).ironjarvis : undefined;
+    const dismissed = localStorage.getItem(DISMISS_KEY) === "1";
+    const desktop = Boolean(bridge);
+    const getState = bridge?.shell?.getState;
+    if (desktop && typeof getState === "function") {
+      // Ask the shell which keys it really holds before rendering a row.
+      let cancelled = false;
+      Promise.resolve()
+        .then(() => getState())
+        .then((shell: ShellState | null) => {
+          if (!cancelled) setState({ dismissed, desktop, shell: shell ?? undefined });
+        })
+        .catch(() => {
+          if (!cancelled) setState({ dismissed, desktop });
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+    setState({ dismissed, desktop });
   }, []);
 
   // Dismissal is one-shot on purpose: no re-open affordance. The Help page
@@ -74,7 +115,9 @@ export function PowerTips() {
 
   if (!state || state.dismissed) return null;
 
-  const tips = state.desktop ? [...UNIVERSAL_TIPS, ...DESKTOP_TIPS] : UNIVERSAL_TIPS;
+  const tips = state.desktop
+    ? [...UNIVERSAL_TIPS, ...desktopTips(state.shell)]
+    : UNIVERSAL_TIPS;
   // The count is computed, not hardcoded — the browser sees two tips, the
   // desktop app four, and a fixed number would be wrong in one of them.
   const countWord = tips.length === 2 ? "Two" : "Four";
@@ -103,7 +146,7 @@ export function PowerTips() {
       <ul className="mt-3 space-y-1.5">
         {tips.map((tip) => (
           <li
-            key={tip.keys.join("+")}
+            key={tip.keys.length ? tip.keys.join("+") : tip.label}
             className="flex items-center gap-3 rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2"
           >
             <span className="flex shrink-0 items-center gap-1">

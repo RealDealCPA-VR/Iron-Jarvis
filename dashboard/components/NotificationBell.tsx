@@ -21,6 +21,43 @@ import { useDesktopNotifications } from "@/lib/useDesktopNotifications";
 import type { ComputerUseStatus, IJEvent, WorkflowRun } from "@/lib/types";
 import { shortId, clockTime } from "@/lib/format";
 
+/** One /diagnostics → background_loops entry (daemon/app.py `_tick`). */
+type LoopHealth = { ok?: boolean; last_error?: string; error?: string; at?: string };
+
+/** v1.229.0 (audit OBS2): a background loop still failing after this long
+ *  becomes a bell item. Shorter and a single blip (a fleet node rebooting)
+ *  would ping the desktop; a loop dead for five minutes is not a blip. */
+const LOOP_FAILING_AFTER_MS = 5 * 60 * 1000;
+
+interface FailingLoop {
+  name: string;
+  minutes: number;
+  error: string;
+}
+
+/** The loops reporting ok:false whose failure is older than the threshold —
+ *  one entry per loop (the map is keyed by name, so a loop can never appear
+ *  twice). An entry with no parseable `at` is skipped: its age is unknown. */
+function staleFailingLoops(
+  loops: Record<string, LoopHealth> | undefined,
+  now: number,
+): FailingLoop[] {
+  const out: FailingLoop[] = [];
+  for (const [name, v] of Object.entries(loops ?? {})) {
+    if (!v || v.ok !== false || !v.at) continue;
+    const at = new Date(v.at).getTime();
+    if (Number.isNaN(at)) continue;
+    const age = now - at;
+    if (age < LOOP_FAILING_AFTER_MS) continue;
+    out.push({
+      name,
+      minutes: Math.floor(age / 60000),
+      error: v.last_error ?? v.error ?? "failed",
+    });
+  }
+  return out;
+}
+
 /** Best-effort session id for a review event (top-level wins, then payload). */
 function reviewKey(e: IJEvent): string {
   return String(e.session_id ?? (e.payload?.session_id as string | undefined) ?? e.id);
@@ -358,8 +395,18 @@ export function NotificationBell() {
   // The live event buffer is empty right after a page reload, so seed the pending
   // review count from /diagnostics (the authoritative current count) — otherwise
   // a reload silently hides reviews that are still waiting on the user.
-  const diag = usePolledApi<{ pending_reviews?: number }>("/diagnostics", 15000);
+  const diag = usePolledApi<{
+    pending_reviews?: number;
+    background_loops?: Record<string, LoopHealth>;
+  }>("/diagnostics", 15000);
   const polledReviews = diag.data?.pending_reviews ?? 0;
+  // v1.229.0: a background loop that has been failing for 5+ minutes is
+  // something only the user can fix (a dead fleet box, a revoked Slack
+  // token) — it rides the same poll and is named with its last error.
+  const failingLoops = useMemo(
+    () => staleFailingLoops(diag.data?.background_loops, Date.now()),
+    [diag.data],
+  );
   // Workflow runs parked on an `ask` step wait on the user too — same polled
   // cadence as the other bell sources (they don't ride a replayable stream).
   // Server-side `status=waiting` (v1.168.0) so an old parked question can
@@ -502,7 +549,7 @@ export function NotificationBell() {
   const reviewish = Math.max(reviews.length, polledReviews) + pendingApprovals;
   // Parked workflow questions and paused agent asks wait on the user exactly
   // like reviews/approvals.
-  const count = reviewish + waiting.length + agentAsks.length;
+  const count = reviewish + waiting.length + agentAsks.length + failingLoops.length;
   // v1.226.0: a polled source that FAILED (non-0 status, e.g. a 500) makes the
   // badge under-count — "You're all caught up" would then be a false empty
   // state. Offline (status 0) is the banner's story, not the bell's.
@@ -544,10 +591,22 @@ export function NotificationBell() {
         parts.push(
           `${agentAsks.length} agent${agentAsks.length === 1 ? "" : "s"} asking permission`,
         );
+      if (failingLoops.length)
+        parts.push(
+          `${failingLoops.length} background task${failingLoops.length === 1 ? "" : "s"} failing`,
+        );
       const body = parts.join(" · ") || "Something needs your attention.";
       notify(`Iron Jarvis — ${count} pending`, body, () => setOpen(true));
     }
-  }, [count, reviews.length, pendingApprovals, waiting.length, agentAsks.length, notify]);
+  }, [
+    count,
+    reviews.length,
+    pendingApprovals,
+    waiting.length,
+    agentAsks.length,
+    failingLoops.length,
+    notify,
+  ]);
 
   // Ping a desktop notification when a NEW activity event arrives. The event
   // buffer starts empty on load and /events only streams (never replays
@@ -697,6 +756,32 @@ export function NotificationBell() {
                       <p className="text-[11px] leading-snug text-amber-200/90">
                         Couldn&apos;t answer &ldquo;{c.workflow}&rdquo;: {c.message}
                       </p>
+                    </li>
+                  ))}
+
+                  {/* v1.229.0: background loops failing for 5+ min, one row
+                      per loop, named with the last error. Links to the
+                      Overview, which carries the same list + the note. */}
+                  {failingLoops.map((l) => (
+                    <li key={`loop-${l.name}`} data-testid="bell-loop-failing">
+                      <Link
+                        href="/"
+                        onClick={() => setOpen(false)}
+                        className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.04]"
+                      >
+                        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-amber-500/25 bg-amber-500/[0.08] text-amber-300">
+                          <ShieldAlert size={15} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium text-zinc-100">
+                            Background task {l.name} has been failing for {l.minutes} min
+                          </span>
+                          <span className="block truncate text-[11px] text-zinc-500" title={l.error}>
+                            {l.error}
+                          </span>
+                        </span>
+                        <ArrowRight size={13} className="shrink-0 text-zinc-600" />
+                      </Link>
                     </li>
                   ))}
 

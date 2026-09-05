@@ -77,6 +77,18 @@ contextBridge.exposeInMainWorld("ironjarvis", {
   // is NOT looking at the app.
   notify: (title, body) =>
     ipcRenderer.invoke("notify:show", { title: String(title ?? ""), body: String(body ?? "") }),
+  // Shell facts (v1.229.0): which global hotkeys are REALLY registered —
+  // `{ hotkeys: { window: "Ctrl+Alt+J" | null, spotlight: ... }, preferred,
+  // platform }`. The Overview tips card and Help read this instead of
+  // hard-coding Ctrl+Shift+J, which another app can hold. Resolves null when
+  // the main process refuses the sender.
+  shell: {
+    getState: () => ipcRenderer.invoke("shell:getState"),
+    // Open userData/logs in the file manager (v1.229.0, audit D8/OBS5) —
+    // Settings → Maintenance → "Open logs folder". Resolves { ok, path,
+    // error? }, or null when the main process refuses the sender.
+    openLogs: () => ipcRenderer.invoke("shell:openLogs"),
+  },
   // App auto-update control for the Updates page (the packaged-app updater).
   update: {
     getState: () => ipcRenderer.invoke("update:getState"),

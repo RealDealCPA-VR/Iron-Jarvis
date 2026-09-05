@@ -73,7 +73,21 @@ type Diagnostics = {
   running_sessions?: number;
   pending_reviews?: number;
   tracked_worktrees?: number;
-  background_loops?: Record<string, { ok?: boolean; error?: string }>;
+  background_loops?: Record<string, LoopHealth>;
+  /** v1.229.0 (audit U4): each configured MCP server with the reason it did
+   *  not start (`last_error` null = loaded). */
+  mcp_servers?: { name: string; tools_loaded?: number; last_error?: string | null }[];
+};
+
+/** One entry of /diagnostics → background_loops (daemon/app.py `_tick`).
+ *  v1.229.0: every loop writes `last_error` + `at` on failure; `error` is the
+ *  pre-v1.229.0 rehydrate-step key, kept one release as an alias. */
+type LoopHealth = {
+  ok?: boolean;
+  last_error?: string;
+  error?: string;
+  at?: string;
+  last_success_at?: string;
 };
 
 /** GET /diagnostics/reliability — free disk + recent provider failures (24h). */
@@ -643,13 +657,37 @@ export default function OverviewPage() {
   );
   const failures = reliability.data?.recent_provider_failures ?? 0;
   const freeDisk = reliability.data?.disk?.free;
+  // v1.229.0 (audit OBS2): the background loops that report ok:false, each
+  // with its reason. The hero must never say "nominal" over a dead loop, and
+  // the loop is NAMED — "N failed" told the user nothing they could act on.
+  const failingLoops = useMemo(
+    () =>
+      Object.entries(diag.data?.background_loops ?? {})
+        .filter(([, v]) => v && v.ok === false)
+        .map(([name, v]) => ({ name, error: v.last_error ?? v.error ?? "failed" })),
+    [diag.data],
+  );
+  // v1.229.0 (audit U4): a tool pack that did not start. It costs every agent
+  // its tools and used to sit under "All systems nominal" (the only trace was
+  // one WARNING line in daemon.log).
+  const failedPacks = useMemo(
+    () =>
+      (diag.data?.mcp_servers ?? [])
+        .filter((s) => s && s.last_error)
+        .map((s) => ({ name: s.name, error: s.last_error as string })),
+    [diag.data],
+  );
   const statusLine = offline
     ? "Daemon offline"
     : runningCount > 0
       ? `Working on ${runningCount} task${runningCount === 1 ? "" : "s"}`
-      : failures > 0
-        ? `${failures} provider hiccup${failures === 1 ? "" : "s"} in the last 24h`
-        : "All systems nominal";
+      : failingLoops.length > 0
+        ? `${failingLoops.length} background task${failingLoops.length === 1 ? "" : "s"} failing`
+        : failedPacks.length > 0
+          ? `${failedPacks.length} thing${failedPacks.length === 1 ? "" : "s"} need${failedPacks.length === 1 ? "s" : ""} attention`
+          : failures > 0
+            ? `${failures} provider hiccup${failures === 1 ? "" : "s"} in the last 24h`
+            : "All systems nominal";
 
   // Compact connections summary.
   const realProviders = (health.data?.providers ?? []).filter(
@@ -709,6 +747,46 @@ export default function OverviewPage() {
           diskLoading={reliability.loading}
         />
       </Reveal>
+
+      {/* v1.229.0: a failing background loop is named where the user lands,
+          in BOTH modes — the health tile below is Advanced-only and inside
+          a collapsed card, so in Simple mode this line is the only truth. */}
+      {failingLoops.length > 0 && (
+        <Reveal>
+          <div
+            role="status"
+            data-testid="loop-failing-note"
+            className="flex items-center gap-2 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-4 py-2 text-[12px] text-amber-200"
+          >
+            <AlertTriangle size={14} className="shrink-0" />
+            <span className="min-w-0 truncate">
+              Background task{failingLoops.length === 1 ? "" : "s"} failing:{" "}
+              {failingLoops.map((l) => `${l.name} — ${l.error}`).join(" · ")}
+            </span>
+          </div>
+        </Reveal>
+      )}
+
+      {/* v1.229.0 (audit U4): the pack that did not start, named with its
+          reason and a way to the Retry — in BOTH modes, like the loop note. */}
+      {failedPacks.length > 0 && (
+        <Reveal>
+          <div
+            role="status"
+            data-testid="pack-failing-note"
+            className="flex items-center gap-2 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-4 py-2 text-[12px] text-amber-200"
+          >
+            <AlertTriangle size={14} className="shrink-0" />
+            <span className="min-w-0 truncate">
+              Tool pack{failedPacks.length === 1 ? "" : "s"} didn’t start:{" "}
+              {failedPacks.map((p) => `${p.name} — ${p.error}`).join(" · ")}
+            </span>
+            <Link href="/tools" className="ml-auto shrink-0 font-medium text-amber-100 underline-offset-2 hover:underline">
+              Retry on Tools
+            </Link>
+          </div>
+        </Reveal>
+      )}
 
       {/* THE DESKTOP (v1.151.0). Every module as an app icon, most-used first
           until you arrange them yourself. Directly under the title bar (which
@@ -1158,6 +1236,7 @@ export default function OverviewPage() {
             ) : diag.loading && !diag.data ? (
               <SkeletonRows rows={2} />
             ) : diag.data ? (
+              <>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
                 <HealthItem
                   label="DB integrity"
@@ -1197,18 +1276,31 @@ export default function OverviewPage() {
                   value={String(diag.data.tracked_worktrees ?? 0)}
                   status="neutral"
                 />
-                {(() => {
-                  const loops = diag.data.background_loops ?? {};
-                  const bad = Object.entries(loops).filter(([, v]) => v && v.ok === false);
-                  return (
-                    <HealthItem
-                      label="Boot loops"
-                      value={bad.length ? `${bad.length} failed` : "ok"}
-                      status={bad.length ? "bad" : "ok"}
-                    />
-                  );
-                })()}
+                <HealthItem
+                  label="Background loops"
+                  value={
+                    failingLoops.length
+                      ? `${failingLoops.length} failed: ${failingLoops.map((l) => l.name).join(", ")}`
+                      : "ok"
+                  }
+                  status={failingLoops.length ? "bad" : "ok"}
+                />
               </div>
+              {/* v1.229.0: the failing loops BY NAME with their last error —
+                  a count alone is not something the user can act on. */}
+              {failingLoops.length > 0 && (
+                <ul data-testid="failing-loops" className="mt-3 space-y-1 text-[12px]">
+                  {failingLoops.map((l) => (
+                    <li key={l.name} className="flex min-w-0 gap-2">
+                      <span className="shrink-0 font-mono text-rose-300">{l.name}</span>
+                      <span className="min-w-0 truncate text-zinc-400" title={l.error}>
+                        {l.error}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              </>
             ) : (
               <Empty icon={<HeartPulse size={22} />}>No diagnostics available.</Empty>
             )}

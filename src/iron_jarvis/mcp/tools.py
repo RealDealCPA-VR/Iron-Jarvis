@@ -242,9 +242,42 @@ def _connect_with_timeout(cfg, name, secret_resolver, timeout):
     return box["client"], box["specs"]
 
 
+#: Per-server load record (v1.229.0, audit U4): ``name -> {last_error, tools_loaded,
+#: at}``. A server skipped at load used to leave ONE warning line in daemon.log
+#: and nothing else — ``/mcp/servers`` reported ``tools_loaded: 0`` with no
+#: reason, the Tools page rendered "0 tools", and the Overview said nominal.
+#: Kept here rather than on the config row: ``config.mcp_servers`` is persisted
+#: verbatim to config.toml, and an exception text is not configuration.
+_LOAD_STATUS: dict[str, dict[str, Any]] = {}
+
+
+def _record_load(name: str, *, error: str | None, tools_loaded: int) -> None:
+    from datetime import datetime, timezone
+
+    _LOAD_STATUS[name] = {
+        "last_error": error,
+        "tools_loaded": tools_loaded,
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def load_status(name: str) -> dict[str, Any] | None:
+    """The last load attempt for server ``name`` (``None`` = never attempted
+    in this process). ``last_error`` is ``None`` after a successful connect."""
+    rec = _LOAD_STATUS.get(name)
+    return dict(rec) if rec is not None else None
+
+
+def load_statuses() -> dict[str, dict[str, Any]]:
+    """Every server's last load record, by name."""
+    return {k: dict(v) for k, v in _LOAD_STATUS.items()}
+
+
 def mcp_tools(
     server_configs: list[dict[str, Any]] | None,
     secret_resolver: SecretResolver | None = None,
+    *,
+    record: bool = True,
 ) -> list[Tool]:
     """Build the wrapped MCP tools for every configured server.
 
@@ -253,7 +286,14 @@ def mcp_tools(
     * Each server is connected, ``tools/list``-ed, and its tools wrapped.
     * A server that cannot be reached, errors, OR does not respond within the
       connect timeout is **skipped** with a warning so one bad/hung server never
-      breaks (or hangs) boot.
+      breaks (or hangs) boot — and the reason is kept on its load record
+      (:func:`load_status`) so the Tools page and the doctor can NAME it.
+    * ``record=False`` is for a PROBE (the read-only ``/mcp/servers/{name}/test``
+      route): it connects and lists but registers nothing, so writing its
+      outcome onto the load record would report a server as started while the
+      registry still holds none of its tools — and every truth surface (Tools
+      row, ``/diagnostics``, the doctor) would go quiet over a pack agents
+      cannot use. Only a load that hands its tools to the registry records.
     """
     if not server_configs:
         return []
@@ -266,11 +306,17 @@ def mcp_tools(
             client, specs = _connect_with_timeout(cfg, name, secret_resolver, timeout)
         except Exception as exc:  # skip the bad/hung server; keep booting
             log.warning("skipping MCP server %r: %s: %s", name, type(exc).__name__, exc)
+            if record:
+                _record_load(name, error=f"{type(exc).__name__}: {exc}", tools_loaded=0)
             continue
+        count = 0
         for spec in specs:
             if not isinstance(spec, dict) or not spec.get("name"):
                 continue
             tools.append(MCPRemoteTool.from_spec(client, name, spec))
+            count += 1
+        if record:
+            _record_load(name, error=None, tools_loaded=count)
     return tools
 
 
@@ -278,6 +324,8 @@ __all__ = [
     "MCPRemoteTool",
     "SecretResolver",
     "mcp_tools",
+    "load_status",
+    "load_statuses",
     "FakeTransport",
     "MCPClient",
     "StdioTransport",

@@ -26,6 +26,7 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { MaintenanceTools } from "@/components/settings/MaintenanceTools";
 import { useDaemon } from "@/lib/daemon";
 
 type FieldType = "text" | "number" | "boolean" | "select";
@@ -978,6 +979,18 @@ export default function SettingsPage() {
     setMaintOk("Restart requested — reconnecting. Watch the status dot in the sidebar.");
   }
 
+  // A restore (Maintenance → Restore from backup…) stops the daemon itself;
+  // this is the same reconnect beat restartDaemon() takes after /shutdown.
+  async function reconnectAfterRestore(note: string) {
+    setMaintOk(null);
+    setMaintErr(null);
+    setRestarting(true);
+    await new Promise((r) => setTimeout(r, 2500));
+    refresh();
+    setRestarting(false);
+    setMaintOk(note);
+  }
+
   const restartTouched = changedKeys.some((k) => FIELDS.find((f) => f.key === k)?.restart);
 
   return (
@@ -1132,6 +1145,11 @@ export default function SettingsPage() {
                     )}
                   </button>
                 </div>
+
+                <MaintenanceTools
+                  disabled={backupBusy || restarting}
+                  onRestartRequested={reconnectAfterRestore}
+                />
 
                 <div className="border-t hairline pt-4">
                   <SectionLabel>Restart daemon</SectionLabel>

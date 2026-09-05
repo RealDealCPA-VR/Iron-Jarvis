@@ -353,6 +353,43 @@ does not need a bump, stop and bump it.
   required: <k> — <tool> needs [...]; got [...]` through the same `_record`
   + `tool.executed` path as any failure. A traceback string names nothing
   the model can correct; a missing key does.
+- **Armed is not healthy: a loop reports its OWN cycles** (v1.229.0, audit
+  Wave 3). `_tick("fleet", True)` sat at ARM time and `FleetSampler._loop`
+  swallowed every cycle at DEBUG; the Slack pump reconnects internally; so a
+  sampler whose every cycle raised and a socket that never once connected
+  both read `ok` on `/diagnostics` forever, while the boot rehydrate steps
+  wrote `error` and every other loop wrote `last_error` — the dashboard read
+  one key, rendered "N failed", and the hero said nominal above it. A
+  background loop takes an `on_tick(ok, exc)` seam and reports after the
+  work (`sampler.py`, `slack_socket.py`); nothing in `app.py` records ok
+  before the first cycle has run. One failure key everywhere (`last_error` +
+  `at`), and a failing loop is NAMED with its reason where the user is
+  standing (Overview note in both modes, health list, bell after 5 min).
+  Same wave (U4/D2): a skipped MCP server keeps its exception text on a
+  load record (`mcp/tools.load_status`) that the Tools row, `/diagnostics`
+  and the doctor `mcp` check read — a WARNING line is not a place the user
+  looks. A PROBE must not write that record: `/mcp/servers/{name}/test` and
+  the Connections test connect but register nothing, so they pass
+  `mcp_tools(record=False)`, else a green Test cleared a boot failure while
+  agents still held zero tools (the doctor also trusts the registry's live
+  count over a clean record); and the desktop hotkey is a LADDER whose registered key
+  (`hotkeyState`, IPC `shell:getState`) every surface reads — a hard-coded
+  "Ctrl+Shift+J" in the tray, README and tips card was a claim the OS had
+  already refused (Win32 1409).
+- **A log handler on the app tree runs inside every `except` branch the
+  daemon has** (v1.229.0, audit Wave 3, OBS5). `RecentErrorsHandler` (the
+  ring behind `GET /diagnostics/errors`) first shipped with a bare
+  `f"{exc}"` and an exception whose `__str__` raised turned
+  `log.exception("scheduler failed to start")` in the lifespan into a boot
+  abort — the log call that was supposed to RECORD the failure became the
+  failure. Anything attached by `configure_logging` wraps its whole `emit`
+  and ends in `handleError`; `tests/test_diagnostics_maintenance_v1229.py::
+  test_ring_handler_never_raises_into_the_caller` pins it. Same wave: a
+  restore over a LIVE home stages first and moves the DB with `os.replace`
+  after deleting `-wal`/`-shm` (`maintenance.restore_backup_live`) — on
+  Windows a held-open DB then fails loudly before any other file moved,
+  which is the honest outcome; extracting straight over the home (what the
+  CLI does with nothing open) would have written under an open connection.
 - **Shipping the mechanism is not shipping the feature** (v1.218.0). v1.217.0
   built a real pane-state classifier, proved it against a live PTY, and put the
   answer into a chip that renders NOTHING for `unknown` — on a canvas where
@@ -521,7 +558,11 @@ does not need a bump, stop and bump it.
   search by route string ACROSS routes/), request models in `schemas.py`.
   Handlers reach shared state via `d.*`; tests monkeypatch `_MAX_UPLOAD_BYTES`
   and `_graceful_stop` on the app module, so routes access those via
-  `_app.<name>` at call time — keep that pattern.
+  `_app.<name>` at call time — keep that pattern. Logging: two logger
+  namespaces (`ironjarvis`, `iron_jarvis`) are aliased in
+  `core/logging.configure_logging` — never add a third; the noise filters
+  and the 500 envelope's `err_` id live in `core/logging.py` and
+  `daemon/auth.unhandled_error_response`.
 - `agents/` — orchestrator (sessions/reviews/continue), runtime (the
   perceive→act loop), dynamic agents. `providers/` — manager (per-provider
   factories), router (routing/failover), adapters/. `terminals/` — manager

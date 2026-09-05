@@ -7,14 +7,18 @@ writes a timestamped snapshot under ``<home>/backups`` and prunes old ones.
 """
 
 import os
+import shutil
 import tarfile
 import tempfile
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .core.ids import utcnow
 
 BACKUP_DIRNAME = "backups"
 _DB_NAME = "ironjarvis.db"
+_BACKUP_GLOB = "ironjarvis-backup-*.tar.gz"
 
 
 def _consistent_db_snapshot(engine, home: Path) -> "Path | None":
@@ -162,3 +166,102 @@ def run_auto_backup(
     create_backup(home, out, engine=engine, include_keys=include_keys)
     prune_backups(backups_dir, keep)
     return out
+
+
+# --- v1.229.0 (audit Wave 3, CL7): list / boot-skip / restore ----------------
+
+
+def list_backups(home: Path) -> list[dict]:
+    """The auto/manual archives under ``<home>/backups``, newest first:
+    ``{name, bytes, modified_at}`` (UTC ISO). Never raises — an unreadable dir
+    lists as empty."""
+    backups_dir = Path(home) / BACKUP_DIRNAME
+    out: list[dict] = []
+    try:
+        for p in backups_dir.glob(_BACKUP_GLOB):
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            out.append(
+                {
+                    "name": p.name,
+                    "bytes": st.st_size,
+                    "modified_at": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+                    .isoformat(timespec="seconds"),
+                }
+            )
+    except OSError:
+        return []
+    out.sort(key=lambda r: (r["modified_at"], r["name"]), reverse=True)
+    return out
+
+
+def boot_backup_delay_s(home: Path, interval_s: float, *, now: "float | None" = None) -> float:
+    """How long the daemon's auto-backup loop should wait before its FIRST
+    snapshot: ``0`` when there is no archive yet or the newest is older than
+    ``interval_s``, else the remainder of the interval. Before this every boot
+    wrote a snapshot 60 s in, so a restart-heavy week filled ``keep=7`` with
+    boot copies of the same day and pushed the older days out."""
+    backups_dir = Path(home) / BACKUP_DIRNAME
+    try:
+        newest = max((p.stat().st_mtime for p in backups_dir.glob(_BACKUP_GLOB)), default=None)
+    except OSError:
+        return 0.0
+    if newest is None:
+        return 0.0
+    age = (time.time() if now is None else now) - newest
+    if age < 0:  # a clock that went backwards — treat the archive as fresh
+        age = 0.0
+    return max(0.0, float(interval_s) - age)
+
+
+def extract_backup(archive: Path, dest: Path) -> None:
+    """Extract ``archive`` into ``dest`` (the PARENT of the home — members are
+    stored as ``.ironjarvis/...``). ``filter="data"`` rejects absolute paths,
+    ``..`` traversal and link escapes. The ``ironjarvis restore`` CLI calls
+    this directly over the live home (it runs with nothing open); the daemon
+    goes through :func:`restore_backup_live`."""
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive, "r:gz") as tar:
+        tar.extractall(path=dest, filter="data")
+
+
+def restore_backup_live(home: Path, archive: Path) -> int:
+    """Restore ``archive`` over a home the daemon has OPEN, safely enough to be
+    followed by a restart: extract into a private staging dir first, then move
+    files into place with ``os.replace`` — the DATABASE FIRST, after deleting
+    the old ``-wal``/``-shm`` sidecars (a leftover WAL would be replayed into
+    the restored file and corrupt it). On Windows a replace fails loudly with
+    ``PermissionError`` while any connection still holds the file, so the
+    caller disposes the engine first and a held-open DB aborts the restore
+    BEFORE anything else moved — never a half-restored home. Files in the home
+    that the archive does not carry are kept. Returns the file count."""
+    home = Path(home)
+    archive = Path(archive)
+    staging = Path(tempfile.mkdtemp(prefix=".restore-", dir=str(home)))
+    try:
+        extract_backup(archive, staging)
+        tops = [p for p in staging.iterdir() if p.is_dir()]
+        if len(tops) != 1:
+            raise ValueError(f"not an Iron Jarvis backup (top-level entries: {len(tops)})")
+        src_home = tops[0]
+        db_src = src_home / _DB_NAME
+        moved = 0
+        if db_src.exists():
+            for side in (f"{_DB_NAME}-wal", f"{_DB_NAME}-shm"):
+                (home / side).unlink(missing_ok=True)
+            os.replace(db_src, home / _DB_NAME)
+            moved += 1
+        for p in sorted(src_home.rglob("*")):
+            if not p.is_file():
+                continue
+            rel = p.relative_to(src_home)
+            target = home / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(p, target)
+            moved += 1
+        return moved
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)

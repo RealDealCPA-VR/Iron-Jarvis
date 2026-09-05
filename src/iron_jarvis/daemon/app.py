@@ -540,6 +540,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
     fleet_sampler = FleetSampler(
         platform.fleet,
         interval_idle=float(max(5, getattr(platform.config, "fleet_sampling_seconds", 30))),
+        # v1.229.0: the loop reports its OWN cycles — ok after one that ran,
+        # failed with the exception after one that raised. Arming is not health.
+        on_tick=lambda ok, exc: _tick("fleet", ok, exc),
     )
 
     # LIVE re-arm bridge: lifespan drops its event loop + the autonomy/sentinel
@@ -564,9 +567,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
         def _rehydrate_step(name, fn):
             try:
                 fn()
-                loop_health[name] = {"ok": True}
+                _tick(name, True)
             except Exception as exc:  # noqa: BLE001 - never block boot
-                loop_health[name] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                # v1.229.0: ONE failure key. This wrote `error` while _tick
+                # wrote `last_error`, and the dashboard read only `error` —
+                # so a failing background loop rendered with no reason at
+                # all. Routed through _tick (`last_error` + `at`); `error`
+                # stays as an alias for one release.
+                _tick(name, False, exc)
+                loop_health[name]["error"] = loop_health[name].get("last_error", "failed")
                 log.exception("boot rehydration step %s failed", name)
 
         _rehydrate_step("reconcile_sessions", orchestrator.reconcile_interrupted_sessions)
@@ -708,7 +717,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
             async def _auto_backup_loop() -> None:
                 from ..core.ids import utcnow
-                from ..maintenance import run_auto_backup
+                from ..maintenance import boot_backup_delay_s, run_auto_backup
 
                 try:
                     hours = float(os.environ.get("IRONJARVIS_AUTO_BACKUP_HOURS", "24"))
@@ -720,6 +729,21 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     keep = 7
                 interval = max(3600.0, hours * 3600.0)
                 await asyncio.sleep(60)  # don't slow boot; first snapshot ~1 min in
+                # v1.229.0 (audit CL7): a boot snapshot only when one is DUE.
+                # Every restart used to write one, so a restart-heavy week
+                # filled keep=7 with copies of the same day.
+                try:
+                    delay = await asyncio.to_thread(
+                        boot_backup_delay_s, platform.config.home, interval
+                    )
+                except Exception:  # noqa: BLE001 - an unreadable dir means "due"
+                    delay = 0.0
+                if delay > 0:
+                    log.info(
+                        "auto-backup: newest snapshot is fresh; next in %.0f min",
+                        delay / 60,
+                    )
+                    await asyncio.sleep(delay)
                 while True:
                     try:
                         await asyncio.to_thread(
@@ -965,7 +989,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     )
                     bg_tasks["fleet"] = asyncio.create_task(fleet_sampler.start())
                     log.info("fleet sampler (re)armed")
-                    _tick("fleet", True)
+                    # No _tick here (v1.229.0): the sampler's on_tick reports
+                    # each cycle. Ticking ok at arm time read "healthy" over a
+                    # loop whose every cycle failed (audit OBS2).
                 else:
                     bg_tasks["fleet"] = asyncio.create_task(fleet_sampler.stop())
             except Exception as exc:  # noqa: BLE001 — telemetry never breaks boot
@@ -1063,6 +1089,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 platform.notifier,
                 platform.secrets.get,
                 lambda: platform.config.comm or {},
+                # v1.229.0: health comes from the pump — ok on a real connect,
+                # failed (with the reason) on every refused dial or drop.
+                on_tick=lambda ok, exc: _tick("slack_socket", ok, exc),
             )
             try:  # v1.226.0: a secret read in here must never abort boot
                 _socket_enabled = bool(_socket.enabled())
@@ -1075,7 +1104,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 async def _slack_socket_loop() -> None:
                     await asyncio.sleep(15)  # let boot settle first
                     try:
-                        _tick("slack_socket", True)  # armed and dialling out
+                        # No arm-time _tick (v1.229.0): "armed and dialling
+                        # out" is not "connected" — the pump ticks on_tick.
                         await _socket.run(stop=slack_socket_stop)
                     except asyncio.CancelledError:
                         raise
@@ -1244,11 +1274,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception):  # noqa: ANN202
-        log.exception("unhandled error on %s %s", request.method, request.url.path)
-        return JSONResponse(
-            status_code=500,
-            content={"detail": f"internal error: {type(exc).__name__}: {exc}"},
-        )
+        # Same envelope as ErrorEnvelopeMiddleware (err_ id in detail + log).
+        from .auth import unhandled_error_response
+
+        return unhandled_error_response(request, exc)
 
     app.state.platform = platform
     app.state.orchestrator = orchestrator

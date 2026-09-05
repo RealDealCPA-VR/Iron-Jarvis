@@ -54,6 +54,7 @@ class SlackSocketMode:
         *,
         open_ws: Callable[[str], str] | None = None,
         ws_connect: Any = None,  # async ctx factory (url) -> websocket; test seam
+        on_tick: Callable[[bool, BaseException | None], None] | None = None,
     ) -> None:
         self.poller = poller
         self.notifier = notifier
@@ -61,6 +62,20 @@ class SlackSocketMode:
         self.comm_config = comm_config
         self._open_ws = open_ws or _default_open_ws
         self._ws_connect = ws_connect
+        #: v1.229.0: loop-health seam — ``(True, None)`` on a real connect,
+        #: ``(False, exc)`` on every drop/refused dial. The daemon used to
+        #: record ``slack_socket`` healthy when it ARMED this pump, and the
+        #: pump reconnects internally, so a socket that never once connected
+        #: read ok forever (docs/TODO.md carried it since v1.226.0).
+        self._on_tick = on_tick
+
+    def _tick(self, ok: bool, exc: BaseException | None = None) -> None:
+        if self._on_tick is None:
+            return
+        try:
+            self._on_tick(ok, exc)
+        except Exception:  # noqa: BLE001 — health bookkeeping never kills the pump
+            log.debug("slack socket: on_tick raised", exc_info=True)
 
     # -- discovery -----------------------------------------------------------
     def candidates(self) -> list[tuple[str, str]]:
@@ -137,8 +152,9 @@ class SlackSocketMode:
         """Connect + pump envelopes for one channel; reconnects with backoff."""
         try:
             import websockets
-        except Exception:  # pragma: no cover — bundled via uvicorn[standard]
+        except Exception as exc:  # pragma: no cover — bundled via uvicorn[standard]
             log.error("slack socket mode needs the 'websockets' package")
+            self._tick(False, exc)
             return
         connect = self._ws_connect or websockets.connect
         delay = 2.0
@@ -148,6 +164,7 @@ class SlackSocketMode:
                 async with connect(url) as ws:
                     delay = 2.0  # healthy connection resets the backoff
                     log.info("slack socket mode connected for channel %r", name)
+                    self._tick(True)
                     async for raw in ws:
                         if stop.is_set():
                             break
@@ -169,6 +186,7 @@ class SlackSocketMode:
                 raise
             except Exception as exc:  # noqa: BLE001 — reconnect with backoff
                 log.warning("slack socket for %r dropped: %s", name, exc)
+                self._tick(False, exc)
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=delay)
                 except asyncio.TimeoutError:

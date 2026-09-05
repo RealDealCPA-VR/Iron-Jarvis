@@ -10,8 +10,12 @@ from fastapi import FastAPI, HTTPException
 from pathlib import Path
 from typing import Any
 
-from ..schemas import RepairBody, SettingsBody, _SETTINGS_KEYS
+from .. import app as _app
+from ..schemas import RepairBody, RestoreBody, SettingsBody, _SETTINGS_KEYS
 from ...core.config import capture_config_undo, persist_config_values
+from ...core.logging import get_logger
+
+log = get_logger("daemon.maintenance")
 
 
 def _record_settings_undo(platform, prior: "dict[str, Any]") -> None:
@@ -143,7 +147,16 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/diagnostics")
     def diagnostics() -> dict[str, Any]:
-        """Read-only health of the running state (never raises)."""
+        """Read-only health of the running state (never raises).
+
+        ``db_liveness`` (v1.229.0, audit OBS5) is what this endpoint really
+        measures: a ``SELECT 1`` — the database file opens and answers.
+        ``db_integrity`` carries the SAME value and is kept for compatibility
+        only; it OVERSTATES, because a real integrity check is ``PRAGMA
+        integrity_check`` (a whole-DB page scan), which is on-demand via
+        ``POST /diagnostics/repair {"action": "db_integrity"}`` and never runs
+        on this polled route. Read ``db_liveness``.
+        """
         from sqlalchemy import text
 
         cfg = d.platform.config
@@ -155,9 +168,10 @@ def register(app: FastAPI, d) -> None:
                 # is polled ~every 15s app-wide (NotificationBell). Deep integrity is
                 # on-demand via POST /diagnostics/repair {db_integrity}.
                 conn.execute(text("SELECT 1")).scalar()
-            out["db_integrity"] = "ok"
+            out["db_liveness"] = "ok"
         except Exception as exc:  # noqa: BLE001
-            out["db_integrity"] = f"error: {exc}"
+            out["db_liveness"] = f"error: {exc}"
+        out["db_integrity"] = out["db_liveness"]  # compat alias; see docstring
         try:
             db_path = cfg.db_path
             out["db_bytes"] = db_path.stat().st_size if db_path.exists() else 0
@@ -176,12 +190,110 @@ def register(app: FastAPI, d) -> None:
         out["running_sessions"] = len(d.orchestrator._running)
         out["pending_reviews"] = len(d.orchestrator._reviews)
         out["background_loops"] = dict(d.loop_health)  # silent-failure visibility
+        # v1.229.0 (audit U4): a configured MCP server that did not start, by
+        # name with its reason — the Overview hero reads this so "All systems
+        # nominal" cannot sit over a pack whose tools every agent is missing.
+        try:
+            from ...mcp.tools import load_status as _mcp_load_status
+
+            out["mcp_servers"] = [
+                {
+                    "name": str(s.get("name") or ""),
+                    "tools_loaded": len(d.platform.registry.mcp_names(str(s.get("name") or ""))),
+                    "last_error": (_mcp_load_status(str(s.get("name") or "")) or {}).get("last_error"),
+                }
+                for s in (getattr(cfg, "mcp_servers", None) or [])
+                if isinstance(s, dict) and s.get("name")
+            ]
+        except Exception:  # noqa: BLE001 — diagnostics must never raise
+            out["mcp_servers"] = []
         out["tracked_worktrees"] = len(d.orchestrator._git_sessions)
         try:
             out["providers"] = d.platform.providers.health()
         except Exception:  # noqa: BLE001
             out["providers"] = []
         return out
+
+    @app.get("/diagnostics/errors")
+    def diagnostics_errors(limit: int = 50) -> dict[str, Any]:
+        """The last WARNING+ log records (v1.229.0, audit OBS5), oldest first:
+        ``{ts, level, logger, message}`` from the in-memory ring buffer
+        ``core/logging.RecentErrorsHandler`` keeps on the whole logger tree —
+        the app's two names and the libraries. Memory only, so it costs
+        nothing on the loop; "Copy diagnostics" on Settings → Maintenance
+        includes it. Additive; never raises."""
+        from ...core.logging import RECENT_ERRORS_CAPACITY, recent_errors
+
+        return {"errors": recent_errors(limit), "capacity": RECENT_ERRORS_CAPACITY}
+
+    @app.get("/maintenance/backups")
+    def maintenance_backups() -> dict[str, Any]:
+        """The archives under ``<home>/backups`` (v1.229.0, audit CL7), newest
+        first, for Settings → Maintenance → Restore from backup."""
+        from ...maintenance import BACKUP_DIRNAME, list_backups
+
+        home = d.platform.config.home
+        return {"dir": str(home / BACKUP_DIRNAME), "backups": list_backups(home)}
+
+    @app.post("/maintenance/restore")
+    def maintenance_restore(body: RestoreBody) -> dict[str, Any]:
+        """Restore one archive from ``GET /maintenance/backups`` over the live
+        home and schedule a daemon stop (v1.229.0, audit CL7); the desktop
+        app relaunches it within ~2 s and the process boots on the restored
+        state. Refuses (409) while sessions or workflow runs are in flight —
+        the same gate as ``db_vacuum`` — and while the database is held open
+        (the replace fails BEFORE any other file moved). ``name`` is a file
+        name from the listing, never a path."""
+        import threading as _threading
+
+        from .system import activity_snapshot
+        from ...maintenance import BACKUP_DIRNAME, restore_backup_live
+
+        name = (body.name or "").strip()
+        home = d.platform.config.home
+        backups_dir = (home / BACKUP_DIRNAME).resolve()
+        if (
+            not name
+            or name != Path(name).name
+            or not name.startswith("ironjarvis-backup-")
+            or not name.endswith(".tar.gz")
+        ):
+            raise HTTPException(status_code=400, detail="name must be an archive from GET /maintenance/backups")
+        archive = (backups_dir / name).resolve()
+        if archive.parent != backups_dir or not archive.is_file():
+            raise HTTPException(status_code=404, detail=f"no backup named {name!r}")
+        act = activity_snapshot(d)
+        running = len(d.orchestrator._running)
+        if act["active_sessions"] or act["writing_workflow_runs"] or running:
+            what = []
+            if act["active_sessions"] or running:
+                what.append(f"{max(act['active_sessions'], running)} session(s) running")
+            if act["writing_workflow_runs"]:
+                what.append(f"{act['writing_workflow_runs']} workflow run(s) running")
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"cannot restore while work is in flight ({', '.join(what)}) — "
+                    "it would replace the database out from under them; wait for "
+                    "them to finish or cancel them, then retry"
+                ),
+            )
+        try:
+            d.platform.engine.dispose()
+        except Exception:  # noqa: BLE001 — a pool that will not close still gets the replace attempt
+            pass
+        try:
+            moved = restore_backup_live(home, archive)
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"restore aborted, nothing changed: the database is still held open ({exc})",
+            ) from exc
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=400, detail=f"restore failed: {exc}") from exc
+        log.warning("restored %d file(s) from backup %s; restarting", moved, name)
+        _threading.Timer(0.5, _app._graceful_stop).start()
+        return {"ok": True, "restored_from": name, "files": moved, "restart": "scheduled"}
 
     @app.post("/diagnostics/repair")
     def diagnostics_repair(body: RepairBody) -> dict[str, Any]:

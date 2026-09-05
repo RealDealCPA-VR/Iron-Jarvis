@@ -5,6 +5,126 @@ the deep-review wow track, deferred backlogs across waves, and known limits.
 The deep review's 11 confirmed bugs are all FIXED (v1.166.2–v1.167.0) — this
 file is what remains.*
 
+## Carried out of the 2026-09-04 audit, Wave 3 (v1.229.0)
+
+- [x] OBS1 one logger tree under two names: `configure_logging` attaches the
+  same timestamped handler to `ironjarvis` AND `iron_jarvis` (27 modules log
+  under the package name and used to fall through to a handler-less root:
+  INFO vanished, WARNING+ printed bare), and the root gets it at WARNING so
+  asyncio/apscheduler/uvicorn.error lines carry a time and a name. No
+  duplicates: `iron_jarvis` still propagates (caplog reads it) and the root
+  handler skips the app trees.
+- [x] OBS2 loop health that is true, and visible: `FleetSampler` and
+  `SlackSocketMode` take an `on_tick` seam and report their OWN cycles
+  (ok after a cycle that ran / a socket that connected, failed with the
+  exception text after a cycle that raised / a dial that was refused);
+  `_arm_fleet` and the slack arm no longer tick ok at arm time; the boot
+  rehydrate steps write `last_error` + `at` like every other loop (`error`
+  kept one release as an alias). Overview: the hero says "N background
+  task(s) failing" instead of nominal, an amber note names each loop with
+  its last error in both modes, the Advanced tile lists the names and a list
+  carries each `last_error`; the bell carries one item per loop failing for
+  5+ min ("Background task <name> has been failing for <m> min — <error>"),
+  counted in the badge.
+- [x] OBS3 every 500 mints `err_<8 hex>`: on the traceback header
+  (`ironjarvis.daemon`) and in `detail` (`internal error [err_…]: <type>:
+  <msg>`), one envelope for the middleware and app.py's backstop
+  (`auth.unhandled_error_response`).
+- [x] OBS4 `daemon.log` noise: `ProactorResetFilter` on `asyncio` (drops only
+  the `_call_connection_lost` ConnectionResetError record) and
+  `PolledRouteAccessFilter` on `uvicorn.access` (drops OPTIONS and 200 GETs
+  to the nine polled routes; every non-200, write and other GET stays),
+  installed at both `uvicorn.run` seams in `daemon/cli.py`, plus uvicorn's
+  own lines timestamped (`uvicorn_log_config`). Not quieted (follow-up):
+  `GET /terminals/activity` is also polled by the Build page.
+- [x] U4 a failed MCP server is visible where the user looks: `mcp/tools.py`
+  keeps a per-server load record (`load_status`: `last_error` = the exception
+  text, `tools_loaded`, `at`) instead of one WARNING line; `GET /mcp/servers`
+  rows carry `last_error` + `last_attempt_at`; `POST /mcp/servers/{name}/reload`
+  is the Retry (unload + reconnect + register live — `/test` and the
+  Connections-page test are PROBES: `mcp_tools(record=False)`, so a green
+  Test never clears a boot failure the registry still shows; the doctor also
+  trusts the registry's live count over a clean record);
+  the Tools row renders "Didn’t start: <last_error>" amber with Retry;
+  `/diagnostics` carries `mcp_servers[]` so the Overview hero says "1 thing
+  needs attention" and a note names the pack with a link to Tools; doctor
+  check `mcp` (RECOMMENDED) resolves `npx` through the CLI finder (PATH, then
+  `%LOCALAPPDATA%\pi-node\current` beside node) and lists each pack's
+  `last_error`.
+- [x] D2 the window hotkey is a ladder with state: `desktop/main.js`
+  `registerHotkey` tries `Ctrl+Shift+J` then `Ctrl+Alt+J`, keeps
+  `hotkeyState = {window, spotlight}` (registered accelerator or null),
+  retries every 30 min and on `browser-window-focus` while a rung is null
+  (one toast per process); the tray reads "Open Iron Jarvis (Ctrl+Alt+J)" or
+  "… — hotkey unavailable (taken by another app)", the app-menu accelerator
+  is the real key, the tray hint no longer hard-codes a key; sender-checked
+  IPC `shell:getState` → preload `window.ironjarvis.shell.getState()`;
+  `PowerTips` renders the live key or the "unavailable" sentence. Not done:
+  a Settings/Help shortcuts row (the tips card + tray are the surfaces).
+- [x] OBS5 the app can describe itself: `core/logging.RecentErrorsHandler`
+  (installed by `configure_logging` on both app trees + the root, one
+  shared 50-record ring, memory only) feeds `GET /diagnostics/errors`
+  (`{ts, level, logger, message}`, oldest first); `/diagnostics` carries
+  `db_liveness` (the `SELECT 1`) and keeps `db_integrity` as a compat alias
+  with the docstring naming the difference; Settings → Maintenance → **Copy
+  diagnostics** copies /health version+instance + /diagnostics +
+  /diagnostics/reliability + /diagnostics/errors as one JSON (a failed
+  endpoint is `{error}` in the blob; no clipboard → the text is shown to
+  select, never "Copied").
+- [x] D8 **Open logs folder**: `desktop/main.js` `openLogsFolder()`
+  (`shell.openPath(userData/logs)`, folder created first, `{ok, path,
+  error?}` never throws) behind the sender-checked IPC `shell:openLogs` →
+  preload `window.ironjarvis.shell.openLogs()`; the Maintenance button
+  renders only when that bridge exists; tray item "Open logs folder".
+- [x] D1 the crash ladder has a ceiling: `desktop/main.js` `startService`
+  counts consecutive deaths within `FAST_DEATH_MS` (3 s) of spawn; at the
+  3rd it runs `verifyInstallIntegrity()` — damaged → `handleCorruptInstall`
+  (the Repair dialog), clean → carries on; a sliding window of
+  `RESTART_CAP_MAX` (10) restarts per `RESTART_CAP_WINDOW_MS` (15 min) then
+  stops the ladder (`rec.capped`), logs "giving up", toasts once more with
+  the stopped wording and `refreshTrayMenu()` inserts **Restart Iron
+  Jarvis** (`restartServicesFromTray`: resets every counter, respawns a
+  capped child, kills a live one with `reason=restart` and `rec.manualRestart`
+  so the ladder respawns it at once without counting a crash; it also
+  cancels a PENDING backoff timer — `rec.restartTimer` + `rec.restartSeq`,
+  review finding — or a click spawned the dashboard now AND the timer
+  spawned a second one on :8788 later, the ladder holding the loser).
+  `installDashboardReloadOnFailure` is no longer one-shot:
+  `armDashboardReload` loops while the window sits on the error page,
+  pauses while the dashboard is capped, and every dashboard spawn re-arms
+  it. Tests: `tests/test_desktop_supervisor_v1229.py` (the audit harnesses
+  landed: cap, integrity, tray Restart, pending-timer cancel, 24 h toast,
+  tooltip reset, stamped log + killed line, reload loop);
+  `test_desktop_reliability_v1226.py`'s plain-crash/ENOENT tests now assert
+  the cap.
+- [x] D3 a second sliding window (`rec.deaths`, 24 h) toasts at the 3rd death
+  regardless of uptime — the 5-minute healthy reset used to zero the ladder
+  before every increment, so a child dying every 6 minutes was restarted
+  forever with no toast. Harness: `h1b_periodic.js`.
+- [x] D4 the tray tooltip returns to "Iron Jarvis — running": `markTrayDegraded`
+  / `markTrayHealthy` keep a per-service degraded set; the healthy-reset
+  branch of the ladder and the watchdog's next healthy `/health` clear their
+  service, and the tooltip resets only when no service is degraded.
+- [x] D5 the child logs say when and why: `killChild(child, label, reason)`
+  writes `[main] <iso> killed pid=… reason=quit|update|watchdog|restart` to
+  the child's own file log (`shutdown(reason)` forwards it; the update path
+  passes `update`, the watchdog `watchdog`), every stdout/stderr chunk and
+  the exited line carry an ISO time. Harness: `h2_taskkill_and_cwd.js`.
+- [x] CL7 backups that survive a restart-heavy week, and a Restore the user
+  can reach: the auto-backup loop consults `maintenance.boot_backup_delay_s`
+  after its 60 s boot sleep and waits out the remainder of the interval
+  when the newest archive is younger than it (one mtime check); `GET
+  /maintenance/backups` lists `backups/` newest first; `POST
+  /maintenance/restore {name}` (name only, never a path) refuses 409 while
+  sessions/workflow runs are in flight (`activity_snapshot` +
+  `orchestrator._running`), disposes the engine, restores via
+  `maintenance.restore_backup_live` (staged extract, DB first after
+  deleting `-wal`/`-shm`, `os.replace` per file — a held-open DB aborts
+  before anything moved; files the archive lacks are kept) and schedules
+  `_graceful_stop`; the CLI `restore` shares `extract_backup`. Settings →
+  Maintenance → **Restore from backup…** picks an archive, confirms by name
+  with "Iron Jarvis restarts right after", shows a 409 verbatim.
+
 ## Carried out of the 2026-09-04 audit, Wave 2 (v1.228.0)
 
 - [x] R1 `local_primary_policy` (refuse | failover, default refuse): a LOCAL
@@ -83,10 +203,11 @@ The six-dimension audit (contract, boot/loops, event loop, streaming, desktop
 supervisor, dashboard error handling) closed 1 S1 + 12 S2 + 21 S3 in
 v1.226.0. These are what the reviewers graded "defer" or "note":
 
-- [ ] `/diagnostics` `background_loops.slack_socket` reads `ok: true` when the
+- [x] `/diagnostics` `background_loops.slack_socket` reads `ok: true` when the
   loop is ARMED (`daemon/app.py` `_tick("slack_socket", True)` before
   `_socket.run` connects); a socket that never connects but retries internally
   reads healthy forever. Record ok only on the first successful connect.
+  DONE v1.229.0 (OBS2, see the Wave 3 section above).
 - [ ] `POST /diagnostics/repair` `db_vacuum` / `prune_events` 409 gate keys off
   DB rows (`GET /system/activity`), not `orchestrator._running`; a session
   stranded `active` inside a live process (only `_finalize_failed._save`

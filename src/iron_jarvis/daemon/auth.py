@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hmac
 import os
+import uuid
 from urllib.parse import urlparse
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -381,6 +382,25 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
         return JSONResponse({"detail": "missing or invalid token"}, status_code=401)
 
 
+def unhandled_error_response(request: Request, exc: BaseException) -> JSONResponse:
+    """The ONE 500 envelope (v1.229.0, audit Wave 3, OBS3), shared by
+    ``ErrorEnvelopeMiddleware`` and app.py's backstop handler so clients see
+    one contract. Mints ``err_<8 hex>``, logs the traceback under the
+    configured ``ironjarvis.daemon`` tree with that id on the header line, and
+    returns the same id in ``detail`` — the dashboard renders ``detail``, so
+    the user can quote the id and it is greppable in the daemon log."""
+    from ..core.logging import get_logger
+
+    err_id = "err_" + uuid.uuid4().hex[:8]
+    get_logger("daemon").exception(
+        "unhandled error on %s %s [%s]", request.method, request.url.path, err_id
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"internal error [{err_id}]: {type(exc).__name__}: {exc}"},
+    )
+
+
 class ErrorEnvelopeMiddleware(BaseHTTPMiddleware):
     """Turn an unhandled exception into a JSON 500 *inside* the CORS layer.
 
@@ -434,13 +454,6 @@ class ErrorEnvelopeMiddleware(BaseHTTPMiddleware):
                 content={"detail": "client disconnected"},
             )
         except Exception as exc:  # noqa: BLE001 — this IS the catch-all
-            # Same shape app.py's handler produces, so clients see one contract.
-            import logging
-
-            logging.getLogger("iron_jarvis.daemon").exception(
-                "unhandled error on %s %s", request.method, request.url.path
-            )
-            return JSONResponse(
-                status_code=500,
-                content={"detail": f"internal error: {type(exc).__name__}: {exc}"},
-            )
+            # One envelope with app.py's backstop handler: an error id the
+            # user can quote, logged with its traceback under the app tree.
+            return unhandled_error_response(request, exc)

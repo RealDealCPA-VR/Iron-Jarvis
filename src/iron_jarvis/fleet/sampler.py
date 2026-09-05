@@ -191,8 +191,16 @@ class FleetSampler:
         clock: Callable[[], float] = time.monotonic,
         probe: Callable[..., tuple[NodeSnapshot, list[FleetNode]]] = probe_node,
         node_timeout: float = _NODE_TIMEOUT,
+        on_tick: Callable[[bool, BaseException | None], None] | None = None,
     ) -> None:
         self.registry = registry
+        #: v1.229.0: loop-health seam. Called ``(True, None)`` after a cycle
+        #: that ran to completion and ``(False, exc)`` after one that raised —
+        #: the daemon used to mark ``fleet`` healthy when it ARMED the loop,
+        #: so a sampler whose every cycle blew up read ok forever. Node
+        #: reachability is NOT this signal (an offline node is a normal
+        #: snapshot); this is whether the loop itself is doing its job.
+        self._on_tick = on_tick
         self.interval_idle = float(interval_idle)
         self.interval_active = float(interval_active)
         self.lease = float(lease)
@@ -519,14 +527,27 @@ class FleetSampler:
         except Exception:  # noqa: BLE001 — shutdown never raises
             log.debug("fleet sampler: loop exited with an error", exc_info=True)
 
+    def _report(self, ok: bool, exc: BaseException | None = None) -> None:
+        """Hand the cycle's outcome to ``on_tick``; a reporter that raises
+        must not take the loop down with it."""
+        if self._on_tick is None:
+            return
+        try:
+            self._on_tick(ok, exc)
+        except Exception:  # noqa: BLE001 — health bookkeeping never kills a cycle
+            log.debug("fleet sampler: on_tick raised", exc_info=True)
+
     async def _loop(self) -> None:
         while not self._stop.is_set():
             try:
                 await self._sample_all_async()
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001 — a cycle must never kill the daemon
+            except Exception as exc:  # noqa: BLE001 — a cycle must never kill the daemon
                 log.debug("fleet sampler: cycle failed", exc_info=True)
+                self._report(False, exc)
+            else:
+                self._report(True)
             await self._sleep_cadence()
 
     async def _sleep_cadence(self) -> None:

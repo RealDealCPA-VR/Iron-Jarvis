@@ -198,6 +198,18 @@ interface McpServer {
   tool_names: string[];
   /** When true, agents may run this server's tools without a prompt. */
   auto_approve?: boolean;
+  /** v1.229.0: why the last load attempt skipped this server (the exception
+   *  text, e.g. "FileNotFoundError: npx not found"); null = it loaded, or no
+   *  attempt has been made in this daemon process. */
+  last_error?: string | null;
+  last_attempt_at?: string | null;
+}
+
+/** Response of POST /mcp/servers/{name}/reload — the Retry for a pack that did not start. */
+interface McpReloadResult {
+  ok: boolean;
+  tools_loaded: number;
+  last_error: string | null;
 }
 
 /** Response of POST /mcp/servers. `note` is set when live-load failed. */
@@ -727,6 +739,41 @@ export default function ToolsPage() {
       }));
     } finally {
       setMcpTestBusy(null);
+    }
+  }
+
+  /** POST /mcp/servers/{name}/reload — Retry a pack that did not start
+   *  (v1.229.0). Unlike Test, a success LOADS the tools for every agent; the
+   *  result rides the same inline slot as a Test result, and the row is
+   *  re-read so the amber line clears (or shows the new reason). */
+  async function retryServer(serverName: string) {
+    setMcpTestBusy(serverName);
+    setMcpTests((t) => {
+      const next = { ...t };
+      delete next[serverName];
+      return next;
+    });
+    try {
+      const res = await post<McpReloadResult>(
+        `/mcp/servers/${encodeURIComponent(serverName)}/reload`,
+      );
+      setMcpTests((t) => ({
+        ...t,
+        [serverName]: { ok: res.ok, count: res.tools_loaded, tools: [], error: res.last_error },
+      }));
+    } catch (err) {
+      setMcpTests((t) => ({
+        ...t,
+        [serverName]: {
+          ok: false,
+          count: 0,
+          tools: [],
+          error: err instanceof ApiError ? err.message : String(err),
+        },
+      }));
+    } finally {
+      setMcpTestBusy(null);
+      void reloadServers();
     }
   }
 
@@ -1886,6 +1933,27 @@ export default function ToolsPage() {
                             {[s.command, ...(s.args ?? [])].join(" ")}
                           </code>
                         </div>
+                        {/* v1.229.0 (audit U4): the REASON a pack holds no tools.
+                            "0 tools loaded" alone read as a fact of life; the
+                            daemon had the exception text all along. */}
+                        {s.last_error && (
+                          <div
+                            data-testid={`mcp-last-error-${s.name}`}
+                            className="mt-1.5 flex flex-wrap items-center gap-2 text-[12px] text-amber-200"
+                          >
+                            <span className="min-w-0 break-all">
+                              Didn’t start: {s.last_error}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => void retryServer(s.name)}
+                              disabled={testing}
+                              className="inline-flex items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/[0.08] px-2 py-0.5 text-[11px] font-medium text-amber-100 transition-colors hover:bg-amber-400/[0.14] disabled:opacity-50"
+                            >
+                              <RefreshCw size={11} /> Retry
+                            </button>
+                          </div>
+                        )}
                       </div>
                       <div className="flex shrink-0 items-center gap-2">
                         <button

@@ -330,8 +330,19 @@ def serve(
     # SSE stream (a running session's live view) to end, so POST /shutdown never
     # reached the lifespan finally and Electron force-killed at 2s — terminal
     # snapshot skipped, scheduler never stopped, no WAL checkpoint.
+    # v1.229.0 (audit Wave 3, OBS4): quiet the proactor reset-on-close
+    # traceback and the dashboard's green polls/preflights; timestamp uvicorn's
+    # own lines. Installed HERE, at the uvicorn seam, so the filters survive its
+    # dictConfig (which replaces handlers, never logger filters).
+    from ..core.logging import install_noise_filters, uvicorn_log_config
+
+    install_noise_filters()
     uvicorn.run(
-        create_app(resolved_root), host=host, port=port, timeout_graceful_shutdown=1.0
+        create_app(resolved_root),
+        host=host,
+        port=port,
+        timeout_graceful_shutdown=1.0,
+        log_config=uvicorn_log_config(),
     )
 
 
@@ -717,7 +728,15 @@ def up(
             pass
     os.environ["IRONJARVIS_ROOT"] = str(Path(root).resolve())
     try:
-        uvicorn.run(create_app(os.environ["IRONJARVIS_ROOT"]), host=host, port=port)
+        from ..core.logging import install_noise_filters, uvicorn_log_config
+
+        install_noise_filters()  # v1.229.0: same log hygiene as `serve`
+        uvicorn.run(
+            create_app(os.environ["IRONJARVIS_ROOT"]),
+            host=host,
+            port=port,
+            log_config=uvicorn_log_config(),
+        )
     finally:
         for pr in procs:
             try:
@@ -771,17 +790,16 @@ def restore(
     when it's most needed: recovering a DB too corrupt to boot."""
     import tarfile
 
+    from ..maintenance import extract_backup
+
     home = _home_for(root)
     if home.exists() and any(home.iterdir()) and not force:
         console.print("[red]refusing[/red]: .ironjarvis is not empty; pass --force")
         raise typer.Exit(code=1)
-    dest = home.parent
-    dest.mkdir(parents=True, exist_ok=True)
     try:
-        with tarfile.open(file, "r:gz") as tar:
-            # filter="data" (Python 3.12+) rejects absolute paths, '..' traversal,
-            # and symlink/hardlink escapes.
-            tar.extractall(path=dest, filter="data")
+        # Shared with the daemon's POST /maintenance/restore (v1.229.0):
+        # filter="data" rejects absolute paths, '..' traversal and link escapes.
+        extract_backup(Path(file), home.parent)
     except (tarfile.TarError, OSError) as exc:
         console.print(f"[red]restore failed[/red]: cannot read backup {file}: {exc}")
         raise typer.Exit(code=1)

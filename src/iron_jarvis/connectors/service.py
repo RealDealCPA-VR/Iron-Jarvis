@@ -291,6 +291,9 @@ def _memory_record(platform, connector_id: str):
 
 
 def test(platform, connector_id: str) -> dict[str, Any]:
+    """Prove a connector's config RIGHT NOW. A probe: it registers nothing,
+    so it passes ``record=False`` and leaves the MCP load record to the loads
+    that actually hand tools to the registry (boot, connect, reload)."""
     connector = get_connector(connector_id)
     if connector is None:
         # Dynamic entries: a user-added MCP server tests exactly like a
@@ -298,7 +301,7 @@ def test(platform, connector_id: str) -> dict[str, Any]:
         cfg = _server_cfg(platform, connector_id)
         if cfg is not None:
             try:
-                tools = mcp_tools([cfg], secret_resolver=platform.secrets.get)
+                tools = mcp_tools([cfg], secret_resolver=platform.secrets.get, record=False)
             except Exception as exc:  # noqa: BLE001
                 return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "tools": []}
             names = [t.name.split("__", 2)[-1] for t in tools]
@@ -323,7 +326,7 @@ def test(platform, connector_id: str) -> dict[str, Any]:
         if cfg is None:
             return {"ok": False, "error": "not connected yet"}
         try:
-            tools = mcp_tools([cfg], secret_resolver=platform.secrets.get)
+            tools = mcp_tools([cfg], secret_resolver=platform.secrets.get, record=False)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "tools": []}
         names = [t.name.split("__", 2)[-1] for t in tools]

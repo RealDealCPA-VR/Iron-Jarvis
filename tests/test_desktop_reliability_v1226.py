@@ -175,6 +175,13 @@ const fileLogger = (label) => (line) => logs.push(`${label}: ${String(line).trim
 function desktopLog(level, ...args) { logs.push(`desktop[${level}]: ${args.join(" ")}`); }
 function reportIncident(kind, detail) { calls.push(["incident", kind, String(detail)]); }
 function sweepOrphanDaemons() { calls.push(["sweep"]); }
+// v1.229.0 (audit D1): the ladder verifies the install at the 3rd fast death and
+// rebuilds the tray menu when it caps; the dashboard spawn re-arms the reload wait.
+const integrityCalls = [];
+function verifyInstallIntegrity() { integrityCalls.push(now); return { ok: true, checked: 1, missing: [], mismatched: [] }; }
+function handleCorruptInstall(result) { calls.push(["corrupt", JSON.stringify(result)]); }
+function refreshTrayMenu() { calls.push(["trayMenu"]); }
+function armDashboardReload() {}
 const app = { getVersion: () => "1.226.0" };
 const DAEMON_PORT = 8787;
 const STARTUP_TIMEOUT_MS = 90000; // packaged boot gate
@@ -407,7 +414,9 @@ _SUPERVISOR_SCENARIOS = """
   out.sweeps = calls.filter((c) => c[0] === "sweep").length;
   out.order = calls.filter((c) => c[0] === "sweep" || c[0] === "spawn").map((c) => c[0]);
   out.posts = calls.filter((c) => c[0] === "POST /shutdown").length;
-  out.rec = rec ? { restarts: rec.restarts, adopted: !!rec.adopted, swept: !!rec.swept } : null;
+  out.trayMenuRebuilds = calls.filter((c) => c[0] === "trayMenu").length;
+  out.rec = rec ? { restarts: rec.restarts, adopted: !!rec.adopted, swept: !!rec.swept, capped: !!rec.capped } : null;
+  out.integrity = integrityCalls.length;
   out.logs = logs;
   out.timersArmed = timers.some((t) => !t.cancelled);
   out.daemonProcExitCode = daemonProc ? daemonProc.exitCode : null;
@@ -689,11 +698,17 @@ def test_quit_sweep_runs_when_this_session_claimed_the_daemon(tmp_path):
 @requires_node
 def test_a_spawn_that_fails_with_enoent_keeps_the_ladder_armed(tmp_path):
     """The audit's exeMissingOnRestart: 2 spawns in an hour, 0 notifications,
-    supervisor disarmed. error + close, never exit."""
+    supervisor disarmed. error + close, never exit. Since v1.229.0 (audit D1)
+    the ladder runs to its CAP (10 restarts / 15 min) and then stops on
+    purpose — so "armed" means every failed spawn was retried up to the cap,
+    the user was told at #3 and again at the cap, and the install was
+    verified at the third fast death."""
     out = _sup("enoent_restart", tmp_path)
-    assert out["spawns"] > 10, f"the ladder disarmed after the failed spawn: {out['spawns']} spawns in 1h"
-    assert out["timersArmed"] is True, "the supervisor gave up"
-    assert len(out["notes"]) == 1, f"the crash-loop notification at #3 was lost: {out['notes']}"
+    assert out["spawns"] == 11, f"expected the initial spawn + 10 capped restarts, got {out['spawns']}"
+    assert out["rec"]["capped"] is True, "the ladder never reached its cap"
+    assert out["integrity"] == 1, "the install was not verified at the third fast death"
+    assert len(out["notes"]) == 2, f"toast at #3 and once more at the cap: {out['notes']}"
+    assert "no longer being restarted" in out["notes"][1], out["notes"]
     assert out["daemonProcExitCode"] == -4058
 
 
@@ -705,12 +720,22 @@ def test_one_death_is_counted_once_even_with_error_and_close(tmp_path):
 
 
 @requires_node
-def test_the_plain_crash_ladder_is_unchanged(tmp_path):
-    """The behaviour the audit called solid: steady 60s retries, one toast at #3."""
+def test_the_plain_crash_ladder_stops_at_the_cap_and_says_so(tmp_path):
+    """v1.226.0 called steady 60 s retries forever "solid"; v1.229.0 (audit D1)
+    gives the ladder a ceiling. A daemon dying 2 s after every spawn: 10
+    restarts inside 15 minutes, then the supervisor stops, toasts once more,
+    rebuilds the tray menu (the "Restart Iron Jarvis" item) and leaves no
+    timer armed — the tray item is the way back, not a 60 s loop."""
     out = _sup("plain_crash", tmp_path)
-    assert out["spawns"] > 40, out["spawns"]
-    assert len(out["notes"]) == 1
-    assert out["timersArmed"] is True
+    assert out["spawns"] == 11, f"the cap is 10 restarts: {out['spawns']} spawns in 1h"
+    assert out["rec"]["capped"] is True
+    assert out["integrity"] == 1, "three fast deaths must verify the install exactly once"
+    assert len(out["notes"]) == 2, out["notes"]
+    assert "10 times in 15 minutes" in out["notes"][1] and "Restart Iron Jarvis" in out["notes"][1], out["notes"]
+    assert out["timersArmed"] is False, "a capped ladder must not keep a restart timer armed"
+    assert any("giving up" in l for l in out["logs"]), out["logs"]
+    assert any("stopped (crashed too often" in t for t in out["tooltips"]), out["tooltips"]
+    assert out["trayMenuRebuilds"] == 1, "the tray menu was not rebuilt to show the Restart item"
 
 
 # --------------------------------------------------------------------------
@@ -871,6 +896,7 @@ _RELOAD_HARNESS = """
 const { EventEmitter } = require("events");
 const calls = [];
 const DASHBOARD_URL = "http://localhost:8788";
+const _services = {}; // armDashboardReload pauses while the dashboard ladder is capped (v1.229.0)
 function isDashboardUrl(u) { try { return new URL(String(u)).origin === DASHBOARD_URL; } catch { return false; } }
 let waits = [];
 function waitForDashboard(t, i) { calls.push(["waitForDashboard", t, i]); return new Promise((res, rej) => waits.push({ res, rej })); }
@@ -1063,8 +1089,9 @@ def test_the_ladder_forgets_a_sweep_after_a_healthy_run_and_quit_stops_the_watch
     """Review nits: rec.swept resets beside rec.restarts; _dwTimer cleared on quit."""
     src = _src()
     assert re.search(
-        r"if \(uptime > 5 \* 60 \* 1000\) \{\s*rec\.restarts = 0;[^\n]*\n\s*rec\.swept = false;\s*\}", src
-    ), "rec.swept is not reset with the ladder after a healthy run"
+        r"if \(uptime > 5 \* 60 \* 1000\) \{\s*rec\.restarts = 0;[^\n]*\n\s*rec\.swept = false;[^\n]*\n\s*markTrayHealthy\(label\);[^\n]*\n\s*\}",
+        src,
+    ), "rec.swept (and the v1.229.0 tooltip reset) are not reset with the ladder after a healthy run"
     assert re.search(
         r'app\.on\("will-quit", \(\) => \{\s*globalShortcut\.unregisterAll\(\);\s*if \(_dwTimer\) clearInterval\(_dwTimer\);\s*_dwTimer = null;',
         src,

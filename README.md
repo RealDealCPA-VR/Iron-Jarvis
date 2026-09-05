@@ -119,7 +119,7 @@ You can skip the guide and explore in demo mode — the banner keeps you honest.
 
 #### 4 · Daily use
 
-- **Closing the window doesn't quit.** Iron Jarvis minimizes to the **system tray** so schedules, webhooks, sentinels, and integrations keep running for weeks. Reopen with the tray icon or **Ctrl+Shift+J**; **Ctrl+Shift+Space** opens Spotlight (quick ask) from anywhere. To fully stop it: tray icon → **Quit Iron Jarvis**.
+- **Closing the window doesn't quit.** Iron Jarvis minimizes to the **system tray** so schedules, webhooks, sentinels, and integrations keep running for weeks. Reopen with the tray icon or **Ctrl+Shift+J** (or **Ctrl+Alt+J** when another app holds it — the tray menu and the Overview tips card show the live key); **Ctrl+Shift+Space** opens Spotlight (quick ask) from anywhere. To fully stop it: tray icon → **Quit Iron Jarvis**.
 - **Updates are automatic.** The app checks GitHub Releases at launch and every 30 minutes, downloads new versions in the background, and installs only when you click **Restart to update** (tray menu, notification, or the Updates page).
 - **Your data lives in `%APPDATA%\Iron Jarvis`** — config, the SQLite database, encrypted secrets, memory, and backups. It survives every update and reinstall. Uninstalling from Windows Settings removes the app but leaves that folder (delete it manually for a full wipe).
 

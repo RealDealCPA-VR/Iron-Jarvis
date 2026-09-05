@@ -23,6 +23,8 @@ like any normal response.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -92,7 +94,8 @@ def test_the_guarded_error_shape_matches_the_existing_handler(client):
     exception handler produces, so a client never sees two error formats."""
     body = client.get("/_boom_unhandled", headers=ORIGIN).json()
     assert set(body) == {"detail"}
-    assert body["detail"].startswith("internal error: ")
+    # v1.229.0: the envelope carries an err_ id the user can quote.
+    assert re.match(r"^internal error \[err_[0-9a-f]{8}\]: ", body["detail"]), body
 
 
 def test_a_non_browser_client_still_gets_the_500(client):

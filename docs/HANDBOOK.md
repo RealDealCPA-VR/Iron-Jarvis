@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.228.0 (2026-09-05).*
+holds itself to. Current as of v1.229.0 (2026-09-05).*
 
 ---
 
@@ -26,8 +26,11 @@ undo can be captured truthfully.
 | Dashboard | Next.js — every page below | `127.0.0.1:8788` |
 | Desktop | Electron — tray, hotkeys, updater, Spotlight | wraps both |
 
-**Hotkeys:** `Ctrl+Shift+J` toggles the window, `Ctrl+Shift+Space` opens
-Spotlight. State lives in `%APPDATA%/Iron Jarvis/.ironjarvis/` (SQLite DB,
+**Hotkeys:** `Ctrl+Shift+J` toggles the window — or `Ctrl+Alt+J` when
+another app holds it (the desktop app tries the two in order and retries a
+taken key every 30 minutes); the tray menu and the Overview tips card show
+the key that is live, or say "hotkey unavailable" when both are taken.
+`Ctrl+Shift+Space` opens Spotlight. State lives in `%APPDATA%/Iron Jarvis/.ironjarvis/` (SQLite DB,
 config.toml, secrets vault, skills, backups). Updates download automatically
 (checked at boot and every 30 min) and install only when you click
 **Restart to update**.
@@ -238,7 +241,23 @@ seam); Train (teach it your writing voice, suggest-only).
    install's, by token) instead of fought over. A lost secrets key, a
    hand-edited `[comm]` section, or a slow notifier can no longer stop the
    daemon from booting; `/diagnostics` → `background_loops` now reports every
-   background loop and the scheduler, not just backups.
+   background loop and the scheduler, not just backups. Since v1.229.0 that
+   report is *true*, not "armed": the fleet sampler and the Slack socket say
+   ok only after a cycle that ran or a connection that opened, and a loop
+   that keeps failing says so with its last error — named on the Overview
+   (the amber line under the hero in Simple mode; the Background loops tile
+   and list under System health in Advanced) and, once it has been failing
+   for five minutes, as a bell item ("Background task fleet has been failing
+   for 12 min — …"). The hero never says "All systems nominal" over a dead
+   loop. A tool pack (MCP server) that did not start is treated the same
+   way: its row under **Tools → Connected packs** carries an amber "Didn’t
+   start: <reason>" line (the exact error, e.g. `npx` not found) with a
+   **Retry** that reloads it live, the Overview hero says "1 thing needs
+   attention" with the pack named under it, and the doctor's `mcp` check
+   names each pack that failed and a missing `npx`. **Test** on that row
+   only proves the config (it loads nothing), so a green Test leaves the
+   amber line and the "needs attention" note in place — press **Retry** to
+   actually bring the pack's tools back.
 
 ## Ask the Guide
 
@@ -261,9 +280,20 @@ reads; it never writes, runs commands, or starts work on its own.
 ## Troubleshooting in one minute
 
 - **"Daemon offline"** → almost always a provider/endpoint issue, not the
-  daemon: check Connections. The tray can restart both processes. In the
-  desktop app the banner says the service is restarting; pages reload
-  themselves the moment it is back (v1.226.0) — no need to navigate away.
+  daemon: check Connections. In the desktop app the banner says the service
+  is restarting; pages reload themselves the moment it is back (v1.226.0) —
+  no need to navigate away. The desktop app restarts a crashed daemon or
+  dashboard by itself with backoff (1 s → 60 s). It does not do so forever
+  (v1.229.0): three deaths within seconds of a start make it verify the
+  install first (a damaged install gets the Repair dialog), and after 10
+  restarts in 15 minutes it stops, tells you, and the tray gains a
+  **Restart Iron Jarvis** item that clears the counters and starts both
+  processes again. A process that crashes only every few minutes is
+  restarted every time, and you are told once it has died 3 times in a day.
+  The tray tooltip reads "running" again as soon as the process is back.
+  The per-process logs (tray → Open logs folder) stamp every line with a
+  time and say `killed pid=… reason=quit|update|watchdog|restart` when the
+  app itself stopped a process, so a crash and a kill no longer look alike.
 - **"Couldn't save this conversation"** (a chip above the composer, v1.226.0)
   → the thread could not be written; Retry re-sends it. If the thread was
   deleted elsewhere the next save quietly re-creates it. Your message is saved
@@ -280,5 +310,27 @@ reads; it never writes, runs commands, or starts work on its own.
   *before* you type.
 - **An update seems stuck** → Updates page; a release can take ~10 min to
   finish uploading after the version bumps.
+- **A message says "internal error [err_xxxxxxxx]: …"** (v1.229.0) → quote
+  the `err_` id from the message. The same id sits on the traceback line in
+  the daemon log (the desktop app's `logs` folder, `daemon.log`), so whoever
+  looks can jump straight to the cause. Every line in that log now carries a
+  timestamp and the logger name, and the routine noise — the dashboard's
+  green polls and preflights, the Windows "connection reset on close"
+  traceback — is filtered out, so what remains is what happened.
+- **You need to show someone what is wrong, or go back to yesterday**
+  (v1.229.0) → **Settings → Maintenance**. *Copy diagnostics* puts one JSON
+  blob on the clipboard — version, health (`db_liveness` is the "does the
+  database answer" probe; `db_integrity` is the same value kept for older
+  readers), background loops, disk, provider failures and the last 50
+  warnings/errors the daemon logged (`GET /diagnostics/errors`); an endpoint
+  that failed appears as `{ "error": … }` rather than vanishing, and when no
+  clipboard is reachable the text is shown to select by hand. *Open logs
+  folder* (desktop app only; also in the tray menu) opens the folder holding
+  `daemon.log`, `dashboard.log` and `desktop.log`. *Restore from backup…*
+  lists the snapshots under `backups/`, names the file in the confirmation,
+  replaces the database and settings with it and restarts the daemon — it is
+  refused while an agent session or workflow run is in flight. Backups also
+  no longer pile up on restarts: the boot snapshot is skipped while the
+  newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.

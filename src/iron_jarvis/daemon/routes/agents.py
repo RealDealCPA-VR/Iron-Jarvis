@@ -1385,10 +1385,17 @@ def register(app: FastAPI, d) -> None:
         """Configured MCP servers, each annotated with how many of its tools are
         currently LIVE in the registry (0 = configured but not loaded — usually a
         server that failed to connect, or was added and needs a restart)."""
+        from ...mcp.tools import load_status as _mcp_load_status
+
         servers = []
         for s in list(getattr(d.platform.config, "mcp_servers", None) or []):
             name = s.get("name") or ""
             loaded = d.platform.registry.mcp_names(name) if name else []
+            # v1.229.0 (audit U4): WHY a server holds 0 tools. The load record
+            # keeps the skip reason (e.g. "FileNotFoundError: npx not found")
+            # that used to live only in a daemon.log warning; `null` means it
+            # loaded (or was never attempted in this process).
+            status = _mcp_load_status(name) if name else None
             servers.append(
                 {
                     **s,
@@ -1399,6 +1406,8 @@ def register(app: FastAPI, d) -> None:
                     "env": dict(s.get("env") or {}),
                     "tools_loaded": len(loaded),
                     "tool_names": [n.split("__", 2)[-1] for n in loaded],
+                    "last_error": status.get("last_error") if status else None,
+                    "last_attempt_at": status.get("at") if status else None,
                 }
             )
         # The Tools page checkbox binds to EFFECTIVE (what the boot-time
@@ -1462,7 +1471,11 @@ def register(app: FastAPI, d) -> None:
     @app.post("/mcp/servers/{name}/test")
     def test_mcp_server(name: str) -> dict[str, Any]:
         """Connect to a configured server RIGHT NOW and list its tools — proves
-        the command/URL + auth work without waiting for a restart. Read-only."""
+        the command/URL + auth work without waiting for a restart. Read-only —
+        it registers nothing, so it must not touch the load record either
+        (``record=False``): a green Test over a pack that failed at boot would
+        otherwise clear ``last_error``, hide the Tools row's Retry and let the
+        Overview say nominal while agents still hold none of its tools."""
         servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
         cfg = next((s for s in servers if s.get("name") == name), None)
         if cfg is None:
@@ -1470,7 +1483,7 @@ def register(app: FastAPI, d) -> None:
         from ...mcp.tools import mcp_tools as _mcp_tools
 
         try:
-            tools = _mcp_tools([cfg], secret_resolver=d.platform.secrets.get)
+            tools = _mcp_tools([cfg], secret_resolver=d.platform.secrets.get, record=False)
         except Exception as exc:  # noqa: BLE001 — report, never crash
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "tools": []}
         names = [t.name.split("__", 2)[-1] for t in tools]
@@ -1480,6 +1493,36 @@ def register(app: FastAPI, d) -> None:
             "tools": names,
             "error": None if tools else "connected but the server advertised no tools",
         }
+
+    @app.post("/mcp/servers/{name}/reload")
+    def reload_mcp_server(name: str) -> dict[str, Any]:
+        """Retry a server that did not start (v1.229.0, audit U4): unload its
+        live tools, connect again through the same loader boot uses, register
+        what it advertises. The load record is refreshed either way, so the row
+        on the Tools page shows the NEW reason (or none) after a Retry — the
+        read-only ``/test`` route proves a config but never changes what agents
+        hold."""
+        servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
+        cfg = next((s for s in servers if s.get("name") == name), None)
+        if cfg is None:
+            raise HTTPException(status_code=404, detail="no such server")
+        from ...mcp.tools import load_status as _mcp_load_status
+        from ...mcp.tools import mcp_tools as _mcp_tools
+
+        for tool_name in d.platform.registry.mcp_names(name):
+            d.platform.registry.unregister(tool_name)
+        loaded = 0
+        try:
+            for tool in _mcp_tools([cfg], secret_resolver=d.platform.secrets.get):
+                d.platform.registry.register(tool, mcp=True)
+                loaded += 1
+        except Exception as exc:  # noqa: BLE001 — report, never crash
+            return {"ok": False, "tools_loaded": 0, "last_error": f"{type(exc).__name__}: {exc}"}
+        status = _mcp_load_status(name) or {}
+        last_error = status.get("last_error")
+        if loaded == 0 and not last_error:
+            last_error = "connected but the server advertised no tools"
+        return {"ok": loaded > 0, "tools_loaded": loaded, "last_error": last_error}
 
     @app.post("/mcp/servers")
     def add_mcp_server(body: McpServerBody) -> dict[str, Any]:

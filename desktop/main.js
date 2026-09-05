@@ -129,8 +129,18 @@ function isTrustedDashboardSender(event) {
 // daemon exe) — give them 90s; dev keeps the tight 30s feedback loop.
 const STARTUP_TIMEOUT_MS = IS_PACKAGED ? 90000 : 30000;
 
-const HOTKEY = "CommandOrControl+Shift+J"; // show/focus the main window
+const HOTKEY = "CommandOrControl+Shift+J"; // show/focus the main window (preferred)
 const SPOTLIGHT_HOTKEY = "CommandOrControl+Shift+Space"; // quick-task overlay
+// v1.229.0 (audit D2): the window hotkey is a LADDER. Ctrl+Shift+J was held by
+// another app on the user's own machine (Win32 error 1409), registration
+// failed once at boot, and every surface — tray, Help, README, the Overview
+// tips card — kept advertising it as fact. Each ladder is tried in order; what
+// actually registered (or null) lives in `hotkeyState`, which the tray label,
+// the app menu, the tray hint and the dashboard (`shell:getState`) all read.
+const HOTKEY_LADDER = [HOTKEY, "CommandOrControl+Alt+J"];
+const SPOTLIGHT_LADDER = [SPOTLIGHT_HOTKEY];
+const HOTKEY_RETRY_MS = 30 * 60 * 1000; // a taken key is retried while null
+const hotkeyState = { window: null, spotlight: null };
 
 // --hidden: boot straight to the tray with no window (start-at-login mode).
 const START_HIDDEN = process.argv.includes("--hidden");
@@ -318,8 +328,11 @@ function maybeShowTrayHint() {
     new Notification({
       title: "Iron Jarvis is still running",
       body:
-        "Find it in the system tray (near the clock). Press Ctrl+Shift+J to reopen " +
-        "the window; to stop it completely use the tray icon → Quit Iron Jarvis.",
+        "Find it in the system tray (near the clock). " +
+        (hotkeyState.window
+          ? `Press ${accelLabel(hotkeyState.window)} to reopen the window; `
+          : "Click the tray icon to reopen the window; ") +
+        "to stop it completely use the tray icon → Quit Iron Jarvis.",
     }).show();
   } catch {
     /* notifications unavailable — the tray tooltip still carries the truth */
@@ -421,6 +434,25 @@ function fileLogger(label) {
   return write;
 }
 
+// Open userData/logs in the OS file manager (v1.229.0, audit D8/OBS5). The
+// tray item and Settings → Maintenance → "Open logs folder" (IPC
+// `shell:openLogs`) both land here. The folder is created first so a fresh
+// install opens an empty folder instead of an error. Resolves
+// `{ ok: true, path }` or `{ ok: false, path, error }` — never throws, so a
+// missing file manager is a sentence in the UI, not a swallowed rejection.
+function openLogsFolder() {
+  const dir = path.join(userDataDir || "", "logs");
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch {
+    /* openPath reports the real failure below */
+  }
+  return shell.openPath(dir).then(
+    (err) => (err ? { ok: false, path: dir, error: String(err) } : { ok: true, path: dir }),
+    (e) => ({ ok: false, path: dir, error: String((e && e.message) || e) })
+  );
+}
+
 // Main-process errors went to the console ONLY — and a Start-Menu launch has
 // no console, so every console.error/warn in this file was written NOWHERE in
 // the packaged app (v1.226.0, F-E-6). Same sink as the children get:
@@ -462,16 +494,20 @@ function spawnChild(label, command, args, cwd, extraEnv, useShell = true) {
   });
 
   const toFile = fileLogger(label);
+  // Every chunk carries an ISO time (v1.229.0, audit D5): a crash at 2am and
+  // a kill at 9am used to be indistinguishable in the file — neither the
+  // child's lines nor the supervisor's exit line said WHEN.
+  const stamped = (d) => `${new Date().toISOString()} ${d}`;
   if (child.stdout) {
     child.stdout.on("data", (d) => {
       process.stdout.write(`[${label}] ${d}`);
-      toFile(d);
+      toFile(stamped(d));
     });
   }
   if (child.stderr) {
     child.stderr.on("data", (d) => {
       process.stderr.write(`[${label}] ${d}`);
-      toFile(d);
+      toFile(stamped(d));
     });
   }
   child.on("error", (err) => {
@@ -482,7 +518,7 @@ function spawnChild(label, command, args, cwd, extraEnv, useShell = true) {
   });
   child.on("exit", (code, signal) => {
     console.log(`[${label}] exited (code=${code}, signal=${signal}, pid=${child.pid})`);
-    toFile(`[main] exited (code=${code}, signal=${signal}, pid=${child.pid})\n`);
+    toFile(`[main] ${new Date().toISOString()} exited (code=${code}, signal=${signal}, pid=${child.pid})\n`);
   });
 
   console.log(`[${label}] started pid=${child.pid}: ${command} ${args.join(" ")} (cwd=${cwd})`);
@@ -497,7 +533,45 @@ function spawnChild(label, command, args, cwd, extraEnv, useShell = true) {
 // fast crashes surface a notification instead of looping forever silently.
 
 const RESTART_BACKOFF_MS = [1000, 5000, 15000, 60000];
-const _services = {}; // label -> { spawnFn, restarts, lastStart }
+// The ladder has a CEILING (v1.229.0, audit D1): a child that dies within
+// FAST_DEATH_MS of its spawn FAST_DEATHS_TO_VERIFY times in a row is checked
+// against the install manifest first (a half-applied update → the Repair
+// dialog, not a 60 s loop forever); a clean install that still cannot keep
+// its child alive stops after RESTART_CAP_MAX restarts in RESTART_CAP_WINDOW_MS,
+// says so once, and hands the user a tray "Restart Iron Jarvis" item.
+const FAST_DEATH_MS = 3000;
+const FAST_DEATHS_TO_VERIFY = 3;
+const RESTART_CAP_MAX = 10;
+const RESTART_CAP_WINDOW_MS = 15 * 60 * 1000;
+// A child that dies every six minutes ran "healthy" by the ladder's 5-minute
+// rule, so its counter reset before every increment and it was restarted
+// forever with no toast (audit D3): a second window counts deaths in a day.
+const DEATHS_DAY_MS = 24 * 60 * 60 * 1000;
+const DEATHS_DAY_TOAST_AT = 3;
+const _services = {}; // label -> { spawnFn, restarts, lastStart, fastDeaths, restartTimes, deaths, capped, restartTimer, restartSeq }
+
+// Tray tooltip truth (audit D4): notifyCrashLoop/notifyWatchdogExhausted
+// wrote "restarting repeatedly" and nothing ever wrote "running" back. Each
+// warning marks its service degraded; the tooltip returns to "running" only
+// when NO service is degraded (a healthy daemon must not clear a dashboard
+// that is still looping).
+const _trayDegraded = new Set();
+function markTrayDegraded(label, text) {
+  _trayDegraded.add(label);
+  try {
+    if (tray) tray.setToolTip(text);
+  } catch {
+    /* tray may be gone */
+  }
+}
+function markTrayHealthy(label) {
+  if (!_trayDegraded.delete(label) || _trayDegraded.size) return;
+  try {
+    if (tray) tray.setToolTip("Iron Jarvis — running");
+  } catch {
+    /* tray may be gone */
+  }
+}
 
 function startService(label, spawnFn) {
   const rec = _services[label] || (_services[label] = { restarts: 0, lastStart: 0 });
@@ -506,7 +580,10 @@ function startService(label, spawnFn) {
   rec.adopted = false; // a child of our own is (being) started
   const child = spawnFn();
   if (label === "daemon") daemonProc = child;
-  else if (label === "dashboard") dashboardProc = child;
+  else if (label === "dashboard") {
+    dashboardProc = child;
+    armDashboardReload(); // a window on the error page gets this spawn's answer (audit D1)
+  }
   // The ladder hooks "close", not "exit" (v1.226.0, F-E-3): a spawn that FAILS
   // (ENOENT — AV quarantined the frozen exe right after killing the daemon)
   // emits error + close and never exit, so the old hook silently disarmed on
@@ -526,17 +603,60 @@ function startService(label, spawnFn) {
       adoptOrReplaceExistingDaemon(rec);
       return;
     }
-    const uptime = Date.now() - rec.lastStart;
+    const now = Date.now();
+    if (rec.manualRestart) {
+      // The tray's "Restart Iron Jarvis" killed it on purpose: respawn at
+      // once, counters already reset, nothing counted as a crash.
+      rec.manualRestart = false;
+      fileLogger(label)(`[main] ${new Date(now).toISOString()} restarting on request\n`);
+      startService(label, rec.spawnFn);
+      return;
+    }
+    const uptime = now - rec.lastStart;
     if (uptime > 5 * 60 * 1000) {
       rec.restarts = 0; // ran healthy — reset the ladder
       rec.swept = false;
+      markTrayHealthy(label); // audit D4: it ran, so the tooltip stops saying "repeatedly"
     }
     rec.restarts += 1;
+    rec.fastDeaths = uptime < FAST_DEATH_MS ? (rec.fastDeaths || 0) + 1 : 0;
+    rec.deaths = (rec.deaths || []).filter((t) => now - t < DEATHS_DAY_MS);
+    rec.deaths.push(now);
+    if (rec.fastDeaths === FAST_DEATHS_TO_VERIFY) {
+      // Three deaths within seconds of spawn: is the install whole? (audit D1)
+      const integrityResult = verifyInstallIntegrity();
+      if (!integrityResult.ok) {
+        fileLogger(label)(`[main] ${new Date(now).toISOString()} died ${rec.fastDeaths}x within ${FAST_DEATH_MS}ms of spawn and the install is damaged — offering repair\n`);
+        handleCorruptInstall(integrityResult);
+        return;
+      }
+      fileLogger(label)(`[main] ${new Date(now).toISOString()} died ${rec.fastDeaths}x within ${FAST_DEATH_MS}ms of spawn; install verified intact (${integrityResult.checked} files)\n`);
+    }
+    rec.restartTimes = (rec.restartTimes || []).filter((t) => now - t < RESTART_CAP_WINDOW_MS);
+    if (rec.restartTimes.length >= RESTART_CAP_MAX) {
+      rec.capped = true;
+      const minutes = Math.round(RESTART_CAP_WINDOW_MS / 60000);
+      desktopLog("error", `[${label}] ${rec.restartTimes.length} restarts in ${minutes} minutes — giving up; use the tray's "Restart Iron Jarvis"`);
+      fileLogger(label)(`[main] ${new Date(now).toISOString()} ${rec.restartTimes.length} restarts in ${minutes} minutes — giving up; use the tray's "Restart Iron Jarvis"\n`);
+      notifyCrashLoop(label, `The ${label} crashed ${rec.restartTimes.length} times in ${minutes} minutes and is no longer being restarted. Use the tray's "Restart Iron Jarvis" to try again.`);
+      refreshTrayMenu(); // adds the "Restart Iron Jarvis" item
+      return;
+    }
+    rec.restartTimes.push(now);
     const delay = RESTART_BACKOFF_MS[Math.min(rec.restarts - 1, RESTART_BACKOFF_MS.length - 1)];
     desktopLog("error", `[${label}] unexpected exit — restart #${rec.restarts} in ${delay}ms`);
-    fileLogger(label)(`[main] unexpected exit — restart #${rec.restarts} in ${delay}ms\n`);
+    fileLogger(label)(`[main] ${new Date(now).toISOString()} unexpected exit — restart #${rec.restarts} in ${delay}ms\n`);
     if (rec.restarts === 3) notifyCrashLoop(label);
-    setTimeout(() => {
+    else if (rec.deaths.length === DEATHS_DAY_TOAST_AT) {
+      notifyCrashLoop(label, `The ${label} has crashed ${rec.deaths.length} times in the last 24 hours and is being restarted each time. Logs: ${path.join(userDataDir || "", "logs")}`);
+    }
+    // The handle lives on the record (review of D1): the tray "Restart Iron
+    // Jarvis" spawns a dead child at once and must cancel this pending spawn,
+    // or two dashboards race for :8788 and the ladder supervises the loser.
+    const seq = (rec.restartSeq = (rec.restartSeq || 0) + 1);
+    rec.restartTimer = setTimeout(() => {
+      if (rec.restartSeq !== seq) return; // superseded by a tray Restart
+      rec.restartTimer = null;
       if (!shuttingDown && !isQuitting) startService(label, rec.spawnFn);
     }, delay);
   };
@@ -552,17 +672,46 @@ function startService(label, spawnFn) {
   return child;
 }
 
-function notifyCrashLoop(label) {
-  const logsDir = path.join(userDataDir || "", "logs");
-  try {
-    if (tray) tray.setToolTip(`Iron Jarvis — ${label} is restarting repeatedly (check logs)`);
-  } catch {
-    /* tray may be gone */
+// Tray "Restart Iron Jarvis" (audit D1): resets every ladder counter, respawns
+// a capped child, and restarts a live one on purpose (manualRestart keeps
+// the ladder from counting that kill as a crash).
+function restartServicesFromTray() {
+  for (const [label, rec] of Object.entries(_services)) {
+    if (!rec.spawnFn) continue;
+    rec.restarts = 0;
+    rec.fastDeaths = 0;
+    rec.restartTimes = [];
+    rec.capped = false;
+    rec.swept = false;
+    rec.restartSeq = (rec.restartSeq || 0) + 1; // a backoff still pending: we spawn now instead
+    if (rec.restartTimer) clearTimeout(rec.restartTimer);
+    rec.restartTimer = null;
+    markTrayHealthy(label);
+    const child = label === "daemon" ? daemonProc : dashboardProc;
+    const alive = !!child && child.exitCode === null && child.signalCode === null;
+    if (alive) {
+      rec.manualRestart = true;
+      killChild(child, label, "restart"); // onGone respawns at once
+    } else if (!rec.adopted) {
+      startService(label, rec.spawnFn);
+    }
   }
+  refreshTrayMenu();
+}
+
+function notifyCrashLoop(label, body) {
+  const logsDir = path.join(userDataDir || "", "logs");
+  const rec = _services[label];
+  markTrayDegraded(
+    label,
+    rec && rec.capped
+      ? `Iron Jarvis — ${label} stopped (crashed too often; Restart from the tray)`
+      : `Iron Jarvis — ${label} is restarting repeatedly (check logs)`
+  );
   try {
     new Notification({
       title: "Iron Jarvis — problem",
-      body: `The ${label} keeps crashing and is being restarted. Logs: ${logsDir}`,
+      body: body || `The ${label} keeps crashing and is being restarted. Logs: ${logsDir}`,
     }).show();
   } catch {
     /* notifications unavailable */
@@ -732,7 +881,7 @@ function commandExists(cmd) {
   });
 }
 
-function killChild(child, label) {
+function killChild(child, label, reason = "quit") {
   if (!child) return;
   // Already exited?
   if (child.exitCode !== null || child.signalCode !== null) return;
@@ -748,17 +897,21 @@ function killChild(child, label) {
     } else {
       child.kill("SIGTERM");
     }
-    console.log(`[${label}] killed (pid=${pid})`);
+    console.log(`[${label}] killed (pid=${pid}, reason=${reason})`);
+    // The file used to show only "exited (code=1)" for a kill AND for a crash
+    // (audit D5) — say which, and why, next to the child's own last lines.
+    fileLogger(label)(`[main] ${new Date().toISOString()} killed pid=${pid} reason=${reason}\n`);
   } catch (err) {
     desktopLog("error", `[${label}] failed to kill (pid=${pid}):`, err.message);
   }
 }
 
-function shutdown() {
+function shutdown(reason) {
   if (shuttingDown) return;
   shuttingDown = true;
-  killChild(daemonProc, "daemon");
-  killChild(dashboardProc, "dashboard");
+  const why = typeof reason === "string" ? reason : "quit"; // process.on("exit") passes the code
+  killChild(daemonProc, "daemon", why);
+  killChild(dashboardProc, "dashboard", why);
 }
 
 // Ask the daemon to exit cleanly (POST /shutdown -> uvicorn SIGTERM -> lifespan
@@ -1103,6 +1256,7 @@ function daemonWatchdogTick() {
     if (health) {
       _dwMissed = 0;
       _dwBooting = false;
+      markTrayHealthy("daemon"); // audit D4: the next healthy /health says so on the tray
       return;
     }
     if (_dwBooting && rec && Date.now() - rec.lastStart < STARTUP_TIMEOUT_MS) return; // still booting
@@ -1143,17 +1297,13 @@ function daemonWatchdogTick() {
     desktopLog("error", `[daemon] watchdog: ${detail}`);
     fileLogger("daemon")(`[main] watchdog: ${detail}\n`);
     reportIncident("daemon-wedged", detail);
-    killChild(daemonProc, "daemon"); // the exit ladder restarts it
+    killChild(daemonProc, "daemon", "watchdog"); // the exit ladder restarts it
   });
 }
 
 function notifyWatchdogExhausted() {
   const logsDir = path.join(userDataDir || "", "logs");
-  try {
-    if (tray) tray.setToolTip("Iron Jarvis — the daemon keeps stalling (check logs)");
-  } catch {
-    /* tray may be gone */
-  }
+  markTrayDegraded("daemon", "Iron Jarvis — the daemon keeps stalling (check logs)");
   try {
     new Notification({
       title: "Iron Jarvis — problem",
@@ -1592,24 +1742,51 @@ function createMainWindow() {
 // and nothing ever retried. Wait for the dashboard to answer with the Iron
 // Jarvis app again, then load it. -3 is ERR_ABORTED — a navigation superseded
 // by another one — not a failure.
+// That wait was ONE-SHOT (v1.229.0, audit D1): after 60 s it gave up and a
+// dashboard the ladder brought back five minutes later never reached the
+// window. It now loops while the window sits on the error page, pauses only
+// when the ladder has given up on the dashboard, and is re-armed by every
+// dashboard spawn (startService).
 let _dashboardReloadPending = false;
+let _dashboardLoadFailed = false; // the main frame is on Chromium's error page
+let _dashboardReloadWc = null;
+function armDashboardReload() {
+  if (!_dashboardLoadFailed || _dashboardReloadPending) return;
+  const wc = _dashboardReloadWc;
+  if (!wc || wc.isDestroyed()) {
+    _dashboardLoadFailed = false;
+    return;
+  }
+  const rec = _services.dashboard;
+  if (rec && rec.capped) return; // nothing is coming back until the tray Restart
+  _dashboardReloadPending = true;
+  waitForDashboard(60000, 500)
+    .then(() => {
+      _dashboardReloadPending = false;
+      _dashboardLoadFailed = false; // a failed loadURL sets it again via did-fail-load
+      if (!wc.isDestroyed()) wc.loadURL(DASHBOARD_URL);
+    })
+    .catch(() => {
+      _dashboardReloadPending = false;
+      armDashboardReload(); // still on the error page — keep waiting
+    });
+}
 function installDashboardReloadOnFailure(win) {
   const wc = win.webContents;
   wc.on("did-fail-load", (_e, code, _desc, url, isMainFrame) => {
     if (code === -3 || !isMainFrame || !isDashboardUrl(url)) return;
-    if (_dashboardReloadPending) return;
-    _dashboardReloadPending = true;
-    desktopLog("warn", `[window] dashboard load failed (${code}) — waiting for the dashboard to come back`);
-    waitForDashboard(60000, 500)
-      .then(() => {
-        if (!wc.isDestroyed()) wc.loadURL(DASHBOARD_URL);
-      })
-      .catch(() => {
-        /* still down after a minute — the next reload/attempt re-arms this */
-      })
-      .finally(() => {
-        _dashboardReloadPending = false;
-      });
+    _dashboardLoadFailed = true;
+    _dashboardReloadWc = wc;
+    if (!_dashboardReloadPending) {
+      desktopLog("warn", `[window] dashboard load failed (${code}) — waiting for the dashboard to come back`);
+    }
+    armDashboardReload();
+  });
+  wc.on("destroyed", () => {
+    if (_dashboardReloadWc === wc) {
+      _dashboardReloadWc = null;
+      _dashboardLoadFailed = false;
+    }
   });
 }
 
@@ -1909,6 +2086,20 @@ function installSpotlightIpc() {
     ..._updateState,
     current: _updateState.current || safeAppVersion(),
   }));
+  // Shell facts the dashboard must not guess (v1.229.0, audit D2): which
+  // global hotkeys ARE registered right now, as the label a user presses
+  // ("Ctrl+Alt+J") or null when every rung of the ladder was taken. Sender-
+  // checked like the other privileged handlers.
+  ipcMain.handle("shell:getState", (event) => {
+    if (!isTrustedDashboardSender(event)) return null;
+    return shellState();
+  });
+  // Open the logs folder (v1.229.0, audit D8/OBS5). Sender-checked: it
+  // launches the OS file manager on the user's machine.
+  ipcMain.handle("shell:openLogs", (event) => {
+    if (!isTrustedDashboardSender(event)) return null;
+    return openLogsFolder();
+  });
   ipcMain.handle("update:check", async () => {
     const au = initUpdater();
     if (!au) {
@@ -1954,12 +2145,30 @@ function buildTrayContextMenu() {
     );
   }
   template.push(
-    { label: "Open Iron Jarvis", click: () => showMainWindow() },
-    { label: "Quick task…  (Ctrl+Shift+Space)", click: () => toggleSpotlight() },
+    {
+      label: hotkeyState.window
+        ? `Open Iron Jarvis (${accelLabel(hotkeyState.window)})`
+        : "Open Iron Jarvis — hotkey unavailable (taken by another app)",
+      click: () => showMainWindow(),
+    },
+    {
+      label: hotkeyState.spotlight
+        ? `Quick task…  (${accelLabel(hotkeyState.spotlight)})`
+        : "Quick task… — hotkey unavailable (taken by another app)",
+      click: () => toggleSpotlight(),
+    },
     // The always-available unfreeze: reloads just the UI (state lives in the
     // daemon). Discoverable here because a frozen window can't show its own
     // menus — the tray keeps working even when the renderer doesn't.
     { label: "Reload UI", click: () => reloadUI() },
+    // Shown only once the ladder has given up on a child (audit D1) — the
+    // user's way back without a Quit + relaunch.
+    ...(Object.values(_services).some((r) => r.capped)
+      ? [{ label: "Restart Iron Jarvis", click: () => restartServicesFromTray() }]
+      : []),
+    // Where the daemon/dashboard/desktop logs live (v1.229.0, audit D8): the
+    // path used to appear only inside a crash toast.
+    { label: "Open logs folder", click: () => openLogsFolder() },
     { type: "separator" },
     {
       label: "Keep running in background",
@@ -2124,7 +2333,7 @@ function applyPendingUpdate() {
   // Handoff accepted: the installer is launching and app.quit() is queued. Kill
   // our children now. An ORPHANED daemon from an earlier crashed session also
   // locks resources/daemon, so sweep by image name too.
-  shutdown();
+  shutdown("update");
   sweepOrphanDaemons();
 }
 
@@ -2364,7 +2573,13 @@ function buildMenu() {
     {
       label: "Iron Jarvis",
       submenu: [
-        { label: "Open / Show Window", accelerator: HOTKEY, click: () => showMainWindow() },
+        {
+          label: "Open / Show Window",
+          // Only a key that is really ours — an accelerator the OS gave to
+          // another app would render in the menu and do nothing.
+          ...(hotkeyState.window ? { accelerator: hotkeyState.window } : {}),
+          click: () => showMainWindow(),
+        },
         { type: "separator" },
         {
           label: "Keep running in background when window is closed",
@@ -2434,6 +2649,7 @@ async function startup() {
   createTray();
   if (!START_HIDDEN) createLoadingWindow(); // login-boot goes straight to tray
   registerHotkey();
+  installHotkeyRetry();
 
   if (IS_PACKAGED) {
     // PACKAGED: frozen daemon exe + standalone dashboard run by Electron's Node.
@@ -2623,32 +2839,90 @@ function handleStartupFailure(title, message, pendingUpdate) {
 
 // --- Global hotkey -------------------------------------------------------
 
+/** "CommandOrControl+Alt+J" -> "Ctrl+Alt+J" (Cmd on macOS): the label a user presses. */
+function accelLabel(accel) {
+  if (!accel) return null;
+  return String(accel).replace("CommandOrControl", process.platform === "darwin" ? "Cmd" : "Ctrl");
+}
+
+/** What the dashboard is told (`shell:getState`): labels, never the internal accelerator strings. */
+function shellState() {
+  return {
+    platform: process.platform,
+    hotkeys: {
+      window: accelLabel(hotkeyState.window),
+      spotlight: accelLabel(hotkeyState.spotlight),
+    },
+    // The preferred keys, so a page can say WHICH one was taken.
+    preferred: { window: accelLabel(HOTKEY), spotlight: accelLabel(SPOTLIGHT_HOTKEY) },
+  };
+}
+
+/** Try each accelerator in order; return the first one that registered, else null. */
+function registerLadder(ladder, handler) {
+  for (const accel of ladder) {
+    try {
+      if (globalShortcut.register(accel, handler)) return accel;
+      desktopLog("warn", `[hotkey] ${accel} registration failed (taken by another app?)`);
+    } catch (err) {
+      desktopLog("error", `[hotkey] ${accel} registration error:`, err && err.message);
+    }
+  }
+  return null;
+}
+
+let _hotkeyNotified = false;
 function registerHotkey() {
+  const before = { window: hotkeyState.window, spotlight: hotkeyState.spotlight };
   // The Spotlight quick-task overlay — best-effort; a taken combo just no-ops
   // (the tray "Quick task…" item + the in-app UI still work).
-  try {
-    globalShortcut.register(SPOTLIGHT_HOTKEY, () => toggleSpotlight());
-  } catch (err) {
-    desktopLog("error", "[hotkey] spotlight registration error:", err && err.message);
+  if (!hotkeyState.spotlight) {
+    hotkeyState.spotlight = registerLadder(SPOTLIGHT_LADDER, () => toggleSpotlight());
   }
-  try {
-    const ok = globalShortcut.register(HOTKEY, () => showMainWindow());
-    if (!ok) {
-      desktopLog("warn", `[hotkey] ${HOTKEY} registration failed (already taken?)`);
+  if (!hotkeyState.window) {
+    hotkeyState.window = registerLadder(HOTKEY_LADDER, () => showMainWindow());
+    if (hotkeyState.window && hotkeyState.window !== HOTKEY) {
+      desktopLog("warn", `[hotkey] ${HOTKEY} is taken — using ${hotkeyState.window} instead`);
+    }
+    if (!hotkeyState.window && !_hotkeyNotified) {
+      _hotkeyNotified = true; // once per process, not once per 30-min retry
+      desktopLog("warn", `[hotkey] no window hotkey could be registered (${HOTKEY_LADDER.join(", ")} all taken)`);
       // Tell the user instead of failing silently — the hotkey is a primary way
       // back to a window that closes to the tray.
       try {
         new Notification({
           title: "Iron Jarvis",
-          body: `The global hotkey ${HOTKEY} is taken by another app — use the tray icon to open Iron Jarvis.`,
+          body: `The global hotkeys ${HOTKEY_LADDER.map(accelLabel).join(" and ")} are taken by other apps — use the tray icon to open Iron Jarvis.`,
         }).show();
       } catch {
         /* notifications unavailable */
       }
     }
-  } catch (err) {
-    desktopLog("error", "[hotkey] registration error:", err && err.message);
   }
+  if (before.window !== hotkeyState.window || before.spotlight !== hotkeyState.spotlight) {
+    desktopLog("warn", `[hotkey] window=${hotkeyState.window || "none"} spotlight=${hotkeyState.spotlight || "none"}`);
+    try {
+      refreshMenus(); // the tray label + app-menu accelerator read hotkeyState
+    } catch {
+      /* menus not built yet */
+    }
+  }
+  return hotkeyState;
+}
+
+// A key another app held at boot may be free later (that app quit, or the
+// user changed its binding): retry every 30 min and whenever a window of ours
+// takes focus, but only while a rung is still null — never re-register a key
+// we already hold.
+let _hotkeyRetryTimer = null;
+function installHotkeyRetry() {
+  if (_hotkeyRetryTimer) return;
+  const retry = () => {
+    if (!hotkeyState.window || !hotkeyState.spotlight) registerHotkey();
+  };
+  _hotkeyRetryTimer = setInterval(retry, HOTKEY_RETRY_MS);
+  if (_hotkeyRetryTimer && typeof _hotkeyRetryTimer.unref === "function") _hotkeyRetryTimer.unref();
+  app.on("browser-window-focus", retry);
 }
 
 // --- Renderer watchdog (v1.130.0) ----------------------------------------
@@ -3061,6 +3335,8 @@ if (!gotLock) {
     globalShortcut.unregisterAll();
     if (_dwTimer) clearInterval(_dwTimer);
     _dwTimer = null;
+    if (_hotkeyRetryTimer) clearInterval(_hotkeyRetryTimer);
+    _hotkeyRetryTimer = null;
     if (tray) {
       try {
         tray.destroy();
