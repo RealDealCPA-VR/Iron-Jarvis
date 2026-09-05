@@ -952,6 +952,15 @@ class Orchestrator:
             # for items "held" by the run the user had just stopped.
             self._release_worklist_claims(session.id, run_ids)
 
+        # v1.227.1: let a pause's shielded WAITING -> RUNNING restore land
+        # BEFORE the settle below, or it could land after and resurrect
+        # RUNNING on a cancelled run (the RT4 race shape, seen on CI).
+        drain = getattr(getattr(self, "runtime", None), "drain_inflight_state", None)
+        if drain is not None:
+            try:
+                await asyncio.shield(drain())
+            except asyncio.CancelledError:
+                pass  # a second cancel: the restore finishes on its own task
         await asyncio.to_thread(_persist_cancel)
         try:
             await self.p.event_bus.publish(

@@ -687,6 +687,14 @@ class AgentRuntime:
         #: pause flips the run to WAITING, the last one to return flips it
         #: back to RUNNING — so the kanban/session row never flickers per ask.
         self._waiting_depth: dict[str, int] = {}
+        #: In-flight WAITING -> RUNNING restores (v1.227.1). A cancel that lands
+        #: while a run is parked on an ask throws CancelledError into the pause;
+        #: the restore in its ``finally`` is SHIELDED so a second cancel cannot
+        #: interrupt the row write, and the orchestrator's cancel finalizer
+        #: drains this set before it settles the row CANCELLED — otherwise the
+        #: restore could land AFTER the settle and resurrect RUNNING (the RT4
+        #: race shape). Seen red on a contended CI runner, green locally.
+        self._inflight_state: set[asyncio.Future] = set()
 
     async def _maybe_compact(
         self,
@@ -1370,8 +1378,12 @@ class AgentRuntime:
             approvals.pop(approval_id)
             # Runs on the answer, the timeout AND a cancel: the row must never
             # be left WAITING (a cancel then settles it CANCELLED, sequentially,
-            # in the orchestrator's finalizer).
-            await self._leave_waiting(run, session.id)
+            # in the orchestrator's finalizer). Shielded and tracked: a cancel
+            # thrown into THIS await must not abandon the restore half-way.
+            restore = asyncio.ensure_future(self._leave_waiting(run, session.id))
+            self._inflight_state.add(restore)
+            restore.add_done_callback(self._inflight_state.discard)
+            await asyncio.shield(restore)
         await self.p.event_bus.publish(
             EventType.APPROVAL_RESOLVED,
             {"approval_id": approval_id, "tool": tc.name, "decision": decision},
@@ -1423,6 +1435,18 @@ class AgentRuntime:
         self._waiting_depth[run.id] = depth
         if depth == 1 and run.state is AgentState.RUNNING:
             await self._set_state(run, AgentState.WAITING, session_id)
+
+    async def drain_inflight_state(self, timeout: float = 5.0) -> None:
+        """Wait for every in-flight WAITING -> RUNNING restore (v1.227.1). The
+        cancel finalizer calls this before it settles the row so the two
+        writes are sequential, never racing. Bounded; never raises."""
+        pending = [f for f in self._inflight_state if not f.done()]
+        if not pending:
+            return
+        try:
+            await asyncio.wait(pending, timeout=timeout)
+        except Exception:  # noqa: BLE001 — a drain must never break a finalize
+            pass
 
     async def _leave_waiting(self, run, session_id: str) -> None:
         """Last pause of a run to return flips it WAITING -> RUNNING."""
