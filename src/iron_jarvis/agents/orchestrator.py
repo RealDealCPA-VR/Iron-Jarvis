@@ -44,7 +44,7 @@ from ..git.review import (
     build_review,
     reject as _reject_review,
 )
-from .runtime import AgentRuntime, is_direct_workspace
+from .runtime import AgentRuntime, inherited_approval_mode, is_direct_workspace
 from .decompose import is_bulk_task
 from .supervisor import run_supervised, with_worklist
 from .types import AgentDefinition, get_agent_definition
@@ -541,8 +541,14 @@ class Orchestrator:
         origin: str | None = None,
         max_steps: int | None = None,
         agent_name: str | None = None,
+        approval_mode: str | None = None,
     ) -> Session:
         """Create (never start) a session row.
+
+        ``approval_mode`` (v1.232.0, audit A7) is the chat posture the
+        escalation carried — normalised through ``inherited_approval_mode``
+        HERE, at the one door every session passes, so ``yolo`` can reach no
+        row from any caller.
 
         ``agent_name`` (v1.193.0) is the ROSTER NAME this run must be CREDITED
         to — ``"custom:tax-reader"`` / ``"remote:hermes"`` / a bare builtin type
@@ -606,6 +612,7 @@ class Orchestrator:
             # project never leaks in.
             project_id=project_id,
             allow_tools_json=_json.dumps(list(allow_tools or [])),
+            approval_mode=inherited_approval_mode(approval_mode),
             # TX-01 provenance: WHO/WHAT started this (user_chat, autonomy,
             # schedule, comm, reflex, …). self_dev is inferable; everything else
             # is passed by the caller. Defaults None = unattributed (the audit
@@ -1162,6 +1169,9 @@ class Orchestrator:
             # raised budget was set to prevent, and the user never touched a
             # control to lose it.
             max_steps=getattr(prev, "max_steps", None),
+            # …and the POSTURE (v1.232.0, A7) — the same inputs, the same
+            # rule about which calls pause.
+            approval_mode=getattr(prev, "approval_mode", "") or None,
         )
 
     def _rerun_direct_root(self, prev: Session) -> str | None:
@@ -1183,7 +1193,13 @@ class Orchestrator:
                 return current
         return prev.workspace_path
 
-    async def continue_session(self, session_id: str, message: str) -> Session:
+    async def continue_session(
+        self,
+        session_id: str,
+        message: str,
+        allow_tools: list[str] | None = None,
+        approval_mode: str | None = None,
+    ) -> Session:
         """Start a follow-up run that reuses the finished session's workspace and
         a compact recap of the prior task/result, enabling multi-turn work.
 
@@ -1192,12 +1208,21 @@ class Orchestrator:
         that says a human is watching. See the comments on the Session below:
         both used to drop here, which quietly fail-closed every turn after the
         first of an escalated chat.
+
+        ``allow_tools`` (v1.232.0, audit A6) is UNIONED with the stored grant:
+        the chat page sends its armed set on every turn now, and a grant the
+        runtime persisted at resolve time ("Allow for this run") is already in
+        the stored list — so a continue inherits both, and can widen but never
+        narrow what run 1 was allowed. ``approval_mode`` (A7): a stated
+        posture replaces the parent's; none = inherit it.
         """
         import json as _json
 
         prev = self.get_session(session_id)
         if prev is None:
             raise KeyError(f"unknown session '{session_id}'")
+        grants = _stored_allow_tools(prev)
+        grants += [str(t) for t in (allow_tools or []) if t and str(t) not in grants]
         recap = (
             f"{message}\n\n[Continuing an earlier session. Original task: "
             f"{prev.task!r}. Prior result: {prev.summary or '(none)'} "
@@ -1218,7 +1243,14 @@ class Orchestrator:
             # are part of the session's inputs (``rerun_session`` says the same):
             # starting the follow-up with an empty ``session_allow`` makes the very
             # command that ran minutes ago in this workspace fail closed.
-            allow_tools_json=_json.dumps(_stored_allow_tools(prev)),
+            allow_tools_json=_json.dumps(grants),
+            # …and so does the POSTURE (v1.232.0, A7), unless this turn
+            # states one. Normalised at this door too: yolo never lands.
+            approval_mode=(
+                inherited_approval_mode(approval_mode)
+                or getattr(prev, "approval_mode", "")
+                or ""
+            ),
             # …and so does the ORIGIN — the PARENT's, never "continuation".
             # ``runtime._pause_for_approval`` pauses only for an origin that
             # asserts a watching human (chat/job/project/user); the continuation

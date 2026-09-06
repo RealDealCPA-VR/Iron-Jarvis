@@ -491,6 +491,33 @@ does not need a bump, stop and bump it.
   /terminals/{id}` is PARTIAL (omitted = keep, `""` = clear) for the same
   reason the remote-agent update is — a re-post silently destroys the field it
   does not carry.
+- **One PTY, many attaches: only the PRIMARY attach resizes it** (v1.232.0,
+  audit Wave 6). Every TerminalPane sent `resize` on open and on every
+  ResizeObserver tick, and the daemon keeps last-writer semantics, so a
+  phone attaching over Tailscale reflowed the desktop's running session into
+  40 columns and the desktop's next tick reflowed it back. `sendResize` now
+  consults `components/terminal/resizeGate.resizeAllowed` — the pane is
+  visible AND `document.hasFocus()` — and a window gaining focus claims the
+  size. Keep the gate on the CLIENT: the daemon cannot tell a phone from the
+  desktop, and "the window the user is looking at" is a fact only the
+  window knows. Same wave: `GET /sessions/{id}/review` answers `200
+  {"review": null}` for the normal no-review state (it 404'd on every
+  detail visit), and the session page reads that shape.
+- **A grant is written where the NEXT run reads, and yolo never rides an
+  escalation** (v1.232.0, audit Wave 6, A6/A7/A9). "Allow for this
+  conversation" on a session's ask widened an in-memory set and nothing
+  else; the chat's next message is a NEW session row built from the parent's
+  `allow_tools_json`, so the user re-approved what they had just approved.
+  `runtime._pause_for_approval` now persists a `conversation` grant into the
+  row at resolve time AND onto the Session object in hand — the finalizers
+  `merge` that object, and a merge of a stale column silently undoes the row
+  write. `ContinueBody.allow_tools` is UNIONED, never assigned. The chat
+  posture rides `SessionCreate`/`SpawnBody`/`ContinueBody.approval_mode`,
+  normalised in ONE place (`runtime.inherited_approval_mode`, called from
+  `create_session`/`continue_session`): `yolo` lands as `approve_for_me` at
+  every door, because auto-approval was consented to one watched turn at a
+  time and a background batch is a different blast radius. Do not add a door
+  that writes `Session.approval_mode` without that helper.
 - **Frozen-build verification**: anything touching native deps or subprocess
   spawning MUST be verified in the packaged daemon, not just source. The
   terminals feature shipped dead once because PyInstaller dropped
@@ -571,6 +598,22 @@ does not need a bump, stop and bump it.
   (fake client, odd transport) lets the real attempt — and the cold-load
   retry ladder — decide. Fake adapters have no `_endpoint`, so the offline
   suite never probes.
+  **A DEATH AFTER THE FIRST TOKEN STILL COUNTS, AND THE BREAKER GATES THE
+  PRIMARY** (v1.232.0, audit Wave 6, R3/R4). `stream()` still never swaps
+  providers mid-answer, but `if committed: raise` sat BEFORE
+  `record_failure`/`provider.failed`, so the same death one token later was
+  invisible to the breaker, the ledger and the notifier — `_committed_failure`
+  records it, publishes `partial: true`, and wraps a LOCAL transport death as
+  the `interrupted` refusal ("dropped mid-answer, so the reply above is
+  incomplete"; an `httpx.ReadError("")` used to render as a BLANK error line
+  under half a reply). `provider.failover` is published on the alternate's
+  FIRST frame, because a client disconnect cancels the generator and the
+  record of a turn that MOVED must already exist. And `ProviderHealth` gated
+  only the failover candidates while its docstring claimed otherwise:
+  `_refuse_if_open` (both lanes, beside `_refuse_if_dead`) refuses an OPEN
+  circuit by name with the seconds left, `/health` rows carry `circuit:
+  {open, retry_in_s}`, and the PreflightNote says it before the user types.
+  Auto and the HALF-OPEN probe still go through.
 - **OpenAI ChatGPT-account backend retires model ids** (gpt-5-codex, gpt-5.1*,
   codex-mini-latest are all dead). The adapter
   (`providers/adapters/openai.py`) keeps a fallback ladder

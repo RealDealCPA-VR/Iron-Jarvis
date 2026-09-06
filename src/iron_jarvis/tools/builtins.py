@@ -904,6 +904,10 @@ class GrepTool(Tool):
             # the truncation note below already proves this tool reports what it
             # could not cover, and a skipped file is the same kind of hole.
             unreadable = 0
+            # Files over the size cap (v1.232.0, audit T7) — the same kind of
+            # hole, and it used to be silent: a 3 MB log the search "did not
+            # find" read exactly like one with no match.
+            oversize = 0
             if base.is_file():
                 files, truncated = [base], ""
             else:
@@ -915,28 +919,39 @@ class GrepTool(Tool):
                 try:
                     # Skip anything too big to be worth scanning line-by-line;
                     # reading a 300MB log into memory on this path is what turns
-                    # a slow search into an unresponsive app.
+                    # a slow search into an unresponsive app. Counted (v1.232.0).
                     if fp.stat().st_size > _MAX_GREP_FILE_BYTES:
+                        oversize += 1
                         continue
                     raw = fp.read_bytes()
                 except (OSError, ValueError):
                     unreadable += 1
                     continue
+                # UTF-16 BEFORE the NUL sniff (v1.232.0, audit T7): every other
+                # byte of a UTF-16 file is a NUL, so a log PowerShell 5.1 wrote
+                # with `>` read as binary. The BOM says what it is.
+                if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+                    try:
+                        text = raw.decode("utf-16")
+                    except UnicodeDecodeError:
+                        unreadable += 1
+                        continue
                 # The decoder below is TOTAL (latin-1 maps all 256 bytes), so it
                 # can no longer be the thing that keeps binaries out — the
                 # UnicodeDecodeError used to do that by accident. Sniff for NUL
                 # explicitly instead, exactly as `filesearch/service._read_text`
                 # does; without it every .png and .exe in the tree would be
                 # scanned as latin-1 mojibake and could produce junk matches.
-                if b"\x00" in raw:
+                elif b"\x00" in raw:
                     continue
-                try:
-                    text = _decode_text(raw)
-                except Exception:  # noqa: BLE001 — the decoder is total; this
-                    # only fires if the documents package fails to import, which
-                    # must degrade to a REPORTED skip, not a silent miss.
-                    unreadable += 1
-                    continue
+                else:
+                    try:
+                        text = _decode_text(raw)
+                    except Exception:  # noqa: BLE001 — the decoder is total; this
+                        # only fires if the documents package fails to import, which
+                        # must degrade to a REPORTED skip, not a silent miss.
+                        unreadable += 1
+                        continue
                 try:
                     for i, line in enumerate(text.splitlines(), 1):
                         if rx.search(line):
@@ -947,14 +962,15 @@ class GrepTool(Tool):
                                     hits,
                                     f"stopped at {_MAX_GREP_HITS} matches",
                                     unreadable,
+                                    oversize,
                                 )
                 except ValueError:  # a path outside root -> relative_to
                     continue
-            return hits, truncated, unreadable
+            return hits, truncated, unreadable, oversize
 
         # Offloaded: unlike the old inline version, a pathological tree can now
         # only ever slow down THIS request instead of the whole daemon.
-        hits, truncated, unreadable = await asyncio.to_thread(_search)
+        hits, truncated, unreadable, oversize = await asyncio.to_thread(_search)
         out = "\n".join(hits)
         if truncated:
             out += f"\n\n[search truncated — {truncated}. Narrow `path` or the pattern.]"
@@ -963,6 +979,12 @@ class GrepTool(Tool):
                 f"\n\n[{unreadable} file(s) skipped — unreadable encoding or "
                 f"denied access. This search did NOT cover them.]"
             )
+        if oversize:
+            out += (
+                f"\n\n[{oversize} file(s) skipped as oversize (over "
+                f"{_MAX_GREP_FILE_BYTES // 1_000_000} MB each). This search did NOT "
+                f"cover them; open one directly with read_file if it matters.]"
+            )
         return ToolResult(
             ok=True,
             output=out,
@@ -970,6 +992,7 @@ class GrepTool(Tool):
                 "matches": len(hits),
                 "truncated": bool(truncated),
                 "skipped_unreadable": unreadable,
+                "skipped_oversize": oversize,
             },
         )
 

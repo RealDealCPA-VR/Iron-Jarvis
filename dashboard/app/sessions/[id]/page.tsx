@@ -48,6 +48,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { TeamTree } from "@/components/sessions/TeamTree";
 import { SessionFiles } from "@/components/sessions/SessionFiles";
 import OriginChip from "@/components/sessions/OriginChip";
+import ConfinementChip from "@/components/sessions/ConfinementChip";
 import { DocPreview } from "@/components/chat/DocPreview";
 import { BlackboardPanel } from "@/components/sessions/BlackboardPanel";
 import { WorklistPanel } from "@/components/sessions/WorklistPanel";
@@ -55,6 +56,7 @@ import { SessionStatusBadge } from "@/components/sessions/SessionStatusBadge";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { ReviewPanel } from "@/components/ReviewPanel";
 import { TracesPanel } from "@/components/TracesPanel";
+import { stepLabel } from "@/components/chat/stepLabel";
 import { SessionFeedback } from "@/components/SessionFeedback";
 import { TimeTravelFeed } from "@/components/TimeTravelFeed";
 import { PageShell, Reveal } from "@/components/motion";
@@ -85,7 +87,16 @@ export default function SessionDetailPage({
   const router = useRouter();
   const detail = useApi<SessionDetail>(`/sessions/${id}`);
   const evaluation = useApi<Evaluation>(`/sessions/${id}/evaluation`);
-  const review = useApi<Review>(`/sessions/${id}/review`);
+  // v1.232.0 (audit U14): a session with no review answers 200 {review: null}
+  // (it used to 404 on every detail visit); a real review is still flat.
+  const reviewRes = useApi<Review | { review: null }>(`/sessions/${id}/review`);
+  const review = {
+    ...reviewRes,
+    data:
+      reviewRes.data && (reviewRes.data as { review?: unknown }).review !== null
+        ? (reviewRes.data as Review)
+        : null,
+  };
 
   const offline = detail.error && detail.error.status === 0;
   const notFound = detail.error && detail.error.status === 404;
@@ -333,6 +344,13 @@ export default function SessionDetailPage({
                       its outcome. Renders nothing when origin is absent. */}
                   <OriginChip origin={session.origin} />
                   {session.provider === "mock" && <MockChip />}
+                  {/* v1.232.0 (audit T5): ONE chip per session when any shell
+                      call ran on the native runtime with the policy
+                      unenforced — read off the ledger rows, so it is true for
+                      a finished session too, not only while events stream. */}
+                  {tools.some((t) => t.confinement === "native-unconfined") && (
+                    <ConfinementChip />
+                  )}
                   {/* "queued" predates statusTone's table — style it here so it
                       reads as "parked", not the slate unknown-status grey. */}
                   {/* Amber "Waiting for you · tool" / "Completed · needs you"
@@ -648,7 +666,12 @@ export default function SessionDetailPage({
                       className="flex items-start gap-2 rounded-lg border border-white/[0.04] bg-white/[0.015] px-2.5 py-1.5"
                     >
                       <span className="shrink-0 text-zinc-600">{clockTime(e.ts)}</span>
-                      <span className="shrink-0 text-accent-soft/80">{e.type}</span>
+                      {/* v1.232.0 (audit U9): the human label chat already
+                          uses for the same events; the raw type stays on
+                          hover for anyone who wants it. */}
+                      <span className="shrink-0 text-accent-soft/80" title={e.type}>
+                        {stepLabel(e) ?? e.type}
+                      </span>
                       <span className="min-w-0 flex-1 truncate text-zinc-400">
                         {summarizeEvent(e)}
                       </span>
@@ -666,7 +689,7 @@ export default function SessionDetailPage({
               icon={<History size={15} />}
               right={
                 <span className="text-[11px] text-zinc-500">
-                  replay &amp; undo
+                  every action this run took, newest first — undo what allows it
                 </span>
               }
             >

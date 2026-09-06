@@ -276,12 +276,20 @@ export default function UpdatesPage() {
                 !sourceCheckout ? (
                   <div className="space-y-3">
                     <div className="flex items-center gap-2 text-sm text-zinc-300">
-                      <StatusDot status="idle" /> Not a source checkout
+                      <StatusDot status="idle" /> Installed app
                     </div>
+                    {/* v1.232.0 (audit U7): this branch is what a phone or a
+                        plain browser tab sees (no desktop bridge, not a git
+                        clone). It used to read "run from a clone (uv)" —
+                        developer advice for a user standing on their phone. */}
                     <p className="text-[13px] leading-relaxed text-zinc-500">
-                      Iron Jarvis is running from an installed package, not a git
-                      checkout — there&apos;s nothing to pull. Run it from a clone of
-                      the repo (uv) to enable self-update.
+                      Updates install from the desktop app on your PC (tray → Restart
+                      to update). This view can only show you the version; nothing
+                      here installs.
+                    </p>
+                    <p className="text-[11px] leading-relaxed text-zinc-600">
+                      Running from a git clone instead? Self-update appears here once
+                      the daemon is started from that checkout.
                     </p>
                   </div>
                 ) : (

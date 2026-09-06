@@ -169,12 +169,12 @@ export function CardInner({
         <OriginChip origin={session.origin} />
         {waiting && (
           <span data-testid="session-waiting-chip" className="contents">
-            <Badge value={waiting} tone="amber" />
+            <Badge value={waiting} tone="amber" keepCase />
           </span>
         )}
         {!waiting && outcome && (
           <span data-testid="session-outcome-chip" className="contents">
-            <Badge value={outcome} tone="amber" />
+            <Badge value={outcome} tone="amber" keepCase />
           </span>
         )}
         {teamBadge}

@@ -60,7 +60,7 @@ export function SessionStatusBadge({
   if (waiting) {
     return (
       <span data-testid="session-waiting-chip" className="contents">
-        <Badge value={waiting} tone="amber" />
+        <Badge value={waiting} tone="amber" keepCase />
       </span>
     );
   }
@@ -68,7 +68,7 @@ export function SessionStatusBadge({
   if (label) {
     return (
       <span data-testid="session-outcome-chip" className="contents">
-        <Badge value={label} tone="amber" />
+        <Badge value={label} tone="amber" keepCase />
       </span>
     );
   }

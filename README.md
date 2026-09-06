@@ -80,6 +80,7 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 | 🪟 **Runs as a desktop app** | an Electron wrapper opens the whole thing in a native window |
 | 🚀 **Guided first run** | a **code-signing-ready** Windows installer + an in-app onboarding wizard — connect a model, test your mic, run your first task, all before you leave the window |
 | 🤖 **Opt-in computer use** | gated, DOM-first browser automation with human-approval for risky actions |
+| 🧾 **The roster is the contract, no cloud by fallback, honest outcomes** | an agent or a chat can only call the tools it was armed with — any other call is refused and ledgered as *not armed*; a local model that is down or answers with an error refuses **by name** instead of quietly failing over to a cloud API (`local_primary_policy = refuse` by default; Auto is the one route that may substitute); and every finished run carries an outcome beside its status — *completed*, *with failures*, or *needs you* — derived from the ledger, never from the model's closing paragraph |
 | ✅ **Tested offline, enforced in CI** | the whole suite runs green with no network and no API keys — the live count is on the [Tests badge](https://github.com/RealDealCPA-VR/Iron-Jarvis/actions/workflows/tests.yml), not hand-edited here |
 
 <div align="center">
@@ -125,7 +126,7 @@ You can skip the guide and explore in demo mode — the banner keeps you honest.
 
 #### If something looks wrong
 
-- *"Daemon offline" in the dashboard* → quit from the tray and relaunch; the app supervises and restarts its daemon automatically.
+- *"Daemon offline" in the dashboard* → the app supervises and restarts its daemon automatically, and the banner needs two missed polls before it shows. If it stays: quit from the tray and relaunch (or tray → **Restart Iron Jarvis**), then **Settings → Maintenance → Copy diagnostics / Open logs folder** to see why.
 - *"Port 8787 already in use" on launch* → another program (or a second Iron Jarvis) owns the port; close it and relaunch.
 - The **System health** card on the Overview page (with **Advanced** switched on in the nav) and the doctor checks in the setup card show exactly what's unhappy — errors are always shown honestly, never papered over.
 
@@ -253,7 +254,7 @@ Iron Jarvis can **grow new capabilities at runtime**. From **Dashboard → Tools
 **Dashboard → Templates** is your library of saved prompts: name a frequent task once, then **Run** it to jump straight into a pre-filled New Session (no retyping). **Dashboard → Usage** charts your **token + dollar cost over time** — totals for the window, a by-day cost trend, and a per-provider/per-model breakdown — so a daily driver never surprises you on the bill. The **search field in the title bar** (or **⌘K / Ctrl+K**) jumps to any page, skill, chat, or buried control — "redact" lands you on the Redact card itself, highlighted — and always ends with an **Ask Iron Jarvis** row so a query can never dead-end.
 
 ### Settings, Self-development & Help
-**Dashboard → Settings** edits the safe config keys (default model, sandbox runtime, self-dev, local Ollama endpoint…) without touching `config.toml`, and holds the **daemon access-token** box so you can log into a deployed instance without a rebuild. **Dashboard → Self-development** shows whether the Maintainer can edit Iron Jarvis's own source and starts a review-gated session. **Dashboard → Help** is an in-app guide to every subsystem. A **🔔 bell** in the top bar surfaces pending reviews and computer-use approvals.
+**Dashboard → Settings** edits the safe config keys (default model, sandbox runtime, self-dev, local Ollama endpoint…) without touching `config.toml`, and holds the **daemon access-token** box so you can log into a deployed instance without a rebuild. **Dashboard → Self-development** shows whether the Maintainer can edit Iron Jarvis's own source and starts a review-gated session. **Dashboard → Help** is an in-app guide to every subsystem. A **🔔 bell** in the top bar surfaces pending reviews and every run that is waiting for you (a permission ask, a workflow question) — the same runs wear an amber **Waiting for you** chip; an ask nobody answered ends up on the session's outcome (*needs you*), not in the bell.
 
 ### Watch it on the Kanban board
 **Dashboard → Kanban.** Sessions flow across **Active → In Review → Completed / Failed** lanes. For git-native sessions, **drag a card from In Review onto Completed to approve** (merge) or onto Failed to reject. Approve/Reject buttons are on each review card too.

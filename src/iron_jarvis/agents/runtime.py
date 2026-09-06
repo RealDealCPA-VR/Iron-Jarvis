@@ -59,6 +59,29 @@ ASKING_ORIGINS = (
 #: cannot act on mid-run, and the measured reason a 40-minute session spent
 #: 30 minutes re-batching the same asks after every timeout. This one names
 #: what happened (paused, unanswered, NOT run) and what to do instead.
+#: The postures a SESSION can carry (v1.232.0, audit A7) — chat's vocabulary
+#: minus ``yolo``. A chat in yolo consented to auto-approval one turn at a
+#: time with the user watching the card that never came; an escalated run
+#: makes its calls in the background, in batches, for minutes, and "run
+#: everything without asking" was never consented to at that blast radius.
+#: So ``yolo`` escalates as ``approve_for_me`` at EVERY door (this helper is
+#: the one place that says so), and the Handbook tells the user.
+SESSION_APPROVAL_MODES = ("approve_for_me", "always_ask")
+
+
+def inherited_approval_mode(raw: object) -> str:
+    """The posture a session inherits from a caller's ``approval_mode``.
+
+    ``""``/None → ``""`` (nobody stated one; reads as the default),
+    ``always_ask`` → itself, anything else — the default, ``yolo``, an
+    unknown string from a newer client — → ``approve_for_me``. Never yolo.
+    """
+    mode = str(raw or "").strip().lower()
+    if not mode:
+        return ""
+    return mode if mode in SESSION_APPROVAL_MODES else "approve_for_me"
+
+
 PAUSE_TIMEOUT_REASON = (
     "the approval request timed out: paused for the user and not answered in"
     " time — this call was NOT run. Do not retry it; continue with what does"
@@ -727,6 +750,11 @@ class AgentRuntime:
         #: restore could land AFTER the settle and resurrect RUNNING (the RT4
         #: race shape). Seen red on a contended CI runner, green locally.
         self._inflight_state: set[asyncio.Future] = set()
+        #: session id -> tools the user granted "for this run" DURING the run
+        #: (v1.232.0, audit A7). ``session_allow`` cannot tell a grant the
+        #: user answered from the list the escalation carried, and under
+        #: ``always_ask`` only the former skips a pause. Reset per run.
+        self._run_grants: dict[str, set[str]] = {}
 
     async def _maybe_compact(
         self,
@@ -974,6 +1002,10 @@ class AgentRuntime:
             state=AgentState.CREATED,
         )
         await asyncio.to_thread(self._save, run)  # v1.226.0: SQLite write off the loop
+        # A fresh run starts with no in-run grants (v1.232.0, A7): a
+        # continuation is a NEW session id, so this only clears a rerun of
+        # the same id after a crash.
+        self._run_grants.pop(session.id, None)
         # FX-01 side-channel: resolve the ephemeral per-run stream sink (token
         # deltas + live tool frames -> SSE). A no-op when no browser is subscribed,
         # and absent entirely when the platform exposes no stream hub.
@@ -1398,11 +1430,24 @@ class AgentRuntime:
         tool = self.p.registry.get(tc.name)
         perm = tool.perm_key() if tool is not None else tc.name
         mode = self.p.permissions.mode_for(perm, agent_def.permission_overrides)
-        if (
-            mode is not PermissionMode.ASK
-            or perm in session_allow
-            or tc.name in session_allow
-        ):
+        if mode is not PermissionMode.ASK:
+            # allow runs; a hard deny is refused by ``invoke`` — a session
+            # grant never lifts it, in any posture.
+            return "", set()
+        # THE POSTURE (v1.232.0, audit A7). ``approve_for_me`` (and "", the
+        # default every non-chat door leaves): the session's grant list —
+        # the tools armed at escalation, every "Allow for this run" answered
+        # since (persisted below), a continue body's additions — runs without
+        # a pause. ``always_ask``: that list does NOT pre-approve; only a
+        # grant the user answered DURING THIS RUN skips the pause, so each
+        # ask-tier tool asks once per run and the sibling release covers
+        # its batch. ``yolo`` cannot reach here (``inherited_approval_mode``).
+        posture = inherited_approval_mode(getattr(session, "approval_mode", ""))
+        if posture == "always_ask":
+            granted = self._run_grants.get(session.id, set())
+        else:
+            granted = session_allow
+        if perm in granted or tc.name in granted:
             return "", set()
         safe = tool.redact_args(tc.arguments) if tool is not None else tc.arguments
         # The session id rides the request (v1.227.0) so the registry can
@@ -1452,6 +1497,25 @@ class AgentRuntime:
         )
         if decision == "conversation":
             session_allow.update({tc.name, perm})
+            self._run_grants.setdefault(session.id, set()).update({tc.name, perm})
+            # THE GRANT OUTLIVES THE RUN (v1.232.0, audit A6). "Allow for this
+            # run" used to live only in the in-memory set above, so the very
+            # next continue (the chat's next message) re-asked for what the
+            # user had just granted. Written to the row's ``allow_tools_json``
+            # off the loop; ``continue_session``/``rerun_session`` read it
+            # from there. A write that fails leaves the in-memory grant
+            # intact — the run goes on, the continue asks again. The OBJECT
+            # in hand is updated too: the orchestrator's finalizers
+            # ``merge`` this very Session, and a merge of a stale
+            # ``allow_tools_json`` would silently undo the row write.
+            try:
+                merged = await asyncio.to_thread(
+                    self._persist_grant, session.id, {tc.name, perm}
+                )
+                if merged:
+                    session.allow_tools_json = json.dumps(merged)
+            except Exception:  # noqa: BLE001 — never fail the call over the record
+                pass
             # RELEASE THE SIBLINGS (v1.227.0, A2 S2). Parallel asks pause PER
             # CALL inside the gather, so a batch of N is N cards; the grant
             # above widened the run's set, but the N-1 siblings were already
@@ -1466,6 +1530,26 @@ class AgentRuntime:
         if decision == "deny":
             return "the user declined this call when asked", set()
         return PAUSE_TIMEOUT_REASON, set()
+
+    def _persist_grant(self, session_id: str, names: set[str]) -> list[str]:
+        """Union ``names`` into the session row's ``allow_tools_json``
+        (blocking — callers hop off the loop). Returns the stored list."""
+        with session_scope(self.p.engine) as db:
+            row = db.get(Session, session_id)
+            if row is None:
+                return []
+            try:
+                stored = json.loads(getattr(row, "allow_tools_json", "") or "[]")
+            except (ValueError, TypeError):
+                stored = []
+            if not isinstance(stored, list):
+                stored = []
+            merged = [str(t) for t in stored if t]
+            merged += sorted(n for n in names if n and n not in merged)
+            row.allow_tools_json = json.dumps(merged)
+            db.add(row)
+            db.commit()
+            return merged
 
     def _release_siblings(self, approvals, session_id: str, perm: str) -> int:
         """Resolve every other pending ask of ``session_id`` whose tool maps

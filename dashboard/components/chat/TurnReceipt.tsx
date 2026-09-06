@@ -75,7 +75,9 @@ export interface TurnAdapted {
 export function wordChange(token: string): string {
   const t = token.trim();
   const cap = /^tool_cap:(\d+)$/.exec(t);
-  if (cap) return `${cap[1]} tools max`;
+  // v1.232.0 (audit U8): "3 tools max" read as a limit the user set; the cap
+  // is the envelope fitting the user's own measured local model.
+  if (cap) return `capped at ${cap[1]} tools for this local model`;
   if (t === "decomposed") return "running step-by-step";
   if (t === "step_retry") return "retried a failed step"; // v1.203.0 (C3)
   return t;

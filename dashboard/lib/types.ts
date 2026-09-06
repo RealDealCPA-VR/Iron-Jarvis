@@ -8,6 +8,12 @@ export interface ProviderHealth {
    *  ("claude-cli" / "codex-cli"), else null/absent. Same answer /connections
    *  (`source`) and /models (`inherited_from`) give. */
   inherited_from?: string | null;
+  /** v1.232.0 (audit R4): the router's circuit breaker for this provider —
+   *  `open` while it is in cooldown after repeated failures, `retry_in_s`
+   *  the whole seconds left (0 when closed). A turn sent to an open provider
+   *  is refused by name with the same seconds, so the composer says it
+   *  first. */
+  circuit?: { open: boolean; retry_in_s: number };
 }
 
 export interface Health {
@@ -93,6 +99,11 @@ export interface ToolInvocation {
   verdict: string;
   ok: boolean;
   output: string;
+  /** v1.232.0 (audit T5): how confined the call was, when the tool says —
+   *  "sandbox" (Docker), "native-unconfined" (the policy asked for isolation
+   *  and the native runtime could not give it), "native". Absent/null for
+   *  tools with no runtime to report. */
+  confinement?: string | null;
   created_at: string;
 }
 

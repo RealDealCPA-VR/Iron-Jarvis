@@ -243,7 +243,7 @@ async def test_advisory_full_once_then_compact(tmp_path, monkeypatch):
     # First: the honest full paragraph.
     assert first.output.startswith("[warning]")
     assert _PARAGRAPH_TAIL in first.output
-    assert first.data["confinement"] == "none"
+    assert first.data["confinement"] == "native-unconfined"
     assert "confinement_warning" in first.data
 
     # Second: compact marker only — the paragraph does not repeat.
@@ -252,7 +252,7 @@ async def test_advisory_full_once_then_compact(tmp_path, monkeypatch):
     assert _NO_CONFINEMENT_WARNING not in second.output
     # Per-result truth is intact: marker in data, confinement still 'none',
     # and the command's real output still present.
-    assert second.data["confinement"] == "none"
+    assert second.data["confinement"] == "native-unconfined"
     assert second.data["confinement_warning"] == _COMPACT_ADVISORY
     assert "real out" in second.output
 

@@ -141,6 +141,15 @@ class Session(SQLModel, table=True):
     #: one of them as allowed for this session only — never overriding a hard
     #: "deny". Empty = no extra grants. Additive column (auto-reconciled).
     allow_tools_json: str = "[]"
+    #: THE APPROVAL POSTURE that rode in from the chat that escalated
+    #: (v1.232.0, audit A7): ``"approve_for_me"`` | ``"always_ask"`` | ``""``.
+    #: ``""`` = nobody stated one (every non-chat door) and reads as the
+    #: default. ``yolo`` NEVER lands here — ``runtime.inherited_approval_mode``
+    #: maps it to ``approve_for_me`` at every door, because a chat's
+    #: auto-approve was consented to one turn at a time with the user
+    #: watching, and a 28-call background run is a different blast radius.
+    #: Continue and rerun inherit it. Additive column (auto-reconciled).
+    approval_mode: str = ""
     summary: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
@@ -209,6 +218,13 @@ class ToolInvocation(SQLModel, table=True):
     #: When this row is ITSELF an undo action, the id of the invocation it
     #: reverted — so the undo is a first-class, auditable entry in the ledger.
     undo_of: str | None = Field(default=None, index=True)
+    #: v1.232.0 (audit T5): HOW confined the call was, when the tool says —
+    #: ``"sandbox"`` (Docker), ``"native-unconfined"`` (the policy asked for
+    #: isolation and the native runtime could not give it), ``"native"``
+    #: (native by configuration). None for every tool that has no runtime
+    #: to report. Additive nullable; the session page reads it off the
+    #: transcript for the "Shell ran unconfined" chip.
+    confinement: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
 

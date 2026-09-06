@@ -493,7 +493,19 @@ function GuidesCard() {
 const TROUBLE: { symptom: string; fix: ReactNode }[] = [
   {
     symptom: "“Daemon offline” in the dashboard",
-    fix: "Quit from the tray and relaunch — the app supervises and restarts its daemon automatically.",
+    // Same words as HANDBOOK.md "Troubleshooting in one minute" and the README
+    // (v1.232.0) — tests/test_handbook_current_v1232.py pins the three together.
+    fix: (
+      <>
+        The desktop app supervises and restarts its daemon automatically, and the banner needs
+        two missed polls before it shows — give it a moment. If it stays: quit from the tray and
+        relaunch (or tray → <Kbd>Restart Iron Jarvis</Kbd>), then{" "}
+        <Link href="/settings" className="text-accent-soft hover:text-accent">
+          Settings → Maintenance
+        </Link>{" "}
+        → <Kbd>Copy diagnostics</Kbd> / <Kbd>Open logs folder</Kbd> to see why.
+      </>
+    ),
   },
   {
     symptom: "“Port 8787 already in use” on launch",

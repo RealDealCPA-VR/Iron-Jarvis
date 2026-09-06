@@ -158,6 +158,8 @@ def _session_view(session, d=None) -> dict[str, Any]:
         # Where the session came from (v1.119.0): "schedule:<name>" for
         # schedule-fired runs, "self_dev", or None for user-started work.
         "origin": getattr(session, "origin", None),
+        # The posture the run carries (v1.232.0, A7): "" = default.
+        "approval_mode": getattr(session, "approval_mode", "") or "",
         "agent_type": session.agent_type.value,
         "provider": session.provider,
         "model": session.model,
@@ -1341,8 +1343,19 @@ def create_app(project_root: str | None = None) -> FastAPI:
         'mock' is the load-bearing offline fallback + the autopromote sentinel,
         so it stays in the ENGINE — but it must not surface as a selectable
         model/tile in the UI (pickers, connections, the switcher). Filtered here
-        (and in /models + /connections) rather than removed from the registry."""
-        return [p for p in platform.providers.health() if p.get("provider") != "mock"]
+        (and in /models + /connections) rather than removed from the registry.
+
+        v1.232.0 (audit R4): each row also carries the router's breaker
+        state — ``circuit: {open, retry_in_s}`` — so the composer can say
+        "in cooldown, retry in N s" BEFORE the user types, the same words
+        the refusal uses. Additive; never fails the health answer."""
+        rows = [p for p in platform.providers.health() if p.get("provider") != "mock"]
+        for row in rows:
+            try:
+                row["circuit"] = platform.router.health.circuit(str(row.get("provider") or ""))
+            except Exception:  # noqa: BLE001 — health must never fail
+                pass
+        return rows
 
     # --- Chat (direct conversation — frontier-chat parity) -----------------
 

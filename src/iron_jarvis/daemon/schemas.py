@@ -92,6 +92,14 @@ class SessionCreate(BaseModel):
     # Per-session bundled tool grant (perm_keys) the user approved up front —
     # "ask" tools in this list run without re-prompting for THIS session only.
     allow_tools: list[str] = []
+    # THE POSTURE RIDES THE ESCALATION (v1.232.0, audit A7). The chat's
+    # approval dropdown (``approve_for_me`` | ``always_ask`` | ``yolo``):
+    # ``approve_for_me`` lets the tools armed at escalation (``allow_tools``)
+    # run without a pause and asks for every other ask-tier call;
+    # ``always_ask`` asks for every ask-tier call, the armed list
+    # notwithstanding; ``yolo`` is NEVER inherited — it lands as
+    # ``approve_for_me`` (``runtime.inherited_approval_mode``). "" = default.
+    approval_mode: str = ""
     # THE FOLDER THE WORK IS ABOUT (v1.189.0). When set (and valid — see the
     # route's guard), the session runs DIRECTLY in this folder instead of a
     # scratch workspace, exactly like a project-folder task. This is the field
@@ -300,6 +308,15 @@ class ProjectKnowledgeBody(BaseModel):
 class ContinueBody(BaseModel):
     message: str
     wait: bool = True
+    # GRANTS RIDE THE CONTINUE TOO (v1.232.0, audit A6). The chat page sends
+    # its armed set on the opener only; a tool granted on a card AFTER the
+    # opener ("Allow for this conversation") reached no later turn, and this
+    # body could not even carry it. UNIONED with the stored grant — a
+    # continue can widen what run 1 was allowed, never narrow it.
+    allow_tools: list[str] = []
+    # The posture for the follow-up run (v1.232.0, audit A7); "" = inherit
+    # the parent's. Same vocabulary and the same yolo rule as SessionCreate.
+    approval_mode: str = ""
 
 
 class UploadBody(BaseModel):
@@ -1166,6 +1183,9 @@ class SpawnBody(BaseModel):
     model: str | None = None
     project_id: str = ""
     allow_tools: list[str] = []
+    # Same contract as SessionCreate.approval_mode (v1.232.0) — the chat's
+    # posture rides a custom-agent escalation exactly as a builtin one.
+    approval_mode: str = ""
     # Same contract as SessionCreate.workspace_root (v1.189.0) — a spawned
     # dynamic agent escalated from a folder-grounded chat works IN that folder.
     workspace_root: str = ""

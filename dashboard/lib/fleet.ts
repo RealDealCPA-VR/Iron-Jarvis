@@ -359,11 +359,11 @@ const KIND_LABELS: Record<string, string> = {
   litellm: "LiteLLM",
   openai: "OpenAI-compat",
   "openai-compat": "OpenAI-compat",
-  unknown: "unknown",
+  unknown: "not detected yet",
 };
 
 export function kindLabel(kind: FleetKind | null | undefined): string {
-  if (!kind) return "unknown";
+  if (!kind) return "not detected yet";
   return KIND_LABELS[String(kind).toLowerCase()] ?? String(kind);
 }
 
@@ -396,9 +396,11 @@ export function fleetTone(status: FleetStatus | null | undefined): Tone {
   }
 }
 
-/** Human label for a status pill. */
+/** Human label for a status pill. v1.232.0 (audit U11): "unknown" is the
+ *  wire word for "no probe has answered yet" — say that. */
 export function statusLabel(status: FleetStatus | null | undefined): string {
-  return status ?? "unknown";
+  if (!status || status === "unknown") return "not detected yet";
+  return status;
 }
 
 /* -------------------------------------------------------------------------- */

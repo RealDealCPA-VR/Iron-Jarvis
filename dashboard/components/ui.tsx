@@ -171,11 +171,22 @@ function isLive(value: string | null | undefined): boolean {
   return v === "active" || v === "running" || v === "pending";
 }
 
-export function Badge({ value, tone }: { value: string; tone?: Tone }) {
+/** `keepCase` (v1.232.0): skip the CSS `capitalize` for a chip that carries a
+ *  sentence, not a status word — "Completed · needs you" rendered as
+ *  "Completed · Needs You". Every other Badge is unchanged. */
+export function Badge({
+  value,
+  tone,
+  keepCase = false,
+}: {
+  value: string;
+  tone?: Tone;
+  keepCase?: boolean;
+}) {
   const t = tone ?? statusTone(value);
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium capitalize ${TONE_BADGE[t]}`}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${keepCase ? "" : "capitalize"} ${TONE_BADGE[t]}`}
     >
       <span className={`h-1.5 w-1.5 rounded-full ${TONE_DOT[t]}`} />
       {value}

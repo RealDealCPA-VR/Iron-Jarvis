@@ -50,7 +50,18 @@ export function WorkingMemory() {
       )}
 
       <Reveal>
-        <Card>
+        {/* v1.232.0 (audit U15): two stacked search boxes on one page — the
+            Recall box above searches EVERY store; this one is the working
+            store only. Say so in the title, or the second box reads as a
+            duplicate of the first. */}
+        <Card
+          title="Search working memory"
+          right={
+            <span className="text-[11px] font-normal text-zinc-500">
+              only the working store (session · project · user) — the Recall box searches everything
+            </span>
+          }
+        >
           <form onSubmit={search} className="flex flex-wrap items-end gap-3">
             <div className="min-w-[240px] flex-1">
               <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
@@ -77,7 +88,7 @@ export function WorkingMemory() {
             </div>
             <div className="w-20">
               <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                k
+                Results
               </label>
               <input
                 type="number"
@@ -85,7 +96,8 @@ export function WorkingMemory() {
                 max={50}
                 value={k}
                 onChange={(e) => setK(Number(e.target.value) || 5)}
-                aria-label="Results to retrieve (k)"
+                aria-label="How many results to show"
+                title="How many results to show"
                 className="field"
               />
             </div>

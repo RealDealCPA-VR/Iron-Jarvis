@@ -53,6 +53,17 @@ interface UsageResponse {
   totals: UsageTotals;
   by_day: UsageByDay[];
   by_model: UsageByModel[];
+  /** v1.232.0: the daemon's own count of models that did work. */
+  model_count?: number;
+}
+
+/** A by-model row that is not a model the user used (v1.232.0, audit U6):
+ *  the offline mock provider or a zero-token row (a probe, a refused call, a
+ *  misconfigured id). The daemon filters these too; this guard keeps the page
+ *  honest against an older daemon that still ships them. */
+function isNoiseModel(m: UsageByModel): boolean {
+  if ((m.provider ?? "").trim().toLowerCase() === "mock") return true;
+  return (m.input_tokens ?? 0) + (m.output_tokens ?? 0) <= 0;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -241,10 +252,12 @@ export default function UsagePage() {
   const byDay = useMemo(() => data?.by_day ?? [], [data]);
   const byModel = useMemo(
     () =>
-      [...(data?.by_model ?? [])].sort(
-        (a, b) =>
-          b.input_tokens + b.output_tokens - (a.input_tokens + a.output_tokens),
-      ),
+      (data?.by_model ?? [])
+        .filter((m) => !isNoiseModel(m))
+        .sort(
+          (a, b) =>
+            b.input_tokens + b.output_tokens - (a.input_tokens + a.output_tokens),
+        ),
     [data],
   );
   const maxModelTokens = useMemo(

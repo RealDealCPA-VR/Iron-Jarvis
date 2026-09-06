@@ -1754,6 +1754,8 @@ def register(app: FastAPI, d) -> None:
             workspace_root=workspace_root,
             origin=body.origin,
             agent_name=agent_name,
+            # The chat posture rides a custom-agent escalation too (v1.232.0).
+            approval_mode=body.approval_mode,
         )
         # Run through the orchestrator (with the dynamic definition override) so
         # a crashed run is finalized FAILED instead of stranded ACTIVE, and

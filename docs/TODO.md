@@ -5,6 +5,78 @@ the deep-review wow track, deferred backlogs across waves, and known limits.
 The deep review's 11 confirmed bugs are all FIXED (v1.166.2–v1.167.0) — this
 file is what remains.*
 
+## Carried out of the 2026-09-04 audit, Wave 6 (v1.232.0)
+
+- [x] CL2 the "Couldn't save" Retry re-sends `messagesRef.current` (the
+  truth on screen), the chip reads "Retrying…" and retires only when the
+  LATEST-sequenced save for that box lands (`SaveTarget.seq`).
+- [x] CL3 two windows on one thread: `GET /chat/threads/{id}` returns
+  `updated_at`, `PUT` takes `if_updated_at` and answers 409 when the row is
+  newer (writes nothing); the page hands back the stamp it loaded and on 409
+  refetches, appends its own new bubbles onto the server array (`putThread`,
+  rebase kept for the turn's later saves) and shows the merge.
+  `tests/test_chat_thread_versions_v1232.py`,
+  `dashboard/__tests__/chat-persistence-v1232.test.tsx`.
+- [x] CL5 a reopened thread ending on an unanswered user message sets
+  `failedTurn`, so "This didn't get a reply" + the same Retry render —
+  chat-owned threads only (a daemon-owned messaging thread ends on the
+  phone's bubble while the daemon composes; `!isDaemon` guard), and the
+  `chat.thread_updated` refetch clears `failedTurn` when the reply lands.
+- [x] CL6 `core/db.py`: `pool_timeout` = busy_timeout + 5 s (35 s over
+  30 s) so a writer stuck past busy_timeout reads "database is locked" for
+  every caller instead of a QueuePool limit; the stuck writer is logged once
+  per engine (`handle_error`). `tests/test_db_pool_v1232.py`.
+- [x] A10 the pending-approvals poll while awaiting (see the Wave 1 line).
+- [x] U6 Usage listed `mock · mock-1 0 tok` and `opencode/bogusprov ·
+  bogusmodel 0 tok` as models: `eval/usage_view.merged_usage` drops the mock
+  provider and zero-token rows from `by_model` (`is_noise_row`), reports
+  `model_count`, keeps the unfiltered rows as `by_model_raw`; the page
+  applies the same guard for an older daemon. `tests/test_usage_copy_v1232.py`.
+- [x] U7 Updates page without the desktop bridge (the phone/Tailscale path)
+  said "run from a clone (uv)": now "Updates install from the desktop app on
+  your PC (tray → Restart to update)".
+- [x] U8 chat controls: hint lines under Web & research / Auto tools, an
+  "Approval posture for this chat — …" title on the select, footer
+  `default · <model>` from the shared /health, receipt "capped at N tools
+  for this local model" (`wordChange`, the one renderer).
+- [x] U9 session page: Live activity rows use `stepLabel` (raw type on
+  hover), Traces → Model calls, Time-travel hint line, "Clean up leftover
+  folders" for the worktree prune.
+- [ ] U9 (deferred) move the worktree prune to Settings → Maintenance.
+- [ ] U10 KILLED at regrade — Connections routing copy untouched.
+- [x] U11 Fleet "Unknown" badge → "not detected yet" (`statusLabel`,
+  `kindLabel`).
+- [x] U12 Activity tiles "in this view" instead of "(loaded)"; a decision
+  row's second line is the event's words (`humanSummary`) and a bare
+  event-type actor is not shown as "by …".
+- [x] U13 Build pane header: **Clear scrollback** (client-side `term.clear()`
+  + repaint). Plus the PTY resize gate: `sendResize` runs only when the pane
+  is visible AND `document.hasFocus()` (`components/terminal/resizeGate.ts`),
+  and a window gaining focus claims the size; the daemon keeps last-writer.
+- [x] U14 `GET /sessions/{id}/review` answers `200 {"review": null}` when
+  there is none (unknown session still 404). `tests/test_review_absent_v1232.py`.
+- [x] U15 Memory: "k" → "Results"; the Working search box is titled "Search
+  working memory" with a one-line note that Recall searches everything
+  (folding it into Recall's store filter is a redesign — deferred).
+- [x] Settings token box: read-only "Set by the desktop app" inside the
+  desktop shell (no Clear); "leave this empty" only in a browser without the
+  bridge (`components/settings/DaemonTokenCard.tsx`).
+- [ ] U15 (deferred) fold the Working search into the Recall box's store filter.
+- [x] Handbook drift (6B): the bell promise reworded (a run waiting for you
+  shows in the bell + amber chip; an unanswered ask is on the outcome — README
+  bell line + Handbook "Waiting for you"); Documents says convert/split/merge/
+  batch are done from Chat and the page's empty state carries the four as
+  chips → `/chat?ask=`; imports named on the Long-term tab (`/ltm`) with a
+  one-line link from the Memory page's other tabs (`MemorySurface`); the
+  "Daemon offline" remedy says the same thing in the Handbook, the Help page
+  and the README (tray restarts, two misses, Settings → Maintenance → Copy
+  diagnostics / Open logs); a "What changed in the audit waves" section ends
+  the Handbook; README Highlights gained the audit-wave guarantees row.
+  `tests/test_handbook_current_v1232.py` fails when the Handbook's "Current
+  as of" lags `__version__`; `dashboard/__tests__/docs-copy-v1232.test.tsx`.
+  The hotkey line was fixed in Wave 3; the Help "System health card"
+  instruction was KILLED at regrade and is untouched.
+
 ## Carried out of the 2026-09-04 audit, Wave 5 (v1.231.0)
 
 - [x] AE1/T4 one execution seam — a project-tagged session with no explicit
@@ -342,13 +414,28 @@ file is what remains.*
 - [x] T6 `tool_create`'s description and the runtime's `# Environment` block
   name the OS (`sandbox/native.host_os_line`: on Windows "cmd.exe; no POSIX
   mv/ls/cp") so a tool is authored for the machine it will run on.
-- [ ] R3 stream() after the first token: `if committed: raise` skips
-  `record_failure` + `provider.failed`; an empty `httpx.ReadError("")` reaches
-  the client as a blank error line; `provider.failover` is published only
-  after the failover stream is fully consumed.
-- [ ] R4 the circuit breaker never gates the PRIMARY (`_resolve` /
-  `complete()` never call `health.allow` for it); no surface can say "in
-  cooldown".
+- [x] R3 (v1.232.0) a death after the first token still COUNTS: the
+  `if committed: raise` branches call `ModelRouter._committed_failure` first
+  — `health.record_failure` + `provider.failed {partial: true}` — and a local
+  transport death comes back as the honest refusal ("the connection to X
+  dropped mid-answer, so the reply above is incomplete") instead of an empty
+  `httpx.ReadError("")`. `provider.failover` is published on the alternate's
+  FIRST frame, so a client that disconnects mid-answer cannot lose the record
+  of a turn that moved. `tests/test_router_breaker_v1232.py`.
+- [x] R4 (v1.232.0) the breaker gates the PRIMARY: `_refuse_if_open` (both
+  lanes, beside the liveness pre-probe) publishes `provider.downgraded` and
+  refuses by name with the seconds left ("fleet-custom is in cooldown, retry
+  in 23 s"); `ProviderHealth.circuit()` rides every `/health` provider row as
+  `{open, retry_in_s}` and the composer's PreflightNote says the same words
+  first. Auto and a HALF-OPEN probe are untouched; the `ProviderHealth`
+  docstring no longer claims the primary is skipped.
+  `tests/test_router_breaker_v1232.py`, `dashboard/__tests__/cooldown-confinement-v1232.test.tsx`.
+- [x] T5 (v1.232.0) a native (unconfined) shell run is visible: the tool
+  answers `confinement: sandbox | native-unconfined | native`,
+  `registry.invoke` carries it onto the `ToolInvocation` row AND the
+  `tool.executed` event, and the session page folds the rows into ONE amber
+  chip "Shell ran unconfined (Docker unavailable)".
+  `tests/test_shell_confinement_v1232.py`.
 
 ## Carried out of the 2026-09-04 audit, Wave 1 (v1.227.0)
 
@@ -364,11 +451,25 @@ by the lanes:
 - [ ] RT4 cancel-race shield: the runtime keeps no handle to the in-flight
   per-step `_save` future, so `_finalize_cancelled` cannot shield-await it
   (the `release_run` half landed). Store it on the runtime, then shield.
-- [ ] A10: after a reload the chat page still shows no card for a paused run
-  until an event arrives (the bell covers it within 15 s). A9: the bell
-  answers one call at a time — add "Allow for this run".
-- [ ] `Badge` applies CSS `capitalize`, so the amber chips read "Needs You"
-  (`ui.tsx`, coordinator-owned).
+- [x] A10 (Wave 6, v1.232.0): while a reload resumes a wait, the 1.5 s
+  finalize poll also reads `/chat/approvals/pending` for the awaited session
+  (tool only — that route never lists args), so the card appears with no
+  live event.
+- [x] A9 (Wave 6, v1.232.0): the bell's agent-ask row has "Allow for this
+  run" (decision `conversation` on the card's route); with the Wave 1
+  sibling release one click clears a batch.
+- [x] A6 (Wave 6, v1.232.0): grants carry — `ContinueBody.allow_tools`
+  (unioned with the stored grant), a `conversation` answer persisted into
+  `allow_tools_json` at resolve time (`runtime._persist_grant`), and the chat
+  page sends its armed set on the continue as it does on the opener.
+- [x] A7 (Wave 6, v1.232.0, Decision 2): `approval_mode` rides `POST
+  /sessions` / `/continue` / a custom spawn onto the row; `approve_for_me`
+  lets the grant list run and asks for the rest, `always_ask` asks even for
+  an armed tool (a run grant covers the run), and `yolo` NEVER inherits — it
+  lands as `approve_for_me` (`runtime.inherited_approval_mode`).
+- [x] `Badge` applies CSS `capitalize`, so the amber chips read "Needs You"
+  (`ui.tsx`, coordinator-owned). DONE v1.232.0: `Badge keepCase`, passed by
+  the outcome and waiting chips (SessionStatusBadge + the kanban card).
 - [ ] `tests/test_bulk_job_repair_v1177.py::test_ordering_has_a_total_tiebreaker`
   pins the count of `(key_norm, id)` orderings in `worklist/store.py`; bump it
   when adding another.
@@ -442,16 +543,17 @@ v1.226.0. These are what the reviewers graded "defer" or "note":
 Each of these was reproduced during those waves and deliberately left out of
 scope. None is speculative.
 
-- [ ] **UTF-16 files are invisible to both search tools.** They contain NUL
-  bytes, so they hit the binary sniff in `filesearch/service._read_text` and
-  `GrepTool` and are skipped silently and uncounted. This matters on THIS
-  machine specifically: PowerShell 5.1's `>` redirect writes UTF-16LE, so a log
-  the user redirected cannot be found. A BOM check before the NUL sniff fixes
-  it in ~3 lines. Same class as the cp1252 defect fixed in v1.195.0.
-- [ ] **The file-size caps skip silently.** `file_search` (1 MiB) and `grep`
-  (2 MB) drop oversized files with no count and no note, while the
-  undecodable-file count added in v1.195.0 IS reported. Truncation is reported;
-  these two were missed.
+- [x] **UTF-16 files are invisible to both search tools.** FIXED in v1.232.0
+  (audit Wave 6, T7): a BOM check runs BEFORE the NUL sniff in
+  `filesearch/service._read_text` and `GrepTool`, so a log PowerShell 5.1
+  wrote with `>` is decoded and searched. Same class as the cp1252 defect
+  fixed in v1.195.0. `tests/test_search_caps_v1232.py`.
+- [x] **The file-size caps skip silently.** FIXED in v1.232.0 (audit Wave 6,
+  T7): an oversized file bumps `SearchNotes.oversize` / grep's own counter and
+  is reported ("N file(s) skipped as oversize (over 1 MB each). This search
+  did NOT cover them") beside the v1.195.0 undecodable note, and rides
+  `skipped_oversize` in both tools' `data`. A binary blob stays silent on
+  purpose — counting every .png would drown the signal.
 - [ ] **`undo.finalize_post_hash` re-hashes on the event loop.** Called from
   `tools/registry.py` after every raw write. Same class as the v1.195.0
   capture_undo fix, roughly half the cost (one read+hash, no write); it was left

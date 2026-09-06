@@ -116,6 +116,9 @@ class FileSearchTool(Tool):
                 "count": len(results),
                 "mode": mode,
                 "skipped_unreadable": notes.unreadable,
+                # v1.232.0 (audit T7): files over the size cap, counted the
+                # way undecodable ones are instead of dropped silently.
+                "skipped_oversize": notes.oversize,
             },
         )
 

@@ -127,6 +127,7 @@ import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { CHAT_EXAMPLES, pickExamples } from "@/components/chat/examples";
 import { stepLabel } from "@/components/chat/stepLabel";
 import { useProviderHealth } from "@/lib/useProviderHealth";
+import { useDaemon } from "@/lib/daemon";
 import type { WorkflowDraft, WorkflowRun } from "@/lib/types";
 import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
 import { timeAgo } from "@/lib/format";
@@ -672,6 +673,9 @@ interface ThreadDetail {
   comm_channel?: string;
   /** Human sender label (e.g. "Val") when daemon-owned. */
   comm_display?: string;
+  /** Version stamp (CL3, v1.232.0): handed back as `if_updated_at` so a save
+   *  from a stale window is refused (409) instead of clobbering. */
+  updated_at?: string | null;
 }
 
 /** PUT /chat/threads/{id} body + response. */
@@ -684,10 +688,32 @@ interface ThreadSaveBody {
   setup?: ThreadSetup;
   /** The project tag (context spine). Explicit null deliberately clears it. */
   project_id?: string | null;
+  /** The `updated_at` this window loaded/last saved (CL3): the daemon answers
+   *  409 when the row is newer, and the save is rebased onto the server copy. */
+  if_updated_at?: string;
 }
 interface ThreadSaveResult {
   id: string;
   title: string;
+  updated_at?: string | null;
+}
+
+/** The mutable SAVE BOX for one conversation (see `saveTargetRef`). */
+interface SaveTarget {
+  id: string | null;
+  /** A MESSAGING thread: the server owns its messages, saves no-op. */
+  daemon?: boolean;
+  /** The row's `updated_at` as this window last saw it (CL3). */
+  updatedAt?: string;
+  /** Length of the local array when it last matched the server — the
+   *  bubbles after it are THIS window's own, appended on a 409 rebase. */
+  syncedLen?: number;
+  /** A 409 rebase: local messages `local` (by reference) stand for the
+   *  server's `server` array in every later save from the same turn. */
+  rebase?: { local: ChatMessage[]; server: ChatMessage[] };
+  /** Sequence of the newest save queued for this box (CL2): the chip only
+   *  retires when the LATEST save landed, not an older one. */
+  seq?: number;
 }
 
 /** One /connectors gallery entry, as the "+" Connectors flyout consumes it. */
@@ -1094,12 +1120,18 @@ export default function ChatPage() {
   const [saveFailure, setSaveFailure] = useState<{
     detail: string;
     retry: () => void;
+    /** Retry was clicked; the chip stays until that save lands (CL2). */
+    retrying?: boolean;
   } | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [choice, setChoice] = useState(""); // "" => server default model
   // Live per-provider availability (v1.165.0) — drives the preflight note
   // above the composer. 5s default keeps it in step with the topbar switcher.
   const health = useProviderHealth();
+  // The app's shared /health poll names the DEFAULT model (v1.232.0, audit
+  // U8): the footer used to say "default model" while the title bar said
+  // "brain (RTX)" — two words for one thing. Read, never polled here.
+  const defaultModelName = useDaemon().health?.default_model ?? "";
   const [personas, setPersonas] = useState<PersonaOption[]>(DEFAULT_PERSONAS);
   const [persona, setPersona] = useState("assistant");
   // PERSONA EDITOR: a collapsible panel that edits the SELECTED persona (or a
@@ -1557,10 +1589,12 @@ export default function ChatPage() {
     api: { text: "metered", cls: "text-zinc-500" },
   };
   const modelLabel = useMemo(() => {
-    if (!choice) return "default model";
+    if (!choice) {
+      return defaultModelName ? `default · ${defaultModelName}` : "default model";
+    }
     const { model } = splitChoice(choice);
     return model || choice.replace("::", " · ");
-  }, [choice]);
+  }, [choice, defaultModelName]);
   useEffect(() => {
     if (!modelMenuOpen) return;
     const onDown = (e: MouseEvent) => {
@@ -1642,9 +1676,7 @@ export default function ChatPage() {
   const saveChainRef = useRef<Promise<void>>(Promise.resolve());
   // `daemon: true` marks the box as a MESSAGING thread: the server owns its
   // messages, so every queued save against that box is a deliberate no-op.
-  const saveTargetRef = useRef<{ id: string | null; daemon?: boolean }>({
-    id: null,
-  });
+  const saveTargetRef = useRef<SaveTarget>({ id: null });
   // The persona selected before "+ New persona" — restored if the new-persona
   // editor is closed without saving.
   const prevPersonaRef = useRef("assistant");
@@ -2165,6 +2197,9 @@ export default function ChatPage() {
       // The user may have switched conversations while the fetch was airborne.
       if (chatGenRef.current !== gen || saveTargetRef.current.id !== id) return;
       setMessages(t.messages ?? []);
+      // The server's array is the truth for this thread; a Retry offered
+      // against an older copy of it (CL5) is retired along with that copy.
+      setFailedTurn(null);
       if (t.owner === "daemon") {
         setCommMeta({
           channel: t.comm_channel ?? "",
@@ -2314,7 +2349,7 @@ export default function ChatPage() {
     // The conversation this save belongs to — passed explicitly when the
     // caller's conversation may no longer be the open one (a 404 re-queue,
     // sendAgent's hand-off mark after a torn-down POST; v1.226.0).
-    target: { id: string | null; daemon?: boolean } = saveTargetRef.current,
+    target: SaveTarget = saveTargetRef.current,
   ) {
     if (msgs.length === 0) return;
     // MESSAGING threads (owner === "daemon") are the server's to write: the
@@ -2326,6 +2361,7 @@ export default function ChatPage() {
     // actually changed something (see sendSetupRef) — never clobber a stored
     // setup with empties just because nothing was re-armed this visit.
     const setup = sendSetupRef.current ? currentSetup() : null;
+    const seq = (target.seq = (target.seq ?? 0) + 1);
     saveChainRef.current = saveChainRef.current.then(async () => {
       try {
         const body: ThreadSaveBody = {
@@ -2336,22 +2372,92 @@ export default function ChatPage() {
           ...(personaValue ? { persona: personaValue } : {}),
           ...(setup ? { setup } : {}),
         };
-        const res = await put<ThreadSaveResult>(
-          `/chat/threads/${target.id ?? "new"}`,
-          body,
-        );
-        target.id = res.id; // "new" → real id; later saves in this convo reuse it
+        const res = await putThread(target, body, msgs);
         if (saveTargetRef.current === target) {
           setThreadId(res.id);
-          setSaveFailure(null); // on disk again — retire the chip
+          // On disk again — but only the LATEST queued save may retire the
+          // chip (CL2): an older save landing while a newer one is still in
+          // the chain says nothing about what is on screen now.
+          if (target.seq === seq) setSaveFailure(null);
         }
         await refreshThreads();
       } catch (e) {
         // Best-effort for the CONVERSATION (the bubbles stay), never silent
         // (v1.226.0): a swallowed failure was data loss the user never saw.
-        noteSaveFailure(e, target, () => queueSave(msgs, target));
+        // Retry sends the TRUTH (CL2): the array on screen now, not the one
+        // captured when this save failed — that snapshot could predate a
+        // reply that a later save already put on disk, and re-sending it
+        // rolled the thread back silently. A box that is no longer the open
+        // conversation keeps its own array (messagesRef is another thread's).
+        noteSaveFailure(e, target, () =>
+          queueSave(
+            saveTargetRef.current === target ? messagesRef.current : msgs,
+            target,
+          ),
+        );
       }
     });
+  }
+
+  /** Rebase a save onto a 409 merge from earlier in the same turn: the
+   *  closures of an in-flight turn keep building on the array they captured
+   *  (by reference), so a later save whose head IS that captured base is
+   *  rewritten onto the server's array the merge established. */
+  function rebased(target: SaveTarget, msgs: ChatMessage[]): ChatMessage[] {
+    const rb = target.rebase;
+    if (!rb) return msgs;
+    const k = rb.local.length;
+    if (msgs.length < k) return msgs;
+    for (let i = 0; i < k; i++) if (msgs[i] !== rb.local[i]) return msgs;
+    return [...rb.server, ...msgs.slice(k)];
+  }
+
+  /** The ONE thread PUT (CL3, v1.232.0). Carries the version stamp this
+   *  window holds; on 409 (the row is newer — another window saved) it
+   *  refetches, appends THIS window's new bubbles (everything after
+   *  `syncedLen`) onto the server's array, saves that, and shows it — the
+   *  other window's turns survive instead of being clobbered. Records the
+   *  stamp and sync point on success so the next save is conditional too. */
+  async function putThread(
+    target: SaveTarget,
+    body: ThreadSaveBody,
+    msgs: ChatMessage[],
+  ): Promise<ThreadSaveResult> {
+    let sent = rebased(target, msgs);
+    const conditional = (m: ChatMessage[]): ThreadSaveBody => ({
+      ...body,
+      messages: m,
+      ...(target.updatedAt ? { if_updated_at: target.updatedAt } : {}),
+    });
+    let res: ThreadSaveResult;
+    try {
+      res = await put<ThreadSaveResult>(
+        `/chat/threads/${target.id ?? "new"}`,
+        conditional(sent),
+      );
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 409 && target.id)) throw e;
+      const fresh = await get<ThreadDetail>(`/chat/threads/${target.id}`);
+      const server = Array.isArray(fresh.messages) ? fresh.messages : [];
+      const k = Math.min(target.syncedLen ?? 0, sent.length);
+      target.rebase = { local: sent.slice(0, k), server };
+      target.updatedAt = fresh.updated_at ?? undefined;
+      sent = [...server, ...sent.slice(k)];
+      res = await put<ThreadSaveResult>(
+        `/chat/threads/${target.id}`,
+        conditional(sent),
+      );
+    }
+    target.id = res.id; // "new" → real id; later saves in this convo reuse it
+    if (res.updated_at) target.updatedAt = res.updated_at;
+    target.syncedLen = sent.length;
+    if (sent !== msgs && saveTargetRef.current === target) {
+      // The merged array is what is on disk: show it (the other window's
+      // bubbles included) instead of the stale copy this window built.
+      messagesRef.current = sent;
+      setMessages(sent);
+    }
+    return res;
   }
 
   /** Load a saved thread into the pane (chat-mode concern; resets agent state). */
@@ -2419,7 +2525,14 @@ export default function ChatPage() {
           ? { channel: t.comm_channel ?? "", display: t.comm_display ?? "" }
           : null,
       );
-      saveTargetRef.current = { id: t.id, daemon: isDaemon };
+      saveTargetRef.current = {
+        id: t.id,
+        daemon: isDaemon,
+        // The version this window holds (CL3): every save hands it back, so
+        // a copy another window has since outrun is refused, not written.
+        updatedAt: t.updated_at ?? undefined,
+        syncedLen: msgs.length,
+      };
       // A TURN LEFT IN FLIGHT (v1.226.0): the last bubble names the session
       // the agent lane was waiting on when the page went away (see sendAgent).
       // Resume exactly the wait the page would have kept: the 1.5s poll +
@@ -2433,6 +2546,22 @@ export default function ChatPage() {
         awaitingIdRef.current = pending;
         setAwaitingId(pending);
         void finalize(pending);
+      } else {
+        // UNANSWERED (CL5, v1.232.0): the question was saved before the
+        // model was asked (v1.226.0) and the daemon restarted mid-turn, so
+        // the thread ends on a user bubble with no reply and no wait to
+        // resume. That is a failed turn in every way but the React state
+        // the failure path sets — set it, so the same Retry the live
+        // failure offers is here too instead of a silent dead end.
+        // NOT on a MESSAGING thread: the daemon appends the phone's message
+        // BEFORE it asks the model (comm/inbound), so a comm thread ends on
+        // a user bubble for as long as the daemon is composing — and the
+        // chat-lane Retry could not help there anyway (the save box is
+        // daemon-owned and no-ops, so its reply would reach neither disk
+        // nor the phone). Those threads reconcile via chat.thread_updated.
+        const last = msgs[msgs.length - 1];
+        if (!isDaemon && last && last.role === "user")
+          setFailedTurn({ history: msgs, atts: attachmentsOf(last) });
       }
       // Context follows the conversation: a project-tagged thread scopes the
       // chat to its project; an untagged one unscopes it. armDefaults stays
@@ -3246,11 +3375,11 @@ export default function ChatPage() {
   // request it closes): every request for this session whose id has no
   // later resolve is a card, oldest first, and answering one leaves the
   // others exactly where they were.
-  const sessionAsks = useMemo(() => {
-    if (!awaitingId) return [] as SessionAsk[];
-    const boundary = sinceRef.current;
+  const askFold = useMemo(() => {
     const resolved = new Set<string>();
     const asks = new Map<string, SessionAsk>();
+    if (!awaitingId) return { asks: [] as SessionAsk[], resolved };
+    const boundary = sinceRef.current;
     for (const e of events) {
       if (e.id === boundary) break;
       if (e.session_id !== awaitingId) continue;
@@ -3270,15 +3399,51 @@ export default function ChatPage() {
         });
       }
     }
-    return Array.from(asks.values()).reverse(); // oldest ask first
+    return { asks: Array.from(asks.values()).reverse(), resolved }; // oldest first
   }, [events, awaitingId]);
+
+  // WITHOUT A LIVE EVENT (A10, v1.232.0): a reloaded page resumes the wait
+  // but has no event replay, so a run already paused on an ask showed no
+  // card until the bell caught it (<=15 s). The finalize poll below also
+  // reads /chat/approvals/pending for the awaited session; that route lists
+  // the tool only (never args — its posture), so the card shows the tool.
+  // An ask the events already resolved is never resurrected from the poll.
+  const [polledAsks, setPolledAsks] = useState<SessionAsk[]>([]);
+  async function pollPendingAsks(id: string) {
+    try {
+      const r = await get<{
+        approvals?: { id?: unknown; tool?: unknown; session_id?: unknown }[];
+      }>("/chat/approvals/pending");
+      if (awaitingIdRef.current !== id) return;
+      const mine = (r.approvals ?? [])
+        .filter((a) => a.session_id === id && typeof a.id === "string")
+        .map((a) => ({ id: String(a.id), tool: String(a.tool ?? "") }));
+      setPolledAsks(mine);
+    } catch {
+      /* best-effort — the event fold and the bell still cover it */
+    }
+  }
+  const sessionAsks = useMemo(() => {
+    const seen = new Set(askFold.asks.map((a) => a.id));
+    const extra = polledAsks.filter(
+      (a) => !seen.has(a.id) && !askFold.resolved.has(a.id),
+    );
+    return extra.length ? [...askFold.asks, ...extra] : askFold.asks;
+  }, [askFold, polledAsks]);
 
   // FALLBACK: if the /events socket is down, poll the session until it finishes.
   // The interval is torn down whenever the turn ends or the component unmounts.
   useEffect(() => {
     if (!awaitingId) return;
-    const timer = setInterval(() => void finalize(awaitingId), 1500);
-    return () => clearInterval(timer);
+    void pollPendingAsks(awaitingId); // a reload's first look, at once (A10)
+    const timer = setInterval(() => {
+      void finalize(awaitingId);
+      void pollPendingAsks(awaitingId);
+    }, 1500);
+    return () => {
+      clearInterval(timer);
+      setPolledAsks([]);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [awaitingId]);
 
@@ -3537,7 +3702,7 @@ export default function ChatPage() {
    *  PUT runs. */
   function queueSaveDocs(
     docs: string[],
-    target: { id: string | null; daemon?: boolean } = saveTargetRef.current, // see queueSave
+    target: SaveTarget = saveTargetRef.current, // see queueSave
   ) {
     if (target.daemon) return; // messaging threads: server-owned, never PUT
     const personaValue = personaForSend();
@@ -3553,11 +3718,7 @@ export default function ChatPage() {
           ...(personaValue ? { persona: personaValue } : {}),
           setup,
         };
-        const res = await put<ThreadSaveResult>(
-          `/chat/threads/${target.id ?? "new"}`,
-          body,
-        );
-        target.id = res.id;
+        const res = await putThread(target, body, msgs);
         if (saveTargetRef.current === target) {
           setThreadId(res.id);
           setSaveFailure(null);
@@ -4261,12 +4422,16 @@ export default function ChatPage() {
     setOffline(false);
     // Re-ground on the SAME attachments the turn carried — otherwise the re-run
     // answers blind while the user bubble still shows the file chip.
-    const atts: UploadedFile[] = (lastUser.attachmentPaths ?? []).map((path, i) => ({
+    void completeChat(history, attachmentsOf(lastUser));
+  }
+
+  /** The attachments a saved user bubble carried, as a re-run needs them. */
+  function attachmentsOf(m: ChatMessage): UploadedFile[] {
+    return (m.attachmentPaths ?? []).map((path, i) => ({
       path,
-      name: lastUser.attachmentNames?.[i] ?? path.split(/[\\/]/).pop() ?? path,
+      name: m.attachmentNames?.[i] ?? path.split(/[\\/]/).pop() ?? path,
       bytes: 0,
     }));
-    void completeChat(history, atts);
   }
 
   /** Re-send the last failed chat turn — same history + attachments, verbatim. */
@@ -4381,23 +4546,38 @@ export default function ChatPage() {
     sinceRef.current = eventsRef.current[0]?.id ?? null;
     try {
       let session: SessionView;
+      // The armed set as of NOW, via the ref: this function belongs to the
+      // render where the turn STARTED, so a tool granted mid-turn on the
+      // approval card (setSelectedTools → a later render) is invisible to
+      // the `selectedTools` binding here — the escalation would then have to
+      // re-ask for the grant the user made seconds earlier. Read ABOVE the
+      // branch (v1.232.0, A6): the continue sends it too.
+      const armedNow = selectedToolsRef.current;
+      // THE POSTURE RIDES THE ESCALATION (v1.232.0, A7) — the same idiom as
+      // the chat body: only the non-default is sent. The daemon never
+      // inherits "yolo" (it lands as approve-for-me), so a yolo chat's
+      // escalated run still asks once per ask-tier tool.
+      const posture =
+        approvalMode !== "approve_for_me" ? { approval_mode: approvalMode } : {};
       if (sessionId) {
         // Continue the same chat — runs in the background (wait:false).
         session = await post<SessionView>(`/sessions/${sessionId}/continue`, {
           message: task,
           wait: false,
+          // GRANTS RIDE THE CONTINUE (v1.232.0, A6): a tool granted on a card
+          // AFTER the opener reached no later turn — the daemon unions this
+          // with the session's stored grant, so a continue can widen but
+          // never narrow what the earlier run was allowed.
+          ...(armedNow.length
+            ? { allow_tools: armedNow.slice(0, MAX_TOOLS) }
+            : {}),
+          ...posture,
         });
       } else {
         // First message opens a session — carry the chat recap into the task so
         // the agent inherits the conversation instead of starting cold.
         const { provider, model } = splitChoice(choice);
         const openingTask = recap ? `${recap}\n\n---\n\n${task}` : task;
-        // The armed set as of NOW, via the ref: this function belongs to the
-        // render where the turn STARTED, so a tool granted mid-turn on the
-        // approval card (setSelectedTools → a later render) is invisible to
-        // the `selectedTools` binding here — the escalation would then have to
-        // re-ask for the grant the user made seconds earlier.
-        const armedNow = selectedToolsRef.current;
         session = customSlug
           ? // The escalating turn picked one of YOUR agents (v1.139.0): spawn
             // its stored definition — prompt, tool allowlist, and its OWN
@@ -4415,6 +4595,7 @@ export default function ChatPage() {
                 ...(armedNow.length
                   ? { allow_tools: armedNow.slice(0, MAX_TOOLS) }
                   : {}),
+                ...posture,
                 // THE FOLDER RIDES TOO (v1.189.0) — see below.
                 ...(workspaceDir ? { workspace_root: workspaceDir } : {}),
                 // Presence asserted — see the POST /sessions branch below.
@@ -4448,6 +4629,7 @@ export default function ChatPage() {
               ...(armedNow.length
                 ? { allow_tools: armedNow.slice(0, MAX_TOOLS) }
                 : {}),
+              ...posture,
               // THE FOLDER RIDES THE ESCALATION (v1.189.0). Chat's own tools
               // operate in this folder; the session the turn escalates into
               // used to lose it and work in a scratch dir instead — measured:
@@ -5988,15 +6170,18 @@ export default function ChatPage() {
                   </span>
                   <button
                     type="button"
+                    disabled={saveFailure.retrying}
                     onClick={() => {
-                      const { retry } = saveFailure;
-                      setSaveFailure(null);
-                      retry();
+                      // The chip stays until the retry LANDS (CL2): clearing
+                      // it here claimed a save that had not happened yet.
+                      setSaveFailure({ ...saveFailure, retrying: true });
+                      saveFailure.retry();
                     }}
                     title="Save this conversation again"
                     className="btn-ghost shrink-0 py-1 text-[12px]"
                   >
-                    <RefreshCw size={12} /> Retry
+                    <RefreshCw size={12} />{" "}
+                    {saveFailure.retrying ? "Retrying…" : "Retry"}
                   </button>
                   <button
                     type="button"
@@ -6019,6 +6204,13 @@ export default function ChatPage() {
                   {compactNote && (
                     <div className="min-w-0 flex-1 text-[12px] text-zinc-400">
                       {compactNote}
+                    </div>
+                  )}
+                  {/* A reopened thread ending on a question (CL5): no error
+                      text belongs to it, so say what happened. */}
+                  {!error && failedTurn && !busy && (
+                    <div className="min-w-0 flex-1 text-[12px] text-amber-300">
+                      This didn&apos;t get a reply.
                     </div>
                   )}
                   {failedTurn && !busy && (
@@ -6049,6 +6241,14 @@ export default function ChatPage() {
                   ]
                 }
                 stale={health.stale}
+                cooldownS={
+                  // Optional-chained on purpose (v1.232.0): this map is newer
+                  // than the hook's other fields, and a caller holding an
+                  // older shape must not take the whole composer down.
+                  health.cooldownByProvider?.[
+                    splitChoice(choice).provider || health.defaultProvider
+                  ]
+                }
               />
 
               {/* The compaction offer (v1.153.0). Sits directly above the
@@ -6749,6 +6949,13 @@ export default function ChatPage() {
                               />
                             </span>
                           </button>
+                          {/* v1.232.0 (audit U8): one plain line under each
+                              switch — the title attribute only shows on hover,
+                              and a switch named "Auto tools" says nothing about
+                              what it does until then. */}
+                          <p className="-mt-1 px-2.5 pb-1.5 text-[10.5px] leading-snug text-zinc-500">
+                            Lets this chat search the web and read pages.
+                          </p>
                           <button
                             type="button"
                             onClick={toggleAutoTools}
@@ -6773,6 +6980,9 @@ export default function ChatPage() {
                               />
                             </span>
                           </button>
+                          <p className="-mt-1 px-2.5 pb-1.5 text-[10.5px] leading-snug text-zinc-500">
+                            Each request picks the safe tools it needs (files, documents, web, images).
+                          </p>
                         </>
                       )}
                     </div>
@@ -6964,9 +7174,10 @@ export default function ChatPage() {
                     markSetupChanged();
                   }}
                   aria-label="Approval mode"
-                  title={
-                    APPROVAL_MODES.find((m) => m.value === approvalMode)?.hint
-                  }
+                  title={`Approval posture for this chat — ${
+                    APPROVAL_MODES.find((m) => m.value === approvalMode)?.hint ??
+                    "when the assistant asks before acting"
+                  }`}
                   className={`cursor-pointer rounded-lg border border-white/10 bg-transparent px-1.5 py-0.5 text-[11.5px] transition-colors hover:border-white/20 ${
                     approvalMode === "yolo"
                       ? "text-amber-300"

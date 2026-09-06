@@ -17,6 +17,7 @@ import {
   Loader2,
   Paperclip,
   Play,
+  Eraser,
   Plug,
   PlugZap,
   Rocket,
@@ -36,6 +37,7 @@ import {
 } from "@/lib/snippet";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 import { outputNotifyAt, terminalReconnectDelayMs } from "@/components/terminal/paneStatusCore";
+import { resizeAllowed } from "@/components/terminal/resizeGate";
 import { useDaemon } from "@/lib/daemon";
 import type { AiCli, ModelOption, Skill, TerminalInfo } from "@/lib/types";
 import { PaneStateChip, type PaneState } from "@/components/terminal/PaneState";
@@ -342,6 +344,10 @@ export function TerminalPane({
   const holderRef = useRef<HTMLDivElement | null>(null);
   // The live xterm instance, so we can refocus it after typing a launch command.
   const termRef = useRef<{ focus: () => void } | null>(null);
+  // v1.232.0 (audit U13): "Clear scrollback" — wipes this pane's on-screen
+  // history and repaints. Client-side only: the shell keeps running and the
+  // daemon's own scrollback is untouched. Set once the xterm instance exists.
+  const clearRef = useRef<(() => void) | null>(null);
   const [state, setState] = useState<ConnState>("connecting");
   // v1.226.0 (F-D-4): why the pane is "closed" — the shell EXITED (code 4000,
   // nothing to reconnect to) or the link was LOST (retries exhausted). Only
@@ -851,12 +857,24 @@ export function TerminalPane({
     };
 
     const sendResize = () => {
+      // v1.232.0: only the PRIMARY attach (visible pane, focused document)
+      // may resize the PTY — see resizeGate.ts. A phone or a second tab
+      // attaching to the same session must never reflow the desktop's
+      // running session; the daemon keeps last-writer semantics.
+      if (!resizeAllowed(holder)) return;
       if (ws && ws.readyState === WebSocket.OPEN && term) {
         ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
       }
     };
 
     const onWinResize = () => {
+      doFit();
+      sendResize();
+    };
+    // Becoming the focused window makes this attach the primary one: claim
+    // the size then, so a pane opened while the window was in the background
+    // (the gate refused its open-time resize) gets its real size on return.
+    const onWinFocus = () => {
       doFit();
       sendResize();
     };
@@ -997,6 +1015,15 @@ export function TerminalPane({
       term.loadAddon(fit);
       term.open(holder);
       termRef.current = term; // expose for launch-command refocus
+      const live = term; // narrowed here; the closure runs later
+      clearRef.current = () => {
+        try {
+          live.clear();
+          live.refresh(0, Math.max(0, live.rows - 1));
+        } catch {
+          /* disposed */
+        }
+      };
       doFit();
 
       // Client -> server: raw keystrokes as text. Suppress xterm's auto-answers
@@ -1061,6 +1088,7 @@ export function TerminalPane({
       });
       ro.observe(holder);
       window.addEventListener("resize", onWinResize);
+      window.addEventListener("focus", onWinFocus);
 
       // FIT BEFORE CONNECT (v1.190.0). The server replays the session's whole
       // scrollback the moment the socket opens, at whatever size this terminal
@@ -1097,8 +1125,10 @@ export function TerminalPane({
       reconnectRef.current = null;
       wsRef.current = null;
       termRef.current = null;
+      clearRef.current = null;
       if (reconnectTimer) clearTimeout(reconnectTimer);
       window.removeEventListener("resize", onWinResize);
+      window.removeEventListener("focus", onWinFocus);
       holder.removeEventListener("contextmenu", onContextMenu);
       holder.removeEventListener("wheel", onWheel, { capture: true } as EventListenerOptions);
       holder.removeEventListener("paste", onPaste, true);
@@ -1266,6 +1296,21 @@ export function TerminalPane({
           }`}
         >
           <Sparkles size={13} />
+        </button>
+        {/* v1.232.0 (audit U13): a visible way out of a garbled replay (the
+            one-word-per-line rehydrate) — clear the on-screen history and
+            repaint. The shell and the daemon's scrollback are untouched. */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            clearRef.current?.();
+            termRef.current?.focus();
+          }}
+          aria-label="Clear scrollback"
+          title="Clear scrollback — wipes this pane's on-screen history and repaints (the shell keeps running)"
+          className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-accent/15 hover:text-accent-soft"
+        >
+          <Eraser size={13} />
         </button>
         <button
           onClick={makeWorkflow}

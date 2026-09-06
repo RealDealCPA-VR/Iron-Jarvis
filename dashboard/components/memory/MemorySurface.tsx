@@ -8,6 +8,7 @@
 // for the all-scopes memory graph (`?view=graph`, persisted in localStorage).
 
 import { Suspense, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   BrainCircuit,
@@ -156,6 +157,20 @@ function ScopedMemory({ initialScope }: { initialScope: MemoryScope }) {
 
       <Reveal>
         <div>
+          {/* Imports (ChatGPT / Claude / Takeout) live on the Long-term tab;
+              Simple mode hides the /ltm nav item, so this line is the door
+              from every other tab (v1.232.0). */}
+          {view === "list" && scope !== "longterm" && (
+            <p className="mb-3 text-[12px] text-zinc-500">
+              <Link
+                href="/memory?scope=longterm"
+                className="text-accent-soft hover:text-accent"
+                data-testid="memory-import-link"
+              >
+                Import from ChatGPT/Claude/Takeout → Long-term memory
+              </Link>
+            </p>
+          )}
           <div className="flex flex-wrap items-center justify-between gap-3">
             {view === "list" ? (
               <div

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.231.0 (2026-09-05).*
+holds itself to. Current as of v1.232.0 (2026-09-05).*
 
 ---
 
@@ -83,6 +83,27 @@ Chat is where most work happens, and it is wired into everything:
   the next step can fix it instead of relaying a Python error. A local model
   that wraps its arguments one level down (`{"arguments": "{…}"}`) is
   unwrapped before the tool ever sees it.
+- **Search says what it did not read** (v1.232.0): `file_search` and `grep`
+  now read UTF-16 files (what PowerShell's `>` redirect writes, so your own
+  logs are searchable), and a file too big to scan is COUNTED and reported
+  ("2 file(s) skipped as oversize (over 1 MB each). This search did NOT cover
+  them") next to the existing unreadable-file note — a hole in a search is
+  always said out loud, never left to look like "no match".
+- **The composer explains itself** (v1.232.0): the "+" menu's **Web &
+  research** and **Auto tools** switches each carry a one-line hint under
+  them ("Lets this chat search the web and read pages" / "Each request picks
+  the safe tools it needs"); the approval dropdown's hover title says it is
+  the *approval posture for this chat*; the footer's model button reads
+  **default · <model name>** (the same name the title bar shows) instead of
+  "default model"; and a receipt line that used to say "3 tools max" now
+  says **capped at 3 tools for this local model** — the envelope fitting your
+  own measured model, not a limit you set.
+- **What an escalated run inherits from the chat** (v1.232.0): the armed
+  tools (on every message, not just the first), a grant you answered on a
+  card, the grounded folder, and the approval posture — except *Auto-approve
+  (YOLO)*, which escalates as *Approve for me*. See *Agents & jobs* for the
+  rules, and the session's amber chips ("Waiting for you · shell",
+  "Completed · needs you") now keep their own case.
 
 ### Agents & jobs
 - **Post a job** on the Agents page: default target **"Team"** runs a
@@ -109,6 +130,22 @@ Chat is where most work happens, and it is wired into everything:
   pending ask for the same tool. An ask nobody answers in 5 minutes is
   reported to the model as *paused, not run* (never as "the user declined"),
   and the run carries a **needs you** verdict at the end.
+- **Grants carry, and the bell can answer a batch** (v1.232.0): a tool you
+  allow "for this conversation / for this run" is written to the session, so
+  the next message you send to that run (and a re-run) does not ask again;
+  the chat sends the tools it has armed on every message, not only the
+  first. The notification bell's agent-ask row now has **Allow for this
+  run** beside Approve once / Deny — one click clears every pending ask for
+  that tool. A hard `deny` is never lifted by any grant.
+- **The approval posture rides an escalation** (v1.232.0): when a chat hands
+  work to an agent session, the chat's approval dropdown goes with it.
+  *Approve for me* lets the tools you armed in chat run without a pause and
+  asks once for anything else; *Ask for approval* asks once per run for
+  every ask-tier tool, armed or not (Allow for this run covers the rest of
+  the run). *Auto-approve (YOLO)* is **never inherited**: a YOLO chat's
+  escalated run behaves as *Approve for me* — you consented to auto-approval
+  one watched turn at a time, not for a background run making a batch of
+  calls while you are elsewhere.
 
 ### Sessions & Kanban
 Every agent run is a **session**: live token/tool streaming, the delegation
@@ -120,7 +157,10 @@ set. Cancel genuinely stops the agent, in every lane.
 
 - **Waiting for you** (v1.227.0): a run paused on a permission ask sits in
   the **In review** column with an amber "Waiting for you · tool" chip, and
-  the session page shows the same approval card chat shows.
+  the session page shows the same approval card chat shows. A run waiting
+  for you shows in the bell and as an amber chip; an ask nobody answered is
+  on the session's outcome (*needs you*) — the bell does not keep a record
+  of asks that already expired.
 - **The verdict is separate from the status** (v1.227.0): a finished run also
   carries an **outcome** — *completed*, *completed · with failures* (a call
   that changes files or state failed), or *completed · needs you* (an ask was
@@ -137,6 +177,15 @@ set. Cancel genuinely stops the agent, in every lane.
   renders the agent's markdown the way a chat reply does — bold, lists, code —
   and a project's **Recent runs** rows show the summary's words on one line,
   never its asterisks.
+- **A session page in your words** (v1.232.0): the **Live activity** rows
+  show the same short labels chat's progress line uses ("Using read_file…",
+  "Step 2 of 4: …"; the raw event name is on hover), the **Traces** card is
+  now **Model calls** (each request and answer this run made), **Time-travel**
+  keeps its name and gains the hint "every action this run took, newest first
+  — undo what allows it", and the sessions list's cleanup button is **Clean
+  up leftover folders** (the git worktrees failed or deleted sessions left
+  behind). A session with no pending review no longer logs a 404 on every
+  visit — the daemon answers `{"review": null}`.
 
 ### Documents
 Read/extract (PDF incl. scanned-with-OCR fallback, docx, xlsx, pptx, csv,
@@ -146,18 +195,31 @@ between formats, split/merge/arrange PDFs (originals never modified),
 **redact PII** with a scan → confirm → verified-removal flow (the written PDF
 is re-read to *prove* the values are gone), batch-process whole folders with
 per-document extraction and synthesis, and an Excel engine that can check
-formulas by computing them.
+formulas by computing them. The **Documents page** itself holds read/extract,
+create, redact and the batch history; **convert, split, merge and batch
+processing are done from Chat** — ask for it in chat, or use the "+" menu —
+and the page's empty state offers those four as example chips that open Chat
+with the request typed in.
 
 ### Memory
 - **Long-term memory**: markdown bases (Obsidian vault supported), Notion,
   imports from ChatGPT/Claude/Takeout exports, all grounded into chat
-  automatically ("# Relevant from memory").
+  automatically ("# Relevant from memory"). Imports live on the **Long-term**
+  tab of the Memory page (`/memory?scope=longterm`, also reachable as
+  `/ltm`); since Simple mode hides `/ltm` from the nav, the Memory page's
+  other tabs carry a one-line link **Import from ChatGPT/Claude/Takeout →
+  Long-term memory** that opens it.
 - **Project knowledge**: per-project notes and uploaded documents, embedded
   on write, retrieved on every grounded turn.
 - **Memory steward**: a scheduled curator that proposes memory changes for
   your approval — it never silently rewrites what the app knows about you.
 - **The 3D memory graph**, lessons, and a "What I can remember" index the
   model sees each turn.
+- **Two search boxes, two jobs** (v1.232.0): the **Recall** box at the top
+  of /memory searches every store at once; the box under the Working tab is
+  titled **Search working memory** and says so — it searches only the
+  working store (session · project · user). The count field beside each
+  query is labelled **Results** (it was "k").
 
 ### Automation
 - **Schedules**: cron/interval/date tasks that fire real agent sessions
@@ -284,6 +346,34 @@ seam); Train (teach it your writing voice, suggest-only).
   models** grouped by provider — your own hardware and flat-rate CLIs first,
   metered APIs after — and folds anything offline under one **Show offline
   (N)** line, so the active local brain is never 2,000 px down the list.
+- **Build panes** (v1.232.0): every pane header has a **Clear scrollback**
+  eraser — it wipes the pane's on-screen history and repaints (the shell
+  keeps running; the daemon's own scrollback is untouched), which is the way
+  out of a garbled replay after a reconnect. And a terminal session is only
+  ever *resized* by the window you are looking at: a pane sends its size to
+  the shell only while it is visible **and** its window has focus, so
+  opening the same session from a phone or a second tab never reflows the
+  desktop's running session (the last focused window wins).
+- **Usage counts models that did work** (v1.232.0): the By-model list and
+  "Across N models" leave out the offline mock provider and rows that moved
+  zero tokens (a probe, a refused call, a misconfigured id); the API still
+  carries the full list as `by_model_raw`.
+- **Activity tiles are about the rows on screen** (v1.232.0): **Tokens in
+  this view** / **Cost in this view** (they were "(loaded)") — account
+  totals live on Usage. A decision row's second line reads "Picked a model
+  for this turn · brain" instead of repeating the event name twice.
+- **Local Fleet** (v1.232.0): a node whose probe has not answered yet wears
+  **not detected yet** rather than "Unknown".
+- **Updates from a phone or a browser tab** (v1.232.0): the page says
+  *Updates install from the desktop app on your PC (tray →
+  Restart to update)* — it can show you the version, nothing there installs.
+  The
+  git self-update card belongs to a daemon started from a source checkout.
+- **Settings → Daemon access token** (v1.232.0): inside the desktop app the
+  box is read-only and says **Set by the desktop app** (it seeds the token
+  on every launch — nothing to paste or clear). The paste box, **Clear**, and
+  the "leave this empty" line appear only in a browser without the desktop
+  bridge (a deployed daemon, a phone over Tailscale).
 
 ---
 
@@ -318,6 +408,14 @@ seam); Train (teach it your writing voice, suggest-only).
    receipt under the reply names what failed and why ("answered by
    claude-cli — fleet-rtx6000ada returned HTTP 500"), and the phone/desktop
    alert carries the same reason. Auto is the one route that may substitute.
+   Since v1.232.0 a provider that has failed repeatedly is put in a short
+   **cooldown** and the next turn is refused *without* being sent — "fleet-
+   custom is in cooldown, retry in 23 s" — and the composer says the same
+   thing above the box before you type, so you never wait out a timeout the
+   app already knew about. And a model that dies *mid-answer* is now recorded
+   like any other failure ("the connection to fleet-custom dropped mid-answer,
+   so the reply above is incomplete"), instead of a blank error line under
+   half a reply.
 4. **Fenced untrusted content.** Web pages, file text, MCP results, and
    agent replies are injection-fenced before a model sees them.
 5. **Confined writes.** File tools and the REPL write inside the workspace
@@ -326,7 +424,12 @@ seam); Train (teach it your writing voice, suggest-only).
    for writability before it is accepted (`C:\Users`, `C:\`, a read-only
    share are refused up front), and agents are told which OS they are on
    (Windows: cmd.exe, no POSIX `mv`/`ls`/`cp`) before they author a custom
-   tool or a shell command.
+   tool or a shell command. Shell commands are the honest exception: without
+   Docker they run on the native runtime, where those limits are advisory
+   rather than enforced. Since v1.232.0 that is visible instead of buried in
+   one tool result — the session page wears an amber **"Shell ran unconfined
+   (Docker unavailable)"** chip whenever any command in that run took the
+   native path, and the confinement is on the ledger row itself.
 6. **One event loop, never blocked.** Heavy work runs off-thread — a big
    render or a cold OneDrive folder can't freeze the app. Since v1.226.0 that
    includes notifications going out, project-knowledge lookups, and every
@@ -382,12 +485,17 @@ reads; it never writes, runs commands, or starts work on its own.
 
 ## Troubleshooting in one minute
 
-- **"Daemon offline"** → almost always a provider/endpoint issue, not the
-  daemon: check Connections. In the desktop app the banner says the service
-  is restarting; pages reload themselves the moment it is back (v1.226.0) —
-  no need to navigate away. The banner needs two missed polls (v1.230.0);
-  one slow request never shows it, and a search you superseded by typing
-  is not counted as a miss at all. The desktop app restarts a crashed daemon or
+- **"Daemon offline"** → the desktop app restarts a crashed daemon by
+  itself, and the banner needs two missed polls before it shows (one slow
+  request never shows it; a search you superseded by typing is not counted
+  as a miss). If it stays: quit from the tray and relaunch (or tray →
+  **Restart Iron Jarvis**), then **Settings → Maintenance → Copy
+  diagnostics** / **Open logs folder** to see why. The Help page's "If
+  something looks wrong" card says the same. It is also, often, a
+  provider/endpoint issue rather than the daemon: check Connections. In the
+  desktop app the banner says the service is restarting; pages reload
+  themselves the moment it is back (v1.226.0) — no need to navigate away.
+  The desktop app restarts a crashed daemon or
   dashboard by itself with backoff (1 s → 60 s). It does not do so forever
   (v1.229.0): three deaths within seconds of a start make it verify the
   install first (a damaged install gets the Repair dialog), and after 10
@@ -400,10 +508,25 @@ reads; it never writes, runs commands, or starts work on its own.
   time and say `killed pid=… reason=quit|update|watchdog|restart` when the
   app itself stopped a process, so a crash and a kill no longer look alike.
 - **"Couldn't save this conversation"** (a chip above the composer, v1.226.0)
-  → the thread could not be written; Retry re-sends it. If the thread was
-  deleted elsewhere the next save quietly re-creates it. Your message is saved
-  *before* the model is asked, so a reload mid-answer keeps the question, and
-  an agent hand-off resumes when you reopen the thread.
+  → the thread could not be written. **Retry** re-sends what is on screen
+  *now* (reply included) and the chip stays up, reading "Retrying…", until
+  that save actually lands — an older save finishing in the meantime does
+  not retire it (v1.232.0). If the thread was deleted elsewhere the next
+  save quietly re-creates it. Your message is saved *before* the model is
+  asked, so a reload mid-answer keeps the question, and an agent hand-off
+  resumes when you reopen the thread. Two windows on the same thread (the
+  app and a browser tab) no longer overwrite each other: a save from a stale
+  copy is refused, the window reloads the thread and appends only its own
+  new messages (v1.232.0). A reopened thread that ends on your question with
+  no reply (the daemon restarted mid-answer) says **This didn't get a reply**
+  with a **Retry** that re-sends it — chat threads only: a messaging thread
+  (Telegram/Slack/email) ends on your phone's message while the daemon is
+  composing, and the reply lands on its own; a reopened thread whose agent run is
+  paused on a permission shows the approval card within a couple of seconds
+  even before any live event arrives. If the daemon log says *"SQLite writer
+  stuck past busy_timeout"*, one write held the database for over 30 s — the
+  callers behind it report "database is locked" (never a pool limit) and the
+  line is logged once; a restart clears it.
 - **A terminal says "Connection lost"** → the daemon restarted; it keeps
   retrying while the daemon is down, or press **Reconnect** — the pane and its
   scrollback come back under the same id.
@@ -439,3 +562,41 @@ reads; it never writes, runs commands, or starts work on its own.
   newest one is younger than the auto-backup interval (24 h by default).
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
+
+## What changed in the audit waves (v1.227.0 → v1.232.0)
+
+A six-wave audit of the whole app, one version per wave, fixed what it found.
+**v1.227.0 (Wave 1, the roster is the contract):** an agent or a chat can only
+call the tools it was armed with — any other call is refused and ledgered as
+"not armed"; a run parked on an ask really waits, batches of asks show one
+card each, and every finished run carries an honest outcome (*completed*,
+*with failures*, *needs you*) beside its status. **v1.228.0 (Wave 2, honest
+failures):** a tool interrupted by a closed window is still on the ledger,
+a wedged tool call in a run hits a deadline and the run continues, a local
+model that *answered* with an error refuses by name instead of failing over
+to a cloud model (`local_primary_policy`, default *refuse*), a dead local
+endpoint is caught in ~2 s, malformed tool arguments are corrected rather
+than crashed, and a folder is only accepted as a workspace once a file
+can actually land in it. **v1.229.0 (Wave 3, the truth about background
+work):** a background loop reports its own cycles so a failing sampler or
+socket can never read "ok", a tool pack that did not start says so with a
+Retry, `internal error [err_…]` ids lead straight to the log line, Settings
+→ Maintenance gained Copy diagnostics / Open logs / Restore from backup, the
+desktop app stops restarting a daemon that keeps dying and tells you, and
+the hotkey shown everywhere is the one the OS actually granted. **v1.230.0
+(Wave 4, a lighter, truer dashboard):** one event socket per window,
+polling that pauses while the window is hidden, no duplicate preflight
+requests, the offline banner only after two misses, Connections and the
+model switcher telling one truth about inherited CLI logins, and session
+summaries rendered as markdown. **v1.231.0 (Wave 5, automation you can
+trust):** every door (schedule, reflex, goal, phone, autonomy) runs in the
+project's folder and may ask you; a crashing workflow step is a failed step
+and finished steps survive a restart; a schedule fire that was missed or
+skipped is written on its row; a revoked phone token is red on the Channels
+row; a dropped message says so. **v1.232.0 (Wave 6, copy and states):**
+the words on every surface match what the app does — chat hints, session
+labels, usage without noise rows, Settings' token box inside the desktop
+app, the Documents page pointing at Chat for convert/split/merge/batch, the
+Memory page linking to imports, a terminal resized only by the window you
+are looking at, and this Handbook, the Help page and the README kept in
+step (a test now fails if this file's "Current as of" line lags the app).

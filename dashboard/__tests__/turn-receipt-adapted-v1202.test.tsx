@@ -34,10 +34,10 @@ describe("wordChange (THE one token renderer)", () => {
   // The narration module imports this SAME function (the draftFromFence
   // one-renderer lesson): the receipt and the progress line must never word
   // the same wire token differently.
-  it("tool_cap:<n> reads as 'N tools max'", () => {
-    expect(wordChange("tool_cap:4")).toBe("4 tools max");
-    expect(wordChange("tool_cap:3")).toBe("3 tools max");
-    expect(wordChange("  tool_cap:6  ")).toBe("6 tools max");
+  it("tool_cap:<n> reads as 'capped at N tools for this local model' (v1.232.0)", () => {
+    expect(wordChange("tool_cap:4")).toBe("capped at 4 tools for this local model");
+    expect(wordChange("tool_cap:3")).toBe("capped at 3 tools for this local model");
+    expect(wordChange("  tool_cap:6  ")).toBe("capped at 6 tools for this local model");
   });
 
   it("decomposed reads as 'running step-by-step'", () => {
@@ -60,18 +60,18 @@ describe("wordChange (THE one token renderer)", () => {
 });
 
 describe("adaptedLabel (the pure wording helper)", () => {
-  it("words tool_cap as 'N tools max' with the model named", () => {
+  it("words tool_cap as 'capped at N tools for this local model' with the model named", () => {
     expect(
       adaptedLabel({ model: "qwen3:4b", changes: ["tool_cap:4"] }),
-    ).toBe("adapted to qwen3:4b: 4 tools max");
+    ).toBe("adapted to qwen3:4b: capped at 4 tools for this local model");
   });
 
   it("omits the 'to <model>' clause when the model is blank", () => {
     expect(adaptedLabel({ model: "", changes: ["tool_cap:3"] })).toBe(
-      "adapted: 3 tools max",
+      "adapted: capped at 3 tools for this local model",
     );
     expect(adaptedLabel({ changes: ["tool_cap:3"] })).toBe(
-      "adapted: 3 tools max",
+      "adapted: capped at 3 tools for this local model",
     );
   });
 
@@ -80,7 +80,7 @@ describe("adaptedLabel (the pure wording helper)", () => {
     // silently disappear (the PHASE_LABEL rule).
     expect(
       adaptedLabel({ model: "m", changes: ["tool_cap:4", "strict_json"] }),
-    ).toBe("adapted to m: 4 tools max, strict_json");
+    ).toBe("adapted to m: capped at 4 tools for this local model, strict_json");
   });
 
   it("null / absent / empty-changes all say nothing", () => {
@@ -102,7 +102,7 @@ describe("TurnReceipt — the quiet adapted line", () => {
     );
     const toggle = screen.getByRole("button", { expanded: false });
     // No expand click — a bent turn must never be invisible.
-    expect(toggle.textContent).toContain("adapted to qwen3:4b: 4 tools max");
+    expect(toggle.textContent).toContain("adapted to qwen3:4b: capped at 4 tools for this local model");
   });
 
   it("is styled QUIET: no amber anywhere, no warning wording", () => {
@@ -134,7 +134,7 @@ describe("TurnReceipt — the quiet adapted line", () => {
       <TurnReceipt adapted={{ model: "tiny", changes: ["tool_cap:3"] }} />,
     );
     expect(container.firstChild).not.toBeNull();
-    expect(screen.getByText(/adapted to tiny: 3 tools max/)).toBeTruthy();
+    expect(screen.getByText(/adapted to tiny: capped at 3 tools for this local model/)).toBeTruthy();
   });
 
   it("a degenerate adapted (empty changes) does not defeat the zero-noise guard", () => {

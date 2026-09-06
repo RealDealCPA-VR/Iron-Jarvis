@@ -296,9 +296,16 @@ function parseAgentApproval(raw: unknown): PendingAgentApproval | null {
 }
 
 /** One paused agent ask in the dropdown: tool name + session link + Approve
- *  once / Deny, POSTing the same route the chat card posts. A 404 means it was
- *  answered elsewhere or timed out (the pause window is bounded) — the row
- *  leaves without a retry; any other failure keeps the row answerable. */
+ *  once / Allow for this run / Deny, POSTing the same route the chat card
+ *  posts. "Allow for this run" (v1.232.0, audit A9) is the card's
+ *  "conversation" answer: the daemon widens the run's grant, releases every
+ *  sibling ask of the same tool at once (a 28-file batch is one click, not
+ *  28 at 15 s poll lag each) and keeps the grant for the run's continues. A
+ *  404 means it was answered elsewhere or timed out (the pause window is
+ *  bounded) — the row leaves without a retry; any other failure keeps the
+ *  row answerable. */
+type AgentAnswer = "once" | "conversation" | "deny";
+
 function AgentApprovalRow({
   ask,
   onGone,
@@ -306,10 +313,10 @@ function AgentApprovalRow({
   ask: PendingAgentApproval;
   onGone: (id: string) => void;
 }) {
-  const [busy, setBusy] = useState<"once" | "deny" | null>(null);
+  const [busy, setBusy] = useState<AgentAnswer | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function answer(decision: "once" | "deny") {
+  async function answer(decision: AgentAnswer) {
     if (busy) return;
     setBusy(decision);
     setError(null);
@@ -351,6 +358,15 @@ function AgentApprovalRow({
               className="btn-accent px-3 py-1.5 text-[12px] disabled:opacity-50"
             >
               {busy === "once" ? "Approving…" : "Approve once"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void answer("conversation")}
+              disabled={busy !== null}
+              title={`Approve ${ask.tool} for the rest of this run — every pending ask for it clears at once`}
+              className="rounded-lg border border-cyan-500/25 bg-cyan-500/[0.06] px-3 py-1.5 text-[12px] text-cyan-200 transition-colors hover:border-cyan-400/40 disabled:opacity-50"
+            >
+              {busy === "conversation" ? "Allowing…" : "Allow for this run"}
             </button>
             <button
               type="button"

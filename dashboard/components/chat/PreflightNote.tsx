@@ -12,6 +12,13 @@
  * data itself is stale (the last check couldn't reach the daemon), the message
  * softens: we no longer KNOW the provider is down, we only failed to check.
  *
+ * v1.232.0 (audit R4): a provider that is reachable but IN COOLDOWN — the
+ * router's circuit breaker tripped on repeated failures — is the second
+ * preflight case (`cooldownS > 0`). The daemon refuses a turn sent to it with
+ * "in cooldown, retry in N s"; this row says the same words first, so the
+ * user does not type a paragraph into a model that will not be asked.
+ * Unreachable wins over cooldown when both are true.
+ *
  * Deliberately: no buttons, one fixed-height single line (h-5 + truncate) so a
  * message SWAP (hard warning ↔ stale softening, or a long provider name) never
  * changes the row's height. Honesty note: the component returns null when
@@ -23,23 +30,30 @@ export function PreflightNote({
   provider,
   available,
   stale,
+  cooldownS,
 }: {
   provider: string;
   available: boolean | undefined;
   stale?: boolean;
+  /** Seconds left in the router's cooldown for `provider` (0/undefined = closed). */
+  cooldownS?: number;
 }) {
-  if (available !== false) return null;
+  const cooldown = available !== false && (cooldownS ?? 0) > 0;
+  if (available !== false && !cooldown) return null;
   return (
     <div
       role="status"
       data-testid="ij-preflight-note"
+      data-kind={cooldown ? "cooldown" : "unreachable"}
       className="flex h-5 min-h-5 items-center gap-1.5 overflow-hidden px-1 text-[11px] leading-none text-amber-300"
     >
       <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
       <span className="truncate">
-        {stale
-          ? `${provider} may be offline — the last check couldn't reach the daemon. Pick another model or check the endpoint.`
-          : `${provider} isn't reachable right now — this turn will fail. Pick another model or bring the endpoint back.`}
+        {cooldown
+          ? `${provider} is in cooldown, retry in ${cooldownS} s — it failed repeatedly, so a turn sent to it now is refused. Pick another model or wait.`
+          : stale
+            ? `${provider} may be offline — the last check couldn't reach the daemon. Pick another model or check the endpoint.`
+            : `${provider} isn't reachable right now — this turn will fail. Pick another model or bring the endpoint back.`}
       </span>
     </div>
   );

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import {
   FileText,
   FileSpreadsheet,
@@ -312,6 +313,15 @@ function SaveToMemoryRow({ filename, text }: { filename: string; text: string })
     </div>
   );
 }
+
+/** Example chips on the read card's empty state: the document jobs that have
+ *  no control on this page because they are done from Chat (v1.232.0). */
+const CHAT_DOC_EXAMPLES: { label: string; ask: string }[] = [
+  { label: "Convert", ask: "Convert report.docx to PDF" },
+  { label: "Split", ask: "Split statement.pdf into one file per page" },
+  { label: "Merge", ask: "Merge invoice-1.pdf and invoice-2.pdf into one PDF" },
+  { label: "Batch", ask: "Summarize every PDF in my Inbox folder into one table" },
+];
 
 /* -------------------------------------------------------------------------- */
 /*  Page                                                                       */
@@ -807,6 +817,24 @@ export default function DocumentsPage() {
               {readText === null && !readError && (
                 <Empty icon={<FileDown size={22} />}>
                   Drop a file above, or enter a path and extract its text.
+                  {/* Convert / split / merge / batch are chat jobs (the tools
+                      are armed from the "+" menu); the chips open Chat with
+                      the request typed in (v1.232.0). */}
+                  <span className="mt-2 block text-[12px] text-zinc-500">
+                    Convert, split, merge and batch are done from Chat — ask for it in chat, or use
+                    the &ldquo;+&rdquo; menu:
+                  </span>
+                  <span className="mt-1.5 flex flex-wrap justify-center gap-1.5">
+                    {CHAT_DOC_EXAMPLES.map((ex) => (
+                      <Link
+                        key={ex.label}
+                        href={`/chat?ask=${encodeURIComponent(ex.ask)}`}
+                        className="rounded-full border border-white/[0.08] bg-white/[0.03] px-2.5 py-0.5 text-[11px] text-zinc-300 transition-colors hover:border-accent/30 hover:text-accent-soft"
+                      >
+                        {ex.label}
+                      </Link>
+                    ))}
+                  </span>
                 </Empty>
               )}
             </form>

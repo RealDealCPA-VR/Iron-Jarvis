@@ -142,6 +142,9 @@ def register(app: FastAPI, d) -> None:
                 # Already range-validated by SessionCreate (a 422 outside
                 # 1..200); None = the configured default.
                 max_steps=body.max_steps,
+                # THE POSTURE RIDES (v1.232.0, A7); yolo is normalised away
+                # inside create_session, the one door every session passes.
+                approval_mode=body.approval_mode,
             )
         except (PermissionError, RuntimeError) as exc:  # self-dev gating
             raise HTTPException(status_code=400, detail=str(exc))
@@ -186,7 +189,14 @@ def register(app: FastAPI, d) -> None:
     @app.post("/sessions/{session_id}/continue")
     async def continue_session(session_id: str, body: ContinueBody) -> dict[str, Any]:
         try:
-            session = await d.orchestrator.continue_session(session_id, body.message)
+            session = await d.orchestrator.continue_session(
+                session_id,
+                body.message,
+                # GRANTS + POSTURE RIDE THE CONTINUE (v1.232.0, A6/A7):
+                # unioned with the stored grant / inherited when blank.
+                allow_tools=body.allow_tools or None,
+                approval_mode=body.approval_mode or None,
+            )
         except KeyError:
             raise HTTPException(status_code=404, detail="session not found")
         except ValueError as exc:  # workspace busy — a continuation is running
@@ -611,9 +621,17 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/sessions/{session_id}/review")
     def get_review(session_id: str) -> dict[str, Any]:
+        """The session's pending review (flat), or ``{"review": null}``.
+
+        v1.232.0 (audit U14): "no review" is the NORMAL state of a session
+        (git-native off, or already approved), and every detail visit used to
+        log a 404 for it. A session that does not exist is still a 404.
+        """
+        if d.orchestrator.get_session(session_id) is None:
+            raise HTTPException(status_code=404, detail="session not found")
         review = d.orchestrator.get_review(session_id)
         if review is None:
-            raise HTTPException(status_code=404, detail="no review for session")
+            return {"review": None}
         return asdict(review)
 
     @app.post("/reviews/{session_id}/approve")

@@ -22,13 +22,35 @@ from .models import EventRecord
 logger = logging.getLogger("iron_jarvis.db")
 
 
-def make_engine(db_path: str | Path) -> Engine:
+#: How long SQLite waits for the single writer before raising "database is
+#: locked" (``PRAGMA busy_timeout``, milliseconds).
+BUSY_TIMEOUT_MS = 30_000
+
+
+def pool_timeout_for(busy_timeout_ms: int) -> float:
+    """The pool's connection wait for a given busy_timeout — ABOVE it, always.
+
+    CL6 (v1.232.0, audit Wave 6): SQLAlchemy's QueuePool default is 30 s, the
+    same as ``busy_timeout``. Measured with 30 writers behind a 32 s external
+    lock: the 15 holding a connection failed with "database is locked" while
+    the 15 queued behind them failed with "QueuePool limit of size 5 overflow
+    10 reached, connection timed out" — a pool message that sends the reader
+    hunting for a connection leak when the disease is ONE stuck writer. With
+    the pool waiting 5 s longer, the holders time out first, hand their
+    connections on, and every caller that fails says "database is locked".
+    """
+    return busy_timeout_ms / 1000 + 5
+
+
+def make_engine(db_path: str | Path, *, busy_timeout_ms: int = BUSY_TIMEOUT_MS) -> Engine:
     path = Path(db_path)
     is_memory = str(db_path) == ":memory:"
     if not is_memory:
         path.parent.mkdir(parents=True, exist_ok=True)
     url = "sqlite://" if is_memory else f"sqlite:///{path}"
-    engine = create_engine(url, connect_args={"check_same_thread": False})
+    # In-memory engines use a thread-local pool that takes no timeout.
+    pool_kw = {} if is_memory else {"pool_timeout": pool_timeout_for(busy_timeout_ms)}
+    engine = create_engine(url, connect_args={"check_same_thread": False}, **pool_kw)
 
     # Harden SQLite for a long-lived daemon with a background-scheduler thread
     # and the async loop both writing: WAL lets readers not block writers, and a
@@ -41,10 +63,29 @@ def make_engine(db_path: str | Path) -> Engine:
         try:
             if not is_memory:
                 cur.execute("PRAGMA journal_mode=WAL")
-            cur.execute("PRAGMA busy_timeout=30000")
+            cur.execute(f"PRAGMA busy_timeout={int(busy_timeout_ms)}")
             cur.execute("PRAGMA synchronous=NORMAL")
         finally:
             cur.close()
+
+    # A writer stuck past busy_timeout is logged ONCE per engine (CL6): SQLite
+    # cannot name the holder, so the waiter and its statement are the clue —
+    # every later caller fails the same way and would only repeat the line.
+    locked_logged = False
+
+    @event.listens_for(engine, "handle_error")
+    def _note_stuck_writer(ctx):  # pragma: no cover - exercised at runtime
+        nonlocal locked_logged
+        if locked_logged or "database is locked" not in str(ctx.original_exception):
+            return
+        locked_logged = True
+        logger.warning(
+            "SQLite writer stuck past busy_timeout (%.0f s): %s waited on %r — "
+            "one writer holds the database; later lock errors are not logged again",
+            busy_timeout_ms / 1000,
+            threading.current_thread().name,
+            (ctx.statement or "")[:120],
+        )
 
     return engine
 

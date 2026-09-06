@@ -59,13 +59,16 @@ export default function ActivityPage() {
             icon={<Undo2 size={15} />}
             accent={(stats?.undoable ?? 0) > 0}
           />
+          {/* v1.232.0 (audit U12): "(loaded)" was the engineer's word for
+              "the rows on screen" — these sum THIS VIEW, never the account
+              (that is the Usage page). */}
           <Stat
-            label="Tokens (loaded)"
+            label="Tokens in this view"
             value={tokens.toLocaleString()}
             icon={<Coins size={15} />}
           />
           <Stat
-            label="Cost (loaded)"
+            label="Cost in this view"
             value={`$${(stats?.costUsd ?? 0).toFixed(stats && stats.costUsd < 1 ? 4 : 2)}`}
             icon={<CircleDollarSign size={15} />}
           />

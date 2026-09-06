@@ -96,7 +96,11 @@ def test_the_artifacts_rail_covers_every_old_affordance():
 # Preflight: warned BEFORE typing, watching the provider that will serve.
 # --------------------------------------------------------------------------- #
 def test_preflight_watches_the_pick_or_the_default():
-    mount = re.search(r"<PreflightNote[\s\S]{0,400}?/>", _PAGE)
+    # The window is generous on purpose: v1.232.0 added the `cooldownS` prop
+    # (with the comment explaining its optional chaining) and the old 400-char
+    # window stopped matching the mount at all, which reads as "never rendered"
+    # rather than "a prop moved". The assertions below are what this pins.
+    mount = re.search(r"<PreflightNote[\s\S]{0,1200}?/>", _PAGE)
     assert mount, "PreflightNote is never rendered"
     body = mount.group(0)
     # The explicit pick when there is one, else the DEFAULT provider — the

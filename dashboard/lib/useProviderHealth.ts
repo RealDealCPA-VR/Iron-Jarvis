@@ -23,6 +23,10 @@ export interface ProviderHealthState {
    *  honestly be accused; a daemon that is down is the offline banner's job
    *  (lib/api maps a dead fetch to status 0), not this hook's. */
   byProvider: Record<string, boolean>;
+  /** provider name → seconds left in the router's cooldown (v1.232.0, audit
+   *  R4); 0 or absent when the circuit is closed. Same last-known rule as
+   *  `byProvider`. */
+  cooldownByProvider: Record<string, number>;
   /** The daemon's current default provider ("" until the first poll lands). */
   defaultProvider: string;
   /** True until the FIRST poll settles (success or failure). */
@@ -50,10 +54,21 @@ export interface ProviderHealthState {
  * - A fetch error KEEPS the last-known map and sets `stale` instead of
  *   emptying it — stale beats empty for a preflight indicator.
  */
+/** The breaker map off a /health payload: seconds left per OPEN circuit. */
+function cooldownMap(h: Health | null | undefined): Record<string, number> {
+  const map: Record<string, number> = {};
+  for (const p of h?.providers ?? []) {
+    const c = p.circuit;
+    map[p.provider] = c && c.open ? Math.max(0, Number(c.retry_in_s) || 0) : 0;
+  }
+  return map;
+}
+
 export function useProviderHealth(intervalMs = 5_000): ProviderHealthState {
   const daemon = useDaemon();
   const shared = daemon.provided;
   const [byProvider, setByProvider] = useState<Record<string, boolean>>({});
+  const [cooldownByProvider, setCooldownByProvider] = useState<Record<string, number>>({});
   const [defaultProvider, setDefaultProvider] = useState("");
   const [loading, setLoading] = useState(true);
   const [stale, setStale] = useState(false);
@@ -72,6 +87,7 @@ export function useProviderHealth(intervalMs = 5_000): ProviderHealthState {
         const map: Record<string, boolean> = {};
         for (const p of h.providers ?? []) map[p.provider] = p.available;
         setByProvider(map);
+        setCooldownByProvider(cooldownMap(h));
         setDefaultProvider(h.default_provider ?? "");
         setStale(false);
       })
@@ -105,10 +121,12 @@ export function useProviderHealth(intervalMs = 5_000): ProviderHealthState {
     for (const p of daemon.health?.providers ?? []) map[p.provider] = p.available;
     return map;
   }, [daemon.health]);
+  const sharedCooldown = useMemo(() => cooldownMap(daemon.health), [daemon.health]);
 
   if (shared) {
     return {
       byProvider: sharedMap,
+      cooldownByProvider: sharedCooldown,
       defaultProvider: daemon.health?.default_provider ?? "",
       loading: daemon.checking,
       // The provider says offline after two consecutive misses (FP4); until
@@ -117,5 +135,5 @@ export function useProviderHealth(intervalMs = 5_000): ProviderHealthState {
       refresh: daemon.refresh,
     };
   }
-  return { byProvider, defaultProvider, loading, stale, refresh };
+  return { byProvider, cooldownByProvider, defaultProvider, loading, stale, refresh };
 }

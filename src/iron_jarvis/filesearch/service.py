@@ -15,7 +15,9 @@ Hard guarantees:
   elsewhere on disk.
 * **Respects ignore patterns.** Directories named in ``ignore`` (``.git``,
   ``node_modules`` …) are pruned during the walk.
-* **Skips unreadable / binary / oversized files gracefully** — they are ignored,
+* **Skips binary files silently; counts unreadable and oversized ones** — the
+  binary blob is ignored (NUL sniff, after a UTF-16 BOM check so a PowerShell
+  ``>`` log is text, v1.232.0), and every other hole in the answer is reported,
   never crash a search, and the ones we could not decode are COUNTED and handed
   back in :class:`SearchNotes` so the caller can say so out loud.
 * **Never answers a broken query with an empty result.** An uncompilable regex
@@ -93,22 +95,32 @@ class SearchNotes:
     told; the count then rides back out in the tool's own output note, next to
     grep's truncation note, rather than in a second reporting mechanism.
 
-    Only files we genuinely TRIED and failed to turn into text are counted. A
-    binary blob (NUL sniff) and an oversized file are deliberate, well-understood
-    exclusions — counting them would put a scary note on every search of a real
-    folder and drown the signal this exists to carry.
+    ``unreadable`` counts files we genuinely TRIED and failed to turn into
+    text. ``oversize`` (v1.232.0, audit T7) counts files over
+    :data:`MAX_FILE_BYTES` — they used to be a silent exclusion, which made a
+    2 MB log the search "did not find" indistinguishable from one that has
+    no match. A binary blob (NUL sniff) stays silent: it never was a text
+    file, and counting every .png would drown the signal this carries.
     """
 
     unreadable: int = 0
+    oversize: int = 0
 
     def note(self) -> str:
-        """The one line to append to a tool's output, or ``""`` when clean."""
-        if not self.unreadable:
-            return ""
-        return (
-            f"[{self.unreadable} file(s) skipped — unreadable encoding or failed "
-            f"extraction. This search did NOT cover them.]"
-        )
+        """The line(s) to append to a tool's output, or ``""`` when clean."""
+        parts: list[str] = []
+        if self.unreadable:
+            parts.append(
+                f"[{self.unreadable} file(s) skipped — unreadable encoding or failed "
+                f"extraction. This search did NOT cover them.]"
+            )
+        if self.oversize:
+            parts.append(
+                f"[{self.oversize} file(s) skipped as oversize (over "
+                f"{MAX_FILE_BYTES // 1_000_000} MB each). This search did NOT cover "
+                f"them; open one directly with read_file if it matters.]"
+            )
+        return "\n".join(parts)
 
 
 #: Bound ONCE on first use to ``documents/readers._decode_bytes`` — this project's
@@ -283,15 +295,16 @@ class FileSearchService:
         """Return decoded text, or None if outside roots / oversized / binary / unreadable.
 
         Every ``None`` that means "we tried to read this file and could not" bumps
-        ``notes.unreadable`` so the caller can report the hole. The three that mean
-        "this was never a text file to begin with" (outside the roots, over the
-        size cap, binary by NUL sniff) stay silent on purpose — see
-        :class:`SearchNotes`.
+        ``notes.unreadable``, and one over the size cap bumps ``notes.oversize``
+        (v1.232.0), so the caller can report the hole. Outside-the-roots and
+        binary-by-NUL-sniff stay silent on purpose — see :class:`SearchNotes`.
         """
         if self._root_for(path, roots) is None:
             return None
         try:
             if path.stat().st_size > MAX_FILE_BYTES:
+                if notes is not None:
+                    notes.oversize += 1
                 return None
         except OSError:
             return None
@@ -315,6 +328,16 @@ class FileSearchService:
             if notes is not None:
                 notes.unreadable += 1
             return None
+        # UTF-16 BEFORE the NUL sniff (v1.232.0, audit T7): every other byte
+        # of a UTF-16 file IS a NUL, so a log PowerShell 5.1 wrote with ``>``
+        # read as binary and was invisible to search. The BOM says what it is.
+        if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            try:
+                return data.decode("utf-16")
+            except UnicodeDecodeError:
+                if notes is not None:
+                    notes.unreadable += 1
+                return None
         if b"\x00" in data:  # cheap binary sniff
             return None
         try:

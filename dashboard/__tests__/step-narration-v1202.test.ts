@@ -173,7 +173,7 @@ describe("stepLabel — envelope.adapted", () => {
           source: "probed",
         }),
       ),
-    ).toBe("Adapted to m1: 3 tools max, running step-by-step");
+    ).toBe("Adapted to m1: capped at 3 tools for this local model, running step-by-step");
   });
 
   it("words a tool_cap-only adaptation", () => {
@@ -186,7 +186,7 @@ describe("stepLabel — envelope.adapted", () => {
           source: "probed",
         }),
       ),
-    ).toBe("Adapted to qwen2.5:14b: 4 tools max");
+    ).toBe("Adapted to qwen2.5:14b: capped at 4 tools for this local model");
   });
 
   it("passes an unknown token through verbatim (new kinds read oddly, never vanish)", () => {
@@ -199,7 +199,7 @@ describe("stepLabel — envelope.adapted", () => {
           source: "probed",
         }),
       ),
-    ).toBe("Adapted to m1: strict_json, 2 tools max");
+    ).toBe("Adapted to m1: strict_json, capped at 2 tools for this local model");
   });
 
   it("says just the model when the adaptations list is empty or junk", () => {

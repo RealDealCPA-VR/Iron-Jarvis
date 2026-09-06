@@ -591,7 +591,7 @@ export function LongTerm() {
             </div>
             <div className="w-20">
               <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                k
+                Results
               </label>
               <input
                 type="number"
@@ -599,7 +599,8 @@ export function LongTerm() {
                 max={50}
                 value={k}
                 onChange={(e) => setK(Number(e.target.value) || 5)}
-                aria-label="Results to retrieve (k)"
+                aria-label="How many results to show"
+                title="How many results to show"
                 className="field"
               />
             </div>

@@ -222,9 +222,11 @@ def test_a_clean_search_carries_no_skip_note(office_root: Path, tmp_path: Path):
     assert "skipped" not in res.output
 
 
-def test_binary_and_oversized_files_are_not_counted_as_skips(tmp_path: Path):
-    """Counting deliberate exclusions would put a scary note on every search of a
-    real folder and drown the signal the note exists to carry."""
+def test_binary_is_silent_but_oversize_is_counted(tmp_path: Path):
+    """A binary blob is a deliberate exclusion (counting every .png would put a
+    scary note on every search of a real folder). An OVERSIZED file used to be
+    treated the same way — v1.232.0 (audit T7) counts it separately, because a
+    2 MB log the search "did not find" is a hole the user must hear about."""
     root = tmp_path / "mixed"
     root.mkdir()
     (root / "note.txt").write_text("Retainer\n", encoding="utf-8")
@@ -236,7 +238,9 @@ def test_binary_and_oversized_files_are_not_counted_as_skips(tmp_path: Path):
     hits = svc.search_content("Retainer", notes=notes)
     assert len(hits) == 1
     assert notes.unreadable == 0
-    assert notes.note() == ""
+    assert notes.oversize == 1
+    assert "1 file(s) skipped as oversize" in notes.note()
+    assert "unreadable" not in notes.note()
 
 
 def test_grep_reports_files_it_could_not_read(tmp_path: Path, monkeypatch):
@@ -265,9 +269,15 @@ def test_grep_reports_files_it_could_not_read(tmp_path: Path, monkeypatch):
 
 
 def test_grep_stays_quiet_when_nothing_was_skipped(tmp_path: Path):
-    (tmp_path / "a.txt").write_text("needle\n", encoding="utf-8")
-    res = asyncio.run(GrepTool().execute({"pattern": "needle"}, _ctx(tmp_path)))
+    # A clean subfolder: _ctx boots the state DB in tmp_path itself, and since
+    # v1.232.0 an oversized DB file is (truthfully) reported as skipped.
+    (tmp_path / "ws").mkdir()
+    (tmp_path / "ws" / "a.txt").write_text("needle\n", encoding="utf-8")
+    res = asyncio.run(
+        GrepTool().execute({"pattern": "needle", "path": "ws"}, _ctx(tmp_path))
+    )
     assert res.data["skipped_unreadable"] == 0
+    assert res.data["skipped_oversize"] == 0
     assert "skipped" not in res.output
 
 

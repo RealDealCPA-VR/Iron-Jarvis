@@ -120,9 +120,10 @@ describe("finding 18 — a mid-turn grant rides a SAME-turn escalation", () => {
 
   it("builds allow_tools from the ref in BOTH escalation branches", () => {
     const body = bodyOf("sendAgent");
-    // The custom-agent /agents/{slug}/spawn branch and the POST /sessions one.
+    // The custom-agent /agents/{slug}/spawn branch and the POST /sessions one
+    // — and, since v1.232.0 (audit A6), the /continue branch too.
     const spreads = body.match(/allow_tools: (\w+)\.slice\(0, MAX_TOOLS\)/g) ?? [];
-    expect(spreads).toHaveLength(2);
+    expect(spreads).toHaveLength(3);
     for (const s of spreads) expect(s).toContain("armedNow");
     // The stale-closure binding must not be what a grant is measured against.
     expect(body).not.toMatch(/allow_tools: selectedTools/);

@@ -14,13 +14,15 @@ export function TracesPanel({ sessionId }: { sessionId: string }) {
   const traces = data?.traces ?? [];
 
   return (
-    <Card title={`Traces · ${traces.length}`} icon={<Activity size={15} />}>
+    // v1.232.0 (audit U9): "Traces" is the engineer's word; these are the
+    // model calls this run made, with each request and answer on expand.
+    <Card title={`Model calls · ${traces.length}`} icon={<Activity size={15} />}>
       {loading && !data ? (
         <Spinner />
       ) : error ? (
-        <Empty>Traces unavailable.</Empty>
+        <Empty>Model calls unavailable.</Empty>
       ) : traces.length === 0 ? (
-        <Empty icon={<Activity size={22} />}>No traces.</Empty>
+        <Empty icon={<Activity size={22} />}>No model calls recorded.</Empty>
       ) : (
         <ul className="space-y-1 font-mono text-xs">
           {traces.map((t, i) => (

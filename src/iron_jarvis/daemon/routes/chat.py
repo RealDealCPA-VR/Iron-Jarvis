@@ -515,6 +515,9 @@ def register(app: FastAPI, d) -> None:
             "id": r.id, "title": r.title, "persona": r.persona,
             "project_id": r.project_id, "messages": msgs, "setup": setup,
             "derived_documents": derived,
+            # The version stamp a client hands back as ``if_updated_at`` on
+            # PUT (CL3, v1.232.0) — two windows on one thread stop clobbering.
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
             # v1.136.0 additive comm-thread fields (see the list route).
             "owner": getattr(r, "owner", "user") or "user",
             "comm_channel": getattr(r, "comm_channel", "") or "",
@@ -601,7 +604,19 @@ def register(app: FastAPI, d) -> None:
           (``db=``), so the transcript and its search docs commit or roll back
           together. The sync is delete-all-then-insert, which is what makes it
           safe for a route that rewrites the whole array on every autosave.
+
+        TWO WINDOWS, ONE THREAD (CL3, v1.232.0): the save is a whole-array
+        rewrite, so a browser tab that autosaves a stale copy silently erased
+        every turn the desktop window had added since. ``if_updated_at``
+        (optional, the ``updated_at`` GET returned) makes the write
+        conditional: a row NEWER than the stamp answers 409 and writes
+        nothing, and the client refetches, appends its own new bubbles onto
+        the server's array and saves again. Omitting the stamp keeps the old
+        unconditional contract for older clients. The response carries the
+        new ``updated_at`` so the next save can hand it back.
         """
+        from datetime import datetime, timezone
+
         from ...core.db import search_index
         from ...core.ids import utcnow as _now
         from ...core.models import ChatThreadRecord
@@ -610,8 +625,29 @@ def register(app: FastAPI, d) -> None:
         raw_setup = body.get("setup")
         if "setup" in body and raw_setup is not None and not isinstance(raw_setup, dict):
             raise HTTPException(status_code=400, detail="setup must be an object")
+        expected: datetime | None = None
+        stamp_in = body.get("if_updated_at")
+        if stamp_in not in (None, ""):
+            try:
+                expected = datetime.fromisoformat(str(stamp_in))
+            except ValueError:
+                raise HTTPException(
+                    status_code=400, detail="if_updated_at must be an ISO timestamp",
+                )
+            if expected.tzinfo is not None:  # the row is stored naive UTC
+                expected = expected.astimezone(timezone.utc).replace(tzinfo=None)
         with _THREAD_SAVE_LOCK, session_scope(d.platform.engine) as db:
             r = None if thread_id == "new" else db.get(ChatThreadRecord, thread_id)
+            if r is not None and expected is not None and r.updated_at is not None:
+                stored = r.updated_at
+                if stored.tzinfo is not None:
+                    stored = stored.astimezone(timezone.utc).replace(tzinfo=None)
+                if stored > expected:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="This conversation was updated from another window"
+                        " — reloading it before saving.",
+                    )
             # getattr-read (defaults "user") so the guard works even before
             # the additive owner column lands — no import-order coupling.
             daemon_owned = r is not None and getattr(r, "owner", "user") == "daemon"
@@ -708,7 +744,10 @@ def register(app: FastAPI, d) -> None:
                             exc_info=True)
             db.commit()
             db.refresh(r)
-        return {"id": r.id, "title": r.title, "project_id": r.project_id}
+        return {
+            "id": r.id, "title": r.title, "project_id": r.project_id,
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+        }
 
     @app.delete("/chat/threads/{thread_id}")
     def delete_chat_thread(thread_id: str) -> dict[str, Any]:

@@ -91,6 +91,22 @@ def _fold(out: dict[str, Any], src: dict[str, Any]) -> None:
     out["by_day"] = sorted(merged.values(), key=lambda r: r["day"])
 
 
+def is_noise_row(row: dict[str, Any]) -> bool:
+    """True for a ``by_model`` row that is not a model the user used (v1.232.0,
+    audit U6): the offline ``mock`` provider, or a row that moved zero tokens
+    (a probe, a refused call, a misconfigured id such as ``bogusprov ·
+    bogusmodel``). The Usage page listed these beside the real models and
+    counted them in "Across N models"."""
+    provider = str(row.get("provider") or "").strip().lower()
+    if provider == "mock":
+        return True
+    try:
+        tokens = int(row.get("input_tokens") or 0) + int(row.get("output_tokens") or 0)
+    except (TypeError, ValueError):
+        tokens = 0
+    return tokens <= 0
+
+
 def merged_usage(platform: Any, days: int = 30) -> dict[str, Any]:
     """``usage_summary`` with the OpenCode and Pi stores folded in.
 
@@ -99,6 +115,11 @@ def merged_usage(platform: Any, days: int = 30) -> dict[str, Any]:
     attribution caveat. The merge NEVER raises: usage is a read-only reporting
     surface and must not break because a CLI store is absent, locked, or on a
     newer schema.
+
+    v1.232.0 (audit U6): ``by_model`` holds only models that did work —
+    :func:`is_noise_row` drops the mock provider and zero-token rows — and
+    ``model_count`` is its length. The unfiltered list stays in the JSON as
+    ``by_model_raw`` so nothing is hidden, and ``totals`` are untouched.
     """
     out = platform.observability.usage_summary(days)
 
@@ -122,4 +143,8 @@ def merged_usage(platform: Any, days: int = 30) -> dict[str, Any]:
     if pi.get("available"):
         _fold(out, pi)
 
+    raw = list(out.get("by_model") or [])
+    out["by_model_raw"] = raw
+    out["by_model"] = [r for r in raw if not is_noise_row(r)]
+    out["model_count"] = len(out["by_model"])
     return out

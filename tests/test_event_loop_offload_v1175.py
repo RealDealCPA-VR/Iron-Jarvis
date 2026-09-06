@@ -203,6 +203,6 @@ async def test_offload_preserves_confinement_reporting(tmp_path, monkeypatch):
         {"command": f'"{sys.executable}" -c "print(1)"'}, _ctx(tmp_path)
     )
 
-    assert result.data["confinement"] == "none"
+    assert result.data["confinement"] == "native-unconfined"
     assert "confinement_warning" in result.data
     assert result.output.startswith("[warning]")

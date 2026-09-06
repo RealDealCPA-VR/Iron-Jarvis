@@ -35,6 +35,15 @@ _NO_CONFINEMENT_WARNING = (
 #: the paragraph appears once.
 _COMPACT_ADVISORY = "[native runtime — limits advisory, see first shell result]"
 
+#: ``data["confinement"]`` vocabulary (v1.232.0, audit T5) — ONE word that
+#: says how confined the run was, carried by the registry onto the ledger row
+#: and the ``tool.executed`` event so a surface can show it without parsing
+#: the advisory prose. ``native-unconfined`` is the case the user must see: the
+#: policy asked for isolation and the native runtime could not give it.
+CONFINEMENT_SANDBOX = "sandbox"
+CONFINEMENT_NATIVE_UNCONFINED = "native-unconfined"
+CONFINEMENT_NATIVE = "native"
+
 #: Cap on the per-session advisory memory — same LRU idiom as
 #: ``agents/consult_tool._MAX_TRACKED_RUNS`` (move_to_end on touch,
 #: ``popitem(last=False)`` to evict). An evicted session honestly sees the
@@ -181,7 +190,13 @@ class SandboxedShellTool(Tool):
             "returncode": result.returncode,
             "timed_out": result.timed_out,
             "duration_s": result.duration_s,
-            "confinement": "none" if native_fallback else "docker",
+            "confinement": (
+                CONFINEMENT_SANDBOX
+                if not native_fallback
+                else CONFINEMENT_NATIVE_UNCONFINED
+                if isolating
+                else CONFINEMENT_NATIVE
+            ),
         }
         output = result.combined.strip()
         # POSIX-guess hint (v1.205.0): a failed native command whose first

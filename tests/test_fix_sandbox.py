@@ -149,7 +149,7 @@ async def test_shell_tool_annotates_confinement_none_on_native_fallback(
     assert res.ok
     assert "2" in res.output
     # F11: native fallback under an isolating policy is flagged unconfined.
-    assert res.data["confinement"] == "none"
+    assert res.data["confinement"] == "native-unconfined"
     assert "confinement_warning" in res.data
     assert "warning" in res.output.lower()
 
@@ -162,5 +162,5 @@ async def test_shell_tool_reports_docker_confinement_when_available(
     tool = SandboxedShellTool()
     res = await tool.execute({"command": 'echo hi'}, _ctx(tmp_path))
     # F11: when Docker is reachable an isolating policy runs confined.
-    assert res.data["confinement"] == "docker"
+    assert res.data["confinement"] == "sandbox"
     assert "confinement_warning" not in res.data

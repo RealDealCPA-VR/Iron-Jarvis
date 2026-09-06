@@ -273,10 +273,10 @@ export default function SessionsPage() {
               icon={<Boxes size={15} />}
               right={
                 <ConfirmButton
-                  label="Prune orphaned worktrees"
-                  confirmLabel="Prune now?"
+                  label="Clean up leftover folders"
+                  confirmLabel="Clean up now?"
                   onConfirm={pruneWorktrees}
-                  title="Garbage-collect worktrees left behind by failed/missing sessions"
+                  title="Remove the git worktrees left behind by failed or deleted sessions"
                   className="!text-zinc-400 hover:!text-accent-soft"
                 />
               }

@@ -601,6 +601,14 @@ class ToolRegistry:
             except Exception:  # noqa: BLE001 — telemetry/guard must never break the tool
                 pass
 
+        # v1.232.0 (audit T5): the runtime's confinement, when the tool
+        # reports one (the shell tool does), rides the ledger row AND the
+        # event — a native run with the policy unenforced used to be a
+        # sentence in the tool output and nothing anywhere else.
+        confinement = (result.data or {}).get("confinement") if isinstance(
+            result.data, dict
+        ) else None
+        confinement = str(confinement) if isinstance(confinement, str) and confinement else None
         inv_id = await asyncio.to_thread(
             self._record,
             ctx,
@@ -610,6 +618,7 @@ class ToolRegistry:
             ok=result.ok,
             output=result.output if result.ok else (result.error or ""),
             reversibility=rev_value,
+            confinement=confinement,
             # Only journal an inverse for a SUCCESSFUL mutation (a failed write
             # changed nothing, so there is nothing to undo).
             undo=undo_desc if result.ok else None,
@@ -622,7 +631,8 @@ class ToolRegistry:
         await ctx.event_bus.publish(
             EventType.TOOL_EXECUTED,
             {"tool": name, "ok": result.ok, "mode": decision.mode.value,
-             "invocation_id": inv_id, "reversibility": rev_value},
+             "invocation_id": inv_id, "reversibility": rev_value,
+             **({"confinement": confinement} if confinement else {})},
             session_id=ctx.session_id,
         )
 
@@ -1038,6 +1048,7 @@ class ToolRegistry:
         reversibility: str | None = None,
         undo: "dict[str, Any] | None" = None,
         created_paths: "list[str] | None" = None,
+        confinement: str | None = None,
     ) -> str:
         """Persist the ToolInvocation (+ an UndoJournal row when an inverse was
         captured) and return the invocation id so the caller can tag its event.
@@ -1082,6 +1093,7 @@ class ToolRegistry:
             ok=ok,
             output=output[:4000],
             reversibility=reversibility,
+            confinement=confinement,
         )
         with session_scope(ctx.engine) as db:
             db.add(record)

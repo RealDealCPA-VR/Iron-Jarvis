@@ -40,6 +40,7 @@ Reliability spine (best-in-class routing):
 from __future__ import annotations
 
 import asyncio
+import math
 import random
 import re
 import subprocess
@@ -273,11 +274,17 @@ class ProviderHealth:
     """Per-provider circuit breaker (CLOSED → OPEN → HALF-OPEN → CLOSED).
 
     After ``threshold`` consecutive failures a provider is OPENed for
-    ``cooldown`` seconds and skipped during resolution/failover — a dead provider
-    stops costing every request a full timeout. Once the cooldown elapses it goes
-    HALF-OPEN: the next attempt is allowed as a probe; success closes the circuit
-    (counters reset), a failure re-opens it for a fresh cooldown. Any success
-    resets the streak, so a provider that merely blipped never trips.
+    ``cooldown`` seconds. The failover candidates skip an open provider; the
+    PRIMARY attempt (v1.232.0, audit R4 — before that only the candidates
+    ever consulted this breaker, so a dead default cost every request the
+    full timeout while this class counted along) REFUSES BY NAME with the
+    seconds left (:meth:`ModelRouter._refuse_if_open`, both lanes), and
+    ``/health`` carries the same :meth:`circuit` row so the composer can say
+    "in cooldown, retry in N s" before the user types. Once the cooldown
+    elapses it goes HALF-OPEN: the next attempt is allowed as a probe;
+    success closes the circuit (counters reset), a failure re-opens it for a
+    fresh cooldown. Any success resets the streak, so a provider that merely
+    blipped never trips.
     """
 
     def __init__(
@@ -303,6 +310,20 @@ class ProviderHealth:
 
     def is_open(self, provider: str) -> bool:
         return not self.allow(provider)
+
+    def retry_in(self, provider: str) -> float:
+        """Seconds until an OPEN circuit goes HALF-OPEN; ``0.0`` when a call
+        is allowed right now (CLOSED or HALF-OPEN)."""
+        opened = self._opened_at.get(provider)
+        if opened is None:
+            return 0.0
+        return max(0.0, self.cooldown - (self._clock() - opened))
+
+    def circuit(self, provider: str) -> dict[str, Any]:
+        """The ``/health`` row shape: ``{open, retry_in_s}`` (whole seconds,
+        rounded UP so an open circuit never reads "retry in 0 s")."""
+        left = self.retry_in(provider)
+        return {"open": left > 0.0, "retry_in_s": int(math.ceil(left))}
 
     def record_success(self, provider: str) -> None:
         self._fails.pop(provider, None)
@@ -572,6 +593,8 @@ class ModelRouter:
         *,
         kind: str = "unreachable",
         exc: Exception | None = None,
+        retry_in: float = 0.0,
+        partial: bool = False,
     ) -> ProviderError:
         """The honest refusal for a REAL provider that isn't connected (v1.162.0).
 
@@ -607,7 +630,31 @@ class ModelRouter:
         the endpoint's own detail (*exc*) and names the setting, because the
         user may legitimately want the old behaviour back and must be able to
         find the switch from the error alone.
+
+        ``"cooldown"`` (v1.232.0, audit R4) is the breaker's own refusal: the
+        provider tripped :class:`ProviderHealth` and this turn was NOT sent
+        to it; *retry_in* is the seconds left, named so the user can wait
+        the right amount or switch. *partial* (audit R3) rewords the
+        ``"interrupted"`` case for a death AFTER the first token: the reply
+        the user is looking at is incomplete, and "not answered" would be
+        the wrong claim about it.
         """
+        if kind == "cooldown":
+            secs = int(math.ceil(max(0.0, retry_in)))
+            text = (
+                f"{wanted} is in cooldown, retry in {secs} s — it failed"
+                f" {self.health.threshold} times in a row, so this turn was not"
+                " sent to it."
+            )
+            if pinned:
+                text += " No substitute was tried because strict model pin is on."
+            else:
+                text += (
+                    " No substitute was used on purpose — a stand-in answer would"
+                    " look like real work that never happened."
+                )
+            text += " Wait it out, or pick another model for this chat and retry."
+            return ProviderError(text)
         if kind == "answered_error":
             status = getattr(exc, "status_code", None) if exc is not None else None
             what = f"answered HTTP {status}" if status else "answered with an error"
@@ -628,7 +675,13 @@ class ModelRouter:
             "timeout": f"{wanted} didn't respond in time",
             "interrupted": f"the connection to {wanted} dropped mid-request",
         }.get(kind, f"{wanted} isn't connected right now")
-        detail = f"{lead}, so this turn was not answered."
+        if partial and kind == "interrupted":
+            detail = (
+                f"the connection to {wanted} dropped mid-answer, so the reply"
+                " above is incomplete."
+            )
+        else:
+            detail = f"{lead}, so this turn was not answered."
         if pinned:
             detail += " No substitute was tried because strict model pin is on."
         else:
@@ -710,7 +763,12 @@ class ModelRouter:
         return policy.strip().lower() != "failover"
 
     async def _publish_not_connected(
-        self, wanted: str, session_id: str | None, *, kind: str = "unreachable"
+        self,
+        wanted: str,
+        session_id: str | None,
+        *,
+        kind: str = "unreachable",
+        retry_in: float = 0.0,
     ) -> None:
         """Banner event for an unconnected provider. Published BEFORE the raise so
         the dashboard still shows "connect a model" alongside the error.
@@ -727,6 +785,12 @@ class ModelRouter:
             "answered_error": "answered with an error — that endpoint is up but"
             " could not serve this turn; no substitute used"
             " (local_primary_policy=refuse)",
+            # v1.232.0 (audit R4): the breaker's own word, seconds included.
+            "cooldown": (
+                f"in cooldown, retry in {int(math.ceil(max(0.0, retry_in)))} s —"
+                " that provider failed repeatedly and this turn was not sent to"
+                " it; nothing stood in"
+            ),
         }.get(kind, "not connected — connect a model on the Connections page")
         await self.event_bus.publish(
             EventType.PROVIDER_DOWNGRADED,
@@ -829,6 +893,86 @@ class ModelRouter:
         if dead:
             await self._publish_not_connected(adapter.provider, session_id, kind=dead)
             raise self._unavailable_error(adapter.provider, pinned, kind=dead)
+
+    # -- the breaker gates the PRIMARY (v1.232.0, audit R4) ----------------
+    async def _refuse_if_open(
+        self, adapter: LLMAdapter, *, auto_selected: bool, pinned: bool, session_id
+    ) -> None:
+        """Refuse a primary whose circuit is OPEN, naming the seconds left.
+
+        Before this the breaker was consulted ONLY by the failover candidates
+        (``_first_capable``, fallback (A), sideways (B)): the primary was
+        called regardless, so a dead default cost every request the full
+        retry ladder while ``ProviderHealth`` counted the failures nobody
+        read, and no surface could say "in cooldown". Same shape as the
+        v1.162.0/v1.228.0 refusals — ``provider.downgraded`` (``used:
+        "none"``) then the honest error — so the banner, the ledger and the
+        error text all say the same thing. Auto is skipped (it is the one
+        route that may substitute, and ``_first_available_real`` already
+        filters by the breaker); a HALF-OPEN circuit is allowed through as
+        the probe it is. MIRROR NOTE (lock-step): called from BOTH
+        complete() and stream() right before ``_refuse_if_dead``."""
+        if auto_selected or adapter.provider == "mock":
+            return
+        if self.health.allow(adapter.provider):
+            return
+        left = self.health.retry_in(adapter.provider)
+        await self._publish_not_connected(
+            adapter.provider, session_id, kind="cooldown", retry_in=left
+        )
+        raise self._unavailable_error(
+            adapter.provider, pinned, kind="cooldown", retry_in=left
+        )
+
+    # -- mid-stream honesty (v1.232.0, audit R3) ---------------------------
+    async def _committed_failure(
+        self, adapter: LLMAdapter, exc: Exception, pinned: bool, session_id
+    ) -> ProviderError | None:
+        """Ledger a failure that landed AFTER the first frame reached the caller.
+
+        ``stream()`` never swaps providers mid-answer (that rule stands), but
+        ``if committed: raise`` used to sit BEFORE ``record_failure`` and
+        ``provider.failed`` — a provider that died mid-answer was invisible
+        to the breaker, the ledger, ``/diagnostics/reliability`` and the
+        notifier, while the same death one token earlier counted. Now it
+        counts, tagged ``partial: true`` so a reader can tell the two apart.
+        Returns the honest ``interrupted`` refusal for a LOCAL primary whose
+        transport broke (a dropped socket's ``httpx.ReadError`` often carries
+        an EMPTY message, which the chat lane rendered as a blank error
+        line), else ``None`` — the caller re-raises the original."""
+        self.health.record_failure(adapter.provider)
+        await self.event_bus.publish(
+            EventType.PROVIDER_FAILED,
+            {
+                "provider": adapter.provider,
+                "error": f"{type(exc).__name__}: {exc}",
+                "partial": True,
+            },
+            session_id=session_id,
+        )
+        if is_local_provider(adapter.provider) and local_failure_kind(exc):
+            await self._publish_not_connected(
+                adapter.provider, session_id, kind="interrupted"
+            )
+            return self._unavailable_error(
+                adapter.provider, pinned, kind="interrupted", exc=exc, partial=True
+            )
+        return None
+
+    async def _publish_failover(
+        self, failed: LLMAdapter, alt: LLMAdapter, why: str, session_id
+    ) -> None:
+        """``provider.failover`` for the stream lane — published on the
+        alternate's FIRST frame (v1.232.0, audit R3), not after the whole
+        stream is consumed: a client that disconnects mid-answer cancels the
+        generator, and the turn that DID move to another provider used to
+        leave no record. complete() publishes before returning, which is the
+        same moment."""
+        await self.event_bus.publish(
+            EventType.PROVIDER_FAILOVER,
+            {"from": failed.provider, "to": alt.provider, "reason": why},
+            session_id=session_id,
+        )
 
     def _wrap_for_tools(self, adapter: LLMAdapter) -> LLMAdapter:
         """The v1.131.0 wrap decision, envelope-gated onto its two rungs
@@ -1139,6 +1283,11 @@ class ModelRouter:
         # A structured provider.routed for EVERY real route (explicit/default/
         # auto-tier/local-oracle/failover). Mock offline/downgrade already emits
         # provider.downgraded, so we skip a redundant routed event there.
+        # THE BREAKER GATES THE PRIMARY (v1.232.0): an OPEN circuit refuses
+        # by name with the seconds left. MIRROR NOTE (lock-step): both lanes.
+        await self._refuse_if_open(
+            adapter, auto_selected=auto_selected, pinned=pinned, session_id=session_id
+        )
         # LIVENESS PRE-PROBE (v1.228.0): a dead LOCAL primary refuses NOW, not
         # after the retry ladder. MIRROR NOTE (lock-step): both lanes.
         await self._refuse_if_dead(
@@ -1522,6 +1671,11 @@ class ModelRouter:
                 session_id=session_id,
             )
 
+        # THE BREAKER GATES THE PRIMARY (v1.232.0): an OPEN circuit refuses
+        # by name with the seconds left. MIRROR NOTE (lock-step): both lanes.
+        await self._refuse_if_open(
+            adapter, auto_selected=auto_selected, pinned=pinned, session_id=session_id
+        )
         # LIVENESS PRE-PROBE (v1.228.0): a dead LOCAL primary refuses NOW, not
         # after the retry ladder. MIRROR NOTE (lock-step): both lanes.
         await self._refuse_if_dead(
@@ -1553,7 +1707,13 @@ class ModelRouter:
             return
         except Exception as exc:  # noqa: BLE001 — classified below
             if committed:
-                raise  # already streaming this provider — never swap mid-stream
+                # Already streaming this provider — never swap mid-stream. But
+                # the death still COUNTS (v1.232.0, audit R3): breaker, ledger,
+                # and an honest refusal in place of a blank error line.
+                wrapped = await self._committed_failure(adapter, exc, pinned, session_id)
+                if wrapped is None:
+                    raise
+                raise wrapped from exc
             primary_exc = exc
             transient = is_transient_error(exc)
             # The ONE derived reason every disclosure below carries (v1.228.0).
@@ -1611,7 +1771,11 @@ class ModelRouter:
                         alt, system=system, messages=messages, tools=tools,
                         deadline=deadline, retry=False,
                     ):
-                        committed = True
+                        if not committed:
+                            committed = True
+                            # The turn has MOVED: say so before the first frame
+                            # leaves (v1.232.0) — a disconnect cannot lose it.
+                            await self._publish_failover(adapter, alt, why, session_id)
                         # A failover answered — disclose it as such (v1.165.0).
                         # MIRROR NOTE (lock-step): complete() fallback (A).
                         yield self._enrich_final(
@@ -1619,15 +1783,15 @@ class ModelRouter:
                         )
                     self._record_stream_latency(alt, t0)
                     self.health.record_success(alt.provider)
-                    await self.event_bus.publish(
-                        EventType.PROVIDER_FAILOVER,
-                        {"from": adapter.provider, "to": alt.provider, "reason": why},
-                        session_id=session_id,
-                    )
+                    if not committed:  # an empty stream still served the turn
+                        await self._publish_failover(adapter, alt, why, session_id)
                     return
                 except Exception as dexc:  # noqa: BLE001 — the default failed too
                     if committed:
-                        raise
+                        wrapped = await self._committed_failure(alt, dexc, pinned, session_id)
+                        if wrapped is None:
+                            raise
+                        raise wrapped from dexc
                     self.health.record_failure(alt.provider)
                     tried_ids.add(id(alt))
                     tried_providers.add(alt.provider)
@@ -1659,7 +1823,9 @@ class ModelRouter:
                         alt, system=system, messages=messages, tools=tools,
                         deadline=deadline, retry=False,
                     ):
-                        committed = True
+                        if not committed:
+                            committed = True
+                            await self._publish_failover(adapter, alt, why, session_id)
                         # Sideways failover answered — disclose it (v1.165.0).
                         # MIRROR NOTE (lock-step): complete() fallback (B).
                         yield self._enrich_final(
@@ -1667,15 +1833,15 @@ class ModelRouter:
                         )
                     self._record_stream_latency(alt, t0)
                     self.health.record_success(alt.provider)
-                    await self.event_bus.publish(
-                        EventType.PROVIDER_FAILOVER,
-                        {"from": adapter.provider, "to": alt.provider, "reason": why},
-                        session_id=session_id,
-                    )
+                    if not committed:  # an empty stream still served the turn
+                        await self._publish_failover(adapter, alt, why, session_id)
                     return
-                except Exception:  # noqa: BLE001 — try the next candidate
+                except Exception as sexc:  # noqa: BLE001 — try the next candidate
                     if committed:
-                        raise
+                        wrapped = await self._committed_failure(alt, sexc, pinned, session_id)
+                        if wrapped is None:
+                            raise
+                        raise wrapped from sexc
                     self.health.record_failure(alt.provider)
                     tried_ids.add(id(alt))
                     tried_providers.add(alt.provider)

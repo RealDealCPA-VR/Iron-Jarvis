@@ -4,16 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import {
   SlidersHorizontal,
   Save,
-  KeyRound,
   Trash2,
-  ShieldCheck,
   RotateCcw,
   Wrench,
   DatabaseBackup,
   Cpu,
   Gauge,
 } from "lucide-react";
-import { get, put, post, ijToken, setIjToken, ApiError } from "@/lib/api";
+import { get, put, post, ApiError } from "@/lib/api";
 import {
   Card,
   OfflineHint,
@@ -27,6 +25,7 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { MaintenanceTools } from "@/components/settings/MaintenanceTools";
+import { DaemonTokenCard } from "@/components/settings/DaemonTokenCard";
 import { useDaemon } from "@/lib/daemon";
 
 type FieldType = "text" | "number" | "boolean" | "select";
@@ -824,10 +823,6 @@ export default function SettingsPage() {
   const [ok, setOk] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Daemon token box (lives in localStorage, applies without a rebuild).
-  const [token, setToken] = useState("");
-  const [tokenNote, setTokenNote] = useState<string | null>(null);
-
   // Maintenance actions (backup / restart) + provider options for the
   // default_provider dropdown, both off the shared /health poll.
   const { refresh, health } = useDaemon();
@@ -837,7 +832,6 @@ export default function SettingsPage() {
   const [maintErr, setMaintErr] = useState<string | null>(null);
 
   useEffect(() => {
-    setToken(ijToken());
     let cancelled = false;
     (async () => {
       try {
@@ -931,17 +925,6 @@ export default function SettingsPage() {
     if (original) setForm(original);
     setOk(null);
     setError(null);
-  }
-
-  function saveToken() {
-    setIjToken(token);
-    setTokenNote(token.trim() ? "Token saved — it's now sent with every request." : "Token cleared.");
-  }
-
-  function clearToken() {
-    setIjToken("");
-    setToken("");
-    setTokenNote("Token cleared.");
   }
 
   async function backupNow() {
@@ -1178,46 +1161,10 @@ export default function SettingsPage() {
               </div>
             </Card>
 
-            {/* Daemon access token */}
-            <Card title="Daemon access token" icon={<KeyRound size={15} />}>
-              <div className="space-y-3.5">
-                <p className="text-[12px] leading-relaxed text-zinc-500">
-                  If the daemon is protected with a bearer token, paste it here. It&apos;s stored in
-                  your browser and sent with every request — so you can log into a deployed instance
-                  without a rebuild.
-                </p>
-                <div>
-                  <SectionLabel>Token</SectionLabel>
-                  <input
-                    type="password"
-                    value={token}
-                    onChange={(e) => {
-                      setToken(e.target.value);
-                      setTokenNote(null);
-                    }}
-                    placeholder="paste IRONJARVIS_TOKEN"
-                    autoComplete="off"
-                    className="field mt-1.5 font-mono text-[13px]"
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <button type="button" onClick={saveToken} className="btn-accent flex-1 py-1.5 text-xs">
-                    <ShieldCheck size={14} /> Save token
-                  </button>
-                  <button
-                    type="button"
-                    onClick={clearToken}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/10 px-3 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:border-rose-500/40 hover:text-rose-300"
-                  >
-                    <Trash2 size={14} /> Clear
-                  </button>
-                </div>
-                {tokenNote && <SuccessNote>{tokenNote}</SuccessNote>}
-                <p className="text-[11px] text-zinc-600">
-                  Local installs usually need no token — leave this empty.
-                </p>
-              </div>
-            </Card>
+            {/* Daemon access token (v1.232.0: read-only inside the desktop
+                app, which seeds it; the paste box is for a browser without
+                the bridge). */}
+            <DaemonTokenCard />
           </div>
         </div>
       </Reveal>

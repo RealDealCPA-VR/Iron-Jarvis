@@ -72,6 +72,50 @@ function kindMeta(kind: string) {
   return KIND_META[kind] ?? KIND_META.action;
 }
 
+/** v1.232.0 (audit U12): plain words for the event types the ledger projects
+ *  straight into a row's `summary` (`_event_summary` says "provider.routed
+ *  <model>" for a decision, and `actor` falls back to the type when nothing
+ *  stamped an origin). A row read "decision by provider.routed /
+ *  provider.routed" — the type twice and no words. Unknown types keep their
+ *  summary verbatim (a new kind must read oddly, never vanish). */
+export const EVENT_WORDS: Record<string, string> = {
+  "provider.routed": "Picked a model for this turn",
+  "provider.failover": "Switched provider after a failure",
+  "provider.downgraded": "Fell back to the offline mock",
+  "autonomy.proposed": "Proposed an action on its own",
+  "autonomy.executed": "Ran an action on its own",
+  "llm.completed": "Model call finished",
+  "session.created": "Session started",
+  "session.completed": "Session finished",
+  "agent.started": "Agent started",
+  "agent.state_changed": "Agent changed state",
+  "agent.completed": "Agent finished",
+  "action.reverted": "Action undone",
+  "tool.executed": "Ran a tool",
+  "tool.denied": "Refused a tool",
+};
+
+const EVENT_TYPE_RE = /^([a-z_]+\.[a-z_.]+)\b\s*(.*)$/s;
+
+/** The row's second line: the event's human label (plus the summary's own
+ *  detail, e.g. the model picked) when the summary is a bare event type. */
+export function humanSummary(summary: string | null | undefined): string {
+  const s = (summary ?? "").trim();
+  if (!s) return "";
+  const m = EVENT_TYPE_RE.exec(s);
+  if (!m) return s;
+  const words = EVENT_WORDS[m[1]];
+  if (!words) return s;
+  const detail = m[2].trim();
+  return detail ? `${words} · ${detail}` : words;
+}
+
+/** An `actor` that is just an event type is the ledger's fallback, not a
+ *  person or an agent — "by provider.routed" says nothing. */
+export function isEventTypeActor(actor: string | null | undefined): boolean {
+  return !!actor && /^[a-z_]+\.[a-z_.]+$/.test(actor.trim());
+}
+
 /**
  * The audit time-travel feed. Renders the canonical `GET /audit` stream as a
  * vertical timeline with per-entry undo where the action allows. Reused by the
@@ -426,7 +470,7 @@ function TimelineRow({
               <span className="text-zinc-300">{meta.label}</span>
             )}
           </span>
-          {e.actor && (
+          {e.actor && !isEventTypeActor(e.actor) && (
             <span className="text-[11px] text-zinc-500">
               by <span className="text-zinc-400">{e.actor}</span>
             </span>
@@ -447,7 +491,7 @@ function TimelineRow({
 
         {e.summary && (
           <div className="mt-0.5 truncate text-xs text-zinc-500" title={e.summary}>
-            {e.summary}
+            {humanSummary(e.summary)}
           </div>
         )}
 

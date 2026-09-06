@@ -220,10 +220,15 @@ def test_git_native_review_approve_over_http(tmp_path, monkeypatch):
         ["git", "branch", "--list", branch], cwd=repo, capture_output=True, text=True
     ).stdout
     assert branch not in branches
-    assert client.get(f"/sessions/{sid}/review").status_code == 404
+    gone = client.get(f"/sessions/{sid}/review")
+    assert gone.status_code == 200 and gone.json() == {"review": None}
 
 
-def test_review_404_when_git_native_disabled(tmp_path):
+def test_review_absent_when_git_native_disabled(tmp_path):
+    # v1.232.0 (audit U14): no review is a 200 {"review": null}, not a 404 —
+    # the dashboard asks on every detail visit and it is the normal state.
     client = TestClient(create_app(str(tmp_path)))
     created = client.post("/sessions", json={"task": "x", "wait": True}).json()
-    assert client.get(f"/sessions/{created['id']}/review").status_code == 404
+    res = client.get(f"/sessions/{created['id']}/review")
+    assert res.status_code == 200
+    assert res.json() == {"review": None}
