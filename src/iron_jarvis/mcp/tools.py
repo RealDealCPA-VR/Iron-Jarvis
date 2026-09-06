@@ -188,10 +188,54 @@ def _build_transport(cfg: dict[str, Any], secret_resolver: SecretResolver | None
         _SUPERSEDED_PACKAGES.get(str(a), str(a)) for a in (cfg.get("args") or [])
     ]
     return StdioTransport(
-        cfg["command"],
+        resolve_launcher(str(cfg["command"])),
         args or None,
         env=merged_env,
         cwd=cfg.get("cwd"),
+    )
+
+
+def resolve_launcher(command: str) -> str:
+    """The executable path for a stdio server's ``command`` (v1.233.0).
+
+    THE LIVE DEFECT: ``brave_search`` is configured as ``command = "npx"`` and
+    ``subprocess.Popen(["npx", ...])`` raised ``FileNotFoundError: [WinError 2]``
+    on the packaged daemon — for two reasons at once. On Windows ``npx`` is
+    ``npx.cmd``; ``CreateProcess`` does not consult ``PATHEXT`` the way
+    ``cmd.exe`` does, so the bare name never resolves even when it IS on PATH.
+    And a GUI-launched daemon inherits Electron's environment, which lacks the
+    per-user Node dirs (``%LOCALAPPDATA%\\pi-node\\current``, ``%APPDATA%\\npm``)
+    the doctor's ``mcp`` check already searches. So the pack was "visible as
+    failed" (v1.229.0) but could never start.
+
+    Resolution mirrors the doctor exactly — ``terminals.ai_clis._find``: real
+    PATH via ``shutil.which`` (PATHEXT-aware, so ``npx`` → ``npx.CMD``), then
+    the well-known per-user bin dirs with Windows extensions. A command that
+    already carries a path separator is the user's explicit choice and is
+    passed through untouched. When nothing resolves, raise a FileNotFoundError
+    that SAYS what is missing and how to fix it, so the Tools-page row and the
+    toast read as instructions instead of a WinError code; that error rides the
+    same ``last_error`` path as any launch failure.
+    """
+    import os as _os
+
+    cmd = (command or "").strip()
+    if not cmd:
+        raise FileNotFoundError("this pack has no launcher command configured")
+    if _os.sep in cmd or (_os.altsep and _os.altsep in cmd):
+        return cmd  # an explicit path: the user's choice, never rewritten
+    from ..terminals.ai_clis import _find
+
+    found = _find(cmd)
+    if found:
+        return found
+    hint = {
+        "npx": "install Node.js LTS (https://nodejs.org)",
+        "uvx": "install uv (https://docs.astral.sh/uv/)",
+    }.get(cmd.lower().removesuffix(".cmd"), f"install '{cmd}'")
+    raise FileNotFoundError(
+        f"launcher '{cmd}' was not found on PATH or in the usual install "
+        f"folders — {hint}, restart Iron Jarvis, then press Retry on the pack"
     )
 
 

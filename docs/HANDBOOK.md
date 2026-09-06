@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.232.0 (2026-09-05).*
+holds itself to. Current as of v1.233.0 (2026-09-06).*
 
 ---
 
@@ -507,6 +507,17 @@ reads; it never writes, runs commands, or starts work on its own.
   The per-process logs (tray → Open logs folder) stamp every line with a
   time and say `killed pid=… reason=quit|update|watchdog|restart` when the
   app itself stopped a process, so a crash and a kill no longer look alike.
+- **"Tool pack didn't start: <name> — launcher 'npx' was not found"** (v1.233.0)
+  → the pack's launcher (`npx` for Node packs, `uvx` for Python packs) is not
+  installed or not where the app looks (PATH, then the usual per-user Node and
+  uv folders). Install Node.js LTS or uv, restart Iron Jarvis, then press
+  **Retry** on the pack under Tools. A pack whose launcher IS installed now
+  starts from the packaged app too — before v1.233.0 the bare name never
+  resolved on Windows even when it was on PATH.
+- **Amber text or boxes unreadable on a light Mark** → fixed in v1.233.0; the
+  light Marks remap every amber tint to deep amber ink. If a new surface
+  shows pale yellow on white, it is a missing rule in the light-amber block
+  of `globals.css` (a test names the class).
 - **"Couldn't save this conversation"** (a chip above the composer, v1.226.0)
   → the thread could not be written. **Retry** re-sends what is on screen
   *now* (reply included) and the chip stays up, reading "Retrying…", until

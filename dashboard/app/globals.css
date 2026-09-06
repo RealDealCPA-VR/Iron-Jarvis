@@ -480,3 +480,100 @@ table {
 :root[data-theme="mark8"] .notice-warn-btn:hover {
   background-color: rgb(180 83 9 / 0.18);
 }
+
+/* ---------------------------------------------------------------------------
+   Amber utilities on the LIGHT Marks (v1.233.0).
+
+   The .notice-warn fix above covered one banner. The report that closed the
+   audit named the rest: every popup, chip and hint that uses a raw Tailwind
+   amber tint (text-amber-100/200/300 and friends) is a DARK-MODE colour and
+   lands near 1.3:1 on Mark 1 / Mark 8. Rather than rewrite ~500 call sites,
+   the light Marks remap the utilities themselves: pale text becomes deep
+   amber ink, faint borders and tints get enough alpha to be seen, and the
+   solid indicator dots (bg-amber-400/500) are left alone because saturated
+   amber already reads on a bright canvas. Dark Marks are untouched.
+
+   GENERATED FROM THE CLASSES IN USE — `light-amber-v1233.test.tsx` fails when
+   a new amber text/border/ring utility appears without a rule here; add the
+   class to this block (same shape) rather than loosening the test.
+--------------------------------------------------------------------------- */
+/* light-amber-overrides:start */
+:root[data-theme="mark1"] .bg-amber-400\/5,
+:root[data-theme="mark8"] .bg-amber-400\/5 { background-color: rgb(245 158 11 / 0.13); }
+:root[data-theme="mark1"] .bg-amber-400\/10,
+:root[data-theme="mark8"] .bg-amber-400\/10 { background-color: rgb(245 158 11 / 0.18); }
+:root[data-theme="mark1"] .bg-amber-400\/15,
+:root[data-theme="mark8"] .bg-amber-400\/15 { background-color: rgb(245 158 11 / 0.23); }
+:root[data-theme="mark1"] .bg-amber-400\/20,
+:root[data-theme="mark8"] .bg-amber-400\/20 { background-color: rgb(245 158 11 / 0.28); }
+:root[data-theme="mark1"] .bg-amber-500\/5,
+:root[data-theme="mark8"] .bg-amber-500\/5 { background-color: rgb(245 158 11 / 0.13); }
+:root[data-theme="mark1"] .bg-amber-500\/10,
+:root[data-theme="mark8"] .bg-amber-500\/10 { background-color: rgb(245 158 11 / 0.18); }
+:root[data-theme="mark1"] .bg-amber-500\/15,
+:root[data-theme="mark8"] .bg-amber-500\/15 { background-color: rgb(245 158 11 / 0.23); }
+:root[data-theme="mark1"] .bg-amber-500\/20,
+:root[data-theme="mark8"] .bg-amber-500\/20 { background-color: rgb(245 158 11 / 0.28); }
+:root[data-theme="mark1"] .bg-orange-500\/10,
+:root[data-theme="mark8"] .bg-orange-500\/10 { background-color: rgb(249 115 22 / 0.18); }
+:root[data-theme="mark1"] .border-amber-400\/20,
+:root[data-theme="mark8"] .border-amber-400\/20 { border-color: rgb(180 83 9 / 0.45); }
+:root[data-theme="mark1"] .border-amber-400\/25,
+:root[data-theme="mark8"] .border-amber-400\/25 { border-color: rgb(180 83 9 / 0.5); }
+:root[data-theme="mark1"] .border-amber-400\/30,
+:root[data-theme="mark8"] .border-amber-400\/30 { border-color: rgb(180 83 9 / 0.55); }
+:root[data-theme="mark1"] .border-amber-400\/40,
+:root[data-theme="mark8"] .border-amber-400\/40 { border-color: rgb(180 83 9 / 0.65); }
+:root[data-theme="mark1"] .border-amber-500\/20,
+:root[data-theme="mark8"] .border-amber-500\/20 { border-color: rgb(180 83 9 / 0.45); }
+:root[data-theme="mark1"] .border-amber-500\/25,
+:root[data-theme="mark8"] .border-amber-500\/25 { border-color: rgb(180 83 9 / 0.5); }
+:root[data-theme="mark1"] .border-amber-500\/30,
+:root[data-theme="mark8"] .border-amber-500\/30 { border-color: rgb(180 83 9 / 0.55); }
+:root[data-theme="mark1"] .border-amber-500\/40,
+:root[data-theme="mark8"] .border-amber-500\/40 { border-color: rgb(180 83 9 / 0.65); }
+:root[data-theme="mark1"] .border-amber-500\/50,
+:root[data-theme="mark8"] .border-amber-500\/50 { border-color: rgb(180 83 9 / 0.75); }
+:root[data-theme="mark1"] .border-amber-500\/60,
+:root[data-theme="mark8"] .border-amber-500\/60 { border-color: rgb(180 83 9 / 0.75); }
+:root[data-theme="mark1"] .border-orange-500\/30,
+:root[data-theme="mark8"] .border-orange-500\/30 { border-color: rgb(194 65 12 / 0.55); }
+:root[data-theme="mark1"] .ring-amber-400\/40,
+:root[data-theme="mark8"] .ring-amber-400\/40 { --tw-ring-color: rgb(180 83 9 / 0.65); }
+:root[data-theme="mark1"] .text-amber-100,
+:root[data-theme="mark8"] .text-amber-100 { color: rgb(120 53 15 / 1); }
+:root[data-theme="mark1"] .text-amber-100\/70,
+:root[data-theme="mark8"] .text-amber-100\/70 { color: rgb(120 53 15 / 0.8); }
+:root[data-theme="mark1"] .text-amber-100\/80,
+:root[data-theme="mark8"] .text-amber-100\/80 { color: rgb(120 53 15 / 0.84); }
+:root[data-theme="mark1"] .text-amber-100\/90,
+:root[data-theme="mark8"] .text-amber-100\/90 { color: rgb(120 53 15 / 0.92); }
+:root[data-theme="mark1"] .text-amber-200,
+:root[data-theme="mark8"] .text-amber-200 { color: rgb(120 53 15 / 1); }
+:root[data-theme="mark1"] .text-amber-200\/60,
+:root[data-theme="mark8"] .text-amber-200\/60 { color: rgb(120 53 15 / 0.8); }
+:root[data-theme="mark1"] .text-amber-200\/70,
+:root[data-theme="mark8"] .text-amber-200\/70 { color: rgb(120 53 15 / 0.8); }
+:root[data-theme="mark1"] .text-amber-200\/80,
+:root[data-theme="mark8"] .text-amber-200\/80 { color: rgb(120 53 15 / 0.84); }
+:root[data-theme="mark1"] .text-amber-200\/90,
+:root[data-theme="mark8"] .text-amber-200\/90 { color: rgb(120 53 15 / 0.92); }
+:root[data-theme="mark1"] .text-amber-300,
+:root[data-theme="mark8"] .text-amber-300 { color: rgb(146 64 14 / 1); }
+:root[data-theme="mark1"] .text-amber-300\/70,
+:root[data-theme="mark8"] .text-amber-300\/70 { color: rgb(146 64 14 / 0.8); }
+:root[data-theme="mark1"] .text-amber-300\/80,
+:root[data-theme="mark8"] .text-amber-300\/80 { color: rgb(146 64 14 / 0.84); }
+:root[data-theme="mark1"] .text-amber-300\/90,
+:root[data-theme="mark8"] .text-amber-300\/90 { color: rgb(146 64 14 / 0.92); }
+:root[data-theme="mark1"] .text-amber-400,
+:root[data-theme="mark8"] .text-amber-400 { color: rgb(146 64 14 / 1); }
+:root[data-theme="mark1"] .text-amber-400\/80,
+:root[data-theme="mark8"] .text-amber-400\/80 { color: rgb(146 64 14 / 0.84); }
+:root[data-theme="mark1"] .text-amber-400\/90,
+:root[data-theme="mark8"] .text-amber-400\/90 { color: rgb(146 64 14 / 0.92); }
+:root[data-theme="mark1"] .text-amber-500,
+:root[data-theme="mark8"] .text-amber-500 { color: rgb(180 83 9 / 1); }
+:root[data-theme="mark1"] .text-orange-300,
+:root[data-theme="mark8"] .text-orange-300 { color: rgb(154 52 18 / 1); }
+/* light-amber-overrides:end */
