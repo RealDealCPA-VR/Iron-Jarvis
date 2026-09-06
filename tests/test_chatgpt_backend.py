@@ -119,12 +119,21 @@ async def test_api_key_still_uses_chat_completions():
     assert out.text == "hi"
 
 
-async def test_incompatible_model_mapped_to_codex_default():
+async def test_incompatible_model_mapped_to_codex_default(monkeypatch):
+    # v1.234.0: self-contained. The adapter keeps a PROCESS-LIFE known-good /
+    # rejected cache, so this test's answer used to depend on which sibling
+    # ran first in the same xdist worker (green in file order, red alone or
+    # split across workers). Start from an empty cache and assert the
+    # adapter's own default, not a model id that retires on OpenAI's clock.
+    from iron_jarvis.providers.adapters import openai as _oa
+
+    monkeypatch.setattr(_oa, "_CHATGPT_KNOWN_GOOD", [])
+    monkeypatch.setattr(_oa, "_CHATGPT_REJECTED", set())
     http = FakeHTTP([FakeResp(text=_TEXT_SSE)])
     adapter = OpenAIAdapter(model="gpt-4o-mini", api_key=_TOKEN, http=http)
     await adapter.complete(system="", messages=[LLMMessage(role="user", content="x")], tools=[])
     # gpt-4o-mini isn't served by the Codex backend -> mapped, not 404'd.
-    assert http.last["json"]["model"] == "gpt-5-codex"
+    assert http.last["json"]["model"] == _oa._CHATGPT_DEFAULT_MODEL
 
 
 async def test_token_without_account_claim_raises_actionable_error():

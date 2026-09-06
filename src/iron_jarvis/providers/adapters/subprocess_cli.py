@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .base import LLMAdapter, LLMMessage, LLMResponse, ProviderError, ToolCall
+from ..cli_auth import cli_failure_message, note_cli_failure
 
 #: Hard wall-clock cap per CLI call — a wedged CLI must never hang a turn. A
 #: tool-using step can legitimately take 10–20s, so this is generous.
@@ -178,8 +179,11 @@ class SubprocessCliAdapter(LLMAdapter):
                     f"{self.provider}: CLI timed out after {_TIMEOUT_S}s", transient=True
                 ) from exc
             if code != 0:
-                detail = (err or out).strip()[:400]
-                raise RuntimeError(f"{self.provider}: CLI exited {code}: {detail}")
+                # v1.234.0: the CLI's own words, mapped to the remedy when it
+                # is a sign-in refusal — and the shared probe hears about it.
+                msg = cli_failure_message(self.provider, self._binary, code, out, err)
+                note_cli_failure(self._binary, msg)
+                raise RuntimeError(msg)
             text = ""
             if out_path is not None:
                 try:
@@ -381,8 +385,15 @@ class ClaudeCliAdapter(LLMAdapter):
                 f"claude-cli: CLI timed out after {_TIMEOUT_S}s", transient=True
             ) from exc
         if code != 0:
-            detail = (err or out).strip()[:400]
-            raise RuntimeError(f"claude-cli: CLI exited {code}: {detail}")
+            # v1.234.0 (live report): newer Claude Code builds exit 1 when
+            # signed out AND print the result JSON to stdout. This branch used
+            # to fire before _parse ever saw the JSON, so the user got 400
+            # characters of it instead of "Not logged in". The message helper
+            # reads the JSON FIRST and maps a sign-in refusal to the remedy;
+            # the shared auth probe is told so availability turns honest now.
+            msg = cli_failure_message(self.provider, "claude", code, out, err)
+            note_cli_failure("claude", msg)
+            raise RuntimeError(msg)
         return self._parse(out, bool(tools))
 
     @staticmethod
@@ -400,9 +411,9 @@ class ClaudeCliAdapter(LLMAdapter):
         # router treats it as a provider failure and fails over — never return
         # the error string as if it were the model's answer.
         if data.get("is_error"):
-            raise RuntimeError(
-                f"claude-cli: {str(data.get('result') or 'CLI error').strip()[:300]}"
-            )
+            msg = cli_failure_message("claude-cli", "claude", 0, stdout, "")
+            note_cli_failure("claude", msg)
+            raise RuntimeError(msg)
         usage_src = data.get("usage") or {}
         usage = {
             "input_tokens": int(usage_src.get("input_tokens", 0) or 0),

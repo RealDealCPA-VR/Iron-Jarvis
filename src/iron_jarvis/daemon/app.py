@@ -654,6 +654,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # Terminal panes survive a restart / app update: re-open each persisted
         # session (fresh shell, same id + cwd + prior scrollback shown).
         _rehydrate_step("rehydrate_terminals", platform.terminals.rehydrate)
+        # v1.234.0: start the subscription-CLI sign-in probes on a thread so
+        # the first /health after boot already knows whether `claude` /
+        # `codex` can answer (warm() returns at once; nothing blocks boot).
+        _rehydrate_step("probe_cli_logins", platform.providers.warm_cli_logins)
         # Living documents: their schedules fire event-kind tasks; regenerate
         # in the background when one lands (sync handler → task on the loop).
         def _on_livedoc_event(event: Any) -> None:

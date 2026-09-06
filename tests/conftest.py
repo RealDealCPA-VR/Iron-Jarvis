@@ -52,11 +52,16 @@ def _isolate_subscription_cli_detection():
     from iron_jarvis.providers.manager import ProviderManager
 
     original = ProviderManager._cli_binary_present
+    original_signed = ProviderManager._cli_signed_in
     ProviderManager._cli_binary_present = staticmethod(lambda binary: False)
+    # v1.234.0: the sign-in probe shells out to the real `claude`/`codex` on
+    # a dev box — stub it to "unknown" so no test ever runs the user's CLI.
+    ProviderManager._cli_signed_in = staticmethod(lambda binary: None)
     try:
         yield
     finally:
         ProviderManager._cli_binary_present = original
+        ProviderManager._cli_signed_in = original_signed
 
 
 @pytest.fixture

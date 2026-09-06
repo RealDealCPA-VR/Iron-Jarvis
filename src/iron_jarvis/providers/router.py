@@ -655,6 +655,30 @@ class ModelRouter:
                 )
             text += " Wait it out, or pick another model for this chat and retry."
             return ProviderError(text)
+        if kind == "signed_out":
+            # v1.234.0: the CLI is on disk and said it is not signed in. The
+            # remedy is the CLI's own login, not an endpoint check.
+            from .cli_auth import CLI_BINARIES, SIGN_IN_FIX
+
+            cli = self._signed_out_cli(wanted) or wanted
+            fix = SIGN_IN_FIX.get(CLI_BINARIES.get(cli, ""), "sign in via its own CLI.")
+            if cli != wanted:
+                # A keyless API provider served through the CLI (inherited
+                # login): name the CLI, because that is what needs the login.
+                text = (
+                    f"{wanted} runs through {cli}, which is installed but not"
+                    " signed in, so this turn was not answered."
+                )
+            else:
+                text = f"{wanted} is installed but not signed in, so this turn was not answered."
+            if pinned:
+                text += " No substitute was tried because strict model pin is on."
+            else:
+                text += (
+                    " No substitute was used on purpose — a stand-in answer would"
+                    " look like real work that never happened."
+                )
+            return ProviderError(f"{text} {fix}")
         if kind == "answered_error":
             status = getattr(exc, "status_code", None) if exc is not None else None
             what = f"answered HTTP {status}" if status else "answered with an error"
@@ -706,6 +730,31 @@ class ModelRouter:
             " chat, and retry.",
         )
         return ProviderError(detail + fix)
+
+    def _signed_out_cli(self, wanted: str) -> str | None:
+        """The subscription CLI provider behind *wanted* that is installed
+        but reported signed out (v1.234.0), or ``None``. *wanted* may be the
+        CLI itself (``claude-cli``) or a keyless API provider it serves
+        (``anthropic`` → ``claude-cli`` via the manager's inherit alias)."""
+        fn = getattr(self.manager, "cli_login_status", None)
+        if not callable(fn):
+            return None
+        alias = (getattr(self.manager, "_INHERIT_ALIAS", None) or {}).get(wanted)
+        for cand in (wanted, alias):
+            if not cand:
+                continue
+            try:
+                st = fn(cand) or {}
+            except Exception:  # noqa: BLE001 — wording only, never a new failure
+                return None
+            if st.get("installed") and st.get("signed_in") is False:
+                return cand
+        return None
+
+    def _unavailable_kind(self, wanted: str) -> str:
+        """``"signed_out"`` when *wanted* (or the CLI it inherits) is
+        installed but reported signed out, else ``"unreachable"``."""
+        return "signed_out" if self._signed_out_cli(wanted) else "unreachable"
 
     def _refuses_failover(self, provider: str, exc: Exception) -> str | None:
         """The refusal KIND when *provider* is LOCAL and *exc* is transport-shaped.
@@ -1225,7 +1274,7 @@ class ModelRouter:
         pinned = bool(provider) and provider != "auto" and self._strict_pin()
         if downgraded:
             await self._publish_not_connected(wanted, session_id)
-            raise self._unavailable_error(wanted, pinned)
+            raise self._unavailable_error(wanted, pinned, kind=self._unavailable_kind(wanted))
 
         # CAPABILITY-AWARE ROUTING. Tools (v1.131.0): a tool-carrying request
         # that resolved to a text-only adapter is WRAPPED in the prompted-tools
@@ -1629,7 +1678,7 @@ class ModelRouter:
         pinned = bool(provider) and provider != "auto" and self._strict_pin()
         if downgraded:
             await self._publish_not_connected(wanted, session_id)
-            raise self._unavailable_error(wanted, pinned)
+            raise self._unavailable_error(wanted, pinned, kind=self._unavailable_kind(wanted))
 
         # Capability-aware routing — same contract as complete(): a tool
         # request on a text-only adapter is wrapped in the prompted-tools

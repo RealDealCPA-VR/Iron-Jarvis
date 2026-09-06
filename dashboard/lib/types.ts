@@ -14,6 +14,13 @@ export interface ProviderHealth {
    *  is refused by name with the same seconds, so the composer says it
    *  first. */
   circuit?: { open: boolean; retry_in_s: number };
+  /** v1.234.0 (subscription CLI rows only): the CLI binary is on disk. */
+  installed?: boolean;
+  /** v1.234.0: the CLI's own answer — true / false / null when not confirmed.
+   *  `installed && signed_in === false` is the "installed, not signed in"
+   *  state Connections and the composer name explicitly. */
+  signed_in?: boolean | null;
+  detail?: string;
 }
 
 export interface Health {

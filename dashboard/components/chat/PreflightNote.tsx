@@ -31,26 +31,38 @@ export function PreflightNote({
   available,
   stale,
   cooldownS,
+  signedOut,
 }: {
   provider: string;
   available: boolean | undefined;
   stale?: boolean;
   /** Seconds left in the router's cooldown for `provider` (0/undefined = closed). */
   cooldownS?: number;
+  /** v1.234.0: `provider` is a subscription CLI that is installed but NOT
+   *  signed in. The daemon refuses the turn with the CLI's own remedy; this
+   *  row says it first. Beats the generic "isn't reachable" wording, which
+   *  sent a user to debug an endpoint that was never the problem. */
+  signedOut?: boolean;
 }) {
   const cooldown = available !== false && (cooldownS ?? 0) > 0;
   if (available !== false && !cooldown) return null;
+  const signedOutCase = available === false && Boolean(signedOut);
+  const signInWords = /codex/i.test(provider)
+    ? "run `codex login` in a terminal"
+    : "run `claude` in a terminal, then /login";
   return (
     <div
       role="status"
       data-testid="ij-preflight-note"
-      data-kind={cooldown ? "cooldown" : "unreachable"}
+      data-kind={cooldown ? "cooldown" : signedOutCase ? "signed-out" : "unreachable"}
       className="flex h-5 min-h-5 items-center gap-1.5 overflow-hidden px-1 text-[11px] leading-none text-amber-300"
     >
       <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
       <span className="truncate">
         {cooldown
           ? `${provider} is in cooldown, retry in ${cooldownS} s — it failed repeatedly, so a turn sent to it now is refused. Pick another model or wait.`
+          : signedOutCase
+            ? `${provider} is installed but not signed in — this turn will fail. ${signInWords[0].toUpperCase()}${signInWords.slice(1)}, then Test on Connections.`
           : stale
             ? `${provider} may be offline — the last check couldn't reach the daemon. Pick another model or check the endpoint.`
             : `${provider} isn't reachable right now — this turn will fail. Pick another model or bring the endpoint back.`}

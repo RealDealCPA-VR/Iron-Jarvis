@@ -270,6 +270,46 @@ class ProviderManager:
         return OpencodeCliAdapter(model=model or "", allowed=self._opencode_allowed)
 
     @staticmethod
+    def _cli_signed_in(binary: str) -> bool | None:
+        """Is the subscription CLI SIGNED IN (v1.234.0)? ``None`` = unknown.
+
+        Read off the shared :data:`providers.cli_auth.DEFAULT_PROBE` — never
+        blocks (a stale cache starts one background refresh). Installed is
+        not connected: a logged-out ``claude`` read "available" for two
+        years and a user learnt otherwise on their first message. The test
+        conftest stubs this to ``None`` beside ``_cli_binary_present``.
+        """
+        try:
+            from .cli_auth import DEFAULT_PROBE
+
+            return DEFAULT_PROBE.verdict(binary)
+        except Exception:  # noqa: BLE001 — a probe fault is "unknown", never "down"
+            return None
+
+    def cli_login_status(self, name: str) -> dict:
+        """``{installed, signed_in, detail}`` for a subscription CLI provider
+        — the one answer /health rows, the doctor and the rescan route read."""
+        from .cli_auth import CLI_BINARIES, DEFAULT_PROBE
+
+        binary = CLI_BINARIES.get(name)
+        if not binary:
+            return {"installed": False, "signed_in": None, "detail": ""}
+        if not self._cli_binary_present(binary):
+            return {"installed": False, "signed_in": None, "detail": "not installed"}
+        signed = self._cli_signed_in(binary)
+        st = DEFAULT_PROBE.status(binary)
+        return {"installed": True, "signed_in": signed, "detail": st.detail if st is not None else ""}
+
+    def warm_cli_logins(self) -> None:
+        """Boot warm-up: start one status probe per INSTALLED CLI on a
+        thread, so the first availability check after boot already knows."""
+        from .cli_auth import CLI_BINARIES, DEFAULT_PROBE
+
+        for binary in CLI_BINARIES.values():
+            if self._cli_binary_present(binary):
+                DEFAULT_PROBE.warm((binary,))
+
+    @staticmethod
     def _cli_binary_present(binary: str) -> bool:
         """Availability for subscription CLIs — the binary on PATH (or the
         common per-user bin dirs the terminals launcher already scans)."""
@@ -504,9 +544,11 @@ class ProviderManager:
             # Locally-installed Grok CLI: live on-disk session check.
             return self._grok_cli_available()
         if name == "claude-cli":
-            return self._cli_binary_present("claude")
+            # Installed AND not known to be signed out (v1.234.0). An
+            # inconclusive probe keeps it available — the run decides.
+            return self._cli_binary_present("claude") and self._cli_signed_in("claude") is not False
         if name == "codex-cli":
-            return self._cli_binary_present("codex")
+            return self._cli_binary_present("codex") and self._cli_signed_in("codex") is not False
         if name == "opencode-cli":
             # Installed AND at least one model that actually runs locally —
             # an OpenCode with only hosted models is not available HERE, and
@@ -722,6 +764,16 @@ class ProviderManager:
             }
             for name in sorted(self._factories)
         ]
+        # v1.234.0: a subscription CLI row says whether the CLI is INSTALLED
+        # and SIGNED IN, so Connections can show "installed, not signed in"
+        # instead of "Not detected" — and the composer can warn before the
+        # user types into a CLI that will refuse.
+        for row in rows:
+            if row.get("class") == "cli" and row["provider"] in ("claude-cli", "codex-cli"):
+                try:
+                    row.update(self.cli_login_status(row["provider"]))
+                except Exception:  # noqa: BLE001 — never breaks /health
+                    pass
         if self.vault is not None:
             for entry in self.vault.providers():
                 rows.append(

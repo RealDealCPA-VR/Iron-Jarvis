@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.233.0 (2026-09-06).*
+holds itself to. Current as of v1.234.0 (2026-09-06).*
 
 ---
 
@@ -485,6 +485,14 @@ reads; it never writes, runs commands, or starts work on its own.
 
 ## Troubleshooting in one minute
 
+- **"Claude Code isn't signed in" / "Codex isn't signed in"** (v1.234.0) →
+  the subscription CLI is installed but logged out, so Iron Jarvis refuses
+  the turn instead of failing over. Open a terminal, run `claude` and then
+  `/login` (or `codex login`), then **Re-detect** or **Test** on
+  Connections. The Connections row reads **Installed — not signed in**
+  until then, and the composer says so before you type. Installed is not
+  connected: the app asks the CLI itself (`claude auth status`, `codex
+  login status`) and re-checks every couple of minutes.
 - **"Daemon offline"** → the desktop app restarts a crashed daemon by
   itself, and the banner needs two missed polls before it shows (one slow
   request never shows it; a search you superseded by typing is not counted

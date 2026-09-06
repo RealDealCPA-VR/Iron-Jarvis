@@ -1419,14 +1419,27 @@ const CLI_PROVIDERS: CliProviderInfo[] = [
   },
 ];
 
+/** v1.234.0: the sign-in remedy per subscription CLI, in the user's words.
+ *  Mirrors the daemon's `SIGN_IN_FIX` (providers/cli_auth.py). */
+const SIGN_IN_HINT: Record<string, string> = {
+  "claude-cli": "run `claude` in a terminal, then /login, then Re-detect",
+  "codex-cli": "run `codex login` in a terminal, then Re-detect",
+};
+
 function CliProviderRow({
   info,
   available,
+  signedOut = false,
   report = [],
   envelopeModels = [],
 }: {
   info: CliProviderInfo;
   available: boolean;
+  /** v1.234.0: installed on this machine but the CLI says it is NOT signed
+   *  in — a third state between "ready" and "not detected", because a
+   *  logged-out CLI used to read "Detected — ready to use" and refuse the
+   *  user's first message. */
+  signedOut?: boolean;
   /** Model report card rows (v1.169.0) — rendered only for LOCAL providers
    *  (ollama, opencode-cli); the cloud CLI rows never get a report line. */
   report?: QualityRow[];
@@ -1450,7 +1463,12 @@ function CliProviderRow({
           <div className="text-sm font-medium text-zinc-100">{info.name}</div>
           <div className="truncate text-[11px] text-zinc-500">
             {info.description}
-            {!available && <span className="text-zinc-600"> · {info.hint}</span>}
+            {!available && (
+              <span className="text-zinc-600">
+                {" "}
+                · {signedOut ? (SIGN_IN_HINT[info.provider] ?? info.hint) : info.hint}
+              </span>
+            )}
           </div>
           <ModelReportLine rows={report} provider={info.provider} />
           {envelopeModels.map((m) => (
@@ -1465,6 +1483,14 @@ function CliProviderRow({
         <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-300">
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_2px_rgba(52,211,153,0.5)]" />
           Detected — ready to use
+        </span>
+      ) : signedOut ? (
+        <span
+          data-testid={`cli-signed-out-${info.provider}`}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-500/25 bg-amber-500/10 px-2.5 py-0.5 text-[11px] font-medium text-amber-300"
+        >
+          <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+          Installed — not signed in
         </span>
       ) : (
         <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-zinc-500/25 bg-zinc-500/10 px-2.5 py-0.5 text-[11px] font-medium text-zinc-400">
@@ -1584,6 +1610,12 @@ export default function ConnectionsPage() {
   const daemonProviders = health?.providers ?? [];
   const isDetected = (provider: string) =>
     daemonProviders.some((p) => p.provider === provider && p.available);
+  // v1.234.0: installed but the CLI itself says "not signed in" — shown as
+  // its own amber state with the remedy, never as "Not detected".
+  const isSignedOut = (provider: string) =>
+    daemonProviders.some(
+      (p) => p.provider === provider && Boolean(p.installed) && p.signed_in === false,
+    );
 
   // Which models a LOCAL provider's row can Measure (v1.201.0): the models
   // the router has judged (quality rows), plus the health default when this
@@ -1863,6 +1895,7 @@ export default function ConnectionsPage() {
                 key={info.provider}
                 info={info}
                 available={isDetected(info.provider)}
+                signedOut={isSignedOut(info.provider)}
                 report={qualityRows}
                 envelopeModels={envelopeModelsFor(info.provider)}
               />

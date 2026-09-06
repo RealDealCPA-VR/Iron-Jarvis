@@ -6249,6 +6249,12 @@ export default function ChatPage() {
                     splitChoice(choice).provider || health.defaultProvider
                   ]
                 }
+                signedOut={
+                  // v1.234.0: same optional-chain rule as cooldownS.
+                  health.signedOutByProvider?.[
+                    splitChoice(choice).provider || health.defaultProvider
+                  ]
+                }
               />
 
               {/* The compaction offer (v1.153.0). Sits directly above the

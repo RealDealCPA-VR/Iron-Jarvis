@@ -337,7 +337,34 @@ def register(app: FastAPI, d) -> None:
         from ...providers.cli_detect import detect_cli_providers
 
         detected = detect_cli_providers()
-        return {"detected": [dm.as_dict() for dm in detected]}
+        rows = [dm.as_dict() for dm in detected]
+        # v1.234.0: the subscription CLIs are re-PROBED for sign-in here
+        # (blocking is fine — this is a sync route on the threadpool), so
+        # "Re-detect" after `/login` turns the row green without a restart.
+        try:
+            from ...providers.cli_auth import CLI_BINARIES, SIGN_IN_FIX, DEFAULT_PROBE
+
+            for prov, binary in CLI_BINARIES.items():
+                if not d.platform.providers._cli_binary_present(binary):  # noqa: SLF001
+                    continue
+                st = DEFAULT_PROBE.refresh(binary)
+                usable = st.signed_in is not False
+                rows.append(
+                    {
+                        "provider": prov,
+                        "model": "subscription",
+                        "name": "Claude Code CLI" if binary == "claude" else "Codex CLI",
+                        "available": usable,
+                        "source": "cli",
+                        "base_url": None,
+                        "exec_path": None,
+                        "context_window": None,
+                        "detail": "" if usable else f"{st.detail}. {SIGN_IN_FIX[binary]}",
+                    }
+                )
+        except Exception:  # noqa: BLE001 — a probe fault never breaks the rescan
+            pass
+        return {"detected": rows}
 
     @app.post("/providers/endpoint-models")
     def endpoint_models(body: EndpointModelsBody) -> dict[str, Any]:

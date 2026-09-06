@@ -27,6 +27,10 @@ export interface ProviderHealthState {
    *  R4); 0 or absent when the circuit is closed. Same last-known rule as
    *  `byProvider`. */
   cooldownByProvider: Record<string, number>;
+  /** v1.234.0: subscription CLIs (claude-cli / codex-cli) that are installed
+   *  but reported NOT signed in — the composer names the remedy instead of
+   *  "isn't reachable". */
+  signedOutByProvider: Record<string, boolean>;
   /** The daemon's current default provider ("" until the first poll lands). */
   defaultProvider: string;
   /** True until the FIRST poll settles (success or failure). */
@@ -64,11 +68,20 @@ function cooldownMap(h: Health | null | undefined): Record<string, number> {
   return map;
 }
 
+function signedOutMap(h: Health | null | undefined): Record<string, boolean> {
+  const map: Record<string, boolean> = {};
+  for (const p of h?.providers ?? []) {
+    map[p.provider] = Boolean(p.installed) && p.signed_in === false;
+  }
+  return map;
+}
+
 export function useProviderHealth(intervalMs = 5_000): ProviderHealthState {
   const daemon = useDaemon();
   const shared = daemon.provided;
   const [byProvider, setByProvider] = useState<Record<string, boolean>>({});
   const [cooldownByProvider, setCooldownByProvider] = useState<Record<string, number>>({});
+  const [signedOutByProvider, setSignedOutByProvider] = useState<Record<string, boolean>>({});
   const [defaultProvider, setDefaultProvider] = useState("");
   const [loading, setLoading] = useState(true);
   const [stale, setStale] = useState(false);
@@ -88,6 +101,7 @@ export function useProviderHealth(intervalMs = 5_000): ProviderHealthState {
         for (const p of h.providers ?? []) map[p.provider] = p.available;
         setByProvider(map);
         setCooldownByProvider(cooldownMap(h));
+        setSignedOutByProvider(signedOutMap(h));
         setDefaultProvider(h.default_provider ?? "");
         setStale(false);
       })
@@ -122,11 +136,13 @@ export function useProviderHealth(intervalMs = 5_000): ProviderHealthState {
     return map;
   }, [daemon.health]);
   const sharedCooldown = useMemo(() => cooldownMap(daemon.health), [daemon.health]);
+  const sharedSignedOut = useMemo(() => signedOutMap(daemon.health), [daemon.health]);
 
   if (shared) {
     return {
       byProvider: sharedMap,
       cooldownByProvider: sharedCooldown,
+      signedOutByProvider: sharedSignedOut,
       defaultProvider: daemon.health?.default_provider ?? "",
       loading: daemon.checking,
       // The provider says offline after two consecutive misses (FP4); until
@@ -135,5 +151,13 @@ export function useProviderHealth(intervalMs = 5_000): ProviderHealthState {
       refresh: daemon.refresh,
     };
   }
-  return { byProvider, cooldownByProvider, defaultProvider, loading, stale, refresh };
+  return {
+    byProvider,
+    cooldownByProvider,
+    signedOutByProvider,
+    defaultProvider,
+    loading,
+    stale,
+    refresh,
+  };
 }

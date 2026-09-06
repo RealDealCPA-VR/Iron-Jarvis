@@ -293,6 +293,37 @@ def runtime_checks(platform) -> list[dict]:
     except Exception as exc:  # noqa: BLE001
         checks.append(_result("provider", False, f"provider health failed: {exc}", level=RECOMMENDED))
 
+    # Subscription CLIs (v1.234.0): installed is not signed in. A logged-out
+    # `claude` used to read "connected" everywhere and refuse the first turn.
+    try:
+        from ..providers.cli_auth import CLI_BINARIES, SIGN_IN_FIX
+
+        status_fn = getattr(platform.providers, "cli_login_status", None)
+        if callable(status_fn):
+            for prov, binary in CLI_BINARIES.items():
+                st = status_fn(prov) or {}
+                if not st.get("installed"):
+                    continue
+                signed = st.get("signed_in")
+                ok = signed is not False
+                if signed:
+                    detail = f"{binary} CLI installed and signed in"
+                elif ok:
+                    detail = f"{binary} CLI installed; sign-in status not confirmed yet"
+                else:
+                    detail = f"{binary} CLI installed but NOT signed in — it refuses every request"
+                checks.append(
+                    _result(
+                        f"{prov}_login",
+                        ok,
+                        detail,
+                        fix="" if ok else SIGN_IN_FIX[binary],
+                        level=RECOMMENDED,
+                    )
+                )
+    except Exception as exc:  # noqa: BLE001
+        checks.append(_result("cli_login", False, f"CLI sign-in check failed: {exc}", level=RECOMMENDED))
+
     # The secrets key actually decrypts stored credentials (catches a key-less restore).
     try:
         valid = platform.secrets.key_valid()
