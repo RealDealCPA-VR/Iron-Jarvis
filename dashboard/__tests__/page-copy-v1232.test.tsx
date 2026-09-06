@@ -62,7 +62,13 @@ vi.mock("@/lib/useApi", () => {
   return { useApi: answer, usePolledApi: answer };
 });
 
-const src = (rel: string) => readFileSync(join(process.cwd(), ...rel.split("/")), "utf8");
+// LINE ENDINGS ARE NORMALISED (v1.232.1). GitHub's Windows runners check out
+// with core.autocrlf=true, so a needle that carries an embedded newline (the
+// "Auto tools" pin below owns its line) can never match there, while it matches
+// every local run. That cost a red release gate; every pin in this file now
+// reads LF-only source.
+const src = (rel: string) =>
+  readFileSync(join(process.cwd(), ...rel.split("/")), "utf8").replace(/\r\n/g, "\n");
 
 afterEach(() => {
   cleanup();

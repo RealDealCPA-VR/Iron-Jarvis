@@ -712,6 +712,18 @@ does not need a bump, stop and bump it.
   is the ONE markdown renderer — a surface that shows a model-written
   paragraph renders through it (or `plainText` for a truncated row); do not
   print `session.summary` raw again.
+- **A SOURCE PIN READS A FILE THE CI RUNNER CHECKED OUT WITH CRLF** (v1.232.1). GitHub's Windows runners set `core.autocrlf=true`, so every
+  file the suite reads as TEXT has `\r\n` line ends there and LF here. A
+  pin whose needle carries an embedded newline therefore matches every
+  local run and NEVER matches on CI: `page-copy-v1232` searched for
+  `"Auto tools\n"` (a JSX text node that owns its line), got `-1`, and
+  took the v1.232.0 installer down with it — the local suite, the local
+  dashboard run and the review had all been green. Normalise at the READER
+  (`readFileSync(...).replace(/\r\n/g, "\n")`, one helper per test file), never
+  at each call site. The same trap sits in every fixed-size window around a
+  match (`[\s\S]{0,400}?`): add a prop and the window stops reaching the
+  closing tag, so the pin reports "never rendered" rather than "a prop
+  moved" (v1.232.0 hit that too). Pin the CONTENT; keep the window generous.
 - **Windows dev shell**: PowerShell 5.1 — no `&&` chaining; Git Bash available.
   This machine lacks ffmpeg on PATH.
 
