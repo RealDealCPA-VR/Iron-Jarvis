@@ -167,9 +167,25 @@ def _unwritable(monkeypatch):
 
 
 _WIN = os.name == "nt"
-_REAL_UNWRITABLE = [
-    p for p in ("C:\\Users", "C:\\") if _WIN and Path(p).is_dir() and not _is_writable_dir(p)
-]
+
+#: The system folders this test WOULD like to prove are refused. Static on
+#: purpose, and that is the whole point of this constant (v1.236.1).
+#:
+#: It used to be the same list FILTERED at import time by actually probing each
+#: folder for writability. Under ``pytest -n auto`` every xdist worker imports
+#: this module, so every worker wrote and deleted ``.ij_v1228_probe.txt`` inside
+#: ``C:\`` and ``C:\Users`` at the same moment — and on the CI runner two workers
+#: disagreed about the answer. That does not fail a test; it makes the workers
+#: COLLECT DIFFERENT TEST IDS, and xdist aborts the entire session with
+#: "Different tests were collected between gw1 and gw0". The whole suite errors
+#: out before running, the gate goes red, and nothing in the report names a
+#: failing assertion, because none failed.
+#:
+#: The rule this encodes: COLLECTION MUST BE DETERMINISTIC. A parametrize list
+#: may not depend on a probe of shared machine state — the filesystem, a clock, a
+#: network, another process. Decide the ids from the platform alone and let the
+#: TEST decide whether it applies.
+_SYSTEM_ROOTS = ("C:\\Users", "C:\\") if _WIN else ()
 
 
 # ---------------------------------------------------------------------------
@@ -216,10 +232,25 @@ def test_readonly_folder_is_not_a_usable_workspace(readonly_dir):
     assert usable_workspace_root(readonly_dir) is False
 
 
-@pytest.mark.parametrize("folder", _REAL_UNWRITABLE or ["<none>"])
+@pytest.mark.parametrize("folder", _SYSTEM_ROOTS or ["<none>"])
 def test_system_roots_the_app_cannot_write_in_are_refused(folder):
+    """A real folder the app genuinely cannot write in is refused as a workspace.
+
+    The probe runs HERE, not at import time. Whether ``C:\`` is writable depends on
+    the machine and on whether the session is elevated, so it is a runtime question
+    with a runtime answer: not applicable becomes a SKIP, and the test ids stay the
+    same on every worker (see ``_SYSTEM_ROOTS``).
+
+    A folder that turns out to be writable is skipped rather than failed. This test
+    pins that an unwritable folder is REFUSED; it cannot also pin that any
+    particular system folder is unwritable, because on an elevated runner it is not.
+    """
     if folder == "<none>":
-        pytest.skip("no real unwritable system folder on this machine (elevated?)")
+        pytest.skip("not Windows; these roots do not exist here")
+    if not Path(folder).is_dir():
+        pytest.skip(f"{folder} is not a directory on this machine")
+    if _is_writable_dir(folder):
+        pytest.skip(f"{folder} is writable here (elevated?), so it proves nothing")
     assert usable_workspace_root(folder) is False
 
 
@@ -468,3 +499,39 @@ async def test_runtime_environment_block_names_the_os_both_shapes(platform, tmp_
     await orch.run_session(sess.id)
     assert "directly in the project folder" in box["system"]
     assert expected in box["system"], box["system"][-600:]
+
+
+def test_the_system_root_ids_do_not_depend_on_the_filesystem():
+    r"""COLLECTION MUST BE DETERMINISTIC (v1.236.1, and it cost a red gate).
+
+    ``_SYSTEM_ROOTS`` used to be filtered at import time by writing a probe file
+    into ``C:\`` and ``C:\Users``. Under ``-n auto`` every xdist worker imports
+    this module at once, two of them disagreed about the answer on the CI runner,
+    and xdist aborted the whole session with "Different tests were collected
+    between gw1 and gw0". No assertion failed; the suite never ran at all, and the
+    gate went red with nothing in the log naming a cause.
+
+    THIS IS A SOURCE PIN, AND THE FIRST VERSION OF IT WAS WORTHLESS. Comparing
+    ``_SYSTEM_ROOTS`` to its expected value passes on any machine where the filter
+    would not have changed the answer — which is most machines, including the one
+    this was written on, where both roots are genuinely unwritable. Restoring the
+    filter left it green. So the pin reads the ASSIGNMENT itself: the ids may be
+    computed from the platform, and from nothing that touches the disk.
+
+    CRLF is normalised at the reader, the statement is sliced by its own
+    boundaries rather than a byte window, and no needle carries a newline.
+    """
+    src = Path(__file__).read_text(encoding="utf-8").replace("\r\n", "\n")
+    start = src.index("\n_SYSTEM_ROOTS")
+    stmt = src[start + 1 :]
+    end = stmt.index("\n\n")
+    stmt = stmt[:end]
+
+    for forbidden in ("_is_writable_dir", "is_dir(", "exists(", "open(", "write_"):
+        assert forbidden not in stmt, (
+            f"the _SYSTEM_ROOTS assignment calls {forbidden!r}, so collection now "
+            "probes shared machine state. Two xdist workers can then disagree about "
+            "the test ids, which aborts the ENTIRE session before anything runs. "
+            "Decide the ids from the platform; let the test decide whether it applies"
+        )
+    assert "_WIN" in stmt, "the ids must still be platform-decided"
