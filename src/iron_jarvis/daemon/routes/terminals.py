@@ -179,6 +179,8 @@ def register(app: FastAPI, d) -> None:
                 rows=body.rows,
                 name=getattr(body, "name", None),
                 agent_cli=getattr(body, "agent_cli", None),
+                capabilities=getattr(body, "capabilities", None),
+                recipe=getattr(body, "recipe", None),
             )
         except RuntimeError as exc:  # session cap reached
             raise HTTPException(status_code=429, detail=str(exc))
@@ -204,6 +206,12 @@ def register(app: FastAPI, d) -> None:
             session.pane_name = body.name.strip() or None
         if body.agent_cli is not None:
             session.agent_cli = body.agent_cli.strip() or None
+        if body.capabilities is not None:
+            # A MERGE, not a replacement — see TerminalUpdate.capabilities. The
+            # pane token is NOT re-minted: `PaneTokenStore.resolve` reads the
+            # live pane, so unticking Browser takes effect on the harness's very
+            # next call without touching its credential.
+            session.update_capabilities(body.capabilities)
         # The exported identity follows the rename, so a CLI started AFTER it
         # sees the current name rather than the one the pane was born with.
         env = dict(session.pane_env_extra or {})
@@ -216,7 +224,10 @@ def register(app: FastAPI, d) -> None:
             else:
                 env.pop(key, None)
         session.pane_env_extra = env or None
-        d.platform.terminals.snapshot()  # a rename must survive a restart
+        # A rename — and a capability change — must survive a restart. This is
+        # the write that makes `terminals.json` current; without it the pane
+        # would be correct until the next daemon boot and then silently revert.
+        d.platform.terminals.snapshot()
         return session.info()
 
     @app.delete("/terminals/{term_id}")

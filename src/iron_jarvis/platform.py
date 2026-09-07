@@ -180,6 +180,13 @@ class Platform:
     #: capability itself stays off until ``config.browser_access`` says otherwise.
     browser: BrowserRuntime
     terminals: TerminalManager
+    #: PANE-SCOPED CAPABILITY TOKENS (v1.238.0). THE SAME OBJECT the
+    #: TerminalManager holds — exposed here, never rebuilt, because the manager
+    #: is what revokes on kill/purge_dead/kill_all and a second store would be a
+    #: second set of live credentials that nothing revokes.
+    pane_tokens: Any
+    #: Outward MCP sessions (the Mcp-Session-Id lifecycle), memory only.
+    mcp_sessions: Any
     blackboard: "BlackboardStore | None" = None
     #: The department's durable WORKLIST (v1.174.0) — which units of a bulk job
     #: exist, which are claimed, which are finished and what each produced. Same
@@ -264,6 +271,79 @@ class Platform:
     #: ``POST /chat/approvals/{id}`` answers a pause wherever it happened.
     #: Optional for bare-platform tests; build_platform always attaches one.
     approvals: "object | None" = None
+
+
+
+# --------------------------------------------------------------------------- #
+# The harness launch path (v1.238.0, plan 13.3)
+# --------------------------------------------------------------------------- #
+#: The port the daemon is served on when nobody says otherwise. `serve` takes
+#: `--port`, but that value never reaches this function, so the ONE signal that
+#: is actually readable here is the environment variable the desktop supervisor
+#: and the dev scripts already use to move the daemon (`desktop/main.js`:
+#: `DAEMON_PORT = process.env.IJ_DAEMON_PORT || "8787"`, inherited by the
+#: spawned daemon). Anything else would be a name nobody sets.
+DEFAULT_DAEMON_PORT = "8787"
+
+
+def own_mcp_url() -> str:
+    """The URL a harness inside a Build pane should POST its MCP calls to.
+
+    Loopback on purpose: the pane's child runs on this machine, and a harness
+    that could be pointed at another host would be a credential leaving the box.
+    """
+    port = (os.environ.get("IJ_DAEMON_PORT") or "").strip()
+    if not port.isdigit():
+        port = DEFAULT_DAEMON_PORT
+    return f"http://127.0.0.1:{port}/mcp"
+
+
+def build_recipe_preparer(url: str):
+    """The adapter between `TerminalManager`'s seam and `terminals/recipes.py`.
+
+    The manager owns the token (it is the thing that revokes it) and knows the
+    pane; the recipe knows what the installed CLI can be told and writes the
+    config into the pane's own folder. This function is the only place those two
+    meet, and it deliberately returns ENVIRONMENT ONLY: whatever it returns is
+    merged into the child environment, so a `config_writes` or `argv_extra` key
+    leaking through would arrive as a bogus variable in the harness's process.
+
+    It runs on Starlette's threadpool (POST /terminals is a sync `def`) and both
+    probing and writing are blocking, which is why the seam is synchronous and
+    `recipes.prepare_async` is not used here.
+
+    A failure is NOT swallowed here. `_prepare_recipe` already degrades a
+    raising preparer to "a pane with a token and no harness configuration" and
+    logs it, so catching it a second time would only hide which recipe failed
+    behind an empty dict that looks like success.
+    """
+
+    def prepare(
+        *,
+        recipe: str,
+        pane_id: str,
+        token: str,
+        capabilities: dict[str, bool] | None = None,
+        cwd: str = "",
+        **_unused: Any,
+    ) -> dict[str, str]:
+        from .terminals import recipes
+
+        entry = recipes.recipe_for(recipe)
+        if entry is None:  # most of the Launch catalog: no recipe, no change
+            return {}
+        result = entry.prepare(pane_id, token, url, capabilities or {}, cwd=cwd)
+        _log.info(
+            "launch recipe %s for pane %s: ok=%s method=%s wrote=%s",
+            recipe,
+            pane_id,
+            result.ok,
+            result.method,
+            result.config_writes,
+        )
+        return {str(k): str(v) for k, v in dict(result.env).items()}
+
+    return prepare
 
 
 def build_platform(
@@ -717,7 +797,36 @@ def build_platform(
     # Terminals: multiple live shell sessions the dashboard can attach to. The
     # snapshot file lets them survive a daemon restart / app update — on boot the
     # panes come back (same id + cwd + prior scrollback, fresh shell).
-    terminals = TerminalManager(state_path=config.home / "terminals.json")
+    # OUTWARD MCP (v1.238.0). `pane_tokens` is the manager's OWN store, taken by
+    # reference: the manager revokes at the three chokepoints (kill, purge_dead,
+    # kill_all) and /mcp resolves against the very same object, so a closed pane's
+    # credential is dead for the harness at the moment the pane dies. Building a
+    # second store here would leave /mcp authorising tokens nothing revokes.
+    #
+    # THE SESSION REGISTRY IS BUILT FIRST AND HANDED IN, for exactly the same
+    # reason. It used to be built AFTER the manager and only put on `Platform`,
+    # so `terminals.mcp_sessions` was `None` in the real app and all three
+    # "CHOKEPOINT" blocks in `TerminalManager` were dead code in production —
+    # while a unit test injected a registry the app never injected and passed.
+    # One store, reachable from both places, or a closed pane leaves live
+    # sessions behind.
+    from .mcpserver.session import McpSessionRegistry
+
+    mcp_sessions = McpSessionRegistry()
+
+    # THE HARNESS PATH IS WIRED HERE OR IT DOES NOT EXIST (v1.238.0). Shipping
+    # `terminals/recipes.py` without these two arguments shipped the mechanism
+    # and not the feature (the v1.218.0 lesson): `_prepare_recipe` minted a
+    # capability token, exported no address for it, and never called a recipe,
+    # so a `recipe=` pane got a credential and nowhere to send it and no
+    # `.mcp.json` was ever written.
+    mcp_url = own_mcp_url()
+    terminals = TerminalManager(
+        state_path=config.home / "terminals.json",
+        mcp_sessions=mcp_sessions,
+        mcp_url=mcp_url,
+        recipe_preparer=build_recipe_preparer(mcp_url),
+    )
 
     # THE BUILD CANVAS IS ADDRESSABLE (v1.217.0). Agents can see which panes
     # exist and what each one is doing, read one, open a sibling, type into it,
@@ -1028,6 +1137,8 @@ def build_platform(
         computeruse=computeruse,
         browser=browser,
         terminals=terminals,
+        pane_tokens=terminals.pane_tokens,
+        mcp_sessions=mcp_sessions,
         fleet=fleet_registry,
         embedder=embedder,
         fabric=fabric,

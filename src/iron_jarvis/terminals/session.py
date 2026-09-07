@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -30,6 +31,48 @@ _ANSI_RE = re.compile(
     # "auto-accept edits on" so detection missed them (live-hit 2026-07-07)
     r"|\x1b[@-_]"  # lone two-byte escapes
 )
+
+
+#: The five capabilities a Build pane can be granted (plan §4.2, decision D20).
+#: A FIXED set: a key outside it is dropped rather than stored, so a caller
+#: cannot invent a capability name and have it round-trip through
+#: ``terminals.json`` looking official.
+PANE_CAPABILITY_KEYS: tuple[str, ...] = (
+    "files",
+    "shell",
+    "browser",
+    "extensions",
+    "memory",
+)
+
+#: Of those five, the ones a gate actually READS today. Only ``browser`` is
+#: enforced in the browser ships; ``files``/``shell``/``extensions``/``memory``
+#: are recorded and displayed, and their enforcement seams are Phase 2 (they
+#: reach into the permission engine and the agent runtime, which is not browser
+#: work). This constant exists so no reader has to infer that from prose, and so
+#: any surface claiming enforcement can be checked against it.
+ENFORCED_PANE_CAPABILITIES: tuple[str, ...] = ("browser",)
+
+
+def normalise_pane_capabilities(raw: Any) -> dict[str, bool]:
+    """Any stored/posted capabilities value reduced to the five canonical keys.
+
+    Always returns all five, always real ``bool``s, and never raises: a pane with
+    no capabilities and a pane whose snapshot predates the field must read the
+    same — everything ``False`` — so an existing pane can never gain a capability
+    by upgrade.
+
+    Truthiness is delegated to :func:`iron_jarvis.browser.panetokens.capability_enabled`
+    rather than re-decided here, because the subtle case belongs to one owner:
+    these values round-trip through JSON, and ``bool("false")`` is ``True``, which
+    would turn every disabled capability back on across a single restart. The
+    import is deferred to call time so importing ``terminals`` does not drag in
+    the whole browser package.
+    """
+    from ..browser.panetokens import capability_enabled
+
+    values = raw if isinstance(raw, Mapping) else {}
+    return {key: capability_enabled(values.get(key)) for key in PANE_CAPABILITY_KEYS}
 
 
 def _safe_replay_start(buf: bytes | bytearray, scan: int = 4096) -> int:
@@ -235,6 +278,14 @@ class TerminalSession:
     #: A human handle for this pane, unique among live panes. Agents address
     #: panes by name; the id stays the stable machine handle.
     pane_name: str | None = None
+    #: What this pane is ALLOWED to do (v1.238.0, plan §4.2 / D20) — the
+    #: server-side half of the Capabilities checklist. ``None`` means "no
+    #: capabilities": an upgraded install, a restored snapshot written before
+    #: the field existed, and a hand-made session all read that way, and every
+    #: gate treats it as all-``False``. Never read this dict directly — a raw
+    #: value can be a JSON string — read :meth:`capability` or
+    #: :meth:`effective_capabilities`.
+    capabilities: dict[str, bool] | None = None
     #: Identity this pane exports to anything it runs (v1.217.0) — see
     #: `TerminalManager.create`. A plain dict, not the process environment:
     #: the shell is already spawned by the time we know the pane's id.
@@ -244,6 +295,37 @@ class TerminalSession:
         """The `IRONJARVIS_*` identity for this pane, or `{}` for a pane that
         predates it (a restored snapshot, a hand-made session)."""
         return dict(self.pane_env_extra or {})
+
+    # ---- capabilities (v1.238.0) -----------------------------------------
+
+    def effective_capabilities(self) -> dict[str, bool]:
+        """The five capabilities as real booleans — what every surface shows."""
+        return normalise_pane_capabilities(self.capabilities)
+
+    def capability(self, name: str) -> bool:
+        """Whether this pane has ``name`` enabled RIGHT NOW. Fail-closed.
+
+        The one question a gate asks. A pane with no ``capabilities``, a pane
+        whose snapshot predates the field, a name outside the canonical five,
+        and a value that merely looks affirmative all answer ``False``.
+        """
+        return self.effective_capabilities().get(name, False)
+
+    def update_capabilities(self, patch: Any) -> dict[str, bool]:
+        """PARTIAL update: a key the caller did not send keeps its value.
+
+        The Capabilities popover toggles ONE box and PATCHes, so a merge that
+        replaced the whole mapping would silently clear the other four — the
+        same shape of bug the remote-agent registry paid for when a re-POST
+        destroyed the credential it did not carry. Sending ``{"files": false}``
+        is how a capability is turned off; omitting it is how it is kept.
+        """
+        merged = self.effective_capabilities()
+        if isinstance(patch, Mapping):
+            supplied = {k: v for k, v in patch.items() if k in PANE_CAPABILITY_KEYS}
+            merged = normalise_pane_capabilities({**merged, **supplied})
+        self.capabilities = merged
+        return dict(merged)
 
     def activity(self, *, seen: bool = True) -> "PaneActivity":
         """Classify what is happening in this pane, from its own output tail.
@@ -282,4 +364,8 @@ class TerminalSession:
             "agent_cli": act.cli,
             "state": act.state.value,
             "state_line": act.line,
+            # v1.238.0 additive, and ALWAYS all five keys: a surface that has to
+            # ask whether the field is present would render a pane's
+            # capabilities differently depending on when the pane was made.
+            "capabilities": self.effective_capabilities(),
         }

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.237.0 (2026-09-07).*
+holds itself to. Current as of v1.238.0 (2026-09-07).*
 
 ---
 
@@ -437,9 +437,46 @@ into a project. What it **cannot** do is change where Chrome saves things, or qu
 redirect a download somewhere else. Moving the file is a copy you asked for, not a
 setting Jarvis touched.
 
-**What is not here yet.** An outside coding harness driving this same browser arrives
-in **v1.238.0**, and the add-on ships inside the installer in **v1.239.0**. Until
-then the add-on is loaded from a source checkout.
+**Letting a coding harness use it.** A coding CLI you launch inside a **Build** pane
+— Claude Code, Codex or Pi — can drive this same browser, through Jarvis, with the
+same gates. Three steps, and none of them are automatic:
+
+1. In **Build**, open the pane's **Capabilities** list and tick **Browser**. A pane
+   starts with nothing ticked, and a pane that grants nothing is handed no
+   credential at all.
+2. Launch the CLI from that pane's **Launch** menu. Jarvis reads what the installed
+   build of that CLI actually advertises, writes the configuration that points it at
+   Jarvis, and hands the pane a credential of its own. The menu says which method it
+   configured, and says plainly when a build cannot be pointed at Jarvis at all —
+   then the pane launches exactly as it does today, with no Jarvis capabilities.
+3. Ask the harness about your browser. It sees the same tools your chat sees, and
+   every call it makes is asked about, gated and recorded the same way — the same
+   deny floor, the same approval cards, the same Activity ledger, tagged with the
+   pane it came from.
+
+**That credential belongs to the pane, and to nothing else.** It is not the app's
+access token and it cannot be used for anything else. It lives in memory only, so
+closing the pane, or restarting Iron Jarvis, ends it — if a harness starts reporting
+that Jarvis refuses it, relaunch it from the Build pane rather than looking for a
+setting. Untick **Browser** and the harness's very next call is refused, without
+anything having to be restarted. Jarvis's configuration file is written into the
+pane's own folder and holds **no** credential — only a reference to one — so it is
+safe if you commit it. If you already had a `.mcp.json` of your own there, your servers
+are kept and Jarvis adds itself alongside them; you can delete the `iron-jarvis` entry
+whenever you like, and the next launch writes it back.
+
+**What the Capabilities boxes do, and what they do not.** The list has five boxes —
+Files, Shell, Browser, Extensions, Memory — and in this version **only Browser is
+enforced**. The other four are recorded and shown so you can see what a pane is meant
+to be for, but nothing gates on them yet: a harness in that pane still has whatever
+file and shell access its own CLI came with. Enforcing the other four is Phase 2
+work, and this line will change when it lands rather than before. One more honest
+edge, from the CLIs' side: some builds cannot be told to switch off their *own* web
+tools, and where Jarvis cannot verify that it says so in the Launch menu instead of
+implying an isolation it did not get.
+
+**What is not here yet.** The add-on ships inside the installer in **v1.239.0**.
+Until then it is loaded from a source checkout.
 
 **What reading a page gives it, and what it does not.** Jarvis asks the page for a
 structured summary, not its HTML: the visible text, the headings, the links, and the

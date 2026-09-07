@@ -732,6 +732,17 @@ class TerminalCreate(BaseModel):
     #: — an ordinary hand-opened terminal carries neither.
     name: str | None = None
     agent_cli: str | None = None
+    #: v1.238.0 additive — what this pane is allowed to do (plan 4.2, D20):
+    #: `files`, `shell`, `browser`, `extensions`, `memory`. Typed `Any` rather
+    #: than `bool` on purpose: the server normalises through ONE fail-closed
+    #: reader (`terminals.session.normalise_pane_capabilities`), and pydantic
+    #: coercing some strings to True while 422-ing others would put a second,
+    #: looser opinion in front of it. Absent means no capabilities.
+    capabilities: dict[str, Any] | None = None
+    #: The launch recipe to prepare before the shell starts (plan 13.3), named
+    #: by `cli_id`. When set, the pane is spawned with a capability token in its
+    #: environment. Absent = today's behaviour exactly: no recipe, no token.
+    recipe: str | None = None
 
 
 class TerminalUpdate(BaseModel):
@@ -747,6 +758,11 @@ class TerminalUpdate(BaseModel):
 
     name: str | None = None
     agent_cli: str | None = None
+    #: v1.238.0. PARTIAL twice over: omitting the field keeps every capability,
+    #: and a mapping that names only some of the five keeps the rest. The
+    #: Capabilities popover toggles one box at a time, so a whole-mapping
+    #: replacement here would clear four capabilities the user never touched.
+    capabilities: dict[str, Any] | None = None
 
 
 class CodeArtifactSave(BaseModel):

@@ -27,16 +27,130 @@
  * agent's state flickers costs more than the scan it saves. Blocked rows are
  * found by the amber pulse instead, and the header carries a jump for the case
  * where the list is long enough to scroll.
+ *
+ * WHAT IT ALSO OWNS (v1.238.0). Per-pane CAPABILITIES, for the same reason
+ * renaming moved here in v1.219.0: this is the only surface that lists every
+ * pane, so it is the only one where you can set five of them without visiting
+ * five panes. Only Browser is enforced in these ships, and the popover says so
+ * in its own copy rather than shipping four checkboxes that look live and gate
+ * nothing — which is the v1.218.0 lesson written as a rule.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Pencil, Plus, X } from "lucide-react";
+import Link from "next/link";
+import { Check, Pencil, Plus, SlidersHorizontal, X } from "lucide-react";
 
+import { get, patch } from "@/lib/api";
 import {
   PaneDot,
   stateWord,
   type PaneDisplay,
 } from "@/components/terminal/PaneState";
+import type { BrowserStatus } from "@/lib/types";
+
+/**
+ * A pane's Capabilities (v1.238.0, D20). Deliberately declared HERE rather than
+ * imported: the popover is the only consumer, and every field is optional, so a
+ * `PaneCapabilities` from `lib/types` assigns to it without this file having to
+ * be edited in lock-step with that one.
+ */
+export interface RailPaneCapabilities {
+  files?: boolean;
+  shell?: boolean;
+  browser?: boolean;
+  extensions?: boolean;
+  memory?: boolean;
+}
+
+export type RailCapabilityKey = keyof RailPaneCapabilities;
+
+/** The five boxes, in D20's order. */
+export const PANE_CAPABILITIES: {
+  key: RailCapabilityKey;
+  label: string;
+  hint: string;
+}[] = [
+  { key: "files", label: "Files", hint: "read and write in this pane's folder" },
+  { key: "shell", label: "Shell", hint: "run commands in this pane" },
+  { key: "browser", label: "Browser", hint: "drive your browser through Jarvis" },
+  { key: "extensions", label: "Extensions", hint: "use this install's extensions" },
+  { key: "memory", label: "Memory", hint: "read this install's memory" },
+];
+
+/** The one capability these five ships actually gate on. */
+export const ENFORCED_CAPABILITY: RailCapabilityKey = "browser";
+
+/** The two `browser_access` words under which a pane's Browser box can be live. */
+const BROWSER_ACCESS_LIVE = ["read_only", "interactive"];
+
+/** Every key present and boolean, so a PATCH body is never half a map. */
+export function fullCapabilities(
+  ...layers: (RailPaneCapabilities | null | undefined)[]
+): Required<RailPaneCapabilities> {
+  const out: Required<RailPaneCapabilities> = {
+    files: false,
+    shell: false,
+    browser: false,
+    extensions: false,
+    memory: false,
+  };
+  for (const layer of layers) {
+    if (!layer) continue;
+    for (const cap of PANE_CAPABILITIES) {
+      const v = layer[cap.key];
+      if (typeof v === "boolean") out[cap.key] = v;
+    }
+  }
+  return out;
+}
+
+/**
+ * What a capability box says about itself — the WORD, never colour alone.
+ *
+ * `access` is the live `config.browser_access`; `""` means the install setting
+ * has not answered yet, and `failed` means asking for it did not work. Both are
+ * unavailable, because a Browser box that renders live on an unknown setting is
+ * the v1.218.0 lie in miniature.
+ *
+ * `on` is THIS PANE'S recorded value, and it is a parameter because from
+ * v1.238.0 an unticked Browser box is not decoration — the daemon's chat gate
+ * and its outward MCP grant both refuse a pane that has not been ticked. A
+ * single word "enforced" printed under both a ticked and an unticked box
+ * described the SETTING and left the user to guess what it did to the pane in
+ * front of them, which is the same distance between copy and code the v1.218.0
+ * lesson is about. So the word names the effect on this pane, in the direction
+ * the box is currently pointing.
+ */
+export function capabilityStatus(
+  key: RailCapabilityKey,
+  access: string,
+  failed: boolean,
+  on = false,
+): { word: string; available: boolean; offForInstall: boolean } {
+  if (key !== ENFORCED_CAPABILITY) {
+    return {
+      word: "recorded, not enforced yet — nothing gates on it",
+      available: true,
+      offForInstall: false,
+    };
+  }
+  if (failed) {
+    return { word: "install setting unreadable", available: false, offForInstall: false };
+  }
+  if (!access) {
+    return { word: "checking this install", available: false, offForInstall: false };
+  }
+  if (!BROWSER_ACCESS_LIVE.includes(access)) {
+    return { word: "off for this install", available: false, offForInstall: true };
+  }
+  return {
+    word: on
+      ? "enforced — this pane may use your browser"
+      : "enforced — this pane gets no browser tools",
+    available: true,
+    offForInstall: false,
+  };
+}
 
 export interface RailPane {
   id: string;
@@ -52,6 +166,10 @@ export interface RailPane {
   unseen?: boolean;
   /** The pane's hidden chat layer is holding an approval. */
   chatApproval?: boolean;
+  /** Server-side per-pane Capabilities (D20). Absent = the daemon has not been
+   *  asked yet, which renders as five unticked boxes — the safe default and
+   *  exactly how an old `terminals.json` snapshot restores. */
+  capabilities?: RailPaneCapabilities | null;
 }
 
 export function PaneRail({
@@ -104,6 +222,97 @@ export function PaneRail({
       if (next !== previous) onRename(id, next);
     },
     [draft, onRename],
+  );
+
+  // CAPABILITIES, PER PANE (v1.238.0, D20). The rail is the only surface that
+  // lists every pane, and per-pane configuration already lives here since
+  // renaming moved in v1.219.0 — so this is where the five boxes belong.
+  //
+  // The plain click still SELECTS: the popover has its own affordance, exactly
+  // as rename does, and neither steals the row.
+  //
+  // The install-wide `browser_access` is read WHEN A POPOVER OPENS rather than
+  // polled. Build already runs several pollers and this answer is only ever
+  // looked at while the panel is on screen; asking once, at the moment the user
+  // is standing there, is both live and free the rest of the time.
+  const [capsOpen, setCapsOpen] = useState<string | null>(null);
+  const [access, setAccess] = useState("");
+  const [accessFailed, setAccessFailed] = useState(false);
+  const [capsError, setCapsError] = useState<string | null>(null);
+  // Optimistic, per pane, so a box responds to the click; the daemon is the
+  // truth and the next list refresh replaces it. A refused PATCH puts it back.
+  const [overlay, setOverlay] = useState<Record<string, RailPaneCapabilities>>({});
+
+  const openCaps = useCallback((id: string) => {
+    setCapsOpen(id);
+    setCapsError(null);
+    setAccessFailed(false);
+    setAccess("");
+    get<BrowserStatus>("/browser/status")
+      .then((s) => setAccess(String(s?.access || "off")))
+      .catch(() => setAccessFailed(true));
+    // RE-READ THE PANE, every open. `panes` comes from the Build page, which
+    // fetches /terminals once on mount and never polls — so after a tick, a
+    // close and a reopen, `p.capabilities` is the value from page load and the
+    // popover would render a box the daemon has already changed. Showing a
+    // stale grant is the worst half of this surface's job done wrong: the user
+    // reads "no Browser" off a pane whose running harness is holding a token
+    // that resolves to browser:true. There is no GET /terminals/{id}, so the
+    // list route answers and the one row is lifted into the overlay.
+    get<{ terminals?: { id?: string; capabilities?: RailPaneCapabilities | null }[] }>(
+      "/terminals",
+    )
+      .then((r) => {
+        const row = (r?.terminals || []).find((t) => t?.id === id);
+        if (!row) return;
+        setOverlay((o) => ({ ...o, [id]: fullCapabilities(row.capabilities) }));
+      })
+      .catch(() => {
+        // The props are still the best answer available, and the boxes render
+        // from them. Nothing is invented and nothing is claimed.
+      });
+  }, []);
+
+  const closeCaps = useCallback(() => {
+    setCapsOpen(null);
+    setCapsError(null);
+    // The overlay is DROPPED on close and re-seeded from the daemon on the next
+    // open (see `openCaps`), so it can never become a long-lived second copy of
+    // the truth that quietly diverges from the pane.
+    setOverlay({});
+  }, []);
+
+  const toggleCap = useCallback(
+    async (p: RailPane, key: RailCapabilityKey) => {
+      const before = fullCapabilities(p.capabilities, overlay[p.id]);
+      const next = { ...before, [key]: !before[key] };
+      setOverlay((o) => ({ ...o, [p.id]: next }));
+      setCapsError(null);
+      try {
+        // ONLY THE KEY THAT CHANGED. `TerminalSession.update_capabilities` is a
+        // real partial merge, and sending the whole five-key map made this
+        // client's cached idea of the other four AUTHORITATIVE: with a stale
+        // `before` — which is what a reopened popover had — ticking Shell
+        // shipped `browser: false` alongside it and revoked, silently, a
+        // capability the user had granted and the daemon had stored. One key is
+        // the only body that can say what the click meant.
+        const body = await patch<{ capabilities?: RailPaneCapabilities | null }>(
+          `/terminals/${p.id}`,
+          { capabilities: { [key]: next[key] } },
+        );
+        // The daemon answers with the pane's whole merged map. Adopt it: it is
+        // the truth, and it is how a value changed by another surface between
+        // the read and the write stops being wrong on screen.
+        if (body && body.capabilities) {
+          const merged = fullCapabilities(body.capabilities);
+          setOverlay((o) => ({ ...o, [p.id]: merged }));
+        }
+      } catch {
+        setOverlay((o) => ({ ...o, [p.id]: before }));
+        setCapsError("Could not save that — the pane still has the capabilities it had.");
+      }
+    },
+    [overlay],
   );
 
   return (
@@ -245,6 +454,21 @@ export function PaneRail({
                   ) : null}
                   <button
                     type="button"
+                    onClick={() => (capsOpen === p.id ? closeCaps() : openCaps(p.id))}
+                    title="Capabilities for this pane"
+                    aria-label={`Capabilities for ${p.label}`}
+                    aria-expanded={capsOpen === p.id}
+                    data-testid={`rail-caps-${p.id}`}
+                    className={`grid h-4 w-4 place-items-center rounded transition-colors hover:bg-white/[0.08] hover:text-zinc-300 focus:opacity-100 group-hover:opacity-100 ${
+                      capsOpen === p.id
+                        ? "text-accent-soft opacity-100"
+                        : "text-zinc-700 opacity-0"
+                    }`}
+                  >
+                    <SlidersHorizontal size={10} />
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => begin(p)}
                     title="Rename this pane"
                     aria-label={`Rename ${p.label}`}
@@ -263,6 +487,126 @@ export function PaneRail({
                     <X size={11} />
                   </button>
                 </span>
+
+                {capsOpen === p.id ? (
+                  <>
+                    <button
+                      aria-hidden
+                      tabIndex={-1}
+                      onClick={closeCaps}
+                      className="fixed inset-0 z-30 cursor-default"
+                    />
+                    <div
+                      role="dialog"
+                      aria-label={`Capabilities for ${p.label}`}
+                      data-testid={`rail-caps-panel-${p.id}`}
+                      className="absolute right-1 top-full z-40 mt-1 w-72 rounded-xl border border-white/10 bg-ink-900/95 p-2 shadow-card backdrop-blur"
+                    >
+                      <p className="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+                        Capabilities
+                      </p>
+                      <div className="space-y-1">
+                        {PANE_CAPABILITIES.map((cap) => {
+                          const on = fullCapabilities(p.capabilities, overlay[p.id])[cap.key];
+                          const status = capabilityStatus(cap.key, access, accessFailed, on);
+                          // WITHDRAWING A GRANT IS ALWAYS ALLOWED. Only the
+                          // off->on direction waits on the install setting; a
+                          // box that is ON but unavailable was still the user's
+                          // recorded choice, and locking it left them having to
+                          // re-enable Browser install-wide in order to take it
+                          // away from one pane.
+                          const clickable = status.available || on;
+                          return (
+                            <button
+                              key={cap.key}
+                              type="button"
+                              role="checkbox"
+                              aria-checked={on}
+                              disabled={!clickable}
+                              data-testid={`rail-cap-${p.id}-${cap.key}`}
+                              onClick={() => toggleCap(p, cap.key)}
+                              className={`flex w-full items-start gap-2 rounded-lg border px-2 py-1.5 text-left transition-colors ${
+                                !status.available && !on
+                                  ? "cursor-not-allowed border-white/[0.06] bg-white/[0.02] opacity-70"
+                                  : on
+                                    ? "border-accent/30 bg-accent/[0.06]"
+                                    : "border-white/[0.06] bg-white/[0.02] hover:border-white/15"
+                              }`}
+                            >
+                              <span
+                                className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded border ${
+                                  on
+                                    ? "border-accent/50 bg-accent text-ink-950"
+                                    : "border-white/15 bg-transparent text-transparent"
+                                }`}
+                              >
+                                <Check size={11} strokeWidth={3} />
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block text-[11.5px] font-medium text-zinc-200">
+                                  {cap.label}
+                                </span>
+                                <span className="block text-[10px] leading-relaxed text-zinc-500">
+                                  {cap.hint}
+                                </span>
+                                {/* THE WORD, always. Never colour alone, and
+                                    never merely unticked: an unavailable box has
+                                    to SAY what makes it unavailable. */}
+                                <span
+                                  data-testid={`rail-cap-word-${p.id}-${cap.key}`}
+                                  className={`block text-[10px] ${
+                                    status.available ? "text-zinc-500" : "text-amber-300"
+                                  }`}
+                                >
+                                  {status.word}
+                                </span>
+                                {/* D20 example, said out loud: global off plus
+                                    pane checked equals unavailable. */}
+                                {on && !status.available ? (
+                                  <span
+                                    data-testid={`rail-cap-conflict-${p.id}-${cap.key}`}
+                                    className="block text-[10px] leading-relaxed text-amber-200"
+                                  >
+                                    Ticked for this pane, but unavailable — the install setting wins. Untick it here if you want the grant gone.
+                                  </span>
+                                ) : null}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {capabilityStatus(ENFORCED_CAPABILITY, access, accessFailed).offForInstall ? (
+                        <p className="mt-1.5 px-1 text-[10px] leading-relaxed text-amber-200">
+                          Browser is off for this whole install.{" "}
+                          <Link
+                            href="/computeruse"
+                            className="text-accent-soft underline-offset-2 hover:underline"
+                          >
+                            Open the Browser page
+                          </Link>{" "}
+                          to turn it on.
+                        </p>
+                      ) : null}
+                      <p
+                        data-testid={`rail-caps-footnote-${p.id}`}
+                        className="mt-1.5 border-t border-white/[0.06] px-1 pt-1.5 text-[10px] leading-relaxed text-zinc-500"
+                      >
+                        Only <span className="text-zinc-300">Browser</span> is enforced today. A pane
+                        starts unticked, and an unticked Browser box means this pane&rsquo;s chat and
+                        anything it launches get no browser tools. Files, Shell, Extensions and Memory
+                        are recorded here and shown to you; nothing gates on them yet.
+                      </p>
+                      {capsError ? (
+                        <p
+                          role="alert"
+                          className="mt-1.5 rounded-lg border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-[10px] leading-relaxed text-amber-200"
+                        >
+                          {capsError}
+                        </p>
+                      ) : null}
+                    </div>
+                  </>
+                ) : null}
               </div>
             );
           })

@@ -374,7 +374,23 @@ export interface TerminalInfo {
   exit_code: number | null;
   /** True when running on a pipe-based shell (no full TTY) — fallback path. */
   degraded?: boolean;
+  /** What this pane's harness may reach through Jarvis (v1.238.0). Absent on a
+   *  pane created before the field existed, which reads as nothing granted —
+   *  no pane gains a capability by upgrade. Only Browser is ENFORCED in the
+   *  v1.235.0-v1.239.0 ships; the other four are recorded and displayed, and
+   *  the rail's copy says so rather than implying a gate that is not there. */
+  capabilities?: PaneCapabilities;
   created_at: string;
+}
+
+/** The five per-pane capability boxes, in D20's order. Server-side is the only
+ *  authority: the checkbox writes PATCH /terminals/{id} and nothing more. */
+export interface PaneCapabilities {
+  files?: boolean;
+  shell?: boolean;
+  browser?: boolean;
+  extensions?: boolean;
+  memory?: boolean;
 }
 
 /** A shell available on the host (`GET /terminals/shells`). */

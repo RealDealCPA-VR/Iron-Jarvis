@@ -461,12 +461,13 @@ def _profile_section(platform) -> str:
 #:   rather than as a sandbox it may experiment in.
 BROWSER_HEADING = "# Browser (connected by the user)"
 
-#: The block's last line. Phrased as a CONDITIONAL because in v1.236.0 it is
-#: genuinely conditional and will become more so: per-pane capabilities are
-#: recorded in Ship 4, and until then ``_pane_browser_allowed`` finds nothing to
-#: refuse. Asserting "Browser tools are available" flatly would be the oversell
-#: rule's exact failure — a prompt claiming an arrangement the install may not
-#: have.
+#: The block's last line. Phrased as a CONDITIONAL because it IS conditional:
+#: per-pane capabilities are recorded and ENFORCED from v1.238.0, and this
+#: whole block renders only on a pane whose Browser box is ticked — so the
+#: sentence is true of the pane reading it and stays honest about the ones it
+#: is never shown to. Asserting "Browser tools are available" flatly would be
+#: the oversell rule's exact failure — a prompt claiming an arrangement the
+#: install may not have.
 BROWSER_CAPABILITY_LINE = (
     "Browser tools are available if this pane has Browser capability."
 )
@@ -649,22 +650,45 @@ def _pane_browser_allowed(d, pane_id: str) -> bool:
     — a prompt telling the model it has browser tools on a pane whose armed set
     has none, which reads to the model as a broken tool rather than as a setting.
 
-    **In v1.236.0 this is a documented NO-OP and answers True for every pane.**
-    Per-pane capabilities are recorded and displayed in Ship 4 (plan 11.5:
-    ``RailPane.capabilities`` and ``PATCH /terminals/{id}``), so there is no
-    stored verdict to read yet —
-    :class:`~iron_jarvis.terminals.session.TerminalSession` carries no
-    ``capabilities`` attribute at all. The seam is written now, with its real
-    signature and its real callers, because the alternative — adding the gate in
-    the same change as the storage that feeds it — is how a filter ends up
-    applied in one lane and not in the other.
+    **UNSET MEANS DENIED (v1.238.0), and it is the pane itself that is asked.**
+    Ship 4 landed the storage (:attr:`TerminalSession.capabilities`), the
+    checklist (``PaneRail``'s popover) and ``PATCH /terminals/{id}``, so there
+    is a stored verdict to read and exactly one right way to read it:
+    ``pane.capability("browser")``. That method is the single owner of pane
+    truthiness — it is what ``info()["capabilities"]`` renders the checkbox
+    from, and what ``PaneTokenStore.resolve`` hands the outward MCP lane — so
+    reading the raw attribute here, with its own idea of what counts as a yes,
+    is how the two lanes came to disagree in the first place.
 
-    UNSET IS NOT DENIED. When a pane records nothing the answer is True: the
-    global ``browser_access`` gate above it already ships ``off``, and making an
-    absent per-pane record mean "denied" would turn every pane dark the moment
-    Ship 4 landed the field. When a pane DOES record a verdict it is read
-    strictly — ``capabilities["browser"]`` must be exactly ``True``, per plan
-    11.2 ("a pane whose ``capabilities['browser']`` is not ``True``").
+    THE DEFECT THIS REPLACES, stated plainly because the shape recurs: until
+    v1.238.0 this function read the RAW attribute and answered ``True``
+    whenever ``"browser"`` was absent from it. Every pane in existence is
+    absent from it — nothing had ever written the field — so the checklist
+    rendered Browser UNTICKED and labelled ``enforced`` while this gate armed
+    the whole ``browser_*`` roster on the very same pane. The MCP lane, reading
+    that pane through ``capability()``, answered 403. The UI said denied, one
+    lane said denied, and this lane said allowed.
+
+    THE COMPATIBILITY COST, taken deliberately. Every pane a user already has
+    is unconfigured, so a strict default CHANGES BEHAVIOUR for all of them:
+    their Build chat loses ``browser_*`` names until the box is ticked. That is
+    the right trade three times over. (1) ``browser_access`` ships ``off``, so
+    gate 1 already strips those names on every install that has not turned
+    Browser on deliberately — the panes that lose anything belong only to an
+    owner who switched Browser on install-wide, and that owner now has a
+    checklist saying which panes may use it. (2) The remedy is one click, in
+    the popover that is already showing the box unticked — whereas the
+    permissive default has no remedy at all, because a user cannot fix a lie
+    they cannot see. (3) A capability that grants itself when nobody has
+    decided is not a capability. Plan 11.2 is literal about it: "A pane whose
+    ``capabilities['browser']`` is not ``True`` gets no ``browser_*`` names."
+
+    A PANE-LESS SURFACE IS STILL ALLOWED (``pane_id == ""``): the main chat
+    page and the phone lane are not panes, gate 2 does not apply to them, and
+    gate 1 still does. An id that names NO pane, and a pane lookup that RAISES,
+    both answer ``False`` now — also a change. A predicate that answered True
+    for an unknown id was one any caller could step around by sending any
+    string at all as ``pane_id``, which is a gate in name only.
 
     SAFE TO CALL ON THE EVENT LOOP, and that was checked rather than assumed:
     :func:`_browser_section` calls this inline during prompt assembly, and
@@ -685,19 +709,31 @@ def _pane_browser_allowed(d, pane_id: str) -> bool:
         terminals = getattr(getattr(d, "platform", None), "terminals", None)
         pane = terminals.get(pid) if terminals is not None else None
     except Exception:  # noqa: BLE001 — a lookup must not break a turn
-        return True
+        # And it does not break the turn: it removes browser names from it. An
+        # unreadable pane store is a failure to answer, never a grant.
+        return False
     if pane is None:
-        # An id that names no live pane. True, and deliberately: this predicate
-        # is not an authenticator. A closed pane, a stale id from a reloaded
-        # dashboard and a forged one are indistinguishable here, and the gates
-        # that DO refuse — global access, the permission engine, and each tool's
-        # own re-check inside ``execute`` — are all still ahead of any
-        # disclosure.
-        return True
-    caps = getattr(pane, "capabilities", None)
-    if not isinstance(caps, dict) or "browser" not in caps:
-        return True  # Ship 4 has not recorded one; see the docstring.
-    return caps.get("browser") is True
+        return False
+    # THE PANE'S OWN ANSWER, not a second reading of its storage. `capability`
+    # normalises (a JSON string "false" is not a yes), is fail-closed when
+    # `capabilities` is None, and is the same method the checklist renders and
+    # the outward MCP grant reads — which is the entire point.
+    reader = getattr(pane, "capability", None)
+    if callable(reader):
+        try:
+            return reader("browser") is True
+        except Exception:  # noqa: BLE001
+            return False
+    # A stand-in pane (a test double, a future backend) that stores the mapping
+    # but has no accessor: normalise it the identical way rather than inventing
+    # a third notion of truthiness in this file.
+    from ..terminals.session import normalise_pane_capabilities
+
+    try:
+        caps = normalise_pane_capabilities(getattr(pane, "capabilities", None))
+    except Exception:  # noqa: BLE001
+        return False
+    return caps.get("browser", False) is True
 
 
 def _browser_section(d, pane_id: str = "") -> str:
@@ -1398,10 +1434,11 @@ def _filter_browser_tools(d, body, armed: list[str]) -> list[str]:
       direction, matching ``Tool.risk_class`` and ``min_access_for``.
     * ``interactive`` — nothing is stripped by gate 1.
 
-    Gate 2, per pane: :func:`_pane_browser_allowed`. A documented no-op in
-    v1.236.0 (no pane records capabilities until Ship 4) and wired anyway, so
-    the enforcement point exists in one place before there is a second lane to
-    forget.
+    Gate 2, per pane: :func:`_pane_browser_allowed`. LIVE from v1.238.0 and
+    fail-closed — a pane nobody has ticked gets no ``browser_*`` name, which is
+    the same answer its checkbox and its MCP grant give. It was a documented
+    no-op in v1.236.0, and the divergence that created is written up on that
+    function.
 
     Returns a NEW list in the caller's order; the input is never mutated.
     """

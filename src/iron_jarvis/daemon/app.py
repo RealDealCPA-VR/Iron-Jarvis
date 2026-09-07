@@ -2394,6 +2394,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # Browser (v1.235.0): /browser/ws + the Your browser card's routes. Its
     # socket authenticates with the PAIRING token, never this install's bearer.
     _routes.browser.register(app, d)
+    # OUTWARD MCP (v1.238.0): Jarvis as the MCP SERVER, so an external Build
+    # harness reaches the SAME tools through the SAME gates. /mcp accepts ONLY a
+    # pane-scoped capability token — never this install's bearer, never a browser
+    # pairing token — which is the whole of D17A.
+    _routes.mcpserver.register(app, d)
     _routes.terminals.register(app, d)
     _routes.workflows.register(app, d)
     _routes.autonomy.register(app, d)

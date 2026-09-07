@@ -64,6 +64,59 @@ def _isolate_subscription_cli_detection():
         ProviderManager._cli_signed_in = original_signed
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_launch_recipe_probes():
+    """No test ever runs the developer's real ``claude``/``codex``/``pi`` (v1.238.0).
+
+    Launch recipes (``terminals/recipes.py``) detect a CLI's version and
+    feature-detect its options by running that CLI's own ``--version`` and
+    ``--help``. ``detect_ai_clis()`` calls into them, and several existing tests
+    call ``detect_ai_clis()`` — so without this a run on THIS machine would spawn
+    three real binaries and read a real help text, while CI (which has none of
+    them) would read nothing, and the two would disagree about every recipe
+    assertion. The same trap ``GROK_HOME``, subscription-CLI detection and the
+    OpenCode store are already isolated for above.
+
+    THREE things leak the host, not one, and stubbing only the first left this
+    machine behaving differently from a CI runner (found in the v1.238.0 review):
+
+    * ``recipes._run_probe`` is the module's subprocess chokepoint. It answers
+      ``""`` — the "unknown" state every recipe is written to degrade into — and
+      the probe cache is cleared on the way in so a real answer from an earlier
+      import can never be reused.
+    * ``recipes._find`` decides whether a CLI is probed AT ALL. Left real, a box
+      with ``claude`` installed resolves a path, runs the (stubbed) probe and
+      lands on a different recipe row than a runner where nothing resolves.
+    * ``pi_adapter._find`` resolves Pi's bundled Node, and ``PiRecipe`` puts that
+      path into its ``detail`` — so the developer's own filesystem path was being
+      read into an assertion's reach, and Pi answered ``ok=True`` here and
+      ``ok=False`` on CI.
+
+    All three are stubbed to the CI-shaped answer. Tests that exercise detection
+    set their own via monkeypatch, which transparently overrides these for their
+    duration. ``ai_clis._find`` is deliberately NOT stubbed: it decides the
+    ``installed`` column for the whole catalog, which many older tests read, and
+    it is not part of the recipe machinery this ship added.
+    """
+    from iron_jarvis.terminals import pi_adapter as _pi_adapter
+    from iron_jarvis.terminals import recipes as _recipes
+
+    original = _recipes._run_probe
+    original_find = _recipes._find
+    original_pi_find = _pi_adapter._find
+    _recipes._run_probe = lambda argv, **kw: ""
+    _recipes._find = lambda command: None
+    _pi_adapter._find = lambda command: None
+    _recipes.clear_probe_cache()
+    try:
+        yield
+    finally:
+        _recipes._run_probe = original
+        _recipes._find = original_find
+        _pi_adapter._find = original_pi_find
+        _recipes.clear_probe_cache()
+
+
 @pytest.fixture
 def project_root(tmp_path):
     return str(tmp_path)

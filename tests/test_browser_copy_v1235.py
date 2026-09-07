@@ -4,18 +4,20 @@ Named for v1.235.0, the ship whose review found the defect, and MAINTAINED every
 after it -- the file is the moving boundary between what the browser can do and what it
 is merely going to do, so it is edited in the same change as the ability, never after.
 
-AT v1.237.0 the browser pairs, reports connection state, lists tabs, names the active
-tab, reads the text of a page, takes a screenshot, AND ACTS ON THE PAGE: click, type,
-press a key, scroll, activate, open and close a tab, and navigate. Fourteen tools. A
-completed download is reported with its real path. What still DOES NOT EXIST is an
-external harness driving the same browser (v1.238.0) and the add-on bundled into the
-installer (v1.239.0).
+AT v1.238.0 the browser pairs, reports connection state, lists tabs, names the active
+tab, reads the text of a page, takes a screenshot, ACTS ON THE PAGE (click, type, press
+a key, scroll, activate, open and close a tab, navigate), AND IS REACHABLE FROM AN
+OUTSIDE HARNESS: a coding CLI launched in a Build pane whose Browser capability is
+ticked drives the same browser, through the same gates. Fourteen tools, two callers. A
+completed download is reported with its real path. What still DOES NOT EXIST is the
+add-on bundled into the installer (v1.239.0).
 
 THE BOUNDARY MOVED IN THIS FILE IN THE SAME CHANGE AS THE ABILITY, which is the only
-discipline that works. Three claims left the forbidden list and became required ones;
-four sentences of copy that dated acting as future were rewritten to describe it as
-live. A claim deleted from BOTH halves is a claim nothing checks, so nothing was
-deleted -- it moved.
+discipline that works. At v1.237.0 three acting claims moved; at v1.238.0 the harness
+claim moved -- out of the forbidden list, into the required half below -- and the
+README row that DATED the harness as future had to stop, because it was dating the
+version it was being read on. A claim deleted from BOTH halves is a claim nothing
+checks, so nothing was deleted -- it moved.
 
 WHY IT EXISTS. At v1.235.0 the shipped copy said otherwise: the Handbook's capability
 table offered "read the current page, take a screenshot" as a Read only ability, the
@@ -83,18 +85,15 @@ def _handbook_browser_section() -> str:
 # Each entry: the file, and a phrase describing an ability this version lacks.
 # Phrased as whole clauses so a legitimate mention of the FUTURE ("reading a
 # page's text arrives in v1.236.0") is not caught.
-# UPDATED AT v1.237.0. ACTING SHIPPED, so the three acting claims left this list and
-# became REQUIRED phrases below -- that direction of travel is the whole point of the
-# file. What stays is what is still not true:
+# UPDATED AT v1.238.0. THE OUTWARD HARNESS SHIPPED, so its README entry left this list
+# and became a REQUIRED phrase below -- that direction of travel is the whole point of
+# the file. What stays is what is still not true:
 #
-#   an outward harness              -> v1.238.0  (a Build harness, same browser)
 #   the add-on inside the installer -> v1.239.0
 #
-# When one of those ships, move its entries the same way: delete here, assert there.
+# When that ships, move its entries the same way: delete here, assert there.
 # A claim deleted from BOTH halves is a claim nothing checks any more.
 OVERSOLD = [
-    # The README highlights row: the Ship 4 harness.
-    (README, "harness you pick in **Build** drives the *same* browser"),
     # The card claimed a folder only a source checkout has is part of the
     # install the user runs.
     (CARD, "from your Iron Jarvis install"),
@@ -289,20 +288,75 @@ def test_the_card_hints_describe_the_abilities_this_version_has():
         )
 
 
-def test_the_readme_row_sells_the_tab_list_and_dates_the_rest():
-    row = next(
+def _readme_browser_row() -> str:
+    return next(
         line
         for line in README.read_text(encoding="utf-8").replace("\r\n", "\n").splitlines()
         if "Your own browser, as a capability" in line
     )
+
+
+def test_the_readme_row_sells_the_tab_list_and_dates_the_rest():
+    row = _readme_browser_row()
     assert "ask about the page in front of you" in row
-    # v1.237.0: the row no longer has to DATE acting -- acting is this version, so
-    # requiring "v1.237.0" here would force the README to keep calling it future.
-    # The harness is still ahead, and the OVERSOLD entry above keeps it honest.
-    assert "v1.238.0" in row
+    # v1.238.0: the only thing left to date is the add-on inside the installer.
+    # Requiring "v1.238.0" here (as this test did until this ship) forced the row to
+    # keep saying the harness "arrives in v1.238.0" ON v1.238.0 -- a required phrase
+    # holding a lie in place, which is the failure mode this file exists to prevent.
+    assert "v1.239.0" in row, (
+        "the README browser row no longer dates anything as future. The one thing "
+        "still ahead is the add-on inside the installer: say it arrives in v1.239.0."
+    )
+    assert "v1.238.0" not in row, (
+        "the README still dates something as arriving in v1.238.0 -- which is the "
+        "version the reader is running"
+    )
     assert "Clicking and typing arrive in v1.237.0" not in row, (
         "the README still dates clicking and typing as future on the version that "
         "ships them"
+    )
+
+
+def test_the_readme_row_says_a_build_harness_drives_the_same_browser():
+    """MOVED AT v1.238.0, both halves of the same edit.
+
+    This exact clause was FORBIDDEN in `OVERSOLD` on every version that could not
+    do it, and the row instead closed with "An external harness driving the same
+    browser arrives in v1.238.0" -- a sentence that, unchanged, tells a user
+    running v1.238.0 that the feature they are running is still to come. Ship 4
+    delivers it, so the clause becomes owed.
+    """
+    row = _readme_browser_row()
+    assert "harness you pick in **Build** drives the *same* browser" in row, (
+        "the README browser row does not say the harness ships. The owed clause is "
+        'exactly: "harness you pick in **Build** drives the *same* browser" -- it '
+        "was on the forbidden list until this version and moved here in the same "
+        "change as the ability. Replace the closing clause 'An external harness "
+        "driving the same browser arrives in v1.238.0'."
+    )
+
+
+def test_the_handbook_tells_a_user_how_a_build_harness_gets_the_browser():
+    """The Handbook is the Guide's corpus, so the harness path has to be IN it.
+
+    Before this ship the Browser section did not mention a harness at all except
+    to date one as future, and "Capabilities" appeared nowhere in the file -- so a
+    user asking the Guide "can Claude Code use my browser through Jarvis?" was
+    told, with confidence, that it arrives in a later version.
+    """
+    section = _handbook_browser_section()
+    assert "Capabilities" in section, (
+        "the Handbook never names the Capabilities list a user has to tick"
+    )
+    assert "Launch" in section, "the Handbook does not say where the harness starts"
+    for needle, why in (
+        ("only Browser is enforced", "the four boxes that gate nothing are not owned"),
+        ("no** credential", "the config file's credential-free promise is not stated"),
+        ("closing the pane", "the credential's lifetime is not stated"),
+    ):
+        assert needle in section, why
+    assert "driving this same browser arrives" not in section, (
+        "the Handbook still dates the harness as future on the version that ships it"
     )
 
 

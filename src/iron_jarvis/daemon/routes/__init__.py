@@ -25,6 +25,7 @@ from . import (  # noqa: F401
     helpdocs,
     knowledge,
     learning,
+    mcpserver,
     memory_review,
     profile,
     projects,

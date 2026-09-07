@@ -177,20 +177,52 @@ def _find(command: str) -> str | None:
     return None
 
 
-def detect_ai_clis() -> list[dict[str, Any]]:
+def detect_ai_clis(*, probe: bool = True) -> list[dict[str, Any]]:
     """The full catalog, each tagged ``installed`` (+ resolved ``path``) and
     carrying its ``autopilot_flag`` ("" when that CLI has none), so the Studio's
     UI names the EXACT flag it will launch with instead of a prose copy that
-    drifts (v1.175.0)."""
+    drifts (v1.175.0).
+
+    **v1.238.0 adds ``version`` and ``recipe`` (D18).** The Launch menu has to be
+    able to show the recipe state BEFORE the user launches — which method would
+    be configured, and any limitation of the installed build — because a harness
+    that silently launches without Jarvis capabilities is exactly the shape of
+    failure the v1.218.0 lesson is about.
+
+    Both fields are honest about how little is known:
+
+    * ``version`` is the CLI's own ``--version`` line verbatim, or ``""``. It is
+      never parsed, never compared, and ``""`` is an ordinary answer.
+    * ``recipe`` is ``None`` for **every catalog entry that has no recipe**,
+      which is most of them. That is not a failure state: a CLI with no recipe
+      launches exactly as it does today, a typed command with no token and no
+      configuration written. Only the three CLIs in
+      :data:`iron_jarvis.terminals.recipes.RECIPES` carry a dict.
+
+    Probing runs the CLI's own binary, so it happens only for a CLI that is BOTH
+    installed AND has a recipe — at most three subprocesses, each bounded and
+    memoised — and ``probe=False`` turns it off entirely for a caller that only
+    wants the installed/path/flag columns. BLOCKING either way: the two callers
+    are synchronous ``def`` FastAPI routes, which Starlette already runs in the
+    threadpool.
+    """
+    from . import recipes as _recipes  # local: recipes imports `_find` from here
+
     out: list[dict[str, Any]] = []
     for cli in AI_CLIS:
         path = _find(cli["command"])
-        out.append(
-            {
-                **cli,
-                "installed": path is not None,
-                "path": path,
-                "autopilot_flag": AUTOPILOT_FLAGS.get(cli["id"], ""),
-            }
-        )
+        row: dict[str, Any] = {
+            **cli,
+            "installed": path is not None,
+            "path": path,
+            "autopilot_flag": AUTOPILOT_FLAGS.get(cli["id"], ""),
+            "version": "",
+            "recipe": None,
+        }
+        recipe = _recipes.recipe_for(cli["id"])
+        if recipe is not None and path is not None and probe:
+            result = recipe.inspect()
+            row["version"] = result.version
+            row["recipe"] = result.row()
+        out.append(row)
     return out

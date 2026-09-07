@@ -250,10 +250,33 @@ class NoStoreMiddleware:
 # Paths that must work without a token even when auth is enabled:
 #   - health/liveness probes (load balancers, `ironjarvis status`)
 #   - the interactive API docs and their schema
+#   - ``/mcp``, which carries its OWN credential (see MCP_PATH below)
 # OAuth provider redirects hit /oauth/{provider}/callback and are matched
 # dynamically in `_is_exempt` (the provider segment is variable).
+
+#: The outward MCP server (v1.238.0). Spelled once, and EXEMPT — not because it
+#: is public, but because the install bearer is the one credential it must
+#: refuse. ``routes/mcpserver`` takes a PANE CAPABILITY token and nothing else
+#: (``authorize_mcp``: no token, the install bearer and a browser pairing token
+#: are each refused by their own explicit check, before anything else runs, on
+#: GET, POST and DELETE alike). This middleware knows only about the install
+#: bearer, so leaving ``/mcp`` covered meant a valid pane token was refused
+#: BEFORE the route could look at it — and since ``desktop/main.js`` always
+#: spawns the daemon with ``IRONJARVIS_TOKEN``, that is every packaged install:
+#: the feature was dead in the product while 89 route tests (each on a bare
+#: FastAPI with no middleware) stayed green. Measured on the real ``create_app``
+#: with a token set: pane token -> 401 "missing or invalid token".
+#:
+#: EXACT MATCH ONLY, and that is a security property, not tidiness: ``/mcp`` is
+#: a prefix of ``POST /mcp/servers``, ``PATCH /mcp/settings`` and
+#: ``POST /mcp/servers/{name}/test`` in ``routes/agents.py``, which register and
+#: run arbitrary commands for the daemon to execute. A ``startswith`` here would
+#: hand those to any unauthenticated local caller. Same shape, same reason, as
+#: the exact ``BROWSER_WS_PATH`` comparison above.
+MCP_PATH = "/mcp"
+
 _EXEMPT_EXACT = frozenset(
-    {"/health", "/docs", "/openapi.json", "/redoc"}
+    {"/health", "/docs", "/openapi.json", "/redoc", MCP_PATH}
 )
 
 _TOKEN_ENV = "IRONJARVIS_TOKEN"

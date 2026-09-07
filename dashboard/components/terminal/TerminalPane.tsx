@@ -53,6 +53,102 @@ type AIResult = {
 
 type ConnState = "connecting" | "open" | "reconnecting" | "closed";
 
+// --- Launch recipes (v1.238.0, D18) ---------------------------------------
+// Before this ship a launch was one string typed into a live shell, and the
+// menu had nothing to say about what the CLI would be able to DO once it
+// started. D18 makes that a recipe: detect the version, verify a method,
+// configure it, hand it a pane token — and, when any of that cannot be done,
+// "surface incompatibility clearly". A harness that cannot be isolated has to
+// say so WHERE THE USER IS STANDING, which is this menu, not a log.
+//
+// The fields are declared here rather than imported: `lib/types` is another
+// lane's file, and every field is optional, so an older daemon (or a type that
+// has not caught up) renders the honest "no recipe" case instead of failing to
+// compile.
+
+/** `detect_ai_clis()`'s per-CLI recipe row. */
+export interface CliRecipe {
+  /** "mcp_http" | "mcp_stdio" | "none" — whatever the recipe verified. */
+  method?: string;
+  ok?: boolean;
+  /** User-facing sentences. Never empty when `ok` is false. */
+  limitations?: string[];
+}
+
+/** An AI CLI as the Launch menu sees it once recipes exist. */
+export type LaunchCli = AiCli & { version?: string; recipe?: CliRecipe | null };
+
+/** How a verified method reads to a person. Unknown methods print verbatim
+ *  rather than being swallowed — a recipe naming a method this build has never
+ *  heard of is information, not a reason to say nothing. */
+export function recipeMethodWord(method: string): string {
+  if (method === "mcp_http") return "over HTTP";
+  if (method === "mcp_stdio") return "over stdio";
+  return method;
+}
+
+/** The one sentence the CLI I am about to launch has coming to it. */
+export function recipeNote(cli: LaunchCli): {
+  headline: string;
+  ready: boolean;
+  limitations: string[];
+} {
+  const recipe = cli.recipe;
+  // No recipe at all: an older daemon, or a catalog entry nobody wrote one for.
+  // That CLI is not broken by this work — it simply launches the way it always
+  // has, with no Jarvis capabilities, and saying so is cheaper than a mystery.
+  if (!recipe) {
+    return { headline: "Launches as-is — no Jarvis capabilities", ready: false, limitations: [] };
+  }
+  const limitations = (recipe.limitations ?? []).filter((l) => typeof l === "string" && l.trim());
+  if (recipe.ok === false) {
+    return {
+      headline: "No Jarvis capabilities on this version",
+      ready: false,
+      // ok:false with nothing to show would render an empty warning, which
+      // reads as "fine". Name the gap instead of implying there is none.
+      limitations: limitations.length
+        ? limitations
+        : ["This version could not be prepared for Jarvis, and it did not say why."],
+    };
+  }
+  const method = String(recipe.method ?? "").trim();
+  if (!method || method === "none") {
+    return { headline: "Launches as-is — no Jarvis capabilities", ready: false, limitations };
+  }
+  return {
+    headline: `Jarvis capabilities ${recipeMethodWord(method)}`,
+    ready: true,
+    limitations,
+  };
+}
+
+/**
+ * The recipe state, rendered INSIDE the Launch row, before the click.
+ *
+ * Lifted out of the dropdown so it can be mounted on its own: jsdom cannot
+ * render an xterm pane, so the house idiom is to unit-test the seam and
+ * source-pin the call site (v1.163.0, v1.190.0, v1.194.0).
+ */
+export function LaunchRecipeNote({ cli }: { cli: LaunchCli }) {
+  const note = recipeNote(cli);
+  const tone = note.ready
+    ? "text-emerald-300/80"
+    : note.limitations.length
+      ? "text-amber-300"
+      : "text-zinc-500";
+  return (
+    <span data-testid={`launch-recipe-${cli.id}`} className="block">
+      <span className={`block text-[10px] leading-relaxed ${tone}`}>{note.headline}</span>
+      {note.limitations.map((line) => (
+        <span key={line} className="block text-[10px] leading-relaxed text-amber-200">
+          {line}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 // --- Screen snippets (v1.194.0) -------------------------------------------
 // A ConPTY pane is a BYTE STREAM: there is no image channel to paste into. But
 // every AI CLI we launch reads images OFF DISK from a path in the prompt, and
@@ -285,6 +381,7 @@ export function TerminalPane({
   draggable = true,
   onRenamed,
   onLaunched,
+  onLaunchWithCapabilities,
   paneState,
   agentCli,
   paneStateLine,
@@ -309,6 +406,14 @@ export function TerminalPane({
   onRenamed?: (name: string) => void;
   /** Told which CLI was just launched here, for the same reason. */
   onLaunched?: (cli: string) => void;
+  /** Open a NEW pane already prepared for this harness (v1.238.0).
+   *  A recipe puts the MCP address and a pane-scoped token into the
+   *  harness's ENVIRONMENT, which the daemon merges before the shell is
+   *  spawned — so it can only be asked for at pane creation. Launching in
+   *  THIS pane types a command into a shell that is already running and
+   *  can never receive them, and the token must never be typed, because a
+   *  shell keeps history and scrollback. */
+  onLaunchWithCapabilities?: (cli: string) => void;
   /** v1.217.0: what the agent occupying this pane is doing. */
   paneState?: PaneState | null;
   /** Which coding CLI Build believes occupies this pane. */
@@ -494,7 +599,7 @@ export function TerminalPane({
       /* offline / pane gone — the list poll is the source of truth */
     });
   }, [draftName, paneName, info.id, onRenamed]);
-  const installedClis = aiClis.filter((c) => c.installed);
+  const installedClis: LaunchCli[] = aiClis.filter((c) => c.installed);
   const notInstalledClis = aiClis.filter((c) => !c.installed);
 
   function launchCli(cli: AiCli) {
@@ -1381,15 +1486,64 @@ export function TerminalPane({
                   launchCli(c);
                   setLaunchOpen(false);
                 }}
-                className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-[12px] text-zinc-200 transition-colors hover:bg-accent/10 hover:text-accent-soft"
+                className="flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left text-[12px] text-zinc-200 transition-colors hover:bg-accent/10 hover:text-accent-soft"
               >
-                <span className="flex items-center gap-2">
-                  <Rocket size={12} className="text-accent-soft/80" />
-                  <span className="font-medium">{c.label}</span>
+                <span className="flex w-full items-center justify-between gap-2">
+                  <span className="flex items-center gap-2">
+                    <Rocket size={12} className="text-accent-soft/80" />
+                    <span className="font-medium">{c.label}</span>
+                    {c.version ? (
+                      <span
+                        data-testid={`launch-version-${c.id}`}
+                        className="font-mono text-[10px] text-zinc-600"
+                      >
+                        {c.version}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="font-mono text-[10px] text-zinc-500">{c.command.trim()}</span>
                 </span>
-                <span className="font-mono text-[10px] text-zinc-500">{c.command.trim()}</span>
+                <LaunchRecipeNote cli={c} />
               </button>
             ))}
+            {/* THE SECOND DOOR (v1.238.0). A recipe hands the harness the MCP
+                address and a pane-scoped token through the child ENVIRONMENT,
+                which the daemon merges before the shell is spawned. Launching
+                above types a command into a shell that is ALREADY RUNNING, so
+                it can never receive them — and the token must never be typed,
+                because a shell keeps history and scrollback. So the capable
+                launch is a NEW pane, and the menu says so rather than quietly
+                doing something different from what the row above it does. */}
+            {onLaunchWithCapabilities &&
+              installedClis.filter((c) => c.recipe && c.recipe.method !== "none").length > 0 && (
+                <>
+                  <div className="px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
+                    With Jarvis capabilities — opens a new pane
+                  </div>
+                  {installedClis
+                    .filter((c) => c.recipe && c.recipe.method !== "none")
+                    .map((c) => (
+                      <button
+                        key={`cap-${c.id}`}
+                        data-testid={`launch-capable-${c.id}`}
+                        onClick={() => {
+                          onLaunchWithCapabilities(c.id);
+                          setLaunchOpen(false);
+                        }}
+                        className="flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left text-[12px] text-zinc-200 transition-colors hover:bg-accent/10 hover:text-accent-soft"
+                      >
+                        <span className="flex w-full items-center justify-between gap-2">
+                          <span className="flex items-center gap-2">
+                            <Rocket size={12} className="text-accent-soft/80" />
+                            <span className="font-medium">{c.label}</span>
+                          </span>
+                          <span className="font-mono text-[10px] text-zinc-500">new pane</span>
+                        </span>
+                        <LaunchRecipeNote cli={c} />
+                      </button>
+                    ))}
+                </>
+              )}
             {notInstalledClis.length > 0 && (
               <div className="px-2 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-600">
                 Not installed

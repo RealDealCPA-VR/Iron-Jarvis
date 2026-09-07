@@ -982,13 +982,61 @@ def test_pane_id_is_optional_and_defaulted():
     assert ChatBody(messages=[], pane_id="term_abc").pane_id == "term_abc"
 
 
+def _granted_pane(bridge, **caps) -> str:
+    """A REAL pane on the bridge's real platform, with a fake shell.
+
+    v1.238.0: gate 2 reads the pane, so a made-up id no longer stands in for
+    one. The pane is created through the manager the daemon actually holds —
+    the same object ``_pane_browser_allowed`` looks the id up in.
+    """
+    from iron_jarvis.terminals.backend import FakeBackend
+
+    pane = bridge.platform.terminals.create(
+        cwd=None, backend=FakeBackend(), capabilities=dict(caps)
+    )
+    return pane.id
+
+
 def test_a_pane_id_rides_a_real_chat_request(bridge):
     """The daemon accepts it from the wire — an ignored field is not a link."""
+    pane_id = _granted_pane(bridge, browser=True)
     bridge.connect_browser(TAB_PAYLOAD)
     bridge.spy_prompts()
     bridge.stub_stream()
-    bridge.ask(pane_id="term_pane1")
-    bridge.ask_stream(pane_id="term_pane1")
+    bridge.ask(pane_id=pane_id)
+    bridge.ask_stream(pane_id=pane_id)
+    assert bridge.blocks() == [EXPECTED_BLOCK]
+
+
+def test_an_unticked_real_pane_gets_no_block_in_either_lane(bridge):
+    """GATE 2, DRIVEN THROUGH THE REAL APP, ON A REAL PANE (v1.238.0).
+
+    The pane is created exactly as the Build page's New-terminal button creates
+    one — no capabilities argument at all — which is the state EVERY pane in
+    every existing install is in. Both lanes are driven, because the defect this
+    replaces was a permissive predicate shared by both: the popover rendered the
+    box unticked, the outward MCP grant answered 403, and this was the one place
+    that said yes.
+    """
+    pane_id = _granted_pane(bridge)
+    pane = bridge.platform.terminals.get(pane_id)
+    # What the checklist renders, from the same object the gate reads.
+    assert pane.info()["capabilities"]["browser"] is False
+
+    bridge.connect_browser(TAB_PAYLOAD)
+    bridge.spy_prompts()
+    bridge.stub_stream()
+    bridge.ask(pane_id=pane_id)
+    bridge.ask_stream(pane_id=pane_id)
+    assert bridge.blocks() == [], "an unticked pane was told it has browser tools"
+
+    # And the same pane, once ticked, gets it in both lanes — so the emptiness
+    # above is the GATE, not a bridge that stopped rendering blocks.
+    pane.update_capabilities({"browser": True})
+    bridge.systems.clear()
+    bridge.planned.clear()
+    bridge.ask(pane_id=pane_id)
+    bridge.ask_stream(pane_id=pane_id)
     assert bridge.blocks() == [EXPECTED_BLOCK]
 
 
@@ -1000,10 +1048,17 @@ def test_a_pane_id_rides_a_real_chat_request(bridge):
 class _Panes:
     """A stand-in for ``TerminalManager``, which is a ``get(id)`` to this caller.
 
-    A real pane spawns a real shell, and what is under test is the LOOKUP plus
-    the reading of a field Ship 4 adds. ``capabilities`` does not exist on
-    ``TerminalSession`` yet, which is exactly why the Ship-2 truth below — an
-    unrecorded verdict is not a denial — is worth pinning now.
+    A real pane spawns a real shell, and what is under test here is the LOOKUP
+    and the reading of the field. The REAL pane object — a live
+    ``TerminalSession`` from a live ``TerminalManager``, with its own
+    ``capability()`` — is driven in
+    ``tests/test_pane_capabilities_v1238.py``, which is where the gate's
+    agreement with the checklist and with the MCP grant is pinned.
+
+    v1.238.0: these panes are ``SimpleNamespace``, so they carry the mapping
+    with no accessor and exercise the fallback branch of
+    ``_pane_browser_allowed`` — deliberately kept, and deliberately normalised
+    the same way, so a stand-in cannot be read more permissively than a pane.
     """
 
     def __init__(self, panes: dict) -> None:
@@ -1036,25 +1091,46 @@ def test_a_pane_less_surface_is_allowed_gate_2_does_not_apply():
     assert _pane_browser_allowed(_deps(), "") is True
 
 
-def test_a_pane_that_records_nothing_is_allowed_in_this_version():
-    """Ship 4 records capabilities. Until then an absent record is not a denial —
-    the global ``browser_access`` gate above it already ships ``off``."""
+def test_a_pane_that_records_nothing_is_denied():
+    """INVERTED IN v1.238.0, and this is the ship's S1.
+
+    Until v1.238.0 an absent record answered ``True`` here. Ship 4 landed the
+    field, the checklist and the outward MCP grant — and EVERY pane in
+    existence is absent from it, so the popover rendered Browser unticked and
+    said "enforced" while this gate armed the whole ``browser_*`` roster on the
+    same pane, and the MCP lane refused it. Unset now means denied in all three
+    places. The reasoning, including the compatibility cost, is on
+    ``_pane_browser_allowed``.
+    """
     d = _deps(panes={"term_1": SimpleNamespace()})
-    assert _pane_browser_allowed(d, "term_1") is True
-    assert BROWSER_HEADING in _browser_section(d, "term_1")
+    assert _pane_browser_allowed(d, "term_1") is False
+    assert _browser_section(d, "term_1") == ""
+    body = ChatBody(messages=[], pane_id="term_1")
+    assert _filter_browser_tools(d, body, ["browser_read_page", "read_file"]) == [
+        "read_file"
+    ]
 
 
-def test_an_unknown_pane_id_is_not_a_denial_and_not_a_grant():
-    """This predicate is not an authenticator: a closed pane, a stale id from a
-    reloaded dashboard and a forged one are indistinguishable here, and every
-    gate that DOES refuse is still ahead of any disclosure."""
-    assert _pane_browser_allowed(_deps(), "term_gone") is True
+def test_an_unknown_pane_id_is_a_denial():
+    """INVERTED IN v1.238.0. A closed pane, a stale id from a reloaded
+    dashboard and a forged one are indistinguishable here — and answering
+    ``True`` to all three made the gate skippable by sending any string at all
+    as ``pane_id``, which is a gate in name only."""
+    assert _pane_browser_allowed(_deps(), "term_gone") is False
 
 
-@pytest.mark.parametrize("caps", [{"browser": False}, {"browser": None}, {"browser": "yes"}])
+@pytest.mark.parametrize(
+    "caps", [{"browser": False}, {"browser": None}, {"browser": "false"}, {}]
+)
 def test_a_pane_whose_browser_capability_is_not_true_gets_no_block_and_no_tools(caps):
-    """Plan 11.2, read strictly: not ``True`` means no. Forward-looking — the
-    field lands in Ship 4 — and wired now so there is one enforcement point."""
+    """Plan 11.2, read strictly: not ``True`` means no.
+
+    v1.238.0 replaced the raw ``is True`` reading with the pane's own
+    ``capability()``, which is the single owner of pane truthiness — so the
+    string ``"false"`` is a no here for exactly the reason it is a no on the
+    checklist and in the MCP grant, and the affirmative string ``"yes"`` moved
+    to the test below rather than being read one way in this file and the
+    opposite way in the other two."""
     d = _deps(panes={"term_1": SimpleNamespace(capabilities=caps)})
     assert _pane_browser_allowed(d, "term_1") is False
     assert _browser_section(d, "term_1") == "", (
@@ -1064,19 +1140,32 @@ def test_a_pane_whose_browser_capability_is_not_true_gets_no_block_and_no_tools(
     assert _filter_browser_tools(d, body, ["browser_read_page", "read_file"]) == ["read_file"]
 
 
-def test_a_pane_that_records_browser_true_keeps_the_block_and_the_tools():
-    d = _deps(panes={"term_1": SimpleNamespace(capabilities={"browser": True})})
+@pytest.mark.parametrize("caps", [{"browser": True}, {"browser": "yes"}])
+def test_a_pane_that_records_browser_true_keeps_the_block_and_the_tools(caps):
+    """``"yes"`` is here, not above, because ONE function decides what counts as
+    a yes for a pane (``normalise_pane_capabilities`` /
+    ``panetokens.capability_enabled``). A hand-edited ``terminals.json`` saying
+    ``"yes"`` renders as a TICKED box and resolves to a granted MCP capability;
+    this lane must not be the only place in the app that calls it a no."""
+    d = _deps(panes={"term_1": SimpleNamespace(capabilities=caps)})
     assert _pane_browser_allowed(d, "term_1") is True
     assert BROWSER_HEADING in _browser_section(d, "term_1")
 
 
-def test_a_broken_pane_store_does_not_break_a_turn():
+def test_a_broken_pane_store_does_not_break_a_turn_and_grants_nothing():
+    """The turn survives; the browser names do not. INVERTED IN v1.238.0: a
+    pane store that cannot answer has not said yes."""
+
     class Boom:
         def get(self, pane_id):
             raise RuntimeError("terminals.json is corrupt")
 
     d = SimpleNamespace(platform=SimpleNamespace(terminals=Boom()))
-    assert _pane_browser_allowed(d, "term_1") is True
+    assert _pane_browser_allowed(d, "term_1") is False
+    body = ChatBody(messages=[], pane_id="term_1")
+    assert _filter_browser_tools(d, body, ["browser_read_page", "read_file"]) == [
+        "read_file"
+    ]
 
 
 # --------------------------------------------------------------------------- #

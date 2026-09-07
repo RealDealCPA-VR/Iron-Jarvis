@@ -267,6 +267,11 @@ export default function TerminalsPage() {
             cwd: t.cwd,
             unseen: Boolean(unseenTermOutput[t.id]),
             chatApproval: Boolean(chatStatus[t.id]?.approval),
+            // v1.238.0: what this pane's harness may reach. Straight off
+            // GET /terminals (session.info()), never a client-side guess — the
+            // server is the only authority, and the rail's checkbox writes back
+            // through PATCH rather than deciding anything itself.
+            capabilities: t.capabilities ?? null,
           };
         }),
     [terminals, paneActivity, unseenTermOutput, paneOverrides, chatStatus, cliLabel],
@@ -703,16 +708,27 @@ export default function TerminalsPage() {
   }, []);
 
   const addTerminal = useCallback(
-    async (cwd?: string | null) => {
+    async (cwd?: string | null, recipe?: string | null) => {
       setBusy(true);
       setError(null);
       try {
         // No explicit folder pick → the daemon falls back to the OS home dir.
         // No client-side path checks — if the daemon can't spawn there, its own
         // error surfaces below.
+        //
+        // `recipe` (v1.238.0) MUST be asked for HERE, at creation, and can never
+        // be added to a pane that already exists. A recipe's whole job is to put
+        // IRONJARVIS_MCP_URL and a pane-scoped token into the harness's
+        // ENVIRONMENT, and the daemon merges that env before the shell is
+        // spawned. The Launch menu types a command into an already-running
+        // shell, so a pane launched the ordinary way can never be given those —
+        // and the token must never be TYPED, because a shell keeps history and
+        // scrollback. So "launch a harness with Jarvis capabilities" is a new
+        // pane, not a command in this one.
         const info = await post<TerminalInfo>("/terminals", {
           cwd: cwd ?? undefined,
           shell: shell || undefined,
+          recipe: recipe ?? undefined,
         });
         setTerminals((prev) => [...prev, info]);
         // Place the new pane in a FREE slot so it never spawns on top of another,
@@ -1007,6 +1023,7 @@ export default function TerminalsPage() {
                                 notePaneOverride(t.id, { name: name || undefined })
                               }
                               onLaunched={(cli) => notePaneOverride(t.id, { cli })}
+                              onLaunchWithCapabilities={(cli) => addTerminal(t.cwd, cli)}
                               onFocus={() => bringToFront(t.id)}
                               onClose={() => setPendingClose(t.id)}
                               onWriterReady={(w) => registerWriter(t.id, w)}
