@@ -226,6 +226,17 @@ def default_permissions() -> dict[str, str]:
         "web_extract": "allow",
         "computer_use_status": "allow",
         "web_action": "ask",
+        # Browser (v1.235.0): the user's OWN Chrome, over the paired add-on.
+        # These three only observe (status + tab metadata), so they are `allow`
+        # — and they are spelled out rather than left to the fail-closed
+        # default because the permissions screen renders this dict, and a
+        # capability whose keys are invisible there cannot be tuned by the
+        # user. The `browser_access` setting (off | read_only | interactive)
+        # gates them independently of these tiers, so `allow` here still means
+        # "nothing until the user turns Browser access on".
+        "browser_get_status": "allow",
+        "browser_list_tabs": "allow",
+        "browser_get_active_tab": "allow",
     }
 
 
@@ -510,6 +521,14 @@ class Config(BaseModel):
     calendar_trigger_enabled: bool = False
     calendar_tick_seconds: int = 300  # calendar poll cadence (background loop)
     calendar_lead_minutes: int = 15  # fire when an event starts within this window
+    # BROWSER CAPABILITY (v1.235.0, D09) — the user's own Chrome, driven over the
+    # paired add-on. OFF by default, exactly like computer_use/autonomy/sentinels:
+    # this one reaches the browser the user is actually logged into, so a default
+    # of anything else would hand a fresh install their real sessions.
+    #   off          → no browser tool is available at all
+    #   read_only    → the inspection tools only
+    #   interactive  → the full MVP tool set (risk classification still applies)
+    browser_access: str = "off"
 
     @field_validator("autonomy_level")
     @classmethod
@@ -518,6 +537,19 @@ class Config(BaseModel):
         # global ceiling. validate_assignment=True applies this on PUT /settings too.
         if v not in ("suggest", "act_low", "act_all"):
             raise ValueError("autonomy_level must be suggest | act_low | act_all")
+        return v
+
+    @field_validator("browser_access")
+    @classmethod
+    def _valid_browser_access(cls, v: str) -> str:
+        # Reject a bad /settings value (400) rather than persist it. The silent
+        # failure this catches is a typo like "readonly" landing in config.toml:
+        # every access check compares against the three spellings below, so an
+        # unknown value would read as "not interactive" in one place and "not
+        # off" in another — a capability half on, with nothing saying so.
+        # validate_assignment=True applies this on PUT /settings too.
+        if v not in ("off", "read_only", "interactive"):
+            raise ValueError("browser_access must be off | read_only | interactive")
         return v
 
     @property

@@ -24,6 +24,15 @@ them on the ``asyncio`` and ``uvicorn.access`` loggers; ``daemon/cli.py``
 calls it where uvicorn is started. Logger-level filters survive uvicorn's
 ``dictConfig`` (it replaces handlers, not filters).
 
+Also here (v1.235.0, Ship 1): :class:`QueryCredentialRedactionFilter`, installed
+by the same call on ``uvicorn.access`` AND ``uvicorn.error``, because uvicorn
+logs the full path-with-query on both — and a WebSocket handshake cannot carry an
+``Authorization`` header, so this app's sockets put their credential on the URL
+(``/events?token=<install bearer>``, ``/browser/ws?token=<pairing token>``). It
+rewrites ``token=``/``secret=``-shaped query values to
+:data:`REDACTED_QUERY_VALUE` before the record is formatted, so no handler ever
+sees the plaintext and ``daemon.log`` stops being a credential store.
+
 Also here (OBS5): :class:`RecentErrorsHandler`, a memory-only ring buffer of
 the last :data:`RECENT_ERRORS_CAPACITY` WARNING+ records from the whole tree
 (both app names AND the libraries), read by ``GET /diagnostics/errors`` so
@@ -39,6 +48,7 @@ from __future__ import annotations
 import collections
 import copy
 import logging
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -211,12 +221,101 @@ class PolledRouteAccessFilter(logging.Filter):
         return str(path).split("?", 1)[0] not in QUIET_PATHS
 
 
+#: What replaces a credential in a logged query string. A MARKER, not an empty
+#: value: a reader has to be able to tell "there was a token here and we removed
+#: it" from "there was no token", or the next person greps the log for ``token=``,
+#: finds nothing, and concludes the add-on never sent one.
+REDACTED_QUERY_VALUE = "REDACTED"
+
+#: Query parameters whose value is a credential. ``token`` is both the browser
+#: pairing token (``/browser/ws?token=``) and the install bearer every local
+#: surface uses (``/events?token=``); the rest are here because a query string
+#: that carries one of these words carries a secret whatever route invented it.
+_SECRET_QUERY_RE = re.compile(
+    r"(?i)([?&][a-z0-9_.\-]*(?:token|secret|password|passwd|apikey|bearer)=)[^&\s\"'<>]*"
+)
+
+
+def _redact_query_credentials(text: str) -> str:
+    """``?token=abc123`` -> ``?token=REDACTED``, leaving everything else alone."""
+    return _SECRET_QUERY_RE.sub(r"\1" + REDACTED_QUERY_VALUE, text)
+
+
+class QueryCredentialRedactionFilter(logging.Filter):
+    """Strip credentials out of query strings BEFORE a record is formatted.
+
+    uvicorn logs the whole path-with-query on both of its loggers — the access
+    line for HTTP, and ``'%s - "WebSocket %s" [accepted]'`` on ``uvicorn.error``
+    for a handshake — and the desktop tees both into
+    ``%APPDATA%/Iron Jarvis/logs/daemon.log``. A WebSocket handshake cannot carry
+    an ``Authorization`` header, so both of this app's sockets put their
+    credential on the URL: ``/events?token=<install bearer>`` (leaking into that
+    file today) and ``/browser/ws?token=<pairing token>`` (D06A says the pairing
+    token is never in a log). The file is a 5 MB rotation readable by any local
+    process without holding either credential, and it is what a user pastes into
+    a bug report. Holding the pairing token, a caller opens ``/browser/ws``, D08
+    hands authority to the NEWER socket, and the user's real Chrome is replaced by
+    an impostor answering for their browser.
+
+    So the fix belongs one layer above whoever built the URL: the record is
+    rewritten here, on the logger, where every emitter of a query string passes.
+    Both ``record.args`` (uvicorn's shape) and ``record.msg`` (an f-string
+    someone writes later) are covered, and the record is rewritten in place BEFORE
+    formatting, so no handler — stream, file, or the OBS5 ring buffer — can ever
+    see the plaintext.
+
+    Never raises, and never falls through with the secret intact (v1.229.0: a log
+    handler runs inside every except branch the daemon has). If redaction itself
+    fails, the record's CONTENT is replaced by a named placeholder rather than
+    printed unredacted — fail CLOSED, because a record we could not read might be
+    exactly the one carrying the token — and only an interpreter too broken to
+    assign that placeholder drops the record entirely.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            args = record.args
+            if isinstance(args, tuple) and args:
+                record.args = tuple(
+                    _redact_query_credentials(a) if isinstance(a, str) else a for a in args
+                )
+            elif isinstance(args, dict) and args:
+                record.args = {
+                    k: (_redact_query_credentials(v) if isinstance(v, str) else v)
+                    for k, v in args.items()
+                }
+            if isinstance(record.msg, str):
+                record.msg = _redact_query_credentials(record.msg)
+            return True
+        except Exception:  # noqa: BLE001 - a filter that raises aborts the log call
+            return self._fail_closed(record)
+
+    @staticmethod
+    def _fail_closed(record: logging.LogRecord) -> bool:
+        try:
+            record.msg = (
+                "a log record was dropped: its query string could not be redacted "
+                "(iron_jarvis.core.logging.QueryCredentialRedactionFilter)"
+            )
+            record.args = ()
+            return True
+        except Exception:  # noqa: BLE001 - then the record cannot be made safe
+            return False
+
+
 def install_noise_filters() -> None:
-    """Attach the two filters to their loggers (idempotent). Called where
-    uvicorn is started; logger-level filters survive uvicorn's dictConfig."""
+    """Attach the filters to their loggers (idempotent). Called where uvicorn is
+    started; logger-level filters survive uvicorn's dictConfig.
+
+    :class:`QueryCredentialRedactionFilter` goes on BOTH uvicorn loggers: the
+    access logger logs HTTP query strings, and ``uvicorn.error`` is where the
+    WebSocket handshake line is written — the one that leaks ``?token=``.
+    """
     for name, cls in (
         ("asyncio", ProactorResetFilter),
         ("uvicorn.access", PolledRouteAccessFilter),
+        ("uvicorn.access", QueryCredentialRedactionFilter),
+        ("uvicorn.error", QueryCredentialRedactionFilter),
     ):
         lg = logging.getLogger(name)
         if not any(isinstance(f, cls) for f in lg.filters):

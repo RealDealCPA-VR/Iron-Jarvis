@@ -8,6 +8,7 @@ from . import (  # noqa: F401
     agents,
     audit,
     autonomy,
+    browser,
     chat,
     codelab,
     comm,

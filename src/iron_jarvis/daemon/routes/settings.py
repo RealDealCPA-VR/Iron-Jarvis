@@ -110,9 +110,13 @@ def register(app: FastAPI, d) -> None:
         # LIVE re-arm: an autonomy_*/sentinels_* change re-arms its background
         # loop immediately (this endpoint runs in a threadpool, so hop onto the
         # daemon loop). Previously the toggle waited for the next restart.
+        # `browser` joined the groups in v1.235.0: moving browser_access to `off`
+        # must DROP the live paired socket, and a capability the user just turned
+        # off that keeps driving their real Chrome until the next restart is the
+        # one failure mode this whole switch exists to prevent.
         loop = d._live_rearm.get("loop")
         if loop is not None:
-            for group in ("autonomy", "sentinels", "calendar", "fleet"):
+            for group in ("autonomy", "sentinels", "calendar", "fleet", "browser"):
                 if any(k.startswith(group) for k in updated):
                     fn = d._live_rearm.get(group)
                     if fn is not None:

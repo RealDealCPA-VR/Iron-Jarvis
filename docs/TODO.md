@@ -5,6 +5,67 @@ the deep-review wow track, deferred backlogs across waves, and known limits.
 The deep review's 11 confirmed bugs are all FIXED (v1.166.2–v1.167.0) — this
 file is what remains.*
 
+## Browser — Phase 2 (deferred from the five MVP ships, v1.235.0–v1.239.0)
+
+*Recorded per decision D31 of `docs/BROWSER-PLAN.md`. None of these is implemented
+by the five MVP ships, and none may be smuggled into them — the one exception the
+decision allows is infrastructure required to keep the `BrowserService` backend
+abstraction honest, which Ship 1 already pays for.*
+
+- [ ] **Jarvis browser / `ManagedBackend`** — the second `BrowserService` backend, a
+  Jarvis-owned Chromium. The Protocol and the runtime seam land in Ship 1; only the
+  backend is missing, so this is additive rather than a redesign.
+- [ ] Isolated Chromium profiles, one per project.
+- [ ] Autonomous and background browser sessions, with the step budgets computer use
+  already enforces (`ComputerUsePolicy.max_steps`).
+- [ ] File upload.
+- [ ] `<select>` specialisation (the MVP treats a select as a generic element).
+- [ ] Hover.
+- [ ] Drag and drop.
+- [ ] Iframe hardening, including cross-origin frames. The MVP reads what it can
+  reach and a cross-origin frame's contents are simply absent from the snapshot.
+- [ ] Shadow DOM hardening.
+- [ ] Visual coordinate interaction, as a last-resort fallback only. Never as the
+  primary strategy: accessibility and DOM semantics stay first (§30 of the plan).
+- [ ] CDP integration.
+- [ ] Network-request inspection.
+- [ ] Console inspection.
+- [ ] Structured extraction, schema-driven.
+- [ ] Watch and subscription tools, so a page change can wake a reflex rule.
+- [ ] Multi-tab planning primitives.
+- [ ] **Enforce the other four pane capabilities.** Files, Shell, Extensions and
+  Memory are recorded and displayed from Ship 4 and gated for Browser ONLY. The UI
+  says so rather than implying enforcement that does not exist (the v1.218.0
+  lesson). Enforcing them touches the permission engine and the agent runtime and is
+  not browser work.
+- [ ] **Declare `risk_class` across the other ~60 tools.** The attribute lands in
+  Ship 1 with a fail-safe default of `EXTERNAL_COMMIT` and is read only for logging,
+  so nothing changes behaviour until a sweep makes it meaningful.
+- [ ] Web Store distribution, replacing Load unpacked. The private key stays outside
+  the repo; only the public `key` and the derived id are committed (D27A).
+- [ ] Per-site access management from Jarvis's own UI, if Chrome ever permits the
+  grant without a user gesture inside an extension context. Today it does not, which
+  is why the grant lives on the add-on's own setup page.
+
+### Browser — Phase 3 (opt-in, later)
+
+*Every item here is OFF by default and needs its own explicit consent — not the
+Browser capability's consent, and not a settings default.*
+
+- [ ] Local semantic browser history.
+- [ ] Page summarisation on visit.
+- [ ] Local embeddings for that history.
+- [ ] A private browsing-memory index.
+- [ ] Semantic search across previously visited pages.
+- [ ] Optional persistent page memory.
+
+**Why opt-in is not negotiable here.** This machine holds client tax material. An
+index of what the user read would record which client they were working on and when,
+which is a privacy decision that is theirs to make and not a default to inherit. The
+same reasoning already governs provider routing in this app: an unreachable local
+model refuses and names itself rather than silently sending client data to a cloud
+API.
+
 ## Carried out of the 2026-09-04 audit, Wave 6 (v1.232.0)
 
 - [x] CL2 the "Couldn't save" Retry re-sends `messagesRef.current` (the

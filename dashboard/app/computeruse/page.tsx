@@ -44,6 +44,7 @@ import {
 import { timeAgo } from "@/lib/format";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { YourBrowserCard } from "@/components/browser/YourBrowserCard";
 
 /* -------------------------------------------------------------------------- */
 /*  Local contracts (daemon additions not yet in lib/types)                    */
@@ -520,8 +521,8 @@ export default function ComputerUsePage() {
     <PageShell>
       <Reveal>
         <PageHeader
-          title="Computer Use"
-          subtitle="Let agents drive a real browser to finish tasks — gated behind allowlists and your explicit approval, with a live view so you can watch the agent work."
+          title="Browser"
+          subtitle="Two browsers live here. Your browser — your own Chrome, paired with Iron Jarvis so it can see your open tabs. And a separate, disposable browser an agent drives on its own, gated behind allowlists and your explicit approval, with a live view so you can watch it work."
           actions={
             data ? (
               <span
@@ -538,7 +539,7 @@ export default function ComputerUsePage() {
                       : "bg-zinc-500"
                   }`}
                 />
-                {enabled ? "Enabled" : "Disabled"}
+                {enabled ? "Agent browser on" : "Agent browser off"}
               </span>
             ) : null
           }
@@ -550,6 +551,15 @@ export default function ComputerUsePage() {
           <OfflineHint />
         </Reveal>
       )}
+
+      {/* Your browser — the user's OWN Chrome, paired here (v1.235.0, D03).
+          It sits above the computer-use explainer deliberately: this is the
+          browser surface a daily-driver user wants, and the disposable-VM
+          Playwright browser below it is the specialist one. Every existing
+          section stays exactly where it was, once. */}
+      <Reveal>
+        <YourBrowserCard />
+      </Reveal>
 
       {/* Safety explainer — lead, slightly cautionary. */}
       <Reveal>

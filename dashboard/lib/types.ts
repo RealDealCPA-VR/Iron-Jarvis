@@ -662,6 +662,61 @@ export interface Approval {
   created_at: string;
 }
 
+/* ---- Your browser (the user's own Chrome/Edge, via the browser add-on) ---- *
+ * v1.235.0. Distinct from Computer use above: that drives a SEPARATE headless
+ * Chromium through Playwright, this drives the browser the user is logged into.
+ * "add-on", never "extension" — in this product an extension is an MCP server. */
+
+/** GET /browser/status — the Your browser card's whole truth. Never fails; it
+ *  degrades to `connected: false` rather than erroring. */
+export interface BrowserStatus {
+  connected: boolean;
+  /** off | read_only | interactive — `config.browser_access`, read live. */
+  access: string;
+  host_permission: boolean;
+  extension_id: string;
+  /** The id the daemon EXPECTS — public, and always present, unlike
+   *  `extension_id`, which is whatever is connected right now. */
+  expected_extension_id: string;
+  paired: boolean;
+  active_tab: BrowserTab | null;
+  pending_pairing: BrowserPendingPairing | null;
+  last_error: string | null;
+}
+
+/** One row of the user's real browser, as the add-on reports it. `title`/`url`
+ *  are null — not "" — while site access has not been granted, because Chrome
+ *  hands the add-on empty strings for both and pretending they are titles is how
+ *  a card ends up displaying a blank tab as a real one. */
+export interface BrowserTab {
+  id: number;
+  title: string | null;
+  url: string | null;
+  active?: boolean;
+  window_id?: number;
+  status?: string;
+  needs_host_permission?: boolean;
+  supported?: boolean;
+}
+
+/** A socket held in the restricted pairing state, waiting for the card. */
+export interface BrowserPendingPairing {
+  request_id: string;
+  first_seen_at: string;
+  /** The Chrome identity of the caller asking to pair, "" when it did not say.
+   *  Pairing needs no credential by design, so this is the ONLY thing that tells
+   *  the real add-on from an impostor and the card must show it. */
+  extension_id: string;
+}
+
+/** POST /browser/test — a read-only round trip, never a mutation. */
+export interface BrowserTestResult {
+  ok: boolean;
+  detail: string;
+  round_trip_ms: number;
+  active_tab: BrowserTab | null;
+}
+
 /* ---- Agents -------------------------------------------------------------- */
 export interface DynamicAgent {
   name: string;

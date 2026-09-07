@@ -74,6 +74,34 @@ class Reversibility(str, Enum):
     IRREVERSIBLE = "irreversible"
 
 
+class RiskClass(str, Enum):
+    """How far beyond reading a tool call can reach (v1.235.0, D12).
+
+    ``READ``            — observes only.
+    ``LOCAL_UI``        — moves the user's own view; no page/document state changes.
+    ``PAGE_ACTION``     — changes a page's (or a document's) state.
+    ``EXTERNAL_COMMIT`` — money, identity, deletion, sending.
+
+    Fail-safe default is EXTERNAL_COMMIT for the same reason
+    :class:`Reversibility` defaults to IRREVERSIBLE: a tool that forgets to
+    declare must not be treated as harmless. The silent failure that default
+    prevents is a new tool inheriting "this is only a read" from the base class
+    and then appearing on a ledger row, an approval card, or a future
+    discovery filter as safe — with nothing in the diff to notice.
+
+    Orthogonal to :class:`Reversibility` (undoability) and to
+    :class:`~iron_jarvis.core.models.PermissionMode` (the resolved per-install
+    verdict). ``str``-valued so it serialises straight into the audit ledger and
+    the ``tool.executed`` event; a bare :class:`Enum` renders as
+    ``"RiskClass.READ"`` inside an f-string and would ship that to the model.
+    """
+
+    READ = "read"
+    LOCAL_UI = "local_ui"
+    PAGE_ACTION = "page_action"
+    EXTERNAL_COMMIT = "external_commit"
+
+
 class Tool(ABC):
     name: str = ""
     description: str = ""
@@ -91,6 +119,19 @@ class Tool(ABC):
     #: non-None inverse descriptor) and ``revert`` — the registry snapshots the
     #: inverse BEFORE the mutation and the /undo endpoint replays it.
     reversibility: Reversibility = Reversibility.IRREVERSIBLE
+    #: RISK CLASS (v1.235.0, D12). How far beyond reading this call can reach.
+    #: Fail-safe default = EXTERNAL_COMMIT (see the enum). Read for LOGGING and
+    #: for a tool's own escalation decision only: it never LOWERS a permission
+    #: verdict, and ``DENY_FLOOR_TOOLS`` stays authoritative, so a tool cannot
+    #: declare its way down off the floor.
+    #:
+    #: IN v1.235.0 NOTHING READS IT YET. The ledger/event read site and the
+    #: escalation that consults it land with the acting browser tools (plan §8.1
+    #: and §8.2, v1.237.0). It is declared now so the fourteen browser tools can
+    #: carry it from the start, and it is documented as inert on purpose: an
+    #: attribute that LOOKS like a live gate is worse than an absent one, because
+    #: a later reader will trust it to be enforcing something.
+    risk_class: RiskClass = RiskClass.EXTERNAL_COMMIT
 
     def perm_key(self) -> str:
         return self.permission_key or self.name

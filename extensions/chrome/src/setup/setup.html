@@ -1,0 +1,142 @@
+<!doctype html>
+<!--
+  The site-access grant surface.
+
+  This page exists for one mechanical reason: chrome.permissions.request() must be
+  called from inside a user gesture and cannot run in a service worker, and Iron
+  Jarvis is a page on another origin so it cannot call it either. One button, one
+  click handler, one call (plan section 6, DEVIATION 1).
+
+  It is NOT the popup and gains nothing D28 keeps out of the popup: no pairing
+  approval, no chat, no model selection, no automation controls, no tool settings.
+  It grants access or reports why it did not.
+
+  Copy rule: this add-on is never called an "extension" in anything the user reads.
+  In Iron Jarvis "extension" already means an MCP server, so the words here are
+  "the Iron Jarvis browser add-on".
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Iron Jarvis — site access</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --ink: #e8eef5;
+        --muted: #93a4b8;
+        --bg: #0b1016;
+        --panel: #121a23;
+        --line: #1f2b38;
+        --cyan: #35d0e6;
+        --amber: #e0a84a;
+        --green: #4fd48a;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 40px 24px;
+        background: var(--bg);
+        color: var(--ink);
+        font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+        display: flex;
+        justify-content: center;
+      }
+      main {
+        width: 100%;
+        max-width: 560px;
+      }
+      h1 {
+        font-size: 22px;
+        margin: 0 0 6px;
+        letter-spacing: 0.2px;
+      }
+      .lede {
+        color: var(--muted);
+        margin: 0 0 24px;
+      }
+      section {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 20px;
+      }
+      ul {
+        margin: 0 0 20px;
+        padding-left: 20px;
+        color: var(--muted);
+      }
+      li + li {
+        margin-top: 6px;
+      }
+      button {
+        appearance: none;
+        border: 1px solid var(--cyan);
+        background: rgba(53, 208, 230, 0.12);
+        color: var(--ink);
+        font: inherit;
+        font-weight: 600;
+        padding: 11px 18px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      button:hover:not(:disabled) {
+        background: rgba(53, 208, 230, 0.22);
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      #outcome {
+        margin: 18px 0 0;
+        min-height: 24px;
+        font-weight: 600;
+      }
+      #outcome[data-tone="granted"] {
+        color: var(--green);
+      }
+      #outcome[data-tone="refused"] {
+        color: var(--amber);
+      }
+      #outcome[data-tone="error"] {
+        color: var(--amber);
+      }
+      footer {
+        margin-top: 22px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 12.5px;
+        color: var(--ink);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Let Iron Jarvis work in your tabs</h1>
+      <p class="lede">
+        The Iron Jarvis browser add-on installs with no access to any site. Chrome only lets a page ask
+        for that access when you click a button yourself, which is what this page is for.
+      </p>
+      <section>
+        <ul>
+          <li>This version sees only the tabs you have open — their titles and addresses.</li>
+          <li>
+            Reading what is on a page, and acting in one, arrive in later versions — and then only
+            while you or an agent asks for it.
+          </li>
+          <li>Everything runs on this computer, over <code>127.0.0.1</code>.</li>
+          <li>You can withdraw this access at any time from <code>chrome://extensions</code>.</li>
+        </ul>
+        <button id="grant" type="button">Grant site access</button>
+        <p id="outcome" role="status" aria-live="polite"></p>
+      </section>
+      <footer>You can close this tab once access is granted.</footer>
+    </main>
+    <script src="setup.js"></script>
+  </body>
+</html>

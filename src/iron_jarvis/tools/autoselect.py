@@ -40,6 +40,22 @@ import re
 #: Every tool this module may ever arm. Curated — see the module docstring.
 AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
     {
+        # YOUR BROWSER, read tier (v1.235.0). Auto-armable because each is
+        # READONLY, refuses unless the user set `browser_access`, and refuses
+        # again unless a browser is actually paired and connected — three gates
+        # ahead of any disclosure, none of which this selector can open.
+        #
+        # They land in Ship 1 rather than Ship 2 (where the plan put them) for
+        # a reason the roster-coverage test made concrete: a tool registered in
+        # one ship and armable only in the next is DEAD in between, and
+        # "registered, permissioned, and named by nobody" is precisely the
+        # shape that shipped history_search, view_image and rename_file dead.
+        # `browser_read_page` and the acting tools stay out until their own
+        # ships: reading a whole page is a disclosure decision, and the four
+        # PAGE_ACTION tools ride the ask tier by design.
+        "browser_get_status",
+        "browser_list_tabs",
+        "browser_get_active_tab",
         "file_search",
         "read_file",
         "list_files",
@@ -1922,6 +1938,65 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             re.IGNORECASE,
         ),
         {"guide_search": 6, "app_search": 5, "app_status": 3},
+    ),
+    # --- YOUR BROWSER, read tier (v1.235.0) --------------------------------
+    # WITHOUT THIS ENTRY THE THREE BROWSER TOOLS WERE REGISTERED AND ARMABLE BY
+    # NOBODY. `AUTO_SAFE_TOOLS` is only the allowlist FILTER at the bottom of
+    # `select_auto_tools` — selection needs a scoring rule, so membership alone
+    # arms nothing, and the roster exemption that pointed at that membership as
+    # proof of reachability was green over a dead path. Measured before this rule
+    # landed: "what tabs do I have open in my browser?" -> [], "list my chrome
+    # tabs" -> [], "is my browser connected to Jarvis?" -> []. That is exactly
+    # the shape this module's own history names — history_search, view_image and
+    # rename_file each shipped registered, permissioned and armed by nobody.
+    #
+    # NOT FRONTED WITH `_imperative()`, unlike the image rule below: all three
+    # tools are `Reversibility.READONLY` / `RiskClass.READ`, so there is no
+    # change to withhold from an ENQUIRY — "why did you list my tabs?" arming a
+    # tab lister costs a schema and nothing else. Three gates sit ahead of any
+    # disclosure and none of them is this selector's to open: `browser_access`
+    # (ships `off`), a paired browser, and Chrome's site grant.
+    #
+    # FALSE ARMS, honestly stated. "tab" is an EXCEL word in this app ("the
+    # summary tab of that workbook"), so a bare `tabs?` is deliberately NOT a
+    # signal: it needs a wh-word/`list` in front of it, or "open"/"I have"
+    # behind it. "edge" is left out of the browser list for the same reason —
+    # "edge case", "cutting edge". A research sentence that happens to say "in
+    # my browser" arms these three alongside `web_search`; that is a deliberate,
+    # cheap over-name (this module's standing "over-naming beats over-arming"),
+    # and a browser that is off refuses honestly at execute.
+    (
+        re.compile(
+            # 1. the browser is NAMED.
+            r"\b(?:browsers?|chrome|chromium|firefox|safari)\b"
+            # 2. TABS, with a neighbour that makes them browser tabs.
+            r"|\b(?:what|which|how\s+many|list)\b.{0,30}\btabs?\b"
+            r"|\btabs?\b.{0,30}\b(?:open|i\s+have)\b"
+            # 3. "what page am I on", "what am I looking at" — the sentence a
+            #    user types INSTEAD of naming the browser at all.
+            r"|\bwhat\s+page\s+(?:am\s+i|i.m)\b"
+            r"|\bwhat\b.{0,20}\b(?:am\s+i|i.m)\b.{0,20}"
+            r"\b(?:looking\s+at|viewing|browsing|reading)\b",
+            re.IGNORECASE,
+        ),
+        # `browser_list_tabs` leads: "what am I looking at" is answerable from
+        # the tab list too, while the reverse is not true. `browser_get_status`
+        # rides lowest here and is lifted by the rule below, which is where the
+        # sentences that are actually ABOUT the connection live.
+        {"browser_list_tabs": 7, "browser_get_active_tab": 6, "browser_get_status": 5},
+    ),
+    # "is my browser connected?", "did the browser add-on pair?", "is chrome set
+    # up with Jarvis?" — a question about the PLUMBING, where the status tool is
+    # the answer and the tab lister is not. Accumulates on top of the rule above
+    # (both fire on these sentences), which is what puts status first.
+    (
+        re.compile(
+            r"\b(?:browsers?|chrome|chromium|firefox|safari|add.?on)\b.{0,40}"
+            r"\b(?:connect|connected|pair(?:ed|ing)?|working|set\s?up|status|"
+            r"hooked\s?up)\b",
+            re.IGNORECASE,
+        ),
+        {"browser_get_status": 6},
     ),
     # --- images -----------------------------------------------------------
     # v1.196.0 round 5 fronts this with `_imperative()` too: `image_convert` and

@@ -141,6 +141,26 @@ class EventType:
     # entries} — who = "user" or the participant key "<source>:<name>";
     # entries = the thread's NEW total message count after the append.
     AGENT_THREAD_UPDATED = "agent_thread.updated"
+    # YOUR BROWSER (v1.235.0) — the user's own Chrome/Edge over /browser/ws.
+    # Ambient facts about a browser, so they carry NO session_id: nothing here
+    # belongs to one conversation. No payload ever carries the pairing token;
+    # extension_id is public, the token is not.
+    # {extension_id, extension_version, host_permission, access}
+    BROWSER_CONNECTED = "browser.connected"
+    # {reason, detail} — reason is one of closed | replaced | revoked | error.
+    # DERIVED at the release site, never a string typed at the publish call, so
+    # "replaced" can never be reported for a browser the user closed themselves.
+    BROWSER_DISCONNECTED = "browser.disconnected"
+    # {tab_id, title, url} — the user switched tabs. Feeds the ambient context
+    # block's cached active tab, so prompt assembly never awaits the browser.
+    BROWSER_TAB_ACTIVATED = "browser.tab_activated"
+    # {tab_id, url, title, page_version} — a navigation settled. page_version is
+    # what invalidates a snapshot, so a stale element id is refused not guessed.
+    BROWSER_NAVIGATION_COMPLETED = "browser.navigation_completed"
+    # {download_id, filename, local_path, source_url, tab_id, bytes, mime} —
+    # local_path is ABSOLUTE (chrome.downloads gives the real destination), which
+    # is what lets the existing file tools reach the file at all.
+    BROWSER_DOWNLOAD_COMPLETED = "browser.download_completed"
 
 
 @dataclass

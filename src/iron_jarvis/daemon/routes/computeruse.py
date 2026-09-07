@@ -32,7 +32,15 @@ def register(app: FastAPI, d) -> None:
         from ...computeruse import ComputerUsePolicy, PlaywrightBrowser
 
         cu = d.platform.computeruse
-        cu.policy = ComputerUsePolicy.from_config(
+        # UPDATED IN PLACE, NEVER REBOUND (v1.235.0). This used to assign a NEW
+        # ComputerUsePolicy onto cu.policy, which was invisible while computer use
+        # was the only holder — and became a real defect the moment a second
+        # feature shared the object: the Browser capability (D01) is built with
+        # THIS instance so the two cannot grow competing policies, and a rebind
+        # here left it holding the boot-time configuration forever. So the browser
+        # would have kept enforcing the domain allowlist the user replaced, with
+        # nothing on any screen to say so. One object, every holder current.
+        fresh = ComputerUsePolicy.from_config(
             {
                 "enabled": body.enabled,
                 "domain_allowlist": body.domain_allowlist
@@ -46,6 +54,15 @@ def register(app: FastAPI, d) -> None:
                 "max_retries": cu.policy.max_retries,
             }
         )
+        for field in (
+            "enabled",
+            "domain_allowlist",
+            "action_allowlist",
+            "isolation",
+            "max_steps",
+            "max_retries",
+        ):
+            setattr(cu.policy, field, getattr(fresh, field))
         # Switch to a real isolated browser when enabling (needs `playwright install`).
         if body.enabled and type(cu.browser).__name__ == "FakeBrowser":
             cu.browser = PlaywrightBrowser()

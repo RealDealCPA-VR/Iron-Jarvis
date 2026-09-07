@@ -137,9 +137,9 @@ const SUBSYSTEMS: Subsystem[] = [
   },
   {
     href: "/computeruse",
-    title: "Computer use",
+    title: "Browser",
     icon: MonitorCog,
-    desc: "Opt-in browser and desktop control, fenced by a domain/action allowlist and human approval gates.",
+    desc: "Pair your own Chrome so Jarvis can see your open tabs — plus opt-in agent control of a separate browser, fenced by allowlists and approval gates.",
   },
   {
     href: "/self-dev",
@@ -202,8 +202,8 @@ const GLOSSARY: GlossaryTerm[] = [
     def: "Lets Iron Jarvis act on its own within limits you set. Off by default.",
   },
   {
-    term: "Computer use",
-    def: "Opt-in control of the browser or desktop, gated by your approvals.",
+    term: "Browser",
+    def: "Your own Chrome, paired with Iron Jarvis so it can see your open tabs — and opt-in agent control of a separate browser, gated by your approvals.",
   },
   {
     term: "Connections",

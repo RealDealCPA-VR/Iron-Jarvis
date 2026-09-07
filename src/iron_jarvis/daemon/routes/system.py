@@ -19,6 +19,104 @@ from ... import __version__
 from ...core.db import session_scope
 
 
+def _browser_health(d) -> dict[str, Any]:
+    """The ``browser`` object on ``GET /health`` (v1.235.0, plan section 3.2).
+
+    Five facts, and every one of them is a fact the user can act on:
+    ``access`` (the ``browser_access`` setting they chose), ``connected`` (a live
+    paired socket right now), ``paired`` (a credential exists, so the add-on has
+    been approved at least once), ``host_permission`` (Chrome's all-sites grant,
+    without which every page-touching tool answers PERMISSION_DENIED) and
+    ``extension_installed``.
+
+    EVERY ONE OF THESE ASKS THE LAYER THAT OWNS THE FACT. The first cut read
+    ``paired`` and ``host_permission`` straight off the runtime, and
+    ``BrowserRuntime`` has neither attribute — ``host_permission`` belongs to the
+    connection and ``paired`` to the pairing store — so this row answered
+    ``paired: false, host_permission: false`` for every real install while
+    ``GET /browser/status`` said ``paired: true`` on the same screen. Its own
+    docstring's claim that "every surface reads ONE truth" was exactly inverted:
+    a health row reading whichever attributes are convenient is a SECOND truth,
+    the v1.230.0 U5 shape. So ``paired`` and ``host_permission`` now come from
+    :func:`~iron_jarvis.browser.tools.browser_flag` — the same function the tools
+    read — and ``paired`` falls through to the pairing store, which is the
+    question the card asks through ``BrowserRuntime.status()``.
+
+    Degrades honestly BEFORE the platform wires ``platform.browser``: no runtime
+    means the capability is not built, which is reported as off/false rather
+    than omitted, so a consumer never has to tell "absent" from "not connected".
+
+    ``extension_installed`` is derived, not observed: nothing in the daemon can
+    see Chrome's add-on list, and the only evidence the add-on exists is that it
+    has spoken to us — so it means "paired, or connected right now", and that is
+    what the card must say rather than claiming to inspect the browser. Reading
+    ``paired`` correctly is what makes it work at all: with ``paired`` stuck at
+    false it collapsed into ``connected`` and could not tell "add-on installed,
+    Chrome closed" from "never installed" — the one distinction the field was
+    added for.
+
+    THE COST, STATED: the ``paired`` fall-through is a one-row SQLite select, and
+    it is reached only when no live socket has already answered yes. ``/health``
+    is a SYNC ``def`` route, so FastAPI runs it in the threadpool and NOTHING
+    here touches the event loop (the v1.153.1 rule) — the ``active_project``
+    lookup in the same handler is the same kind of read. There is still no
+    ``await`` and no socket round trip on this path: a probe that awaited the
+    browser would stop looking like a slow probe and start looking like "Daemon
+    offline".
+
+    Never raises: every enrichment sits inside the ``try``, because the dashboard
+    maps a dead ``/health`` to "Daemon offline".
+    """
+    out: dict[str, Any] = {
+        "connected": False,
+        "access": "off",
+        "paired": False,
+        "host_permission": False,
+        "extension_installed": False,
+    }
+    try:
+        from ...browser.tools import browser_flag
+
+        out["access"] = str(getattr(d.platform.config, "browser_access", "off") or "off")
+        runtime = getattr(d.platform, "browser", None)
+        if runtime is not None:
+            out["connected"] = bool(browser_flag(runtime, "connected"))
+            out["paired"] = bool(_paired_flag(runtime, browser_flag))
+            out["host_permission"] = bool(browser_flag(runtime, "host_permission"))
+            out["extension_installed"] = bool(out["paired"] or out["connected"])
+    except Exception:  # noqa: BLE001 — health must never fail
+        pass
+    return out
+
+
+def _paired_flag(runtime, browser_flag) -> bool:
+    """Whether a pairing credential exists at all — a live socket, or the store.
+
+    Two sources and BOTH are needed, in this order:
+
+    * a connected socket is a paired one by construction (``/browser/ws`` lets an
+      unpaired connection send nothing but a pairing ack), so the live connection
+      answers first and costs nothing;
+    * otherwise the PairingStore, because the state this field exists to report —
+      "the add-on is installed and approved, but Chrome is not running" — is
+      invisible to the transport. A socket answer of ``False`` must therefore NOT
+      short-circuit: a restricted (unpaired) socket sitting on the wire while a
+      credential exists is precisely the case that would report "never installed".
+
+    Blocking (one indexed SQLite select), which is safe here and only here: see
+    the threadpool paragraph in :func:`_browser_health`.
+    """
+    if browser_flag(runtime, "paired"):
+        return True
+    store = getattr(runtime, "pairing", None)
+    if store is None:
+        return False
+    try:
+        return bool(store.paired())
+    except Exception:  # noqa: BLE001 — a health row that throws is worse
+        return False
+
+
 def activity_snapshot(d) -> dict[str, Any]:
     """What the daemon is busy with RIGHT NOW (v1.226.0, contract C6).
 
@@ -91,6 +189,14 @@ def register(app: FastAPI, d) -> None:
             "default_model": d.platform.config.default_model,
             "active_project": active_project,
             "providers": d._visible_providers(),
+            # BROWSER (v1.235.0, plan section 3.2): five booleans + the access
+            # word, so every surface that must say whether Jarvis can see the
+            # user's Chrome reads ONE truth instead of polling /browser/status
+            # for a banner. Never raises: /health is the daemon's liveness
+            # answer and the dashboard maps a dead fetch to "Daemon offline",
+            # so a browser probe that threw would take the whole app down in
+            # the UI (the v1.153.1 outage shape, one layer up).
+            "browser": _browser_health(d),
         }
 
     @app.get("/system/activity")

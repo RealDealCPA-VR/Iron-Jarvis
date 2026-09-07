@@ -480,6 +480,12 @@ _SETTINGS_KEYS = [
     # v1.143.0: the periodic memory-curation review (additions are written,
     # every change/removal is queued for approval — see Config).
     "memory_steward_enabled",
+    # BROWSER (v1.235.0) — off | read_only | interactive, OFF by default. A key
+    # absent from THIS list is invisible to both settings routes, so the only way
+    # to turn the capability on would be hand-editing config.toml; moving it to
+    # `off` also re-arms live (put_settings → _live_rearm["browser"]) so the
+    # paired socket drops immediately instead of waiting for a restart.
+    "browser_access",
 ]
 
 

@@ -218,6 +218,7 @@ _LATE_MODEL_MODULES = (
     "..worklist.models",      # WorklistItem — durable per-item checkpoints
     "..capability.models",    # CapabilityProposalRecord — the agent's asks
     "..goals.models",         # GoalContractRecord — goal contracts (v1.208.0)
+    "..browser.models",       # BrowserPairing — the paired browser (v1.235.0)
 )
 
 

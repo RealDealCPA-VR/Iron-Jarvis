@@ -18,6 +18,7 @@ packaging/dist/
 
 # Node / dashboard
 dashboard/node_modules/
+extensions/chrome/node_modules/
 dashboard/.next/
 dashboard/.turbo/
 
@@ -28,3 +29,7 @@ Thumbs.db
 # Bundled offline voice model (downloaded at build time, ~40MB)
 desktop/resources/vosk-model/
 desktop/resources/vosk-model.zip
+
+# Browser add-on signing key (D27A): public material ships, this never does.
+*.pem
+ironjarvis-extension.pem

@@ -1036,6 +1036,27 @@ def create_app(project_root: str | None = None) -> FastAPI:
         _live_rearm["calendar"] = _arm_calendar
         _live_rearm["fleet"] = _arm_fleet
 
+        def _arm_browser() -> None:
+            """Re-read ``browser_access`` and drop the paired socket when it is off.
+
+            Runs on the loop via ``_live_rearm`` (PUT /settings hops it there). A
+            capability the user just switched off that kept driving their real
+            Chrome until the next restart is the one failure this switch exists to
+            prevent, so the enforcement is a DISCONNECT, not a flag other code is
+            trusted to consult. Never raises: a settings save must not 500 because
+            a browser was already gone.
+            """
+            browser = getattr(platform, "browser", None)
+            if browser is None:
+                return
+            try:
+                if str(getattr(platform.config, "browser_access", "off")).strip() == "off":
+                    asyncio.ensure_future(browser.disconnect())
+            except Exception:  # noqa: BLE001 - a settings save never fails on this
+                log.debug("browser re-arm skipped", exc_info=True)
+
+        _live_rearm["browser"] = _arm_browser
+
         # Two-way comm inbound poller — the receive leg. The task is ALWAYS
         # created (v1.136.0 live re-arm) but each pass re-checks
         # poller.enabled() and IDLES when no channel is inbound-enabled +
@@ -2370,6 +2391,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
     _routes.profile.register(app, d)
     _routes.learning.register(app, d)
     _routes.computeruse.register(app, d)
+    # Browser (v1.235.0): /browser/ws + the Your browser card's routes. Its
+    # socket authenticates with the PAIRING token, never this install's bearer.
+    _routes.browser.register(app, d)
     _routes.terminals.register(app, d)
     _routes.workflows.register(app, d)
     _routes.autonomy.register(app, d)

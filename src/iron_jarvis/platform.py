@@ -101,6 +101,7 @@ from .documents import document_tools
 # Web search (keyless) + page fetch + MCP client (consume external MCP servers).
 from .tools.websearch import web_search_tools
 from .tools.webfetch import web_fetch_tools
+from .browser import BrowserRuntime, ExtensionBackend, PairingStore, browser_tools
 from .mcp import mcp_tools
 from .learning import LearningEngine, learning_tools
 from .learning import models as _learn_models  # noqa: F401
@@ -166,6 +167,12 @@ class Platform:
     learning: LearningEngine
     connections: ConnectionRegistry
     computeruse: CUContext
+    #: YOUR BROWSER (v1.235.0) — the user's own Chrome/Edge, reached through the
+    #: browser add-on over ``/browser/ws``. Distinct from ``computeruse`` above,
+    #: which drives a SEPARATE headless Chromium and shares no session with it.
+    #: Built either way so the card and ``/health`` can report honestly; the
+    #: capability itself stays off until ``config.browser_access`` says otherwise.
+    browser: BrowserRuntime
     terminals: TerminalManager
     blackboard: "BlackboardStore | None" = None
     #: The department's durable WORKLIST (v1.174.0) — which units of a bulk job
@@ -674,6 +681,28 @@ def build_platform(
     for tool in computeruse_tools(computeruse):
         registry.register(tool)
 
+    # YOUR BROWSER (v1.235.0) — the user's own logged-in Chrome/Edge, reached
+    # through the browser add-on. Built unconditionally so the Your browser card,
+    # /health and the doctor can tell the truth about a browser that is not
+    # connected; the CAPABILITY is gated by config.browser_access, which ships
+    # `off` and is read LIVE on every call (a PUT /settings must take effect at
+    # once, and its `off` case drops the socket via the browser re-arm hook).
+    # The policy and approval queue are SHARED with computer use on purpose:
+    # decision D01 says reuse those primitives rather than grow a second,
+    # competing browser policy engine that could disagree with the first.
+    browser = BrowserRuntime(
+        backend=ExtensionBackend(event_bus=event_bus),
+        config=config,
+        pairing=PairingStore(engine),
+        policy=cu_policy,
+        approvals=computeruse.approvals,
+        artifacts=artifacts,
+        router_resolver=lambda: router,
+        event_bus=event_bus,
+    )
+    for tool in browser_tools(browser):
+        registry.register(tool)
+
     # Terminals: multiple live shell sessions the dashboard can attach to. The
     # snapshot file lets them survive a daemon restart / app update — on boot the
     # panes come back (same id + cwd + prior scrollback, fresh shell).
@@ -986,6 +1015,7 @@ def build_platform(
         learning=learning,
         connections=connections,
         computeruse=computeruse,
+        browser=browser,
         terminals=terminals,
         fleet=fleet_registry,
         embedder=embedder,

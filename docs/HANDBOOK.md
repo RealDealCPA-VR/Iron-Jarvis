@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.234.0 (2026-09-06).*
+holds itself to. Current as of v1.235.0 (2026-09-06).*
 
 ---
 
@@ -374,6 +374,77 @@ seam); Train (teach it your writing voice, suggest-only).
   on every launch — nothing to paste or clear). The paste box, **Clear**, and
   the "leave this empty" line appear only in a browser without the desktop
   bridge (a deployed daemon, a phone over Tailscale).
+
+---
+
+### Browser — your own Chrome
+
+The **Browser** page is where Jarvis meets a browser. There are two of them, and
+the difference matters.
+
+**Your browser** is the Chrome or Edge you already use, logged into the sites you
+are already logged into. Jarvis reaches it through a small **browser add-on** you
+load yourself. Nothing is automatic: the add-on has to be loaded, you have to
+press **Pair** in Jarvis, and you have to grant it access to sites. Until all
+three happen, Jarvis cannot see a single tab.
+
+**Jarvis browser** is a browser the app owns, separate from yours and logged into
+nothing. It is not built yet, and nothing in the app pretends otherwise.
+
+Below those sits the older **computer use** machinery, which drives a headless
+Chromium of its own behind a domain allowlist. It is unchanged, and it shares no
+cookies or sessions with your browser.
+
+**Turning it on.** Browser access has three settings and ships **off**:
+
+| Setting | What Jarvis may do **in this version** |
+|---|---|
+| **Off** | Nothing. No browser tool exists. |
+| **Read only** | Look, and only at the outside of a page: report whether your browser is connected, list your open tabs, and name the tab you are looking at. |
+| **Interactive** | Nothing more than **Read only** yet. It is the setting acting will need; today it grants no ability that **Read only** does not. |
+
+Off is the default because reading a logged-in browser is a real permission, not a
+convenience, and this app does not grant itself those.
+
+**What is not here yet.** This version pairs a browser and looks at the tab list.
+Reading the text of a page and taking a screenshot arrive in **v1.236.0**; clicking,
+typing, scrolling, navigating and downloads arrive in **v1.237.0**. Ask for one of
+them today and Jarvis has no tool to answer with — there is no half-working version
+of it hiding behind the Interactive setting.
+
+**Pairing, once.** Open the Browser page, set access, then load the add-on from the
+folder the card names (from a source checkout it has to be built first — the card's
+steps say how). The card will say **Waiting to pair**; press **Pair** and it
+becomes **Connected**. Pairing mints a credential that belongs only to that browser
+and only to the browser socket — it is not the app's access token, and it cannot be
+used for anything else. **Disconnect** ends the session and keeps the pairing;
+**Forget browser** revokes it, so the next connection starts over.
+
+**Site access.** Chrome will not let Jarvis ask for access to your sites on your
+behalf; the request has to come from a button inside the add-on. So the card sends
+you to a single-purpose page with one button on it. Grant once and normal use stops
+prompting. You can narrow it later in Chrome's own extension controls, and Jarvis
+will tell you when a page is out of reach rather than failing quietly.
+
+**What it will never do, decided now.** Nothing in this version reads or changes a
+page, so there is nothing to guard yet. These are not hopes — they are the design
+commitments the reading and acting versions ship with, fixed before the code that
+needs them exists:
+
+- **Page content is untrusted data, always** (with reading, **v1.236.0**): a page that
+  contains instructions does not get to give Jarvis orders, and a page that looks like
+  it is trying to gets flagged in the result.
+- **Passwords are never read** (with reading, **v1.236.0**): a password field arrives
+  with its value stripped, and text Jarvis types is redacted in the record. Your
+  browser's own password manager keeps working, because Jarvis never sees what it
+  fills.
+- **Changing a page asks first** (with acting, **v1.237.0**): a click, typing or a
+  navigation is gated the same way computer use is gated, and asks before it commits
+  to something that looks destructive or transactional.
+
+**Test** on the card does a harmless round trip and reports what came back, which is
+the fastest way to tell a browser that is not running from an add-on that is not
+loaded.
 
 ---
 

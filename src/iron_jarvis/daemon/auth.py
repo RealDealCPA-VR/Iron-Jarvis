@@ -23,6 +23,7 @@ it publicly.
 from __future__ import annotations
 
 import hmac
+import inspect
 import os
 import uuid
 from urllib.parse import urlparse
@@ -82,6 +83,104 @@ def _origin_ok(origin: str) -> bool:
     return o in allowed
 
 
+# --- The ONE path-scoped origin exception: the browser add-on's socket (D07) --
+# A Chrome add-on's Origin is ``chrome-extension://<id>``, whose hostname is the
+# id itself: not loopback, so ``_origin_ok`` refuses it. The only existing way to
+# admit it is ``IRONJARVIS_CORS_ORIGINS``, which would admit that origin on EVERY
+# route — a browser extension the user installed for one purpose would gain the
+# whole RCE-by-design daemon. So the exception is scoped to one path, decided
+# HERE because ``__call__`` below is the only place in the process holding
+# ``scope["path"]`` beside the Origin header.
+
+#: The single path the extension origin is admitted on. Spelled once.
+BROWSER_WS_PATH = "/browser/ws"
+
+
+def _extension_origin_ok(path: str, origin: str) -> bool:
+    """True only for the pinned add-on's exact Origin on exactly ``/browser/ws``.
+
+    Two silent failures this shape avoids:
+
+    * A ``startswith("chrome-extension://")`` test would admit every add-on the
+      user has installed, which is the one thing a pinned id exists to prevent —
+      and it would look identical in every log line. Whole strings are compared,
+      built by :func:`iron_jarvis.browser.identity.extension_origin` so the id is
+      spelled in one module.
+    * A path test that used ``startswith`` would admit ``/browser/ws-anything``.
+      The comparison is exact.
+
+    The pinned id is read per call (``extension_origin`` consults
+    ``IRONJARVIS_BROWSER_EXTENSION_ID`` itself), matching how the rest of this
+    module reads its environment per request rather than at construction, so a
+    reconfigured install needs no restart. The import is function-local so this
+    middleware module keeps importing with nothing but Starlette present — it is
+    imported by CLI paths that never build the browser package — and so a broken
+    browser package degrades to "origin refused" instead of taking down the guard
+    for every request in the app.
+    """
+    if (path or "") != BROWSER_WS_PATH:
+        return False
+    candidate = (origin or "").strip().rstrip("/").lower()
+    if not candidate:
+        return False
+    try:
+        from ..browser.identity import extension_origin
+    except Exception:  # pragma: no cover - defensive; a broken import must not open the guard
+        return False
+    return candidate == extension_origin().strip().rstrip("/").lower()
+
+
+async def browser_ws_token_ok(ws, verify) -> bool:
+    """Pairing-token check for ``/browser/ws`` — the sibling of ``_ws_token_ok``.
+
+    Deliberately NOT the same function, because it is not the same credential
+    (D06). Four differences, each one a refusal that would otherwise be an
+    accept:
+
+    * **Query string only.** An extension cannot set a header on a WebSocket
+      handshake, so the pairing token can only arrive as ``?token=``. Reading the
+      ``Authorization`` header here would additionally hand the socket to the
+      install bearer, which §12.3 says it must refuse.
+    * **No "auth disabled" branch.** ``_ws_token_ok`` opens every socket when
+      ``IRONJARVIS_TOKEN`` is unset, which is right for a local daily driver's own
+      surfaces. Here it would mean that a fresh install — the common case — let
+      any page-scoped attacker with a loopback origin drive the user's real,
+      logged-in browser. Absent or unverifiable token, closed socket.
+    * **Never raises.** ``verify`` reaches a store that can be missing, locked or
+      mid-migration; an exception escaping a WebSocket handshake is not a 1008
+      close but an unhandled error (FastAPI's exception handler is HTTP-only),
+      which is exactly the trap ``token_matches`` above was rewritten for.
+
+    * **Asynchronous.** ``_ws_token_ok`` compares a string from the environment
+      and can be a plain ``def``; this one reaches a SQLite row, so its verifier
+      (``BrowserRuntime.verify_token``) does its work in a thread and returns an
+      awaitable. Making this function sync would have meant either a blocking
+      database hop on the daemon's single event loop — the v1.153.1 outage the
+      user experienced as "Daemon offline" — or a second verifier that skipped
+      the store. A sync verifier still works, so a test can pass a lambda.
+
+    ``verify`` is passed in rather than imported so this module stays free of the
+    browser package and of daemon state: the caller (``routes/browser.py``) is
+    the only place holding the ``PairingStore``.
+    """
+    try:
+        candidate = (ws.query_params.get("token") or "").strip()
+    except Exception:  # pragma: no cover - defensive; a malformed query string
+        return False
+    if not candidate:
+        return False
+    try:
+        outcome = verify(candidate)
+        if inspect.isawaitable(outcome):
+            outcome = await outcome
+        # Truthiness, not ``is True``: the real verifier answers with the pairing
+        # ROW it matched (so the caller could name the browser), and ``None`` for a
+        # miss. An identity test against True would refuse every valid token.
+        return bool(outcome)
+    except Exception:
+        return False
+
+
 class HostOriginGuardMiddleware:
     """Pure-ASGI guard covering HTTP AND WebSocket (BaseHTTPMiddleware can't see
     WS). Add it OUTERMOST (last add_middleware) so a bad Host/Origin is rejected
@@ -98,7 +197,13 @@ class HostOriginGuardMiddleware:
             }
             if not _host_ok(headers.get("host", "")):
                 return await self._reject(scope, receive, send, "host not allowed")
-            if not _origin_ok(headers.get("origin", "")):
+            origin = headers.get("origin", "")
+            # The extension exception is checked ONLY after `_origin_ok` has
+            # already refused, so the ordinary loopback rule is untouched and the
+            # exception can only ever ADD the one pinned origin on the one path.
+            if not _origin_ok(origin) and not _extension_origin_ok(
+                scope.get("path", ""), origin
+            ):
                 return await self._reject(scope, receive, send, "origin not allowed")
         await self.app(scope, receive, send)
 

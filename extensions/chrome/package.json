@@ -1,0 +1,22 @@
+{
+  "name": "ironjarvis-browser-addon",
+  "version": "1.235.0",
+  "private": true,
+  "description": "The Iron Jarvis browser add-on: the Chrome/Edge half of the Browser Bridge.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "typecheck": "tsc --noEmit",
+    "verify-id": "node scripts/verify-id.mjs",
+    "check": "pnpm run verify-id && pnpm run typecheck && pnpm run build"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.2.9",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.7.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}

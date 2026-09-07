@@ -1,0 +1,11 @@
+# Build output. Produced by `node esbuild.config.mjs` and by the release
+# workflow; never committed, so a stale bundle can never be what a reviewer
+# reads while the source says something else.
+dist/
+node_modules/
+
+# The extension signing key. Public material (the SPKI in manifest.json's
+# "key") is committed on purpose; the private half never is. Losing it is
+# recoverable only by changing the extension id, which changes the origin the
+# daemon's guard admits — so it is kept outside the repository entirely.
+*.pem

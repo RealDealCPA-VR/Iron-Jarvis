@@ -230,10 +230,23 @@ export const NAV: NavSectionDef[] = [
       },
       {
         href: "/computeruse",
-        label: "Computer Control",
+        label: "Browser",
         icon: MonitorCog,
-        aliases: ["browser", "click for me", "screen control", "web automation", "rpa"],
-        blurb: "Let agents drive a real browser, gated behind your approval.",
+        // v1.235.0: the label became Browser (D03/D04 — "Your browser" is the
+        // canonical name). The route stays /computeruse so links, docs and the
+        // frozen RAIL pin keep resolving. "browser" is NOT an alias any more:
+        // nav.test.ts refuses an alias that merely restates the label.
+        aliases: [
+          "chrome",
+          "my browser",
+          "tabs",
+          "computer control",
+          "click for me",
+          "screen control",
+          "web automation",
+          "rpa",
+        ],
+        blurb: "See the tabs open in your own browser, plus agent control of a separate one.",
       },
       {
         href: "/webhooks",

@@ -23,6 +23,9 @@ PR that ships it.
 | A destination you can talk back to | **two-way destination** | gateway, messaging platform |
 | The one-tap connect gallery | **Directory** | marketplace |
 | Talking it out with several agents at once (the Agents page; each conversation is a *thread*, its seated agents the *panel*) | **round-table** | — |
+| The user's own Chrome/Edge, driven by Jarvis | **Your browser** | browser bridge, chrome extension, browser agent |
+| A Jarvis-owned browser profile (phase 2) | **Jarvis browser** | managed browser, headless browser |
+| The thing you load into Chrome so Jarvis can reach it | **browser add-on** | chrome extension, browser extension |
 
 Two-way is a per-destination *upgrade*, not a new noun (decided in the
 messaging plan, shipped v1.136.0): the toggle that creates one reads
@@ -50,6 +53,27 @@ understood. The section that hosts them says *Extensions* and keeps the
 protocol in a parenthetical for people who know it: MCP is the wire, not the
 noun. "plug-in" joins "tool pack" as a retired word kept as a search alias, so
 anyone who learned the old name still finds the page.
+
+### Computer Control → Browser, and why the add-on is not an "extension" (v1.235.0)
+
+Two things arrived at once and the second one nearly broke the rule above.
+
+The page at `/computeruse` was called **Computer Control**, which described the
+mechanism (a headless Chromium the app drives) rather than the thing the user
+came for. It is now **Browser**, and it hosts two modes with two names: **Your
+browser**, the Chrome the user is logged into, reached through an add-on they
+load themselves; and **Jarvis browser**, a profile the app owns, which is phase
+2 and says so. The route stays `/computeruse` — identities are contracts, see
+the three-layer rule below.
+
+The trap: the thing you load into Chrome is, in Chrome's own words, an
+extension — and **extension** was already spent here on an MCP server
+(v1.216.0, above). One word cannot mean two things on the same screen, and the
+MCP meaning is older, load-bearing, and printed on a page users already know.
+So the browser side yields: it is the **browser add-on** everywhere a user can
+read it. Engineering identifiers keep Chrome's word (`extensions/chrome/`,
+`extension_id`, `chrome-extension://`) because those are the wire, not the
+noun.
 
 ## The three-layer rule
 

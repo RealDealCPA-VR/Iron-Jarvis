@@ -159,6 +159,18 @@ def test_default_registry_serves_the_file_core_including_rename(platform):
 _OFF_ROSTER_BY_DESIGN = {
     # Reached through `with_worklist`, not through a roster — asserted in §3.
     "worklist_add", "worklist_next", "worklist_done", "worklist_status",
+    # YOUR BROWSER (v1.235.0) — reached from CHAT and, from Ship 4, from an
+    # external Build harness over the outward MCP server. Deliberately on no
+    # agent roster, and this is the one entry in this file where "unreachable by
+    # an agent" is the FEATURE: these tools drive the browser the user is sitting
+    # in front of, so they belong to a surface where the user is present to
+    # approve a click. A background agent run at 3am has nobody to ask, and
+    # handing it the user's logged-in sessions is the blast radius this
+    # capability ships `off` to avoid. Chat arms them through
+    # `tools/autoselect.AUTO_SAFE_TOOLS` (read tier) and the ask tier (acting
+    # tier, Ship 3). `test_the_browser_read_tier_is_reachable_from_chat` below
+    # pins that, so this exemption cannot quietly become "reachable by nobody".
+    "browser_get_status", "browser_list_tabs", "browser_get_active_tab",
 }
 _OFF_ROSTER_OPEN = {
     # Documents/media the acceptance job plausibly needs, on no definition:
@@ -202,6 +214,68 @@ def test_a_newly_registered_tool_reaches_some_agent_roster(platform):
         "rename_file each shipped dead. Put each one on the roster that needs "
         "it in agents/types.py, or add it to _OFF_ROSTER_OPEN above WITH the "
         f"reason it is deliberately unreachable: {orphans}"
+    )
+
+
+def test_the_browser_read_tier_is_reachable_from_chat(platform):
+    """The one exemption above that is only honest if ANOTHER surface reaches them.
+
+    Every other name in ``_OFF_ROSTER_BY_DESIGN`` is reached through
+    ``with_worklist``, and §3 proves it. The browser read tier is reached from
+    chat instead, so without this pin the exemption would be indistinguishable
+    from the bug: three tools registered, permissioned, and callable by nothing.
+
+    Asserted against the REGISTRY and the SELECTOR together, because either half
+    alone can pass while the feature is dead — a name in ``AUTO_SAFE_TOOLS`` that
+    the registry does not hold arms nothing, and a registered tool the selector
+    has never heard of is never offered.
+
+    THE SELECTOR HALF DRIVES REAL SENTENCES, and it has to. The first cut of this
+    test asserted ``read_tier <= AUTO_SAFE_TOOLS`` — set membership — and was
+    GREEN over a completely dead path: ``AUTO_SAFE_TOOLS`` is only the allowlist
+    filter at the END of ``select_auto_tools``, and with no ``_RULES`` entry
+    naming a browser tool the selector returned ``[]`` for every browser sentence
+    a user could type. A membership assertion cannot see that, which makes it the
+    exact instrument this file's own header warns about: green over the state its
+    docstring calls the bug. So the pin below types what the user types.
+    """
+    from iron_jarvis.tools.autoselect import AUTO_SAFE_TOOLS, select_auto_tools
+
+    read_tier = {"browser_get_status", "browser_list_tabs", "browser_get_active_tab"}
+    registered = set(platform.registry.names())
+    assert read_tier <= registered, (
+        f"not registered: {sorted(read_tier - registered)} — platform.py builds the "
+        "BrowserRuntime and registers browser_tools(browser)"
+    )
+    assert read_tier <= AUTO_SAFE_TOOLS, (
+        f"not auto-armable: {sorted(read_tier - AUTO_SAFE_TOOLS)} — chat is the only "
+        "surface that reaches these, so dropping one here makes it unreachable while "
+        "this file's orphan check still passes"
+    )
+    # Sentence -> the tool that MUST come back for it. Each is a thing the user
+    # says out loud about their own browser; between them they cover the three
+    # tools, so no one of them can go dark while this test passes.
+    wanted = {
+        "what tabs do I have open in my browser?": "browser_list_tabs",
+        "list my chrome tabs": "browser_list_tabs",
+        "what page am I looking at right now?": "browser_get_active_tab",
+        "what am I looking at?": "browser_get_active_tab",
+        "is my browser connected to Jarvis?": "browser_get_status",
+        "is my browser paired?": "browser_get_status",
+    }
+    for sentence, tool in wanted.items():
+        armed = select_auto_tools(sentence)
+        assert tool in armed, (
+            f"{sentence!r} armed {armed} — {tool} was not offered, so nothing the "
+            "user types reaches it. Membership in AUTO_SAFE_TOOLS arms nothing on "
+            "its own: tools/autoselect._RULES needs a vocabulary entry awarding "
+            "these names, and without one the read tier is reachable from NO "
+            "surface and the _OFF_ROSTER_BY_DESIGN exemption above is a fiction"
+        )
+    # And the selector's own boundary: an unrelated request must not arm them.
+    quiet = select_auto_tools("summarize the K-1 I just attached")
+    assert not (read_tier & set(quiet)), (
+        f"a document request armed browser tools: {sorted(read_tier & set(quiet))}"
     )
 
 
