@@ -6,6 +6,23 @@
 > `docs/BROWSER-IMPLEMENTATION-PLAN.md`. Decisions here are binding and must not be re-opened.
 > Note: D29's "start from v1.233.0" line is superseded by the v1.235.0 heading below (the repo shipped
 > v1.234.0 on 2026-09-06).
+>
+> **D28 IS PARTLY SUPERSEDED, 2026-09-07, at the user's explicit direction.** They asked for a chat
+> sidebar docked in the browser, in the shape of the Perplexity assistant. A user may re-open a decision
+> they made; nobody else may. The supersession is NARROW and is recorded in full in
+> `docs/BROWSER-SIDEBAR-PLAN.md` §1, which is binding for v1.240.0-v1.242.0:
+>
+> * D28's do-not-place list still governs the POPUP and every other add-on surface. Model selection,
+>   automation UI, pairing approval and tool settings do not move into the browser, ever.
+> * A SIDE PANEL is added, and it holds no model, no agent loop, no policy and no tool settings. It
+>   renders a conversation that runs entirely in the daemon, under the same approval gate, the same
+>   `browser_access` mode and the same risk tiers as every other Jarvis surface.
+> * The PRIMARY ARCHITECTURAL PRINCIPLE below is therefore intact, not weakened. "The extension performs
+>   browser-side I/O" still describes the add-on exactly: the panel is a view onto Jarvis, not a second
+>   Jarvis with its own rules. That is what makes Stop and Steer real rather than cosmetic — the thing
+>   being stopped is the daemon's own run.
+> * The popup itself is retired (D32), because Chrome ignores `openPanelOnActionClick` when
+>   `action.default_popup` is set. Its status readout moves to the panel header, so nothing is lost.
 
 ---
 

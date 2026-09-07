@@ -79,6 +79,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import time
 import types
 from typing import Any
 
@@ -86,6 +88,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from ..auth import browser_ws_token_ok
+from ..schemas import SettingsBody
 from ...browser import protocol as P
 from ...browser.errors import BrowserError, BrowserErrorCode, browser_error
 from ...browser.extension_backend import ExtensionConnection
@@ -146,6 +149,8 @@ SERVED_PATHS: tuple[str, ...] = (
     "/browser/forget",
     "/browser/test",
     "/browser/request-host-permission",
+    "/browser/setup/arm",
+    "/browser/setup/disarm",
 )
 
 #: What :func:`register` actually put on the LAST app registered in this process.
@@ -197,6 +202,18 @@ class PairBody(BaseModel):
     request_id: str = ""
 
 
+class SetupArmBody(BaseModel):
+    """``POST /browser/setup/arm`` — the access mode the setup modal chose, or none.
+
+    ``None`` (the default) means "leave ``browser_access`` exactly as it is". A
+    default of ``read_only`` here would be a capability the user never chose being
+    switched on by a button labelled Set up, which is the failure the whole
+    off-by-default arrangement exists to prevent.
+    """
+
+    access: str | None = None
+
+
 def _runtime(d) -> Any:
     """``d.platform.browser``, or ``None`` while that field does not exist yet.
 
@@ -240,6 +257,135 @@ def _addon_dir() -> str:
     return str(folder) if folder is not None else ""
 
 
+# --------------------------------------------------------------- setup window
+
+#: How long ``POST /browser/setup/arm`` leaves the door open, in seconds.
+#:
+#: THE SILENT FAILURE A BOUND PREVENTS: while the window is open Jarvis acts on a
+#: browser's behalf without being asked to -- it sends the add-on the directive
+#: that opens its own site-access page. An always-armed version would open a tab
+#: at a user who never pressed anything, and would keep the dashboard claiming a
+#: setup was in progress forever. Two minutes is long enough to open Chrome's
+#: extensions page and press Load unpacked, and short enough that the window is
+#: shut again before the user has walked away from the machine. NOTHING behind
+#: this window mints a credential: see the note where ``_pinned_socket`` was.
+SETUP_WINDOW_S = 120.0
+
+#: Where the deadline lives: an attribute on the ``BrowserRuntime`` this install
+#: built, not a module global. One process builds one app, but a module global is
+#: an answer about the PROCESS -- the same reasoning :data:`SERVED_ATTR` carries --
+#: and a second app in a test would then share one window with the first.
+SETUP_DEADLINE_ATTR = "setup_window_until"
+
+
+def _monotonic() -> float:
+    """The clock the setup window is measured on, in one place.
+
+    MONOTONIC, never the wall clock. THE SILENT FAILURE: a window stored as a
+    ``time.time()`` deadline is reopened by a clock that steps backwards -- an NTP
+    correction, a laptop resuming from sleep, a user fixing their timezone -- and
+    a setup window the user closed two hours ago is open again with nothing
+    anywhere saying so. ``time.monotonic`` cannot go backwards.
+
+    A module-level function rather than a bare ``time.monotonic`` reference so a
+    test can drive expiry by moving a clock instead of by sleeping: an assertion
+    that waits out a real 120 seconds measures the hardware, not the rule.
+    """
+    return time.monotonic()
+
+
+def _setup_arm(runtime: Any, window_s: float = SETUP_WINDOW_S) -> float:
+    """Open the setup window on *runtime*; returns the seconds it will last.
+
+    Called from ONE place -- the explicit arm route. Never on boot, never by
+    default: see :data:`SETUP_WINDOW_S`.
+
+    RE-ARMING IS ALLOWED, and it re-bases the deadline from now rather than
+    topping up whatever was left. A user who pressed Set up, went to find Chrome's
+    extensions page and came back to an expired window genuinely needs longer, and
+    the only way to ask for it is to press Set up again -- an explicit act, by the
+    same person, on the same trusted surface. What is said here is what the code
+    does: the docstring of the arm route once claimed the window "is not extended
+    by use", which was never true of this line, and a bound described one way and
+    implemented another is a bound nobody can reason about.
+    """
+    window = float(window_s)
+    setattr(runtime, SETUP_DEADLINE_ATTR, _monotonic() + window)
+    return window
+
+
+def _setup_disarm(runtime: Any) -> None:
+    """Shut the window. Idempotent, and never raises.
+
+    A runtime that refuses the attribute is left alone rather than failing the
+    route: Disarm is the SAFE direction, and a Disarm button that returned an error
+    would leave a user who wanted the window shut believing it was still open.
+    """
+    try:
+        setattr(runtime, SETUP_DEADLINE_ATTR, None)
+    except Exception:  # noqa: BLE001 - shutting a door must not raise
+        logger.debug("browser setup window could not be disarmed", exc_info=True)
+
+
+def _setup_remaining_s(runtime: Any) -> float:
+    """Seconds left on the setup window, or ``0.0`` when it is shut or expired.
+
+    EXPIRY IS CHECKED HERE, ON EVERY USE, and there is deliberately no background
+    timer to shut the window. THE SILENT FAILURE a timer would introduce: a task
+    that failed to be scheduled, was cancelled with its loop, or raised on a tick
+    leaves the window open forever, and nothing looks different from the outside --
+    the deadline is still in the object, and every reader would still be trusting
+    a sweeper that is no longer running. A deadline compared at the point of use
+    cannot be left armed by a task that stopped.
+
+    Fails CLOSED: a runtime whose deadline is unreadable or not a number counts as
+    shut, because the failure direction of "armed" is handing a credential away.
+    """
+    try:
+        deadline = getattr(runtime, SETUP_DEADLINE_ATTR, None)
+    except Exception:  # noqa: BLE001 - an unreadable window is a shut one
+        return 0.0
+    if deadline is None:
+        return 0.0
+    try:
+        left = float(deadline) - _monotonic()
+    except (TypeError, ValueError):
+        return 0.0
+    return left if left > 0.0 else 0.0
+
+
+def _setup_armed(runtime: Any) -> bool:
+    """Whether the setup window is open right now.
+
+    It gates CONVENIENCES ONLY -- the auto-grant directive, and the card's own
+    "a setup is in progress" hint. It has never gated, and must never gate, the
+    minting of a credential: nothing but a human press does that.
+    """
+    return _setup_remaining_s(runtime) > 0.0
+
+
+def _setup_view(runtime: Any) -> dict[str, Any]:
+    """The ``setup`` key of ``GET /browser/status``, from one definition.
+
+    ``expires_in_s`` is rounded UP so that "armed" and "0 seconds left" can never be
+    reported together: a card that renders a countdown would show an open window
+    with no time on it, and a reader cannot tell that from a bug.
+    """
+    left = _setup_remaining_s(runtime)
+    return {"armed": left > 0.0, "expires_in_s": int(math.ceil(left)) if left > 0.0 else 0}
+
+
+#: THERE IS NO ``_pinned_socket`` GATE ANY MORE, AND THERE MUST NOT BE ONE.
+#: It existed to decide whether a credential could be minted for a socket without
+#: a human pressing Pair, on the strength of the extension id in the ``Origin``
+#: header. That is not a decision an id can carry: ``Origin`` is a header the
+#: client writes, ``/browser/ws?pairing=1`` is the one endpoint that needs no
+#: credential, and the pinned id is a PUBLIC constant in every install. Anything
+#: running as the user can therefore present it. The id is kept only so a pairing
+#: row can name who asked -- see :func:`_origin_extension_id`, which says the same
+#: thing -- and the human pressing Pair is the whole security boundary.
+
+
 def _disconnected_status() -> dict[str, Any]:
     """The status shape for "there is no browser here", in one place.
 
@@ -266,6 +412,10 @@ def _disconnected_status() -> dict[str, Any]:
         "pending_pairing": None,
         "paired": False,
         "last_error": None,
+        # The setup window, SHUT unless an arm route opened one. Present in the
+        # disconnected shape too, because the card that renders the countdown is
+        # exactly the card a user is looking at while nothing is connected yet.
+        "setup": {"armed": False, "expires_in_s": 0},
     }
 
 
@@ -492,6 +642,121 @@ def _deadline_s(store: Any) -> float:
         return float(_PAIRING_DEADLINE_S)
 
 
+#: Marker set on a connection once the setup window has DECIDED about its host
+#: permission, so the directive is sent at most once per socket. Set whether or not
+#: a directive went out: the decision is made once, when the facts are known.
+_AUTO_GRANT_ATTR = "_ij_setup_grant_decided"
+
+
+async def _auto_grant(runtime: Any, conn: Any) -> bool:
+    """Ask an adopted browser for site access while the window is open.
+
+    THE SILENT FAILURE: the add-on connects, everything reads "Connected", and every
+    page read fails with a permission error the user has no obvious remedy for --
+    the grant lives behind a button inside the add-on, on a page nothing opened.
+    Inside the setup window that page is opened for them.
+
+    ``{"requested": true}`` is all this can ever mean, here as on
+    ``POST /browser/request-host-permission``: ``chrome.permissions.request()``
+    needs a user gesture, so Jarvis asks and the human still clicks.
+
+    Decided at most once per socket, and only when the window is open and the socket
+    reports NO host permission. Never raises: a browser that is already granted, or
+    wedged, must not lose its connection to a convenience.
+
+    THE SILENT FAILURE THE ADOPTION CHECK PREVENTS: this runs as a background task,
+    so a D08 replacement can land between the moment it was scheduled for socket A
+    and the moment it runs. It reads ``conn.host_permission`` -- socket A's fact --
+    but ``request_host_permission`` sends to whatever socket is authoritative NOW.
+    Without the check it decides about A and delivers to B: a browser that had
+    already granted access gets a setup page opened in front of the user, and the
+    browser that had not been asked never is. A socket that is no longer the
+    adopted one is skipped, and an unreadable backend is skipped too -- not sending
+    a convenience is the safe direction.
+    """
+    if getattr(conn, _AUTO_GRANT_ATTR, False):
+        return False
+    if not _setup_armed(runtime):
+        return False
+    setattr(conn, _AUTO_GRANT_ATTR, True)
+    if bool(getattr(conn, "host_permission", False)):
+        return False
+    try:
+        adopted = runtime.backend.connection
+    except Exception:  # noqa: BLE001 - an unreadable backend decides about nothing
+        logger.debug("browser auto-grant could not read the adopted socket", exc_info=True)
+        return False
+    if adopted is not conn:
+        logger.info("browser auto-grant skipped: this socket is no longer the adopted one")
+        return False
+    try:
+        await runtime.request_host_permission()
+    except BrowserError as exc:
+        logger.info("browser auto-grant not delivered: %s", exc.code)
+        return False
+    except Exception:  # noqa: BLE001 - a convenience must never drop the socket
+        logger.debug("browser auto-grant failed", exc_info=True)
+        return False
+    logger.info("browser asked for site access inside the setup window")
+    return True
+
+
+#: Where the in-flight auto-grant task is parked, so the loop keeps a strong
+#: reference to it. ``asyncio`` holds only a weak one, and a task nothing refers to
+#: can be collected mid-await — the directive would simply never be sent, on some
+#: runs and not others.
+_AUTO_GRANT_TASK_ATTR = "_ij_setup_grant_task"
+
+
+def _schedule_auto_grant(runtime: Any, conn: Any) -> Any:
+    """Run :func:`_auto_grant` as a background task; returns it, or ``None``.
+
+    IT MUST NOT BE AWAITED BY THE READER, and this is not a preference.
+    ``request_host_permission`` sends a ``browser.directive`` and then AWAITS the
+    add-on's response — and the only code that reads frames off this socket is the
+    pump. Awaiting it from the socket handler (or from inside the pump's own loop)
+    parks the one coroutine that could deliver the answer, so the directive times
+    out after the full command bound while the browser's reply sits unread in the
+    socket. The user would see a browser that connects and then goes silent for
+    fifteen seconds, with nothing naming why.
+
+    Returns ``None`` when there is no running loop to schedule on, which is only
+    true outside the ASGI server.
+    """
+    if getattr(conn, _AUTO_GRANT_ATTR, False):
+        return None
+    try:
+        task = asyncio.get_running_loop().create_task(_auto_grant(runtime, conn))
+    except RuntimeError:  # pragma: no cover - no running loop
+        return None
+    setattr(conn, _AUTO_GRANT_TASK_ATTR, task)
+    return task
+
+
+def _settings_writer(app: FastAPI) -> Any:
+    """The app's OWN ``PUT /settings`` handler, looked up off its route table.
+
+    ONE definition of "write a setting": validation on a throwaway copy, the undo
+    journal, the atomic persist and the live re-arm that DROPS the paired socket
+    when ``browser_access`` moves to ``off`` all live in ``routes/settings.py`` and
+    none of them is re-implemented here. THE SILENT FAILURE a second writer would
+    cause: arming would set the field on the live ``Config`` and skip the persist,
+    so the access mode the user chose in the setup modal would be gone at the next
+    boot with nothing to show they had chosen it.
+
+    Read off ``app.routes`` rather than imported so registration ORDER does not
+    matter and a build where the settings routes were not registered answers
+    ``None`` -- which the arm route reports as a refusal rather than pretending the
+    setting was written.
+    """
+    for route in app.routes:
+        if str(getattr(route, "path", "")) != "/settings":
+            continue
+        if "PUT" in (getattr(route, "methods", None) or set()):
+            return getattr(route, "endpoint", None)
+    return None
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
 
@@ -582,6 +847,7 @@ def register(app: FastAPI, d) -> None:
                         # browser.ready that says so.
                         await backend.adopt(conn)
                         inert = False
+                        _schedule_auto_grant(runtime, conn)
                         continue
                     try:
                         message = recv.result()
@@ -618,6 +884,13 @@ def register(app: FastAPI, d) -> None:
                     # which frame type, so nothing is added here.
                     reason, detail = "closed", "the browser broke the pairing protocol"
                     break
+                # AUTO-GRANT, at the only moment the answer is knowable. ``adopt()``
+                # runs before a single frame has been read, so host_permission is
+                # still its default there; ``browser.hello`` is the frame that
+                # carries it. ``_auto_grant`` decides once, and only while the setup
+                # window is open.
+                if conn.paired and getattr(conn, "hello_seen", False):
+                    _schedule_auto_grant(runtime, conn)
                 recv = asyncio.ensure_future(ws.receive())
         finally:
             recv.cancel()
@@ -686,6 +959,14 @@ def register(app: FastAPI, d) -> None:
         elif not await _open_pairing(runtime, conn):
             await _close(ws, 1008)
             return
+        # AND NOTHING IS PAIRED HERE. A pairing socket leaves with an OFFER and
+        # nothing else, however the setup window is set: the id this socket is
+        # named by comes from its own ``Origin`` header, this endpoint is the one
+        # that needs no credential, and the pinned id is public material shipped in
+        # every install (see the note where ``_pinned_socket`` used to be). A
+        # credential minted on that basis is minted for whoever asked first, and it
+        # locks the real add-on out afterwards while the card reads "Connected".
+        # The human pressing Pair is what tells the two apart, so the press stays.
         await _pump(ws, runtime, conn, inert=inert)
 
     # ------------------------------------------------------------------ HTTP
@@ -728,6 +1009,10 @@ def register(app: FastAPI, d) -> None:
             answer["paired"] = bool(store is not None and await asyncio.to_thread(store.paired))
         except Exception:
             logger.debug("pairing lookup degraded", exc_info=True)
+        try:
+            answer["setup"] = _setup_view(runtime)
+        except Exception:  # noqa: BLE001 - this route is documented never to fail
+            logger.debug("browser setup window lookup degraded", exc_info=True)
         return answer
 
     @app.post("/browser/pair")
@@ -753,6 +1038,14 @@ def register(app: FastAPI, d) -> None:
         except BrowserError as exc:
             status = 404 if exc.code == BrowserErrorCode.PAIRING_REQUIRED.value else 409
             raise _refuse(exc.code, status, exc.message) from exc
+        # THE SETUP IS OVER, SO THE WINDOW SHUTS. THE SILENT FAILURE: a window left
+        # armed by a successful pairing keeps running for the rest of its two
+        # minutes with nothing on screen saying why -- the card still renders "a
+        # setup is in progress", and a POST /browser/forget pressed inside the
+        # leftover minute drops straight back into a setup state the user did not
+        # ask for a second time. Shutting it here means the window always ends at
+        # something the user did.
+        _setup_disarm(runtime)
         return {"paired": True}
 
     @app.post("/browser/disconnect")
@@ -864,6 +1157,82 @@ def register(app: FastAPI, d) -> None:
                 BrowserErrorCode.EXTENSION_ERROR, 409, f"{type(exc).__name__}: {exc}"
             ) from exc
         return {"requested": True}
+
+    @app.post("/browser/setup/arm")
+    async def browser_setup_arm(body: SetupArmBody) -> dict[str, Any]:
+        """Open the time-boxed setup window, and optionally set the access mode.
+
+        This route is the ONLY thing that opens the window. Nothing arms it at boot
+        and no default arms it. The window expires :data:`SETUP_WINDOW_S` seconds
+        after THIS call, measured on a monotonic clock, and expiry is checked
+        wherever it is read rather than by a timer. Pressing Set up again re-bases
+        that deadline from now (:func:`_setup_arm`): a user who needed longer asked
+        for longer, explicitly, on the surface they are already looking at.
+
+        THE SILENT FAILURE THE WINDOW REMOVES: setup asks a user to press Pair in
+        Jarvis and Allow in Chrome at a moment they cannot predict, and the two
+        prompts appear on two different surfaces. People give up between them, and
+        an install that stops at "Waiting to pair" looks identical to one that is
+        broken.
+
+        WHAT THE WINDOW DOES NOT DO: it never mints a credential. The Pair press is
+        the security boundary and this route does not move it — a socket that
+        arrives inside an open window is offered a pairing exactly as it would be
+        with the window shut, because the only thing naming it is an ``Origin``
+        header it wrote itself and the pinned id is public. See the note where
+        ``_pinned_socket`` used to be. What the window does is send the add-on the
+        directive that opens its own site-access page (:func:`_auto_grant`), which
+        hands over nothing, and tell the card a setup is in progress so the Pair
+        button is put in front of the user instead of being hunted for.
+
+        It shuts itself at the deadline, and ``POST /browser/pair`` shuts it on a
+        successful pairing: a setup window outlives neither its bound nor its job.
+
+        The access mode is written through the app's own ``PUT /settings`` handler
+        (:func:`_settings_writer`), never through a second writer: that path
+        validates, journals the undo, persists atomically and re-arms the live
+        browser hook. A 400 from it is the setting's own refusal and is passed
+        through unchanged.
+        """
+        runtime = _runtime(d)
+        if runtime is None:
+            raise _refuse(
+                BrowserErrorCode.EXTENSION_ERROR, 503, "the browser bridge is unavailable"
+            )
+        access = (body.access or "").strip()
+        if access:
+            writer = _settings_writer(app)
+            if writer is None:
+                raise _refuse(
+                    BrowserErrorCode.EXTENSION_ERROR,
+                    503,
+                    "this install cannot change the browser access setting",
+                )
+            # In a thread: ``put_settings`` is a SYNC handler that writes a file and
+            # touches the database, and the daemon is ONE loop. An HTTPException it
+            # raises (a rejected access word) propagates unchanged.
+            await asyncio.to_thread(writer, SettingsBody(values={"browser_access": access}))
+        window = _setup_arm(runtime)
+        return {
+            "armed": True,
+            "expires_in_s": int(window),
+            # The folder the modal tells the user to load, from the ONE resolver.
+            "addon_dir": _addon_dir(),
+        }
+
+    @app.post("/browser/setup/disarm")
+    async def browser_setup_disarm() -> dict[str, bool]:
+        """Shut the setup window. Never fails, and is safe to call when it is shut.
+
+        Never fails because it is the SAFE direction: a Cancel that returned an error
+        would leave a user who wanted the window closed believing it was still open,
+        which is the one state this feature must never be wrong about. A missing
+        runtime answers ``false`` for the same reason — there is no window there.
+        """
+        runtime = _runtime(d)
+        if runtime is not None:
+            _setup_disarm(runtime)
+        return {"armed": False}
 
 
     # What actually landed. Read off the app's own route table rather than trusted

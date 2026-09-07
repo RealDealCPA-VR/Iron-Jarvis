@@ -73,9 +73,38 @@ be built first — `pnpm install && pnpm run check` inside `extensions/chrome` �
 because the built files are deliberately not committed. The Browser page's steps
 say so, and `extensions/chrome/README.md` has the detail.
 
+## The guided setup (v1.240.0)
+
+The Browser card has a **Set up my browser** button. It opens a window that walks
+the four steps below in order and moves itself along as each one lands, so you are
+never looking at a step you have already done or one you cannot do yet. It names
+the add-on folder for *this* machine and gives you a button to copy it, and while
+it is open Jarvis opens the site-access page for you rather than making you find
+it.
+
+The window does not change any setting on its own. Browser access is a control you
+can see inside it, and it is written only when you pick a level.
+
+Two steps in that list are yours, and the guide says so plainly instead of leaving
+you to wonder why the automation stopped:
+
+* **Developer mode** and **Load unpacked** are Chrome's. No application can install
+  an add-on into your browser; only the Web Store can, and there is no listing yet.
+* **Pair** is yours on purpose. See below.
+
 ## Pairing
 
 Loading the add-on does not connect it to anything. It knocks; you answer.
+
+**Why Jarvis will not press Pair for you.** This was built to be automatic and then
+deliberately taken out. The connection an add-on opens is an ordinary local one,
+and the identity it presents is a header that any program running on your computer
+could write. Jarvis cannot tell a real browser from a program claiming to be one —
+and no secret fixes that, because anything the add-on can read, a program running
+as you can read too. If Jarvis paired on its own, a program on your machine could
+take the credential meant for your browser, lock your real add-on out, and leave
+this card reading **Connected**. So a person looks once and confirms. That press is
+the security boundary of the whole feature, not friction waiting to be removed.
 
 1. The add-on connects to the daemon on your own machine with no credential and
    is held in a restricted state where it can do nothing but ask to be paired.

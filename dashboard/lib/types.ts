@@ -706,6 +706,21 @@ export interface BrowserStatus {
   active_tab: BrowserTab | null;
   pending_pairing: BrowserPendingPairing | null;
   last_error: string | null;
+  /** The time-boxed setup window opened by `POST /browser/setup/arm`
+   *  (v1.240.0). While it is armed, a pending pairing from the PINNED add-on
+   *  identity is completed with no second click and the host-permission
+   *  directive goes out the moment the socket adopts. Optional because a daemon
+   *  older than v1.240.0 does not send the field, and absent is not the same as
+   *  `{armed: false}`: the first means "this install cannot arm", the second
+   *  means "it can, and it is not armed right now". */
+  setup?: BrowserSetupWindow;
+}
+
+/** The setup window, as the daemon reports it. `expires_in_s` counts down and
+ *  is meaningless when `armed` is false. */
+export interface BrowserSetupWindow {
+  armed: boolean;
+  expires_in_s: number;
 }
 
 /** One row of the user's real browser, as the add-on reports it. `title`/`url`

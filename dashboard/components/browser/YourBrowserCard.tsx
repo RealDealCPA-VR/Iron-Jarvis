@@ -71,6 +71,7 @@ import {
   ChevronDown,
   ChevronRight,
   Activity,
+  Wand2,
 } from "lucide-react";
 import { post, put, ApiError } from "@/lib/api";
 import { usePolledApi } from "@/lib/useApi";
@@ -93,6 +94,11 @@ import {
 // REPORTS "unavailable" instead of pretending. A second copy helper in this file
 // would be a second thing to fix the day the bridge changes.
 import { copyPlain } from "@/components/settings/MaintenanceTools";
+// The guided setup window (v1.240.0). It is a separate file rather than a
+// block in this one because it is a dialog with its own lifecycle — it arms a
+// time-boxed window on open and gives it back on close — and this card is
+// already six states long.
+import { BrowserSetupModal } from "@/components/browser/BrowserSetupModal";
 
 /* -------------------------------------------------------------------------- */
 /*  Contracts                                                                 */
@@ -457,6 +463,7 @@ export function YourBrowserCard() {
   const [note, setNote] = useState<string | null>(null);
   const [test, setTest] = useState<BrowserTestResult | null>(null);
   const [highlightAccess, setHighlightAccess] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
   const readOnlyRef = useRef<HTMLButtonElement | null>(null);
 
   const state = browserCardState(data);
@@ -568,6 +575,42 @@ export function YourBrowserCard() {
               session. Load the Iron Jarvis browser add-on, pair it here, and Jarvis can read the
               page you are looking at.
             </p>
+
+            {/* THE GUIDED WINDOW (v1.240.0). One button, on the three states
+                that still have work to do — nothing is loaded, the add-on is
+                paired but down, or access is off entirely. It is the entry
+                point for the whole capability, and it is deliberately ABOVE
+                the per-state block: a user who presses it never has to read
+                the rest of the card. The connected and waiting states are
+                excluded because both are one click from finished on the card
+                itself, and a wizard offered to somebody already there is
+                noise. A dialog ALREADY OPEN stays open across that transition
+                — it is rendered outside this condition — because pairing is
+                step three of the wizard (v1.240.0, F2) and the user walking
+                through it lands in `waiting` half way down. */}
+            {(state === "off" || state === "not_connected" || state === "paired_down") && (
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  type="button"
+                  data-testid="browser-setup-open"
+                  onClick={() => setSetupOpen(true)}
+                  className="btn-accent py-1.5 text-xs"
+                >
+                  <Wand2 size={14} /> Set up my browser
+                </button>
+                <span className="text-[11px] text-zinc-500">
+                  Four steps, guided — Iron Jarvis does everything else itself.
+                </span>
+              </div>
+            )}
+
+            {setupOpen && (
+              <BrowserSetupModal
+                status={data ?? null}
+                onClose={() => setSetupOpen(false)}
+                onChanged={reload}
+              />
+            )}
 
             {/* Primary action per state. Exactly one next step. */}
             {state === "off" && (

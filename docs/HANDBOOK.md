@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.239.0 (2026-09-07).*
+holds itself to. Current as of v1.240.0 (2026-09-07).*
 
 ---
 
@@ -394,6 +394,25 @@ nothing. It is not built yet, and nothing in the app pretends otherwise.
 Below those sits the older **computer use** machinery, which drives a headless
 Chromium of its own behind a domain allowlist. It is unchanged, and it shares no
 cookies or sessions with your browser.
+
+**Setting it up (v1.240.0).** The Browser card has a **Set up my browser** button
+that opens a guided window and walks the four steps in order, moving itself along
+as each one lands: find the add-on folder on this machine (it names the real path
+and copies it), load that folder into Chrome, press **Pair**, then allow site
+access. While the window is open Jarvis opens the site-access page for you instead
+of making you find it.
+
+Two of those steps are yours and cannot be automated, and the guide says so rather
+than leaving you wondering. Chrome will not let an app install an add-on into your
+browser, so **Developer mode** and **Load unpacked** are your clicks until there is
+a Web Store listing. And **Pair** is your click on purpose: the identity a browser
+presents to Jarvis over a local connection is a header any program on your computer
+could write, so a person has to confirm the browser knocking is really theirs. That
+press is the security boundary of the whole feature, not a step waiting to be
+optimised away.
+
+The guide never changes a setting behind your back. Browser access is a control you
+can see inside the window, and it is written only when you pick it.
 
 **Turning it on.** Browser access has three settings and ships **off**:
 

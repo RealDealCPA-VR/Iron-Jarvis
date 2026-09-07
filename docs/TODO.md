@@ -31,6 +31,43 @@ are unchanged by the ships themselves.*
   `docs/BROWSER.md` — bundled for the Guide, and the sixteen known limits stated
   in plain words rather than discovered.
 
+## Browser — the sidebar and one-click setup (v1.240.0 → v1.242.0)
+
+*Asked for by the user on 2026-09-07: setup automated down to the approvals Chrome
+will not let us skip, a guided modal explaining the bare minimum, a chat sidebar
+docked in the browser like the Perplexity assistant, and the ability to stop or
+steer an agentic run at any time. The binding plan is `docs/BROWSER-SIDEBAR-PLAN.md`;
+it supersedes D28 narrowly and re-affirms the rest (see the note at the top of
+`docs/BROWSER-PLAN.md`).*
+
+- [ ] **Ship 1 — Setup in one place (v1.240.0).** A guided modal on the Browser page
+  that names the real add-on folder for this machine, copies it, and walks the four
+  steps, advancing itself as the daemon's status changes. A time-boxed setup window
+  opens the site-access page for the user and tells the dashboard to put the **Pair**
+  press in front of them in context.
+  **Auto-pairing was built and then removed**: a security review demonstrated it
+  minting a real credential for any local process that forged an `Origin` header,
+  because the pairing socket needs no credential, the identity is a client-written
+  header, and the add-on's id is a public constant. There is no cryptographic repair,
+  so the manual Pair press is permanently the security boundary.
+- [ ] **Ship 2 — The chat turn becomes addressable (v1.241.0).** `/chat/stream`
+  cancellation is connection-bound today: no run id, no cancel route, and the only
+  cooperative check is `request.is_disconnected()` once per tool round. A panel turn
+  has no HTTP connection to drop, so Stop is undeliverable for the sidebar until the
+  streaming turn is extracted (mirroring the v1.136.0 `run_chat_turn` extraction) and
+  given a turn registry. The dashboard gains a real out-of-band Stop for free.
+- [ ] **Ship 3 — The sidebar (v1.242.0).** A `chrome.sidePanel` page, a new protocol
+  frame pair (the add-on cannot ask the daemon a question today, by design), panel
+  turns that run in the daemon under the same gates, and Stop / Steer / Approve.
+  The popup is retired, since Chrome ignores `openPanelOnActionClick` when
+  `action.default_popup` is set.
+
+*Not in these three ships, and not pretended otherwise: the add-on still cannot be
+installed for the user. Developer mode and Load unpacked stay manual until there is
+a Web Store listing, which needs a developer account and a review cycle.*
+
+---
+
 ## Browser — Phase 2 (deferred from the five MVP ships, v1.235.0–v1.239.0)
 
 *Recorded per decision D31 of `docs/BROWSER-PLAN.md`. None of these is implemented
