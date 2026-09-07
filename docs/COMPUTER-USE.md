@@ -1,17 +1,49 @@
 # Iron Jarvis — Computer Use (opt-in, safe by construction)
 
-Computer Use lets agents drive a real browser (and, behind the strongest gates,
-a desktop) to do work no API exposes. It is **OFF by default** and built to a
-strict safety spec — every best practice below is enforced in code, not just
-documented.
+Computer Use lets agents drive a real browser **of the app's own** (and, behind
+the strongest gates, a desktop) to do work no API exposes. It is **OFF by
+default** and built to a strict safety spec — every best practice below is
+enforced in code, not just documented.
+
+This is **not** the feature that reads the tabs in the Chrome you use every day;
+that is **Your browser**, and the next section tells the two apart.
 
 > ⚠️ Enable it **only** on an isolated/disposable VM or container. The daemon
 > executes actions; treat it like remote code execution.
 
+## Two browsers, and which one this page is about
+
+The **Browser** page in the dashboard holds two different features, and they
+share no code, no profile and no cookies. Read this first or the rest of this
+file will describe the wrong one.
+
+**Your browser** is the Chrome or Edge *you* already use, logged into the sites
+you are already logged into. Jarvis reaches it through a small **browser add-on**
+you load yourself and then **Pair**, and it can only see a tab once you have
+granted the add-on access to that site. In **v1.236.0 it reads and photographs,
+nothing more**: list your open tabs, name the tab you are looking at, read a
+page's text and elements, and take a screenshot of it. It cannot click, type or
+navigate. Browser access ships **off**, and its three settings (off / read only /
+interactive) are separate from everything below — turning Computer Use on does
+not touch it, and turning it off does not disable Computer Use. See the Browser
+section of `docs/HANDBOOK.md`.
+
+**Computer use** — the rest of this file — is the other one: a **separate,
+headless Chromium** the daemon launches itself, in a fresh incognito context per
+run, logged into nothing. It shares no cookies or sessions with your browser, so
+it cannot reach a site you are signed into unless it signs in itself. It is the
+half that actually *acts* (navigate, click, type, extract), which is why it is
+the half wrapped in domain allowlists, action allowlists and human approvals.
+
+One sentence to keep them straight: **your browser is the one you are logged
+into and Jarvis may only look at it; the Computer Use browser is the one Jarvis
+drives and it knows nobody.**
+
 ## Enable it
 
-Dashboard → **Computer Use** → toggle on, set a **domain allowlist** and
-**action allowlist**. Or:
+Dashboard → **Browser** (the route is still `/computeruse`) → the **Computer
+Use** sections → toggle on, set a **domain allowlist** and an **action
+allowlist**. Or:
 
 ```bash
 # config (off by default): .ironjarvis project config or env
@@ -41,7 +73,10 @@ A real browser needs Playwright's browsers once: `uv run playwright install chro
 - Tools (gated by `policy.enabled`): `browse`, `web_extract`, `web_action` (perm `ask`), `computer_use_status`.
 - Daemon: `GET /computeruse`, `POST /computeruse/enable`, `GET /computeruse/approvals`,
   `POST /computeruse/approvals/{id}/approve|deny`, `GET /computeruse/runs/{id}`.
-- Dashboard: the **Computer Use** page (enable, allowlists, live approval queue).
+- Dashboard: the **Browser** page at `/computeruse` — the Your browser card on
+  top (pairing and access for your own Chrome), and below it the Computer Use
+  sections (enable, allowlists, live approval queue). The page was labelled
+  **Computer Use** before v1.235.0.
 
 ## Proof
 `tests/test_computeruse.py` — **15 offline tests** (FakeBrowser, no real browser),

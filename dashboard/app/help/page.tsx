@@ -139,7 +139,7 @@ const SUBSYSTEMS: Subsystem[] = [
     href: "/computeruse",
     title: "Browser",
     icon: MonitorCog,
-    desc: "Pair your own Chrome so Jarvis can see your open tabs — plus opt-in agent control of a separate browser, fenced by allowlists and approval gates.",
+    desc: "Pair your own Chrome so Jarvis can see your open tabs and read the page you are looking at — plus opt-in agent control of a separate browser, fenced by allowlists and approval gates.",
   },
   {
     href: "/self-dev",
@@ -203,7 +203,7 @@ const GLOSSARY: GlossaryTerm[] = [
   },
   {
     term: "Browser",
-    def: "Your own Chrome, paired with Iron Jarvis so it can see your open tabs — and opt-in agent control of a separate browser, gated by your approvals.",
+    def: "Your own Chrome, paired with Iron Jarvis so it can see your open tabs and read the page in front of you — and opt-in agent control of a separate browser, gated by your approvals.",
   },
   {
     term: "Connections",

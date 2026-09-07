@@ -87,6 +87,24 @@ from .protocol import (
 from .extension_backend import ExtensionBackend, ExtensionConnection
 from .models import BrowserPairing
 from .pairing import PairingStore
+from .screenshot import (
+    ARTIFACT_KIND,
+    SavedScreenshot,
+    ScreenshotOutcome,
+    capture_for_tool,
+)
+from .snapshot import (
+    MAX_CACHED_TABS,
+    MODE_SPECS,
+    PageSnapshot,
+    SnapshotCache,
+    SnapshotLimits,
+    SnapshotModeSpec,
+    TruncationNote,
+    UnknownSnapshotMode,
+    mode_spec,
+    normalise_mode,
+)
 from .service import BrowserRuntime, BrowserService
 from .tools import browser_tools
 
@@ -136,4 +154,19 @@ __all__ = [
     "ExtensionConnection",
     "PairingStore",
     "browser_tools",
+    # snapshots + screenshots (v1.236.0)
+    "ARTIFACT_KIND",
+    "MAX_CACHED_TABS",
+    "MODE_SPECS",
+    "PageSnapshot",
+    "SavedScreenshot",
+    "SnapshotCache",
+    "SnapshotLimits",
+    "SnapshotModeSpec",
+    "TruncationNote",
+    "UnknownSnapshotMode",
+    "ScreenshotOutcome",
+    "capture_for_tool",
+    "mode_spec",
+    "normalise_mode",
 ]

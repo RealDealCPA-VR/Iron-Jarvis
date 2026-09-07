@@ -246,7 +246,7 @@ export const NAV: NavSectionDef[] = [
           "web automation",
           "rpa",
         ],
-        blurb: "See the tabs open in your own browser, plus agent control of a separate one.",
+        blurb: "Read the tabs and pages open in your own browser, plus agent control of a separate one.",
       },
       {
         href: "/webhooks",

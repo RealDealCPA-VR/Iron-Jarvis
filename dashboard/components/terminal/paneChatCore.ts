@@ -158,6 +158,13 @@ export type PaneTurnBody = {
   project_id?: string;
   auto_tools: true;
   approval_mode?: string;
+  /** WHICH pane this turn came from (v1.236.0) — the daemon's ChatBody.pane_id.
+   *  The missing link a pane-scoped rule keys on: a turn already carried the
+   *  pane's FOLDER, and a folder is not an identity (two panes can be open on
+   *  the same one, and the user can repoint a pane). The daemon reads it for the
+   *  Browser capability gate; omitted, the turn is a pane-less surface and the
+   *  global gate alone applies. */
+  pane_id?: string;
 };
 
 /** The /chat contract's tool cap (the server truncates at six). */
@@ -184,6 +191,10 @@ export interface PaneTurnArgs {
    *  stored always_ask/yolo MUST ride or the pane silently downgrades the
    *  consent the user set in /chat (BC1 D4). */
   approvalMode?: string;
+  /** This pane's stable id (v1.236.0) — the same value {@link paneThreadKey}
+   *  keys the thread on. Optional so a caller that has no pane identity (a
+   *  test, a future non-pane embedder) keeps today's body exactly. */
+  paneId?: string;
 }
 
 export function buildTurnBody(a: PaneTurnArgs): PaneTurnBody {
@@ -200,6 +211,10 @@ export function buildTurnBody(a: PaneTurnArgs): PaneTurnBody {
       : {}),
     // The pane's whole point: every turn is grounded in the pane's folder.
     workspace_dir: a.cwd,
+    // WHICH pane asked (v1.236.0). Omitted when there is none, never sent as
+    // "": the daemon treats "" as a pane-less surface, and an empty string on
+    // the wire is a field that looks present and identifies nothing.
+    ...(a.paneId ? { pane_id: a.paneId } : {}),
     // Context spine: only when the cwd sits under a project root.
     ...(a.projectId ? { project_id: a.projectId } : {}),
     // Seamless arming — the daemon fills safe tool slots from the request.

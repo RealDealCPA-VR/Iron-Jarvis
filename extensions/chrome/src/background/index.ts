@@ -15,26 +15,46 @@
 // so the pairing token and the user's suspend choice live in storage and nothing
 // else needs to survive.
 //
-// Ship 1 registers the three READ methods. `read_page`, `get_elements`, the
-// screenshot and every acting method arrive in Ship 2 with the content script and
-// the tools that reach them. Until then the dispatcher answers an unregistered
-// method with EXTENSION_ERROR naming it, so a daemon built ahead of the add-on
-// learns which half is missing instead of timing out.
+// Ship 2 registers six methods: Ship 1's three tab-metadata reads, plus
+// `read_page`, `get_elements` and `screenshot`. The acting methods — `click`,
+// `type_text`, `press_key`, `navigate`, `scroll` and the tab-management pair — arrive
+// in Ship 3. Until then the dispatcher answers an unregistered method with
+// EXTENSION_ERROR naming it, so a daemon built ahead of the add-on learns which half
+// is missing instead of timing out.
+//
+// Note where the page work is NOT: none of it is in this file. `read_page` and
+// `get_elements` go through `tabs.runInPage`, which injects `content/index.ts` on
+// demand and speaks to it; the screenshot is `tabs.captureVisible`, which must live in
+// the worker because only an extension page may call `captureVisibleTab`. This file
+// stays what it was — the socket, the directives, the events and the popup's
+// messages — and the reason is MV3 lifetime: a worker that also held the DOM walk
+// would be a worker that gets evicted in the middle of one.
 
 import {
   DIRECTIVE_DISCONNECT,
   DIRECTIVE_REQUEST_HOST_PERMISSIONS,
   EVENT_ID_PREFIX,
+  EVENT_NAVIGATION_COMPLETED,
   EVENT_TAB_ACTIVATED,
   METHOD_ACTIVE_TAB,
+  METHOD_GET_ELEMENTS,
   METHOD_LIST_TABS,
+  METHOD_READ_PAGE,
+  METHOD_SCREENSHOT,
   METHOD_STATUS,
 } from "../protocol";
 import { BridgeError } from "../bridge/errors";
 import { Dispatcher } from "../bridge/dispatch";
 import { BridgeSocket, toggleAction, type BridgeStatus } from "../bridge/socket";
 import { hasHostPermission, onHostPermissionChanged, openSetupPage } from "./hostperms";
-import { activeTab, listTabs, tabRow } from "./tabs";
+import {
+  activeTab,
+  captureVisible,
+  getElements,
+  listTabs,
+  readPage,
+  tabRow,
+} from "./tabs";
 
 /** The dashboard page the popup's Open Jarvis button goes to. */
 const JARVIS_URL = "http://127.0.0.1:8788/computeruse";
@@ -72,7 +92,7 @@ const socket = new BridgeSocket({
   },
 });
 
-// --- the three read methods -------------------------------------------------
+// --- the three tab-metadata read methods ------------------------------------
 
 dispatcher.register(METHOD_STATUS, async () => {
   const hostPermission = await hasHostPermission();
@@ -101,6 +121,25 @@ dispatcher.register(METHOD_ACTIVE_TAB, async () => {
   // carries no index signature, which the response frame's `result` needs. The
   // spread keeps every key and its type while making the shape assignable.
   return { ...(await activeTab(await hasHostPermission())) };
+});
+
+// --- the three page read methods --------------------------------------------
+
+// The host grant is read fresh on every call, never cached in a module variable: the
+// user can revoke it from chrome://extensions between two calls, and a cached `true`
+// would send the page reader at a tab it may no longer read — which surfaces as
+// Chrome's own wording instead of the remedy naming the button to press.
+
+dispatcher.register(METHOD_READ_PAGE, async (params) => {
+  return readPage(params, await hasHostPermission());
+});
+
+dispatcher.register(METHOD_GET_ELEMENTS, async (params) => {
+  return getElements(params, await hasHostPermission());
+});
+
+dispatcher.register(METHOD_SCREENSHOT, async (params) => {
+  return captureVisible(params, await hasHostPermission());
 });
 
 // --- directives -------------------------------------------------------------
@@ -158,6 +197,51 @@ chrome.tabs.onActivated.addListener((info) => {
       tab_id: info.tabId,
       title,
       url,
+    });
+  })();
+});
+
+chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
+  // SAME-TAB NAVIGATION. Without this the daemon only ever hears onActivated,
+  // which fires when the user SWITCHES tabs — so following a link in the tab you
+  // are already in left Jarvis asserting the previous page's title and URL in the
+  // ambient block, and left a snapshot of the old document cached as current.
+  // Both are wrong in the most confident possible way: specific, plausible, and
+  // about the one page the user is actually looking at.
+  //
+  // `status === "complete"` is the settle signal: onUpdated also fires for
+  // "loading", for favicon changes and for title changes, and emitting on those
+  // would report a document that is still moving. A title-only update (a
+  // single-page app rewriting document.title after the URL changed) still
+  // arrives, because it lands after the load completed and carries the new title.
+  if (change.status !== "complete" && change.title === undefined) {
+    return;
+  }
+  void (async () => {
+    // Only the tab the user is looking at. A background tab finishing its load is
+    // true but not what the ambient block is about, and the daemon merges this
+    // onto its active-tab cache — so reporting a background tab here would
+    // overwrite the active one with a page the user cannot see.
+    let active = false;
+    try {
+      const [current] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      active = current?.id === tabId;
+    } catch {
+      // Query failed (no focused window). Say nothing rather than guess.
+      return;
+    }
+    if (!active) {
+      return;
+    }
+    const hostPermission = await hasHostPermission();
+    eventSeq += 1;
+    socket.emitEvent(`${EVENT_ID_PREFIX}${eventSeq}`, EVENT_NAVIGATION_COMPLETED, {
+      tab_id: tabId,
+      // Without the site grant Chrome hands back empty strings, and an empty
+      // title reads to a model as "this page has no title" — a lie it repeats to
+      // the user. null says "not known", which is the truth.
+      title: hostPermission ? (change.title ?? tab.title ?? "") : null,
+      url: hostPermission ? (tab.url ?? "") : null,
     });
   })();
 });

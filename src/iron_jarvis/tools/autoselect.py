@@ -56,6 +56,38 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         "browser_get_status",
         "browser_list_tabs",
         "browser_get_active_tab",
+        # YOUR BROWSER, page-reading tier (v1.236.0). The disclosure decision
+        # Ship 1's note above deferred, taken: these three read the CONTENT of a
+        # tab, not just its title, and they are admissible on the same three
+        # facts the tier above rides on — `Reversibility.READONLY`,
+        # `RiskClass.READ`, and three gates ahead of any disclosure that this
+        # selector cannot open (`browser_access`, which ships `off`; a paired
+        # and connected browser; and Chrome's own site grant, which the user
+        # grants per install with a button).
+        #
+        # WHY AUTO-ARMING AND NOT EXPLICIT-ONLY. The feature IS the seamless
+        # path: D16 is "the user asks the Build chat what page they have open and
+        # gets a correct answer", and a tool the user must find in the "+" menu
+        # first is a tool that has already lost that interaction. Reading a page
+        # the user is looking at is strictly less disclosure than `read_file`
+        # (already here) opening a document they are not.
+        #
+        # WHAT THEY ARE STILL NOT. None of them can CHANGE a page: clicking and
+        # typing are `browser_click`/`browser_type`/`browser_press_key`/
+        # `browser_navigate`, they land in Ship 3, they sit on the deny floor,
+        # and they must never appear in this set — arming here is granting
+        # (session_allow), and the whole point of the deny floor is that a page
+        # action asks a human first.
+        #
+        # `browser_screenshot` is the one with a COST: it may make a nested
+        # vision call. It is in because the alternative is worse — a model that
+        # cannot see a chart the user is pointing at describes the page text and
+        # calls it an answer — and because the cost is only paid when the model
+        # passes a `question`. `view_image`, two tiers down in this same set, has
+        # had exactly that property since v1.196.0.
+        "browser_read_page",
+        "browser_get_elements",
+        "browser_screenshot",
         "file_search",
         "read_file",
         "list_files",
@@ -1997,6 +2029,88 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             re.IGNORECASE,
         ),
         {"browser_get_status": 6},
+    ),
+    # --- YOUR BROWSER, reading the page (v1.236.0) -------------------------
+    # THE INTERACTION THIS EXISTS FOR (D16): "what page do I have open and what
+    # is it about?" — asked in a Build pane, answered without the user pasting a
+    # URL. The Ship-1 rule above arms the tab LISTERS, which answer the first
+    # half and cannot touch the second: a tab row is an id, a title and a URL.
+    # Measured with only that rule in place, all three of the plan's own drive
+    # sentences armed no page reader at all:
+    #   "what does this page say"        -> ['browser_list_tabs', ...] (titles only)
+    #   "read the page I have open"      -> []
+    #   "summarise what I'm reading"     -> []
+    # The middle one is the shape this module's history keeps repeating —
+    # `AUTO_SAFE_TOOLS` membership without a scoring rule arms NOTHING, which is
+    # how `history_search`, `view_image`, `rename_file` and then Ship 1's own
+    # three tools each shipped registered and reachable by nobody.
+    #
+    # `browser_read_page` LEADS and `browser_get_active_tab` rides with it: the
+    # reader needs no tab id (omitted means the active tab, resolved
+    # server-side), but the model that has both can name the tab it read in the
+    # same turn instead of describing an unattributed wall of text.
+    #
+    # FALSE ARMS, honestly stated. "the page" is also a PDF word in this app
+    # ("summarise the page 3 table"), so a page reader can arm on a sentence
+    # about a document. That is this module's standing "over-naming beats
+    # over-arming": the reader costs a schema, the document tools armed by the
+    # attachment pass keep their own slots, and a browser that is off — or one
+    # nobody paired — refuses honestly at execute and names the remedy.
+    (
+        re.compile(
+            # 1. an asking/reading verb, then the page the user is ON.
+            r"\b(?:read|summari[sz]e|summarise|scan|skim|check|explain|"
+            r"translate|what\s+does|what(?:'s|s| is)\s+(?:on|in)|"
+            r"tell\s+me\s+about)\b"
+            r"[^.?!]{0,40}\b(?:this|that|the|current|my)\s+(?:\w+\s+){0,2}"
+            r"(?:page|tab|site|article)\b"
+            # 2. the page named as the one in front of them, verb-first or not:
+            #    "the page I have open", "the tab I'm on", "what I'm reading".
+            r"|\b(?:page|tab|article|site)\s+(?:that\s+)?i(?:'m|\s+am|m)?\s+"
+            r"(?:have\s+open|on|am\s+on|looking\s+at|reading|viewing)\b"
+            r"|\bwhat\s+(?:i'm|i\s+am|im)\s+(?:reading|looking\s+at|viewing)\b"
+            # 3. the identity question, which in practice is asked WITH the
+            #    content question ("what page do I have open and what is it
+            #    about?"). The tab listers are scored by the rule above; this
+            #    adds the reader so the second half is answerable too.
+            r"|\bwhat\s+page\s+(?:am\s+i|do\s+i\s+have|is\s+(?:this|open))\b",
+            re.IGNORECASE,
+        ),
+        {"browser_read_page": 8, "browser_get_active_tab": 4},
+    ),
+    # The element registry: "what fields does this form have", "what can I
+    # click", "list the links on this page". `browser_get_elements` is the tool
+    # that answers those precisely; `browser_read_page` rides beneath it because
+    # its `interactive` mode already returns the registry, so a model with both
+    # can answer in one call when the page is small.
+    (
+        re.compile(
+            r"\b(?:buttons?|links?|fields?|inputs?|checkboxes?|dropdowns?|"
+            r"menus?|forms?)\b[^.?!]{0,40}\b(?:this|that|the|current)\s+"
+            r"(?:\w+\s+){0,2}(?:page|form|site|tab|screen)\b"
+            r"|\b(?:this|that|the|current)\s+(?:\w+\s+){0,2}(?:page|form)\b"
+            r"[^.?!]{0,40}\b(?:buttons?|links?|fields?|inputs?|checkboxes?|"
+            r"dropdowns?)\b"
+            r"|\bwhat\s+can\s+i\s+(?:click|fill|type)\b",
+            re.IGNORECASE,
+        ),
+        {"browser_get_elements": 7, "browser_read_page": 3},
+    ),
+    # A picture of the tab. Deliberately NARROW: it requires a browser/page word
+    # beside the capture verb, because "take a screenshot" on its own is at
+    # least as likely to mean the user's DESKTOP — which is `record_screenshot`
+    # in `computeruse`, is not in `AUTO_SAFE_TOOLS`, and stays behind explicit
+    # arming. Arming the browser's camera for a request about the screen would
+    # send back a picture of the wrong thing, confidently.
+    (
+        re.compile(
+            r"\b(?:screen\s?shot|screen\s?grab|capture|snapshot|picture\s+of)\b"
+            r"[^.?!]{0,30}\b(?:page|tab|browsers?|chrome|site|window)\b"
+            r"|\b(?:page|tab|browsers?|chrome|site)\b[^.?!]{0,30}"
+            r"\b(?:screen\s?shot|screen\s?grab)\b",
+            re.IGNORECASE,
+        ),
+        {"browser_screenshot": 7},
     ),
     # --- images -----------------------------------------------------------
     # v1.196.0 round 5 fronts this with `_imperative()` too: `image_convert` and

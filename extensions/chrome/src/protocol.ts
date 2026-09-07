@@ -17,6 +17,7 @@ export const ALL_METHODS = ["status", "list_tabs", "active_tab", "read_page", "g
 export const COMMAND_TIMEOUTS_S = { "navigate": 30.0, "read_page": 20.0 };
 export const DAEMON_TO_EXTENSION = ["browser.command", "browser.directive", "browser.paired", "browser.pairing_required", "browser.ready", "browser.connection_replaced"] as const;
 export const DEFAULT_COMMAND_TIMEOUT_S = 15.0;
+export const DEFAULT_SNAPSHOT_MODE = "interactive";
 export const DIRECTIVE_DISCONNECT = "disconnect";
 export const DIRECTIVE_REQUEST_HOST_PERMISSIONS = "request_host_permissions";
 export const EVENT_DOWNLOAD_COMPLETED = "download_completed";
@@ -34,8 +35,16 @@ export const FRAME_PAIRING_ACK = "browser.pairing_ack";
 export const FRAME_PAIRING_REQUIRED = "browser.pairing_required";
 export const FRAME_READY = "browser.ready";
 export const FRAME_RESPONSE = "browser.response";
+export const FULL_TEXT_CHARS = 60000;
 export const LOCAL_UI_METHODS = ["activate_tab", "scroll", "create_tab", "close_tab"] as const;
+export const MAX_AX_DEPTH = 24;
+export const MAX_AX_NODES = 5000;
+export const MAX_ELEMENTS = 250;
 export const MAX_FRAME_BYTES = 524288;
+export const MAX_HEADINGS = 100;
+export const MAX_LINKS = 200;
+export const MAX_NAME_CHARS = 200;
+export const MAX_TEXT_CHARS = 20000;
 export const METHOD_ACTIVATE_TAB = "activate_tab";
 export const METHOD_ACTIVE_TAB = "active_tab";
 export const METHOD_CLICK = "click";
@@ -50,6 +59,9 @@ export const METHOD_SCREENSHOT = "screenshot";
 export const METHOD_SCROLL = "scroll";
 export const METHOD_STATUS = "status";
 export const METHOD_TYPE_TEXT = "type_text";
+export const MODE_FULL = "full";
+export const MODE_INTERACTIVE = "interactive";
+export const MODE_SUMMARY = "summary";
 export const PAGE_ACTION_METHODS = ["click", "type_text", "press_key", "navigate"] as const;
 export const PAIRING_DEADLINE_S = 300.0;
 export const PAIRING_ID_PREFIX = "pair_";
@@ -60,6 +72,9 @@ export const READ_METHODS = ["status", "list_tabs", "active_tab", "read_page", "
 export const REQUEST_ID_PREFIX = "req_";
 export const RESTRICTED_INBOUND_FRAMES = ["browser.pairing_ack"] as const;
 export const SENSITIVE_AUTOCOMPLETE = ["cc-csc", "cc-exp", "cc-exp-month", "cc-exp-year", "cc-number", "current-password", "new-password"] as const;
+export const SNAPSHOT_ID_PREFIX = "snap_";
+export const SNAPSHOT_MODES = ["summary", "interactive", "full"] as const;
+export const SUMMARY_TEXT_CHARS = 2000;
 export const UNSUPPORTED_HOSTS = ["chromewebstore.google.com", "chrome.google.com"] as const;
 export const UNSUPPORTED_SCHEMES = ["chrome:", "edge:", "about:", "devtools:", "view-source:", "chrome-extension:"] as const;
 
@@ -106,7 +121,7 @@ export const REMEDIES: Record<BrowserErrorCode, string> = {
   "CONNECTION_REPLACED": "Another browser connected and replaced this one, so this call was abandoned rather than left hanging. Call browser_get_status and retry against the connected browser.",
 };
 
-// --- Frame shapes, from the TypedDicts in protocol.py ---
+// --- Frame and payload shapes, from the TypedDicts in protocol.py ---
 
 /** The two-key failure envelope, built only by browser_error(). */
 export interface ErrorEnvelope {
@@ -184,6 +199,119 @@ export interface EventFrame {
   type: string;
   event: string;
   payload: Record<string, unknown>;
+}
+
+/** ``read_page`` params. Every limit is sent, none is assumed. */
+export interface ReadPageParams {
+  mode: string;
+  tab_id?: number;
+  max_chars?: number;
+  max_elements?: number;
+  max_headings?: number;
+  max_links?: number;
+  max_name_chars?: number;
+  max_ax_depth?: number;
+  max_ax_nodes?: number;
+}
+
+/** ``get_elements`` params — a filtered view of one fresh snapshot. */
+export interface GetElementsParams {
+  tab_id?: number;
+  query?: string;
+  role?: string;
+  limit?: number;
+}
+
+/** ``screenshot`` params. ``full_page`` is always sent, never inferred. */
+export interface ScreenshotParams {
+  full_page: boolean;
+  tab_id?: number;
+}
+
+/** One entry in the interactive registry (D13), verbatim. */
+export interface ElementRow {
+  id: string;
+  role: string;
+  name: string;
+  text: string;
+  visible: boolean;
+  enabled: boolean;
+  type?: string;
+  autocomplete?: string;
+  sensitive?: boolean;
+  value?: null;
+}
+
+/** One heading, as ``{level, text}``. */
+export interface HeadingRow {
+  level: number;
+  text: string;
+}
+
+/** One link. ``element_id`` ties it back to the registry. */
+export interface LinkRow {
+  element_id: string;
+  text: string;
+  href: string;
+}
+
+/** One form. ``fields`` holds element ids, never values. */
+export interface FormRow {
+  name: string;
+  action: string;
+  fields: string[];
+}
+
+/** The Q03 injection warning that rides on a snapshot. */
+export interface SecurityNote {
+  warning: boolean;
+  category: string;
+  reason: string;
+}
+
+/** One limit that bit, named, with how much was dropped (D13A). */
+export interface TruncationRow {
+  limit: string;
+  kept: number;
+  total: number;
+}
+
+/** The ``read_page`` result — the snapshot of plan section 9.1. */
+export interface SnapshotResult {
+  snapshot_id: string;
+  page_version: number;
+  tab_id: number;
+  title: string;
+  url: string;
+  mode: string;
+  truncated: boolean;
+  text: string;
+  headings: HeadingRow[];
+  elements: ElementRow[];
+  forms: FormRow[];
+  links: LinkRow[];
+  security?: SecurityNote | null;
+  timestamp?: string;
+  truncation?: TruncationRow[];
+  counts?: Record<string, number>;
+  omitted?: string[];
+}
+
+/** The ``get_elements`` result — a filtered slice of a fresh snapshot. */
+export interface ElementsResult {
+  snapshot_id: string;
+  page_version: number;
+  elements: ElementRow[];
+  count: number;
+  truncated: boolean;
+  truncation?: TruncationRow[];
+}
+
+/** The ``screenshot`` result. Base64 PNG on the response frame (D14). */
+export interface ScreenshotResult {
+  tab_id: number;
+  media_type: string;
+  data_b64: string;
 }
 
 // --- Frame type -> shape, mirroring protocol.FRAME_SHAPES ---

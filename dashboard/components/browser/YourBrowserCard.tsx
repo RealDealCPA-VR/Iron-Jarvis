@@ -89,7 +89,7 @@ const ACCESS_LEVELS: AccessLevel[] = [
   {
     value: "read_only",
     label: "Read only",
-    hint: "Jarvis can see your open tabs and which one you are looking at. Reading a page's text arrives in v1.236.0.",
+    hint: "Jarvis can see your open tabs, read the text of the page you are looking at, and take a screenshot of it. It cannot click or type.",
   },
   {
     value: "interactive",

@@ -101,7 +101,13 @@ from .documents import document_tools
 # Web search (keyless) + page fetch + MCP client (consume external MCP servers).
 from .tools.websearch import web_search_tools
 from .tools.webfetch import web_fetch_tools
-from .browser import BrowserRuntime, ExtensionBackend, PairingStore, browser_tools
+from .browser import (
+    BrowserRuntime,
+    ExtensionBackend,
+    PairingStore,
+    SnapshotCache,
+    browser_tools,
+)
 from .mcp import mcp_tools
 from .learning import LearningEngine, learning_tools
 from .learning import models as _learn_models  # noqa: F401
@@ -694,6 +700,11 @@ def build_platform(
         backend=ExtensionBackend(event_bus=event_bus),
         config=config,
         pairing=PairingStore(engine),
+        # The last page snapshot per tab (v1.236.0), bounded. It is what makes an
+        # element id mean something: a snapshot the page has since replaced must be
+        # REFUSED as stale rather than acted on, and the transport invalidates this
+        # cache on navigation because only the socket hears that event.
+        snapshots=SnapshotCache(),
         policy=cu_policy,
         approvals=computeruse.approvals,
         artifacts=artifacts,

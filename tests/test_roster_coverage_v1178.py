@@ -171,6 +171,10 @@ _OFF_ROSTER_BY_DESIGN = {
     # tier, Ship 3). `test_the_browser_read_tier_is_reachable_from_chat` below
     # pins that, so this exemption cannot quietly become "reachable by nobody".
     "browser_get_status", "browser_list_tabs", "browser_get_active_tab",
+    # Ship 2 (v1.236.0) added the reading half of the same tier. Same reasoning,
+    # and it gets stronger the more a browser tool can see: a snapshot of the page
+    # the user is looking at belongs to a surface where the user is present.
+    "browser_read_page", "browser_get_elements", "browser_screenshot",
 }
 _OFF_ROSTER_OPEN = {
     # Documents/media the acceptance job plausibly needs, on no definition:
@@ -241,7 +245,14 @@ def test_the_browser_read_tier_is_reachable_from_chat(platform):
     """
     from iron_jarvis.tools.autoselect import AUTO_SAFE_TOOLS, select_auto_tools
 
-    read_tier = {"browser_get_status", "browser_list_tabs", "browser_get_active_tab"}
+    read_tier = {
+        "browser_get_status",
+        "browser_list_tabs",
+        "browser_get_active_tab",
+        "browser_read_page",
+        "browser_get_elements",
+        "browser_screenshot",
+    }
     registered = set(platform.registry.names())
     assert read_tier <= registered, (
         f"not registered: {sorted(read_tier - registered)} — platform.py builds the "

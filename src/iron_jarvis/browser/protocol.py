@@ -200,6 +200,59 @@ COMMAND_TIMEOUTS_S: dict[str, float] = {
 PAIRING_DEADLINE_S = 300.0
 
 # --------------------------------------------------------------------------- #
+# Snapshot modes and limits (D13, D13A) — plan sections 9.1 and 9.2
+# --------------------------------------------------------------------------- #
+
+#: The three values of a ``read_page`` ``mode`` param, in increasing cost.
+MODE_SUMMARY = "summary"
+MODE_INTERACTIVE = "interactive"
+MODE_FULL = "full"
+
+#: Every legal mode. ``interactive`` is the default (D13) — it is the only mode
+#: that yields element ids, and an action needs one, so defaulting to anything
+#: else would make "read then click" two reads.
+SNAPSHOT_MODES: tuple[str, ...] = (MODE_SUMMARY, MODE_INTERACTIVE, MODE_FULL)
+DEFAULT_SNAPSHOT_MODE = MODE_INTERACTIVE
+
+#: ``snap_<8 hex>``. Minted by the CONTENT SCRIPT, because the element registry
+#: it keys is held in the page; the daemon only remembers which id was newest.
+SNAPSHOT_ID_PREFIX = "snap_"
+
+#: The D13A limits. They live on the WIRE contract, beside ``MAX_FRAME_BYTES``,
+#: for the same reason that one does: both sides need them, and the side that
+#: must not exceed them is the one whose numbers are generated rather than typed.
+#: The content script trims to these while walking the page — that is the only
+#: place a limit can be enforced *before* the bytes exist — and the daemon trims
+#: again on arrival and reports what it dropped, so an add-on that ignores a cap
+#: cannot hand a model an unbounded page. Plan section 9.2 names ``snapshot.py``
+#: as their home; :mod:`iron_jarvis.browser.snapshot` re-exports every one of
+#: them under exactly these names, so there is ONE definition and both spellings
+#: read the same number. A second literal in TypeScript is the drift this whole
+#: module exists to prevent.
+#:
+#: Visible text characters, ``interactive`` mode: the D13A headline figure.
+MAX_TEXT_CHARS = 20_000
+#: ``summary`` mode's text budget — metadata and headings plus a first taste.
+SUMMARY_TEXT_CHARS = 2_000
+#: ``full`` mode "raises the text cap" (plan 9.1). Three times the default, and
+#: still an order of magnitude inside ``MAX_FRAME_BYTES`` once elements, links
+#: and JSON escaping are counted — a cap that can produce a frame the daemon
+#: then refuses would turn "read more of this page" into a failure.
+FULL_TEXT_CHARS = 60_000
+#: Interactive elements in one snapshot.
+MAX_ELEMENTS = 250
+#: Accessibility walk depth.
+MAX_AX_DEPTH = 24
+#: Nodes visited while walking, however shallow the tree.
+MAX_AX_NODES = 5_000
+#: Headings.
+MAX_HEADINGS = 100
+#: Links.
+MAX_LINKS = 200
+#: Characters of one element's accessible name (or a heading's / link's text).
+MAX_NAME_CHARS = 200
+
+# --------------------------------------------------------------------------- #
 # Sensitive-field vocabularies, re-exported so they cannot drift
 # --------------------------------------------------------------------------- #
 
@@ -386,6 +439,234 @@ FRAME_SHAPES: dict[str, type] = {
 }
 
 # --------------------------------------------------------------------------- #
+# Read-method params and result shapes (Ship 2, plan sections 8.6 and 9.1)
+# --------------------------------------------------------------------------- #
+#
+# These are the payloads INSIDE a ``browser.command`` / ``browser.response``
+# frame, not frames themselves, so they are declared in their own tuple
+# (:data:`RESULT_TYPEDDICTS`) rather than in :data:`FRAME_TYPEDDICTS`:
+# ``FRAME_SHAPES`` maps a ``type`` string to a shape and every frame shape must
+# have a type. A params object has no ``type`` of its own — it rides inside one —
+# and putting it in the frame tuple would break that invariant while looking
+# harmless. The generator emits both tuples.
+
+
+class ReadPageParams(TypedDict):
+    """``read_page`` params. Every limit is sent, none is assumed.
+
+    ``tab_id`` is optional and absent means the active tab, resolved in the
+    browser and echoed back in the result, so a model never needs two calls to
+    read what the user is looking at.
+
+    The limit keys are present because the content script must not carry its own
+    copy of the numbers: a page trimmed to a cap the daemon does not know is a
+    page whose truncation nobody reports.
+    """
+
+    mode: str
+    tab_id: NotRequired[int]
+    max_chars: NotRequired[int]
+    max_elements: NotRequired[int]
+    max_headings: NotRequired[int]
+    max_links: NotRequired[int]
+    max_name_chars: NotRequired[int]
+    max_ax_depth: NotRequired[int]
+    max_ax_nodes: NotRequired[int]
+
+
+class GetElementsParams(TypedDict):
+    """``get_elements`` params — a filtered view of one fresh snapshot."""
+
+    tab_id: NotRequired[int]
+    query: NotRequired[str]
+    role: NotRequired[str]
+    limit: NotRequired[int]
+
+
+class ScreenshotParams(TypedDict):
+    """``screenshot`` params. ``full_page`` is always sent, never inferred."""
+
+    full_page: bool
+    tab_id: NotRequired[int]
+
+
+class ElementRow(TypedDict):
+    """One entry in the interactive registry (D13), verbatim.
+
+    ``value`` is typed ``None`` and nothing else, and it appears at all only on a
+    control the scrubber marked sensitive — which is how the type system itself
+    refuses the D13B leak. Section 9.4 collects no field value for ANY input, so
+    there is no shape in this protocol that can carry one.
+    """
+
+    id: str
+    role: str
+    name: str
+    text: str
+    visible: bool
+    enabled: bool
+    type: NotRequired[str]
+    autocomplete: NotRequired[str]
+    sensitive: NotRequired[bool]
+    value: NotRequired[None]
+
+
+class HeadingRow(TypedDict):
+    """One heading, as ``{level, text}``."""
+
+    level: int
+    text: str
+
+
+class LinkRow(TypedDict):
+    """One link. ``element_id`` ties it back to the registry."""
+
+    element_id: str
+    text: str
+    href: str
+
+
+class FormRow(TypedDict):
+    """One form. ``fields`` holds element ids, never values."""
+
+    name: str
+    action: str
+    fields: list[str]
+
+
+class SecurityNote(TypedDict):
+    """The Q03 injection warning that rides on a snapshot.
+
+    ``warning`` is always ``true`` when the key is present: the absence of the
+    note is how "nothing was detected" is said. A ``{"warning": false}`` object
+    would be a second way to say the same thing, and a reader that checked only
+    for the key's presence would then warn on a clean page.
+    """
+
+    warning: bool
+    category: str
+    reason: str
+
+
+class TruncationRow(TypedDict):
+    """One limit that bit, named, with how much was dropped (D13A).
+
+    ``total`` is what the page actually had, when the page could say; ``0`` means
+    it could not. Reported per limit rather than as one boolean, because "this
+    page was cut short" and "the element registry stopped at 250" send a model to
+    different next calls.
+    """
+
+    limit: str
+    kept: int
+    total: int
+
+
+class SnapshotResult(TypedDict):
+    """The ``read_page`` result — the snapshot of plan section 9.1.
+
+    ``timestamp``, ``truncation``, ``counts`` and ``omitted`` are optional on the
+    WIRE and always present on the daemon's own
+    :class:`~iron_jarvis.browser.snapshot.PageSnapshot`: the add-on may leave them
+    out, and the daemon fills them in from what arrived, so an older add-on
+    degrades to a snapshot with a daemon-stamped time rather than to a failure.
+    """
+
+    snapshot_id: str
+    page_version: int
+    tab_id: int
+    title: str
+    url: str
+    mode: str
+    truncated: bool
+    text: str
+    headings: list[HeadingRow]
+    elements: list[ElementRow]
+    forms: list[FormRow]
+    links: list[LinkRow]
+    security: NotRequired[SecurityNote | None]
+    timestamp: NotRequired[str]
+    truncation: NotRequired[list[TruncationRow]]
+    counts: NotRequired[dict[str, int]]
+    omitted: NotRequired[list[str]]
+
+
+class ElementsResult(TypedDict):
+    """The ``get_elements`` result — a filtered slice of a fresh snapshot.
+
+    ``truncation`` is the same channel :class:`SnapshotResult` carries, and it is
+    here for the same reason: a filtered list is drawn from ONE walk of the page,
+    and that walk has caps. When it stopped at ``max_ax_depth`` or ran out of
+    ``max_ax_nodes``, the elements below were never visited, so they are in
+    neither ``elements`` nor any count of what matched — the answer looks
+    complete. A registry that looks complete is then cached as the tab's complete
+    registry, and the next lookup answers ``ELEMENT_NOT_FOUND`` for a button that
+    is genuinely on the page: a confident lie, and the one the daemon's caching
+    branch exists to avoid. Naming the limit is what turns "there is no Export
+    button" back into "I did not look at all of it".
+
+    Optional on the wire, like :class:`SnapshotResult`'s, so an older add-on that
+    does not send it degrades to today's behaviour rather than to a failure.
+    """
+
+    snapshot_id: str
+    page_version: int
+    elements: list[ElementRow]
+    count: int
+    truncated: bool
+    truncation: NotRequired[list[TruncationRow]]
+
+
+class ScreenshotResult(TypedDict):
+    """The ``screenshot`` result. Base64 PNG on the response frame (D14).
+
+    The bytes travel as base64 inside the ordinary response frame — there is no
+    browser-specific image transport (D14) — which is also why
+    :data:`MAX_FRAME_BYTES` matters here more than anywhere else: a full-page
+    capture of a long page is the one payload that can reach the cap honestly.
+    """
+
+    tab_id: int
+    media_type: str
+    data_b64: str
+
+
+#: The payload ``TypedDict``s, in generation order: referenced shapes first, so
+#: the generated TypeScript reads top to bottom like the Python does.
+RESULT_TYPEDDICTS: tuple[type, ...] = (
+    ReadPageParams,
+    GetElementsParams,
+    ScreenshotParams,
+    ElementRow,
+    HeadingRow,
+    LinkRow,
+    FormRow,
+    SecurityNote,
+    TruncationRow,
+    SnapshotResult,
+    ElementsResult,
+    ScreenshotResult,
+)
+
+#: ``method`` -> the ``TypedDict`` describing that method's RESULT. Only the read
+#: methods are listed; the acting methods land in Ship 3. A method with no entry
+#: is not undocumented by accident — it is not implemented yet, and
+#: :class:`~iron_jarvis.browser.service.BrowserRuntime` raises for it by name.
+RESULT_SHAPES: dict[str, type] = {
+    METHOD_READ_PAGE: SnapshotResult,
+    METHOD_GET_ELEMENTS: ElementsResult,
+    METHOD_SCREENSHOT: ScreenshotResult,
+}
+
+#: ``method`` -> the ``TypedDict`` describing that method's PARAMS.
+PARAM_SHAPES: dict[str, type] = {
+    METHOD_READ_PAGE: ReadPageParams,
+    METHOD_GET_ELEMENTS: GetElementsParams,
+    METHOD_SCREENSHOT: ScreenshotParams,
+}
+
+
+# --------------------------------------------------------------------------- #
 # Frame builders
 # --------------------------------------------------------------------------- #
 
@@ -488,6 +769,114 @@ def event_frame(event_id: str, event: str, payload: dict[str, Any] | None = None
     return {"id": event_id, "type": FRAME_EVENT, "event": event, "payload": dict(payload or {})}
 
 
+
+def _int_param(value: Any) -> int | None:
+    """``value`` as a positive int, or ``None`` for anything else.
+
+    Silently dropping a malformed limit is right *here* and wrong at the tool
+    layer: this function builds a wire frame, and a ``max_chars`` of ``"lots"``
+    put on the wire would be a limit the content script cannot compare against,
+    so it would walk the page unbounded. The tool layer is where a bad argument
+    earns words; the frame builder's job is to never emit one.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if value > 0 else None
+
+
+#: The limit keys ``read_page_params`` will put on the wire. A whitelist, so a
+#: caller handing over a dict with an extra key cannot invent a param the add-on
+#: has never heard of and will silently ignore.
+_READ_PAGE_LIMIT_KEYS: frozenset[str] = frozenset(
+    {
+        "max_chars",
+        "max_elements",
+        "max_headings",
+        "max_links",
+        "max_name_chars",
+        "max_ax_depth",
+        "max_ax_nodes",
+    }
+)
+
+
+def read_page_params(
+    tab_id: int | None = None,
+    mode: str = DEFAULT_SNAPSHOT_MODE,
+    limits: dict[str, int] | None = None,
+) -> ReadPageParams:
+    """Build ``read_page`` params.
+
+    ``limits`` is :meth:`~iron_jarvis.browser.snapshot.SnapshotLimits.to_params`
+    output. It is passed in rather than computed here because the effective limits
+    depend on the mode AND on what the caller asked for, and that resolution is
+    the snapshot model's job — this module holds the numbers, not the policy that
+    narrows them. Omitting it sends the mode alone, which is what the plan's own
+    frame example shows.
+
+    ``tab_id`` is OMITTED when ``None`` rather than sent as null: absent means
+    "the active tab", and a null would have to be given that meaning a second
+    time, in the add-on, in TypeScript, where ``0`` is also falsy.
+    """
+    params: ReadPageParams = {"mode": str(mode or DEFAULT_SNAPSHOT_MODE)}
+    resolved_tab = _int_param(tab_id) if tab_id is not None else None
+    if resolved_tab is not None:
+        params["tab_id"] = resolved_tab
+    for key, value in (limits or {}).items():
+        clean = _int_param(value)
+        if clean is not None and key in _READ_PAGE_LIMIT_KEYS:
+            params[key] = clean  # type: ignore[literal-required]
+    return params
+
+
+def get_elements_params(
+    tab_id: int | None = None,
+    *,
+    query: str | None = None,
+    role: str | None = None,
+    limit: int | None = None,
+) -> GetElementsParams:
+    """Build ``get_elements`` params. Empty filters are omitted, not sent blank.
+
+    An empty ``query`` sent as ``""`` is indistinguishable in the add-on from "no
+    filter" only if the add-on remembers to check for it. Omitting the key makes
+    that impossible to get wrong.
+    """
+    params: GetElementsParams = {}
+    resolved_tab = _int_param(tab_id) if tab_id is not None else None
+    if resolved_tab is not None:
+        params["tab_id"] = resolved_tab
+    text = str(query or "").strip()
+    if text:
+        params["query"] = text
+    role_text = str(role or "").strip()
+    if role_text:
+        params["role"] = role_text
+    resolved_limit = _int_param(limit)
+    if resolved_limit is not None:
+        params["limit"] = min(resolved_limit, MAX_ELEMENTS)
+    return params
+
+
+def screenshot_params(tab_id: int | None = None, *, full_page: bool = False) -> ScreenshotParams:
+    """Build ``screenshot`` params. ``full_page`` is always present."""
+    params: ScreenshotParams = {"full_page": bool(full_page)}
+    resolved_tab = _int_param(tab_id) if tab_id is not None else None
+    if resolved_tab is not None:
+        params["tab_id"] = resolved_tab
+    return params
+
+
+def is_snapshot_mode(value: Any) -> bool:
+    """Whether ``value`` is one of the three modes, exactly as spelled.
+
+    No case folding and no aliases. ``"Interactive"`` is refused so the model is
+    told the vocabulary once instead of learning a private dialect that the
+    content script — which compares the raw string — will not honour.
+    """
+    return isinstance(value, str) and value in SNAPSHOT_MODES
+
+
 def command_timeout_s(method: str) -> float:
     """The wait bound for ``method``. One lookup, so no call site invents its own."""
     return COMMAND_TIMEOUTS_S.get(method, DEFAULT_COMMAND_TIMEOUT_S)
@@ -519,6 +908,7 @@ __all__ = [
     "COMMAND_TIMEOUTS_S",
     "DAEMON_TO_EXTENSION",
     "DEFAULT_COMMAND_TIMEOUT_S",
+    "DEFAULT_SNAPSHOT_MODE",
     "DIRECTIVE_DISCONNECT",
     "DIRECTIVE_REQUEST_HOST_PERMISSIONS",
     "EVENT_DOWNLOAD_COMPLETED",
@@ -538,8 +928,16 @@ __all__ = [
     "FRAME_RESPONSE",
     "FRAME_SHAPES",
     "FRAME_TYPEDDICTS",
+    "FULL_TEXT_CHARS",
     "LOCAL_UI_METHODS",
+    "MAX_AX_DEPTH",
+    "MAX_AX_NODES",
+    "MAX_ELEMENTS",
     "MAX_FRAME_BYTES",
+    "MAX_HEADINGS",
+    "MAX_LINKS",
+    "MAX_NAME_CHARS",
+    "MAX_TEXT_CHARS",
     "METHOD_ACTIVATE_TAB",
     "METHOD_ACTIVE_TAB",
     "METHOD_CLICK",
@@ -554,9 +952,13 @@ __all__ = [
     "METHOD_SCROLL",
     "METHOD_STATUS",
     "METHOD_TYPE_TEXT",
+    "MODE_FULL",
+    "MODE_INTERACTIVE",
+    "MODE_SUMMARY",
     "PAGE_ACTION_METHODS",
     "PAIRING_DEADLINE_S",
     "PAIRING_ID_PREFIX",
+    "PARAM_SHAPES",
     "PASSWORD_AUTOCOMPLETE",
     "PAYMENT_AUTOCOMPLETE",
     "PROTOCOL_VERSION",
@@ -564,21 +966,38 @@ __all__ = [
     "REMEDIES",
     "REQUEST_ID_PREFIX",
     "RESTRICTED_INBOUND_FRAMES",
+    "RESULT_SHAPES",
+    "RESULT_TYPEDDICTS",
     "SENSITIVE_AUTOCOMPLETE",
+    "SNAPSHOT_ID_PREFIX",
+    "SNAPSHOT_MODES",
+    "SUMMARY_TEXT_CHARS",
     "UNSUPPORTED_HOSTS",
     "UNSUPPORTED_SCHEMES",
-    # frame shapes
+    # frame and payload shapes
     "CommandFrame",
     "ConnectionReplacedFrame",
     "DirectiveFrame",
+    "ElementRow",
+    "ElementsResult",
     "ErrorEnvelope",
     "EventFrame",
+    "FormRow",
+    "GetElementsParams",
+    "HeadingRow",
     "HelloFrame",
+    "LinkRow",
     "PairedFrame",
     "PairingAckFrame",
     "PairingRequiredFrame",
+    "ReadPageParams",
     "ReadyFrame",
     "ResponseFrame",
+    "ScreenshotParams",
+    "ScreenshotResult",
+    "SecurityNote",
+    "SnapshotResult",
+    "TruncationRow",
     # errors, re-exported so one import serves a protocol call site
     "BrowserError",
     "BrowserErrorCode",
@@ -590,11 +1009,15 @@ __all__ = [
     "directive_frame",
     "error_response_frame",
     "event_frame",
+    "get_elements_params",
     "hello_frame",
+    "is_snapshot_mode",
     "paired_frame",
     "pairing_ack_frame",
     "pairing_required_frame",
+    "read_page_params",
     "ready_frame",
     "response_frame",
+    "screenshot_params",
     "unsupported_page_scheme",
 ]

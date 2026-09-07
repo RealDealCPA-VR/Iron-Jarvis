@@ -12,6 +12,30 @@ passed all the way through the defect.
 
 The rest covers the pure renderer, the store's contracts, the language
 detector's false-positive guards, and the single-rewrite enforcement path.
+
+WHY THE AMBIENT BROWSER BLOCK IS NOT DRIVEN HERE (v1.236.0, plan 11.3). The
+spine rule above says a NEW surface that talks to the user adds its injection at
+every seam in the same change, and `chat_turn._browser_section` deliberately
+reaches only the two CHAT lanes: not `agents/runtime.py`, and not
+`agents/threads.py`. That is not an omission and must not be "fixed" here.
+
+The two cases differ in what the injected text CLAIMS. A profile is true wherever
+the user is answered — who they are does not depend on which surface asked — so a
+seam without it is a seam answering the wrong person, which is the bug this file
+exists to catch. A live browser is the opposite: it is a piece of hardware state
+that belongs to the person sitting in front of the machine RIGHT NOW. An agent run
+started by a schedule at 03:00 and a round-table panel of personas are not
+attached to the user's Chrome, and injecting "Browser: connected / Active tab:
+..." into either would assert an attachment that does not exist — the INVERSE of
+the v1.144.0 bug, and worse in kind, because the model would then plan around
+tools that run nowhere. External harnesses get the equivalent guidance through
+the MCP server's instructions instead (D21, Ship 4).
+
+The decision is pinned, not merely written down:
+`tests/test_browser_ambient_v1236.py::
+test_an_agent_run_and_the_round_table_are_told_nothing_about_the_browser`
+drives a real paired browser, asserts the block IS in chat for the contrast, and
+asserts it is absent from an agent session and a panel round.
 """
 
 from __future__ import annotations

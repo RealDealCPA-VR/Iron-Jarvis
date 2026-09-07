@@ -212,6 +212,25 @@ class ChatBody(BaseModel):
     #: separately bounded); a memory connector (an LTM source, e.g. an
     #: MCP-served brain) grounds the turn with that store's top hits.
     connectors: list[str] = []
+    #: WHICH Build pane this turn came from (v1.236.0) — the pane's stable
+    #: `term_*` id, or "" for a surface that is not a pane (the main chat page,
+    #: the phone lane, an MCP caller).
+    #:
+    #: THIS IS THE MISSING LINK a pane-scoped rule needs. Until now a chat
+    #: request carried ``workspace_dir`` — the pane's FOLDER — and nothing
+    #: identifying the pane itself, so a per-pane capability had nothing to key
+    #: on: two panes open on the same folder are indistinguishable by
+    #: ``workspace_dir``, and a folder is not an identity anyway (the user can
+    #: repoint a pane). ``_filter_browser_tools`` reads it (plan 11.2 gate 2)
+    #: and ``_browser_section`` passes it on.
+    #:
+    #: OPTIONAL AND DEFAULTED, deliberately: every existing caller — the chat
+    #: page, the phone lane, `/agents`, an older packaged dashboard talking to a
+    #: newer daemon — keeps today's behaviour byte for byte. Absent, the turn is
+    #: treated as a pane-LESS surface where gate 2 does not apply and the global
+    #: gate still does. It is never a permission by itself: an unknown or
+    #: forged id resolves to no pane, and no gate anywhere WIDENS on it.
+    pane_id: str = ""
 
 
 class ChatCompactBody(BaseModel):

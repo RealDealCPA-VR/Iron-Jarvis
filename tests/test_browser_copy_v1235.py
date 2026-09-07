@@ -1,19 +1,27 @@
-"""Ship 1's user-facing copy describes Ship 1 (v1.235.0, Browser capability, S1).
+"""The Browser copy describes the version that is actually installed.
 
-The implementation of Ship 1 pairs a browser, reports connection state, lists
-tabs, names the active tab, and runs a read-only Test round trip. Three tools:
-`browser_get_status`, `browser_list_tabs`, `browser_get_active_tab`. Reading a
-page, screenshots, clicking, typing, scrolling, navigating, downloads, password
-scrubbing and injection flagging DO NOT EXIST -- `BrowserRuntime` raises
-`NotImplementedError` for every one of them.
+Named for v1.235.0, the ship whose review found the defect, and MAINTAINED every ship
+after it -- the file is the moving boundary between what the browser can do and what it
+is merely going to do, so it is edited in the same change as the ability, never after.
 
-The shipped copy said otherwise: the Handbook's capability table offered "read
-the current page, take a screenshot" as a Read only ability, the page subtitle
-and the Help tile promised "read the page you are looking at", the card's
+AT v1.236.0 the browser pairs, reports connection state, lists tabs, names the active
+tab, READS THE TEXT OF A PAGE and takes a screenshot. Nine tools. Clicking, typing,
+scrolling, navigating and downloads still DO NOT EXIST -- `BrowserRuntime` raises
+`NotImplementedError` for each -- and neither does an external harness driving the same
+browser, nor the add-on bundled into the installer.
+
+WHY IT EXISTS. At v1.235.0 the shipped copy said otherwise: the Handbook's capability
+table offered "read the current page, take a screenshot" as a Read only ability, the
+page subtitle and the Help tile promised "read the page you are looking at", the card's
 Interactive hint said "Jarvis can also click, type and navigate", and the README
 promised the Ship 4 harness. The Guide answers out of `docs/HANDBOOK.md`
-(`guide/corpus.py`), so an overselling Handbook is a Guide that lies with
-confidence -- the failure this repository has been burned by before.
+(`guide/corpus.py`), so an overselling Handbook is a Guide that lies with confidence --
+the failure this repository has been burned by before.
+
+It cuts BOTH ways, which is why the required half matters as much as the forbidden one:
+once an ability ships, copy that still hedges it understates what the user paid for, and
+they never find the feature. So a ship moves a claim from one list to the other. A claim
+deleted from both is a claim nothing checks.
 
 These are content pins, on purpose: the defect was words, so the test reads the
 words. Each assertion names the sentence it forbids, so a later ship that
@@ -67,21 +75,24 @@ def _handbook_browser_section() -> str:
 # Each entry: the file, and a phrase describing an ability this version lacks.
 # Phrased as whole clauses so a legitimate mention of the FUTURE ("reading a
 # page's text arrives in v1.236.0") is not caught.
+# UPDATED AT v1.236.0. Reading a page SHIPPED, so the six read-related claims left
+# this list and became REQUIRED phrases below -- that direction of travel is the whole
+# point of the file. What stays is what is still not true:
+#
+#   acting on a page                -> v1.237.0  (click, type, scroll, navigate)
+#   an outward harness              -> v1.238.0  (a Build harness, same browser)
+#   the add-on inside the installer -> v1.239.0
+#
+# When one of those ships, move its entries the same way: delete here, assert there.
+# A claim deleted from BOTH halves is a claim nothing checks any more.
 OVERSOLD = [
-    # The page subtitle, the Help tile and the Help glossary.
-    (BROWSER_PAGE, "read the page you are looking at"),
-    (HELP_PAGE, "read the page you are looking at"),
-    (HELP_PAGE, "so it can read your tabs"),
-    # The nav blurb: "drive" is Ship 3.
+    # The nav blurb: "drive" is acting.
     (NAV, "read and drive your own browser"),
     # The Handbook capability table.
-    (HANDBOOK, "read the current page, take a screenshot"),
     (HANDBOOK, "Also act: click, type, scroll, navigate"),
     # The card's access hints.
-    (CARD, "Jarvis can read tabs and pages"),
     (CARD, "Jarvis can also click, type and navigate"),
-    # The README highlights row: reading the page, and the Ship 4 harness.
-    (README, "ask about the page in front of you"),
+    # The README highlights row: the Ship 4 harness.
     (README, "harness you pick in **Build** drives the *same* browser"),
     # The card claimed a folder only a source checkout has is part of the
     # install the user runs.
@@ -96,9 +107,10 @@ OVERSOLD = [
 )
 def test_no_surface_promises_an_ability_this_version_lacks(path: Path, claim: str):
     assert claim.lower() not in _text(path).lower(), (
-        f"{path.name} still tells the user {claim!r}. Nothing in v1.235.0 does "
-        "that -- BrowserRuntime raises NotImplementedError. Say what this version "
-        "does and name the version the rest arrives in."
+        f"{path.name} still tells the user {claim!r}, which this version cannot do "
+        "-- BrowserRuntime raises NotImplementedError for it. Say what this version "
+        "does and name the version the rest arrives in. If the ability just shipped, "
+        "move this entry into the required-phrase half below rather than deleting it."
     )
 
 
@@ -109,33 +121,47 @@ def test_no_surface_promises_an_ability_this_version_lacks(path: Path, claim: st
 
 def test_the_handbook_table_describes_this_version_and_dates_the_rest():
     section = _handbook_browser_section()
-    # The Read only row is the tab list, and only that.
+    # The Read only row is looking, which as of v1.236.0 includes the page itself.
     assert "list your open tabs" in section
     assert "name the tab you are looking at" in section
+    assert "read the text of a page" in section
     # Interactive grants nothing extra yet, and the Handbook says so.
     assert "Nothing more than **Read only** yet" in section
-    # Later abilities are named as later, with the version that brings them.
-    assert "Reading the text of a page and taking a screenshot arrive in **v1.236.0**" in section
+    # Acting is still named as later, with the version that brings it.
     assert "navigating and downloads arrive in **v1.237.0**" in section
+
+
+def test_the_handbook_says_what_reading_a_page_does_not_cover():
+    """The three limits a user would otherwise discover by being misled.
+
+    Each is real and each is invisible unless stated: a bounded snapshot can look like
+    a short page, a cross-origin frame is absent rather than empty, and an element id
+    that changes between readings looks like a bug until you know it describes one
+    reading and not the page forever.
+    """
+    section = _handbook_browser_section()
+    assert "bounded" in section
+    assert "another site" in section, "the cross-origin frame limit is not stated"
+    assert "the ids change" in section
 
 
 def test_the_handbook_keeps_the_privacy_commitments_as_commitments():
     """The password-stripping and injection-flagging paragraph is a real DESIGN
     decision, so it stays -- dated, not deleted."""
     section = _handbook_browser_section()
-    assert "design commitments" in section
-    for promise, version in (
-        ("Page content is untrusted data, always", "v1.236.0"),
-        ("Passwords are never read", "v1.236.0"),
+    # v1.236.0: two of the three are LIVE now and say so; the third still names its
+    # version. A promise in force must not keep a future date (that understates what
+    # the user already has), and one that is not in force must never read as live.
+    for promise, marker in (
+        ("Page content is untrusted data, always", "(live)"),
+        ("Passwords are never read", "(live)"),
         ("Changing a page asks first", "v1.237.0"),
     ):
         idx = section.find(promise)
         assert idx != -1, f"the Handbook dropped the commitment {promise!r}"
-        # The version that brings it is named in the same breath, so the line
-        # cannot read as a live guarantee.
-        assert version in section[idx : idx + len(promise) + 40], (
-            f"{promise!r} does not name the version it arrives in -- as written it "
-            "reads as something v1.235.0 already guarantees"
+        assert marker in section[idx : idx + len(promise) + 40], (
+            f"{promise!r} is not marked {marker!r} -- a commitment must say whether it "
+            "is in force now or which version brings it"
         )
 
 
@@ -147,20 +173,22 @@ def test_the_handbook_does_not_claim_a_jarvis_browser_notice_no_page_shows():
 
 def test_the_tab_wording_is_the_same_on_the_page_the_tile_and_the_glossary():
     for path in (BROWSER_PAGE, HELP_PAGE):
-        assert "see your open tabs" in _text(path), (
-            f"{path.name} should say 'see your open tabs' -- the one thing this "
-            "version can actually do"
+        text = _text(path)
+        assert "see your open tabs" in text, f"{path.name} lost the tab-list wording"
+        assert "read the page" in text, (
+            f"{path.name} does not mention reading a page, which v1.236.0 added -- "
+            "understating a shipped ability is its own kind of wrong copy"
         )
 
 
 def test_the_nav_blurb_describes_the_tab_list():
-    assert "See the tabs open in your own browser" in _text(NAV)
+    assert "Read the tabs and pages open in your own browser" in _text(NAV)
 
 
 def test_the_card_hints_date_the_abilities_they_describe():
     src = _text(CARD)
-    assert "Jarvis can see your open tabs and which one you are looking at" in src
-    assert "Reading a page's text arrives in v1.236.0" in src
+    assert "read the text of the page you are looking at" in src
+    assert "It cannot click or type." in src
     assert "Nothing more than Read only in this version" in src
     assert "Clicking, typing and navigating arrive in v1.237.0" in src
 
@@ -171,8 +199,8 @@ def test_the_readme_row_sells_the_tab_list_and_dates_the_rest():
         for line in README.read_text(encoding="utf-8").replace("\r\n", "\n").splitlines()
         if "Your own browser, as a capability" in line
     )
-    assert "see your open tabs" in row
-    assert "v1.236.0" in row and "v1.237.0" in row
+    assert "ask about the page in front of you" in row
+    assert "v1.237.0" in row and "v1.238.0" in row
 
 
 # --------------------------------------------------------------------------- #

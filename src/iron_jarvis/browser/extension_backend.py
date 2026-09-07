@@ -273,10 +273,18 @@ class ExtensionBackend:
         event_bus: Any | None = None,
         clock: Any = utcnow,
         access_reader: Any = None,
+        snapshot_invalidator: Any = None,
     ) -> None:
         self.event_bus = event_bus
         self.clock = clock
         self.access_reader = access_reader
+        #: ``(tab_id: int | None) -> None``, installed by
+        #: :class:`~iron_jarvis.browser.service.BrowserRuntime` (Ship 2). Called when
+        #: a tab NAVIGATES and when this socket goes away, so the daemon's snapshot
+        #: cache stops naming a page that no longer exists. Held as a callable
+        #: because the transport owns no policy and no cache: it knows a page moved,
+        #: and nothing about what a snapshot is.
+        self.snapshot_invalidator = snapshot_invalidator
         self._conn: ExtensionConnection | None = None
         self._lock = asyncio.Lock()
         self._seq = itertools.count(1)
@@ -289,9 +297,14 @@ class ExtensionBackend:
         #: One key, per the v1.229.0 rule that a failing loop is NAMED where the
         #: user is standing rather than logged at DEBUG and reported ``ok``.
         self.last_error: str = ""
-        #: Cached active tab from ``browser.event tab_activated``. Ship 2's ambient
-        #: context reads this rather than making a round trip, because a prompt
-        #: assembly that awaits a browser is a prompt assembly that can hang.
+        #: Cached active tab. Ship 2's ambient context reads this rather than
+        #: making a round trip, because a prompt assembly that awaits a browser is
+        #: a prompt assembly that can hang. THREE writers, and it needs all three:
+        #: ``browser.event tab_activated`` (a tab SWITCH), ``navigation_completed``
+        #: (a move inside the tab that is already active), and every successful
+        #: ``active_tab`` command (see :meth:`command`) — because with only the
+        #: first, a user who navigates in place leaves this naming the page BEFORE
+        #: the one they are looking at, for the rest of the connection.
         self.active_tab: dict[str, Any] | None = None
 
     # --- state ------------------------------------------------------------
@@ -509,6 +522,11 @@ class ExtensionBackend:
             if self._conn is conn:
                 self._conn = None
         self.active_tab = None
+        # Every cached snapshot belonged to the browser that has just gone. Keeping
+        # them would leave the daemon holding page text — and password-field
+        # metadata — for a session that is over, and would let a snapshot_id from
+        # the old browser resolve against a new one.
+        self._invalidate_snapshots(None)
         await self._publish(EVENT_DISCONNECTED, {"reason": word, "detail": detail})
 
     # --- commands ---------------------------------------------------------
@@ -535,11 +553,23 @@ class ExtensionBackend:
                 whatever code the add-on itself reported.
         """
         bound = float(timeout_s) if timeout_s else P.command_timeout_s(method)
-        return await self._await_response(
+        result = await self._await_response(
             lambda request_id: P.command_frame(request_id, method, params),
             bound=bound,
             label=method,
         )
+        if method == P.METHOD_ACTIVE_TAB and result:
+            # THE CACHE LEARNS FROM EVERY LIVE ANSWER, not only from events.
+            # ``active_tab`` is written by ``tab_activated``, which the add-on
+            # emits on a tab SWITCH — so a user who navigates inside the tab they
+            # are already on leaves the cache naming the PREVIOUS page, and the
+            # ambient block then states the wrong title and URL on every later
+            # turn. Anything that asks the browser for the active tab has just
+            # been told the truth; caching it here, in the object that owns the
+            # cache, is one owner and no extra round trip. (The ambient block
+            # still never triggers one: it reads this attribute and never calls.)
+            self.active_tab = dict(result)
+        return result
 
     async def directive(
         self,
@@ -801,12 +831,51 @@ class ExtensionBackend:
             return
         if name == P.EVENT_TAB_ACTIVATED:
             self.active_tab = payload or None
-        elif name == P.EVENT_NAVIGATION_COMPLETED and self.active_tab:
-            if payload.get("tab_id") == self.active_tab.get("id") or payload.get(
-                "tab_id"
-            ) == self.active_tab.get("tab_id"):
-                self.active_tab = {**self.active_tab, **payload}
+        elif name == P.EVENT_NAVIGATION_COMPLETED:
+            if self.active_tab and (
+                payload.get("tab_id") == self.active_tab.get("id")
+                or payload.get("tab_id") == self.active_tab.get("tab_id")
+            ):
+                merged = {**self.active_tab, **payload}
+                if payload.get("url") and payload.get("url") != self.active_tab.get("url"):
+                    # A DIFFERENT DOCUMENT. Any page-authored key the navigation
+                    # did not restate describes the page that just went away, and
+                    # a merge would leave page A's title sitting beside page B's
+                    # URL — a row that is wrong in the most confident possible
+                    # way, since each half looks right. Dropped, not kept: the
+                    # ambient block omits a line it cannot fill, which is honest,
+                    # and the next live ``active_tab`` refills it.
+                    for stale_key in ("title", "text", "status", "page_version"):
+                        if stale_key not in payload:
+                            merged.pop(stale_key, None)
+                self.active_tab = merged
+            # The page this tab held is gone, so the snapshot taken of it is not a
+            # stale VIEW of the same page — it describes a different document. The
+            # element ids in it would resolve to nothing, and the daemon would say
+            # so with no reason it could name. Dropping the cache entry makes the
+            # next action STALE_SNAPSHOT, whose remedy is "call browser_read_page".
+            # A navigation the add-on could not place (no ``tab_id``) drops EVERY
+            # cached snapshot rather than none: one unnecessary re-read is cheap, and
+            # a kept snapshot of a page that has been replaced is a wrong answer.
+            self._invalidate_snapshots(payload.get("tab_id"))
         await self._publish(bus_name, payload)
+
+    def _invalidate_snapshots(self, tab_id: Any) -> None:
+        """Tell the runtime to forget a tab's snapshot; ``None`` means every tab.
+
+        Never raises into the socket handler and never awaits: the invalidator is
+        dictionary work by contract (see
+        :meth:`~iron_jarvis.browser.service.BrowserRuntime.invalidate_snapshot`).
+        The v1.229.0 lesson applies literally — a call whose job is to keep the
+        daemon honest must not become the thing that drops the connection.
+        """
+        hook = self.snapshot_invalidator
+        if hook is None:
+            return
+        try:
+            hook(tab_id)
+        except Exception:  # noqa: BLE001 — never break a socket over a cache
+            logger.debug("browser snapshot invalidation failed", exc_info=True)
 
     # --- events -----------------------------------------------------------
 

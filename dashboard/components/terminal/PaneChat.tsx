@@ -747,6 +747,10 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
         buildTurnBody({
           history,
           cwd,
+          // WHICH pane asked (v1.236.0) — the daemon's ChatBody.pane_id. Without
+          // this one line the field exists on both sides and nothing ever sends
+          // it, which is the "green suite over an unreachable feature" shape.
+          paneId,
           provider: providerRef.current,
           // The thread's pinned model rides with the provider (BC1 D5).
           model: modelRef.current,

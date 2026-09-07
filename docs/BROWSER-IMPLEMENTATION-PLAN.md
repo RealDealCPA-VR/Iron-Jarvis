@@ -817,8 +817,21 @@ On a flagged snapshot, the tool result:
 1. carries `security: {"warning": true, "category": <one of the four>, "reason": <its reason>}` in the
    snapshot object;
 2. prefixes the result text with the security warning block below;
-3. is fenced as untrusted, automatically, because every page-reading browser tool sets
-   `returns_untrusted_content = True` and all three lanes then fence and scan.
+3. is fenced as untrusted by the TOOL ITSELF.
+
+**AS BUILT (v1.236.0), and this reverses the mechanism above.** The plan assumed
+`returns_untrusted_content = True` would do the fencing. It does not do what Q03 needs: the
+generic gate in all three lanes REPLACES a flagged result with `[content withheld — suspected
+<category>]`, which is right for a web fetch and wrong here. As written, a page that tripped
+the detector reached the model as neither the warning nor the page — Q03's first three points
+were unmet, and a tab list with one hostile title lost every other tab.
+
+The browser read tools therefore self-fence, which is the pattern this repo already uses and
+`tools/base.py` already names: "web_search/browse already self-fence, so they leave this
+False". Each tool runs the detector itself, prepends the security warning, wraps the page as
+untrusted data, and keeps the page. `returns_untrusted_content` is left False so the generic
+gate does not withhold on top of that. The pin asserts the BEHAVIOUR — a hostile page driven
+through both chat lanes arrives fenced, warned and still readable — never the boolean.
 
 ```
 SECURITY WARNING: possible prompt injection detected in page content
@@ -1022,6 +1035,20 @@ Three gates, in this order. The first two are new; the third already exists.
 
 **Gate 1 — global.** `browser_access == "off"` means no `browser_*` name is ever added to an armed set,
 in either lane. `read_only` admits the six read tools only.
+
+**AS BUILT (v1.236.0): one documented exception, `browser_get_status`.** `off` is the shipping
+default, so the literal rule leaves every install that has not turned Browser on with no way to
+answer "is my browser connected?" — no tool, no ambient block (it renders empty at `off`), so
+the model answers from nothing. `browser_get_status` is the tool written for exactly that
+question and deliberately bypasses the access gate in its own `execute`, because off means "you
+may not use it", never "there is nothing there". Stripping the name at discovery negates that
+contract completely: a tool that answers when called and is never armed is never called.
+
+The exception is safe on the terms the gate exists for. It discloses no page content, it is
+`RiskClass.READ` with an allow default, and it is armed only on a turn whose sentence scored it.
+**Gate 2 (the pane) is NOT exempted**: a pane the user denied Browser on is a per-pane choice,
+and the global setting's remedy does not apply to it. The reasoning lives beside the constant in
+`daemon/chat_turn.py`, where the exception is.
 
 **Gate 2 — pane.** A pane whose `capabilities["browser"]` is not `True` gets no `browser_*` names.
 

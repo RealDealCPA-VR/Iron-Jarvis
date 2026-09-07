@@ -52,6 +52,14 @@ HEADER = """// GENERATED FILE — DO NOT EDIT.
 // buffer and compares it byte for byte. Change protocol.py and regenerate.
 """
 
+#: Every ``TypedDict`` the generator emits, frames first and then the payload
+#: shapes that ride inside them. Two tuples in ``protocol.py`` rather than one,
+#: because ``FRAME_SHAPES`` must map a ``type`` string to every frame shape and a
+#: params object has no ``type``; joined here because ``_ts_type`` has to resolve a
+#: reference to any of them by name, and a shape it cannot resolve is a field whose
+#: real type would silently vanish from the generated file.
+ALL_SHAPES: tuple[type, ...] = tuple(P.FRAME_TYPEDDICTS) + tuple(P.RESULT_TYPEDDICTS)
+
 #: Python scalar/container types -> their TypeScript spelling.
 _SCALARS: dict[Any, str] = {
     str: "string",
@@ -77,7 +85,7 @@ def _ts_type(annotation: Any) -> str:
     origin = get_origin(annotation)
     if origin is None:
         name = getattr(annotation, "__name__", "")
-        if name in {shape.__name__ for shape in P.FRAME_TYPEDDICTS}:
+        if name in {shape.__name__ for shape in ALL_SHAPES}:
             return name
         raise TypeError(f"no TypeScript spelling for annotation {annotation!r}")
     args = get_args(annotation)
@@ -190,9 +198,9 @@ def render() -> str:
     lines.append("};")
     lines.append("")
 
-    lines.append("// --- Frame shapes, from the TypedDicts in protocol.py ---")
+    lines.append("// --- Frame and payload shapes, from the TypedDicts in protocol.py ---")
     lines.append("")
-    for shape in P.FRAME_TYPEDDICTS:
+    for shape in ALL_SHAPES:
         doc = (shape.__doc__ or "").strip().splitlines()
         summary = doc[0].strip() if doc else ""
         if summary:
@@ -218,6 +226,10 @@ def render() -> str:
     lines.append("// --- Frame type -> shape, mirroring protocol.FRAME_SHAPES ---")
     lines.append("")
     lines.append("export type BrowserFrame =")
+    # Frames only, and deliberately not `ALL_SHAPES`: a union that admitted
+    # `SnapshotResult` would type-check a bare result object as a frame, and the
+    # dispatcher's `frame.type` switch would then compile against a value that
+    # has no `type` at all.
     for shape in P.FRAME_TYPEDDICTS[1:]:
         lines.append(f"  | {shape.__name__}")
     lines[-1] = lines[-1] + ";"

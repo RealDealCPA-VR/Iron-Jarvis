@@ -237,6 +237,15 @@ def default_permissions() -> dict[str, str]:
         "browser_get_status": "allow",
         "browser_list_tabs": "allow",
         "browser_get_active_tab": "allow",
+        # Browser (v1.236.0): reading a page. Still observation only — no page
+        # state changes — so `allow`, and still nothing at all until Browser
+        # access is on. `browser_read_page` and `browser_get_elements` collect no
+        # input field's VALUE for any field type (plan §9.4), and
+        # `browser_screenshot` writes a normal artifact the user can open, which
+        # is why reading a page needs no separate ask.
+        "browser_read_page": "allow",
+        "browser_get_elements": "allow",
+        "browser_screenshot": "allow",
     }
 
 

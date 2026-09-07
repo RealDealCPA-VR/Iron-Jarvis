@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.235.0 (2026-09-06).*
+holds itself to. Current as of v1.236.0 (2026-09-07).*
 
 ---
 
@@ -400,17 +400,24 @@ cookies or sessions with your browser.
 | Setting | What Jarvis may do **in this version** |
 |---|---|
 | **Off** | Nothing. No browser tool exists. |
-| **Read only** | Look, and only at the outside of a page: report whether your browser is connected, list your open tabs, and name the tab you are looking at. |
+| **Read only** | Look, but never touch: list your open tabs, name the tab you are looking at, read the text of a page, and take a screenshot of it. |
 | **Interactive** | Nothing more than **Read only** yet. It is the setting acting will need; today it grants no ability that **Read only** does not. |
 
 Off is the default because reading a logged-in browser is a real permission, not a
 convenience, and this app does not grant itself those.
 
-**What is not here yet.** This version pairs a browser and looks at the tab list.
-Reading the text of a page and taking a screenshot arrive in **v1.236.0**; clicking,
-typing, scrolling, navigating and downloads arrive in **v1.237.0**. Ask for one of
-them today and Jarvis has no tool to answer with — there is no half-working version
-of it hiding behind the Interactive setting.
+**What is not here yet.** Clicking, typing, scrolling, navigating and downloads arrive
+in **v1.237.0**. Ask for one of them today and Jarvis has no tool to answer with —
+there is no half-working version of it hiding behind the Interactive setting.
+
+**What reading a page gives it, and what it does not.** Jarvis asks the page for a
+structured summary, not its HTML: the visible text, the headings, the links, and the
+things you could interact with, each with a short-lived id. It is **bounded** — a very
+long page is cut, and when that happens Jarvis is told what was cut rather than being
+handed a short page that looks complete. It covers the **tab you are looking at**, and
+only the top document: content inside an embedded frame from another site, such as a
+payment box or a chat widget, is invisible to it. Ask for the same page twice and the
+ids change, because they describe that one reading and not the page forever.
 
 **Pairing, once.** Open the Browser page, set access, then load the add-on from the
 folder the card names (from a source checkout it has to be built first — the card's
@@ -426,21 +433,23 @@ you to a single-purpose page with one button on it. Grant once and normal use st
 prompting. You can narrow it later in Chrome's own extension controls, and Jarvis
 will tell you when a page is out of reach rather than failing quietly.
 
-**What it will never do, decided now.** Nothing in this version reads or changes a
-page, so there is nothing to guard yet. These are not hopes — they are the design
-commitments the reading and acting versions ship with, fixed before the code that
-needs them exists:
+**What it will never do.** Two of these are live as of this version; the third is a
+design commitment fixed before the code that needs it exists, and it is dated so you
+can tell which is which:
 
-- **Page content is untrusted data, always** (with reading, **v1.236.0**): a page that
-  contains instructions does not get to give Jarvis orders, and a page that looks like
-  it is trying to gets flagged in the result.
-- **Passwords are never read** (with reading, **v1.236.0**): a password field arrives
-  with its value stripped, and text Jarvis types is redacted in the record. Your
-  browser's own password manager keeps working, because Jarvis never sees what it
-  fills.
+- **Page content is untrusted data, always** (live): a page that contains instructions
+  does not get to give Jarvis orders, and a page that looks like it is trying to gets
+  flagged in the result, with the rest of the page still handed over as data. A
+  suspicious page does not silently end what you asked for.
+- **Passwords are never read** (live): a password field arrives with its value
+  stripped, and in fact **no** field's value is ever collected — not just password
+  ones. The stripping happens inside the page, before anything is sent, so a password
+  never reaches Iron Jarvis at all. Your browser's own password manager keeps working,
+  because Jarvis never sees what it fills.
 - **Changing a page asks first** (with acting, **v1.237.0**): a click, typing or a
   navigation is gated the same way computer use is gated, and asks before it commits
-  to something that looks destructive or transactional.
+  to something that looks destructive or transactional. Typed text will be redacted in
+  the record.
 
 **Test** on the card does a harmless round trip and reports what came back, which is
 the fastest way to tell a browser that is not running from an add-on that is not

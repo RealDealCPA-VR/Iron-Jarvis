@@ -47,6 +47,7 @@ from ..chat_turn import (
     _WORKFLOW_DRAFT_SPEC,
     _WORKFLOW_DRAFT_TOOL,
     _attachment_budgets,
+    _browser_section,
     _prepare_attachments,
     _compose_recall_query,
     _connector_memory_block,
@@ -1290,6 +1291,14 @@ def register(app: FastAPI, d) -> None:
         # an email; if the instruction reached only the non-streaming lane the
         # feature would look broken exactly where it is most used.
         system += DRAFT_BLOCK
+        # YOUR BROWSER (v1.236.0, D16/D21) — the lock-step copy of chat_turn's
+        # injection. MIRROR NOTE: edit both or neither. This is the STREAMING
+        # lane, which is the one the Build pane uses, so D16's own interaction
+        # ("what page do I have open?" in a Build chat) lives on THIS side: an
+        # ambient block that reached only the non-streaming lane would be a
+        # feature nobody could see. Placed at the same seam, before
+        # `_plan_context`, so the section is priced by the budget planner.
+        system += _browser_section(d, getattr(body, "pane_id", "") or "")
         pid = (body.project_id or "").strip() or None
         resolved_proj = None
         if pid:
