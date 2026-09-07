@@ -55,6 +55,39 @@ to the daemon's log at line rate, so the socket is closed once the count is reac
 (``extensions/chrome/src/bridge/socket.ts`` ``onClose``), and a garbage frame is not
 a reason to make the user pair again.
 
+**An unpaired socket has a LIFETIME budget, and it is the one that counts**
+(v1.239.0). The refusal bound above is on CONSECUTIVE refusals and one readable
+frame forgives it, which is right for a paired add-on with a bug and no bound at
+all for the caller this file is actually defending against: ``?pairing=1`` needs
+no credential, so any local process can send nine unreadable frames, then one
+well-formed ``browser.pairing_ack``, and repeat forever — the refusal count
+resets, the WARNING budget resets with it, and the D06A pairing deadline is
+consulted only on an IDLE tick that a continuously sending socket never reaches.
+:data:`MAX_UNPAIRED_FRAMES` bounds the whole life of a socket that has not
+authenticated and nothing forgives it. The real add-on sends exactly one frame in
+that state.
+
+**``last_error`` is one line; the ledger is the history behind it** (v1.239.0).
+A successful round trip retires ``last_error``, which is what the card's "Last
+problem" line should do and is useless for the question a user with a flaky
+browser actually asks — why does it keep dropping. Every fault therefore goes
+through :meth:`ExtensionBackend.note_error`, which writes both, and
+:meth:`ExtensionBackend.error_ledger` keeps the last
+offered to callers on ``status()["recent_errors"]`` and bounded to
+:data:`MAX_ERROR_LEDGER` DISTINCT ones, each clipped to
+:data:`MAX_ERROR_DETAIL_CHARS` (a repeat bumps a count rather than
+taking a row, so a flood of one fault cannot evict the interesting one). Nothing
+clears it — not a success, not a new connection.
+
+NOBODY READS IT YET, AND SAYING SO IS THE POINT. The ledger is exposed on
+``status()``, and ``GET /browser/status`` does not forward it — so nothing on any
+screen answers "why does my browser keep dropping", which is the question this
+ledger was built for. A ledger kept and
+not forwarded is work shipped to nobody: the honest state is recorded here rather
+than implied away, because the alternative is a docstring promising a diagnostic
+the user cannot reach. Forwarding it is one key on the status route and belongs
+with whoever next touches that surface.
+
 **The restricted state is a state machine, not a convention** (D06A). An unpaired
 socket may send exactly one frame type,
 :data:`~iron_jarvis.browser.protocol.RESTRICTED_INBOUND_FRAMES`; anything else
@@ -87,8 +120,12 @@ logger = get_logger(__name__)
 #: that edit has landed yet, and a hard import of a missing attribute would fail
 #: at module load in the frozen build, where the traceback reaches nobody.
 EVENT_CONNECTED: str = getattr(EventType, "BROWSER_CONNECTED", "browser.connected")
-EVENT_DISCONNECTED: str = getattr(EventType, "BROWSER_DISCONNECTED", "browser.disconnected")
-EVENT_TAB_ACTIVATED: str = getattr(EventType, "BROWSER_TAB_ACTIVATED", "browser.tab_activated")
+EVENT_DISCONNECTED: str = getattr(
+    EventType, "BROWSER_DISCONNECTED", "browser.disconnected"
+)
+EVENT_TAB_ACTIVATED: str = getattr(
+    EventType, "BROWSER_TAB_ACTIVATED", "browser.tab_activated"
+)
 EVENT_NAVIGATION_COMPLETED: str = getattr(
     EventType, "BROWSER_NAVIGATION_COMPLETED", "browser.navigation_completed"
 )
@@ -118,6 +155,61 @@ MAX_REFUSAL_WARNINGS = 3
 #: socket as "this credential is refused" and deletes its stored pairing token, so
 #: 1008 here would make a buggy frame cost the user a re-pair.
 CLOSE_PROTOCOL_ERROR = 1002
+
+#: Total frames an UNPAIRED socket may deliver before it is closed as a flood.
+#: :data:`MAX_REFUSED_FRAMES` counts CONSECUTIVE refusals and is deliberately
+#: forgiven by one readable frame - right for a paired add-on with a bug, and no
+#: bound at all against a caller holding no credential, which can send nine
+#: unreadable frames, then one well-formed ``browser.pairing_ack``, and repeat for
+#: as long as it likes: the refusal count resets, the WARNING budget resets with
+#: it, and the D06A pairing deadline is only consulted on an IDLE tick that a
+#: continuously sending socket never reaches. This bound is on the LIFETIME of a
+#: socket that has not authenticated, and nothing forgives it. The real add-on
+#: sends exactly one frame in that state - its pairing ack - so the ceiling is
+#: generous by an order of magnitude and still ends the flood.
+MAX_UNPAIRED_FRAMES = 20
+
+#: Faults kept by :meth:`ExtensionBackend.error_ledger`. ``last_error`` is ONE
+#: string and a successful round trip retires it, which is right for the card's
+#: "Last problem" line and wrong for the question a user with a flaky browser
+#: actually asks - why does it keep dropping. A browser that fails, recovers and
+#: fails again leaves nothing behind in one string. The ledger is that history,
+#: bounded; a repeat of the same detail bumps a count rather than taking a row, so
+#: a flood of one fault cannot push the interesting one out of the window.
+MAX_ERROR_LEDGER = 20
+
+#: Longest fault sentence the ledger will keep, per row (v1.239.0).
+#:
+#: The row COUNT was bounded from the start; the row SIZE was not, and the two
+#: bounds are only a bound together. An UNPAIRED socket is unauthenticated by
+#: design — that is what the pairing handshake is for — and several fault
+#: sentences quote what the caller sent. So a caller with no credential could pin
+#: twenty rows of its own arbitrary-length text in the daemon, for the life of the
+#: connection, simply by sending long rubbish. Ship 1 capped pending pairings for
+#: exactly this reason; this is the same rule one layer down.
+#:
+#: 400 characters is enough for every sentence this module actually writes (the
+#: longest is the oversized-frame refusal, which is well under it), so the cap
+#: bites only on quoted caller text — the case it exists for.
+MAX_ERROR_DETAIL_CHARS = 400
+
+
+def clip_detail(detail: object) -> str:
+    """One fault sentence, stripped and bounded by :data:`MAX_ERROR_DETAIL_CHARS`.
+
+    A function rather than an inline slice so the bound can be driven on its own,
+    and so every future writer of a fault string gets it for free. ``None`` and
+    non-strings answer ``""`` — a ledger row that says nothing is worse than no
+    row, because it occupies one of the twenty slots that hold real faults.
+
+    A clipped sentence ENDS IN AN ELLIPSIS. Without the marker a cut sentence
+    reads as a complete one that happened to stop there, which is how a truncated
+    diagnostic becomes a misleading one.
+    """
+    text = str(detail or "").strip()
+    if len(text) <= MAX_ERROR_DETAIL_CHARS:
+        return text
+    return text[: MAX_ERROR_DETAIL_CHARS - 3] + "..."
 
 #: ``browser.event`` name -> bus event name. A frame whose event is absent here is
 #: recorded as an extension error rather than published under a guessed name: an
@@ -198,7 +290,9 @@ def download_bus_payload(reported: Any) -> tuple[dict[str, Any], str]:
     reading the wrong one.
     """
     source = reported if isinstance(reported, Mapping) else {}
-    payload: dict[str, Any] = {key: source[key] for key in DOWNLOAD_PAYLOAD_KEYS if key in source}
+    payload: dict[str, Any] = {
+        key: source[key] for key in DOWNLOAD_PAYLOAD_KEYS if key in source
+    }
     verified = absolute_local_path(payload.get("filename"))
     if not verified:
         claimed = payload.get("filename")
@@ -209,7 +303,6 @@ def download_bus_payload(reported: Any) -> tuple[dict[str, Any], str]:
         )
     payload["local_path"] = verified
     return payload, ""
-
 
 
 class ExtensionConnection:
@@ -267,6 +360,11 @@ class ExtensionConnection:
         self.superseded = False
         #: Consecutive frames this connection sent that could not be accepted.
         self.refused_frames = 0
+        #: Every frame this connection has delivered, refused ones included. Only
+        #: consulted while it is UNPAIRED (:data:`MAX_UNPAIRED_FRAMES`): it is the
+        #: one count a caller with no credential cannot reset by behaving for a
+        #: single frame, and it never decreases.
+        self.frames_seen = 0
 
     @property
     def restricted(self) -> bool:
@@ -296,7 +394,9 @@ class ExtensionConnection:
             await self.ws.send_json(frame)
             return True
         except Exception:  # noqa: BLE001 — a dead socket is an expected outcome here
-            logger.debug("browser socket send failed (%s)", frame.get("type"), exc_info=True)
+            logger.debug(
+                "browser socket send failed (%s)", frame.get("type"), exc_info=True
+            )
             self.closed = True
             return False
 
@@ -388,6 +488,12 @@ class ExtensionBackend:
         #: One key, per the v1.229.0 rule that a failing loop is NAMED where the
         #: user is standing rather than logged at DEBUG and reported ``ok``.
         self.last_error: str = ""
+        #: The connection error ledger: every fault :meth:`note_error` recorded,
+        #: oldest first, bounded by :data:`MAX_ERROR_LEDGER`. NOT cleared when a
+        #: successful round trip retires ``last_error``, and not cleared by a new
+        #: connection - losing the history at the moment the browser recovers is
+        #: exactly what makes an intermittent fault undiagnosable.
+        self.errors: list[dict[str, Any]] = []
         #: Cached active tab. Ship 2's ambient context reads this rather than
         #: making a round trip, because a prompt assembly that awaits a browser is
         #: a prompt assembly that can hang. THREE writers, and it needs all three:
@@ -439,7 +545,9 @@ class ExtensionBackend:
         try:
             value = reader()
         except Exception:  # noqa: BLE001 — a ready frame must not fail on a getter
-            logger.debug("browser access read failed while building a ready frame", exc_info=True)
+            logger.debug(
+                "browser access read failed while building a ready frame", exc_info=True
+            )
             return ""
         return value.strip() if isinstance(value, str) else ""
 
@@ -455,6 +563,50 @@ class ExtensionBackend:
     def next_request_id(self) -> str:
         """The next ``req_<n>``. Minted here so ids are unique per daemon run."""
         return f"{P.REQUEST_ID_PREFIX}{next(self._seq)}"
+
+    def note_error(self, detail: str) -> None:
+        """Record one transport fault: the ``last_error`` line AND a ledger row.
+
+        Every assignment to :attr:`last_error` that means "something went wrong"
+        goes through here, so the two cannot disagree - a second writer that sets
+        the string directly is a fault the ledger never saw, and a ledger is only
+        worth reading if it is complete.
+
+        A repeat of the same sentence bumps the previous row's ``count`` instead of
+        taking a new one. Without that, ten refused frames are ten identical rows
+        and the twenty-row window holds one fault; with it, the window holds twenty
+        DISTINCT faults, which is the thing worth keeping.
+        """
+        # CLIPPED AT THE ENTRY POINT, not at each caller. Every "something went
+        # wrong" string in this module arrives here, so one clip covers all of
+        # them — and covers the next one somebody adds without reading this.
+        text = clip_detail(detail)
+        if not text:
+            return
+        self.last_error = text
+        if self.errors and self.errors[-1].get("detail") == text:
+            row = self.errors[-1]
+            row["count"] = int(row.get("count") or 1) + 1
+            row["at"] = self._stamp()
+            return
+        self.errors.append({"at": self._stamp(), "detail": text, "count": 1})
+        del self.errors[:-MAX_ERROR_LEDGER]
+
+    def _stamp(self) -> str:
+        """``clock()`` as an ISO string, never raising. A ledger row is diagnostics."""
+        try:
+            return self.clock().isoformat()
+        except Exception:  # noqa: BLE001 - an injected clock must not break a fault path
+            return ""
+
+    def error_ledger(self) -> list[dict[str, Any]]:
+        """Copies of the ledger rows, oldest first.
+
+        Copies because a caller that mutated a row would rewrite the record of what
+        happened, and this is the one structure in the transport whose whole value
+        is that it was not edited after the fact.
+        """
+        return [dict(row) for row in self.errors]
 
     def status(self) -> dict[str, Any]:
         """The transport's half of ``GET /browser/status``. Never raises.
@@ -473,6 +625,9 @@ class ExtensionBackend:
             "in_flight": len(conn.pending) if conn else 0,
             "active_tab": dict(self.active_tab) if self.active_tab else None,
             "last_error": self.last_error or None,
+            # The history behind that one line. The status ROUTE decides whether to
+            # forward it; the transport's duty is to have kept it.
+            "recent_errors": self.error_ledger(),
         }
 
     # --- connection lifecycle --------------------------------------------
@@ -556,10 +711,15 @@ class ExtensionBackend:
                 failed = previous.fail_pending(BrowserErrorCode.CONNECTION_REPLACED)
                 await previous.close(1000)
             if failed:
-                logger.info("browser connection replaced with %d command(s) in flight", failed)
+                logger.info(
+                    "browser connection replaced with %d command(s) in flight", failed
+                )
             await self._publish(
                 EVENT_DISCONNECTED,
-                {"reason": "replaced", "detail": "a newer browser connection authenticated"},
+                {
+                    "reason": "replaced",
+                    "detail": "a newer browser connection authenticated",
+                },
             )
         await conn.send(self.ready_frame(active=True))
         self.last_error = ""
@@ -659,6 +819,17 @@ class ExtensionBackend:
         # call — and a path claimed against a new browser would attribute one
         # browser's download to another's click.
         self._downloads.clear()
+        if word == "error" or detail:
+            # The ledger's other half. A disconnect that carries a reason is the
+            # fault a user watching an intermittently dropping browser most needs to
+            # see, and it is the one fault that passes through no frame handler.
+            # Recorded only for the socket that WAS authoritative, because release
+            # runs twice for the same connection on the ordinary path.
+            self.note_error(
+                f"the browser disconnected ({word}): {detail}"
+                if detail
+                else f"the browser disconnected ({word})"
+            )
         await self._publish(EVENT_DISCONNECTED, {"reason": word, "detail": detail})
 
     # --- downloads --------------------------------------------------------
@@ -684,7 +855,9 @@ class ExtensionBackend:
         signal, self._download_signal = self._download_signal, asyncio.Event()
         signal.set()
 
-    def record_download(self, reported: Any, *, claimed: bool = False) -> dict[str, Any]:
+    def record_download(
+        self, reported: Any, *, claimed: bool = False
+    ) -> dict[str, Any]:
         """Verify one reported download, remember it, and return the bus payload.
 
         Args:
@@ -713,7 +886,7 @@ class ExtensionBackend:
         """
         payload, problem = download_bus_payload(reported)
         if problem:
-            self.last_error = problem
+            self.note_error(problem)
             logger.debug("browser download not verified: %s", problem)
             return payload
         download_id = payload.get("download_id")
@@ -743,7 +916,9 @@ class ExtensionBackend:
         tab started it would lose the path entirely, which is the outcome plan 10.3
         exists to prevent.
         """
-        wanted = tab_id if isinstance(tab_id, int) and not isinstance(tab_id, bool) else None
+        wanted = (
+            tab_id if isinstance(tab_id, int) and not isinstance(tab_id, bool) else None
+        )
         for record in reversed(self._downloads):
             if record["claimed"]:
                 continue
@@ -834,7 +1009,9 @@ class ExtensionBackend:
             # already CLAIMED, so the ``download_completed`` frame that follows
             # cannot report the same file to a second tool call.
             result = dict(result)
-            result["download"] = self.record_download(result.get("download"), claimed=True)
+            result["download"] = self.record_download(
+                result.get("download"), claimed=True
+            )
         return result
 
     async def directive(
@@ -901,7 +1078,7 @@ class ExtensionBackend:
                 # raised from anywhere else must keep its own message — the
                 # v1.228.0 misattribution lesson.
                 if scope.expired():
-                    self.last_error = f"{label} timed out after {bound:g}s"
+                    self.note_error(f"{label} timed out after {bound:g}s")
                     raise BrowserError(BrowserErrorCode.ACTION_TIMEOUT) from None
                 raise
         finally:
@@ -924,6 +1101,28 @@ class ExtensionBackend:
         recorded, not parsed — the command it was answering then fails honestly
         with ``ACTION_TIMEOUT`` rather than the daemon pretending to have an answer.
         """
+        if conn.restricted:
+            # Counted BEFORE the frame is measured or parsed, because the cheapest
+            # possible answer to a caller that has already spent its budget is the
+            # right one. See MAX_UNPAIRED_FRAMES: the consecutive-refusal bound
+            # below cannot see this caller at all, since one well-formed pairing
+            # ack every ninth frame forgives it forever.
+            conn.frames_seen += 1
+            if conn.frames_seen > MAX_UNPAIRED_FRAMES:
+                self.note_error(
+                    f"a browser that has not paired sent {conn.frames_seen} frames; "
+                    f"the limit before pairing is {MAX_UNPAIRED_FRAMES}, so the "
+                    "connection was closed"
+                )
+                logger.warning("closing unpaired browser socket: %s", self.last_error)
+                # 1002 and never 1008: the add-on deletes its stored pairing token
+                # on a 1008 (extensions/chrome/src/bridge/socket.ts onClose), and a
+                # second browser flooding this socket must not cost the user - whose
+                # own browser is paired - their credential.
+                await conn.close(CLOSE_PROTOCOL_ERROR)
+                if conn.pairing_request_id:
+                    self._restricted.pop(conn.pairing_request_id, None)
+                return False
         if isinstance(raw, str) and len(raw) > P.MAX_FRAME_BYTES:
             # The cheap upper bound first: a ``str`` of N characters is at least N
             # UTF-8 bytes, so this refuses without building the copy. Starlette hands
@@ -946,7 +1145,9 @@ class ExtensionBackend:
         try:
             frame = json.loads(data)
         except (ValueError, UnicodeDecodeError):
-            return await self._refuse_frame(conn, "your browser sent a frame that is not JSON")
+            return await self._refuse_frame(
+                conn, "your browser sent a frame that is not JSON"
+            )
         if not isinstance(frame, dict):
             return await self._refuse_frame(
                 conn, "your browser sent a frame that is not an object"
@@ -965,13 +1166,13 @@ class ExtensionBackend:
         :data:`MAX_REFUSED_FRAMES` with :data:`CLOSE_PROTOCOL_ERROR`.
         """
         conn.refused_frames += 1
-        self.last_error = why
+        self.note_error(why)
         if conn.refused_frames <= MAX_REFUSAL_WARNINGS:
             logger.warning("browser frame refused: %s", why)
         else:
             logger.debug("browser frame refused (%d): %s", conn.refused_frames, why)
         if conn.refused_frames >= MAX_REFUSED_FRAMES:
-            self.last_error = (
+            self.note_error(
                 f"your browser sent {conn.refused_frames} frames Iron Jarvis could not "
                 f"read, so the connection was closed; the last one: {why}"
             )
@@ -982,7 +1183,9 @@ class ExtensionBackend:
             return False
         return True
 
-    async def handle_frame(self, conn: ExtensionConnection, frame: dict[str, Any]) -> bool:
+    async def handle_frame(
+        self, conn: ExtensionConnection, frame: dict[str, Any]
+    ) -> bool:
         """Dispatch one parsed frame. ``False`` means the socket has been closed.
 
         The restricted-state rule of D06A is enforced here rather than at the
@@ -993,7 +1196,13 @@ class ExtensionBackend:
         """
         kind = str(frame.get("type") or "")
         if conn.restricted and kind not in P.RESTRICTED_INBOUND_FRAMES:
-            self.last_error = f"an unpaired browser sent {kind or 'an unnamed frame'}"
+            # `kind` is CALLER-CONTROLLED, so it is clipped BEFORE the sentence is
+            # built. Clipping only inside note_error would still format a
+            # caller-sized string on the event loop first, which is most of the
+            # cost this bound exists to deny.
+            self.note_error(
+                f"an unpaired browser sent {clip_detail(kind) or 'an unnamed frame'}"
+            )
             logger.warning("closing unpaired browser socket: %s", self.last_error)
             await conn.close(1008)
             if conn.pairing_request_id:
@@ -1014,10 +1223,12 @@ class ExtensionBackend:
         # An unknown type on a PAIRED socket is recorded, not fatal: a newer add-on
         # speaking a frame this daemon predates must not take the connection down,
         # or an upgrade on either side becomes an outage.
-        self.last_error = f"your browser sent an unknown frame type {kind!r}"
+        self.note_error(f"your browser sent an unknown frame type {kind!r}")
         return True
 
-    async def _handle_hello(self, conn: ExtensionConnection, frame: dict[str, Any]) -> None:
+    async def _handle_hello(
+        self, conn: ExtensionConnection, frame: dict[str, Any]
+    ) -> None:
         """Record who the add-on is, and re-announce only if the facts changed.
 
         ``browser.hello`` arrives *after* adoption on a token-bearing socket, and
@@ -1029,7 +1240,9 @@ class ExtensionBackend:
         """
         before = (conn.extension_id, conn.extension_version, conn.host_permission)
         conn.extension_id = str(frame.get("extension_id") or conn.extension_id)
-        conn.extension_version = str(frame.get("extension_version") or conn.extension_version)
+        conn.extension_version = str(
+            frame.get("extension_version") or conn.extension_version
+        )
         conn.host_permission = bool(frame.get("host_permission"))
         conn.hello_seen = True
         after = (conn.extension_id, conn.extension_version, conn.host_permission)
@@ -1039,7 +1252,9 @@ class ExtensionBackend:
                 self.connected_payload(conn),
             )
 
-    def _resolve_response(self, conn: ExtensionConnection, frame: dict[str, Any]) -> None:
+    def _resolve_response(
+        self, conn: ExtensionConnection, frame: dict[str, Any]
+    ) -> None:
         """Resolve the future keyed by this response's id, if one is still waiting.
 
         An id with no waiter is normal and ignored: it is the late reply to a
@@ -1089,7 +1304,7 @@ class ExtensionBackend:
         payload = dict(payload) if isinstance(payload, dict) else {}
         bus_name = _EVENT_BUS_NAMES.get(name)
         if bus_name is None:
-            self.last_error = f"your browser reported an unknown event {name!r}"
+            self.note_error(f"your browser reported an unknown event {name!r}")
             return
         if name == P.EVENT_TAB_ACTIVATED:
             self.active_tab = payload or None
@@ -1099,7 +1314,9 @@ class ExtensionBackend:
                 or payload.get("tab_id") == self.active_tab.get("tab_id")
             ):
                 merged = {**self.active_tab, **payload}
-                if payload.get("url") and payload.get("url") != self.active_tab.get("url"):
+                if payload.get("url") and payload.get("url") != self.active_tab.get(
+                    "url"
+                ):
                     # A DIFFERENT DOCUMENT. Any page-authored key the navigation
                     # did not restate describes the page that just went away, and
                     # a merge would leave page A's title sitting beside page B's

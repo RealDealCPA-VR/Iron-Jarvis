@@ -72,6 +72,44 @@ jobs:
         working-directory: dashboard
         run: pnpm build
 
+  # The browser add-on (v1.239.0). Mirrors the identically-named steps in the
+  # release gate (.github/workflows/release.yml, job `suite`), so a change that
+  # breaks the add-on is red on a PR rather than at publish time.
+  #
+  # Three failures live in this one command, and none of them is a unit test:
+  #   * the pinned extension id in manifest.json drifting from
+  #     src/iron_jarvis/browser/identity.py — the daemon's origin guard then
+  #     refuses the real add-on with close 1008 and nothing names the mismatch;
+  #   * a type error, since esbuild strips types without checking them;
+  #   * a bundle manifest.json names that no build actually produced, which
+  #     Chrome reports as "Service worker registration failed", naming no file.
+  #
+  # Ubuntu: this is a bundler and a typechecker, both platform-independent, and
+  # the release gate already runs the same command on the windows runner the
+  # product ships for.
+  browser-addon:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install browser add-on deps
+        working-directory: extensions/chrome
+        run: pnpm install --frozen-lockfile
+
+      - name: Build + typecheck the browser add-on, and verify the pinned ID
+        working-directory: extensions/chrome
+        run: node scripts/build.mjs
+
   # Syntax-check the Electron entry points. A parse error in the supervisor /
   # tray / updater / IPC (main.js, preload.js, ...) reaches users only at launch
   # otherwise — no test covers desktop/. Pure `node --check`, no deps needed.

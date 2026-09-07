@@ -695,6 +695,14 @@ export interface BrowserStatus {
    *  `extension_id`, which is whatever is connected right now. */
   expected_extension_id: string;
   paired: boolean;
+  /** The ABSOLUTE folder on this machine that Chrome's Load unpacked must be
+   *  pointed at (v1.239.0) — the daemon's own `onboarding.doctor.browser_addon_dir()`,
+   *  which is the packaged `<resources>/browser-addon` in an installed app and
+   *  `extensions/chrome` in a checkout. `""` means this install could not find the
+   *  add-on at all, and the card says so instead of printing a folder NAME the
+   *  file picker cannot resolve. Optional because a daemon older than v1.239.0
+   *  does not send the field. */
+  addon_dir?: string;
   active_tab: BrowserTab | null;
   pending_pairing: BrowserPendingPairing | null;
   last_error: string | null;
@@ -729,6 +737,13 @@ export interface BrowserPendingPairing {
 export interface BrowserTestResult {
   ok: boolean;
   detail: string;
+  /** The BROWSER_* code behind a failure (v1.239.0). RENDERED by the card, in its
+   *  own chip beside the sentence (`browser-test-code`), so two refusals that
+   *  wear the same prose are still distinguishable — by the user reading it, and
+   *  in whatever they paste into a bug report. The success body carries `""` and a
+   *  daemon older than v1.239.0 carries nothing at all; both mean "no code", and
+   *  the chip is then absent rather than empty. */
+  code?: string;
   round_trip_ms: number;
   active_tab: BrowserTab | null;
 }

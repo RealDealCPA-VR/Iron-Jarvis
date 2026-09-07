@@ -140,7 +140,7 @@ repository; paths are spelled out in decorators.
 | Route | Transport | Auth | Request | Response | Errors |
 | --- | --- | --- | --- | --- | --- |
 | `/browser/ws` | WebSocket | **Pairing token only**, `?token=`. Install bearer is rejected. Unpaired sockets connect with `?pairing=1` | Protocol frames (§29 below, in `docs/BROWSER-PLAN.md` terms) | Protocol frames | close `1008` on bad token, bad origin, or a non-pairing frame on a restricted socket; close `1000` with `CONNECTION_REPLACED` on replacement |
-| `GET /browser/status` | HTTP | install bearer | none | `{connected, access, host_permission, extension_id, active_tab: {id,title,url}|null, pending_pairing: {request_id, first_seen_at}|null, paired: bool, last_error: str|null}` | never fails; degrades to `connected: false` |
+| `GET /browser/status` | HTTP | install bearer | none | `{connected, access, host_permission, extension_id, expected_extension_id, addon_dir, active_tab, pending_pairing, paired, last_error}` | never fails; degrades to `connected: false` |
 | `POST /browser/pair` | HTTP | install bearer | `{request_id: str}` | `{paired: true}` — **never the token** | 404 unknown or expired `request_id`; 409 already paired |
 | `POST /browser/disconnect` | HTTP | install bearer | none | `{disconnected: bool}` | never fails |
 | `POST /browser/forget` | HTTP | install bearer | none | `{forgotten: bool}` | never fails |
@@ -1476,6 +1476,13 @@ tests/_fakes/browser_peer.py                 (the deterministic test peer, D30)
 | `.gitignore` | `extensions/chrome/node_modules/` |
 | `VOCABULARY.md`, `docs/HANDBOOK.md`, `README.md`, `docs/TODO.md` | see Docs |
 
+**AS BUILT (v1.239.0).** `GET /browser/status` carries `addon_dir`: the absolute folder a user
+points Chrome's Load unpacked at, resolved by the doctor's own resolver and empty when it cannot
+be found. It is on the status route rather than an Electron IPC channel — the plan's Ship 5 table
+called for a preload channel, and it was not needed, so that row is struck. The card was naming
+only the folder NAME while two shipped guides promised "the exact folder on this machine", which
+is the last-step failure of D27: a user who ran the installer has no checkout to guess from.
+
 **AS BUILT (v1.235.0, recorded after the fix wave).** Six files the plan's tables did not
 list were modified, each for a reason found during review rather than by choice:
 `src/iron_jarvis/tools/autoselect.py` (the read tier had to become auto-armable in Ship 1,
@@ -1897,7 +1904,6 @@ dashboard/__tests__/browser-test-button-v1239.test.tsx
 | `desktop/package.json` | `build.extraResources` gains the built add-on |
 | `desktop/afterPack.js` | the new resource directory joins the integrity manifest |
 | `desktop/main.js` | expose the on-disk add-on path over IPC (coordinator) |
-| `desktop/preload.js` | the IPC channel (coordinator) |
 | `desktop/build-installer.ps1` | an extension build stage using the existing `Invoke-Native` wrapper |
 | `.github/workflows/release.yml` | build and typecheck the extension in the `suite` job; verify the pinned ID |
 | `.github/workflows/tests.yml` | the same checks |

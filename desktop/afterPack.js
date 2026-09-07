@@ -45,12 +45,40 @@ exports.default = async function afterPack(context) {
   console.log(`[afterPack] staged dashboard node_modules -> ${dst} (next present: ${ok})`);
   if (!ok) throw new Error("[afterPack] node_modules/next did not land — dashboard would not boot");
 
+  const resourcesDir = path.join(context.appOutDir, "resources");
+
+  // The browser add-on (v1.239.0). extraResources copies extensions/chrome ->
+  // resources/browser-addon, and that folder is what the Browser page tells the
+  // user to point Chrome's "Load unpacked" at — so it must be COMPLETE, not
+  // merely present.
+  //
+  // The failure this catches: extensions/chrome/dist is gitignored and produced
+  // by extensions/chrome/scripts/build.mjs. If that build did not run (a fresh
+  // clone, a `-SkipDashboard`-style shortcut, a CI step quietly reordered),
+  // electron-builder still copies manifest.json — the filter matches it — and
+  // ships an add-on folder with no service worker in it. Chrome's answer is
+  // "Service worker registration failed. Status code: 15", which names no file,
+  // on the user's machine, after an install. Fail the BUILD instead.
+  const addonDir = path.join(resourcesDir, "browser-addon");
+  for (const rel of ["manifest.json", path.join("dist", "background.js")]) {
+    const abs = path.join(addonDir, rel);
+    if (!fs.existsSync(abs) || fs.statSync(abs).size === 0) {
+      throw new Error(`[afterPack] browser add-on incomplete: ${abs} is missing or empty — run extensions/chrome/scripts/build.mjs before packaging (build-installer.ps1 stage 3c)`);
+    }
+  }
+  console.log(`[afterPack] browser add-on staged -> ${addonDir}`);
+
   // Inventory everything we just shipped so the packaged app can verify at boot
   // that the NSIS extraction actually completed (see integrity.js for the
   // v1.124.0 truncated-update incident this guards against).
-  const resourcesDir = path.join(context.appOutDir, "resources");
+  //
+  // A BUNDLED DIRECTORY MISSING FROM THIS LIST IS NOT INVENTORIED AT ALL, and
+  // therefore cannot fail the boot-time check — which is precisely the
+  // half-installed-bundle failure integrity.js was written for. Adding a
+  // `to:` target to build.extraResources means adding it here in the same
+  // change; tests/test_browser_packaging_v1239.py pins the two lists together.
   const version = context.packager.appInfo.version;
-  const manifest = integrity.buildManifest(resourcesDir, ["daemon", "dashboard", "vosk-model"], version);
+  const manifest = integrity.buildManifest(resourcesDir, ["daemon", "dashboard", "vosk-model", "browser-addon"], version);
   const count = Object.keys(manifest.files).length;
   if (count < MANIFEST_FLOOR) {
     throw new Error(`[afterPack] install manifest has only ${count} files — the bundle is hollow`);

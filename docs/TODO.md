@@ -5,6 +5,32 @@ the deep-review wow track, deferred backlogs across waves, and known limits.
 The deep review's 11 confirmed bugs are all FIXED (v1.166.2–v1.167.0) — this
 file is what remains.*
 
+## Browser — the five MVP ships, delivered (v1.235.0 → v1.239.0)
+
+*The whole plan of `docs/BROWSER-PLAN.md` and `docs/BROWSER-IMPLEMENTATION-PLAN.md`,
+shipped. Nothing in those five ships is still ahead; everything else the plan named
+is in the Phase 2 and Phase 3 lists below, which were recorded in Ship 1 (D31) and
+are unchanged by the ships themselves.*
+
+- [x] **Ship 1 — Browser foundation (v1.235.0).** The `BrowserService` seam and its
+  extension backend, the pairing credential and its own socket, the pinned add-on
+  identity, `browser_access` (off by default), the Your browser card, and the
+  add-on itself.
+- [x] **Ship 2 — Read the browser (v1.236.0).** The page snapshot with its bounds,
+  its scrubbing and its per-reading element ids; reading, screenshots and the
+  ambient "the tab you are looking at" context in both chat lanes.
+- [x] **Ship 3 — Act on the browser (v1.237.0).** The eight acting tools, the risk
+  gate that fails closed, the deny floor, redacted typed text on the ledger, the
+  browser events, and the download whose real path Jarvis learns.
+- [x] **Ship 4 — Outward harness capability (v1.238.0).** The outward MCP server,
+  pane capabilities, and a pane-scoped credential that dies with its pane — so a
+  coding CLI in a Build pane drives the same browser through the same gates.
+- [x] **Ship 5 — Hardening and release (v1.239.0).** Honest browser diagnostics,
+  the add-on **inside the installer** (so no source checkout is needed), the ten
+  acceptance tests of the plan's §21 driven end to end, and the user-facing
+  `docs/BROWSER.md` — bundled for the Guide, and the sixteen known limits stated
+  in plain words rather than discovered.
+
 ## Browser — Phase 2 (deferred from the five MVP ships, v1.235.0–v1.239.0)
 
 *Recorded per decision D31 of `docs/BROWSER-PLAN.md`. None of these is implemented
@@ -22,8 +48,12 @@ abstraction honest, which Ship 1 already pays for.*
 - [ ] `<select>` specialisation (the MVP treats a select as a generic element).
 - [ ] Hover.
 - [ ] Drag and drop.
-- [ ] Iframe hardening, including cross-origin frames. The MVP reads what it can
-  reach and a cross-origin frame's contents are simply absent from the snapshot.
+- [ ] Reading inside frames at all, then iframe hardening including cross-origin
+  ones. The MVP snapshot is the TOP DOCUMENT ONLY: the content script is injected
+  without `allFrames` and `IFRAME` is in the walker's `SKIP_TAGS`, so no frame's
+  contents are in the snapshot, same-origin or not. `docs/BROWSER.md` limitation 9
+  and the Handbook state it that way; do not soften either to "read where
+  reachable" until this item ships.
 - [ ] Shadow DOM hardening.
 - [ ] Visual coordinate interaction, as a last-resort fallback only. Never as the
   primary strategy: accessibility and DOM semantics stay first (§30 of the plan).

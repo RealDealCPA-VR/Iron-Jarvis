@@ -241,6 +241,255 @@ def check_guide_docs() -> dict:
     )
 
 
+# --------------------------------------------------------------------------- #
+# The browser add-on (D25, D27) - where it is, and whether it was BUILT.
+# --------------------------------------------------------------------------- #
+
+#: Points the add-on lookup at an explicit folder, read PER CALL (the shape
+#: ``browser.identity.EXTENSION_ID_ENV`` has). The desktop supervisor can name the
+#: folder it installed, and a test can build a layout without freezing anything.
+BROWSER_ADDON_ENV = "IRONJARVIS_BROWSER_ADDON_DIR"
+
+#: The add-on folder inside a PACKAGED install, relative to the resources root.
+#: electron-builder copies the built add-on there as an extraResource; the frozen
+#: daemon sits beside it in ``<resources>/daemon``.
+BROWSER_ADDON_RESOURCE_DIR = "browser-addon"
+
+#: Other names that folder has been given, tried after the one above. A renamed
+#: extraResource must not make the doctor say "no add-on shipped" while the folder
+#: is sitting right there: the add-on is IDENTIFIED by its manifest
+#: (:func:`_is_addon_dir`), not by the name chosen in ``desktop/package.json``.
+_BROWSER_ADDON_ALIASES = ("browser_addon", "chrome-addon", "extension", "addon")
+
+#: The bundles the add-on loads AT RUN TIME, which ``manifest.json`` does not name.
+#:
+#: There is no ``content_scripts`` block by design (plan section 6): the content
+#: script is injected on demand by ``chrome.scripting.executeScript`` from
+#: ``src/background/tabs.ts`` (``CONTENT_SCRIPT_FILE``), and the host-permission
+#: setup page is opened by ``src/background/hostperms.ts`` (``SETUP_PAGE``). So a
+#: check that read ONLY the manifest -- which is what this one did until v1.239.0 --
+#: called a ``dist/`` holding ``background.js`` and ``popup.html`` "built and ready
+#: to load" while every ``read_page`` failed with a bare injection error and the
+#: site-access setup page could not open at all: the exact silent-blame case this
+#: row exists to end.
+#:
+#: Named HERE rather than read from those sources, because a PACKAGED install ships
+#: ``manifest.json``, ``README.md`` and ``dist/**`` and no ``src/`` at all
+#: (``desktop/package.json`` extraResources filter), so there is nothing on disk to
+#: read. The build's own verifier
+#: (``extensions/chrome/scripts/build.mjs::requiredFiles``) reads the two constants
+#: with a regex, and ``test_browser_doctor_v1239`` reads them with the SAME regex and
+#: asserts this tuple equals what it found -- so a rename on either side fails a test
+#: here as well as the build, and the two lists cannot drift in silence.
+BROWSER_ADDON_RUNTIME_FILES: tuple[str, ...] = ("dist/content.js", "dist/setup.html")
+
+
+def _is_addon_dir(path: Path) -> bool:
+    """Whether *path* looks like the add-on: a folder holding a ``manifest.json``."""
+    try:
+        return path.is_dir() and (path / "manifest.json").is_file()
+    except OSError:
+        return False
+
+
+def browser_addon_dir() -> Path | None:
+    """The folder a user points Chrome's *Load unpacked* at, or ``None``.
+
+    ONE resolver for both layouts, because the doctor is what a user runs when the
+    add-on will not load and "which folder?" is half the question:
+
+    * the env override, when it names a real add-on folder;
+    * **packaged**: beside the frozen daemon under Electron's ``resources`` --
+      ``<resources>/browser-addon``, then the aliases, then any immediate child of
+      ``resources`` carrying a ``manifest.json``;
+    * **dev**: ``<repo>/extensions/chrome``.
+
+    Returns the folder even when its build output is missing. "Present but
+    unbuilt" is the failure this ship exists to catch -- ``extensions/chrome/dist``
+    is gitignored, so a release that skipped the extension build ships a folder
+    Chrome refuses -- and only a check that FOUND the folder can report it.
+    """
+    override = (os.environ.get(BROWSER_ADDON_ENV) or "").strip()
+    if override:
+        candidate = Path(override)
+        if _is_addon_dir(candidate):
+            return candidate
+
+    if getattr(sys, "frozen", False):
+        try:
+            resources = Path(sys.executable).resolve().parent.parent
+        except OSError:  # pragma: no cover - defensive
+            return None
+        for name in (BROWSER_ADDON_RESOURCE_DIR, *_BROWSER_ADDON_ALIASES):
+            candidate = resources / name
+            if _is_addon_dir(candidate):
+                return candidate
+        try:
+            children = sorted(resources.iterdir())
+        except OSError:
+            children = []
+        for child in children:
+            if _is_addon_dir(child):
+                return child
+        return None
+
+    candidate = Path(__file__).resolve().parents[3] / "extensions" / "chrome"
+    return candidate if _is_addon_dir(candidate) else None
+
+
+def _addon_manifest(folder: Path) -> dict:
+    """The add-on's ``manifest.json`` as a dict, or ``{}``. Never raises."""
+    import json
+
+    try:
+        loaded = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _addon_build_missing(folder: Path) -> list[str]:
+    """The files ``manifest.json`` points at that are NOT on disk.
+
+    Read OUT of the manifest rather than listed here: the manifest is what Chrome
+    loads, so a build that renamed ``background.js`` is caught by the same read
+    Chrome performs, and a second hard-coded list could not disagree with it
+    silently. An unreadable manifest reports itself as the missing file.
+
+    The manifest is not the WHOLE list, though, and believing it was is what made
+    this check green on an add-on that could not read a page:
+    :data:`BROWSER_ADDON_RUNTIME_FILES` carries the bundles the background script
+    loads at run time, which no manifest field names.
+    """
+    manifest = _addon_manifest(folder)
+    if not manifest:
+        return ["manifest.json"]
+    wanted: list[str] = []
+    background = manifest.get("background")
+    if isinstance(background, dict) and background.get("service_worker"):
+        wanted.append(str(background["service_worker"]))
+    action = manifest.get("action")
+    if isinstance(action, dict) and action.get("default_popup"):
+        wanted.append(str(action["default_popup"]))
+    for entry in manifest.get("content_scripts") or []:
+        if isinstance(entry, dict):
+            wanted += [str(js) for js in (entry.get("js") or [])]
+    wanted += [name for name in BROWSER_ADDON_RUNTIME_FILES if name not in wanted]
+    missing: list[str] = []
+    for rel in wanted:
+        try:
+            if not (folder / rel).is_file():
+                missing.append(rel)
+        except OSError:  # pragma: no cover - defensive
+            missing.append(rel)
+    return missing
+
+
+def _addon_manifest_id(folder: Path) -> tuple[str, str]:
+    """``(derived id, problem)`` for the manifest's ``key``. Never raises.
+
+    The id Chrome will actually compute for this folder (D27A). The check compares
+    it with the id the daemon's origin allowlist admits, because those two parting
+    is a total and silent failure: the real add-on loads, connects, and is refused
+    at ``/browser/ws`` with 1008 while the card waits to pair forever.
+    """
+    from ..browser.identity import extension_id_from_spki_b64
+
+    manifest = _addon_manifest(folder)
+    if not manifest:
+        return "", "its manifest could not be read"
+    key = str(manifest.get("key") or "")
+    if not key:
+        return "", "its manifest carries no 'key', so Chrome would give it a random id"
+    try:
+        return extension_id_from_spki_b64(key), ""
+    except Exception as exc:  # noqa: BLE001 - a doctor check never raises
+        return "", f"its manifest key is not a usable public key ({exc})"
+
+
+def check_browser_addon() -> dict:
+    """The browser add-on ships, is BUILT, and carries the pinned id (D25, D27A).
+
+    RECOMMENDED, never REQUIRED: Iron Jarvis runs fine with no browser attached,
+    and a machine that has never loaded the add-on is not broken. Named
+    ``browser_addon`` because ``check_browser`` already answers a different
+    question -- is a Chromium browser installed at all.
+
+    What is silently LOST when this fails is specific. ``extensions/chrome/dist``
+    is gitignored and produced by the release, so a build that skipped that stage
+    ships a folder whose ``manifest.json`` points at a service worker that is not
+    there: Chrome refuses to register it, the user sees an add-on error rather
+    than an Iron Jarvis one, and nothing in this app says a word. A manifest
+    ``key`` that has drifted from ``browser.identity`` is worse than an absent
+    one -- the add-on loads, connects, and is refused at ``/browser/ws`` with 1008
+    by the origin allowlist, leaving the card on "Waiting to pair" with no
+    explanation anywhere.
+    """
+    from ..browser.identity import (
+        EXTENSION_ID_ENV,
+        PINNED_EXTENSION_ID,
+        pinned_extension_id,
+    )
+
+    expected = pinned_extension_id()
+    # The pinned id is CONFIGURABLE (``EXTENSION_ID_ENV``), and an override left in
+    # the environment by an earlier experiment narrows the origin allowlist to an
+    # add-on the user is no longer running -- every connection refused with 1008
+    # and nothing anywhere naming the reason. So when the id in force is not the
+    # built-in one, every sentence below says where it came from.
+    source = f" (from {EXTENSION_ID_ENV})" if expected != PINNED_EXTENSION_ID else ""
+    folder = browser_addon_dir()
+    if folder is None:
+        return _result(
+            "browser_addon",
+            False,
+            "the browser add-on folder is not in this install - Load unpacked has "
+            "nothing to point at, so no browser can be paired.",
+            fix="Reinstall the current release; from source the folder is extensions/chrome.",
+            level=RECOMMENDED,
+        )
+
+    missing = _addon_build_missing(folder)
+    if missing:
+        return _result(
+            "browser_addon",
+            False,
+            f"the browser add-on at {folder} is not built: {', '.join(missing)} "
+            "missing - Chrome refuses to load it, so pairing can never start.",
+            fix="Reinstall the current release; from source, run `pnpm install && pnpm build` "
+            "in extensions/chrome.",
+            level=RECOMMENDED,
+        )
+
+    derived, problem = _addon_manifest_id(folder)
+    if problem:
+        return _result(
+            "browser_addon",
+            False,
+            f"the browser add-on at {folder} is built, but {problem} - the daemon "
+            f"admits only {expected}{source} at /browser/ws, so it would be refused.",
+            fix="Reinstall the current release; the add-on's manifest key must be the one in "
+            "iron_jarvis/browser/identity.py.",
+            level=RECOMMENDED,
+        )
+    if derived != expected:
+        return _result(
+            "browser_addon",
+            False,
+            f"the browser add-on at {folder} loads as {derived}, but the daemon admits "
+            f"only {expected}{source} at /browser/ws - it would be refused with no message, "
+            "and the card would wait to pair forever.",
+            fix="Reinstall the current release; if you loaded your own build, set "
+            "IRONJARVIS_BROWSER_EXTENSION_ID to its id.",
+            level=RECOMMENDED,
+        )
+    return _result(
+        "browser_addon",
+        True,
+        f"browser add-on built and ready to load from {folder} (id {expected}{source}).",
+        level=RECOMMENDED,
+    )
+
 #: Ordered list of every check callable — callers may render this directly.
 CHECKS = [
     check_python,
@@ -251,6 +500,7 @@ CHECKS = [
     check_browser,
     check_pdf_classifier,
     check_guide_docs,
+    check_browser_addon,
 ]
 
 
@@ -417,6 +667,16 @@ def runtime_checks(platform) -> list[dict]:
             _result("scheduler_timezone", False, f"time-zone check failed: {exc}", level=RECOMMENDED)
         )
 
+    # The browser bridge (v1.239.0, D25): the service the platform built, the
+    # routes actually being served, the access setting, and the pairing/connection
+    # state. Not paired is not broken, so those are reported with ok true.
+    try:
+        checks.append(check_browser_bridge(platform))
+    except Exception as exc:  # noqa: BLE001
+        checks.append(
+            _result("browser_bridge", False, f"browser check failed: {exc}", level=RECOMMENDED)
+        )
+
     # The custom endpoint's configured model actually EXISTS on that gateway.
     # A renamed gateway alias otherwise 400s every request routed there with a
     # cryptic provider error (live-hit 2026-07-31: model 'brain' after the
@@ -516,6 +776,147 @@ def check_mcp(platform) -> dict:
         else "Open Tools → Connected packs and press Retry on the pack; if npx is missing, install Node.js LTS (https://nodejs.org) and restart Iron Jarvis.",
         level=RECOMMENDED,
     )
+
+
+
+def check_browser_bridge(platform) -> dict:
+    """The live half of the browser diagnostics (D25). RECOMMENDED, never raises.
+
+    Covers what only a running install can answer -- the service the platform
+    built, the routes that are actually being served, the ``browser_access``
+    setting, the pairing record and the live socket -- and leaves the on-disk
+    add-on and the pinned id to :func:`check_browser_addon`, which needs no
+    platform and so also runs from the offline CLI doctor.
+
+    **Not connected is not broken.** ``browser_access`` ships ``off`` and most
+    installs never pair a browser, so those states are REPORTED in the detail with
+    ``ok`` true. A doctor that flagged them would be crying wolf on every fresh
+    install, and a user who learns to ignore a row learns to ignore the row that
+    matters. What DOES fail here is a bridge that cannot work at all: no runtime on
+    the platform (every ``browser_*`` tool is missing and the card is dead), routes
+    that were never registered (the add-on's socket has nowhere to connect), or a
+    paired browser whose transport is holding an unretired fault -- the one case
+    where the user believes they have a working browser and does not.
+
+    **Unknown is not a negative.** A fact this check cannot READ (an unreadable
+    config store, a transport that raises) is reported as unknown and NOT ok, never
+    as the falsy default of the variable it failed to fill. Saying "no browser is
+    connected" on the strength of an exception is a claim about the user's browser
+    that nothing in this process supports, and a green row over it hides the only
+    failure the user could still act on.
+    """
+    from ..daemon.routes.browser import SERVED_PATHS, WS_PATH, served_paths
+
+    # getattr, but for a platform that is still BUILDING: a half-constructed
+    # object can raise out of a property, and `getattr(..., None)` only swallows
+    # AttributeError. The doctor is what a user runs when something is already
+    # wrong, so it is the last place allowed to raise.
+    try:
+        runtime = getattr(platform, "browser", None)
+    except Exception:  # noqa: BLE001 - a doctor check never raises
+        runtime = None
+    if runtime is None:
+        return _result(
+            "browser_bridge",
+            False,
+            "the browser service did not initialise - every browser tool is missing "
+            "and the Your browser card cannot pair anything.",
+            fix="Restart Iron Jarvis; if it persists, reinstall the current release "
+            "(check daemon.log for the boot error).",
+            level=RECOMMENDED,
+        )
+
+    facts: list[str] = []
+
+    # Asked ABOUT THIS PLATFORM, not about the process: ``served_paths`` records
+    # what it registered on the platform it registered for, so a second app built
+    # anywhere in this process cannot make this row describe the wrong route table.
+    unserved = sorted(set(SERVED_PATHS) - served_paths(platform))
+    if unserved:
+        return _result(
+            "browser_bridge",
+            False,
+            "the browser routes are not being served in this process "
+            f"({', '.join(unserved)}) - the add-on has nowhere to connect.",
+            fix="Restart Iron Jarvis; if it persists, reinstall the current release.",
+            level=RECOMMENDED,
+        )
+    facts.append(f"the pairing socket is served at {WS_PATH}")
+
+    # What could not be READ AT ALL, as opposed to what read as "no". The two are
+    # not the same row and this check used to conflate them: an unreadable fact left
+    # its variable at its falsy default, so a runtime whose every question raised
+    # rendered GREEN and asserted "no browser is connected" -- a claim about the
+    # user's browser derived from an exception. A fact nobody could read is not a
+    # negative fact; it is a bridge whose state is unknown, which is the one thing
+    # this row must never report with confidence.
+    unreadable: list[str] = []
+
+    try:
+        access = str(runtime.access() or "off").strip()
+    except Exception as exc:  # noqa: BLE001 - a doctor check never raises
+        access = ""
+        unreadable.append("the browser_access setting")
+        facts.append(f"the browser_access setting could not be read ({exc})")
+    if access == "off":
+        facts.append("browser access is off, so Jarvis will not speak to a browser")
+    elif access:
+        facts.append(f"browser access is {access}")
+
+    paired = None
+    try:
+        store = getattr(runtime, "pairing", None)
+        paired = bool(store is not None and store.paired())
+    except Exception as exc:  # noqa: BLE001
+        unreadable.append("the pairing record")
+        facts.append(f"the pairing record could not be read ({exc})")
+    if paired is True:
+        facts.append("a browser is paired")
+    elif paired is False:
+        facts.append("no browser is paired yet")
+
+    # ``None``, not ``{}``: the pairing branch above already distinguishes "could
+    # not read" from False by leaving its variable None, and the connection branch
+    # has to do the same or it says something it does not know.
+    view: dict | None = None
+    try:
+        view = dict(runtime.backend.status())
+    except Exception as exc:  # noqa: BLE001
+        unreadable.append("the transport's state")
+        facts.append(f"the transport could not report its state ({exc})")
+    connected = bool(view.get("connected")) if view is not None else None
+    if connected is True:
+        facts.append("a browser is connected")
+    elif connected is False:
+        facts.append("no browser is connected")
+    last_error = str((view or {}).get("last_error") or "").strip()
+
+    if unreadable:
+        # No remedy would be worse than a wrong one: the user is looking at a row
+        # that cannot say whether their browser works, and the honest instruction is
+        # the same one the missing-runtime row gives. Naming WHAT could not be read
+        # keeps the fix pointed at this failure rather than at browsers in general.
+        return _result(
+            "browser_bridge",
+            False,
+            "; ".join(facts) + " - so this row cannot say whether your browser works.",
+            fix=f"Restart Iron Jarvis; if it persists, reinstall the current release "
+            f"({', '.join(unreadable)} could not be read - daemon.log has the error).",
+            level=RECOMMENDED,
+        )
+
+    if paired and not connected and last_error:
+        return _result(
+            "browser_bridge",
+            False,
+            "; ".join(facts) + f" - last problem: {last_error}",
+            fix="Open Chrome with the add-on loaded; if it does not reconnect, press "
+            "Forget on the Your browser card and pair again.",
+            level=RECOMMENDED,
+        )
+    if last_error:
+        facts.append(f"last problem: {last_error}")
+    return _result("browser_bridge", True, "; ".join(facts) + ".", level=RECOMMENDED)
 
 
 def doctor(platform=None) -> dict:

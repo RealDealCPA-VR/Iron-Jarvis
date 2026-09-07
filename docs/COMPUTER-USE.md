@@ -44,10 +44,18 @@ silently redirect where Chrome saves it. (`rename_file` refuses to move a file
 from outside the workspace — that refusal is the documented behaviour, not a
 bug; the copy is `POST /documents/save-copy`.)
 
+**A harness can use it too.** A coding CLI launched in a Build pane whose
+**Browser** capability is ticked drives this same browser through Jarvis, behind
+the same approvals and the same ledger, on a credential that belongs to that pane
+and dies with it. Computer use is untouched by that: it has no pane capability
+and no add-on.
+
 Browser access ships **off**, and its three settings (off / read only /
 interactive) are separate from everything below — turning Computer Use on does
-not touch it, and turning it off does not disable Computer Use. See the Browser
-section of `docs/HANDBOOK.md`.
+not touch it, and turning it off does not disable Computer Use. **Your browser has
+its own guide: `docs/BROWSER.md`** — loading the add-on, pairing, the three access
+modes, the security model, and the sixteen limits of this first version. The
+Handbook's Browser section is the short version of the same ground.
 
 **Computer use** — the rest of this file — is the other one: a **separate,
 headless Chromium** the daemon launches itself, in a fresh incognito context per

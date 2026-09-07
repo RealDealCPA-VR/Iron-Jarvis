@@ -102,6 +102,29 @@ jobs:
         working-directory: dashboard
         run: pnpm test
 
+      # THE GATE COVERS WHAT THE INSTALLER CONTAINS — and since v1.239.0 the
+      # installer contains the browser add-on (desktop/package.json
+      # extraResources -> resources/browser-addon). extensions/chrome/dist is
+      # gitignored, so the bundle exists only because a build produced it; if
+      # that build can fail, it must fail HERE, in the gate, and not in the
+      # installer job that publishes to the user's auto-updating daily driver.
+      #
+      # scripts/build.mjs is the same entry point desktop/build-installer.ps1
+      # calls, and it runs three checks the gate needs by name: it verifies the
+      # PINNED EXTENSION ID against src/iron_jarvis/browser/identity.py (a drift
+      # there gets the real add-on refused at /browser/ws with close 1008),
+      # it typechecks (esbuild strips types without checking them), and it
+      # re-reads manifest.json to confirm every file it names landed in dist/.
+      - name: Install browser add-on deps
+        if: steps.gate.outputs.publish == 'true'
+        working-directory: extensions/chrome
+        run: pnpm install --frozen-lockfile
+
+      - name: Build + typecheck the browser add-on, and verify the pinned ID
+        if: steps.gate.outputs.publish == 'true'
+        working-directory: extensions/chrome
+        run: node scripts/build.mjs
+
       - name: Syntax-check the desktop entry points
         if: steps.gate.outputs.publish == 'true'
         shell: bash

@@ -51,10 +51,19 @@ Two things this module reads that the card contract depends on, and their reason
   timeout, and the page the user opened to find out that their browser is wedged
   would be the page that hangs. The plan says this route never fails; a route that
   takes 15 seconds has failed.
-* ``POST /browser/test`` calls ``runtime.active_tab()`` — a READ method, and the
-  only method this route may ever send (D25: "Do not make Test mutate the page").
-  ``TEST_METHOD`` names it so the read-only property is a thing a test asserts
-  against ``protocol.READ_METHODS`` rather than a promise in a docstring.
+* ``POST /browser/test`` runs the runtime's own ``active_tab`` against a
+  ``_ReadOnlyRuntime`` view — a READ method, and the only method this route may
+  ever send (D25: "Do not make Test mutate the page"). ``TEST_METHOD`` names it so
+  the read-only property is a thing a test asserts against ``protocol.READ_METHODS``
+  rather than a promise in a docstring, and the view is what makes the property
+  hold for the NEXT edit as well: a method outside ``READ_METHODS`` is refused
+  before it reaches the socket instead of being sent to a real, signed-in browser.
+  The view is TOTAL, which took a second pass to be true — a method reached
+  THROUGH it is re-bound to the view, so a round trip that delegates to a sibling
+  still speaks through the read-only transport; ``directive`` is refused outright
+  (``disconnect`` would drop the browser Test was pressed to measure); and the
+  transport's other attributes are an allowlist, because ``command`` is not the
+  only route to a frame and a denylist would admit the next one by default.
 
 The plaintext pairing token never passes through this module: ``complete_pairing``
 mints it and hands it to the one ``browser.paired`` frame, and
@@ -70,6 +79,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import types
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -81,6 +91,14 @@ from ...browser.errors import BrowserError, BrowserErrorCode, browser_error
 from ...browser.extension_backend import ExtensionConnection
 from ...browser.identity import pinned_extension_id
 from ...browser.service import ACCESS_OFF
+
+# The FUNCTION, imported directly, because ``iron_jarvis.onboarding``'s package
+# __init__ rebinds the name ``doctor`` from the MODULE to the ``doctor()``
+# function -- ``from ...onboarding import doctor`` hands back a callable with no
+# ``browser_addon_dir`` on it. Tests drive this through the real
+# ``IRONJARVIS_BROWSER_ADDON_DIR`` env override the resolver reads per call, which
+# is the seam the desktop supervisor itself uses.
+from ...onboarding.doctor import browser_addon_dir
 
 logger = logging.getLogger("iron_jarvis.browser")
 
@@ -114,6 +132,60 @@ TEST_METHOD = P.METHOD_ACTIVE_TAB
 _EXTENSION_ORIGIN_PREFIX = "chrome-extension://"
 
 
+#: The pairing socket's path, named once so the doctor can say it out loud.
+WS_PATH = "/browser/ws"
+
+#: Every path this module serves. Declared here, and VERIFIED against the app's own
+#: route table at the end of :func:`register` -- a declaration alone would be a
+#: constant read twice, which is not evidence that anything is being served.
+SERVED_PATHS: tuple[str, ...] = (
+    WS_PATH,
+    "/browser/status",
+    "/browser/pair",
+    "/browser/disconnect",
+    "/browser/forget",
+    "/browser/test",
+    "/browser/request-host-permission",
+)
+
+#: What :func:`register` actually put on the LAST app registered in this process.
+#: The per-app answer is :data:`SERVED_ATTR` on that app's platform; this is the
+#: fallback for a caller that has no platform to ask.
+_SERVED: frozenset[str] = frozenset()
+
+#: Where :func:`register` records the served set for the platform it registered
+#: with, so :func:`served_paths` can answer for THAT app rather than for whichever
+#: one registered most recently. A module global is a fine answer in production --
+#: one process builds one app -- but it is an answer about the process, and the
+#: doctor is handed a platform and asks about the install it belongs to. A second
+#: ``create_app`` anywhere (a helper, a future embedded mode, a half-built app
+#: constructed after the real one) would otherwise make this row describe the wrong
+#: route table with total confidence, and nothing would look different.
+SERVED_ATTR = "browser_served_paths"
+
+
+def served_paths(platform: Any = None) -> frozenset[str]:
+    """The paths of :data:`SERVED_PATHS` really registered for *platform*.
+
+    The doctor's browser row reads this (D25's "WebSocket route"). It answers
+    ``frozenset()`` in a process that never built an app, which is the truth: the
+    add-on's socket has nowhere to connect there. The alternative -- asserting the
+    constant tuple -- would report a served socket in a build where the ``register``
+    call had been deleted, which is exactly the failure the row exists to name.
+
+    With no *platform* (or one that never went through :func:`register`) this falls
+    back to the process-wide record, which is what every caller had before.
+    """
+    if platform is not None:
+        try:
+            served = getattr(platform, SERVED_ATTR, None)
+        except Exception:  # noqa: BLE001 - a half-built platform may raise
+            served = None
+        if isinstance(served, frozenset):
+            return served
+    return _SERVED
+
+
 class PairBody(BaseModel):
     """``POST /browser/pair`` — the pending request id the card is offering.
 
@@ -138,8 +210,44 @@ def _runtime(d) -> Any:
     return getattr(platform, "browser", None)
 
 
+def _addon_dir() -> str:
+    """The absolute add-on folder Chrome must be pointed at here, or ``""``.
+
+    ONE resolver, the doctor's (:func:`onboarding.doctor.browser_addon_dir`), which
+    already answers this question for the ``browser_addon`` row: the env override
+    the desktop supervisor exports (``IRONJARVIS_BROWSER_ADDON_DIR``, set by
+    ``desktop/main.js`` when the bundled add-on carries a manifest), then the
+    packaged ``<resources>/browser-addon``, then a source checkout. A second
+    implementation of "where is the add-on" in this module is the one-definition
+    failure this repository keeps paying for (v1.231.0), and the two would disagree
+    on exactly the install where it mattered.
+
+    WHY THE ROUTE CARRIES IT AT ALL. The next physical act after reading the card is
+    typing this folder into Chrome's *Load unpacked* picker, and a folder NAME is
+    not something a file picker can resolve. It is not a secret -- it is a directory
+    inside the user's own installation, and the doctor already prints it -- so it
+    carries no authorisation beyond the one every route in this module already has.
+
+    Never raises, and never waits: a handful of ``stat`` calls, on a route
+    documented never to fail. An unresolvable folder is ``""``, which the card
+    renders as "this install could not find it" rather than as a path.
+    """
+    try:
+        folder = browser_addon_dir()
+    except Exception:  # pragma: no cover - defensive; the resolver swallows OSError
+        logger.debug("browser add-on folder lookup degraded", exc_info=True)
+        return ""
+    return str(folder) if folder is not None else ""
+
+
 def _disconnected_status() -> dict[str, Any]:
-    """The status shape for "there is no browser here", in one place."""
+    """The status shape for "there is no browser here", in one place.
+
+    ``addon_dir`` is resolved HERE rather than in the connected branch because it
+    is a fact about the disk, not about the socket: the card needs it precisely
+    when nothing is connected, and the ``runtime is None`` branch returns this
+    shape unmodified.
+    """
     return {
         "connected": False,
         "access": "off",
@@ -151,11 +259,145 @@ def _disconnected_status() -> dict[str, Any]:
         # request arrives from an unauthenticated socket, and this is the only fact
         # that distinguishes the real add-on from anything else on the machine.
         "expected_extension_id": pinned_extension_id(),
+        # The folder a user points Chrome's Load unpacked at, absolute, or "" when
+        # this install cannot find one. See :func:`_addon_dir`.
+        "addon_dir": _addon_dir(),
         "active_tab": None,
         "pending_pairing": None,
         "paired": False,
         "last_error": None,
     }
+
+
+#: Every attribute of the real transport a READ path may reach through the view.
+#: Tiny on purpose, and the only two ``BrowserRuntime``'s read path actually uses:
+#: ``connected`` (through ``getattr(self.backend, "connected", False)`` -- which is
+#: why a refusal here must NOT be an ``AttributeError``, or it would silently become
+#: ``False``) and ``status()``, the cached transport view that makes no round trip.
+_READABLE_TRANSPORT_ATTRS = frozenset({"connected", "status"})
+
+
+class _ReadOnlyTransport:
+    """The transport ``POST /browser/test`` speaks through: READ methods, nothing else.
+
+    Not a second policy -- it grants nothing and takes nothing away, and every
+    access decision is still the runtime's. It is a STOP placed between the
+    diagnostic and the socket so that "Test does not mutate the page" (D25) is a
+    property of the code path rather than a promise in a docstring. Test is a
+    button a worried user presses twice; a frame that clicked or navigated would be
+    sent to their real, signed-in browser, and no test of the *current* method
+    protects the NEXT edit that points the round trip somewhere else.
+
+    A refused method raises rather than returning empty: a diagnostic that quietly
+    did nothing would report "Round-trip OK" while never speaking to the browser.
+
+    **The gate is an ALLOWLIST, and it has to be.** ``command`` is not the only way
+    to put a frame on the socket: ``directive`` sends one (``disconnect`` would drop
+    the user's browser mid-diagnostic), and ``_await_response``, ``deliver_pairing``,
+    ``release`` and ``connection.send`` all reach it too. A ``__getattr__`` that
+    forwarded everything and refused a list would admit the NEXT one added by
+    default, which is the same "true for the current edit only" property this class
+    exists to remove. So exactly the attributes a READ path uses pass through
+    (:data:`_READABLE_TRANSPORT_ATTRS`) and everything else is refused BY NAME --
+    loudly, so an edit that legitimately needs another read is told to widen the set
+    rather than discovering silence.
+    """
+
+    def __init__(self, backend: Any) -> None:
+        self._backend = backend
+        #: Every method that reached the socket through here, for the caller's log.
+        self.sent: list[str] = []
+
+    def __getattr__(self, name: str) -> Any:
+        if name not in _READABLE_TRANSPORT_ATTRS:
+            raise BrowserError(
+                BrowserErrorCode.EXTENSION_ERROR,
+                message=(
+                    f"the browser test refused to reach {name!r} on the transport: "
+                    "Test is read-only and may use only a read attribute"
+                ),
+            )
+        return getattr(self._backend, name)
+
+    async def directive(
+        self,
+        action: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout_s: float | None = None,
+    ) -> dict[str, Any]:
+        """Always refused. No directive is a read.
+
+        The two that exist act on the SESSION -- ``disconnect`` drops the socket and
+        ``request_host_permissions`` opens a page in the user's browser -- so a Test
+        that sent either would change the thing it was called to measure.
+        """
+        raise BrowserError(
+            BrowserErrorCode.EXTENSION_ERROR,
+            message=(
+                f"the browser test refused to send the directive {action!r}: Test is "
+                "read-only and a directive acts on your browser session"
+            ),
+        )
+
+    async def command(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout_s: float | None = None,
+    ) -> dict[str, Any]:
+        if str(method) not in P.READ_METHODS:
+            raise BrowserError(
+                BrowserErrorCode.EXTENSION_ERROR,
+                message=(
+                    f"the browser test refused to send {method!r}: Test is read-only "
+                    "and may send only a read method"
+                ),
+            )
+        self.sent.append(str(method))
+        return await self._backend.command(method, params, timeout_s=timeout_s)
+
+
+class _ReadOnlyRuntime:
+    """*runtime* with :class:`_ReadOnlyTransport` in place of its transport.
+
+    A view, not a copy: every other attribute is the live runtime's, so the access
+    gate, the pairing store and the snapshot cache are the real ones and no state
+    is duplicated. The runtime object itself is NOT modified -- swapping its
+    ``backend`` for the duration of a request would be shared mutable state, and a
+    tool call arriving on another task mid-test would find a transport that refuses
+    to click.
+
+    **The view is TOTAL, one level was not enough.** A plain forwarding
+    ``__getattr__`` hands back the attribute off the REAL runtime, so a method
+    fetched through the view is BOUND TO THE REAL RUNTIME and its ``self.backend``
+    is the real transport. That made the guarantee true only for a direct
+    ``self.backend.command`` inside ``active_tab`` itself -- and the likeliest next
+    edit is exactly the other shape, ``active_tab`` delegating to a sibling such as
+    ``resolve_page_tab``, whose own backend call would have gone straight to the
+    socket. So a plain function found on the runtime's class is re-bound to THIS
+    view, and the read-only transport follows the call however deep it goes.
+    Properties, classmethods, staticmethods and instance attributes are forwarded
+    untouched: those are not methods this view can be the ``self`` of.
+    """
+
+    def __init__(self, runtime: Any) -> None:
+        self._runtime = runtime
+        self.backend = _ReadOnlyTransport(runtime.backend)
+
+    def __getattr__(self, name: str) -> Any:
+        cls = type(self._runtime)
+        for klass in cls.__mro__:
+            if name in vars(klass):
+                found = vars(klass)[name]
+                # ``types.FunctionType`` and nothing looser: a ``property`` object
+                # must be evaluated against the real instance, and a ``staticmethod``
+                # or ``classmethod`` takes no ``self`` for this view to be.
+                if isinstance(found, types.FunctionType):
+                    return found.__get__(self, cls)
+                break
+        return getattr(self._runtime, name)
 
 
 def _refuse(code: BrowserErrorCode | str, status: int, message: str = "") -> HTTPException:
@@ -386,7 +628,7 @@ def register(app: FastAPI, d) -> None:
             except Exception:  # noqa: BLE001 — teardown must not raise into ASGI
                 logger.debug("browser connection release failed", exc_info=True)
 
-    @app.websocket("/browser/ws")
+    @app.websocket(WS_PATH)
     async def browser_ws(ws: WebSocket) -> None:
         """The add-on's one socket. A pairing token, or ``?pairing=1``; nothing else.
 
@@ -564,10 +806,23 @@ def register(app: FastAPI, d) -> None:
         runtime = _runtime(d)
         if runtime is None:
             return _error_body(BrowserErrorCode.BROWSER_NOT_CONNECTED, _ms())
+        # The runtime's OWN active_tab, applied to a read-only view of it. The
+        # implementation is the service's (it applies the access gate before any
+        # frame is sent, and maps "no window open" to None rather than an error);
+        # what the view adds is that a method outside READ_METHODS cannot reach the
+        # socket from here even if a later edit points this round trip at one.
+        # Resolved off the CLASS because that is what binding to the view requires;
+        # a runtime that carries no such method is refused rather than called
+        # directly, because calling it directly is precisely the unguarded path.
+        probe = getattr(type(runtime), "active_tab", None)
+        if not callable(probe):
+            return _error_body(
+                BrowserErrorCode.EXTENSION_ERROR,
+                _ms(),
+                "this browser service cannot be diagnosed read-only",
+            )
         try:
-            # active_tab() applies the access gate (BROWSER_ACCESS_OFF before any
-            # frame is sent) and maps "no window open" to None rather than an error.
-            tab = await runtime.active_tab()
+            tab = await probe(_ReadOnlyRuntime(runtime))
         except BrowserError as exc:
             return _error_body(exc.code, _ms(), exc.message)
         except Exception as exc:  # noqa: BLE001 — a diagnostic must never 500
@@ -609,6 +864,24 @@ def register(app: FastAPI, d) -> None:
                 BrowserErrorCode.EXTENSION_ERROR, 409, f"{type(exc).__name__}: {exc}"
             ) from exc
         return {"requested": True}
+
+
+    # What actually landed. Read off the app's own route table rather than trusted
+    # from the tuple above, so a route that failed to register (or was renamed) is
+    # reported missing by the doctor instead of being claimed as served.
+    global _SERVED
+    live = {str(getattr(route, "path", "")) for route in app.routes}
+    _SERVED = frozenset(path for path in SERVED_PATHS if path in live)
+    # And recorded ON the platform these routes were registered for, so the doctor
+    # answers for the app that serves the install it was handed rather than for the
+    # last app this process happened to build. Guarded: ``d`` may carry no platform
+    # at all (the browser package is optional in a partial build), and a platform
+    # that refuses the attribute simply keeps the module-global answer.
+    try:
+        setattr(d.platform, SERVED_ATTR, _SERVED)
+    except Exception:  # noqa: BLE001 - registration must never fail on bookkeeping
+        logger.debug("browser routes could not record served paths on the platform",
+                     exc_info=True)
 
 
 async def _close(ws: WebSocket, code: int = 1000) -> None:

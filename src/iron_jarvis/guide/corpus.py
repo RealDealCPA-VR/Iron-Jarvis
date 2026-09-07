@@ -48,6 +48,7 @@ BUNDLED_DOCS: tuple[tuple[str, str, str], ...] = (
     ("local-models", "docs/LOCAL-MODELS.md", "Local Models by RAM Tier"),
     ("reflex", "docs/REFLEX.md", "Reflex rules"),
     ("computer-use", "docs/COMPUTER-USE.md", "Computer use"),
+    ("browser", "docs/BROWSER.md", "Your browser"),
     ("readme", "README.md", "README"),
     ("vocabulary", "VOCABULARY.md", "Vocabulary (one name per concept)"),
     ("spec", "SPEC.MD", "Product spec"),
@@ -86,6 +87,7 @@ _DOC_PRIOR: dict[str, float] = {
     "local-models": 1.15,
     "reflex": 1.15,
     "computer-use": 1.15,
+    "browser": 1.15,
     "spec": 0.85,
     "operating-manual": 0.85,
 }

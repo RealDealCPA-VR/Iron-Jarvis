@@ -7,7 +7,14 @@
       1. Freeze the daemon (PyInstaller)        -> packaging/dist/ironjarvis/
       2. Build the dashboard (Next standalone)  -> dashboard/.next/standalone/
       3. Stage .next/static (+ public) INTO the standalone bundle (Next won't)
+      3c. Build the browser add-on              -> extensions/chrome/dist/
       4. electron-builder                       -> desktop/release/*.exe
+
+    Stage 3c is NOT a CI-only convenience. extensions/chrome/dist is gitignored,
+    extraResources bundles that folder as resources/browser-addon, and the Browser
+    page tells the user to load it unpacked -- so a build that skipped 3c would
+    produce a LOCAL installer whose add-on folder has no service worker in it.
+    afterPack.js refuses such a bundle rather than shipping it.
 
     Run from anywhere:
         pnpm run dist:full       (from desktop/)
@@ -124,6 +131,23 @@ if (Test-Path (Join-Path $VoskDir "am")) {
     if (-not (Test-Path (Join-Path $VoskDir "am"))) { throw "vosk model download failed: $VoskDir" }
     Write-Host "    voice model ready at $VoskDir" -ForegroundColor Green
 }
+
+# 3c) Build the browser add-on --------------------------------------------
+# One entry point (scripts/build.mjs) verifies the pinned extension id,
+# typechecks, bundles, and then re-reads manifest.json to confirm every file it
+# names actually landed in dist/. Unconditional and un-skippable on purpose: a
+# stale dist/ is indistinguishable from a fresh one to electron-builder, and the
+# only symptom of a missing bundle is a Chrome error that names no file.
+Write-Host "==> [3c] Building the browser add-on (extensions/chrome)..." -ForegroundColor Cyan
+$Addon = Join-Path $Root "extensions\chrome"
+Push-Location $Addon
+try {
+    Invoke-Native "pnpm install (browser add-on)" { pnpm install }
+    Invoke-Native "browser add-on build" { node scripts/build.mjs }
+} finally { Pop-Location }
+$AddonWorker = Join-Path $Addon "dist\background.js"
+if (-not (Test-Path $AddonWorker)) { throw "browser add-on bundle missing: $AddonWorker" }
+Write-Host "    add-on ready at $Addon (bundled as resources\browser-addon)" -ForegroundColor Green
 
 # 4) Package the installer -------------------------------------------------
 Write-Host "==> [4/4] Packaging the installer (electron-builder)..." -ForegroundColor Cyan

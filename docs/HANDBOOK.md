@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.238.0 (2026-09-07).*
+holds itself to. Current as of v1.239.0 (2026-09-07).*
 
 ---
 
@@ -475,21 +475,30 @@ edge, from the CLIs' side: some builds cannot be told to switch off their *own* 
 tools, and where Jarvis cannot verify that it says so in the Launch menu instead of
 implying an isolation it did not get.
 
-**What is not here yet.** The add-on ships inside the installer in **v1.239.0**.
-Until then it is loaded from a source checkout.
+**Where the add-on comes from.** The installer ships it **inside the app**, so
+there is nothing to download and no repository to clone: the Browser card names
+the add-on folder, and Chrome's **Load unpacked** takes it from there. Chrome's
+picker wants a *directory*, so you need where the folder is as well as what it is
+called — on a default Windows install that is
+`%LOCALAPPDATA%\Programs\Iron Jarvis\resources\browser-addon`, and if you chose your own
+install location it is `resources\browser-addon` underneath it. `docs/BROWSER.md`
+walks the whole thing. (Running from a source checkout instead? The card says so
+and gives the one build command first — the built files are deliberately not
+committed, and Chrome refuses the folder without them.)
 
 **What reading a page gives it, and what it does not.** Jarvis asks the page for a
 structured summary, not its HTML: the visible text, the headings, the links, and the
 things you could interact with, each with a short-lived id. It is **bounded** — a very
 long page is cut, and when that happens Jarvis is told what was cut rather than being
 handed a short page that looks complete. It covers the **tab you are looking at**, and
-only the top document: content inside an embedded frame from another site, such as a
-payment box or a chat widget, is invisible to it. Ask for the same page twice and the
+only its top document: nothing inside an `<iframe>` is read — not from another
+site, and not from this one either — so an embedded viewer, a payment box or a
+chat widget is absent from the reading rather than reported as empty. An open
+shadow root is walked; a closed one cannot even be counted. Ask for the same page twice and the
 ids change, because they describe that one reading and not the page forever.
 
 **Pairing, once.** Open the Browser page, set access, then load the add-on from the
-folder the card names (from a source checkout it has to be built first — the card's
-steps say how). The card will say **Waiting to pair**; press **Pair** and it
+folder the card names. The card will say **Waiting to pair**; press **Pair** and it
 becomes **Connected**. Pairing mints a credential that belongs only to that browser
 and only to the browser socket — it is not the app's access token, and it cannot be
 used for anything else. **Disconnect** ends the session and keeps the pairing;
@@ -501,9 +510,8 @@ you to a single-purpose page with one button on it. Grant once and normal use st
 prompting. You can narrow it later in Chrome's own extension controls, and Jarvis
 will tell you when a page is out of reach rather than failing quietly.
 
-**What it will never do.** Two of these are live as of this version; the third is a
-design commitment fixed before the code that needs it exists, and it is dated so you
-can tell which is which:
+**What it will never do.** All three are live as of this version, and each says so,
+so you never have to guess whether a promise is in force or merely planned:
 
 - **Page content is untrusted data, always** (live): a page that contains instructions
   does not get to give Jarvis orders, and a page that looks like it is trying to gets
@@ -524,6 +532,60 @@ can tell which is which:
 **Test** on the card does a harmless round trip and reports what came back, which is
 the fastest way to tell a browser that is not running from an add-on that is not
 loaded.
+
+**Supported browsers.** Chrome and Edge, **version 120 or newer** — the floor the
+add-on's own Manifest V3 manifest declares, and an older Chrome refuses to load it.
+Other Chromium browsers at 120 or above will most likely work; those two are what it
+is tested against. Firefox and Safari are not supported.
+
+**The security model, in five sentences.** There are five separate credentials in this
+app and none of them substitutes for another: the app's own access token opens the
+app's routes, the pairing credential opens the browser socket and nothing else, a
+pane's credential opens the harness door and nothing else, provider secrets stay in
+the encrypted vault, and whatever your own MCP servers authenticate with stays in
+their own configuration, which Jarvis never borrows. Exactly one paired browser is connected at a time — a second one
+takes over, the first is told why, and anything in flight on it fails with a reason
+instead of hanging. The daemon listens on this computer's loopback address only, and
+the browser socket admits the add-on's own fixed identity and refuses everything else.
+No field's value is ever collected — the stripping happens inside the page, so a
+password never reaches Iron Jarvis at all — and what Jarvis types is redacted before
+the record is written. Everything a browser tool does is on the Activity ledger, with
+no credential ever written down.
+
+**What this first version cannot do**, stated here rather than discovered later. One
+browser at a time, and a newer connection replaces the older. Chrome and Edge only,
+version 120 or newer. Loaded unpacked, so Chrome may prompt about it at each start until a Web Store listing
+exists. Site access is granted all-or-nothing from the add-on's own page and narrowed
+afterwards in Chrome's controls, never per-site from Jarvis. Downloads land where
+Chrome puts them — Jarvis learns the path and copies the file into a project, and
+writing files stays inside the workspace, so that copy goes through the app's
+save-a-copy route rather than renaming a file that lives outside it. No clicking by
+coordinates: a control drawn on a canvas with no readable name cannot be clicked. No
+file upload, no special handling for drop-down `select` menus, no hover, no drag and
+drop. Nothing inside an embedded frame is read at all — this site's or another
+site's — while an open shadow DOM root is walked and a closed one cannot be counted.
+Element ids belong to one reading and are
+refused once the page has moved on. Screenshots capture the visible part of the tab,
+not a whole long page stitched together. A flagged page constrains what happens next
+but does not end your turn. A pane's credential dies with the daemon, so relaunch the
+harness after a restart. Only the Browser capability is enforced per pane. Keeping a
+harness away from its *own* web tools is best effort and is reported honestly. There
+is no Jarvis browser yet. And Chrome unloads a browser add-on that has gone quiet, so
+a long-idle bridge reads as **Paired — not running** with Chrome open in front of
+you; it is not broken and needs no re-pairing, and it reconnects by itself the moment
+anything wakes the add-on — opening its popup, switching tabs, or restarting the
+browser.
+
+**The whole guide** is `docs/BROWSER.md` — the same ground at length. It is bundled
+into the app for the Guide rather than dropped in a folder you can open, so the way to
+read it in an installed copy is to ask the Guide. What comes next is the Jarvis-owned
+browser and its per-project profiles, file upload, hover and drag and drop, reading
+inside frames, richer extraction, and watching a page so a change can wake a rule;
+after that, remembering and searching the pages you visited — and every one of those
+last items is off by default and will ask for its own separate consent, because an
+index of what you read records which client you were working on and when. (The
+maintainers' full list is `docs/TODO.md` in the source repository, which is not part of
+an installed copy.)
 
 ---
 

@@ -70,6 +70,22 @@ const DASHBOARD_DIR = path.join(REPO_ROOT, "dashboard");
 const RES_DIR = process.resourcesPath || REPO_ROOT;
 const DAEMON_EXE = path.join(RES_DIR, "daemon", "ironjarvis.exe");
 const DASHBOARD_SERVER = path.join(RES_DIR, "dashboard", "server.js");
+// THE BROWSER ADD-ON (v1.239.0), in BOTH layouts, in one declaration — the same
+// shape DAEMON_EXE and DASHBOARD_SERVER use above, and at the same scope FOR A
+// REASON. It first landed inside the `if (IS_PACKAGED)` boot branch, which made
+// its dev arm unreachable: in a source run the branch never executes, so the
+// daemon was never told where the add-on is and the Browser page could only fall
+// back to guessing. The packaging test that claimed to pin "both layouts" passed
+// anyway, because it reads the declaration rather than reaching it.
+//
+// Packaged: electron-builder puts it in extraResources as "browser-addon" and
+// afterPack.js inventories it. Source checkout: the repo's own extensions/chrome.
+// The daemon is told which, so the doctor and the Browser page can name a REAL
+// folder for Chrome's Load unpacked — a user who ran the installer has no
+// checkout, which is the whole point of D27.
+const BROWSER_ADDON_DIR = IS_PACKAGED
+  ? path.join(RES_DIR, "browser-addon")
+  : path.join(REPO_ROOT, "extensions", "chrome");
 
 // The dashboard's API base (NEXT_PUBLIC_IJ_API) is baked at build time to
 // 127.0.0.1:8787, so the bundled daemon MUST listen on 8787.
@@ -2668,11 +2684,21 @@ async function startup() {
     // daemon; point the daemon at it so speech-to-text works with no key/server/
     // internet. Only set when the model is actually present (dev has none), so
     // resolution falls through cleanly otherwise.
+    // The add-on's folder is resolved at module scope (BROWSER_ADDON_DIR); this
+    // only decides whether to TELL the daemon about it. Guarded by the manifest
+    // rather than the directory: an extraResources entry that shipped empty (the
+    // dist/ output is gitignored, so a build that skipped the add-on step
+    // produces exactly that) must fall through and be reported by the doctor,
+    // not exported as if it were loadable.
+    const addonEnv = fs.existsSync(path.join(BROWSER_ADDON_DIR, "manifest.json"))
+      ? { IRONJARVIS_BROWSER_ADDON_DIR: BROWSER_ADDON_DIR }
+      : {};
     const voskModelDir = path.join(RES_DIR, "vosk-model");
     const voskEnv =
       fs.existsSync(path.join(voskModelDir, "am"))
         ? { IRONJARVIS_VOSK_MODEL: voskModelDir }
         : {};
+    const resourceEnv = { ...voskEnv, ...addonEnv };
     // 1) Frozen daemon. Must serve on 8787 to match the build-time-baked client URL.
     startService("daemon", () =>
       spawnChild(
@@ -2683,7 +2709,7 @@ async function startup() {
         // Blank out any ambient IRONJARVIS_HOME (e.g. left over from source/dev use)
         // so the packaged app's per-install userData home always wins — an empty
         // value makes resolve_home() fall back to --root (userData/.ironjarvis).
-        { IRONJARVIS_TOKEN: authToken, IRONJARVIS_HOME: "", ...voskEnv },
+        { IRONJARVIS_TOKEN: authToken, IRONJARVIS_HOME: "", ...resourceEnv },
         false
       )
     );
