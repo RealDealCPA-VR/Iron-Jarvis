@@ -331,7 +331,21 @@ describe("AgentPortrait — the same row for every kind of agent", () => {
     pick("builder", pngFile());
     await waitFor(() => expect(screen.getByTestId("portrait-cropper")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Use this" }));
-    await waitFor(() => expect(screen.getByText("boom")).toBeTruthy());
+    // HEADROOM, NOT A PERFORMANCE CLAIM (v1.236.2). This is still waiting for the
+    // exact thing it asserts — the error the failed store produced — which is the
+    // rule that matters. The only change is how long it is willing to wait.
+    //
+    // The v1.236.1 gate failed here alone, out of 140 files and 1975 tests, with
+    // "Unable to find an element with the text: boom". It passes locally every
+    // time, in isolation and beside its neighbours, because the whole chain is
+    // synchronous plus microtasks: click -> crop -> onCropped -> a rejected post
+    // -> setError. A contended Windows runner rendering 140 suites is the only
+    // place that window opens, which is exactly what this repo has recorded twice
+    // before about frontend waits. Raising the bound cannot mask a real defect:
+    // if the error never renders, this still fails, just later.
+    await waitFor(() => expect(screen.getByText("boom")).toBeTruthy(), {
+      timeout: 5000,
+    });
     // Whether one EXISTS is daemon truth, so the row must not refetch on a
     // failure and must not draw one either (the v1.171.0 rule).
     expect(onChanged).not.toHaveBeenCalled();
