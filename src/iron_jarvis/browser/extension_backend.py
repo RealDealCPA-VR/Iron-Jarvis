@@ -22,6 +22,13 @@ and awaits. Two consequences that are each a test:
   future is the worst available outcome — the tool call never returns, the chat
   turn never finishes, and the user sees a spinner with no error anywhere.
 
+**A download report is verified, never trusted.** The add-on sends the path
+Chromium gave it; :func:`download_bus_payload` is what turns that claim into the
+``local_path`` key the file tools read, and only when the string is genuinely
+absolute. The whitelist around it (:data:`DOWNLOAD_PAYLOAD_KEYS`) exists so a
+compromised add-on cannot send a ``local_path`` of its own choosing and have every
+consumer downstream treat it as something the daemon checked.
+
 **Frame size is checked before ``json.loads``** (:data:`~iron_jarvis.browser.
 protocol.MAX_FRAME_BYTES`). The decode runs on the daemon's single event loop, so
 an oversized payload is not a big object — it is a stalled application, and the
@@ -61,7 +68,9 @@ from __future__ import annotations
 import asyncio
 import itertools
 import json
+from collections.abc import Mapping
 from datetime import datetime
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 from ..core.events import EventType
@@ -119,6 +128,88 @@ _EVENT_BUS_NAMES: dict[str, str] = {
     P.EVENT_NAVIGATION_COMPLETED: EVENT_NAVIGATION_COMPLETED,
     P.EVENT_DOWNLOAD_COMPLETED: EVENT_DOWNLOAD_COMPLETED,
 }
+
+#: The only keys the ADD-ON may contribute to a download payload, read off the
+#: protocol's own ``DownloadPayload`` so the wire contract has ONE definition.
+#:
+#: The whitelist is a security boundary rather than tidiness. The bus payload of
+#: plan 10.2 carries ``local_path``, and the file tools read that key as a path the
+#: daemon verified. Copying the add-on's dict wholesale would let a buggy — or
+#: compromised — add-on simply SEND a ``local_path`` of its choosing, and every
+#: consumer downstream would treat an unchecked string as a verified one.
+DOWNLOAD_PAYLOAD_KEYS: tuple[str, ...] = tuple(P.DownloadPayload.__annotations__)
+
+#: Completed downloads the backend remembers so an acting tool result can name one.
+#: A bound, not a cache policy: the list exists to answer "did the action the model
+#: just took produce a file", and an unbounded list over a long session is a growing
+#: set of absolute paths into the user's private folders, kept for nothing.
+MAX_TRACKED_DOWNLOADS = 16
+
+#: Default seconds :meth:`ExtensionBackend.await_download` may wait for a download
+#: to finish. A BOUND, never a performance claim, and no test asserts an elapsed
+#: duration against it. Waiting is what lets plan 10.3's one agent-facing capability
+#: exist — the completed download's absolute path appears in the result of the
+#: action that started it — and the bound is what stops an ordinary click, which
+#: starts no download at all, from becoming a tool call that never returns.
+DOWNLOAD_SETTLE_S = 5.0
+
+
+def absolute_local_path(claim: Any) -> str:
+    """Return ``claim`` when it is an absolute local path, otherwise ``""``.
+
+    Chromium documents ``DownloadItem.filename`` as an absolute local path, and
+    that documentation is the whole reason plan 10.3 needs no native messaging
+    host. It is still the ADD-ON's claim, arriving over a socket, so the string is
+    checked here before anything calls it a path.
+
+    The silent failure this catches: a relative or invented ``filename`` becomes a
+    ``local_path`` the model hands to ``read_document``, which resolves a relative
+    path against the SESSION WORKSPACE — so the daemon reads, or fails to read, a
+    completely different file while every surface reports the download as found.
+
+    Both path flavours are asked, never only the host's. A POSIX path is not
+    absolute to :class:`PureWindowsPath` and a drive path is not absolute to
+    :class:`PurePosixPath`, so a single-flavour check would call a genuine path a
+    fake one on the other operating system — and this function is pinned from a
+    suite that runs on both.
+    """
+    if not isinstance(claim, str):
+        return ""
+    text = claim.strip()
+    if not text or "\x00" in text:
+        return ""
+    if PureWindowsPath(text).is_absolute() or PurePosixPath(text).is_absolute():
+        return text
+    return ""
+
+
+def download_bus_payload(reported: Any) -> tuple[dict[str, Any], str]:
+    """Turn one add-on download report into the bus payload of plan 10.2.
+
+    Returns ``(payload, problem)``. ``problem`` is ``""`` when the reported
+    ``filename`` verified as absolute, and the payload then carries ``local_path``;
+    otherwise ``problem`` is a sentence naming what the browser claimed and the
+    payload has NO ``local_path`` key at all.
+
+    **The absent key is the point.** It is the same rule the tab list follows when
+    it sends ``null`` instead of ``""`` for a title it cannot read: a
+    ``local_path`` that is present but wrong is read by every consumer as verified,
+    while one that is absent makes the model say it cannot find the file instead of
+    reading the wrong one.
+    """
+    source = reported if isinstance(reported, Mapping) else {}
+    payload: dict[str, Any] = {key: source[key] for key in DOWNLOAD_PAYLOAD_KEYS if key in source}
+    verified = absolute_local_path(payload.get("filename"))
+    if not verified:
+        claimed = payload.get("filename")
+        return payload, (
+            "your browser reported a completed download without an absolute local "
+            f"path (filename={claimed!r}), so Iron Jarvis will not hand that path to "
+            "a file tool"
+        )
+    payload["local_path"] = verified
+    return payload, ""
+
 
 
 class ExtensionConnection:
@@ -306,6 +397,21 @@ class ExtensionBackend:
         #: first, a user who navigates in place leaves this naming the page BEFORE
         #: the one they are looking at, for the rest of the connection.
         self.active_tab: dict[str, Any] | None = None
+        #: Completed downloads this browser reported, oldest first, each with a
+        #: ``claimed`` flag. Plan 10.3 adds NO ``browser_download`` tool and no new
+        #: file tool; the one agent-facing capability it does add is that the
+        #: absolute path of a completed download appears in the result of the
+        #: browser action that started it, so the model can hand that path straight
+        #: to ``read_document``, ``extract_pdf`` or ``list_folder``. This list is
+        #: where the path waits between the add-on's event and that result.
+        self._downloads: list[dict[str, Any]] = []
+        #: Replaced (not merely set) by :meth:`_notify_downloads` on every recorded
+        #: download, so :meth:`await_download` waits on an EVENT rather than polling
+        #: a clock — the daemon's single event loop serves every route, and a spin
+        #: here is felt as the whole application going slow. A waiter captures this
+        #: attribute BEFORE it checks for a download, which is what closes the
+        #: lost-wakeup window between "nothing yet" and "now waiting".
+        self._download_signal = asyncio.Event()
 
     # --- state ------------------------------------------------------------
 
@@ -371,6 +477,30 @@ class ExtensionBackend:
 
     # --- connection lifecycle --------------------------------------------
 
+    def connected_payload(self, conn: ExtensionConnection) -> dict[str, Any]:
+        """The ``browser.connected`` payload of plan 10.2, from ONE definition.
+
+        It is published from two places — :meth:`adopt`, and :meth:`_handle_hello`
+        when the greeting contradicts what adoption knew — and the two held separate
+        copies of the dict. A key added to one of them is a key the other event
+        silently lacks, and a consumer reading the stream then sees the same browser
+        described two different ways.
+
+        ``access`` is the live ``browser_access`` word, and it is OMITTED rather
+        than guessed when no reader is installed: ``"off"`` on a hunch would tell
+        every consumer the user had switched the capability off. The pairing token
+        never appears here. The extension id does, and it is public.
+        """
+        payload: dict[str, Any] = {
+            "extension_id": conn.extension_id,
+            "extension_version": conn.extension_version,
+            "host_permission": conn.host_permission,
+        }
+        access = self.access_word()
+        if access:
+            payload["access"] = access
+        return payload
+
     def register_restricted(self, conn: ExtensionConnection) -> None:
         """Track an unpaired socket by its pairing request id (D06A).
 
@@ -435,11 +565,7 @@ class ExtensionBackend:
         self.last_error = ""
         await self._publish(
             EVENT_CONNECTED,
-            {
-                "extension_id": conn.extension_id,
-                "extension_version": conn.extension_version,
-                "host_permission": conn.host_permission,
-            },
+            self.connected_payload(conn),
         )
         return previous if previous is not conn else None
 
@@ -527,7 +653,136 @@ class ExtensionBackend:
         # metadata — for a session that is over, and would let a snapshot_id from
         # the old browser resolve against a new one.
         self._invalidate_snapshots(None)
+        # And the download list, for the same reason: every path in it is an
+        # absolute path into the user's private folders, remembered only so the
+        # NEXT tool call on this browser could name the file. There is no next
+        # call — and a path claimed against a new browser would attribute one
+        # browser's download to another's click.
+        self._downloads.clear()
         await self._publish(EVENT_DISCONNECTED, {"reason": word, "detail": detail})
+
+    # --- downloads --------------------------------------------------------
+
+    @property
+    def recent_downloads(self) -> list[dict[str, Any]]:
+        """Copies of the remembered download payloads, oldest first.
+
+        Copies rather than the live rows: a caller that mutated one would change
+        what a later tool result reports, and the ``claimed`` bookkeeping belongs to
+        this object alone.
+        """
+        return [dict(record["payload"]) for record in self._downloads]
+
+    def _notify_downloads(self) -> None:
+        """Wake every current waiter, and hand the next one a fresh event.
+
+        Swapping the object rather than ``set()``-then-``clear()`` is what makes
+        :meth:`await_download` free of a lost wakeup: a waiter that captured the old
+        event is woken by this ``set``, and a waiter that arrives afterwards holds
+        the new one and is unaffected by a completion it already saw.
+        """
+        signal, self._download_signal = self._download_signal, asyncio.Event()
+        signal.set()
+
+    def record_download(self, reported: Any, *, claimed: bool = False) -> dict[str, Any]:
+        """Verify one reported download, remember it, and return the bus payload.
+
+        Args:
+            reported: the add-on's ``DownloadPayload``, from a ``download_completed``
+                event frame or from an acting method's ``result.download``.
+            claimed: ``True`` when the caller is already delivering this payload to a
+                model — an acting tool's own result — so no later call reports the
+                same file a second time.
+
+        Never raises. A malformed report must not break the socket the user's whole
+        browser rides on.
+
+        An unverifiable path is NOT remembered: :meth:`claim_download` would
+        otherwise hand a tool result a path that points at nothing. The caller still
+        gets the payload back and still publishes the event, because the download
+        really did complete — the user's own downloads list is the truth about where
+        it went, and "it finished, and I could not verify where" is honest where
+        silence is not.
+
+        A repeat of a ``download_id`` REPLACES the earlier record rather than adding
+        one, because the same completion legitimately arrives twice: once on an
+        acting method's result and once on the event frame. Two records would let the
+        model be told about one file twice, and it would then copy it into the
+        project twice. ``claimed`` is sticky across that replacement — a file already
+        named in a result stays named.
+        """
+        payload, problem = download_bus_payload(reported)
+        if problem:
+            self.last_error = problem
+            logger.debug("browser download not verified: %s", problem)
+            return payload
+        download_id = payload.get("download_id")
+        was_claimed = False
+        if download_id is not None:
+            for record in list(self._downloads):
+                if record["payload"].get("download_id") == download_id:
+                    was_claimed = was_claimed or bool(record["claimed"])
+                    self._downloads.remove(record)
+        self._downloads.append({"payload": payload, "claimed": claimed or was_claimed})
+        del self._downloads[:-MAX_TRACKED_DOWNLOADS]
+        self._notify_downloads()
+        return payload
+
+    def claim_download(self, tab_id: Any = None) -> dict[str, Any] | None:
+        """The newest unclaimed completed download for ``tab_id``, or ``None``.
+
+        CLAIMED, not merely read. A download is reported in exactly one tool result;
+        repeating it on every later browser call would tell the model that each click
+        produced a file, and "put the statement in the project" would then run three
+        times on one statement.
+
+        A record whose ``tab_id`` the add-on could not determine matches any tab.
+        Chromium's ``DownloadItem`` carries no tab at all, so the add-on's
+        attribution is the tab that was active when the transfer started; refusing to
+        name a real file the user just downloaded because Chrome would not say which
+        tab started it would lose the path entirely, which is the outcome plan 10.3
+        exists to prevent.
+        """
+        wanted = tab_id if isinstance(tab_id, int) and not isinstance(tab_id, bool) else None
+        for record in reversed(self._downloads):
+            if record["claimed"]:
+                continue
+            owner = record["payload"].get("tab_id")
+            if wanted is not None and isinstance(owner, int) and owner != wanted:
+                continue
+            record["claimed"] = True
+            return dict(record["payload"])
+        return None
+
+    async def await_download(
+        self, tab_id: Any = None, *, timeout_s: float = DOWNLOAD_SETTLE_S
+    ) -> dict[str, Any] | None:
+        """Claim a completed download for ``tab_id``, waiting up to ``timeout_s``.
+
+        Returns ``None`` rather than raising when nothing arrives: a click that
+        starts no download is the ordinary case, not a failure, and an error here
+        would turn every ordinary click into a failed tool call.
+
+        The wait is a BOUND and nothing asserts an elapsed duration against it. It
+        never polls — see :meth:`_notify_downloads` — so a browser that downloads
+        nothing costs the event loop one suspended task and no CPU.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, float(timeout_s))
+        while True:
+            # Captured BEFORE the claim, so a download recorded between the two is
+            # still waiting on THIS event object rather than on the one that follows.
+            signal = self._download_signal
+            claimed = self.claim_download(tab_id)
+            if claimed is not None:
+                return claimed
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return None
+            try:
+                await asyncio.wait_for(signal.wait(), remaining)
+            except (TimeoutError, asyncio.TimeoutError):
+                return None
 
     # --- commands ---------------------------------------------------------
 
@@ -569,6 +824,17 @@ class ExtensionBackend:
             # cache, is one owner and no extra round trip. (The ambient block
             # still never triggers one: it reads this attribute and never calls.)
             self.active_tab = dict(result)
+        if result.get("download") is not None:
+            # A download also arrives on the RESULT of the action that started it:
+            # plan 10.3 puts the path in the answer to the call the model made,
+            # because an event the model never sees is a path it cannot hand to
+            # ``read_document``. It gets exactly the verification the event path
+            # gets — a result is not a more trustworthy channel than an event
+            # merely because the daemon asked for it — and it is recorded as
+            # already CLAIMED, so the ``download_completed`` frame that follows
+            # cannot report the same file to a second tool call.
+            result = dict(result)
+            result["download"] = self.record_download(result.get("download"), claimed=True)
         return result
 
     async def directive(
@@ -770,11 +1036,7 @@ class ExtensionBackend:
         if after != before and self._conn is conn:
             await self._publish(
                 EVENT_CONNECTED,
-                {
-                    "extension_id": conn.extension_id,
-                    "extension_version": conn.extension_version,
-                    "host_permission": conn.host_permission,
-                },
+                self.connected_payload(conn),
             )
 
     def _resolve_response(self, conn: ExtensionConnection, frame: dict[str, Any]) -> None:
@@ -858,6 +1120,15 @@ class ExtensionBackend:
             # cached snapshot rather than none: one unnecessary re-read is cheap, and
             # a kept snapshot of a page that has been replaced is a wrong answer.
             self._invalidate_snapshots(payload.get("tab_id"))
+        elif name == P.EVENT_DOWNLOAD_COMPLETED:
+            # THE ADD-ON'S CLAIM BECOMES THE DAEMON'S FACT ONLY AFTER A CHECK.
+            # ``filename`` arrives as Chromium's absolute local path; ``local_path``
+            # — the key the file tools read — is added here, by the daemon, or not
+            # at all. Every other key the add-on sent is dropped by the whitelist,
+            # which is what stops a buggy or compromised add-on from simply SENDING
+            # a ``local_path`` of its own and having the whole application treat it
+            # as verified.
+            payload = self.record_download(payload)
         await self._publish(bus_name, payload)
 
     def _invalidate_snapshots(self, tab_id: Any) -> None:
@@ -900,6 +1171,8 @@ class ExtensionBackend:
 __all__ = [
     "CLOSE_PROTOCOL_ERROR",
     "DISCONNECT_REASONS",
+    "DOWNLOAD_PAYLOAD_KEYS",
+    "DOWNLOAD_SETTLE_S",
     "EVENT_CONNECTED",
     "EVENT_DISCONNECTED",
     "EVENT_DOWNLOAD_COMPLETED",
@@ -907,6 +1180,9 @@ __all__ = [
     "EVENT_TAB_ACTIVATED",
     "MAX_REFUSAL_WARNINGS",
     "MAX_REFUSED_FRAMES",
+    "MAX_TRACKED_DOWNLOADS",
     "ExtensionBackend",
     "ExtensionConnection",
+    "absolute_local_path",
+    "download_bus_payload",
 ]

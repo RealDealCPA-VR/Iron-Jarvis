@@ -125,12 +125,14 @@ class Tool(ABC):
     #: verdict, and ``DENY_FLOOR_TOOLS`` stays authoritative, so a tool cannot
     #: declare its way down off the floor.
     #:
-    #: IN v1.235.0 NOTHING READS IT YET. The ledger/event read site and the
-    #: escalation that consults it land with the acting browser tools (plan §8.1
-    #: and §8.2, v1.237.0). It is declared now so the fourteen browser tools can
-    #: carry it from the start, and it is documented as inert on purpose: an
-    #: attribute that LOOKS like a live gate is worse than an absent one, because
-    #: a later reader will trust it to be enforcing something.
+    #: READ SINCE v1.237.0, and it was inert before that — this note used to say
+    #: so, and updating it is part of shipping the read site rather than an
+    #: afterthought. Two things consult it now: ``ToolRegistry.invoke`` puts it on
+    #: the ``tool.executed`` / ``tool.denied`` payloads (D24), and the browser's
+    #: acting tools pass their declared class to ``browser.risk`` to decide whether
+    #: a call needs approval. Neither LOWERS a verdict: an attribute can raise the
+    #: bar, never drop it, and ``DENY_FLOOR_TOOLS`` stays authoritative — otherwise
+    #: a dynamically created tool could declare its way down off the floor.
     risk_class: RiskClass = RiskClass.EXTERNAL_COMMIT
 
     def perm_key(self) -> str:

@@ -1,13 +1,14 @@
 // Tabs: what the add-on can see of the user's browser, and how it reaches a page.
 //
-// Six methods now. Ship 1's three are read-only tab METADATA: `status`, `list_tabs`,
-// `active_tab`. Ship 2 adds the three that need the page itself — `read_page`,
-// `get_elements` and `screenshot` — so this file also owns the two bridges into a
-// tab: `runInPage`, which injects the content script on demand and speaks to it, and
-// `captureVisible`, which photographs a tab. Activating, creating, closing and
-// navigating a tab land in Ship 3 with the tools that reach them; writing them now
-// would be code no caller can run, and this repository has already paid for a
-// library that worked while nothing could reach it.
+// Fourteen methods now. Ship 1's three are read-only tab METADATA: `status`,
+// `list_tabs`, `active_tab`. Ship 2 adds the three that need the page itself —
+// `read_page`, `get_elements` and `screenshot` — so this file also owns the two
+// bridges into a tab: `runInPage`, which injects the content script on demand and
+// speaks to it, and `captureVisible`, which photographs a tab. Ship 3 adds the eight
+// that ACT: `activate_tab`, `create_tab`, `close_tab` and `navigate`, which change
+// the browser and live at the foot of this file, and `click`, `type_text`,
+// `press_key` and `scroll`, which change a page and go through `runInPage` to
+// `content/actions.ts`.
 //
 // WHY THE SCREENSHOT LIVES HERE AND NOT IN THE CONTENT SCRIPT: only an extension
 // page may call `chrome.tabs.captureVisibleTab`, and it photographs whatever is
@@ -31,8 +32,12 @@
 
 import {
   MAX_FRAME_BYTES,
+  METHOD_CLICK,
   METHOD_GET_ELEMENTS,
+  METHOD_PRESS_KEY,
   METHOD_READ_PAGE,
+  METHOD_SCROLL,
+  METHOD_TYPE_TEXT,
   UNSUPPORTED_HOSTS,
   UNSUPPORTED_SCHEMES,
 } from "../protocol";
@@ -343,4 +348,274 @@ export async function captureVisible(
       `${MAX_FRAME_BYTES} byte frame limit, so it was not sent. Ask the user to make the ` +
       "browser window smaller and try again",
   });
+}
+
+// --- acting on a tab (Ship 3) -----------------------------------------------
+//
+// Four methods that change the user's browser rather than a page's contents:
+// `activate_tab`, `create_tab`, `close_tab` and `navigate`. They live beside the
+// reads because they resolve tabs the same way and refuse the same pages, and a
+// second tab module would be a second answer to "which tab did you mean".
+//
+// THE HOST-GRANT LINE IS DRAWN BY WHAT THE RESULT CLAIMS, not by what the action
+// touches. `activate_tab`, `create_tab` and `navigate` all report a `title` and a
+// `url`, and without the grant Chrome hands back empty strings — so the honest
+// answer would be "I switched you to a tab I cannot name", which is an action taken
+// blind on a real browser. They refuse with PERMISSION_DENIED, which names the
+// button. `close_tab` reports neither, so it works without the grant: refusing to
+// close a tab the user asked to close, because we cannot read its title, would be a
+// refusal with no reason a user could act on.
+
+/** `activate_tab`: bring one tab to the front of its window. */
+export async function activateTab(
+  params: Record<string, unknown>,
+  hostPermission: boolean,
+): Promise<Record<string, unknown>> {
+  if (!hostPermission) {
+    throw new BridgeError("PERMISSION_DENIED");
+  }
+  const tab = await pageTab(params["tab_id"]);
+  const tabId = tab.id as number;
+  let updated: chrome.tabs.Tab | undefined;
+  try {
+    updated = await chrome.tabs.update(tabId, { active: true });
+    // The WINDOW too. `tabs.update({active:true})` makes the tab current inside its
+    // own window and leaves that window behind whichever one is on screen, so the
+    // user would be told Iron Jarvis switched to a tab they still cannot see.
+    await chrome.windows.update(tab.windowId, { focused: true });
+  } catch (err) {
+    throw new BridgeError("EXTENSION_ERROR", {
+      detail: `tab ${tabId} could not be activated: ${reason(err)}`,
+    });
+  }
+  return {
+    tab_id: tabId,
+    title: updated?.title ?? tab.title ?? "",
+    url: updated?.url ?? tab.url ?? "",
+    activated: true,
+  };
+}
+
+/** `close_tab`: close one tab. Not undoable, which is why it is `IRREVERSIBLE`. */
+export async function closeTab(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const raw = params["tab_id"];
+  if (typeof raw !== "number" || !Number.isInteger(raw)) {
+    // Deliberately NOT routed through `pageTab`, which falls back to the ACTIVE tab
+    // when the id is missing or malformed. That fallback is right for a read and
+    // catastrophic here: `close_tab` with a dropped id would close whatever the
+    // user is looking at instead of refusing.
+    throw new BridgeError("TAB_NOT_FOUND", { tab_id: String(raw ?? "(none)") });
+  }
+  try {
+    await chrome.tabs.remove(raw);
+  } catch (err) {
+    throw new BridgeError("TAB_NOT_FOUND", { tab_id: `${raw} (${reason(err)})` });
+  }
+  return { tab_id: raw, closed: true };
+}
+
+/** `create_tab`: open a new tab, optionally at a URL. */
+export async function createTab(
+  params: Record<string, unknown>,
+  hostPermission: boolean,
+): Promise<Record<string, unknown>> {
+  if (!hostPermission) {
+    throw new BridgeError("PERMISSION_DENIED");
+  }
+  const url = String(params["url"] ?? "").trim();
+  if (url) {
+    const scheme = unsupportedScheme(url);
+    if (scheme) {
+      throw new BridgeError("UNSUPPORTED_PAGE", { scheme });
+    }
+  }
+  let created: chrome.tabs.Tab;
+  try {
+    // `url` is omitted entirely when empty rather than sent as `about:blank`:
+    // `about:` is on UNSUPPORTED_SCHEMES, so the model would be handed a tab id it
+    // can never read or act on.
+    created = await chrome.tabs.create({
+      active: params["active"] !== false,
+      ...(url ? { url } : {}),
+    });
+  } catch {
+    throw new BridgeError("NAVIGATION_FAILED", { url: url || "(a blank tab)" });
+  }
+  if (created.id === undefined) {
+    throw new BridgeError("EXTENSION_ERROR", {
+      detail: "Chrome opened a tab without giving it an id, so it cannot be acted on",
+    });
+  }
+  const settled = await settle(created.id);
+  return {
+    tab_id: created.id,
+    url: settled.url ?? created.pendingUrl ?? url,
+    title: settled.title ?? "",
+  };
+}
+
+/**
+ * `navigate`: point one tab at a URL and wait for it to finish loading.
+ *
+ * `page_version` is reported as 0, and the zero is the point. The document that
+ * loads is BRAND NEW: the previous content script died with the previous document,
+ * and no snapshot of the new one exists. Reporting the old version, or inventing a
+ * 1, would let the daemon compare equal against a registry that describes a page
+ * that is gone — and the next `browser_click` would resolve an element id against
+ * it. Zero matches no real version, so every id from before this call answers
+ * STALE_ELEMENT, which is the truth.
+ *
+ * NAVIGATION_FAILED is reported only where it can honestly be detected: Chrome
+ * rejects a malformed URL, and that rejection is a real failure. A DNS error or a
+ * 404 is NOT a rejection — Chrome loads its own error page and reports `complete` —
+ * so those come back as a successful navigation whose title says what went wrong,
+ * which is what the user's own browser shows them too.
+ */
+export async function navigate(
+  params: Record<string, unknown>,
+  hostPermission: boolean,
+): Promise<Record<string, unknown>> {
+  if (!hostPermission) {
+    throw new BridgeError("PERMISSION_DENIED");
+  }
+  const url = String(params["url"] ?? "").trim();
+  if (!url) {
+    throw new BridgeError("NAVIGATION_FAILED", { url: "(no address)" });
+  }
+  const scheme = unsupportedScheme(url);
+  if (scheme) {
+    throw new BridgeError("UNSUPPORTED_PAGE", { scheme });
+  }
+  const tab = await pageTab(params["tab_id"]);
+  const tabId = tab.id as number;
+  try {
+    await chrome.tabs.update(tabId, { url });
+  } catch (err) {
+    throw new BridgeError("NAVIGATION_FAILED", { url: `${url} (${reason(err)})` });
+  }
+  const settled = await settle(tabId);
+  return {
+    tab_id: tabId,
+    url: settled.url ?? url,
+    title: settled.title ?? "",
+    page_version: 0,
+    // "complete" or "loading". A load that outran the wait is reported as still
+    // loading rather than as complete: the model then calls browser_read_page,
+    // which refuses with PAGE_NOT_READY until the document is actually there.
+    status: settled.status ?? "unknown",
+  };
+}
+
+/** How long a create or a navigate waits for the tab to report `complete`. */
+export const SETTLE_TIMEOUT_MS = 20000;
+
+/**
+ * The three things a settled tab is asked for, and nothing else.
+ *
+ * Narrower than `chrome.tabs.Tab` on purpose: the closed-tab path has no real tab to
+ * return, and a hand-built `Tab` would have to invent `index`, `pinned`,
+ * `highlighted` and eight more fields that would then travel to the daemon as though
+ * Chrome had said them.
+ */
+interface SettledTab {
+  url?: string;
+  title?: string;
+  status?: string;
+}
+
+/**
+ * Wait for `tabId` to finish loading, and return it however it ends up.
+ *
+ * NEVER REJECTS AND NEVER HANGS. A page that loads slowly, a page that never
+ * finishes, and a tab the user closes mid-load all resolve — with whatever the tab
+ * last said. A wait that could hang would burn the daemon's whole command timeout
+ * and report ACTION_TIMEOUT ("your browser did not answer"), which is false: the
+ * browser answered, the page is just still loading, and the two need different
+ * remedies.
+ *
+ * The listener is removed on every exit path, including the timeout. A service
+ * worker accumulates listeners across calls and is evicted while holding them, so a
+ * leaked one is a leak that survives nothing and confuses everything in between.
+ */
+async function settle(tabId: number): Promise<SettledTab> {
+  const current = async (): Promise<SettledTab> => {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      return { url: tab.url, title: tab.title, status: tab.status };
+    } catch {
+      // The tab closed. Reporting an unknown status is honest; throwing here would
+      // turn "the user closed the tab" into an extension error, and inventing a
+      // half-built `chrome.tabs.Tab` would put fabricated fields on the wire.
+      return { status: "unknown" };
+    }
+  };
+  const already = await current();
+  if (already.status === "complete") {
+    return already;
+  }
+  return new Promise<SettledTab>((resolve) => {
+    let done = false;
+    const finish = (tab: SettledTab): void => {
+      if (done) {
+        return;
+      }
+      done = true;
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      clearTimeout(timer);
+      resolve(tab);
+    };
+    const onUpdated = (
+      id: number,
+      change: chrome.tabs.OnUpdatedInfo,
+      tab: chrome.tabs.Tab,
+    ): void => {
+      if (id === tabId && change.status === "complete") {
+        finish({ url: tab.url, title: tab.title, status: tab.status });
+      }
+    };
+    const timer = setTimeout(() => {
+      void current().then(finish);
+    }, SETTLE_TIMEOUT_MS);
+    chrome.tabs.onUpdated.addListener(onUpdated);
+  });
+}
+
+// --- acting inside a page (Ship 3) ------------------------------------------
+//
+// The four page actions go through `runInPage`, the same door the two reads use,
+// and so inherit its host-permission gate, its unsupported-page refusal and its
+// on-demand injection with nothing restated. `scroll` is here rather than in the
+// worker for the same reason `read_page` is: the scroll position belongs to the
+// document, and only the injected half can see one.
+
+/** `click`: press one element in a page. */
+export async function clickInPage(
+  params: Record<string, unknown>,
+  hostPermission: boolean,
+): Promise<Record<string, unknown>> {
+  return runInPage(METHOD_CLICK, params, hostPermission);
+}
+
+/** `type_text`: fill one field. The result never carries what was typed. */
+export async function typeTextInPage(
+  params: Record<string, unknown>,
+  hostPermission: boolean,
+): Promise<Record<string, unknown>> {
+  return runInPage(METHOD_TYPE_TEXT, params, hostPermission);
+}
+
+/** `press_key`: send one key to a page. */
+export async function pressKeyInPage(
+  params: Record<string, unknown>,
+  hostPermission: boolean,
+): Promise<Record<string, unknown>> {
+  return runInPage(METHOD_PRESS_KEY, params, hostPermission);
+}
+
+/** `scroll`: move the user's view of one page. */
+export async function scrollInPage(
+  params: Record<string, unknown>,
+  hostPermission: boolean,
+): Promise<Record<string, unknown>> {
+  return runInPage(METHOD_SCROLL, params, hostPermission);
 }

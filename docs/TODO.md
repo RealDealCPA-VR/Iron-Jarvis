@@ -33,6 +33,14 @@ abstraction honest, which Ship 1 already pays for.*
 - [ ] Structured extraction, schema-driven.
 - [ ] Watch and subscription tools, so a page change can wake a reflex rule.
 - [ ] Multi-tab planning primitives.
+- [ ] **Carry the turn's request text on `ToolContext`, and wire Q03's action
+  justification to it.** `BrowserRuntime.request_text` exists and is read through
+  one helper, but nothing sets it, so every state-changing call on a page that
+  tripped the injection detector asks for approval. That is the safe direction.
+  The wiring was deliberately NOT done as a field on the runtime: it is built once
+  at boot and shared by every conversation, so two turns in flight would let one
+  conversation's words authorise the other's click — silently, and failing OPEN.
+  `ToolContext` is already built per call and is the right carrier.
 - [ ] **Enforce the other four pane capabilities.** Files, Shell, Extensions and
   Memory are recorded and displayed from Ship 4 and gated for Browser ONLY. The UI
   says so rather than implying enforcement that does not exist (the v1.218.0

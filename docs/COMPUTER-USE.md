@@ -20,10 +20,31 @@ file will describe the wrong one.
 **Your browser** is the Chrome or Edge *you* already use, logged into the sites
 you are already logged into. Jarvis reaches it through a small **browser add-on**
 you load yourself and then **Pair**, and it can only see a tab once you have
-granted the add-on access to that site. In **v1.236.0 it reads and photographs,
-nothing more**: list your open tabs, name the tab you are looking at, read a
-page's text and elements, and take a screenshot of it. It cannot click, type or
-navigate. Browser access ships **off**, and its three settings (off / read only /
+granted the add-on access to that site. As of **v1.237.0 it can also act on the
+page**: alongside listing your tabs, naming the tab you are looking at, reading a
+page and photographing it, it can click, type, scroll, press a key, open, switch
+or close a tab, and navigate. Acting is a separate setting — **Interactive** —
+and it is not what **Read only** grants.
+
+**Acting in your browser asks first, in two layers.** All eight acting abilities
+default to **ask**, so an ordinary click on an ordinary button already stops and
+shows you an approval card; nothing reaches your browser until you say yes. On
+top of that, the four that change a page — click, type, press a key, navigate —
+sit on the **deny floor**, so setting them to *allow* is dropped rather than
+obeyed, and even a session-wide "allow for this conversation" is overruled when
+the target looks destructive or transactional, when the page marks the field
+sensitive, or when the control cannot be identified well enough to judge. A
+button called "Delete account" asks every time; so does a target with no
+readable name.
+
+**Downloads.** If a page Jarvis clicks starts a download, Chrome owns it and the
+file lands wherever your own Chrome settings put it, normally `~/Downloads`.
+Jarvis can read a completed download and copy it into a project; it cannot
+silently redirect where Chrome saves it. (`rename_file` refuses to move a file
+from outside the workspace — that refusal is the documented behaviour, not a
+bug; the copy is `POST /documents/save-copy`.)
+
+Browser access ships **off**, and its three settings (off / read only /
 interactive) are separate from everything below — turning Computer Use on does
 not touch it, and turning it off does not disable Computer Use. See the Browser
 section of `docs/HANDBOOK.md`.
@@ -31,13 +52,13 @@ section of `docs/HANDBOOK.md`.
 **Computer use** — the rest of this file — is the other one: a **separate,
 headless Chromium** the daemon launches itself, in a fresh incognito context per
 run, logged into nothing. It shares no cookies or sessions with your browser, so
-it cannot reach a site you are signed into unless it signs in itself. It is the
-half that actually *acts* (navigate, click, type, extract), which is why it is
-the half wrapped in domain allowlists, action allowlists and human approvals.
+it cannot reach a site you are signed into unless it signs in itself. It acts
+too, and it is the half wrapped in domain allowlists, action allowlists and
+human approvals of its own.
 
-One sentence to keep them straight: **your browser is the one you are logged
-into and Jarvis may only look at it; the Computer Use browser is the one Jarvis
-drives and it knows nobody.**
+One sentence to keep them straight: **your browser is the one you are already
+logged into, and Jarvis acts in it only with your approval; the Computer Use
+browser is one Jarvis owns, and it knows nobody.**
 
 ## Enable it
 

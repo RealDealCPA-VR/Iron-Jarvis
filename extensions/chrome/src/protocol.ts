@@ -77,6 +77,16 @@ export const SNAPSHOT_MODES = ["summary", "interactive", "full"] as const;
 export const SUMMARY_TEXT_CHARS = 2000;
 export const UNSUPPORTED_HOSTS = ["chromewebstore.google.com", "chrome.google.com"] as const;
 export const UNSUPPORTED_SCHEMES = ["chrome:", "edge:", "about:", "devtools:", "view-source:", "chrome-extension:"] as const;
+export const SCROLL_BOTTOM = "bottom";
+export const SCROLL_DIRECTIONS = ["up", "down", "top", "bottom"] as const;
+export const SCROLL_DOWN = "down";
+export const SCROLL_TOP = "top";
+export const SCROLL_UP = "up";
+export const TARGET_CSS = "css";
+export const TARGET_ELEMENT_ID = "element_id";
+export const TARGET_FORMS = ["element_id", "role", "css"] as const;
+export const TARGET_KEYS = ["element_id", "role", "name", "css"] as const;
+export const TARGET_ROLE = "role";
 
 // --- Error codes and their model-actionable remedies, from errors.py ---
 
@@ -312,6 +322,159 @@ export interface ScreenshotResult {
   tab_id: number;
   media_type: string;
   data_b64: string;
+}
+
+/** How ONE element is addressed by an acting call (section 8.6). */
+export interface Target {
+  element_id?: string;
+  role?: string;
+  name?: string;
+  css?: string;
+}
+
+/** What was ACTUALLY acted on, echoed back by the page. */
+export interface TargetRef {
+  element_id: string;
+  role: string;
+  name: string;
+}
+
+/** ``activate_tab`` params. ``tab_id`` is REQUIRED here, uniquely. */
+export interface ActivateTabParams {
+  tab_id: number;
+}
+
+/** ``scroll`` params. ``direction`` is one of :data:`SCROLL_DIRECTIONS`. */
+export interface ScrollParams {
+  direction: string;
+  tab_id?: number;
+  amount?: number;
+}
+
+/** ``create_tab`` params. ``active`` is always sent, never inferred. */
+export interface CreateTabParams {
+  active: boolean;
+  url?: string;
+}
+
+/** ``close_tab`` params. ``tab_id`` is required. */
+export interface CloseTabParams {
+  tab_id: number;
+}
+
+/** ``click`` params. */
+export interface ClickParams {
+  target: Target;
+  tab_id?: number;
+  snapshot_id?: string;
+}
+
+/** ``type_text`` params. */
+export interface TypeTextParams {
+  target: Target;
+  text: string;
+  clear: boolean;
+  press_enter: boolean;
+  tab_id?: number;
+  snapshot_id?: string;
+}
+
+/** ``press_key`` params. ``target`` is optional — a key can go to the page. */
+export interface PressKeyParams {
+  key: string;
+  tab_id?: number;
+  target?: Target;
+  snapshot_id?: string;
+}
+
+/** ``navigate`` params. */
+export interface NavigateParams {
+  url: string;
+  tab_id?: number;
+}
+
+/** The ``download_completed`` event payload, as the ADD-ON sends it (10.3). */
+export interface DownloadPayload {
+  download_id: number;
+  filename: string;
+  source_url: string;
+  final_url?: string;
+  tab_id?: number;
+  bytes?: number;
+  mime?: string;
+  timestamp?: string;
+}
+
+/** The ``activate_tab`` result. */
+export interface ActivateTabResult {
+  tab_id: number;
+  title: string;
+  url: string;
+  activated: boolean;
+}
+
+/** The ``scroll`` result. ``scrolled_to`` names where the page ended up. */
+export interface ScrollResult {
+  tab_id: number;
+  scrolled_to: string;
+  page_version: number;
+  url?: string;
+  title?: string;
+}
+
+/** The ``create_tab`` result. */
+export interface CreateTabResult {
+  tab_id: number;
+  url: string;
+  title: string;
+}
+
+/** The ``close_tab`` result. ``closed`` is always ``true`` on success. */
+export interface CloseTabResult {
+  tab_id: number;
+  closed: boolean;
+}
+
+/** The ``click`` result. */
+export interface ClickResult {
+  tab_id: number;
+  clicked: TargetRef;
+  url: string;
+  page_version: number;
+  navigated: boolean;
+  title?: string;
+  download?: DownloadPayload;
+}
+
+/** The ``type_text`` result. It NEVER echoes ``text`` — there is no key for it. */
+export interface TypeTextResult {
+  tab_id: number;
+  typed_into: TargetRef;
+  cleared: boolean;
+  submitted: boolean;
+  page_version: number;
+  url?: string;
+  title?: string;
+  navigated?: boolean;
+}
+
+/** The ``press_key`` result. */
+export interface PressKeyResult {
+  tab_id: number;
+  key: string;
+  page_version: number;
+  navigated: boolean;
+  url?: string;
+  title?: string;
+}
+
+/** The ``navigate`` result. ``status`` is the tab's load state. */
+export interface NavigateResult {
+  tab_id: number;
+  url: string;
+  title: string;
+  page_version: number;
+  status: string;
 }
 
 // --- Frame type -> shape, mirroring protocol.FRAME_SHAPES ---

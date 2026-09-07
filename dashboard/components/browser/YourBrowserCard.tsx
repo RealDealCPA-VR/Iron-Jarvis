@@ -89,12 +89,12 @@ const ACCESS_LEVELS: AccessLevel[] = [
   {
     value: "read_only",
     label: "Read only",
-    hint: "Jarvis can see your open tabs, read the text of the page you are looking at, and take a screenshot of it. It cannot click or type.",
+    hint: "Jarvis can see your open tabs, read the text of the page you are looking at, and take a screenshot of it. Looking only — changing a page needs Interactive.",
   },
   {
     value: "interactive",
     label: "Interactive",
-    hint: "Nothing more than Read only in this version. Clicking, typing and navigating arrive in v1.237.0, and sensitive steps will ask first.",
+    hint: "Jarvis can also click, type and navigate. Anything that changes a page is gated, and a target that looks destructive or transactional — or that cannot be identified at all — stops and asks you first.",
   },
 ];
 

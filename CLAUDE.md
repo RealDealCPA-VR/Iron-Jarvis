@@ -626,7 +626,8 @@ does not need a bump, stop and bump it.
   endpoints on that path.
 - **Event payloads**: `agent.state_changed` carries `{from, to}` (NOT
   `state`); `agent.completed` `{run_id, ok, result}`; `tool.executed`
-  `{tool, ok, mode}`. All tagged with `session_id`. Grep
+  `{tool, ok, mode, invocation_id, reversibility, risk_class}` (`risk_class`
+  since v1.237.0). All tagged with `session_id`. Grep
   `core/events.py` + `agents/runtime.py` before consuming events.
 - **Parallel agent work**: one file per agent, period. Shared files
   (`daemon/app.py`, `Sidebar.tsx`, `types.ts`, `ui.tsx`, `main.js`) are owned

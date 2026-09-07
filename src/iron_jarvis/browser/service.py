@@ -31,13 +31,27 @@ hold. Two properties of it are load-bearing:
   weaker: this repository's standing rule is that an unavailable capability refuses
   and names itself rather than substituting quietly.
 
-Ship 1 implemented ``status`` / ``list_tabs`` / ``active_tab``; Ship 2 adds the READ
-tier — ``read_page``, ``get_elements`` and ``screenshot`` — and every acting method
-still raises :class:`NotImplementedError` naming the ship that fills it in, rather
-than returning an empty result. A method that answers ``{}`` reads to a model as
-"the page has nothing on it", and this repository has already shipped one bug of
-exactly that shape (a truncated listing read as complete, after which the model
-reported that a file did not exist).
+Ship 1 implemented ``status`` / ``list_tabs`` / ``active_tab``; Ship 2 added the READ
+tier — ``read_page``, ``get_elements`` and ``screenshot``; Ship 3 fills in the eight
+ACTING methods, and with them the rule that makes this the highest-risk ship of the
+five: every one of them moves the user's real, logged-in browser, so a wrong click
+is not a failed test but an action taken in someone's account.
+
+Three properties of the acting tier are stated here because each is the kind of
+thing a later reader "simplifies" away:
+
+* **This module decides no RISK.** :mod:`iron_jarvis.browser.risk` is the single
+  door, consulted by the TOOL before it reaches any method here. A service method
+  that escalated as well would be a second policy site, and a second site is a
+  rule one of the two will eventually skip — silently, because a skipped
+  escalation looks exactly like a call that was not sensitive.
+* **A resolution is made ONCE and carried** (:class:`ActionTarget`). The risk
+  decision, the frame and the result all describe the same element because they
+  are all handed the same object; resolving separately would let the card the user
+  approved and the frame that was sent name different buttons.
+* **A page that moved under an action drops its snapshot** (:meth:`BrowserRuntime._settle`).
+  A stale registry is how an element id comes to mean a different element than the
+  model saw.
 
 Two properties of the read tier are worth naming here, because both are easy to
 "simplify" away:
@@ -58,6 +72,8 @@ Two properties of the read tier are worth naming here, because both are easy to
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from ..core.logging import get_logger
@@ -111,6 +127,139 @@ def _as_tab_id(value: Any) -> int | None:
     return None
 
 
+def _role_name_match(
+    snapshot: PageSnapshot, target: Mapping[str, Any] | None
+) -> dict[str, Any] | None:
+    """The snapshot row a ``{"role", "name"}`` target names, or ``None``.
+
+    **This is the other half of the sensitive-field gate.** Before it existed,
+    only ``{"element_id"}`` resolved to a row, so a password typed through
+    ``{"role": "textbox", "name": "Password"}`` — the second of the three forms
+    the tool's own schema advertises — reached
+    :func:`~iron_jarvis.browser.risk.browser_risk_decision` with
+    ``target_element=None``. Both arms that catch a credential field then went
+    dark: ``classify``'s ``type``/``autocomplete`` reading (which needs a
+    :class:`~iron_jarvis.computeruse.base.Page` row) and the D13B ``sensitive``
+    override. The call was allowed with no card, on the user's real bank login,
+    while the identical call by ``element_id`` correctly asked. The daemon was
+    holding the row the whole time.
+
+    Matching is the content script's own rule (``resolveTarget`` in
+    ``content/actions.ts``): role and name compared case-folded and whole, never
+    by substring. Two readers of one rule, so the row this resolves is the row the
+    page will act on.
+
+    Advisory, and deliberately so: a miss returns ``None`` rather than raising.
+    The live page may hold a control this snapshot never carried — ``summary``
+    mode carries no registry at all, and a cap may have dropped the row — and
+    refusing daemon-side would break a call the page can serve. A miss costs
+    nothing: :meth:`BrowserRuntime.prepare_action` then falls back to
+    :func:`~iron_jarvis.browser.protocol.target_label`, so the words the model
+    named are still scanned by the escalation vocabulary.
+
+    An AMBIGUOUS name (two rows with the same role and name) takes the STRICTEST
+    candidate — a ``sensitive`` row over a plain one. The page refuses ambiguity
+    outright, so this choice never selects what gets clicked; it only decides what
+    the risk door is shown, and there the safest reading of "we are not sure which
+    of these it is" is the dangerous one.
+    """
+    row = dict(target or {})
+    role = str(row.get("role") or "").strip().casefold()
+    name = str(row.get("name") or "").strip().casefold()
+    if not role or not name:
+        return None
+    matches = [
+        dict(candidate)
+        for candidate in snapshot.elements
+        if str(candidate.get("role") or "").strip().casefold() == role
+        and str(candidate.get("name") or "").strip().casefold() == name
+    ]
+    if not matches:
+        return None
+    matches.sort(key=lambda candidate: not bool(candidate.get("sensitive")))
+    return matches[0]
+
+
+@dataclass(frozen=True)
+class ActionTarget:
+    """What one acting call resolved to, decided ONCE and carried to every step.
+
+    Ship 3's acting path has three consumers of the same resolution and they must
+    not resolve separately:
+
+    * the RISK decision (:func:`~iron_jarvis.browser.risk.browser_risk_decision`)
+      needs the target's accessible NAME and its snapshot row, because that is
+      what the escalation vocabulary and the sensitive-field arms read;
+    * the FRAME builder needs the normalised target, the tab id and the snapshot
+      id;
+    * the RESULT needs the tab's title and URL, which D24 requires in the ledger
+      row so a browser action is reconstructible months later.
+
+    Resolving three times would spend three round trips, and — the reason this is
+    a value object rather than a convenience — the three answers could DIFFER. A
+    page mutates between calls; a risk decision made against the element the
+    first resolution found, then sent as a frame naming the element the second
+    one found, is an approval card the user answered about a different button.
+    One resolution, passed along, makes that impossible to express.
+
+    Frozen, and ``target``/``element`` are copies taken at construction: a caller
+    that mutated the target after the risk decision was made would be editing the
+    thing the user approved.
+    """
+
+    #: The resolved tab row (id, title, url, status), from :meth:`BrowserRuntime.resolve_page_tab`.
+    tab: dict[str, Any] = field(default_factory=dict)
+    #: The tab id actually used. Echoed in every result (section 8.6).
+    tab_id: int | None = None
+    #: The snapshot this action is judged against, resolved to the tab's newest
+    #: when the caller named none. ``""`` for the methods that address no element.
+    snapshot_id: str = ""
+    #: The normalised, exactly-one-form target, or ``None`` for a method that
+    #: addresses no element.
+    target: dict[str, Any] | None = None
+    #: The snapshot's element row for that target, when one was resolved. Its
+    #: ``type``/``autocomplete``/``sensitive`` are what catch a password or card
+    #: field whose visible name says neither.
+    element: dict[str, Any] | None = None
+    #: The RESOLVED accessible name — the words the user would read on the
+    #: control. The one field the escalation vocabulary is scanned against, which
+    #: is why an ``element_id`` target is preferred over a css one: a selector
+    #: resolves to a node and names nothing a classifier can read.
+    label: str = ""
+
+    @property
+    def page_url(self) -> str:
+        """The acted-on page's URL, for the classifier's ``Page`` and for D24."""
+        return str(self.tab.get("url") or "")
+
+    @property
+    def page_title(self) -> str:
+        """The acted-on page's title. Untrusted page text — fence before printing."""
+        return str(self.tab.get("title") or "")
+
+    def target_ref(self, echoed: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """``{element_id, role, name}`` — what was ACTUALLY acted on (section 10.4).
+
+        The PAGE's echo wins over what the model asked for, because they differ
+        precisely when a role+name or css target matched something other than what
+        the model pictured — and that difference is the only evidence a later
+        reader of the ledger has. Falling back to the request would erase it.
+        """
+        row = dict(echoed or {})
+        if row.get("element_id") or row.get("role") or row.get("name"):
+            return {
+                "element_id": str(row.get("element_id") or ""),
+                "role": str(row.get("role") or ""),
+                "name": str(row.get("name") or ""),
+            }
+        asked = dict(self.target or {})
+        return {
+            "element_id": str(asked.get("element_id") or ""),
+            "role": str(asked.get("role") or ""),
+            "name": str(asked.get("name") or self.label or ""),
+        }
+
+
 @runtime_checkable
 class BrowserService(Protocol):
     """One canonical browser surface. ExtensionBackend today, ManagedBackend later.
@@ -158,38 +307,45 @@ class BrowserService(Protocol):
 
     async def screenshot(self, tab_id: int | None = None, *, full_page: bool = False) -> bytes: ...
 
+    # THE ACTING TIER IS NOT ON THIS SURFACE, AND THAT IS THE PROTECTION.
+    #
+    # Plan §5.1 sketches eight acting methods here, and six of them were written:
+    # ``click``, ``type_text``, ``press_key``, ``navigate``, ``create_tab`` and
+    # ``close_tab``, each reaching the socket with NO risk decision, and each
+    # without a single caller anywhere in ``src/`` or the routes. That is a second
+    # door onto the user's real, logged-in browser, standing open because nothing
+    # walks through it YET — and the module comment above ``prepare_action``
+    # promises that ``browser/risk.py`` is the single door, which was true only
+    # for as long as every caller happened to be a tool. Ship 4 adds an outward
+    # MCP harness; the next author wiring a route or a handler to
+    # ``runtime.click(...)`` would have got a click on the user's bank with no
+    # Decision, no card and a ledger row that never mentioned risk, and every test
+    # in this ship would have stayed green.
+    #
+    # They are gone. The acting path is ``_ActingTool.execute``
+    # (``browser/tools.py``), which is final, calls
+    # :func:`~iron_jarvis.browser.risk.browser_risk_decision` exactly once, routes
+    # a ``requires_approval`` verdict to the approval queue, and only then sends
+    # the frame through :meth:`BrowserRuntime.command`. Routing these six through
+    # the risk door INSTEAD would have been the other available fix and is worse:
+    # it makes a second policy site, and two policy sites are how one of them
+    # comes to be skipped.
+    #
+    # ``activate_tab`` and ``scroll`` stay. They commit nothing — their risk
+    # verdict is "allowed by policy" at rule 1 of §8.2 unconditionally, whichever
+    # caller makes it — so there is no gate for a second caller to get around, and
+    # a route that brings a tab to the front needs no tool. Every method that can
+    # change a page, open one, or destroy one is reached through the tool layer or
+    # not at all.
+
     async def activate_tab(self, tab_id: int) -> dict[str, Any]: ...
 
-    async def scroll(self, tab_id: int, direction: str, amount: int | None) -> dict[str, Any]: ...
-
-    async def create_tab(self, url: str | None, *, active: bool = True) -> dict[str, Any]: ...
-
-    async def close_tab(self, tab_id: int) -> dict[str, Any]: ...
-
-    async def click(
-        self, tab_id: int, target: dict[str, Any], snapshot_id: str | None
-    ) -> dict[str, Any]: ...
-
-    async def type_text(
+    async def scroll(
         self,
-        tab_id: int,
-        target: dict[str, Any],
-        text: str,
-        *,
-        clear: bool,
-        press_enter: bool,
-        snapshot_id: str | None,
+        tab_id: Any = None,
+        direction: str = P.SCROLL_DOWN,
+        amount: int | None = None,
     ) -> dict[str, Any]: ...
-
-    async def press_key(
-        self,
-        tab_id: int,
-        key: str,
-        target: dict[str, Any] | None,
-        snapshot_id: str | None,
-    ) -> dict[str, Any]: ...
-
-    async def navigate(self, tab_id: int, url: str) -> dict[str, Any]: ...
 
 
 class BrowserRuntime:
@@ -235,7 +391,46 @@ class BrowserRuntime:
         artifacts: Any | None = None,
         router_resolver: Any | None = None,
         event_bus: Any | None = None,
+        approval_resolver: Any | None = None,
     ) -> None:
+        #: THE USER'S OWN REQUEST TEXT FOR THIS TURN, or ``""`` (Q03, plan §9.5).
+        #:
+        #: Set per turn by whichever lane is driving, and read through exactly one
+        #: helper, :func:`~iron_jarvis.browser.risk.request_text_of`. It answers
+        #: Q03 point 5: after a page has tripped the injection detector, a
+        #: state-changing call on that tab requires approval unless the target's
+        #: accessible name appears in what the USER asked for — the difference
+        #: between "click Sign in, as I asked" and "click the button the page told
+        #: you to click".
+        #:
+        #: Empty FAILS CLOSED (every state-changing call on a flagged tab asks),
+        #: which is the safe direction but a noisy one.
+        #:
+        #: NOTHING SETS IT AS OF v1.237.0, AND THAT IS A DECISION, not an oversight.
+        #: The obvious wiring — each chat lane assigning the user's message here at
+        #: the top of a turn — is a RACE, because the runtime is one object built at
+        #: boot and shared by every conversation. Two turns in flight and one
+        #: conversation's words decide whether the OTHER conversation's click is
+        #: allowed. The failure is silent and it fails OPEN: turn B says "click Sign
+        #: in", turn A's flagged page offers a "Sign in" button, and A's click stops
+        #: asking. Trading an extra approval card for that is not a trade worth
+        #: making, and a noisy prompt on a page that already tripped the injection
+        #: detector is close to free — flagged pages are rare, and a card on one is
+        #: arguably the right outcome anyway.
+        #:
+        #: The fix, when it is worth it, is a per-turn carrier (the request text on
+        #: ``ToolContext``, which is already built per call) rather than a mutable
+        #: field on a process-wide singleton. Recorded in ``docs/TODO.md``. Until
+        #: then this stays "" and ``request_text_of`` reads it through one helper, so
+        #: there is exactly one place to change.
+        self.request_text: str = ""
+        #: Optional synchronous approval decider, mirroring
+        #: ``CUContext.approval_resolver``. Absent (the production default), a
+        #: browser call that needs approval returns PENDING and the user answers
+        #: the card they already know; the model's next identical call consumes
+        #: that approval. Present, it decides in-process — which is what lets a
+        #: test drive the approved AND the refused branch without a dashboard.
+        self.approval_resolver = approval_resolver
         self.backend = backend
         self.config = config
         # The transport stamps the live access word onto ``browser.ready`` so the
@@ -669,53 +864,229 @@ class BrowserRuntime:
         except Exception:  # noqa: BLE001 — never break a socket over a cache
             logger.debug("browser snapshot cache not invalidated", exc_info=True)
 
-    # --- BrowserService: later ships -------------------------------------
+    # --- BrowserService: the ACTING tier (Ship 3) ------------------------
     #
-    # Each raises NotImplementedError naming its ship. They are declared rather
-    # than omitted so ``isinstance(runtime, BrowserService)`` holds from Ship 1 and
-    # the protocol is one list in one place; and they raise rather than return an
-    # empty result because an empty snapshot reads to a model as an empty page.
+    # The RESOLUTION every acting call needs (:meth:`prepare_action`,
+    # :meth:`_settle`) plus the two methods that commit nothing
+    # (:meth:`activate_tab`, :meth:`scroll`). The six that change a page, open a
+    # tab or destroy one are NOT here: they are sent by ``_ActingTool.execute``,
+    # the one path that consults the risk door first. See the comment on
+    # :class:`BrowserService` for why they were removed rather than gated here.
+    #
+    # What remains obeys the same four rules the eight did. They are stated once,
+    # here, because the bodies below are deliberately short and a rule restated in
+    # each of them is a rule that will be spelled differently in one:
+    #
+    # 1. **``interactive`` is asserted BEFORE any command is sent.** ``command``
+    #    would refuse an acting method on its own (``min_access_for``), but only
+    #    after :meth:`resolve_page_tab` had already spent a ``list_tabs`` round
+    #    trip on a call that was never going to run. Asserting first also means
+    #    the READ_ONLY_MODE refusal names the acting tool the model called rather
+    #    than arriving out of a metadata read it never asked for.
+    # 2. **The tab is resolved daemon-side**, so ``tab_id`` is optional
+    #    everywhere section 8.6 says it is, the id actually used is echoed in the
+    #    result, and a page Chrome closes to add-ons is refused UNSUPPORTED_PAGE
+    #    before the frame exists (section 9.7).
+    # 3. **Element-addressed calls pass the snapshot gate**
+    #    (:meth:`~iron_jarvis.browser.snapshot.SnapshotCache.check`) and then SEND
+    #    the snapshot id they were judged against, so the page can make the
+    #    ``page_version`` comparison only it can make (section 9.3). Two halves of
+    #    one check, each answered where the evidence is: the daemon knows which
+    #    snapshot it handed out, the page knows whether the node is still there.
+    # 4. **A result that says the page moved invalidates the cache**
+    #    (:meth:`_settle`). A stale registry is how an element id comes to mean a
+    #    different element than the model saw, and the cost of an unnecessary
+    #    re-read is one cheap call while the cost of a kept one is a click on the
+    #    wrong control.
+    #
+    # None of them decides RISK. That is :mod:`iron_jarvis.browser.risk`'s single
+    # door, called by the tool layer before it reaches any of these — a service
+    # method that escalated as well would be a second policy site, and one of the
+    # two would eventually be skipped.
+
+    async def prepare_action(
+        self,
+        tab_id: Any = None,
+        *,
+        target: Mapping[str, Any] | None = None,
+        snapshot_id: Any = None,
+        need_snapshot: bool = True,
+    ) -> ActionTarget:
+        """Everything an acting tool must know BEFORE it decides risk (8.2, 9.3).
+
+        The tool layer cannot ask
+        :func:`~iron_jarvis.browser.risk.browser_risk_decision` anything useful
+        until the target has a NAME: the escalation vocabulary is scanned against
+        the resolved element's accessible name, and an ``element_id`` names
+        nothing until a snapshot resolves it. So this method does the resolution,
+        in the order the failures should be reported, and hands back one object.
+
+        BOTH resolvable forms are resolved, not only the preferred one. An
+        ``element_id`` is looked up in the roster; a ``{"role", "name"}`` target is
+        matched against the same rows by :func:`_role_name_match`. That second
+        lookup is the sensitive-field gate for two of the three documented forms:
+        without it a password typed by role and name reached the risk door with no
+        element, and every arm that reads ``type``/``autocomplete``/``sensitive``
+        went dark while the identical call by ``element_id`` asked. A ``css``
+        target resolves to nothing here — the daemon cannot run a selector — and
+        the risk door fails closed on a target it could not read.
+
+        Order is load-bearing:
+
+        1. access — an acting call at ``read_only`` is refused here, before a
+           metadata read is spent on it;
+        2. the tab — ``TAB_NOT_FOUND`` / ``UNSUPPORTED_PAGE``, daemon-side;
+        3. the target's SHAPE — :func:`~iron_jarvis.browser.protocol.normalise_target`
+           refuses two forms with a message naming the conflict, and it runs
+           before the snapshot gate so "you sent two targets" is not reported as
+           "your snapshot is stale";
+        4. the snapshot gate — ``STALE_SNAPSHOT`` for a tab nobody has read (or a
+           snapshot id this tab did not hand out) and ``ELEMENT_NOT_FOUND`` for an
+           id absent from the roster we hold.
+
+        ``need_snapshot`` is False for the four LOCAL_UI methods and for
+        ``navigate``: none of them addresses an element, and requiring a snapshot
+        to open a URL would make "go to example.com" impossible without first
+        reading a page the user never asked about. It is True for click, type and
+        press_key even when the target is absent, which is section 8.6's rule
+        taken literally — acting on a page nobody has read is acting blind, and
+        the refusal carries a one-call remedy.
+
+        Raises:
+            BrowserError: every failure above, each with its D15 remedy.
+        """
+        self.require(ACCESS_INTERACTIVE)
+        row = await self.resolve_page_tab(tab_id)
+        resolved_tab = _as_tab_id(row.get("id"))
+        clean: dict[str, Any] | None = None
+        element_id = ""
+        if target is not None:
+            clean = dict(P.normalise_target(target))
+            element_id = str(clean.get("element_id") or "")
+        wanted = str(snapshot_id or "").strip()
+        used = ""
+        element: dict[str, Any] | None = None
+        if need_snapshot:
+            cache = self.snapshots
+            if cache is None:
+                # No cache at all is not "no snapshot needed": it is a runtime
+                # built without the object that makes an element id mean
+                # something. Refusing with the one code whose remedy is "call
+                # browser_read_page" keeps a half-wired install honest, rather
+                # than letting it act on ids nothing can validate.
+                raise BrowserError(BrowserErrorCode.STALE_SNAPSHOT)
+            used = cache.check(resolved_tab, wanted or None, None, element_id or None)
+            cached = cache.get(resolved_tab)
+            if cached is not None:
+                element = (
+                    cached.element(element_id)
+                    if element_id
+                    else _role_name_match(cached, clean)
+                )
+        elif wanted:
+            used = wanted
+        # The LABEL the escalation vocabulary is scanned against. The resolved
+        # accessible name when we have one; otherwise whatever the model named,
+        # which is ``P.target_label``'s pre-resolution fallback and is empty for
+        # an element_id or a css target. Never the selector text: a css string is
+        # page-authored and names nothing a user would read off a button.
+        label = str((element or {}).get("name") or (element or {}).get("text") or "")
+        if not label and clean is not None:
+            label = P.target_label(clean)
+        return ActionTarget(
+            tab=dict(row),
+            tab_id=resolved_tab,
+            snapshot_id=used,
+            target=clean,
+            element=element,
+            label=label,
+        )
+
+    def _settle(self, plan: ActionTarget, result: Mapping[str, Any]) -> dict[str, Any]:
+        """Fold the tab context into an acting result, and drop a moved page's snapshot.
+
+        Two jobs, both about one fact — *is the snapshot the model holds still
+        true?*
+
+        * **Report the tab.** Section 8.6's shared convention: every result
+          carries ``tab_id``, ``url``, ``title`` and ``page_version``. The add-on
+          fills what it knows; the daemon fills the rest from the tab it
+          resolved, so a result never omits the id it acted on.
+        * **Invalidate on movement.** ``navigated`` true, or a ``page_version``
+          past the one the cached snapshot was taken at, both mean the registry
+          the model is holding no longer describes the page. Dropping the cache
+          entry turns the NEXT call into ``STALE_SNAPSHOT`` — whose remedy is one
+          call — instead of an element id that silently resolves to whatever now
+          occupies that slot. That is the failure this ship must not have: a
+          click landing on a different control than the model saw.
+
+        A MISSING ``page_version`` does not invalidate. The add-on omits it on
+        results where the page did not move (``activate_tab``), and treating
+        absence as movement would throw away every snapshot on every harmless
+        call — which reads as working caution and is actually a cache that never
+        holds anything.
+        """
+        payload = dict(result)
+        payload.setdefault("tab_id", plan.tab_id)
+        payload.setdefault("url", plan.tab.get("url") or "")
+        payload.setdefault("title", plan.tab.get("title") or "")
+        moved = bool(payload.get("navigated"))
+        version = payload.get("page_version")
+        if not moved and version is not None and self.snapshots is not None:
+            try:
+                cached = self.snapshots.get(plan.tab_id)
+            except Exception:  # noqa: BLE001 — a cache read must not fail an action
+                cached = None
+            moved = cached is not None and cached.is_stale_for(version)
+        # A plan with no tab id is ``create_tab``, which resolved no existing tab.
+        # ``invalidate_snapshot(None)`` means "forget EVERY tab" — the right
+        # meaning when a browser disconnects and a catastrophic one here, where it
+        # would throw away every other tab's snapshot because one new tab opened.
+        if moved and plan.tab_id is not None:
+            self.invalidate_snapshot(plan.tab_id)
+            payload["snapshot_invalidated"] = True
+            return payload
+        payload["snapshot_invalidated"] = False
+        return payload
 
     async def activate_tab(self, tab_id: int) -> dict[str, Any]:
-        raise NotImplementedError("activate_tab lands in Ship 3 (v1.237.0)")
+        """Bring one tab to the front. LOCAL_UI: the user's view moves, no page does.
 
-    async def scroll(self, tab_id: int, direction: str, amount: int | None) -> dict[str, Any]:
-        raise NotImplementedError("scroll lands in Ship 3 (v1.237.0)")
+        ``need_snapshot=False`` — nothing inside the page is addressed — and the
+        tab is resolved through the same daemon-side path as every other acting
+        call, so activating a closed tab is ``TAB_NOT_FOUND`` with the remedy
+        naming ``browser_list_tabs`` rather than a bare add-on error.
+        """
+        plan = await self.prepare_action(tab_id, need_snapshot=False)
+        result = await self.command(
+            P.METHOD_ACTIVATE_TAB, dict(P.activate_tab_params(plan.tab_id))
+        )
+        return self._settle(plan, result)
 
-    async def create_tab(self, url: str | None, *, active: bool = True) -> dict[str, Any]:
-        raise NotImplementedError("create_tab lands in Ship 3 (v1.237.0)")
-
-    async def close_tab(self, tab_id: int) -> dict[str, Any]:
-        raise NotImplementedError("close_tab lands in Ship 3 (v1.237.0)")
-
-    async def click(
-        self, tab_id: int, target: dict[str, Any], snapshot_id: str | None
-    ) -> dict[str, Any]:
-        raise NotImplementedError("click lands in Ship 3 (v1.237.0) with escalate_browser")
-
-    async def type_text(
+    async def scroll(
         self,
-        tab_id: int,
-        target: dict[str, Any],
-        text: str,
-        *,
-        clear: bool,
-        press_enter: bool,
-        snapshot_id: str | None,
+        tab_id: Any = None,
+        direction: str = P.SCROLL_DOWN,
+        amount: int | None = None,
     ) -> dict[str, Any]:
-        raise NotImplementedError("type_text lands in Ship 3 (v1.237.0) with escalate_browser")
+        """Scroll one tab. LOCAL_UI, and yet it can invalidate a snapshot.
 
-    async def press_key(
-        self,
-        tab_id: int,
-        key: str,
-        target: dict[str, Any] | None,
-        snapshot_id: str | None,
-    ) -> dict[str, Any]:
-        raise NotImplementedError("press_key lands in Ship 3 (v1.237.0) with escalate_browser")
+        Scrolling an infinite list loads more of it, which adds interactive nodes
+        and bumps ``page_version``; :meth:`_settle` therefore drops the tab's
+        cached snapshot exactly as it would after a click. A model that scrolled
+        and then reused an element id from before the scroll is answered with a
+        remedy instead of acting on whatever now holds that id.
 
-    async def navigate(self, tab_id: int, url: str) -> dict[str, Any]:
-        raise NotImplementedError("navigate lands in Ship 3 (v1.237.0) with the domain allowlist")
+        ``direction`` is validated by
+        :func:`~iron_jarvis.browser.protocol.scroll_params`, which raises rather
+        than putting an unknown word on the wire — the content script compares the
+        raw string, so an unrecognised direction would scroll nowhere and answer
+        success, which a model reads as "done".
+        """
+        plan = await self.prepare_action(tab_id, need_snapshot=False)
+        params = P.scroll_params(plan.tab_id, direction=direction, amount=amount)
+        result = await self.command(P.METHOD_SCROLL, dict(params))
+        return self._settle(plan, result)
 
     # --- pairing and session control, for the /browser/* routes ----------
 
@@ -858,6 +1229,7 @@ __all__ = [
     "ACCESS_LEVELS",
     "ACCESS_OFF",
     "ACCESS_READ_ONLY",
+    "ActionTarget",
     "BrowserRuntime",
     "BrowserService",
     "min_access_for",

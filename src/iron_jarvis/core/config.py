@@ -246,6 +246,29 @@ def default_permissions() -> dict[str, str]:
         "browser_read_page": "allow",
         "browser_get_elements": "allow",
         "browser_screenshot": "allow",
+        # Browser (v1.237.0): ACTING. Every one of these changes something in the
+        # browser the user is actually logged into, so every one of them is
+        # `ask` — plan §8.4. Absent keys already fail closed to `ask`, so these
+        # exist for LEGIBILITY: the permissions screen renders this dict, and a
+        # capability the user cannot see is one they cannot tune or revoke.
+        #
+        # The four LOCAL_UI tools move the user's own view and change no page,
+        # which is why they are not on the deny floor — but they are still `ask`,
+        # because a tab closing under the user's hands is startling even when it
+        # is harmless, and closing one is not undoable.
+        "browser_activate_tab": "ask",
+        "browser_scroll": "ask",
+        "browser_create_tab": "ask",
+        "browser_close_tab": "ask",
+        # The four PAGE_ACTION tools are ALSO on `DENY_FLOOR_TOOLS` (D11), which
+        # is what makes this `ask` un-lowerable: an agent definition's `allow`
+        # override is dropped and a capability proposal naming one is refused. A
+        # per-session grant still lifts the ask, which is what makes the approval
+        # card's "Allow for this conversation" work.
+        "browser_click": "ask",
+        "browser_type": "ask",
+        "browser_press_key": "ask",
+        "browser_navigate": "ask",
     }
 
 

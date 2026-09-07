@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.236.0 (2026-09-07).*
+holds itself to. Current as of v1.237.0 (2026-09-07).*
 
 ---
 
@@ -401,14 +401,45 @@ cookies or sessions with your browser.
 |---|---|
 | **Off** | Nothing. No browser tool exists. |
 | **Read only** | Look, but never touch: list your open tabs, name the tab you are looking at, read the text of a page, and take a screenshot of it. |
-| **Interactive** | Nothing more than **Read only** yet. It is the setting acting will need; today it grants no ability that **Read only** does not. |
+| **Interactive** | Everything **Read only** does, and the ability to act on the page. Also act: click, type, scroll, navigate — press a key, and activate, open or close a tab. Every one of those asks you first (below). |
 
 Off is the default because reading a logged-in browser is a real permission, not a
 convenience, and this app does not grant itself those.
 
-**What is not here yet.** Clicking, typing, scrolling, navigating and downloads arrive
-in **v1.237.0**. Ask for one of them today and Jarvis has no tool to answer with —
-there is no half-working version of it hiding behind the Interactive setting.
+**What gets asked before an action.** Two layers, and the second is the one that
+matters when you get comfortable:
+
+- **Everything that acts asks, by default.** All eight acting abilities ship set to
+  **ask**, so the first time Jarvis wants to click, type, press a key, scroll,
+  navigate, or open, switch or close a tab, it stops and shows you an approval card
+  naming the tab, the control and what it is about to do. Nothing is sent to your
+  browser until you say yes.
+- **The four that change a page can never be turned all the way off.** Clicking,
+  typing, pressing a key and navigating sit on the **deny floor**: setting them to
+  *allow* on the Permissions screen is dropped rather than obeyed. And even after you
+  have said "allow for this conversation", a target that reads as **destructive or
+  transactional** — *Delete account*, *Submit payment*, *Confirm transfer* — asks
+  again, every time. So does typing into a field the page itself marks as a password
+  or a payment detail, and so does a target Jarvis **could not identify at all**: if
+  it cannot read what it is about to act on, it stops and waits for you rather than
+  guessing.
+
+What Jarvis types is never written down. The typed text is replaced with
+`***REDACTED***` in the record before the record is written, always — not only for
+password boxes — so it is not in the ledger, in an export, or in a backup.
+
+**Downloads, and the one thing Jarvis cannot do.** If something you click starts a
+download, Chrome handles it exactly as it always does and the file lands where your
+own Chrome settings say — normally your **Downloads** folder. Jarvis is told when the
+download finishes and the file's real path is recorded, so you can then say "read that
+statement" or "put it in this project": it can read a completed download and copy it
+into a project. What it **cannot** do is change where Chrome saves things, or quietly
+redirect a download somewhere else. Moving the file is a copy you asked for, not a
+setting Jarvis touched.
+
+**What is not here yet.** An outside coding harness driving this same browser arrives
+in **v1.238.0**, and the add-on ships inside the installer in **v1.239.0**. Until
+then the add-on is loaded from a source checkout.
 
 **What reading a page gives it, and what it does not.** Jarvis asks the page for a
 structured summary, not its HTML: the visible text, the headings, the links, and the
@@ -446,10 +477,12 @@ can tell which is which:
   ones. The stripping happens inside the page, before anything is sent, so a password
   never reaches Iron Jarvis at all. Your browser's own password manager keeps working,
   because Jarvis never sees what it fills.
-- **Changing a page asks first** (with acting, **v1.237.0**): a click, typing or a
-  navigation is gated the same way computer use is gated, and asks before it commits
-  to something that looks destructive or transactional. Typed text will be redacted in
-  the record.
+- **Changing a page asks first** (live): a click, typing, a key press or a
+  navigation is gated the same way computer use is gated. Every one of them asks
+  before it runs at all, and the four that change a page ask AGAIN — whatever you
+  have already allowed — when the target looks destructive or transactional, when the
+  page marks the field sensitive, or when the control cannot be identified well enough
+  to judge. Typed text is redacted in the record, always.
 
 **Test** on the card does a harmless round trip and reports what came back, which is
 the fastest way to tell a browser that is not running from an add-on that is not

@@ -570,8 +570,17 @@ def test_everything_that_touches_a_page_gates_on_the_host_grant_first():
 # --------------------------------------------------------------------------- #
 
 
-def test_the_add_on_registers_the_six_read_methods_and_no_acting_method():
-    """Ship 2 reads. Clicking and typing are Ship 3 and may not appear."""
+def test_the_add_on_registers_every_method_through_a_generated_constant():
+    """Every method the add-on serves is a name protocol.py knows.
+
+    UPDATED AT v1.237.0. This pinned "six read methods and nothing that acts",
+    which was Ship 2's truth; Ship 3 delivers the eight acting methods, so the
+    list moved. What did NOT move, and is the part worth keeping, is the shape:
+    a method may only be registered through a GENERATED constant, never a string
+    literal. A literal would let the add-on serve something protocol.py has never
+    heard of — a capability with no schema, no daemon-side gate and no name in the
+    drift check that keeps the two sides honest.
+    """
     arguments = re.findall(r"dispatcher\.register\(\s*([^,]+),", _code(WORKER_TS))
     literals = [argument for argument in arguments if not argument.startswith("METHOD_")]
     assert not literals, (
@@ -580,21 +589,33 @@ def test_the_add_on_registers_the_six_read_methods_and_no_acting_method():
     )
     registered = set(arguments)
     expected = {
+        # read (Ships 1 and 2)
         "METHOD_STATUS",
         "METHOD_LIST_TABS",
         "METHOD_ACTIVE_TAB",
         "METHOD_READ_PAGE",
         "METHOD_GET_ELEMENTS",
         "METHOD_SCREENSHOT",
+        # acting (Ship 3)
+        "METHOD_ACTIVATE_TAB",
+        "METHOD_SCROLL",
+        "METHOD_CREATE_TAB",
+        "METHOD_CLOSE_TAB",
+        "METHOD_CLICK",
+        "METHOD_TYPE_TEXT",
+        "METHOD_PRESS_KEY",
+        "METHOD_NAVIGATE",
     }
     assert registered == expected, f"the add-on registers {sorted(registered)}"
     wire = {getattr(P, name) for name in registered}
-    assert wire == set(P.READ_METHODS), (
-        "the registered methods are not exactly protocol.READ_METHODS, so either a "
-        "read is missing or an acting method landed a ship early"
+    assert wire == set(P.ALL_METHODS), (
+        "the registered methods are not exactly protocol.ALL_METHODS, so either a "
+        "method is missing or one is served that protocol.py does not declare"
     )
-    for name in ("METHOD_CLICK", "METHOD_TYPE_TEXT", "METHOD_PRESS_KEY", "METHOD_NAVIGATE"):
-        assert getattr(P, name) not in _code(INDEX_TS), f"the page reader implements {name} a ship early"
+    # The read methods are all still there. Stated separately from the set equality
+    # above so a future ship that adds a method cannot quietly drop a read one and
+    # still satisfy a single "they are equal" assertion.
+    assert set(P.READ_METHODS) <= wire
 
 
 def test_the_page_reader_serves_the_two_page_methods_by_their_wire_names():

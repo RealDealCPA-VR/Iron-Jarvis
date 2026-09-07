@@ -60,6 +60,28 @@ DENY_FLOOR_TOOLS: frozenset[str] = frozenset(
     # authenticated to something the agent never had to ask for. `pane_spawn`
     # starts a host process. The read-only three (`pane_list`, `pane_read`,
     # `pane_wait`) are NOT here — they observe and cannot act.
+    # The four PAGE_ACTION browser tools joined in v1.237.0 (D11, plan §8.3).
+    # They act on the user's REAL, logged-in browser — their bank, their email,
+    # their client portal — so a wrong click is not a failed test, it is an
+    # action taken in someone's account. The read tools (`browser_read_page`,
+    # `browser_get_elements`, `browser_screenshot`, the three identity tools)
+    # and the four LOCAL_UI tools (`browser_activate_tab`, `browser_scroll`,
+    # `browser_create_tab`, `browser_close_tab`) are NOT here: they observe, or
+    # move the user's own view, and cannot commit anything on a page.
+    #
+    # What the floor does to these four, all three consequences intended:
+    #   * an agent-definition `allow` override is DROPPED (`mode_for` above), so
+    #     a user-authored dynamic agent cannot arm page-acting on itself and
+    #     then be spawned headless;
+    #   * `capability/store.py:floor_violation` REFUSES a capability proposal
+    #     naming one, because that check consults this module set, not the
+    #     tool's `risk_class` attribute (an attribute may raise the effective
+    #     bar, never lower it);
+    #   * an interactive per-session grant STILL lifts the `ask` (`authorize`
+    #     below) — which is exactly what makes "Allow for this conversation" on
+    #     the approval card work. Do not weaken that: without it every step of a
+    #     multi-step flow would re-ask, and a user clicking through five
+    #     identical cards is a user who has stopped reading them.
     {
         "shell",
         "browser_use",
@@ -68,6 +90,10 @@ DENY_FLOOR_TOOLS: frozenset[str] = frozenset(
         "repl",
         "pane_send",
         "pane_spawn",
+        "browser_click",
+        "browser_type",
+        "browser_press_key",
+        "browser_navigate",
     }
 )
 

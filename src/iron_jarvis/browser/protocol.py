@@ -40,9 +40,11 @@ may import from ``computeruse``; ``computeruse`` never imports ``browser``.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, NotRequired, TypedDict
 
 from ..computeruse.policy import _PASSWORD_AUTOCOMPLETE, _PAYMENT_AUTOCOMPLETE
+from ..core.jsonish import loads_object
 from .errors import REMEDIES, BrowserError, BrowserErrorCode, browser_error
 
 PROTOCOL_VERSION = 1
@@ -289,6 +291,37 @@ UNSUPPORTED_HOSTS: tuple[str, ...] = (
     "chromewebstore.google.com",
     "chrome.google.com",
 )
+
+# --------------------------------------------------------------------------- #
+# Acting vocabularies (Ship 3, plan sections 8.5 and 8.6)
+# --------------------------------------------------------------------------- #
+
+#: The four ``scroll`` directions, exactly as spelled. Checked daemon-side by
+#: :func:`is_scroll_direction` before a frame is built, for the same reason
+#: :data:`SNAPSHOT_MODES` is: the content script compares the raw string, so a
+#: ``"Down"`` that reached the page would scroll nowhere and answer success.
+SCROLL_UP = "up"
+SCROLL_DOWN = "down"
+SCROLL_TOP = "top"
+SCROLL_BOTTOM = "bottom"
+SCROLL_DIRECTIONS: tuple[str, ...] = (SCROLL_UP, SCROLL_DOWN, SCROLL_TOP, SCROLL_BOTTOM)
+
+#: The three ways a target may be addressed, in the order section 8.6 prefers
+#: them. ``element_id`` first is not a style preference: it is the only form that
+#: carries the element's ACCESSIBLE NAME back to the risk classifier
+#: (:func:`iron_jarvis.computeruse.policy.escalate_browser`), and a CSS selector
+#: gives that classifier nothing to read. A "Delete account" button addressed as
+#: ``{"css": "#btn-7"}`` is a button whose escalation vocabulary is empty.
+TARGET_ELEMENT_ID = "element_id"
+TARGET_ROLE = "role"
+TARGET_CSS = "css"
+TARGET_FORMS: tuple[str, ...] = (TARGET_ELEMENT_ID, TARGET_ROLE, TARGET_CSS)
+
+#: Every key a target object may carry. ``name`` rides with ``role`` and is not a
+#: form of its own — a bare name with no role is ambiguous on a page with a link
+#: and a button that read the same, and picking one silently is how the wrong
+#: control gets clicked.
+TARGET_KEYS: tuple[str, ...] = ("element_id", "role", "name", "css")
 
 # --------------------------------------------------------------------------- #
 # Frame shapes — plan section 9.6, verbatim
@@ -631,6 +664,269 @@ class ScreenshotResult(TypedDict):
     data_b64: str
 
 
+class Target(TypedDict):
+    """How ONE element is addressed by an acting call (section 8.6).
+
+    Exactly one form per call: ``element_id``, or ``role`` + ``name``, or ``css``.
+    Every key is optional in the TYPE because a TypedDict cannot express "exactly
+    one of three"; :func:`normalise_target` enforces it and refuses two forms with
+    a message naming the conflict. A permissive reader that took the first key it
+    recognised would act on the target the model did NOT mean — two forms
+    disagree precisely when the model is unsure, which is the moment a wrong click
+    costs the most.
+
+    Coordinates are deliberately absent (section 30 of the decision record).
+    """
+
+    element_id: NotRequired[str]
+    role: NotRequired[str]
+    name: NotRequired[str]
+    css: NotRequired[str]
+
+
+class TargetRef(TypedDict):
+    """What was ACTUALLY acted on, echoed back by the page.
+
+    Not the same object as :class:`Target`: that is what the model asked for, this
+    is what the content script resolved. They differ whenever a role+name or CSS
+    target matched something other than what the model pictured, and that
+    difference is the only evidence a later reader of the ledger has. Section 10.4
+    requires this in every acting result for exactly that reason.
+    """
+
+    element_id: str
+    role: str
+    name: str
+
+
+class ActivateTabParams(TypedDict):
+    """``activate_tab`` params. ``tab_id`` is REQUIRED here, uniquely.
+
+    Every other acting method treats an absent ``tab_id`` as "the active tab".
+    Activating the tab that is already active is a call with no meaning, so this
+    one method has nothing to default to.
+    """
+
+    tab_id: int
+
+
+class ScrollParams(TypedDict):
+    """``scroll`` params. ``direction`` is one of :data:`SCROLL_DIRECTIONS`."""
+
+    direction: str
+    tab_id: NotRequired[int]
+    amount: NotRequired[int]
+
+
+class CreateTabParams(TypedDict):
+    """``create_tab`` params. ``active`` is always sent, never inferred."""
+
+    active: bool
+    url: NotRequired[str]
+
+
+class CloseTabParams(TypedDict):
+    """``close_tab`` params. ``tab_id`` is required.
+
+    Closing "whatever is active" is how the user loses the tab they were reading,
+    and a closed tab is the one page state in this protocol that no retry
+    restores — which is why the tool declares IRREVERSIBLE.
+    """
+
+    tab_id: int
+
+
+class ClickParams(TypedDict):
+    """``click`` params.
+
+    ``snapshot_id`` is optional and ENFORCED when present. Absent, the daemon uses
+    the tab's newest snapshot and says so in the result; with no snapshot at all
+    the call is refused ``STALE_SNAPSHOT`` with the remedy "call browser_read_page
+    first". Acting on a page nobody has read is acting blind.
+    """
+
+    target: Target
+    tab_id: NotRequired[int]
+    snapshot_id: NotRequired[str]
+
+
+class TypeTextParams(TypedDict):
+    """``type_text`` params.
+
+    ``text`` crosses the socket because it has to be typed, and it is the one
+    field in this protocol that is redacted before it is ever WRITTEN down:
+    ``browser_type.redact_args`` replaces it unconditionally, so ``args_json`` —
+    stored at rest, returned by session export, included in backups — never holds
+    it. Unconditional, not "when the field looks sensitive": a conditional
+    redactor would have to resolve the element before the ledger write, and any
+    resolution failure would then log the plaintext.
+    """
+
+    target: Target
+    text: str
+    clear: bool
+    press_enter: bool
+    tab_id: NotRequired[int]
+    snapshot_id: NotRequired[str]
+
+
+class PressKeyParams(TypedDict):
+    """``press_key`` params. ``target`` is optional — a key can go to the page."""
+
+    key: str
+    tab_id: NotRequired[int]
+    target: NotRequired[Target]
+    snapshot_id: NotRequired[str]
+
+
+class NavigateParams(TypedDict):
+    """``navigate`` params.
+
+    The URL has already passed :func:`unsupported_page_scheme` and the live
+    ``ComputerUsePolicy.domain_allowed`` on the daemon side before this object is
+    built. Both checks are pre-send on purpose: a refusal decided in the page is a
+    refusal the daemon cannot explain, and the domain allowlist the user
+    configured for computer use is the same allowlist here — one configuration,
+    not two.
+    """
+
+    url: str
+    tab_id: NotRequired[int]
+
+
+class DownloadPayload(TypedDict):
+    """The ``download_completed`` event payload, as the ADD-ON sends it (10.3).
+
+    ``filename`` is Chromium's ``DownloadItem.filename``, documented as an
+    absolute local path and readable with the ``downloads`` permission alone — no
+    native messaging host, and no filesystem access invented inside the add-on.
+
+    It is still only a CLAIM until the daemon checks it. The bus payload of 10.2
+    carries ``local_path``, and that key is added daemon-side after verifying the
+    string is absolute; it is deliberately NOT a field here, so nothing can put a
+    relative path (or a path a compromised add-on invented) into a ``local_path``
+    the file tools would then trust. The wire says what the browser reported; the
+    daemon says what it verified.
+
+    ``final_url`` is the post-redirect URL and differs from ``source_url``
+    whenever a download link bounces through a CDN — which is most of them, and is
+    why both are reported rather than one.
+    """
+
+    download_id: int
+    filename: str
+    source_url: str
+    final_url: NotRequired[str]
+    tab_id: NotRequired[int]
+    bytes: NotRequired[int]
+    mime: NotRequired[str]
+    timestamp: NotRequired[str]
+
+
+class ActivateTabResult(TypedDict):
+    """The ``activate_tab`` result."""
+
+    tab_id: int
+    title: str
+    url: str
+    activated: bool
+
+
+class ScrollResult(TypedDict):
+    """The ``scroll`` result. ``scrolled_to`` names where the page ended up.
+
+    ``page_version`` rides on a LOCAL_UI result because scrolling can load more of
+    an infinite list, which adds interactive nodes and bumps the version. A model
+    that scrolled and then clicked an element id from before the scroll would
+    otherwise be refused ``STALE_ELEMENT`` with no idea which of its own calls
+    caused it.
+    """
+
+    tab_id: int
+    scrolled_to: str
+    page_version: int
+    url: NotRequired[str]
+    title: NotRequired[str]
+
+
+class CreateTabResult(TypedDict):
+    """The ``create_tab`` result."""
+
+    tab_id: int
+    url: str
+    title: str
+
+
+class CloseTabResult(TypedDict):
+    """The ``close_tab`` result. ``closed`` is always ``true`` on success."""
+
+    tab_id: int
+    closed: bool
+
+
+class ClickResult(TypedDict):
+    """The ``click`` result.
+
+    ``navigated`` is the page telling the daemon that the click left the page. It
+    is what invalidates the tab's cached snapshot, so a model that clicks a link
+    and then reuses an element id is answered ``STALE_SNAPSHOT`` with a remedy
+    instead of clicking whatever now occupies that slot.
+
+    ``download`` carries the completed download the click started (section 10.3).
+    It is on the RESULT and not only on the event because a model that asked for a
+    file needs the path in the answer to the call it made — an event it never sees
+    is a path it cannot hand to ``read_document``.
+    """
+
+    tab_id: int
+    clicked: TargetRef
+    url: str
+    page_version: int
+    navigated: bool
+    title: NotRequired[str]
+    download: NotRequired[DownloadPayload]
+
+
+class TypeTextResult(TypedDict):
+    """The ``type_text`` result. It NEVER echoes ``text`` — there is no key for it.
+
+    Absent by construction rather than by a caller remembering to strip it: a
+    result shape with a ``text`` field is a result shape that will eventually
+    carry a password into the ledger's ``output`` column, which is capped and
+    stored but not redacted.
+    """
+
+    tab_id: int
+    typed_into: TargetRef
+    cleared: bool
+    submitted: bool
+    page_version: int
+    url: NotRequired[str]
+    title: NotRequired[str]
+    navigated: NotRequired[bool]
+
+
+class PressKeyResult(TypedDict):
+    """The ``press_key`` result."""
+
+    tab_id: int
+    key: str
+    page_version: int
+    navigated: bool
+    url: NotRequired[str]
+    title: NotRequired[str]
+
+
+class NavigateResult(TypedDict):
+    """The ``navigate`` result. ``status`` is the tab's load state."""
+
+    tab_id: int
+    url: str
+    title: str
+    page_version: int
+    status: str
+
+
 #: The payload ``TypedDict``s, in generation order: referenced shapes first, so
 #: the generated TypeScript reads top to bottom like the Python does.
 RESULT_TYPEDDICTS: tuple[type, ...] = (
@@ -646,6 +942,25 @@ RESULT_TYPEDDICTS: tuple[type, ...] = (
     SnapshotResult,
     ElementsResult,
     ScreenshotResult,
+    Target,
+    TargetRef,
+    ActivateTabParams,
+    ScrollParams,
+    CreateTabParams,
+    CloseTabParams,
+    ClickParams,
+    TypeTextParams,
+    PressKeyParams,
+    NavigateParams,
+    DownloadPayload,
+    ActivateTabResult,
+    ScrollResult,
+    CreateTabResult,
+    CloseTabResult,
+    ClickResult,
+    TypeTextResult,
+    PressKeyResult,
+    NavigateResult,
 )
 
 #: ``method`` -> the ``TypedDict`` describing that method's RESULT. Only the read
@@ -656,6 +971,14 @@ RESULT_SHAPES: dict[str, type] = {
     METHOD_READ_PAGE: SnapshotResult,
     METHOD_GET_ELEMENTS: ElementsResult,
     METHOD_SCREENSHOT: ScreenshotResult,
+    METHOD_ACTIVATE_TAB: ActivateTabResult,
+    METHOD_SCROLL: ScrollResult,
+    METHOD_CREATE_TAB: CreateTabResult,
+    METHOD_CLOSE_TAB: CloseTabResult,
+    METHOD_CLICK: ClickResult,
+    METHOD_TYPE_TEXT: TypeTextResult,
+    METHOD_PRESS_KEY: PressKeyResult,
+    METHOD_NAVIGATE: NavigateResult,
 }
 
 #: ``method`` -> the ``TypedDict`` describing that method's PARAMS.
@@ -663,6 +986,23 @@ PARAM_SHAPES: dict[str, type] = {
     METHOD_READ_PAGE: ReadPageParams,
     METHOD_GET_ELEMENTS: GetElementsParams,
     METHOD_SCREENSHOT: ScreenshotParams,
+    METHOD_ACTIVATE_TAB: ActivateTabParams,
+    METHOD_SCROLL: ScrollParams,
+    METHOD_CREATE_TAB: CreateTabParams,
+    METHOD_CLOSE_TAB: CloseTabParams,
+    METHOD_CLICK: ClickParams,
+    METHOD_TYPE_TEXT: TypeTextParams,
+    METHOD_PRESS_KEY: PressKeyParams,
+    METHOD_NAVIGATE: NavigateParams,
+}
+
+#: ``event`` name -> the ``TypedDict`` describing that event's PAYLOAD. Only the
+#: download event has a shape worth pinning: the other two carry tab identity the
+#: add-on already sends on every response. Listed so the generator emits it and
+#: the add-on's downloads module compiles against the same object the daemon
+#: parses (section 10.3).
+EVENT_PAYLOAD_SHAPES: dict[str, type] = {
+    EVENT_DOWNLOAD_COMPLETED: DownloadPayload,
 }
 
 
@@ -867,6 +1207,305 @@ def screenshot_params(tab_id: int | None = None, *, full_page: bool = False) -> 
     return params
 
 
+def activate_tab_params(tab_id: int) -> ActivateTabParams:
+    """Build ``activate_tab`` params. ``tab_id`` is required and validated here.
+
+    Raises:
+        BrowserError: ``TAB_NOT_FOUND`` when ``tab_id`` is not a positive integer.
+        A bool is refused too, because ``True`` is an ``int`` in Python and
+        ``activate_tab(True)`` would put ``tab_id: 1`` on the wire and activate a
+        tab the caller never named.
+    """
+    resolved = _int_param(tab_id)
+    if resolved is None:
+        raise BrowserError(BrowserErrorCode.TAB_NOT_FOUND, tab_id=tab_id)
+    return {"tab_id": resolved}
+
+
+def close_tab_params(tab_id: int) -> CloseTabParams:
+    """Build ``close_tab`` params. Same required-and-validated ``tab_id``."""
+    resolved = _int_param(tab_id)
+    if resolved is None:
+        raise BrowserError(BrowserErrorCode.TAB_NOT_FOUND, tab_id=tab_id)
+    return {"tab_id": resolved}
+
+
+def scroll_params(
+    tab_id: int | None = None,
+    *,
+    direction: str,
+    amount: int | None = None,
+) -> ScrollParams:
+    """Build ``scroll`` params.
+
+    Raises:
+        BrowserError: ``EXTENSION_ERROR`` naming the four legal directions when
+        ``direction`` is outside :data:`SCROLL_DIRECTIONS`. Refused HERE rather
+        than in the page: the content script compares the raw string, so an
+        unknown direction would scroll nowhere and answer success — a silent
+        no-op that a model reads as "done".
+    """
+    if not is_scroll_direction(direction):
+        raise BrowserError(
+            BrowserErrorCode.EXTENSION_ERROR,
+            detail=(
+                f"scroll direction {direction!r} is not one of "
+                f"{', '.join(SCROLL_DIRECTIONS)}"
+            ),
+        )
+    params: ScrollParams = {"direction": str(direction)}
+    resolved_tab = _int_param(tab_id) if tab_id is not None else None
+    if resolved_tab is not None:
+        params["tab_id"] = resolved_tab
+    resolved_amount = _int_param(amount)
+    if resolved_amount is not None:
+        params["amount"] = resolved_amount
+    return params
+
+
+def create_tab_params(url: str | None = None, *, active: bool = True) -> CreateTabParams:
+    """Build ``create_tab`` params. An empty ``url`` is omitted, not sent blank.
+
+    ``about:blank`` is not substituted for a missing URL: ``about:`` is on
+    :data:`UNSUPPORTED_SCHEMES`, so a tab opened that way would be one the add-on
+    can never read, and the model would be handed an id it cannot act on.
+    """
+    params: CreateTabParams = {"active": bool(active)}
+    text = str(url or "").strip()
+    if text:
+        params["url"] = text
+    return params
+
+
+def click_params(
+    target: Mapping[str, Any],
+    tab_id: int | None = None,
+    *,
+    snapshot_id: str | None = None,
+) -> ClickParams:
+    """Build ``click`` params, with the target normalised to exactly one form."""
+    params: ClickParams = {"target": normalise_target(target)}
+    resolved_tab = _int_param(tab_id) if tab_id is not None else None
+    if resolved_tab is not None:
+        params["tab_id"] = resolved_tab
+    snap = str(snapshot_id or "").strip()
+    if snap:
+        params["snapshot_id"] = snap
+    return params
+
+
+def type_text_params(
+    target: Mapping[str, Any],
+    text: str,
+    tab_id: int | None = None,
+    *,
+    clear: bool = False,
+    press_enter: bool = False,
+    snapshot_id: str | None = None,
+) -> TypeTextParams:
+    """Build ``type_text`` params. ``clear`` and ``press_enter`` are always sent.
+
+    Both booleans are present on every frame rather than omitted when false. The
+    add-on would have to default a missing key, and the two possible defaults are
+    "leave the field's existing content" and "wipe it" — a divergence between the
+    daemon's assumption and the add-on's would silently destroy whatever the user
+    had already typed into that field.
+
+    ``text`` is passed through verbatim, including empty: typing an empty string
+    with ``clear=True`` is how a field is emptied, and dropping the key would turn
+    that into a validation failure for a legitimate call.
+    """
+    params: TypeTextParams = {
+        "target": normalise_target(target),
+        "text": str(text if text is not None else ""),
+        "clear": bool(clear),
+        "press_enter": bool(press_enter),
+    }
+    resolved_tab = _int_param(tab_id) if tab_id is not None else None
+    if resolved_tab is not None:
+        params["tab_id"] = resolved_tab
+    snap = str(snapshot_id or "").strip()
+    if snap:
+        params["snapshot_id"] = snap
+    return params
+
+
+def press_key_params(
+    key: str,
+    tab_id: int | None = None,
+    *,
+    target: Mapping[str, Any] | None = None,
+    snapshot_id: str | None = None,
+) -> PressKeyParams:
+    """Build ``press_key`` params. ``target`` is optional; ``key`` is not.
+
+    Raises:
+        BrowserError: ``EXTENSION_ERROR`` on an empty ``key``. A frame with an
+        empty key would reach the page, dispatch nothing, and answer success.
+    """
+    text = str(key or "").strip()
+    if not text:
+        raise BrowserError(
+            BrowserErrorCode.EXTENSION_ERROR,
+            detail="press_key needs a key name, for example 'Enter' or 'Escape'",
+        )
+    params: PressKeyParams = {"key": text}
+    resolved_tab = _int_param(tab_id) if tab_id is not None else None
+    if resolved_tab is not None:
+        params["tab_id"] = resolved_tab
+    if target:
+        params["target"] = normalise_target(target)
+    snap = str(snapshot_id or "").strip()
+    if snap:
+        params["snapshot_id"] = snap
+    return params
+
+
+def navigate_params(url: str, tab_id: int | None = None) -> NavigateParams:
+    """Build ``navigate`` params.
+
+    Raises:
+        BrowserError: ``UNSUPPORTED_PAGE`` for a scheme Chrome closes to add-ons,
+        and ``NAVIGATION_FAILED`` for an empty URL. The scheme check runs here as
+        well as at the tool because this is the last point before the frame
+        exists: a ``chrome://`` command that reached the add-on would be dropped
+        by Chrome with no response frame at all, and the daemon would report an
+        ``ACTION_TIMEOUT`` for a call that was refused instantly.
+    """
+    text = str(url or "").strip()
+    if not text:
+        raise BrowserError(BrowserErrorCode.NAVIGATION_FAILED, url=url)
+    scheme = unsupported_page_scheme(text)
+    if scheme:
+        raise BrowserError(BrowserErrorCode.UNSUPPORTED_PAGE, scheme=scheme)
+    params: NavigateParams = {"url": text}
+    resolved_tab = _int_param(tab_id) if tab_id is not None else None
+    if resolved_tab is not None:
+        params["tab_id"] = resolved_tab
+    return params
+
+
+def normalise_target(target: Mapping[str, Any] | None) -> Target:
+    """The one target validator: exactly one form, or a refusal that names why.
+
+    Section 8.6's rule, enforced in one place so no acting tool can spell it
+    differently: ``{"element_id": "e17"}`` preferred, ``{"role", "name"}`` next,
+    ``{"css"}`` last, and exactly ONE of the three per call.
+
+    Two forms is refused rather than resolved by preference order. That looks
+    stricter than it needs to be until you picture the call it refuses: a model
+    that sends both ``element_id`` and ``css`` is a model that is unsure which is
+    right, and silently honouring the first would act on the target it did not
+    mean — on the user's real, logged-in page — with a result echoing the id that
+    "won" and nothing recording the disagreement.
+
+    Unknown keys are dropped rather than refused: an add-on or a caller a version
+    ahead may send a key this daemon has never heard of, and failing the whole
+    call over an extra field would break a flow that is otherwise well formed.
+
+    A target that is not an OBJECT at all is refused here with the same code and
+    the same three-form message, and that is not a formality. ``registry.invoke``'s
+    shape gate deliberately accepts a STRING wherever a type is declared
+    (``core.jsonish.json_type_ok``), so ``{"target": "e7"}`` — the single most
+    likely wrong shape, because models stringify — reaches this function, and
+    ``dict("e7")`` raises ``ValueError``, which is not a :class:`BrowserError` and
+    therefore reached the model as a raw Python traceback: *dictionary update
+    sequence element #0 has length 1; 2 is required*. Plan section 8.6 forbids
+    exactly that — a model given a traceback has nothing to correct and retries
+    the same shape. A string is first tried as JSON (a model that encoded the
+    object is honoured), and anything else is a refusal that names the forms.
+
+    Raises:
+        BrowserError: ``ELEMENT_NOT_FOUND`` with an explicit message when the
+        target is not an object, is empty, carries two forms, or names a role with
+        no name.
+    """
+    if target is not None and not isinstance(target, Mapping):
+        recovered = loads_object(target) if isinstance(target, str) else None
+        if recovered is None:
+            raise BrowserError(
+                BrowserErrorCode.ELEMENT_NOT_FOUND,
+                message=(
+                    "The target must be an object, not "
+                    f"{type(target).__name__}. Send exactly one of: "
+                    '{"element_id": "e17"} from browser_read_page (preferred), '
+                    '{"role": "button", "name": "Sign in"}, or {"css": "#submit"}.'
+                ),
+            )
+        target = recovered
+    row = {str(k): v for k, v in dict(target or {}).items() if k in TARGET_KEYS}
+    element_id = str(row.get("element_id") or "").strip()
+    role = str(row.get("role") or "").strip()
+    name = str(row.get("name") or "").strip()
+    css = str(row.get("css") or "").strip()
+
+    forms = [
+        form
+        for form, present in (
+            (TARGET_ELEMENT_ID, bool(element_id)),
+            (TARGET_ROLE, bool(role or name)),
+            (TARGET_CSS, bool(css)),
+        )
+        if present
+    ]
+    if not forms:
+        raise BrowserError(
+            BrowserErrorCode.ELEMENT_NOT_FOUND,
+            message=(
+                "No target was given. Name exactly one of: "
+                '{"element_id": "e17"} from browser_read_page (preferred), '
+                '{"role": "button", "name": "Sign in"}, or {"css": "#submit"}.'
+            ),
+        )
+    if len(forms) > 1:
+        raise BrowserError(
+            BrowserErrorCode.ELEMENT_NOT_FOUND,
+            message=(
+                f"The target names {len(forms)} forms at once ({', '.join(forms)}); "
+                "exactly one is allowed. Send the element_id from "
+                "browser_read_page on its own."
+            ),
+        )
+    if TARGET_ROLE in forms and not (role and name):
+        raise BrowserError(
+            BrowserErrorCode.ELEMENT_NOT_FOUND,
+            message=(
+                "A role target needs both role and name, for example "
+                '{"role": "button", "name": "Sign in"}. Call browser_read_page '
+                "to see what is on the page now."
+            ),
+        )
+
+    clean: Target = {}
+    if element_id:
+        clean["element_id"] = element_id
+    elif css:
+        clean["css"] = css
+    else:
+        clean["role"] = role
+        clean["name"] = name
+    return clean
+
+
+def target_label(target: Mapping[str, Any] | None) -> str:
+    """The words a risk classifier can read off a target, or ``""``.
+
+    Only a role+name target carries any: an ``element_id`` names nothing until the
+    page resolves it, and a CSS selector names nothing ever. That asymmetry is the
+    whole reason section 8.6 prefers ``element_id`` *and* the reason the acting
+    tools must pass the RESOLVED accessible name to
+    :func:`~iron_jarvis.computeruse.policy.escalate_browser` rather than relying on
+    this. This function is the pre-resolution fallback, not the label.
+    """
+    row = dict(target or {})
+    return str(row.get("name") or "").strip()
+
+
+def is_scroll_direction(value: Any) -> bool:
+    """Whether ``value`` is one of the four directions, exactly as spelled."""
+    return isinstance(value, str) and value in SCROLL_DIRECTIONS
+
+
 def is_snapshot_mode(value: Any) -> bool:
     """Whether ``value`` is one of the three modes, exactly as spelled.
 
@@ -974,6 +1613,17 @@ __all__ = [
     "SUMMARY_TEXT_CHARS",
     "UNSUPPORTED_HOSTS",
     "UNSUPPORTED_SCHEMES",
+    "EVENT_PAYLOAD_SHAPES",
+    "SCROLL_BOTTOM",
+    "SCROLL_DIRECTIONS",
+    "SCROLL_DOWN",
+    "SCROLL_TOP",
+    "SCROLL_UP",
+    "TARGET_CSS",
+    "TARGET_ELEMENT_ID",
+    "TARGET_FORMS",
+    "TARGET_KEYS",
+    "TARGET_ROLE",
     # frame and payload shapes
     "CommandFrame",
     "ConnectionReplacedFrame",
@@ -998,6 +1648,25 @@ __all__ = [
     "SecurityNote",
     "SnapshotResult",
     "TruncationRow",
+    "ActivateTabParams",
+    "ActivateTabResult",
+    "ClickParams",
+    "ClickResult",
+    "CloseTabParams",
+    "CloseTabResult",
+    "CreateTabParams",
+    "CreateTabResult",
+    "DownloadPayload",
+    "NavigateParams",
+    "NavigateResult",
+    "PressKeyParams",
+    "PressKeyResult",
+    "ScrollParams",
+    "ScrollResult",
+    "Target",
+    "TargetRef",
+    "TypeTextParams",
+    "TypeTextResult",
     # errors, re-exported so one import serves a protocol call site
     "BrowserError",
     "BrowserErrorCode",
@@ -1020,4 +1689,15 @@ __all__ = [
     "response_frame",
     "screenshot_params",
     "unsupported_page_scheme",
+    "activate_tab_params",
+    "click_params",
+    "close_tab_params",
+    "create_tab_params",
+    "is_scroll_direction",
+    "navigate_params",
+    "normalise_target",
+    "press_key_params",
+    "scroll_params",
+    "target_label",
+    "type_text_params",
 ]

@@ -15,12 +15,30 @@
 // so the pairing token and the user's suspend choice live in storage and nothing
 // else needs to survive.
 //
-// Ship 2 registers six methods: Ship 1's three tab-metadata reads, plus
-// `read_page`, `get_elements` and `screenshot`. The acting methods — `click`,
-// `type_text`, `press_key`, `navigate`, `scroll` and the tab-management pair — arrive
-// in Ship 3. Until then the dispatcher answers an unregistered method with
+// Ship 3 registers all fourteen methods: Ship 1's three tab-metadata reads, Ship 2's
+// `read_page`, `get_elements` and `screenshot`, and the eight that ACT —
+// `activate_tab`, `scroll`, `create_tab`, `close_tab`, `click`, `type_text`,
+// `press_key` and `navigate`. An unregistered method is still answered with
 // EXTENSION_ERROR naming it, so a daemon built ahead of the add-on learns which half
 // is missing instead of timing out.
+//
+// EVERY ACTING METHOD READS THE HOST GRANT FRESH, exactly as the reads do, and for a
+// sharper reason: the user can revoke site access from chrome://extensions between
+// two calls, and a cached `true` would send a click at a page the add-on may no
+// longer touch — surfacing as Chrome's own wording instead of the remedy naming the
+// button to press.
+//
+// Downloads are the third thing that is NOT in this file: `background/downloads.ts`
+// owns what a completed download means — completion only, the origin tab across an
+// MV3 eviction, and the absolute path Chromium reports — and is handed one emitter
+// so it never learns that a socket exists.
+//
+// The one thing this file DOES do about downloads is plan 10.3's single agent-facing
+// capability: the `click` handler below awaits `awaitDownload` and puts what comes
+// back on `ClickResult.download`, so the path of a file a click produced rides the
+// answer to that click. An event the model never sees is a path it cannot hand to
+// `read_document`, which is the whole point of 10.3 — and this call site is the only
+// place the capability exists. Nothing else in the add-on calls `awaitDownload`.
 //
 // Note where the page work is NOT: none of it is in this file. `read_page` and
 // `get_elements` go through `tabs.runInPage`, which injects `content/index.ts` on
@@ -36,24 +54,41 @@ import {
   EVENT_ID_PREFIX,
   EVENT_NAVIGATION_COMPLETED,
   EVENT_TAB_ACTIVATED,
+  METHOD_ACTIVATE_TAB,
   METHOD_ACTIVE_TAB,
+  METHOD_CLICK,
+  METHOD_CLOSE_TAB,
+  METHOD_CREATE_TAB,
   METHOD_GET_ELEMENTS,
   METHOD_LIST_TABS,
+  METHOD_NAVIGATE,
+  METHOD_PRESS_KEY,
   METHOD_READ_PAGE,
   METHOD_SCREENSHOT,
+  METHOD_SCROLL,
   METHOD_STATUS,
+  METHOD_TYPE_TEXT,
 } from "../protocol";
 import { BridgeError } from "../bridge/errors";
 import { Dispatcher } from "../bridge/dispatch";
 import { BridgeSocket, toggleAction, type BridgeStatus } from "../bridge/socket";
+import { awaitDownload, watchDownloads } from "./downloads";
 import { hasHostPermission, onHostPermissionChanged, openSetupPage } from "./hostperms";
 import {
+  activateTab,
   activeTab,
   captureVisible,
+  clickInPage,
+  closeTab,
+  createTab,
   getElements,
   listTabs,
+  navigate,
+  pressKeyInPage,
   readPage,
+  scrollInPage,
   tabRow,
+  typeTextInPage,
 } from "./tabs";
 
 /** The dashboard page the popup's Open Jarvis button goes to. */
@@ -140,6 +175,65 @@ dispatcher.register(METHOD_GET_ELEMENTS, async (params) => {
 
 dispatcher.register(METHOD_SCREENSHOT, async (params) => {
   return captureVisible(params, await hasHostPermission());
+});
+
+// --- the eight acting methods (Ship 3) --------------------------------------
+
+// The four that change the BROWSER. Three of them report a title and a URL, so they
+// refuse without the site grant rather than name a page they cannot read;
+// `close_tab` reports neither and so needs no grant. That line is drawn in tabs.ts,
+// beside the code it governs.
+
+dispatcher.register(METHOD_ACTIVATE_TAB, async (params) => {
+  return activateTab(params, await hasHostPermission());
+});
+
+dispatcher.register(METHOD_CREATE_TAB, async (params) => {
+  return createTab(params, await hasHostPermission());
+});
+
+dispatcher.register(METHOD_CLOSE_TAB, async (params) => {
+  return closeTab(params);
+});
+
+dispatcher.register(METHOD_NAVIGATE, async (params) => {
+  return navigate(params, await hasHostPermission());
+});
+
+// The four that change a PAGE. Each is one line because `runInPage` already holds
+// the gate, the unsupported-page refusal and the injection; the work itself is in
+// `content/actions.ts`, inside the page, where the live node is.
+
+dispatcher.register(METHOD_CLICK, async (params) => {
+  // BEFORE the click, not after: `awaitDownload` will only accept a completion
+  // recorded at or after this moment, which is what stops a click that downloaded
+  // nothing from claiming a file the user downloaded themselves earlier.
+  const startedAt = Date.now();
+  const result = await clickInPage(params, await hasHostPermission());
+  // Plan 10.3. `clickInPage` has already resolved the real tab, so the result's
+  // `tab_id` attributes the download better than the caller's params could — a
+  // click with no `tab_id` acts on the active tab, and `params` would say `null`.
+  const tabId = typeof result["tab_id"] === "number" ? (result["tab_id"] as number) : null;
+  const download = await awaitDownload(tabId, startedAt);
+  if (download === null) {
+    // By far the common case: the click pressed a button. The result is returned
+    // unchanged, WITHOUT a `download` key — an absent key reads downstream as "no
+    // file", where a null one would have to be special-cased in three places.
+    return result;
+  }
+  return { ...result, download: download as unknown as Record<string, unknown> };
+});
+
+dispatcher.register(METHOD_TYPE_TEXT, async (params) => {
+  return typeTextInPage(params, await hasHostPermission());
+});
+
+dispatcher.register(METHOD_PRESS_KEY, async (params) => {
+  return pressKeyInPage(params, await hasHostPermission());
+});
+
+dispatcher.register(METHOD_SCROLL, async (params) => {
+  return scrollInPage(params, await hasHostPermission());
 });
 
 // --- directives -------------------------------------------------------------
@@ -244,6 +338,22 @@ chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
       url: hostPermission ? (tab.url ?? "") : null,
     });
   })();
+});
+
+watchDownloads((event, payload) => {
+  // Downloads are reported through the SAME event frame as everything else (D22:
+  // no second bus, and no second transport either). `downloads.ts` owns what a
+  // completion means and never touches the socket; this closure owns the event id,
+  // because `eventSeq` is this worker's counter and two owners would mint the same
+  // id for two different events.
+  //
+  // The site grant is NOT consulted here, and that is deliberate rather than an
+  // omission. A download is a fact about the user's own filesystem reported by
+  // `chrome.downloads`, which the "downloads" permission alone covers; gating it on
+  // host permissions would silence the one event that works without them, on a page
+  // Iron Jarvis was never allowed to read in the first place.
+  eventSeq += 1;
+  socket.emitEvent(`${EVENT_ID_PREFIX}${eventSeq}`, event, payload);
 });
 
 onHostPermissionChanged(() => {

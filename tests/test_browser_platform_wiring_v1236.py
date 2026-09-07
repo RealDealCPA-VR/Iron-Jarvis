@@ -374,25 +374,35 @@ def test_the_computer_use_doc_tells_the_two_browsers_apart():
 
 
 def test_the_computer_use_doc_does_not_oversell_your_browser():
-    """v1.236.0 reads and photographs. It does not click, type or navigate.
+    """The doc's promise is checked against the ROSTER, not against itself.
 
-    The tools that exist are the claim's evidence: this asserts the doc's promise
-    against the ROSTER, so a doc that grows an ability before the tool does goes
-    red rather than shipping as a lie the Guide repeats.
+    UPDATED AT v1.237.0, and the update is the point of the test. It read "v1.236.0
+    reads and photographs, it does not click" — true then, a lie the moment the
+    acting tools landed. The Guide answers out of this file, so a stale sentence
+    here is a confident wrong answer to a user's question.
+
+    The pin ties the claim to the tools that EXIST: a doc that grows an ability
+    before the tool does goes red, and so does a doc still denying one that shipped.
     """
     from iron_jarvis.browser.tools import browser_tools
 
     names = {tool.name for tool in browser_tools(None)}
-    assert names == {
-        "browser_get_status",
-        "browser_list_tabs",
-        "browser_get_active_tab",
-        "browser_read_page",
-        "browser_get_elements",
-        "browser_screenshot",
+    acting = {
+        "browser_activate_tab", "browser_scroll", "browser_create_tab", "browser_close_tab",
+        "browser_click", "browser_type", "browser_press_key", "browser_navigate",
     }
+    assert acting <= names, f"the acting tools are not registered: {sorted(acting - names)}"
 
-    assert "It cannot click, type or navigate." in _flat(COMPUTER_USE_DOC)
+    flat = _flat(COMPUTER_USE_DOC)
+    # The doc must no longer DENY what now exists...
+    assert "It cannot click, type or navigate." not in flat, (
+        "docs/COMPUTER-USE.md still tells the user the browser cannot click or type. "
+        "It can, as of v1.237.0 — and the Guide repeats this file verbatim"
+    )
+    # ...and must name the gate, because "it can click" without "it asks first" is
+    # the half of the truth that matters least to someone deciding to turn it on.
+    assert "Interactive" in flat
+    assert "asks first" in flat
 
 
 def test_the_computer_use_doc_names_the_nav_item_that_exists():

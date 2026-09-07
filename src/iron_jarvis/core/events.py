@@ -37,6 +37,10 @@ class EventType:
     AGENT_STARTED = "agent.started"
     AGENT_STATE_CHANGED = "agent.state_changed"
     AGENT_COMPLETED = "agent.completed"
+    # {tool, ok, mode, invocation_id, reversibility, risk_class} — risk_class
+    # joined in v1.237.0 with the acting browser tools, so an audit can tell a
+    # read from something that changed a page without re-deriving it from the
+    # tool name. Merged onto its ToolInvocation row by invocation_id.
     TOOL_EXECUTED = "tool.executed"
     TOOL_DENIED = "tool.denied"
     # TX-01 audit: one event per LLM completion so every token is individually

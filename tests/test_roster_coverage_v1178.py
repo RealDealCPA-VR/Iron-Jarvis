@@ -175,7 +175,21 @@ _OFF_ROSTER_BY_DESIGN = {
     # and it gets stronger the more a browser tool can see: a snapshot of the page
     # the user is looking at belongs to a surface where the user is present.
     "browser_read_page", "browser_get_elements", "browser_screenshot",
+    # Ship 3 (v1.237.0) added the acting half, and here the reasoning gets
+    # STRONGER rather than weaker. These change a page in the browser the user
+    # is logged into. They ride the ASK tier, so a call pauses for an approval
+    # card — and a card needs somebody in front of it. A background agent run at
+    # 3am has nobody to ask, which is exactly why none of these is on a roster.
+    "browser_activate_tab", "browser_scroll", "browser_create_tab", "browser_close_tab",
+    "browser_click", "browser_type", "browser_press_key", "browser_navigate",
 }
+
+#: The eight that CHANGE something, named once so the exemption above and the
+#: reachability pin below cannot drift apart.
+_BROWSER_ACTING = frozenset({
+    "browser_activate_tab", "browser_scroll", "browser_create_tab", "browser_close_tab",
+    "browser_click", "browser_type", "browser_press_key", "browser_navigate",
+})
 _OFF_ROSTER_OPEN = {
     # Documents/media the acceptance job plausibly needs, on no definition:
     "convert_document",   # `_DOCUMENT_TOOLS` has read/write/extract_pdf, not this
@@ -288,6 +302,59 @@ def test_the_browser_read_tier_is_reachable_from_chat(platform):
     assert not (read_tier & set(quiet)), (
         f"a document request armed browser tools: {sorted(read_tier & set(quiet))}"
     )
+
+
+def test_the_browser_acting_tier_is_reachable_and_only_through_the_ask_tier():
+    """The acting tools' exemption is honest ONLY if two things are true at once.
+
+    They are on no agent roster (see ``_OFF_ROSTER_BY_DESIGN``), so if chat could
+    not reach them either, eight tools would be registered and callable by nobody —
+    the shape this file exists to catch. And if chat reached them through the AUTO
+    tier they would run without asking, which is the opposite of what the deny floor
+    and the approval card are for.
+
+    So: reachable through ``select_ask_tools``, and absent from ``select_auto_tools``.
+    Driven with sentences a user would actually type, never asserted as set
+    membership — Ship 1 shipped a tier that was in ``AUTO_SAFE_TOOLS`` and armed by
+    nothing, because membership without a rule arms nothing at all.
+    """
+    from iron_jarvis.tools.autoselect import select_ask_tools, select_auto_tools
+
+    sentences = {
+        "click the sign in button": "browser_click",
+        "type my email into the form": "browser_type",
+        "scroll down the page": "browser_scroll",
+        "open a new tab": "browser_create_tab",
+    }
+    for sentence, expected in sentences.items():
+        asked = [n for n in select_ask_tools(sentence) if n.startswith("browser_")]
+        assert expected in asked, (
+            f"{sentence!r} does not arm {expected} on the ask tier, so the tool is "
+            "registered, permissioned and reachable by nothing"
+        )
+
+    # NOTHING auto-arms an acting tool — and the sentences that matter here are the
+    # READING ones as much as the acting ones. The first version of this pin only
+    # drove the four acting sentences and missed the realistic regression entirely:
+    # an acting tool riding along on a READ rule ("what does this page say?" arming
+    # browser_click beside browser_read_page). Arming IS granting in both chat lanes,
+    # so an acting tool on the auto tier changes a page with no card and no ask.
+    for sentence in (
+        *sentences,
+        "what does this page say?",
+        "what page am I looking at?",
+        "what tabs do I have open?",
+        "read the page I have open",
+        "take a screenshot of this page",
+        "summarise this article for me",
+    ):
+        auto = [n for n in select_auto_tools(sentence) if n.startswith("browser_")]
+        leaked = sorted(set(auto) & _BROWSER_ACTING)
+        assert not leaked, (
+            f"{sentence!r} auto-armed {leaked}. An acting tool on the auto tier is "
+            "granted rather than offered, so it would change a page in the user's "
+            "real browser with no approval card in front of anybody"
+        )
 
 
 # --------------------------------------------------------------------------- #

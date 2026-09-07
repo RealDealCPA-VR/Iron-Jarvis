@@ -257,10 +257,22 @@ def _leaky_page() -> LeakyBrowser:
 # --------------------------------------------------------------------------- #
 
 
-def test_ship_two_registers_six_read_tools_and_no_acting_tool():
-    """Six tools, and not one that can change a page: acting is Ship 3."""
+def test_the_read_tools_come_first_and_the_acting_tools_after_them():
+    """The roster, in order, with the read tier ahead of anything that acts.
+
+    UPDATED AT v1.237.0. This pinned "six read tools and not one that can change a
+    page", which was Ship 2's truth. Ship 3 adds the eight acting tools, so the
+    forbidden half became the expected half — the same move the copy pin makes each
+    ship, and the reason both halves exist.
+
+    ORDER is what survives, and it is not cosmetic. The read tier is what a
+    `read_only` install gets, and it is the prefix of this list; a model that reads
+    the roster top-down meets looking before touching. An acting tool appearing
+    among the first six would be the interesting failure, because `read_only` is
+    the setting a user picks to say "look, do not touch".
+    """
     names = [tool.name for tool in browser_tools(ReadRuntime(_peer()))]
-    assert names == [
+    assert names[:6] == [
         "browser_get_status",
         "browser_list_tabs",
         "browser_get_active_tab",
@@ -268,8 +280,20 @@ def test_ship_two_registers_six_read_tools_and_no_acting_tool():
         "browser_get_elements",
         "browser_screenshot",
     ]
-    for forbidden in ("browser_click", "browser_type", "browser_press_key", "browser_navigate"):
-        assert forbidden not in names, f"{forbidden} is Ship 3 and must not exist yet"
+    assert sorted(names[6:]) == sorted([
+        "browser_activate_tab",
+        "browser_scroll",
+        "browser_create_tab",
+        "browser_close_tab",
+        "browser_click",
+        "browser_type",
+        "browser_press_key",
+        "browser_navigate",
+    ])
+    for acting in ("browser_click", "browser_type", "browser_press_key", "browser_navigate"):
+        assert acting not in names[:6], (
+            f"{acting} sits in the READ tier, so a read_only install could reach it"
+        )
 
 
 def test_the_page_reading_tools_are_read_tier_and_fence_their_own_output(tmp_path):

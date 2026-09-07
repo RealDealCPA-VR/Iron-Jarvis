@@ -105,6 +105,21 @@ export const WATCHED_ATTRIBUTES = [
   "href",
   "role",
   "type",
+  // THE NAME ITSELF (v1.237.0). The first five watch whether a control is there
+  // and usable; these watch what it CLAIMS TO BE, and a click is approved by that
+  // claim. The risk gate scans the accessible name, and the approval card shows
+  // it, so a page that renames a control between the snapshot and the click gets
+  // the user to approve "Sign in" and receives a click on something else — with
+  // every other signal (same element, same position, same page_version) looking
+  // untouched. Watching them means such a rename BUMPS page_version, the next
+  // action is refused as stale, and the model has to read the page again and ask
+  // about the name the control actually has now.
+  "aria-label",
+  "aria-labelledby",
+  "title",
+  "alt",
+  "placeholder",
+  "value",
 ];
 
 /** The explicit `role` attribute's first token, lowercased, or `""`. */

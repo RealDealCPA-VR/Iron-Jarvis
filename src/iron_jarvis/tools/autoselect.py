@@ -2138,6 +2138,102 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
     ),
 ]
 
+# --- YOUR BROWSER: the acting rules that ADDRESS AN ELEMENT (v1.237.0) -------
+#
+# ONE PATTERN, TWO TIERS, and the pairing is the whole point of this list.
+#
+# `browser_click`, `browser_type` and `browser_press_key` each call
+# `BrowserRuntime.prepare_action` with `need_snapshot=True` — section 8.6 of the
+# implementation plan taken literally, "acting on a page nobody has read is
+# acting blind" — so on a tab nothing has read they REFUSE, with a remedy that
+# names exactly one tool: "No current snapshot for this tab. Call
+# browser_read_page and retry with the new element ID."
+#
+# Ship 3's first cut scored the acting tool ALONE, and driving it is what showed
+# the dead end. The ship's own live drive ("type a phrase into the search field
+# and press Enter") armed `browser_type` and nothing else; the model called it;
+# the tool refused STALE_SNAPSHOT; the model followed the remedy and called
+# `browser_read_page` — and the v1.227.0 roster gate refused THAT, because the
+# reader was not on the turn's roster ("`browser_read_page` is not one of this
+# agent's tools — it was not run"). The turn ended with nothing done and no move
+# left. An acting tool armed without the reader it structurally requires is not
+# a capability; it is one refusal followed by another.
+#
+# So each rule scores into both tiers, and the two halves CANNOT be merged:
+#
+# * the ACTING tool into `_ASK_RULES` — visible but ungranted, so the call
+#   pauses for the approval card the deny floor exists to raise;
+# * `browser_read_page` into `_RULES` — READ, `allow` by default, no card.
+#
+# A name scored in `_ASK_RULES` that is not in `ASK_TIER_TOOLS` is dropped by
+# the filter at the bottom of `select_ask_tools`, so the reader could not have
+# been scored there; and it must never JOIN that tier either, because that tier
+# means "ask the user first" and putting a card in front of looking is the
+# opposite of what Ship 2 shipped.
+#
+# ONLY `browser_read_page`. The refusal names one tool, its default
+# `interactive` mode is the one that carries element ids, and
+# `browser_get_elements` already has its own rule above for the sentences that
+# ask what is on a page — a second reader here would spend a schema slot of the
+# arming cap on the same fact.
+#
+# NOT the other five acting rules. `navigate`, `create_tab`, `scroll`,
+# `activate_tab` and `close_tab` all pass `need_snapshot=False`: none of them
+# addresses an element, so none can dead-end this way, and arming a page reader
+# for "go to example.com in my browser" would be a false arm on a sentence about
+# a page nobody needs read.
+_BROWSER_ELEMENT_RULES: list[tuple[re.Pattern[str], dict[str, int], dict[str, int]]] = [
+    (
+        # Clicking, pressing and submitting, on a PAGE.
+        re.compile(
+            r"\b(?:click|press|tap|hit|push|submit)\b[^.?!]{0,60}"
+            r"\b(?:button|link|checkbox|tab|menu|page|form|site|browser|chrome)\b"
+            r"|\b(?:click|press|tap|hit)\s+(?:on\s+)?(?:the\s+)?"
+            r"[\\\"'“‘][^\\\"'”’]{1,60}[\\\"'”’]",
+            re.IGNORECASE,
+        ),
+        {"browser_click": 8},
+        {"browser_read_page": 7},
+    ),
+    (
+        # Typing, filling and searching INTO something on a page. `press_enter`
+        # is an argument of `browser_type`, so a "type X and hit enter" sentence
+        # needs only the one tool; `browser_press_key` rides lower for the
+        # sentences that press a key and type nothing.
+        re.compile(
+            r"\b(?:type|enter|fill|fill\s+in|fill\s+out|put)\b[^.?!]{0,60}"
+            r"\b(?:field|box|form|input|search\s?(?:bar|box)?|page|site|browser|"
+            r"chrome)\b"
+            r"|\b(?:search|look\s+up)\b[^.?!]{0,40}\b(?:on|in)\b[^.?!]{0,20}"
+            r"\b(?:this|that|the)\s+(?:\w+\s+){0,2}(?:page|site|tab)\b",
+            re.IGNORECASE,
+        ),
+        {"browser_type": 8, "browser_press_key": 3},
+        {"browser_read_page": 7},
+    ),
+    (
+        # A bare key press: "press Enter", "hit Escape", "press Tab twice".
+        # Named keys only — this is the one acting rule with no browser noun, so
+        # it is bounded by a closed list of key names instead. "Enter the
+        # amount" is a typing sentence and must not land here, which is why the
+        # verb must be press/hit/tap and never "enter".
+        re.compile(
+            r"\b(?:press|hit|tap)\s+(?:the\s+)?"
+            r"(?:enter|return|escape|esc|tab|space|backspace|delete|"
+            r"arrow\s?(?:up|down|left|right)|page\s?(?:up|down))\b",
+            re.IGNORECASE,
+        ),
+        {"browser_press_key": 7},
+        {"browser_read_page": 7},
+    ),
+]
+
+#: The reader half, appended to :data:`_RULES` so `select_auto_tools` scores it.
+#: Appended rather than written out a second time: two copies of a regex this
+#: shape drift, and a drifted copy fails SILENTLY — the acting tool still arms,
+#: and only a live turn discovers the reader stopped riding with it.
+_RULES.extend((rx, auto) for rx, _ask, auto in _BROWSER_ELEMENT_RULES)
+
 #: The positional-branch group names each rule carries, in ``_RULES`` order.
 #: Read off the COMPILED pattern rather than maintained by hand — a rule that
 #: fronts three verbs with :func:`_imperative` (the convert rule does) gets three
@@ -2319,7 +2415,28 @@ def select_auto_tools(
 #: card. That gate is what makes visibility safe: before it, arming `shell`
 #: here would have handed a headless-style silent grant to the exact tool the
 #: deny floor exists to keep behind a human.
-ASK_TIER_TOOLS: frozenset[str] = frozenset({"shell", "repl"})
+#:
+#: THE EIGHT ACTING BROWSER TOOLS JOINED IN v1.237.0, and they joined HERE and
+#: not :data:`AUTO_SAFE_TOOLS` for the reason this set exists. Every one of them
+#: changes something in the browser the user is actually logged into — their
+#: bank, their email, their client portal — so a call must PAUSE for the approval
+#: card, and arming through the auto set would have granted the turn instead.
+#: The read tools stay in the auto set; the acting eight are visible-but-ungranted
+#: and no other spelling of "visible" would keep that gate.
+ASK_TIER_TOOLS: frozenset[str] = frozenset(
+    {
+        "shell",
+        "repl",
+        "browser_activate_tab",
+        "browser_scroll",
+        "browser_create_tab",
+        "browser_close_tab",
+        "browser_click",
+        "browser_type",
+        "browser_press_key",
+        "browser_navigate",
+    }
+)
 
 #: Signals that a task genuinely wants host reach. CONSERVATIVE ON PURPOSE:
 #: a false arm costs schema context and — if the model bites — a click the
@@ -2355,6 +2472,97 @@ _ASK_RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             re.IGNORECASE,
         ),
         {"repl": 5},
+    ),
+    # --- YOUR BROWSER, acting on it (v1.237.0) ----------------------------
+    #
+    # THE INTERACTION THESE EXIST FOR: "click the Sign in button", "type my email
+    # into the form", "scroll down and tell me what it says". Ship 2 armed the
+    # readers from the auto set; without a rule here the acting eight would be
+    # registered, permissioned and reachable by nobody — the shape this module's
+    # history keeps repeating (`history_search`, `view_image`, `rename_file`, and
+    # Ship 1's own three tools each shipped that way).
+    #
+    # Verified by DRIVING `select_ask_tools` AND `select_auto_tools` with real
+    # sentences, never by asserting membership: membership is what those four
+    # tools already had, and driving only the ask half is what let Ship 3 arm an
+    # acting tool whose first call could only refuse (see
+    # :data:`_BROWSER_ELEMENT_RULES`).
+    #
+    # Every rule needs a browser NOUN as well as its verb, and that is the whole
+    # design. "click" is an everyday word in this app ("click through the
+    # numbers", "the client clicked accept in Karbon"), "type" is what a user
+    # does to a message box, and "open" is a document verb. A bare verb rule
+    # would arm a page-acting tool on office chatter — which is not the usual
+    # cheap over-name this module accepts, because the cost is not a wasted
+    # schema but an approval card in front of an action the user never asked
+    # about, and a user who dismisses cards is a user who has stopped reading
+    # them.
+    #
+    # The three rules that ADDRESS AN ELEMENT live in
+    # :data:`_BROWSER_ELEMENT_RULES`, above `_RULE_POS_GROUPS`, because each one
+    # scores into BOTH tiers and one pattern cannot be maintained in two places.
+    *((rx, ask) for rx, ask, _auto in _BROWSER_ELEMENT_RULES),
+    (
+        # Going somewhere: "go to example.com in my browser", "navigate to the
+        # login page", "open https://portal.example". `browser_navigate` leads
+        # and `browser_create_tab` rides with it, because the difference between
+        # them is whether the user keeps the page they are on — which the
+        # sentence usually does not say and the model should choose.
+        #
+        # The gap class here is `[^?!\n]`, NOT the `[^.?!]` every other rule in
+        # this module uses. A URL CONTAINS DOTS: under the usual class
+        # "go to example.com in my browser" matched nothing at all, because the
+        # dot in the host ended the gap before "in my browser" was ever reached
+        # — and that is the exact sentence this rule exists for.
+        re.compile(
+            r"\b(?:navigate|browse)\s+to\b"
+            r"|\b(?:go\s+to|open|pull\s+up|visit|load)\b[^?!\n]{0,60}"
+            r"\b(?:in|on)\s+(?:my|the)\s+(?:browser|chrome|chromium)\b"
+            r"|\b(?:go\s+to|open|visit|load|pull\s+up)\b[^?!\n]{0,20}"
+            r"(?:\bhttps?://|\bwww\.)",
+            re.IGNORECASE,
+        ),
+        {"browser_navigate": 7, "browser_create_tab": 6},
+    ),
+    (
+        # A NEW tab, specifically: "open a new tab", "open that in another tab".
+        # Scored on its own so the tool that KEEPS the user's current page leads
+        # the one that replaces it; the two ride together in the rule above,
+        # where the sentence does not say which the user meant.
+        re.compile(r"\b(?:new|another|second|separate)\s+tab\b", re.IGNORECASE),
+        {"browser_create_tab": 8, "browser_navigate": 4},
+    ),
+    # --- the three LOCAL_UI moves, scored ONE VERB PER RULE ----------------
+    #
+    # Written as one rule first, and measured: "close that tab" armed
+    # `browser_scroll` ahead of `browser_close_tab`, because a single rule awards
+    # every tool it names whatever the sentence actually said and the highest
+    # fixed weight then wins. Splitting them is what lets the VERB decide, and
+    # nothing else can. Each stays ask-tier despite changing no page: a tab
+    # closing under the user's hands is startling even when it is harmless, and
+    # it is the one state in this capability that no retry restores.
+    (
+        re.compile(
+            r"\bscroll\b[^?!\n]{0,40}\b(?:page|tab|down|up|top|bottom|site|"
+            r"further|more)\b|\bscroll\s+(?:down|up|to)\b",
+            re.IGNORECASE,
+        ),
+        {"browser_scroll": 8},
+    ),
+    (
+        re.compile(
+            r"\b(?:switch|jump|move|flip)\b[^?!\n]{0,20}\b(?:to|back|over)\b"
+            r"[^?!\n]{0,40}\btabs?\b"
+            r"|\bbring\b[^?!\n]{0,40}\btabs?\b[^?!\n]{0,20}"
+            r"\b(?:front|forward|up)\b"
+            r"|\b(?:activate|focus)\b[^?!\n]{0,20}\btabs?\b",
+            re.IGNORECASE,
+        ),
+        {"browser_activate_tab": 8},
+    ),
+    (
+        re.compile(r"\bclose\b[^?!\n]{0,30}\btabs?\b", re.IGNORECASE),
+        {"browser_close_tab": 8},
     ),
 ]
 

@@ -4,11 +4,18 @@ Named for v1.235.0, the ship whose review found the defect, and MAINTAINED every
 after it -- the file is the moving boundary between what the browser can do and what it
 is merely going to do, so it is edited in the same change as the ability, never after.
 
-AT v1.236.0 the browser pairs, reports connection state, lists tabs, names the active
-tab, READS THE TEXT OF A PAGE and takes a screenshot. Nine tools. Clicking, typing,
-scrolling, navigating and downloads still DO NOT EXIST -- `BrowserRuntime` raises
-`NotImplementedError` for each -- and neither does an external harness driving the same
-browser, nor the add-on bundled into the installer.
+AT v1.237.0 the browser pairs, reports connection state, lists tabs, names the active
+tab, reads the text of a page, takes a screenshot, AND ACTS ON THE PAGE: click, type,
+press a key, scroll, activate, open and close a tab, and navigate. Fourteen tools. A
+completed download is reported with its real path. What still DOES NOT EXIST is an
+external harness driving the same browser (v1.238.0) and the add-on bundled into the
+installer (v1.239.0).
+
+THE BOUNDARY MOVED IN THIS FILE IN THE SAME CHANGE AS THE ABILITY, which is the only
+discipline that works. Three claims left the forbidden list and became required ones;
+four sentences of copy that dated acting as future were rewritten to describe it as
+live. A claim deleted from BOTH halves is a claim nothing checks, so nothing was
+deleted -- it moved.
 
 WHY IT EXISTS. At v1.235.0 the shipped copy said otherwise: the Handbook's capability
 table offered "read the current page, take a screenshot" as a Read only ability, the
@@ -48,6 +55,7 @@ CARD = REPO / "dashboard" / "components" / "browser" / "YourBrowserCard.tsx"
 BROWSER_PAGE = REPO / "dashboard" / "app" / "computeruse" / "page.tsx"
 HELP_PAGE = REPO / "dashboard" / "app" / "help" / "page.tsx"
 NAV = REPO / "dashboard" / "lib" / "nav.ts"
+COMPUTER_USE = REPO / "docs" / "COMPUTER-USE.md"
 ADDON_README = REPO / "extensions" / "chrome" / "README.md"
 
 
@@ -75,28 +83,28 @@ def _handbook_browser_section() -> str:
 # Each entry: the file, and a phrase describing an ability this version lacks.
 # Phrased as whole clauses so a legitimate mention of the FUTURE ("reading a
 # page's text arrives in v1.236.0") is not caught.
-# UPDATED AT v1.236.0. Reading a page SHIPPED, so the six read-related claims left
-# this list and became REQUIRED phrases below -- that direction of travel is the whole
-# point of the file. What stays is what is still not true:
+# UPDATED AT v1.237.0. ACTING SHIPPED, so the three acting claims left this list and
+# became REQUIRED phrases below -- that direction of travel is the whole point of the
+# file. What stays is what is still not true:
 #
-#   acting on a page                -> v1.237.0  (click, type, scroll, navigate)
 #   an outward harness              -> v1.238.0  (a Build harness, same browser)
 #   the add-on inside the installer -> v1.239.0
 #
 # When one of those ships, move its entries the same way: delete here, assert there.
 # A claim deleted from BOTH halves is a claim nothing checks any more.
 OVERSOLD = [
-    # The nav blurb: "drive" is acting.
-    (NAV, "read and drive your own browser"),
-    # The Handbook capability table.
-    (HANDBOOK, "Also act: click, type, scroll, navigate"),
-    # The card's access hints.
-    (CARD, "Jarvis can also click, type and navigate"),
     # The README highlights row: the Ship 4 harness.
     (README, "harness you pick in **Build** drives the *same* browser"),
     # The card claimed a folder only a source checkout has is part of the
     # install the user runs.
     (CARD, "from your Iron Jarvis install"),
+    # v1.237.0: the two sentences docs/COMPUTER-USE.md kept while a Ship 3
+    # paragraph was inserted ABOVE them, so the file contradicted itself. The
+    # second is the file's own one-sentence answer to "can Jarvis click in my
+    # own Chrome?", which is the sentence the Guide is most likely to retrieve
+    # verbatim -- and it said no on the version where the answer is yes.
+    (COMPUTER_USE, "may only look at it"),
+    (COMPUTER_USE, "the half that actually"),
 ]
 
 
@@ -107,10 +115,10 @@ OVERSOLD = [
 )
 def test_no_surface_promises_an_ability_this_version_lacks(path: Path, claim: str):
     assert claim.lower() not in _text(path).lower(), (
-        f"{path.name} still tells the user {claim!r}, which this version cannot do "
-        "-- BrowserRuntime raises NotImplementedError for it. Say what this version "
-        "does and name the version the rest arrives in. If the ability just shipped, "
-        "move this entry into the required-phrase half below rather than deleting it."
+        f"{path.name} still tells the user {claim!r}, which is not true of this "
+        "version. Say what this version does and name the version the rest arrives "
+        "in. If the ability just shipped, move this entry into the required-phrase "
+        "half below rather than deleting it."
     )
 
 
@@ -120,15 +128,67 @@ def test_no_surface_promises_an_ability_this_version_lacks(path: Path, claim: st
 
 
 def test_the_handbook_table_describes_this_version_and_dates_the_rest():
+    """MOVED AT v1.237.0, both halves of the same edit.
+
+    "Also act: click, type, scroll, navigate" was FORBIDDEN here until this ship and
+    is now REQUIRED, because the Interactive row is the one place a user decides
+    whether to grant acting -- and it read "Nothing more than Read only yet" on the
+    version where Interactive grants eight tools that touch their logged-in browser.
+    The two sentences that dated acting as future are gone from the copy, so they are
+    gone from the assertions; what replaces them is the ability, stated.
+    """
     section = _handbook_browser_section()
     # The Read only row is looking, which as of v1.236.0 includes the page itself.
     assert "list your open tabs" in section
     assert "name the tab you are looking at" in section
     assert "read the text of a page" in section
-    # Interactive grants nothing extra yet, and the Handbook says so.
-    assert "Nothing more than **Read only** yet" in section
-    # Acting is still named as later, with the version that brings it.
-    assert "navigating and downloads arrive in **v1.237.0**" in section
+    # The Interactive row now GRANTS something, and says what.
+    assert "Also act: click, type, scroll, navigate" in section, (
+        "the Handbook's Interactive row does not say what Interactive grants -- it "
+        "is the row a user reads before turning acting on"
+    )
+    assert "Nothing more than **Read only** yet" not in section, (
+        "the Interactive row still says it grants nothing, on the version where it "
+        "grants eight tools that act in the user's logged-in browser"
+    )
+    assert "navigating and downloads arrive in **v1.237.0**" not in section, (
+        "the Handbook still dates acting as future on the version that ships it"
+    )
+
+
+def test_the_handbook_says_what_gets_asked_before_an_action():
+    """The plan's named Ship 3 docs deliverable, asserted as content.
+
+    Both layers, because either alone misleads: "everything asks by default" without
+    the deny floor understates what protects a user who later sets click to allow,
+    and the destructive vocabulary alone reads as though an ordinary click proceeds
+    unattended. The third clause is the one the risk lane closed this ship: a target
+    Jarvis cannot identify stops rather than proceeding.
+    """
+    section = _handbook_browser_section()
+    assert "deny floor" in section, "the Handbook does not name the floor"
+    assert "destructive or transactional" in section
+    for needle, why in (
+        ("ask", "the Handbook never says an action is asked about at all"),
+        ("could not identify", "an unidentifiable target is not named as an ask"),
+        ("REDACTED", "the Handbook does not say typed text is redacted"),
+    ):
+        assert needle in section, why
+
+
+def test_the_handbook_states_the_download_limitation_in_plain_words():
+    """Plan 10.3 asks for this in the docs, in these words, because the refusal text
+    is otherwise the only place the fact exists: a user who says "put that statement
+    in my project" meets `rename_file` refusing an out-of-workspace source with no
+    idea why. Jarvis can read a completed download and copy it into a project; it
+    cannot change where Chrome saves it."""
+    section = _handbook_browser_section()
+    assert "Downloads" in section, "the Handbook Browser section never mentions downloads"
+    assert "copy it into a project" in section
+    assert "cannot" in section and "where Chrome saves" in section, (
+        "the Handbook does not state the limitation -- that Jarvis cannot change or "
+        "redirect where Chrome saves a download"
+    )
 
 
 def test_the_handbook_says_what_reading_a_page_does_not_cover():
@@ -149,13 +209,15 @@ def test_the_handbook_keeps_the_privacy_commitments_as_commitments():
     """The password-stripping and injection-flagging paragraph is a real DESIGN
     decision, so it stays -- dated, not deleted."""
     section = _handbook_browser_section()
-    # v1.236.0: two of the three are LIVE now and say so; the third still names its
-    # version. A promise in force must not keep a future date (that understates what
-    # the user already has), and one that is not in force must never read as live.
+    # v1.237.0: ALL THREE are live now and say so. "Changing a page asks first" was
+    # the design commitment fixed before the code that needed it existed; the code
+    # exists, so the date comes off. A promise in force must not keep a future date
+    # (that understates what the user already has), and one that is not in force must
+    # never read as live.
     for promise, marker in (
         ("Page content is untrusted data, always", "(live)"),
         ("Passwords are never read", "(live)"),
-        ("Changing a page asks first", "v1.237.0"),
+        ("Changing a page asks first", "(live)"),
     ):
         idx = section.find(promise)
         assert idx != -1, f"the Handbook dropped the commitment {promise!r}"
@@ -181,16 +243,50 @@ def test_the_tab_wording_is_the_same_on_the_page_the_tile_and_the_glossary():
         )
 
 
-def test_the_nav_blurb_describes_the_tab_list():
-    assert "Read the tabs and pages open in your own browser" in _text(NAV)
+def test_the_nav_blurb_describes_reading_AND_driving():
+    """MOVED AT v1.237.0. "read and drive your own browser" was forbidden here on
+    every version that could not drive; it is required now, because the nav blurb is
+    where a user learns the capability exists at all."""
+    assert "read and drive your own browser" in _text(NAV).lower(), (
+        "dashboard/lib/nav.ts still describes the Browser page as reading only. "
+        'The owed sentence is "Read and drive your own browser" -- acting shipped '
+        "in v1.237.0, and the nav blurb is the first place a user reads what the "
+        "page is for."
+    )
 
 
-def test_the_card_hints_date_the_abilities_they_describe():
+def test_the_card_hints_describe_the_abilities_this_version_has():
+    """MOVED AT v1.237.0, and this is the surface the user is actually standing on.
+
+    The card renders next to the access selector: it is read at the moment someone
+    decides between Read only and Interactive. Until this ship it told them
+    Interactive granted nothing and that Jarvis "cannot click or type" -- which was
+    true, and became the reason the copy stayed that way, because the required half
+    of this file was holding it there.
+    """
     src = _text(CARD)
-    assert "read the text of the page you are looking at" in src
-    assert "It cannot click or type." in src
-    assert "Nothing more than Read only in this version" in src
-    assert "Clicking, typing and navigating arrive in v1.237.0" in src
+    owed = (
+        ("read the text of the page you are looking at", "the Read only hint"),
+        (
+            "Jarvis can also click, type and navigate",
+            "the Interactive hint -- acting shipped in v1.237.0",
+        ),
+    )
+    for needle, what in owed:
+        assert needle in src, (
+            f"YourBrowserCard.tsx is missing {what}: {needle!r}. The card is read at "
+            "the moment the user chooses an access level, so it must describe the "
+            "level they are choosing."
+        )
+    for stale in (
+        "It cannot click or type.",
+        "Nothing more than Read only in this version",
+        "Clicking, typing and navigating arrive in v1.237.0",
+    ):
+        assert stale not in src, (
+            f"YourBrowserCard.tsx still says {stale!r} on the version that ships "
+            "acting -- the user is told the feature they just enabled does not exist"
+        )
 
 
 def test_the_readme_row_sells_the_tab_list_and_dates_the_rest():
@@ -200,7 +296,14 @@ def test_the_readme_row_sells_the_tab_list_and_dates_the_rest():
         if "Your own browser, as a capability" in line
     )
     assert "ask about the page in front of you" in row
-    assert "v1.237.0" in row and "v1.238.0" in row
+    # v1.237.0: the row no longer has to DATE acting -- acting is this version, so
+    # requiring "v1.237.0" here would force the README to keep calling it future.
+    # The harness is still ahead, and the OVERSOLD entry above keeps it honest.
+    assert "v1.238.0" in row
+    assert "Clicking and typing arrive in v1.237.0" not in row, (
+        "the README still dates clicking and typing as future on the version that "
+        "ships them"
+    )
 
 
 # --------------------------------------------------------------------------- #

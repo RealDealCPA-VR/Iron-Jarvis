@@ -583,7 +583,34 @@ Rules, in order:
 | `classify()` reports sensitive | `Decision(True, True, <its reason>)` |
 | `target_label` matches `_DESTRUCTIVE_WORDS` (`policy.py:68`) | `Decision(True, True, f"destructive/transactional target ({word!r})")` |
 | `target_label` matches `_PAYMENT_WORDS` (`policy.py:43`) | `Decision(True, True, "payment/transactional target")` |
+| `target_label` matches `_PASSWORD_WORDS` or `_PII_WORDS` | `Decision(True, True, "credential target (<word>)" / "personal/PII target (<word>)")` |
+| `base` is `PAGE_ACTION` and the target could be given **neither a label nor a resolved element** | `Decision(True, True, "the target could not be checked: it has no accessible name")` |
 | otherwise, `base` is `PAGE_ACTION` | `Decision(True, False, "allowed by policy")` |
+
+**AS BUILT (v1.237.0): two rules were added, and the review is why.** The table above shipped with
+five rules and two holes that the plan's own examples never touched:
+
+* **The credential and PII vocabularies were never scanned against the label at all** — only the
+  destructive and payment lists were. A control labelled literally "Password" or "Update SSN",
+  with no password markup behind it, escalated on nothing.
+* **An empty label disarmed the whole scan.** Every word rule sat behind "if there is a label",
+  so a `{"css": "#delete-account"}` click, a control the page gave no accessible name, and a bare
+  `browser_press_key` (which names no target at all, and commits whatever has focus) all reached
+  the page with no card. That last one is the sharpest: pressing Enter on a focused "Delete
+  account" button commits exactly what clicking it commits.
+
+The second rule is the important one, and it restores this module's own convention. Everywhere
+else it fails safe — an unknown tool name is `EXTERNAL_COMMIT`, a missing request text fails
+closed — and this one place resolved "we could not read the target" to *allow*. It now asks, and
+names why. `browser_navigate` is exempt only when it carries a URL, because then its target IS
+readable: the URL itself is scanned, so a destination like `/checkout` or `/transfer` escalates on
+its own words. A navigate with no URL is not exempt.
+
+The shared `_DESTRUCTIVE_WORDS` list also grew (D12's one list, not a browser-only copy), to cover
+the access and session controls it missed: revoke, sign out, reset password, disable two-factor,
+withdraw, terminate, wipe and the rest. That widening applies to **computer use as well**, which
+is the price of one shared vocabulary and the reason it is the right design: the two features
+cannot drift into disagreeing about what is destructive.
 
 `target_label` is the snapshot element's accessible name, which is the concrete reason the plan prefers
 `element_id` targets over selectors: a CSS selector gives the classifier nothing to read. The decision

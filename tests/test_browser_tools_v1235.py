@@ -253,7 +253,7 @@ def test_browser_tools_declares_the_read_tier_and_only_the_read_tier():
     minimum access on every one.
     """
     tools = browser_tools(FakeRuntime(_peer()))
-    assert [t.name for t in tools] == [
+    read_tier = [
         "browser_get_status",
         "browser_list_tabs",
         "browser_get_active_tab",
@@ -261,18 +261,37 @@ def test_browser_tools_declares_the_read_tier_and_only_the_read_tier():
         "browser_get_elements",
         "browser_screenshot",
     ]
-    for tool in tools:
-        assert tool.risk_class is RiskClass.READ, tool.name
-        assert tool.reversibility is Reversibility.READONLY, tool.name
-        assert tool.min_access == "read_only", tool.name
-        assert tool.perm_key() == tool.name, tool.name
-        assert tool.description.strip(), tool.name
+    assert [t.name for t in tools][:6] == read_tier
+    by_name = {t.name: t for t in tools}
+    # THE READ TIER. Every one is READ, READONLY, and reachable at `read_only` —
+    # the three facts that together mean "looking". A tool that drifts on any of
+    # them becomes reachable by a user who asked only to be looked at.
+    for name in read_tier:
+        tool = by_name[name]
+        assert tool.risk_class is RiskClass.READ, name
+        assert tool.reversibility is Reversibility.READONLY, name
+        assert tool.min_access == "read_only", name
+        assert tool.perm_key() == tool.name, name
+        assert tool.description.strip(), name
+    # THE ACTING TIER (v1.237.0). None of them is reachable at `read_only`, and
+    # none claims to be undoable: a click cannot be taken back, so IRREVERSIBLE is
+    # the honest declaration and the one the undo journal reads.
+    for name in (
+        "browser_activate_tab", "browser_scroll", "browser_create_tab", "browser_close_tab",
+        "browser_click", "browser_type", "browser_press_key", "browser_navigate",
+    ):
+        tool = by_name[name]
+        assert tool.min_access == "interactive", name
+        assert tool.reversibility is Reversibility.IRREVERSIBLE, name
+        assert tool.risk_class in (RiskClass.LOCAL_UI, RiskClass.PAGE_ACTION), name
+        assert tool.perm_key() == tool.name, name
+        assert tool.description.strip(), name
     # The three Ship 1 tools take no arguments at all; the Ship 2 three do, and
     # every one of their arguments is optional (plan section 8.6: `tab_id` omitted
     # means the tab the user is looking at, so a model never needs two calls).
     for tool in tools[:3]:
         assert tool.input_schema == {"type": "object", "properties": {}}, tool.name
-    for tool in tools[3:]:
+    for tool in tools[3:6]:
         assert tool.input_schema.get("properties"), tool.name
         assert not tool.input_schema.get("required"), (
             f"{tool.name} has a required argument; plan section 8.6 makes every "

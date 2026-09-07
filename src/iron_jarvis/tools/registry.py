@@ -22,7 +22,7 @@ from ..core.ids import new_id
 from ..core.fs_policy import fs_read_ok
 from ..core.jsonish import json_type_ok
 from ..core.models import PermissionMode, ToolInvocation, UndoJournal
-from .base import Reversibility, Tool, ToolContext, ToolResult, safe_path
+from .base import Reversibility, RiskClass, Tool, ToolContext, ToolResult, safe_path
 from .permissions import PermissionDecision, PermissionEngine
 from .undo import make_file_descriptor
 from .undo import finalize_post_hash
@@ -121,6 +121,47 @@ def compose_failure_text(
     return header + _FAILURE_JOIN + out
 
 
+def risk_value(tool: "Tool | None") -> str | None:
+    """The ``risk_class`` string that rides a ``tool.executed`` /
+    ``tool.denied`` payload (v1.237.0, D12/D24, plan §8.1 and §10.4).
+
+    READ FOR LOGGING ONLY. Ship 1 (v1.235.0) landed ``Tool.risk_class`` inert
+    and said so in its own docstring; this is the ship that starts reading it,
+    and it reads it in exactly one direction: onto the event payload beside
+    ``reversibility``, which is the precedent this follows line for line. It
+    NEVER reaches ``perms.authorize``, is never compared against a
+    ``PermissionMode``, and cannot lower a verdict — ``DENY_FLOOR_TOOLS``
+    stays authoritative, so a browser tool cannot declare its way down off
+    the floor by claiming ``READ``.
+
+    The silent failure this helper's shape catches, and why it is not a bare
+    ``tool.risk_class.value``:
+
+    * **A tool that declares a plain string.** ``risk_class = "page_action"``
+      is what a hand-written or dynamically-built tool will do, and
+      ``.value`` on a ``str`` raises ``AttributeError`` — from inside the
+      publish path of EVERY tool call, which would turn one malformed tool
+      into a daemon-wide outage. ``str()`` is taken instead, so the payload
+      carries what was declared.
+    * **A tool with no attribute at all.** ``getattr`` with the fail-safe
+      default matches ``reversibility``'s treatment above: an undeclared tool
+      is logged as the strictest class, never as a read. A row that reads
+      ``read`` for a call that changed a page is the one wrong answer an
+      audit log must not give, because it is wrong in the reassuring
+      direction.
+    * **No tool at all** (an unknown name the model invented) is ``None``,
+      exactly as ``reversibility`` is ``None`` on that path: there is no
+      declaration to report, and inventing ``external_commit`` for a call
+      that never existed would put a phantom high-risk row in the audit view.
+    """
+    if tool is None:
+        return None
+    value = getattr(tool, "risk_class", RiskClass.EXTERNAL_COMMIT)
+    if isinstance(value, RiskClass):
+        return value.value
+    return str(value) if value else RiskClass.EXTERNAL_COMMIT.value
+
+
 #: Tools whose successful text output is worth REMEMBERING for the rest of a
 #: session (contract 3, v1.174.0).
 #:
@@ -196,8 +237,12 @@ class ToolRegistry:
         #: an agent can opt into user-authored tools without also inheriting
         #: every connected external integration (Gmail/Drive/GitHub/...).
         self._mcp: set[str] = set()
-        #: In-flight ledger jobs for calls cancelled mid-execute (v1.228.0,
-        #: CL1) — held so the tasks are not garbage-collected before they land.
+        #: In-flight ledger jobs — held so the tasks are not garbage-collected
+        #: before they land. Two kinds live here: the interrupted-row task for a
+        #: call cancelled mid-execute (v1.228.0, CL1) and, since v1.237.0, the
+        #: TERMINAL row + event of every finished call, so a cancel delivered
+        #: after `execute` returned cannot erase the record of an effect that
+        #: already happened. Both are entered and discarded within one call.
         self._interrupt_jobs: set = set()
         #: READ CACHE (contract 3, v1.174.0). ``key -> {output, data, tool,
         #: step}``, LRU-ordered. See ``CACHEABLE_READ_TOOLS``.
@@ -338,7 +383,8 @@ class ToolRegistry:
             await ctx.event_bus.publish(
                 EventType.TOOL_EXECUTED,
                 {"tool": name, "ok": False, "mode": PermissionMode.DENY.value,
-                 "invocation_id": inv_id, "reversibility": None},
+                 "invocation_id": inv_id, "reversibility": None,
+                 "risk_class": None},
                 session_id=ctx.session_id,
             )
             return ToolResult(ok=False, error=error)
@@ -405,6 +451,12 @@ class ToolRegistry:
             )
         reversibility = getattr(tool, "reversibility", Reversibility.IRREVERSIBLE)
         rev_value = reversibility.value if isinstance(reversibility, Reversibility) else str(reversibility)
+        # v1.237.0 (D12/D24): the declared risk class rides every verdict event
+        # beside `reversibility`. Derived ONCE, here, so all five publish sites
+        # below carry the same string — a per-site `getattr` is how the deny
+        # path and the executed path would come to report different classes for
+        # the same tool. See `risk_value`: logging only, never a gate.
+        risk = risk_value(tool)
 
         if not decision.allowed:
             # Only a caller-supplied refusal may relabel itself; a decision the
@@ -419,7 +471,7 @@ class ToolRegistry:
                 EventType.TOOL_DENIED,
                 {"tool": name, "mode": decision.mode.value, "reason": decision.reason,
                  "invocation_id": inv_id, "reversibility": rev_value,
-                 "kind": label},
+                 "risk_class": risk, "kind": label},
                 session_id=ctx.session_id,
             )
             return ToolResult(ok=False, error=f"{label}: {decision.reason}")
@@ -443,7 +495,8 @@ class ToolRegistry:
             await ctx.event_bus.publish(
                 EventType.TOOL_EXECUTED,
                 {"tool": name, "ok": False, "mode": decision.mode.value,
-                 "invocation_id": inv_id, "reversibility": rev_value},
+                 "invocation_id": inv_id, "reversibility": rev_value,
+                 "risk_class": risk},
                 session_id=ctx.session_id,
             )
             return ToolResult(ok=False, error=shape_error)
@@ -490,7 +543,7 @@ class ToolRegistry:
                         EventType.TOOL_EXECUTED,
                         {"tool": name, "ok": True, "mode": decision.mode.value,
                          "invocation_id": inv_id, "reversibility": rev_value,
-                         "cached": True},
+                         "risk_class": risk, "cached": True},
                         session_id=ctx.session_id,
                     )
                     if store_as:
@@ -569,6 +622,7 @@ class ToolRegistry:
                     ctx, name, args, decision.mode, rev_value,
                     f"{who} while the tool was running"
                     " — its effect may have landed",
+                    risk=risk,
                 )
             )
             self._interrupt_jobs.add(job)
@@ -609,32 +663,48 @@ class ToolRegistry:
             result.data, dict
         ) else None
         confinement = str(confinement) if isinstance(confinement, str) and confinement else None
-        inv_id = await asyncio.to_thread(
-            self._record,
-            ctx,
-            name,
-            args,
-            decision.mode,
-            ok=result.ok,
-            output=result.output if result.ok else (result.error or ""),
-            reversibility=rev_value,
-            confinement=confinement,
-            # Only journal an inverse for a SUCCESSFUL mutation (a failed write
-            # changed nothing, so there is nothing to undo).
-            undo=undo_desc if result.ok else None,
-            # Files the tool could not name until it had done the work
-            # (v1.157.0) — see ToolResult.created_paths. Journaled through the
-            # same path as any other creation so agents/outcome, the run's
-            # result card and the preview rail all see them.
-            created_paths=result.created_paths if result.ok else None,
+        # THE TERMINAL LEDGER SURVIVES A LATE CANCEL (v1.237.0, Ship 3).
+        # The `except asyncio.CancelledError` branch above covers a cancel that
+        # arrives DURING `execute`. This is the other window, and Ship 3 is what
+        # makes it matter: `execute` has RETURNED — the click landed in the
+        # user's real, logged-in browser — and the cancel arrives while the row
+        # is still being written. `asyncio.to_thread` submits to the default
+        # executor and awaits; a cancel before a worker picks the job up
+        # cancels the concurrent future, so `_record` NEVER RUNS (measured on a
+        # contended executor: effect landed, 0 rows, 0 events), and even with a
+        # free worker the anyio cancel scope re-delivers CancelledError at the
+        # `publish` await below (measured: 1 row, 0 events).
+        #
+        # So the row and the event are filed the same way `_ledger_interrupted`
+        # is: ONE independent task holding BOTH, created outside this task's
+        # cancel scope, awaited under a shield. A cancel here still unwinds the
+        # caller exactly as before — it just cannot take the ledger with it.
+        job = asyncio.ensure_future(
+            self._ledger_executed(
+                ctx,
+                name,
+                args,
+                decision.mode,
+                ok=result.ok,
+                output=result.output if result.ok else (result.error or ""),
+                reversibility=rev_value,
+                confinement=confinement,
+                # Only journal an inverse for a SUCCESSFUL mutation (a failed
+                # write changed nothing, so there is nothing to undo).
+                undo=undo_desc if result.ok else None,
+                # Files the tool could not name until it had done the work
+                # (v1.157.0) — see ToolResult.created_paths. Journaled through
+                # the same path as any other creation so agents/outcome, the
+                # run's result card and the preview rail all see them.
+                created_paths=result.created_paths if result.ok else None,
+                risk=risk,
+            )
         )
-        await ctx.event_bus.publish(
-            EventType.TOOL_EXECUTED,
-            {"tool": name, "ok": result.ok, "mode": decision.mode.value,
-             "invocation_id": inv_id, "reversibility": rev_value,
-             **({"confinement": confinement} if confinement else {})},
-            session_id=ctx.session_id,
-        )
+        self._interrupt_jobs.add(job)
+        job.add_done_callback(self._finish_ledger_job)
+        # NOT swallowed: a ledger failure has always surfaced to the caller and
+        # still does. Only a CANCEL is survived, and it is re-raised.
+        await asyncio.shield(job)
 
         # Cache bookkeeping (contract 3). A cacheable read that SUCCEEDED is
         # remembered; anything else that succeeded and is not read-only has
@@ -656,6 +726,62 @@ class ToolRegistry:
             result = await self._store_result(store_as, result, ctx)
         return result
 
+    def _finish_ledger_job(self, job) -> None:
+        """Drop a finished ledger task and RETRIEVE its exception.
+
+        Without the retrieval, a caller cancelled at the shield never awaits the
+        task, and a `_record` failure would surface only as asyncio's
+        "exception was never retrieved" noise at garbage-collection time. The
+        awaiting caller still sees the exception — retrieving it here only marks
+        it read."""
+        self._interrupt_jobs.discard(job)
+        if not job.cancelled():
+            job.exception()
+
+    async def _ledger_executed(
+        self,
+        ctx: ToolContext,
+        name: str,
+        args: dict[str, Any],
+        mode: PermissionMode,
+        *,
+        ok: bool,
+        output: str,
+        reversibility: str | None,
+        confinement: str | None,
+        undo: dict[str, Any] | None,
+        created_paths: Any,
+        risk: str | None,
+    ) -> None:
+        """The terminal row + ``tool.executed`` for a call that FINISHED.
+
+        Its own task for one reason: a cancel delivered after ``execute``
+        returned must not be able to erase the record of an effect that already
+        landed. See the call site in ``invoke``. Nothing is caught here — a
+        ledger error still reaches the caller through the shielded await, which
+        is the behaviour every path had before this task existed."""
+        inv_id = await asyncio.to_thread(
+            self._record,
+            ctx,
+            name,
+            args,
+            mode,
+            ok=ok,
+            output=output,
+            reversibility=reversibility,
+            confinement=confinement,
+            undo=undo,
+            created_paths=created_paths,
+        )
+        await ctx.event_bus.publish(
+            EventType.TOOL_EXECUTED,
+            {"tool": name, "ok": ok, "mode": mode.value,
+             "invocation_id": inv_id, "reversibility": reversibility,
+             "risk_class": risk,
+             **({"confinement": confinement} if confinement else {})},
+            session_id=ctx.session_id,
+        )
+
     async def _ledger_interrupted(
         self,
         ctx: ToolContext,
@@ -664,9 +790,20 @@ class ToolRegistry:
         mode: PermissionMode,
         rev_value: str,
         note: str,
+        *,
+        risk: str | None = None,
     ) -> None:
         """The failed row + ``tool.executed`` for a call that was CANCELLED
-        mid-execute (v1.228.0, CL1). Runs as its own task — see ``invoke``."""
+        mid-execute (v1.228.0, CL1). Runs as its own task — see ``invoke``.
+
+        ``risk`` (v1.237.0) rides this payload for the same reason the row
+        itself does: a browser action whose effect LANDED while the await was
+        cancelled is the worst outcome Ship 3 can produce, and an audit view
+        that can see the row but not what class of action it was cannot tell a
+        cancelled scroll from a cancelled click on "Delete account". Keyword,
+        with a default, so any caller that does not know the class still gets a
+        row rather than a TypeError — the ledger write must never be the thing
+        that fails."""
         try:
             inv_id = await asyncio.to_thread(
                 self._record,
@@ -677,7 +814,7 @@ class ToolRegistry:
                 EventType.TOOL_EXECUTED,
                 {"tool": name, "ok": False, "mode": mode.value,
                  "invocation_id": inv_id, "reversibility": rev_value,
-                 "interrupted": True},
+                 "risk_class": risk, "interrupted": True},
                 session_id=ctx.session_id,
             )
         except Exception:  # noqa: BLE001 — best-effort; never raises into a cancel

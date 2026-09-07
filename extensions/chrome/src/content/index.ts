@@ -24,8 +24,16 @@
 // sentence — `bridge/errors.ts` owns the remedy vocabulary, generated from Python, so
 // the model reads one wording no matter which half of the add-on refused.
 
-import { METHOD_GET_ELEMENTS, METHOD_READ_PAGE } from "../protocol";
+import {
+  METHOD_CLICK,
+  METHOD_GET_ELEMENTS,
+  METHOD_PRESS_KEY,
+  METHOD_READ_PAGE,
+  METHOD_SCROLL,
+  METHOD_TYPE_TEXT,
+} from "../protocol";
 import { BridgeError } from "../bridge/errors";
+import { click, pressKey, scroll, typeText } from "./actions";
 import { isPageRequest, type PageFailure, type PageReply, type PageRequest } from "./channel";
 import { registry } from "./elements";
 import { getElements, readPage } from "./snapshot";
@@ -44,10 +52,27 @@ function handle(request: PageRequest): Record<string, unknown> {
   if (request.op === METHOD_GET_ELEMENTS) {
     return { ...getElements(params) };
   }
-  // Ship 3's `click`, `type_text`, `press_key` and `scroll` arrive here. Until then
-  // an honest "not in this version, and here is the name" beats a silent no-op: a
-  // daemon built ahead of the add-on learns which half is missing instead of waiting
-  // out its timeout and reporting that the browser never answered.
+  // The four ACTING operations (Ship 3). They are dispatched from the same table as
+  // the two reads on purpose: one listener, one refusal shape, one place a reviewer
+  // can see everything this add-on will do inside a page. Every one of them is
+  // SYNCHRONOUS — see the listener below for why that is load-bearing rather than
+  // stylistic.
+  if (request.op === METHOD_CLICK) {
+    return { ...click(params) };
+  }
+  if (request.op === METHOD_TYPE_TEXT) {
+    return { ...typeText(params) };
+  }
+  if (request.op === METHOD_PRESS_KEY) {
+    return { ...pressKey(params) };
+  }
+  if (request.op === METHOD_SCROLL) {
+    return { ...scroll(params) };
+  }
+  // Anything else. An honest "not in this version, and here is the name" beats a
+  // silent no-op: a daemon built ahead of the add-on learns which half is missing
+  // instead of waiting out its timeout and reporting that the browser never
+  // answered.
   throw new BridgeError("EXTENSION_ERROR", {
     detail: `the Iron Jarvis browser add-on's page reader does not implement ${
       request.op || "(no operation)"
@@ -95,6 +120,12 @@ function install(): void {
     // The whole walk is synchronous, so the answer is already sent. Returning true
     // here would hold the port open for an async reply that will never come, and the
     // worker would wait out its timeout on a call that has already answered.
+    //
+    // SYNCHRONOUS ALSO MATTERS FOR THE ACTIONS, and for a harder reason than tidiness:
+    // a click can navigate the document, and a navigating document tears this script
+    // down. An action that awaited anything before responding would be killed
+    // mid-await on exactly the clicks that worked, and the model would be told the
+    // browser never answered a call that in fact signed the user in.
     return false;
   });
 }
