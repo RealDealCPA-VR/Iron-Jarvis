@@ -7,6 +7,7 @@ reached through ``d`` (see the deps object built in create_app).
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import re as _re
@@ -15,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pathlib import Path
 from sqlmodel import select
+from types import SimpleNamespace
 from typing import Any
 
 from ..schemas import (
@@ -30,6 +32,7 @@ from ...core.db import CONVERSATION_WRITE_LOCK, session_scope
 from ...core.models import AgentState, PermissionMode
 from ...memory import commit as _commit
 from ...core.approvals import APPROVAL_TIMEOUT_S, DECISIONS, ChatApprovals
+from ...core.turns import TURNS
 from ..doors import collect_doors, door_for
 
 # The chat TURN lives in daemon/chat_turn.py (v1.136.0 messaging surfaces):
@@ -316,25 +319,44 @@ def _clean_setup(raw: Any) -> str:
     return json.dumps(out, separators=(",", ":")) if out else ""
 
 
-def register(app: FastAPI, d) -> None:
-    """Attach these routes to *app*; ``d`` is the create_app deps object."""
+def _approvals(d) -> ChatApprovals:
+    """THE shared approval registry — the platform's (v1.189.0).
 
-    def _approvals() -> ChatApprovals:
-        """THE shared approval registry — the platform's (v1.189.0).
+    Since sessions pause too, chat and the runtime must share one registry
+    or a pause answered on the wrong copy waits forever; the platform owns
+    it. The ``d`` fallback keeps test doubles (a bare SimpleNamespace
+    platform) working — never two live copies in one real app, because
+    build_platform always attaches one.
 
-        Since sessions pause too, chat and the runtime must share one registry
-        or a pause answered on the wrong copy waits forever; the platform owns
-        it. The ``d`` fallback keeps test doubles (a bare SimpleNamespace
-        platform) working — never two live copies in one real app, because
-        build_platform always attaches one."""
-        ap = getattr(d.platform, "approvals", None)
-        if ap is not None:
-            return ap
-        ap = getattr(d, "chat_approvals", None)
+    MODULE-LEVEL SINCE v1.241.0 (it was a ``register`` closure) because the
+    streaming turn moved out of the route and can no longer see one. The
+    fallback now caches on the PLATFORM as well as on ``d``: the lifted turn
+    builds a fresh per-turn ``d`` shim, so a ``d``-only cache would hand the
+    turn a second, private registry and an approval answered through
+    ``POST /chat/approvals/{id}`` would wait out its timeout against a copy
+    nobody was holding.
+    """
+    ap = getattr(d.platform, "approvals", None)
+    if ap is not None:
+        return ap
+    ap = getattr(d, "chat_approvals", None)
+    if ap is None:
+        ap = getattr(d.platform, "_chat_approvals", None)
         if ap is None:
             ap = ChatApprovals()
+            try:
+                d.platform._chat_approvals = ap
+            except Exception:  # noqa: BLE001 — a slotted double; d still caches
+                pass
+        try:
             d.chat_approvals = ap
-        return ap
+        except Exception:  # noqa: BLE001
+            pass
+    return ap
+
+
+def register(app: FastAPI, d) -> None:
+    """Attach these routes to *app*; ``d`` is the create_app deps object."""
 
     @app.post("/chat/approvals/{approval_id}")
     async def resolve_chat_approval(approval_id: str, body: dict) -> dict[str, Any]:
@@ -354,7 +376,7 @@ def register(app: FastAPI, d) -> None:
                 status_code=400,
                 detail=f"decision must be one of: {', '.join(DECISIONS)}",
             )
-        if not _approvals().resolve(approval_id, decision):
+        if not _approvals(d).resolve(approval_id, decision):
             raise HTTPException(
                 status_code=404, detail="no such pending approval"
             )
@@ -392,7 +414,7 @@ def register(app: FastAPI, d) -> None:
         response fans out to EVERY dashboard page on a 15s poll, so metadata
         is copied key-by-key and args are dropped even when present.
         """
-        ids = _approvals().pending_ids()
+        ids = _approvals(d).pending_ids()
         if not ids:
             return {"approvals": []}
 
@@ -1232,1171 +1254,1364 @@ def register(app: FastAPI, d) -> None:
         return await run_chat_turn(d.platform, d._PERSONAS, body)
 
     @app.post("/chat/stream")
-    async def chat_stream(body: ChatBody, request: Request):
+    async def chat_stream_route(body: ChatBody, request: Request):
         """Streaming twin of :func:`chat_complete` (FX-01).
 
-        IDENTICAL prep (persona/project/learning/memory fabric/attachments/skill/
-        armed tools/overrides/routing choice), but the turn is emitted as Server-
-        Sent Events — token deltas as they generate, live tool-call frames, then a
-        terminal ``done``. PURELY ADDITIVE: POST /chat is unchanged, and this
-        shares the same router + tool-loop semantics so a streamed turn is byte-
-        compatible with the non-streaming one (same usage ledger, same reply).
+        THIN WRAPPER since v1.241.0, exactly as ``POST /chat`` became one in
+        v1.136.0 and for the same reason: the turn was lifted OUT of the route
+        (:func:`stream_chat_turn`, below) so a caller with no HTTP connection
+        can run it. This route's behaviour is UNCHANGED — it injects
+        ``request.is_disconnected`` as the stop predicate, which is the exact
+        call the loop used to make by hand.
         """
-        from ...providers.adapters.base import LLMMessage
-
-        if not body.messages:
-            raise HTTPException(status_code=400, detail="messages is required")
-
-        # ------------------------------------------------------------------ #
-        # PREP — verbatim from chat_complete (kept in lock-step deliberately).
-        # ------------------------------------------------------------------ #
-        # ONE retrieval query for the whole turn (v1.141.0): project knowledge,
-        # the memory fabric, and toggled connector memory all key off this —
-        # composed so short follow-ups inherit the conversation's subject (rule
-        # documented + pinned on _compose_recall_query). Attachment RAG keeps
-        # the raw last user message for within-file relevance.
-        # MIRROR NOTE (lock-step): same line in chat_turn.run_chat_turn —
-        # edit both or neither.
-        recall_query = _compose_recall_query(body.messages)
-
-        # Persona: a user override/creation wins, then a built-in, then the value
-        # is treated as free-text instructions (used verbatim). With NO explicit
-        # persona the configured default applies (Pair Z's config.default_persona
-        # — getattr because the field lands with Z; "" = the old behaviour).
-        # MIRROR NOTE (lock-step): same call in chat_turn.run_chat_turn.
-        want = (body.persona or "").strip()
-        persona = _resolve_persona(
-            _persona_store(), d._PERSONAS, want,
-            getattr(d.platform.config, "default_persona", ""),
+        gen = await stream_chat_turn(
+            d.platform,
+            d._PERSONAS,
+            body,
+            should_stop=request.is_disconnected,
         )
-        system = persona + (
-            "\n\n# Environment\n"
-            f"- You run locally on the user's machine; their home directory is {Path.home()}.\n"
-            # THIS LINE caused the reported behaviour. It told the model that
-            # a mode existed and that switching was the USER's job, so when a
-            # request outgrew the turn it dutifully said "you need to be in
-            # agent mode" — the app asking the user to do its routing.
-            "- Answer directly. There are no modes for the user to pick: when "
-            "a request needs sustained multi-step work you cannot finish here, "
-            "call escalate_to_agent and it is taken over seamlessly.\n"
-            "- When the user describes a repeatable multi-step process (\"every "
-            "Friday…\", \"whenever a client sends…\"), call workflow_draft so "
-            "they get a saveable workflow card instead of prose steps."
-        )
-        # USER PROFILE (v1.144.0) — the lock-step copy of chat_turn's injection.
-        # MIRROR NOTE: edit both or neither.
-        system += _profile_section(d.platform)
-        # DRAFT FENCE (v1.161.0) — lock-step copy of chat_turn's injection. This
-        # is the STREAMING lane, which is the one a user actually watches write
-        # an email; if the instruction reached only the non-streaming lane the
-        # feature would look broken exactly where it is most used.
-        system += DRAFT_BLOCK
-        # YOUR BROWSER (v1.236.0, D16/D21) — the lock-step copy of chat_turn's
-        # injection. MIRROR NOTE: edit both or neither. This is the STREAMING
-        # lane, which is the one the Build pane uses, so D16's own interaction
-        # ("what page do I have open?" in a Build chat) lives on THIS side: an
-        # ambient block that reached only the non-streaming lane would be a
-        # feature nobody could see. Placed at the same seam, before
-        # `_plan_context`, so the section is priced by the budget planner.
-        system += _browser_section(d, getattr(body, "pane_id", "") or "")
-        pid = (body.project_id or "").strip() or None
-        resolved_proj = None
-        if pid:
-            try:
-                from ...core.models import Project
-
-                with session_scope(d.platform.engine) as db:
-                    resolved_proj = db.get(Project, pid)
-            except Exception:  # noqa: BLE001 — never block a chat turn
-                resolved_proj = None
-        if resolved_proj is not None:
-            block = f"\n\n# Project: {resolved_proj.name}"
-            instructions = (resolved_proj.instructions or "").strip()
-            if instructions:
-                block += f"\n\nInstructions (follow these):\n{instructions[:2000]}"
-            if resolved_proj.brief:
-                block += f"\n\nAbout this project: {resolved_proj.brief[:1500]}"
-            # PROJECT PARITY (v1.141.0): root line + recent-activity recap,
-            # the agents/runtime.py _project_context formats. MIRROR NOTE
-            # (lock-step): same block in chat_turn.run_chat_turn — edit both
-            # or neither.
-            if (resolved_proj.root or "").strip():
-                block += f"\n\nProject folder: {resolved_proj.root.strip()}"
-            # Knowledge keyed off the turn's composed recall query (X.3).
-            try:
-                from ...projects.knowledge import ground
-
-                # v1.226.0: embed round-trip off the loop (mirror of chat_turn).
-                knowledge = await asyncio.to_thread(ground, d.platform, pid, recall_query)
-                if knowledge:
-                    block += f"\n\nProject knowledge (reference):\n{knowledge}"
-            except Exception:  # noqa: BLE001 — retrieval must never break a turn
-                pass
-            # Recent activity: the last 5 sessions in this project, in the
-            # exact line format the agent runtime injects. Best-effort.
-            try:
-                from sqlmodel import select as _select
-
-                from ...core.models import Session as _Session
-
-                with session_scope(d.platform.engine) as db:
-                    _siblings = list(
-                        db.exec(
-                            _select(_Session)
-                            .where(_Session.project_id == pid)
-                            .order_by(_Session.created_at.desc())  # type: ignore[attr-defined]
-                            .limit(5)
-                        )
-                    )
-                _recent = [
-                    f"- [{s.status.value}] {s.task[:80]}: {(s.summary or '(no summary)')[:160]}"
-                    for s in _siblings
-                ]
-                if _recent:
-                    block += (
-                        "\n\nRecent activity in this project (newest first):\n"
-                        + "\n".join(_recent)
-                    )
-            except Exception:  # noqa: BLE001 — the recap must never break a turn
-                pass
-            system += block
-
-        learning = getattr(d.platform, "learning", None)
-        if learning is not None:
-            try:
-                system = learning.apply_to_prompt(system)
-            except Exception:  # noqa: BLE001 — never block a chat turn
-                pass
-
-        # AWARENESS INDEX (v1.141.0): Pair Y's memory_index_block, injected
-        # after lessons. Import-guarded + callable-checked for landing order.
-        # MIRROR NOTE (lock-step): same block in chat_turn.run_chat_turn —
-        # edit both or neither.
-        try:
-            from ...memory.index_block import memory_index_block as _memory_index_block
-        except ImportError:  # Pair Y's module not landed yet
-            _memory_index_block = None
-        if callable(_memory_index_block):
-            try:
-                _idx = _memory_index_block(d.platform, project_id=pid)
-                if _idx:
-                    system += "\n\n" + _idx.strip("\n")
-            except Exception:  # noqa: BLE001 — awareness must never break a turn
-                pass
-
-        # MEMORY FABRIC (mirrors chat_complete): keyed off the composed
-        # recall query; grounding failures LOG (never silently pass, never
-        # break the turn) — a bare ``pass`` here swallowed the day-one
-        # ``sources=`` TypeError. MIRROR NOTE (lock-step): same block in
-        # chat_turn.run_chat_turn — edit both or neither.
-        fabric = getattr(d.platform, "fabric", None)
-        if fabric is not None and recall_query.strip():
-            try:
-                # OFF THE EVENT LOOP (v1.173.0) — lock-step with chat_turn:
-                # grounding hits the DB and remote bases, and can now fan out
-                # into several passes.
-                grounding = await asyncio.to_thread(
-                    fabric.ground,
-                    recall_query,
-                    project_id=pid,
-                    sources=["files", "notes", "memory", "lessons", "sessions", "chats"],
-                )
-                if grounding:
-                    system += grounding
-            except Exception:  # noqa: BLE001 — never break a turn, never silent
-                log.exception(
-                    "chat memory-fabric grounding failed (turn continues)"
-                )
-
-        # Connector toggles (mirrors chat_complete): memory hits injected
-        # directly; MCP tool groups merge into the armed set below. Same
-        # composed recall query as the fabric (X.3).
-        conn_tools, conn_memory = _resolve_connectors(d, body)
-        if conn_memory:
-            cm_block = await asyncio.to_thread(
-                _connector_memory_block, d, conn_memory, recall_query
-            )
-            if cm_block:
-                system += cm_block
-
-        # Routing choice (hoisted, mirrors chat_complete) — attachment budgets
-        # scale to the model that will actually answer.
-        provider_choice = (body.provider or "").strip() or (
-            (resolved_proj.default_provider or "").strip() if resolved_proj else ""
-        )
-        model_choice = (body.model or "").strip() or (
-            (resolved_proj.default_model or "").strip() if resolved_proj else ""
-        )
-        _inline_budget, _rag_budget, _rag_k = _attachment_budgets(
-            d,
-            provider_choice or d.platform.config.default_provider,
-            model_choice or d.platform.config.default_model,
-        )
-
-        # Attachments: text formats extracted inline (scans via OCR), images to
-        # VISION. SHARED IMPLEMENTATION (v1.174.0): this lane and
-        # chat_turn.run_chat_turn both call `_prepare_attachments`. It was a
-        # hand-copied block in each until a scanned PDF — no text layer, "0
-        # indexed sections", half of a real tax folder — had to be fixed in
-        # both; the copy in THIS lane is the one the dashboard runs, so a
-        # single-lane fix is a fix the user never sees. Do not re-inline it.
-        images, attach_block = await _prepare_attachments(
-            d, body,
-            inline_budget=_inline_budget, rag_budget=_rag_budget, rag_k=_rag_k,
-            provider_choice=provider_choice, model_choice=model_choice,
-            # MIRROR NOTE (lock-step): same argument in chat_turn.run_chat_turn.
-            # The grounded project's folder, which the preparer needs to decide
-            # whether an IN-PLACE edit of an attachment can actually reach it —
-            # everything else about the live-file handoff lives INSIDE
-            # `_prepare_attachments`, so this lane inherits it (v1.196.0).
-            project_root=(
-                (resolved_proj.root or "") if resolved_proj is not None else ""
-            ),
-        )
-        if attach_block:
-            system += "\n\n# Attachments (provided by the user this turn)" + attach_block
-
-        if (body.skill or "").strip():
-            sk = d.platform.skills.get(body.skill.strip())
-            if sk is None:
-                raise HTTPException(status_code=404, detail=f"no such skill: {body.skill}")
-            system += (
-                f"\n\n# Skill invoked by the user: {sk.name}\n"
-                "FOLLOW this playbook for this request.\n" + sk.instructions[:8000]
-            )
-
-        # CAPABILITY ROSTER (v1.139.0): who could take escalated work — after
-        # the skills section, before the tools block, so the model can NAME a
-        # specialist in escalate_to_agent's optional ``agent`` arg. Skipped
-        # cleanly when empty; a missing/broken roster module never breaks a
-        # turn.
-        # MIRROR NOTE (lock-step): this is an inline copy of the same block in
-        # chat_turn.run_chat_turn. The stream prep started as a byte-identical
-        # lift of the turn service; from v1.139.0 it is kept in lock-step BY
-        # HAND — edit both sites or neither.
-        try:
-            from ...agents.roster import roster_block
-
-            _roster = roster_block(d.platform)
-            if _roster:
-                system += "\n\n" + _roster
-        except Exception:  # noqa: BLE001 — the roster must never break a turn
-            pass
-
-        # SAVED WORKFLOWS (v1.170.0) — the lock-step copy of chat_turn's
-        # injection: the bounded one-line map of the user's stored workflows,
-        # added BEFORE the budget planner runs so its cost is priced (the
-        # repo rule). This is the STREAMING lane — the one the dashboard
-        # uses — so skipping it here would make the model workflow-blind on
-        # every real turn. MIRROR NOTE (lock-step): same line in
-        # chat_turn.run_chat_turn — edit both or neither.
-        system += _saved_workflows_block(d.platform)
-
-        # WORKSPACE GROUNDING (v1.210.0) — the lock-step copy of chat_turn's
-        # injection: a chat bound to a folder (the Build pane's per-pane chat
-        # sends `workspace_dir` every turn) has that folder NAMED in the
-        # prompt, regardless of whether any tools arm. THIS lane is the one
-        # the Build pane actually POSTs to, so skipping it here would leave
-        # the live bug in place exactly where it was reported. Resolved at
-        # most ONCE per turn (the armed branch below reuses this tuple for
-        # its ToolContext), off the event loop (v1.153.1), and BEFORE the
-        # budget planner so its cost is priced (the repo rule).
-        # MIRROR NOTE (lock-step): same block in chat_turn.run_chat_turn —
-        # edit both or neither.
-        _ws_resolved: "tuple[Path, bool] | None" = None
-        if (getattr(body, "workspace_dir", "") or "").strip():
-            try:
-                _ws_resolved = await asyncio.to_thread(
-                    _resolve_tool_workspace,
-                    d.platform.config.home / "uploads",
-                    body.workspace_dir or "",
-                    (resolved_proj.root or "") if resolved_proj is not None else "",
-                )
-            except Exception:  # noqa: BLE001 — resolution MKDIRs a folder the
-                # user picked; that can fail. None renders the honest "not
-                # accessible" wording rather than a grounding claim tools
-                # cannot back.
-                _ws_resolved = None
-            system += _workspace_grounding_block(body.workspace_dir, _ws_resolved)
-
-        # CONTEXT PROTECTION (v1.146.0) + COMPACTION (v1.153.0) — the lock-step
-        # copy of chat_turn's. MIRROR NOTE: edit both or neither.
-        system, _ctx_messages, context_report = await _apply_compaction(
-            d, body, system, provider_choice, model_choice
-        )
-        plan = _plan_context(
-            d, body, system, provider_choice, model_choice, messages=_ctx_messages
-        )
-        if plan.recap:
-            system += "\n\n" + plan.recap
-        msgs: list[LLMMessage] = [
-            LLMMessage(role=m["role"], content=m["content"]) for m in plan.messages
-        ]
-        if images and msgs:
-            for m in reversed(msgs):
-                if m.role == "user":
-                    m.images = images
-                    break
-
-        # An EXPLICITLY picked text-only CLI (codex exec has no structured
-        # tool-calling) used to be capability-REROUTED here — the user asked
-        # for their Codex subscription and got a different provider every
-        # time. Honest fix (v1.125.0): honor the pick and serve the turn
-        # TEXT-ONLY — no armed tools, no exit tools — with a note when tools
-        # were explicitly requested. Only for explicit picks; default/auto
-        # routes keep full capability routing.
-        text_only_pick = False
-        if (body.provider or "").strip() not in ("", "auto"):
-            try:
-                _picked = d.platform.providers.get(
-                    provider_choice, model_choice or None
-                )
-                from ...providers.router import _capabilities
-
-                # The ROUTER's accessor (adapter.capabilities()) — the same
-                # truth the capability reroute reads, so the two can never
-                # disagree about what "text-only" means.
-                text_only_pick = not bool(
-                    _capabilities(_picked).get("tool_use", True)
-                )
-            except Exception:  # noqa: BLE001 — resolution failures rout normally
-                text_only_pick = False
-        # ENVELOPE ADAPTATION DISCLOSURE (v1.202.0): non-null exactly when the
-        # capability envelope narrowed this turn's arming (the tool cap below)
-        # — null on every trusted/unmeasured route, which is the common case.
-        # The text-only branch never arms, so nothing there can bend.
-        # MIRROR NOTE (lock-step): chat_turn.run_chat_turn carries the same
-        # computation — edit both or neither.
-        envelope_adapted: "dict[str, Any] | None" = None
-        if text_only_pick:
-            armed, auto_armed, ask_armed = [], [], []
-            tool_specs = []
-        else:
-            # ENVELOPE TOOL CAP (v1.202.0) — the lock-step twin of the consult
-            # in `chat_turn.run_chat_turn`; see the reasoning there. The cap is
-            # about a weak model facing a wide menu; explicit user tool picks
-            # are consent and the autoselect contract already protects them.
-            # Resolved for the model that will ANSWER (explicit/project pin,
-            # else the config default route); trusted (cloud/CLI/mock) and
-            # unmeasured profiles answer None -> arming byte-identical.
-            # MIRROR NOTE (lock-step): edit both or neither.
-            _env_model = model_choice or d.platform.config.default_model
-            _tool_cap: "int | None" = None
-            try:
-                _profiler = getattr(
-                    d.platform.providers, "capability_profile", None
-                )
-                if _profiler is not None:
-                    _tool_cap = _profiler(
-                        provider_choice or d.platform.config.default_provider,
-                        _env_model,
-                    ).max_tools()
-            except Exception:  # noqa: BLE001 — never break a turn
-                _tool_cap = None
-            # OFF THE EVENT LOOP (v1.196.0) — the lock-step twin of the hop in
-            # `chat_turn.run_chat_turn`; see the reasoning there. This lane
-            # matters more, not less: it is the one the user watches token by
-            # token, so a parked loop here reads as the app having died.
-            _selection = await asyncio.to_thread(
-                _resolve_armed_tools, d, body, _tool_cap
-            )
-            armed, auto_armed = _selection
-            # "adapted" MUST MEAN THE LOOP BENT, not that a budget existed —
-            # the gate is the MEASURED drop signal, and the number printed is
-            # the ceiling that actually bit (lock-step twin of chat_turn's
-            # disclosure gate; the two reviewer repros — plain "hello" under a
-            # cap, and 5 explicit picks under a cap of 3 — are pinned in
-            # tests/test_chat_envelope_v1202.py for BOTH lanes).
-            if _selection.dropped > 0:
-                envelope_adapted = {
-                    "model": _env_model,
-                    "changes": [f"tool_cap:{_selection.ceiling}"],
-                }
-            armed += [t for t in conn_tools if t not in armed]
-            # ASK-TIER ARMING (v1.187.0): show the model the host-reach verbs
-            # this message signals a need for — VISIBLE, never GRANTED. They
-            # join tool_specs so the model can call them, and deliberately
-            # never join `armed`/`overrides`/`armed_grant`, so a call pauses
-            # the turn for the user's approval (the mid-turn ask below). THIS
-            # LANE ONLY: the non-stream lane serves headless callers (the comm
-            # poller, the phone) where nobody is present to answer, and arming
-            # a question no one can hear just manufactures denials.
-            ask_armed = []
-            if bool(getattr(body, "auto_tools", True)):
-                from ...tools.autoselect import select_ask_tools
-
-                ask_armed = [
-                    t for t in select_ask_tools(_last_user_text(body.messages))
-                    if t not in armed
-                ]
-                # WORKSPACE ASK (v1.210.0): a chat BOUND to a folder (the
-                # Build pane) is a coding surface — `shell` joins the ask tier
-                # so the model can propose a command without the user typing
-                # "run" first. Same contract as every other ask_armed entry:
-                # VISIBLE (tool_specs), never GRANTED — a call renders the
-                # mid-turn ApprovalCard and waits for the human. STREAM LANE
-                # ONLY, deliberately: the non-stream lane serves headless
-                # callers where nobody is present to answer a card (the
-                # documented asymmetry above).
-                if (
-                    (getattr(body, "workspace_dir", "") or "").strip()
-                    and "shell" not in ask_armed
-                    and "shell" not in armed
-                    and d.platform.registry.get("shell") is not None
-                ):
-                    ask_armed.append("shell")
-            tool_specs = (
-                d.platform.registry.specs(armed + ask_armed)
-                if (armed or ask_armed)
-                else []
-            ) + [
-                _ESCALATE_SPEC,
-                _WORKFLOW_DRAFT_SPEC,
-            ]
-        # THE POSTURE (v1.188.0): how the mid-turn ask behaves this turn.
-        # Resolved ONCE, for BOTH branches above (a text-only pick still runs
-        # the loop, and the loop reads it), so the prompt sentence below and
-        # the card predicate can never read two different answers.
-        approval_mode = normalize_approval_mode(
-            getattr(body, "approval_mode", "")
-        )
-        # Card-grants made THIS conversation (an approval card's
-        # "conversation" answer). Deliberately separate from `armed_grant`,
-        # which starts as EVERY armed tool — strict mode must card a
-        # write_document that auto-arming granted a moment ago, and a set
-        # that begins full would make strict mode a no-op on exactly the
-        # common case.
-        card_grants: set[str] = set()
-        ctx = None
-        if armed or ask_armed:
-            from ...tools.base import ToolContext
-
-            # OFF THE EVENT LOOP (v1.195.0, finding 7) — MIRROR NOTE
-            # (lock-step): same call in chat_turn.run_chat_turn, edit both or
-            # neither. The resolution is stats + resolve()s + a mkdir against a
-            # folder the USER picked (network share, unhydrated OneDrive), and
-            # THIS is the lane the user is watching when the app goes "Daemon
-            # offline". One hop for the whole block, not four.
-            # v1.210.0: a BOUND workspace was already resolved by the
-            # grounding block above — reuse that tuple (one resolution per
-            # turn; the prompt block and this ToolContext must agree on the
-            # folder). The hop runs only for the project-root / scratch path.
-            if _ws_resolved is not None:
-                tool_ws, in_project_folder = _ws_resolved
-            else:
-                tool_ws, in_project_folder = await asyncio.to_thread(
-                    _resolve_tool_workspace,
-                    d.platform.config.home / "uploads",
-                    body.workspace_dir or "",
-                    (resolved_proj.root or "") if resolved_proj is not None else "",
-                )
-            ctx = ToolContext(
-                workspace=tool_ws, session_id="chat", agent_run_id="chat",
-                config=d.platform.config, event_bus=d.platform.event_bus,
-                engine=d.platform.engine,
-                # v1.200.0: resolved-project tag for artifact sinks. MIRROR
-                # NOTE (lock-step): non-stream copy in daemon/chat_turn.py.
-                project_id=(pid if resolved_proj is not None else None),
-            )
-            explicit_armed = [
-                t for t in armed if t not in auto_armed and t not in conn_tools
-            ]
-            system += (
-                "\n\n# Tools\n"
-                + (
-                    "The user armed these tools for this chat: "
-                    + ", ".join(explicit_armed)
-                    + ". "
-                    if explicit_armed
-                    else ""
-                )
-                + (
-                    "Auto-selected from this request: " + ", ".join(auto_armed) + ". "
-                    if auto_armed
-                    else ""
-                )
-                + (
-                    "Connector tools the user toggled on: "
-                    + ", ".join(conn_tools)
-                    + ". "
-                    if conn_tools
-                    else ""
-                )
-                + "Use them when they help; answer directly when they don't."
-                + (
-                    "\nSPREADSHEET FIGURES: never compute numbers yourself —"
-                    " call excel_query (profile the workbook first with"
-                    " excel_profile) and report its computed results exactly."
-                    if any(t.startswith("excel_") for t in armed)
-                    else ""
-                )
-                + (
-                    "\nREDACTION: scan first (redact_scan), present the"
-                    " numbered findings, and get the user's confirmation of"
-                    " exactly which to remove BEFORE calling redact_pii —"
-                    " pass the confirmed values via terms."
-                    if any(t.startswith("redact") for t in armed)
-                    else ""
-                )
-                + (
-                    # Lock-step with chat_turn.py's non-stream lane (v1.167.0):
-                    # the dashboard STREAMS, so this — the lane users actually
-                    # see — shipped without the PDF guidance for a full wave.
-                    "\nPDF PAGES: for page-level PDF work (merge/split/rotate/"
-                    "reorder) use pdf_arrange/pdf_split — they write NEW files"
-                    " and never modify the original."
-                    if any(t in ("pdf_arrange", "pdf_split") for t in armed)
-                    else ""
-                )
-                + (
-                    # Lock-step with chat_turn.py's non-stream lane (v1.170.0):
-                    # the workflow tool sentences, each gated on ITS OWN
-                    # arming. workflow_list is auto-safe and routinely arms
-                    # ALONE while workflow_run is ask-gated and never
-                    # auto-armed, so a combined any() gate had the prompt
-                    # claim a runnable tool absent from tool_specs — a lie
-                    # the model relays. The saved-workflows LIST rides the
-                    # prompt above regardless.
-                    "\nWORKFLOWS: workflow_list lists the user's saved workflows."
-                    if "workflow_list" in armed
-                    else ""
-                )
-                + (
-                    "\nWORKFLOWS: workflow_run runs a saved workflow by name and"
-                    " returns its run id — prefer running a saved workflow over"
-                    " redoing its steps by hand."
-                    if "workflow_run" in armed
-                    else ""
-                )
-                + (
-                    f"\nYour file tools operate INSIDE the folder {tool_ws}; "
-                    "read, edit, and create files there directly, and use the absolute paths "
-                    "that file_search returns."
-                    if in_project_folder
-                    else ""
-                )
-                + (
-                    # ASK-TIER sentence (v1.187.0, THIS LANE ONLY — see the
-                    # arming above): the model must know these tools pause for
-                    # a human, or a denial reads to it as a broken tool and it
-                    # retries the exact call the user just refused. The
-                    # posture rewrites it (v1.188.0) because each mode makes a
-                    # DIFFERENT promise and the prompt must not claim a pause
-                    # that will not happen (yolo) or stay silent about ones
-                    # that will (always_ask).
-                    "\nAPPROVAL-GATED: "
-                    + ", ".join(sorted(ask_armed))
-                    + " are pre-approved for this conversation (the user"
-                    " chose auto-approve) — they run without pausing. Still"
-                    " prefer the specialized tools when one fits."
-                    if ask_armed and approval_mode == "yolo"
-                    else "\nAPPROVAL-GATED: "
-                    + ", ".join(sorted(ask_armed))
-                    + " will PAUSE this turn while the user is asked to"
-                    " approve the call — the user sees the exact command/code"
-                    " you pass. Use them when the task genuinely needs them;"
-                    " prefer the specialized tools when one fits, and if the"
-                    " user declines, do not retry the same call."
-                    if ask_armed
-                    else ""
-                )
-                + (
-                    "\nSTRICT APPROVAL: the user chose to approve every file"
-                    " edit and internet call — document/file-writing tools"
-                    " and web_search/web_fetch also pause for approval."
-                    " One approval per call unless the user grants the tool"
-                    " for the conversation; if they decline, do not retry"
-                    " the same call."
-                    if approval_mode == "always_ask"
-                    else ""
-                )
-                # Lock-step with chat_turn.py (v1.186.0). THIS is the lane the
-                # dashboard uses, and the failure it was built from happened
-                # here: a local model read nine documents and wrote nothing.
-                # A directive that reached only the non-stream lane would have
-                # fixed the report without fixing the user's experience of it.
-                + _write_directive(body, armed)
-            )
-        overrides: dict[str, str] = {}
-        for _name in armed:
-            overrides[_name] = "allow"
-            _tool = d.platform.registry.get(_name)
-            if _tool is not None:
-                overrides[_tool.perm_key()] = "allow"
-        armed_grant = set(overrides.keys())
-        # (provider_choice/model_choice were resolved above the attachments.)
-
-        # ------------------------------------------------------------------ #
-        # STREAM — the round + tool loop, emitting SSE frames as it goes.
-        # ------------------------------------------------------------------ #
-        async def gen():
-            usage_in = usage_out = completions = 0
-            tools_used: list[str] = []          # ONLY tools that actually executed
-            denied_tools: list[str] = []        # armed tools refused this turn
-            # DOORS (v1.199.0): links into the surface a SUCCESSFUL creating
-            # tool just changed. Appended only inside the `if ran:` block —
-            # the same gate as tools_used, so a failed/denied call can never
-            # mint one. MIRROR NOTE (lock-step): chat_turn.py's tool loop
-            # carries the same collection — edit both or neither.
-            door_entries: list[dict[str, str] | None] = []
-            last_tool_output = ""               # last SUCCESSFUL output (synthesis)
-            stopped_note = ""                   # round budget cut off tool calls
-            escalate = False        # the turn asked for the full agent
-            escalate_reason = ""
-            escalate_agent = None   # v1.139.0: validated roster target (None = default)
-            workflow_draft = None           # proposed reusable workflow (v1.120.0)
-            made_docs: list[str] = []           # documents created/edited (preview)
-            workflow_run_info = None    # v1.170.0: workflow this turn STARTED (contract 2)
-            reply_text = ""
-            route_provider = provider_choice or ""
-            route_model = model_choice or ""
-            # ROUTE DISCLOSURE (v1.165.0): filled from the router's final
-            # frame each round; `requested` seeds from the explicit pick ("" =
-            # default route) so even an errored turn reports what was asked.
-            route_requested = provider_choice or ""
-            route_reason = ""
-            # v1.228.0: the failed primary + derived reason on a failover
-            # (both "" otherwise) — read off the same final frame.
-            route_from = ""
-            route_why = ""
-            # USAGE LEDGER, EXACTLY ONE TERMINAL ROW. Every terminal path below
-            # goes through this helper, so the cancellation guards can run
-            # unconditionally without ever writing a second row for the same
-            # turn. It reads the live counters/route by closure, which is what
-            # makes it correct from an exception handler.
-            persisted = False
-
-            def _persist_once(state: AgentState) -> None:
-                nonlocal persisted
-                if persisted or not completions:
-                    return
-                persisted = True
-                _persist_chat_usage(
-                    d, provider=route_provider, model=route_model,
-                    state=state, completions=completions,
-                    usage_in=usage_in, usage_out=usage_out,
-                )
-
-            try:
-                for _round in range(_MAX_TOOL_ROUNDS):
-                    if await request.is_disconnected():
-                        # The completed rounds were billed even though the
-                        # client walked away — keep the ledger honest.
-                        _persist_once(AgentState.CANCELLED)
-                        return
-                    yield _sse("round", {"round": _round})
-                    final_resp = None
-                    async for frame in _router_frames(
-                        d.platform.router,
-                        provider=provider_choice or None,
-                        model=model_choice or None,
-                        system=system,
-                        messages=msgs,
-                        tools=tool_specs,
-                        task_class="chat",
-                    ):
-                        ftype = frame.get("type")
-                        if ftype == "text":
-                            txt = frame.get("text") or ""
-                            if txt:
-                                yield _sse("token", {"text": txt})
-                        elif ftype == "meta":
-                            route_provider = frame.get("provider") or route_provider
-                            route_model = frame.get("model") or route_model
-                            yield _sse(
-                                "meta",
-                                {"provider": route_provider, "model": route_model},
-                            )
-                        elif ftype == "reset":
-                            # A pre-first-token failover swapped providers — tell the
-                            # client to discard any partial text streamed so far.
-                            yield _sse("reset", {"reason": frame.get("reason", "")})
-                        elif ftype == "final":
-                            final_resp = frame.get("response")
-                            route_provider = frame.get("provider") or route_provider
-                            route_model = frame.get("model") or route_model
-                            # Route disclosure off the final frame (v1.165.0).
-                            # `requested` is legitimately "" on the default
-                            # route, so test MEMBERSHIP, not truthiness — an
-                            # `or` here would silently keep the seed value and
-                            # mask a router that reports differently.
-                            if "requested" in frame:
-                                route_requested = str(frame.get("requested") or "")
-                            route_reason = str(frame.get("reason") or route_reason)
-                            route_from = str(frame.get("from") or route_from)
-                            route_why = str(frame.get("why") or route_why)
-                    if final_resp is None:
-                        # The stream ended without an aggregate — honest error, not
-                        # a fabricated reply. Completed rounds still get counted.
-                        _persist_once(AgentState.FAILED)
-                        yield _sse(
-                            "error",
-                            {"detail": "stream ended without a final response"},
-                        )
-                        return
-                    reply_text = final_resp.text or ""
-                    _u = final_resp.usage or {}
-                    usage_in += int(_u.get("input_tokens", 0) or 0)
-                    usage_out += int(_u.get("output_tokens", 0) or 0)
-                    completions += 1
-                    calls = final_resp.tool_calls or []
-                    # THE DRAFT, THREE WAYS (v1.225.0) — lock-step copy of
-                    # chat_turn: the exit tool, an unarmed workflow_create,
-                    # or JSON written in a text-only reply.
-                    workflow_draft = _draft_from_calls(calls, armed)
-                    if workflow_draft is None and not calls:
-                        workflow_draft = _draft_from_text(reply_text)
-                    if workflow_draft is not None:
-                        break
-                    esc_call = next(
-                        (c for c in calls if c.name == _ESCALATE_TOOL), None
-                    )
-                    if esc_call is not None:
-                        escalate = True
-                        _esc_args = esc_call.arguments or {}
-                        escalate_reason = str(_esc_args.get("reason") or "").strip()
-                        # v1.139.0 roster target — validated; None keeps every
-                        # caller default. MIRROR NOTE (lock-step): same
-                        # extraction as chat_turn.run_chat_turn's escalate
-                        # branch — edit both or neither.
-                        escalate_agent = _validated_escalate_agent(
-                            d.platform, _esc_args.get("agent")
-                        )
-                        break
-                    # ask_armed counts (v1.187.0): a turn whose ONLY armed
-                    # verbs are approval-gated still has real calls to run.
-                    if not calls or not (armed or ask_armed):
-                        break
-                    if _round == _MAX_TOOL_ROUNDS - 1:
-                        # LAST allowed round (mirrors chat_complete): no round is
-                        # left to show the model these results — skip, say so.
-                        stopped_note = (
-                            f"stopped after {_round} tool rounds; "
-                            f"{len(calls)} tool call(s) not executed"
-                        )
-                        escalate = True
-                        escalate_reason = escalate_reason or (
-                            "this needs more steps than a quick answer allows"
-                        )
-                        break
-                    msgs.append(LLMMessage(role="assistant",
-                                           content=final_resp.text,
-                                           tool_calls=calls))
-                    for tc in calls:
-                        ran = False
-                        _t = d.platform.registry.get(tc.name)
-                        # REDACT args before they cross the wire — a planted secret
-                        # (secrets/computeruse tools redact) never streams to the
-                        # browser; same guard the DB-persist path uses.
-                        safe_args = (
-                            _t.redact_args(tc.arguments) if _t is not None else tc.arguments
-                        )
-                        # MID-TURN APPROVAL (v1.187.0). The two halves of this
-                        # mechanism predate it: `authorize` names the
-                        # interactive session grant as the sanctioned lift for
-                        # an ask-tier tool, and `invoke` has carried
-                        # `deny_reason=` since v1.155.0 for "a caller that
-                        # already asked a human and was refused". Nothing in
-                        # chat ever ASKED — an ask-tier call was silently
-                        # denied and the user learned from a footnote. Now the
-                        # turn pauses, the card renders, and the decision is
-                        # genuinely the user's — including the refusal, which
-                        # is why the deny path still calls `invoke`: the
-                        # refusal must reach the ledger as a decision a human
-                        # made, not vanish as a call that never happened.
-                        #
-                        # BEFORE the "started" frame, so the tool card never
-                        # spins while the app is waiting on a human.
-                        _deny_reason = ""
-                        _grant_extra: set[str] = set()
-                        _perm_name = _t.perm_key() if _t is not None else tc.name
-                        _mode = d.platform.permissions.mode_for(_perm_name, overrides)
-                        # THE POSTURE DECIDES WHETHER A CARD RENDERS
-                        # (v1.188.0). The engine's answer is unchanged in
-                        # every mode — the posture only chooses when to put a
-                        # human between an *askable* call and its execution:
-                        #   approve_for_me  engine-ask only (v1.187.0);
-                        #   always_ask      engine-ask PLUS file edits + web,
-                        #                   unless a card already granted the
-                        #                   tool this conversation;
-                        #   yolo            never — an engine-ask is granted
-                        #                   because the user pre-approved it
-                        #                   from the dropdown. A base `deny`
-                        #                   never reaches this branch (it is
-                        #                   not ASK) and `invoke` refuses it
-                        #                   in yolo exactly as everywhere.
-                        _engine_asks = (
-                            _mode is PermissionMode.ASK
-                            and _perm_name not in armed_grant
-                            and tc.name not in armed_grant
-                        )
-                        # THE ARMED SET IS THE GATE (v1.227.0, RT1): this
-                        # turn's tools are `armed` + `ask_armed` (what the
-                        # model was shown). Anything else is refused by the
-                        # registry as "not armed" — so it must never CARD
-                        # either: asking the user to approve a call that
-                        # cannot run would make their Allow a lie.
-                        # MIRROR NOTE (lock-step): chat_turn.py passes its
-                        # armed set the same way — edit both or neither.
-                        _turn_tools = {*armed, *ask_armed}
-                        _unarmed = tc.name not in _turn_tools
-                        if approval_mode == "yolo":
-                            if _engine_asks:
-                                _grant_extra = {tc.name, _perm_name}
-                            _needs_card = False
-                        elif approval_mode == "always_ask":
-                            _needs_card = _engine_asks or (
-                                tc.name in STRICT_ASK_TOOLS
-                                and tc.name not in card_grants
-                                and _mode is not PermissionMode.DENY
-                            )
-                        else:
-                            _needs_card = _engine_asks
-                        if _unarmed:
-                            _needs_card = False
-                        if _needs_card:
-                            _apr = _approvals()
-                            _ap_id, _fut = _apr.request(tc.name, safe_args)
-                            yield _sse("approval", {
-                                "id": _ap_id, "call_id": tc.id,
-                                "tool": tc.name, "args": safe_args,
-                                "timeout_s": int(APPROVAL_TIMEOUT_S),
-                            })
-                            _decision = "timeout"
-                            _aloop = asyncio.get_running_loop()
-                            _deadline = _aloop.time() + APPROVAL_TIMEOUT_S
-                            try:
-                                while True:
-                                    _left = _deadline - _aloop.time()
-                                    if _left <= 0:
-                                        break
-                                    try:
-                                        # shield: a keepalive slice expiring
-                                        # must not CANCEL the future — the
-                                        # user's click can land in the next
-                                        # slice.
-                                        _decision = await asyncio.wait_for(
-                                            asyncio.shield(_fut),
-                                            timeout=min(15.0, _left),
-                                        )
-                                        break
-                                    except asyncio.TimeoutError:
-                                        # SSE comment — keeps the connection
-                                        # alive through a slow human decision
-                                        # without inventing a frame type.
-                                        yield ": keepalive\n\n"
-                            finally:
-                                _apr.pop(_ap_id)
-                            yield _sse("approval_resolved", {
-                                "id": _ap_id, "call_id": tc.id,
-                                "tool": tc.name, "decision": _decision,
-                            })
-                            if _decision == "once":
-                                _grant_extra = {tc.name, _perm_name}
-                            elif _decision == "conversation":
-                                # Rest of THIS turn's rounds; the client
-                                # persists it for later turns by arming the
-                                # tool (the existing "+"-menu machinery — not
-                                # a second grant store). IN-PLACE update, not
-                                # `|=`: an augmented assignment would bind
-                                # `armed_grant` as a LOCAL of this generator
-                                # and unbind every earlier read of the
-                                # enclosing scope's set. `card_grants` is what
-                                # stops strict mode re-carding this tool —
-                                # armed_grant alone cannot say WHO granted.
-                                armed_grant.update({tc.name, _perm_name})
-                                card_grants.update({tc.name, _perm_name})
-                            elif _decision == "deny":
-                                _deny_reason = (
-                                    "you declined this call when asked"
-                                )
-                            else:
-                                _deny_reason = (
-                                    "the approval request timed out with no"
-                                    " answer"
-                                )
-                        yield _sse("tool_call", {
-                            "id": tc.id, "name": tc.name,
-                            "status": "started", "args": safe_args,
-                        })
-                        try:
-                            # deny_reason rides ONLY when a human actually
-                            # refused — the common path stays byte-identical
-                            # with every existing caller (and every test
-                            # double) of this five-argument invoke.
-                            result = await d.platform.registry.invoke(
-                                tc.name, tc.arguments, ctx, d.platform.permissions,
-                                overrides,
-                                session_allow=(armed_grant | _grant_extra),
-                                allowed_names=_turn_tools,
-                                **(
-                                    {"deny_reason": _deny_reason}
-                                    if _deny_reason
-                                    else {}
-                                ),
-                            )
-                            if result.ok:
-                                content = result.output
-                                ran = True
-                                last_tool_output = str(result.output or "")
-                            else:
-                                content = result.error or "error"
-                                if "permission denied" in (result.error or ""):
-                                    denied_tools.append(tc.name)
-                        except Exception as exc:  # noqa: BLE001
-                            content = f"{type(exc).__name__}: {exc}"
-                        if ran:
-                            tools_used.append(tc.name)
-                            # DOOR (v1.199.0): a successful creating tool
-                            # opens a link into its surface. Same gate as
-                            # tools_used — inside this `if ran:` — so honesty
-                            # is enforced at the call site. MIRROR NOTE
-                            # (lock-step): chat_turn.py's tool loop carries
-                            # the same append — edit both or neither.
-                            door_entries.append(door_for(tc.name, result))
-                            # WORKFLOW RUN RECEIPT (v1.170.0, contract 2): a
-                            # SUCCESSFUL workflow_run's {run_id, workflow}
-                            # rides the done frame as `workflow_run` so the
-                            # client renders the live run under this reply.
-                            # Only a run the tool actually started counts —
-                            # a failed/denied call leaves the key absent —
-                            # and only with a real run id, because a chip
-                            # pointing at no run would poll a 404 forever.
-                            # The last successful call wins. MIRROR NOTE
-                            # (lock-step): chat_turn.py's tool loop carries
-                            # this same capture — edit both or neither.
-                            if tc.name == "workflow_run":
-                                _wr = getattr(result, "data", None) or {}
-                                _wr_id = str(_wr.get("run_id") or "").strip()
-                                if _wr_id:
-                                    workflow_run_info = {
-                                        "run_id": _wr_id,
-                                        "name": str(
-                                            _wr.get("workflow") or ""
-                                        ).strip(),
-                                    }
-                            # Track created/edited documents for the preview
-                            # (mirrors chat_complete).
-                            if tc.name in _DOC_WRITING_TOOLS:
-                                _rel = str(
-                                    (getattr(result, "data", None) or {}).get("path")
-                                    or ""
-                                )
-                                if _rel:
-                                    try:
-                                        _abs = str((tool_ws / _rel).resolve())
-                                        if _abs not in made_docs:
-                                            made_docs.append(_abs)
-                                    except Exception:  # noqa: BLE001
-                                        pass
-                            # EVERY file a turn creates is disclosed, not just
-                            # the document tools' (v1.165.0): merge the
-                            # ABSOLUTE ToolResult.created_paths (repl's
-                            # workspace diff, batch jobs) so a repl-written
-                            # file reaches `documents` here too. Call order
-                            # kept, deduped against the doc-tool entries.
-                            # ABSOLUTE paths only — the contract says absolute
-                            # (tools/base.py); a relative name from a lying
-                            # tool is an unverifiable claim and resolving it
-                            # against a guessed base could disclose the WRONG
-                            # file. MIRROR NOTE (lock-step): chat_turn.py's
-                            # tool loop carries this same merge — edit both
-                            # or neither.
-                            for _cp in getattr(result, "created_paths", None) or []:
-                                _cp = str(_cp)
-                                try:
-                                    if not Path(_cp).is_absolute():
-                                        continue
-                                except (OSError, ValueError):
-                                    continue
-                                if _cp not in made_docs:
-                                    made_docs.append(_cp)
-                            # FENCE externally-sourced output before the model (and
-                            # the client) sees it — the same guard chat_complete +
-                            # the agent runtime apply to returns_untrusted_content.
-                            if getattr(_t, "returns_untrusted_content", False):
-                                from ...computeruse.safety import (
-                                    detect_injection,
-                                    wrap_untrusted,
-                                )
-
-                                _inj = detect_injection(str(content))
-                                content = wrap_untrusted(
-                                    f"[content withheld — suspected {_inj['category']}: "
-                                    f"{_inj['reason']}]"
-                                    if _inj["flagged"]
-                                    else str(content)
-                                )
-                        yield _sse("tool_call", {
-                            "id": tc.id, "name": tc.name, "status": "finished",
-                            "ok": ran, "output": str(content)[:2000],
-                        })
-                        msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
-                                               name=tc.name, content=str(content)[:12000]))
-            except Exception as exc:  # noqa: BLE001 — honest error, never fabricate
-                # Completed rounds were still billed — persist BEFORE the error
-                # frame (mirrors chat_complete's failure path); the client sees
-                # the same error either way.
-                _persist_once(AgentState.FAILED)
-                yield _sse("error", {"detail": str(exc)})
-                return
-            except BaseException:
-                # STOP MID-GENERATION. When the client aborts DURING a round,
-                # Starlette cancels this generator at its current await
-                # (CancelledError) or, if it is parked at a yield, at
-                # finalization (GeneratorExit). Both are BaseException-shaped:
-                # they skip the round-TOP disconnect check above AND the
-                # handler above, so every COMPLETED earlier round — already
-                # counted at its `final` frame and already billed by the
-                # provider — used to vanish from the ledger entirely. No frame
-                # is emitted here (the connection is gone) and the exception is
-                # re-raised unchanged, so cancellation still means cancellation.
-                _persist_once(AgentState.CANCELLED)
-                raise
-
-            # LANGUAGE GUARD (v1.144.0) — the lock-step copy of chat_turn's, and
-            # like it, run BEFORE the ledger so a rewrite is billed.
-            #
-            # STREAM-SPECIFIC NOTE: the leaked text has already been streamed to
-            # the client token by token, so the correction lands in the `done`
-            # frame instead — which useChatStream treats as AUTHORITATIVE
-            # ("done.reply is authoritative; fall back to the accumulated text"),
-            # so the finished bubble and the saved thread both carry the
-            # corrected reply. The user may see the wrong-language text flicker
-            # during generation; that is honest (it IS what the model produced)
-            # and needs no client change. MIRROR NOTE (lock-step): chat_turn.
-            try:
-                reply_text, lang_note, _l_in, _l_out, _l_n = await _enforce_language(
-                    d.platform,
-                    text=reply_text or "",
-                    user_text=_last_user_text(body.messages),
-                    system=system,
-                    messages=msgs,
-                    provider=provider_choice,
-                    model=model_choice,
-                )
-            except BaseException:
-                # The one remaining await between the last billed round and the
-                # COMPLETED row below (it calls a model when it rewrites): a
-                # Stop delivered HERE drops exactly the same already-billed
-                # tokens as one delivered inside the loop.
-                _persist_once(AgentState.CANCELLED)
-                raise
-            usage_in += _l_in
-            usage_out += _l_out
-            completions += _l_n
-
-            # USAGE LEDGER — persist the run row exactly as chat_complete does so a
-            # streamed turn counts the same on the Usage page.
-            _persist_once(AgentState.COMPLETED)
-
-            # Reply honesty (mirrors chat_complete): synthesize from the last tool
-            # output when the model returned no final text; note denied tools.
-            # THE DRAFT CARRIES THE CHAT'S PROJECT (v1.225.0) — lock-step copy
-            # of chat_turn's stamp; this is the lane the card is born in.
-            if workflow_draft is not None and resolved_proj is not None and pid:
-                workflow_draft["project_id"] = pid
-            reply = reply_text or ""
-            if workflow_draft is not None:
-                # Mirrors chat_complete: a draft exit is a success — no
-                # placeholder, no creation-honesty note.
-                reply = reply.strip()
-                if denied_tools:
-                    names = ", ".join(dict.fromkeys(denied_tools))
-                    reply += f"\n\n_Note: {names} could not run (permission denied)._"
-            else:
-                if not reply.strip() and last_tool_output:
-                    snippet = last_tool_output.strip()[:600]
-                    ran_names = ", ".join(dict.fromkeys(tools_used)) or "the armed tools"
-                    reply = f"Ran {ran_names}. Result:\n{snippet}"
-                elif not reply.strip():
-                    reply = "(no reply)"
-                if denied_tools:
-                    names = ", ".join(dict.fromkeys(denied_tools))
-                    reply += f"\n\n_Note: {names} could not run (permission denied)._"
-                if stopped_note:
-                    reply += f"\n\n_Note: {stopped_note}._"
-                if lang_note:
-                    reply += f"\n\n_Note: {lang_note}._"
-                _ctx_note = plan.note()
-                if _ctx_note:
-                    reply += f"\n\n_Note: {_ctx_note}._"
-                reply += _creation_honesty_note(body, armed, tools_used)
-                # v1.153.2: and check the reply's own CLAIMS against the
-                # ledger — the note above keys off the user's phrasing and
-                # so missed a reply announcing a saved file after only a
-                # scan had run. MIRROR NOTE (lock-step): both lanes.
-                reply += _claimed_write_note(reply, tools_used)
-            if text_only_pick and (body.tools or []):
-                reply += (
-                    f"\n\n_Note: {provider_choice} can't run tools — this "
-                    f"turn was answered text-only._"
-                )
-            done_frame: dict[str, Any] = {
-                "reply": reply,
-                "provider": route_provider,
-                "model": route_model,
-                # ROUTE DISCLOSURE (v1.165.0) — the identical object POST
-                # /chat returns: server-side truth of WHO answered and WHY,
-                # because the client-side "answered by X" chip is silent on
-                # the default route. Top-level provider/model stay untouched
-                # for existing clients. MIRROR NOTE (lock-step): the
-                # non-stream response dict in chat_turn.py carries the same
-                # object — edit both or neither.
-                "route": {
-                    "requested": route_requested,
-                    "provider": route_provider,
-                    "model": route_model,
-                    "reason": route_reason,
-                    # v1.228.0 (additive): which provider failed and why, on
-                    # a failover — same keys the non-stream lane emits.
-                    "from": route_from,
-                    "why": route_why,
-                },
-                "tools_used": tools_used,
-                # DOORS (v1.199.0): server-derived links into the surfaces
-                # this turn's SUCCESSFUL creating tools changed — deduped by
-                # href, capped at 4, ALWAYS present (possibly empty). Files
-                # are deliberately not doors (the ArtifactsRail owns files).
-                # MIRROR NOTE (lock-step): the non-stream response dict in
-                # chat_turn.py carries the identical key — edit both or
-                # neither.
-                "doors": collect_doors(door_entries),
-                # ENVELOPE ADAPTATION (v1.202.0): {"model", "changes":
-                # ["tool_cap:<n>", ...]} when the capability envelope bent
-                # this turn, else null — ALWAYS PRESENT (null, never absent),
-                # like doors' [], pinning lane parity on absent-vs-null.
-                # MIRROR NOTE (lock-step): the non-stream response dict in
-                # chat_turn.py carries the identical key — edit both or
-                # neither.
-                "adapted": envelope_adapted,
-                "denied_tools": denied_tools,
-                "auto_armed": auto_armed,
-                "documents": made_docs,
-                "escalate": escalate,
-                "escalate_reason": escalate_reason,
-                # v1.139.0 pinned contract change: the validated roster target
-                # (None = the caller's default builder), same as POST /chat.
-                "escalate_agent": escalate_agent,
-                "workflow_draft": workflow_draft,
-                "usage": {"input_tokens": usage_in, "output_tokens": usage_out},
-                # v1.146.0 + v1.153.0 — same shape POST /chat returns, so the
-                # composer's headroom meter and the compaction offer behave
-                # identically on both lanes.
-                "context": {**plan.as_dict(), **context_report},
-            }
-            # CONTRACT 2 (v1.170.0): present ONLY when this turn's tool loop
-            # actually started a workflow run — absent otherwise (including
-            # failed calls), so clients key off the key itself, never a null.
-            # MIRROR NOTE (lock-step): the non-stream response dict in
-            # chat_turn.py carries the same conditional key — edit both or
-            # neither.
-            if workflow_run_info is not None:
-                done_frame["workflow_run"] = workflow_run_info
-            yield _sse("done", done_frame)
-
         return StreamingResponse(
-            gen(),
+            gen,
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    @app.post("/chat/turns/{turn_id}/stop")
+    async def stop_chat_turn(turn_id: str) -> dict[str, Any]:
+        """Stop the running turn named ``turn_id`` — from ANY connection.
+
+        THE SILENT FAILURE THIS PREVENTS: a Stop button that does nothing.
+        Before v1.241.0 the only way to stop a streamed turn was to drop the
+        HTTP response carrying it, which a second window cannot do and a
+        caller that owns no connection at all (a browser side panel, whose
+        turn the daemon runs on its behalf) can never do.
+
+        AUTH: the ordinary install bearer, like every other ``/chat/*`` route.
+        It is deliberately NOT on any exemption list — ``turn_id`` is a name
+        the caller chose, not a credential, and treating it as one would make
+        a guessable string sufficient to interrupt somebody's work.
+
+        404 on an unknown or already-finished id, never a silent success: the
+        runner pops its own id in a ``finally``, so "I stopped it" from a route
+        that stopped nothing would be the exact lie this ship exists to remove.
+        A turn that supplied no ``turn_id`` never registered and is therefore
+        honestly unknown here.
+
+        HONESTY: a tool already executing is NOT killed. Its worker thread
+        finishes and its write lands (v1.228.0). Stop ends the answer being
+        generated and prevents the NEXT round; no surface may imply more.
+        """
+        if not TURNS.stop(turn_id):
+            raise HTTPException(
+                status_code=404, detail=f"no such running turn: {turn_id}"
+            )
+        return {"ok": True, "stopped": True}
+
+
+# --------------------------------------------------------------------------- #
+# THE STREAMING TURN (v1.241.0) — lifted out of the route so a caller with no
+# HTTP connection can run it, and so Stop can reach it by name.
+# --------------------------------------------------------------------------- #
+async def stream_chat_turn(platform, personas: dict, body, *, should_stop=None):
+    """Streaming twin of :func:`chat_complete` (FX-01) — the turn itself.
+
+    IDENTICAL prep (persona/project/learning/memory fabric/attachments/skill/
+    armed tools/overrides/routing choice), but the turn is emitted as Server-
+    Sent Events — token deltas as they generate, live tool-call frames, then a
+    terminal ``done``. PURELY ADDITIVE: POST /chat is unchanged, and this
+    shares the same router + tool-loop semantics so a streamed turn is byte-
+    compatible with the non-streaming one (same usage ledger, same reply).
+
+    LIFTED OUT OF THE ROUTE IN v1.241.0, verbatim, mirroring what v1.136.0 did
+    to ``chat_complete`` → :func:`iron_jarvis.daemon.chat_turn.run_chat_turn`
+    and for the same reason: so a caller that is NOT an HTTP request can run
+    the same engine. ``POST /chat/stream`` is now a thin wrapper over this.
+
+    THE SILENT FAILURE THE LIFT PREVENTS: a Stop button that does nothing.
+    Stopping a streamed turn used to be CONNECTION-BOUND — the sole
+    cooperative check was ``request.is_disconnected()`` once per tool round,
+    and mid-generation stop worked only because Starlette cancels the response
+    generator when the HTTP client goes away. A caller that owns no connection
+    (a browser side panel: the daemon runs the turn on its behalf) has nothing
+    to hang up, so the entire mechanism was unavailable to it. Stop is now
+    ADDRESSABLE: see ``should_stop`` and ``body.turn_id``.
+
+    ``should_stop`` — an optional predicate (sync or async) consulted at every
+    tool-round boundary AND inside the token loop. The HTTP route injects
+    ``request.is_disconnected``, which is exactly the call this code used to
+    hard-code, so that lane's behaviour is unchanged.
+
+    ``body.turn_id`` — optional and defaulted. Present, the turn registers in
+    :data:`iron_jarvis.core.turns.TURNS` for the duration and
+    ``POST /chat/turns/{turn_id}/stop`` can stop it from anywhere; absent,
+    NOTHING registers and every byte of behaviour is what it was. The daemon
+    never mints one.
+
+    HONESTY, and it is a hard limit: stop does NOT kill a tool that is already
+    executing. The tool runs on a worker thread (v1.228.0); that thread
+    finishes and its write lands. Stop ends the answer being generated and
+    prevents the NEXT round — it is not an abort of work in flight, and no
+    surface built on this may imply that it is.
+
+    RETURNS an async iterator of SSE strings. It is a COROUTINE returning the
+    iterator, not an async generator, deliberately: the prep raises
+    ``HTTPException`` (400 empty messages, 404 unknown skill) and those must
+    land before any response has begun, exactly as they did when this was the
+    route body. An async generator would defer them until the first frame and
+    turn a clean 400 into a broken stream.
+    """
+    turn_id = str(getattr(body, "turn_id", "") or "").strip()
+    handle = TURNS.register(turn_id) if turn_id else None
+    if handle is None:
+        # NO turn_id: byte-identical to the pre-v1.241.0 path — nothing
+        # registered, nothing to release, the generator handed back bare.
+        return await chat_stream(
+            platform, personas, body, should_stop=should_stop, handle=None
+        )
+    try:
+        inner = await chat_stream(
+            platform, personas, body, should_stop=should_stop, handle=handle
+        )
+    except BaseException:
+        # Prep can raise (400/404) before there is any generator to release
+        # it. A registered id whose turn never ran would stay "stoppable"
+        # forever and answer 200 to a stop that stopped nothing.
+        TURNS.release(turn_id, handle)
+        raise
+
+    async def _tracked():
+        """The runner owns the pop: release in a ``finally``, so a stop
+        arriving after the last frame is honestly a 404 rather than a success
+        against a turn that has moved on."""
+        try:
+            async for chunk in inner:
+                yield chunk
+        finally:
+            TURNS.release(turn_id, handle)
+
+    return _tracked()
+
+
+async def chat_stream(
+    platform, personas: dict, body, *, should_stop=None, handle=None
+):
+    """THE STREAMING CHAT LANE — the lifted route body itself.
+
+    Keeps the name the lane has always been known by (it was
+    ``register.chat_stream``), because that name is what the lock-step pins
+    address: ``tests/test_arming_offload_v1196.py`` parses THIS function to
+    prove the arming pass is offloaded, and CLAUDE.md's rules speak of
+    "the ``/chat/stream`` mirror in ``routes/chat.py``". The thin ASGI handler
+    above is now ``chat_stream_route`` — it is a route, and this is the lane.
+
+    Callers use :func:`stream_chat_turn`, which owns the turn registry;
+    see it for the contract, the stop semantics and their honest limits.
+    """
+    from ...providers.adapters.base import LLMMessage
+    from ...personas import PersonaStore
+
+    # The moved body reads its dependencies through ``d.platform`` exactly as
+    # it did as a route closure — the shim keeps the lift mechanical, and is
+    # the SAME shim ``chat_turn.run_chat_turn`` has carried since v1.136.0.
+    d = SimpleNamespace(platform=platform)
+
+    if not body.messages:
+        raise HTTPException(status_code=400, detail="messages is required")
+
+    async def _stop() -> bool:
+        """Should this turn stop NOW? (v1.241.0.)
+
+        THE SILENT FAILURE THIS PREVENTS: a Stop that only the connection
+        owner can press. Two independent sources, either of which is enough:
+
+        * ``handle`` — the turn registry's flag, set by
+          ``POST /chat/turns/{turn_id}/stop`` from ANY connection, or from no
+          connection at all (a browser side panel whose turn the daemon runs
+          on its behalf, so there is nothing for it to hang up).
+        * ``should_stop`` — whatever the caller injected. The HTTP route
+          passes ``request.is_disconnected``, which is precisely the predicate
+          this call site used to hard-code, so its behaviour is unchanged.
+
+        ``should_stop`` may be sync or async: ``request.is_disconnected`` is a
+        coroutine function, a socket-driven caller's flag read is not, and a
+        caller forced to wrap a plain bool in a coroutine would be a caller
+        invited to get it wrong.
+        """
+        if handle is not None and handle.stopped:
+            return True
+        if should_stop is None:
+            return False
+        res = should_stop()
+        if inspect.isawaitable(res):
+            res = await res
+        return bool(res)
+
+    # ------------------------------------------------------------------ #
+    # PREP — verbatim from chat_complete (kept in lock-step deliberately).
+    # ------------------------------------------------------------------ #
+    # ONE retrieval query for the whole turn (v1.141.0): project knowledge,
+    # the memory fabric, and toggled connector memory all key off this —
+    # composed so short follow-ups inherit the conversation's subject (rule
+    # documented + pinned on _compose_recall_query). Attachment RAG keeps
+    # the raw last user message for within-file relevance.
+    # MIRROR NOTE (lock-step): same line in chat_turn.run_chat_turn —
+    # edit both or neither.
+    recall_query = _compose_recall_query(body.messages)
+
+    # Persona: a user override/creation wins, then a built-in, then the value
+    # is treated as free-text instructions (used verbatim). With NO explicit
+    # persona the configured default applies (Pair Z's config.default_persona
+    # — getattr because the field lands with Z; "" = the old behaviour).
+    # MIRROR NOTE (lock-step): same call in chat_turn.run_chat_turn.
+    want = (body.persona or "").strip()
+    persona = _resolve_persona(
+        PersonaStore(platform.engine), personas, want,
+        getattr(d.platform.config, "default_persona", ""),
+    )
+    system = persona + (
+        "\n\n# Environment\n"
+        f"- You run locally on the user's machine; their home directory is {Path.home()}.\n"
+        # THIS LINE caused the reported behaviour. It told the model that
+        # a mode existed and that switching was the USER's job, so when a
+        # request outgrew the turn it dutifully said "you need to be in
+        # agent mode" — the app asking the user to do its routing.
+        "- Answer directly. There are no modes for the user to pick: when "
+        "a request needs sustained multi-step work you cannot finish here, "
+        "call escalate_to_agent and it is taken over seamlessly.\n"
+        "- When the user describes a repeatable multi-step process (\"every "
+        "Friday…\", \"whenever a client sends…\"), call workflow_draft so "
+        "they get a saveable workflow card instead of prose steps."
+    )
+    # USER PROFILE (v1.144.0) — the lock-step copy of chat_turn's injection.
+    # MIRROR NOTE: edit both or neither.
+    system += _profile_section(d.platform)
+    # DRAFT FENCE (v1.161.0) — lock-step copy of chat_turn's injection. This
+    # is the STREAMING lane, which is the one a user actually watches write
+    # an email; if the instruction reached only the non-streaming lane the
+    # feature would look broken exactly where it is most used.
+    system += DRAFT_BLOCK
+    # YOUR BROWSER (v1.236.0, D16/D21) — the lock-step copy of chat_turn's
+    # injection. MIRROR NOTE: edit both or neither. This is the STREAMING
+    # lane, which is the one the Build pane uses, so D16's own interaction
+    # ("what page do I have open?" in a Build chat) lives on THIS side: an
+    # ambient block that reached only the non-streaming lane would be a
+    # feature nobody could see. Placed at the same seam, before
+    # `_plan_context`, so the section is priced by the budget planner.
+    system += _browser_section(d, getattr(body, "pane_id", "") or "")
+    pid = (body.project_id or "").strip() or None
+    resolved_proj = None
+    if pid:
+        try:
+            from ...core.models import Project
+
+            with session_scope(d.platform.engine) as db:
+                resolved_proj = db.get(Project, pid)
+        except Exception:  # noqa: BLE001 — never block a chat turn
+            resolved_proj = None
+    if resolved_proj is not None:
+        block = f"\n\n# Project: {resolved_proj.name}"
+        instructions = (resolved_proj.instructions or "").strip()
+        if instructions:
+            block += f"\n\nInstructions (follow these):\n{instructions[:2000]}"
+        if resolved_proj.brief:
+            block += f"\n\nAbout this project: {resolved_proj.brief[:1500]}"
+        # PROJECT PARITY (v1.141.0): root line + recent-activity recap,
+        # the agents/runtime.py _project_context formats. MIRROR NOTE
+        # (lock-step): same block in chat_turn.run_chat_turn — edit both
+        # or neither.
+        if (resolved_proj.root or "").strip():
+            block += f"\n\nProject folder: {resolved_proj.root.strip()}"
+        # Knowledge keyed off the turn's composed recall query (X.3).
+        try:
+            from ...projects.knowledge import ground
+
+            # v1.226.0: embed round-trip off the loop (mirror of chat_turn).
+            knowledge = await asyncio.to_thread(ground, d.platform, pid, recall_query)
+            if knowledge:
+                block += f"\n\nProject knowledge (reference):\n{knowledge}"
+        except Exception:  # noqa: BLE001 — retrieval must never break a turn
+            pass
+        # Recent activity: the last 5 sessions in this project, in the
+        # exact line format the agent runtime injects. Best-effort.
+        try:
+            from sqlmodel import select as _select
+
+            from ...core.models import Session as _Session
+
+            with session_scope(d.platform.engine) as db:
+                _siblings = list(
+                    db.exec(
+                        _select(_Session)
+                        .where(_Session.project_id == pid)
+                        .order_by(_Session.created_at.desc())  # type: ignore[attr-defined]
+                        .limit(5)
+                    )
+                )
+            _recent = [
+                f"- [{s.status.value}] {s.task[:80]}: {(s.summary or '(no summary)')[:160]}"
+                for s in _siblings
+            ]
+            if _recent:
+                block += (
+                    "\n\nRecent activity in this project (newest first):\n"
+                    + "\n".join(_recent)
+                )
+        except Exception:  # noqa: BLE001 — the recap must never break a turn
+            pass
+        system += block
+
+    learning = getattr(d.platform, "learning", None)
+    if learning is not None:
+        try:
+            system = learning.apply_to_prompt(system)
+        except Exception:  # noqa: BLE001 — never block a chat turn
+            pass
+
+    # AWARENESS INDEX (v1.141.0): Pair Y's memory_index_block, injected
+    # after lessons. Import-guarded + callable-checked for landing order.
+    # MIRROR NOTE (lock-step): same block in chat_turn.run_chat_turn —
+    # edit both or neither.
+    try:
+        from ...memory.index_block import memory_index_block as _memory_index_block
+    except ImportError:  # Pair Y's module not landed yet
+        _memory_index_block = None
+    if callable(_memory_index_block):
+        try:
+            _idx = _memory_index_block(d.platform, project_id=pid)
+            if _idx:
+                system += "\n\n" + _idx.strip("\n")
+        except Exception:  # noqa: BLE001 — awareness must never break a turn
+            pass
+
+    # MEMORY FABRIC (mirrors chat_complete): keyed off the composed
+    # recall query; grounding failures LOG (never silently pass, never
+    # break the turn) — a bare ``pass`` here swallowed the day-one
+    # ``sources=`` TypeError. MIRROR NOTE (lock-step): same block in
+    # chat_turn.run_chat_turn — edit both or neither.
+    fabric = getattr(d.platform, "fabric", None)
+    if fabric is not None and recall_query.strip():
+        try:
+            # OFF THE EVENT LOOP (v1.173.0) — lock-step with chat_turn:
+            # grounding hits the DB and remote bases, and can now fan out
+            # into several passes.
+            grounding = await asyncio.to_thread(
+                fabric.ground,
+                recall_query,
+                project_id=pid,
+                sources=["files", "notes", "memory", "lessons", "sessions", "chats"],
+            )
+            if grounding:
+                system += grounding
+        except Exception:  # noqa: BLE001 — never break a turn, never silent
+            log.exception(
+                "chat memory-fabric grounding failed (turn continues)"
+            )
+
+    # Connector toggles (mirrors chat_complete): memory hits injected
+    # directly; MCP tool groups merge into the armed set below. Same
+    # composed recall query as the fabric (X.3).
+    conn_tools, conn_memory = _resolve_connectors(d, body)
+    if conn_memory:
+        cm_block = await asyncio.to_thread(
+            _connector_memory_block, d, conn_memory, recall_query
+        )
+        if cm_block:
+            system += cm_block
+
+    # Routing choice (hoisted, mirrors chat_complete) — attachment budgets
+    # scale to the model that will actually answer.
+    provider_choice = (body.provider or "").strip() or (
+        (resolved_proj.default_provider or "").strip() if resolved_proj else ""
+    )
+    model_choice = (body.model or "").strip() or (
+        (resolved_proj.default_model or "").strip() if resolved_proj else ""
+    )
+    _inline_budget, _rag_budget, _rag_k = _attachment_budgets(
+        d,
+        provider_choice or d.platform.config.default_provider,
+        model_choice or d.platform.config.default_model,
+    )
+
+    # Attachments: text formats extracted inline (scans via OCR), images to
+    # VISION. SHARED IMPLEMENTATION (v1.174.0): this lane and
+    # chat_turn.run_chat_turn both call `_prepare_attachments`. It was a
+    # hand-copied block in each until a scanned PDF — no text layer, "0
+    # indexed sections", half of a real tax folder — had to be fixed in
+    # both; the copy in THIS lane is the one the dashboard runs, so a
+    # single-lane fix is a fix the user never sees. Do not re-inline it.
+    images, attach_block = await _prepare_attachments(
+        d, body,
+        inline_budget=_inline_budget, rag_budget=_rag_budget, rag_k=_rag_k,
+        provider_choice=provider_choice, model_choice=model_choice,
+        # MIRROR NOTE (lock-step): same argument in chat_turn.run_chat_turn.
+        # The grounded project's folder, which the preparer needs to decide
+        # whether an IN-PLACE edit of an attachment can actually reach it —
+        # everything else about the live-file handoff lives INSIDE
+        # `_prepare_attachments`, so this lane inherits it (v1.196.0).
+        project_root=(
+            (resolved_proj.root or "") if resolved_proj is not None else ""
+        ),
+    )
+    if attach_block:
+        system += "\n\n# Attachments (provided by the user this turn)" + attach_block
+
+    if (body.skill or "").strip():
+        sk = d.platform.skills.get(body.skill.strip())
+        if sk is None:
+            raise HTTPException(status_code=404, detail=f"no such skill: {body.skill}")
+        system += (
+            f"\n\n# Skill invoked by the user: {sk.name}\n"
+            "FOLLOW this playbook for this request.\n" + sk.instructions[:8000]
+        )
+
+    # CAPABILITY ROSTER (v1.139.0): who could take escalated work — after
+    # the skills section, before the tools block, so the model can NAME a
+    # specialist in escalate_to_agent's optional ``agent`` arg. Skipped
+    # cleanly when empty; a missing/broken roster module never breaks a
+    # turn.
+    # MIRROR NOTE (lock-step): this is an inline copy of the same block in
+    # chat_turn.run_chat_turn. The stream prep started as a byte-identical
+    # lift of the turn service; from v1.139.0 it is kept in lock-step BY
+    # HAND — edit both sites or neither.
+    try:
+        from ...agents.roster import roster_block
+
+        _roster = roster_block(d.platform)
+        if _roster:
+            system += "\n\n" + _roster
+    except Exception:  # noqa: BLE001 — the roster must never break a turn
+        pass
+
+    # SAVED WORKFLOWS (v1.170.0) — the lock-step copy of chat_turn's
+    # injection: the bounded one-line map of the user's stored workflows,
+    # added BEFORE the budget planner runs so its cost is priced (the
+    # repo rule). This is the STREAMING lane — the one the dashboard
+    # uses — so skipping it here would make the model workflow-blind on
+    # every real turn. MIRROR NOTE (lock-step): same line in
+    # chat_turn.run_chat_turn — edit both or neither.
+    system += _saved_workflows_block(d.platform)
+
+    # WORKSPACE GROUNDING (v1.210.0) — the lock-step copy of chat_turn's
+    # injection: a chat bound to a folder (the Build pane's per-pane chat
+    # sends `workspace_dir` every turn) has that folder NAMED in the
+    # prompt, regardless of whether any tools arm. THIS lane is the one
+    # the Build pane actually POSTs to, so skipping it here would leave
+    # the live bug in place exactly where it was reported. Resolved at
+    # most ONCE per turn (the armed branch below reuses this tuple for
+    # its ToolContext), off the event loop (v1.153.1), and BEFORE the
+    # budget planner so its cost is priced (the repo rule).
+    # MIRROR NOTE (lock-step): same block in chat_turn.run_chat_turn —
+    # edit both or neither.
+    _ws_resolved: "tuple[Path, bool] | None" = None
+    if (getattr(body, "workspace_dir", "") or "").strip():
+        try:
+            _ws_resolved = await asyncio.to_thread(
+                _resolve_tool_workspace,
+                d.platform.config.home / "uploads",
+                body.workspace_dir or "",
+                (resolved_proj.root or "") if resolved_proj is not None else "",
+            )
+        except Exception:  # noqa: BLE001 — resolution MKDIRs a folder the
+            # user picked; that can fail. None renders the honest "not
+            # accessible" wording rather than a grounding claim tools
+            # cannot back.
+            _ws_resolved = None
+        system += _workspace_grounding_block(body.workspace_dir, _ws_resolved)
+
+    # CONTEXT PROTECTION (v1.146.0) + COMPACTION (v1.153.0) — the lock-step
+    # copy of chat_turn's. MIRROR NOTE: edit both or neither.
+    system, _ctx_messages, context_report = await _apply_compaction(
+        d, body, system, provider_choice, model_choice
+    )
+    plan = _plan_context(
+        d, body, system, provider_choice, model_choice, messages=_ctx_messages
+    )
+    if plan.recap:
+        system += "\n\n" + plan.recap
+    msgs: list[LLMMessage] = [
+        LLMMessage(role=m["role"], content=m["content"]) for m in plan.messages
+    ]
+    if images and msgs:
+        for m in reversed(msgs):
+            if m.role == "user":
+                m.images = images
+                break
+
+    # An EXPLICITLY picked text-only CLI (codex exec has no structured
+    # tool-calling) used to be capability-REROUTED here — the user asked
+    # for their Codex subscription and got a different provider every
+    # time. Honest fix (v1.125.0): honor the pick and serve the turn
+    # TEXT-ONLY — no armed tools, no exit tools — with a note when tools
+    # were explicitly requested. Only for explicit picks; default/auto
+    # routes keep full capability routing.
+    text_only_pick = False
+    if (body.provider or "").strip() not in ("", "auto"):
+        try:
+            _picked = d.platform.providers.get(
+                provider_choice, model_choice or None
+            )
+            from ...providers.router import _capabilities
+
+            # The ROUTER's accessor (adapter.capabilities()) — the same
+            # truth the capability reroute reads, so the two can never
+            # disagree about what "text-only" means.
+            text_only_pick = not bool(
+                _capabilities(_picked).get("tool_use", True)
+            )
+        except Exception:  # noqa: BLE001 — resolution failures rout normally
+            text_only_pick = False
+    # ENVELOPE ADAPTATION DISCLOSURE (v1.202.0): non-null exactly when the
+    # capability envelope narrowed this turn's arming (the tool cap below)
+    # — null on every trusted/unmeasured route, which is the common case.
+    # The text-only branch never arms, so nothing there can bend.
+    # MIRROR NOTE (lock-step): chat_turn.run_chat_turn carries the same
+    # computation — edit both or neither.
+    envelope_adapted: "dict[str, Any] | None" = None
+    if text_only_pick:
+        armed, auto_armed, ask_armed = [], [], []
+        tool_specs = []
+    else:
+        # ENVELOPE TOOL CAP (v1.202.0) — the lock-step twin of the consult
+        # in `chat_turn.run_chat_turn`; see the reasoning there. The cap is
+        # about a weak model facing a wide menu; explicit user tool picks
+        # are consent and the autoselect contract already protects them.
+        # Resolved for the model that will ANSWER (explicit/project pin,
+        # else the config default route); trusted (cloud/CLI/mock) and
+        # unmeasured profiles answer None -> arming byte-identical.
+        # MIRROR NOTE (lock-step): edit both or neither.
+        _env_model = model_choice or d.platform.config.default_model
+        _tool_cap: "int | None" = None
+        try:
+            _profiler = getattr(
+                d.platform.providers, "capability_profile", None
+            )
+            if _profiler is not None:
+                _tool_cap = _profiler(
+                    provider_choice or d.platform.config.default_provider,
+                    _env_model,
+                ).max_tools()
+        except Exception:  # noqa: BLE001 — never break a turn
+            _tool_cap = None
+        # OFF THE EVENT LOOP (v1.196.0) — the lock-step twin of the hop in
+        # `chat_turn.run_chat_turn`; see the reasoning there. This lane
+        # matters more, not less: it is the one the user watches token by
+        # token, so a parked loop here reads as the app having died.
+        _selection = await asyncio.to_thread(
+            _resolve_armed_tools, d, body, _tool_cap
+        )
+        armed, auto_armed = _selection
+        # "adapted" MUST MEAN THE LOOP BENT, not that a budget existed —
+        # the gate is the MEASURED drop signal, and the number printed is
+        # the ceiling that actually bit (lock-step twin of chat_turn's
+        # disclosure gate; the two reviewer repros — plain "hello" under a
+        # cap, and 5 explicit picks under a cap of 3 — are pinned in
+        # tests/test_chat_envelope_v1202.py for BOTH lanes).
+        if _selection.dropped > 0:
+            envelope_adapted = {
+                "model": _env_model,
+                "changes": [f"tool_cap:{_selection.ceiling}"],
+            }
+        armed += [t for t in conn_tools if t not in armed]
+        # ASK-TIER ARMING (v1.187.0): show the model the host-reach verbs
+        # this message signals a need for — VISIBLE, never GRANTED. They
+        # join tool_specs so the model can call them, and deliberately
+        # never join `armed`/`overrides`/`armed_grant`, so a call pauses
+        # the turn for the user's approval (the mid-turn ask below). THIS
+        # LANE ONLY: the non-stream lane serves headless callers (the comm
+        # poller, the phone) where nobody is present to answer, and arming
+        # a question no one can hear just manufactures denials.
+        ask_armed = []
+        if bool(getattr(body, "auto_tools", True)):
+            from ...tools.autoselect import select_ask_tools
+
+            ask_armed = [
+                t for t in select_ask_tools(_last_user_text(body.messages))
+                if t not in armed
+            ]
+            # WORKSPACE ASK (v1.210.0): a chat BOUND to a folder (the
+            # Build pane) is a coding surface — `shell` joins the ask tier
+            # so the model can propose a command without the user typing
+            # "run" first. Same contract as every other ask_armed entry:
+            # VISIBLE (tool_specs), never GRANTED — a call renders the
+            # mid-turn ApprovalCard and waits for the human. STREAM LANE
+            # ONLY, deliberately: the non-stream lane serves headless
+            # callers where nobody is present to answer a card (the
+            # documented asymmetry above).
+            if (
+                (getattr(body, "workspace_dir", "") or "").strip()
+                and "shell" not in ask_armed
+                and "shell" not in armed
+                and d.platform.registry.get("shell") is not None
+            ):
+                ask_armed.append("shell")
+        tool_specs = (
+            d.platform.registry.specs(armed + ask_armed)
+            if (armed or ask_armed)
+            else []
+        ) + [
+            _ESCALATE_SPEC,
+            _WORKFLOW_DRAFT_SPEC,
+        ]
+    # THE POSTURE (v1.188.0): how the mid-turn ask behaves this turn.
+    # Resolved ONCE, for BOTH branches above (a text-only pick still runs
+    # the loop, and the loop reads it), so the prompt sentence below and
+    # the card predicate can never read two different answers.
+    approval_mode = normalize_approval_mode(
+        getattr(body, "approval_mode", "")
+    )
+    # Card-grants made THIS conversation (an approval card's
+    # "conversation" answer). Deliberately separate from `armed_grant`,
+    # which starts as EVERY armed tool — strict mode must card a
+    # write_document that auto-arming granted a moment ago, and a set
+    # that begins full would make strict mode a no-op on exactly the
+    # common case.
+    card_grants: set[str] = set()
+    ctx = None
+    if armed or ask_armed:
+        from ...tools.base import ToolContext
+
+        # OFF THE EVENT LOOP (v1.195.0, finding 7) — MIRROR NOTE
+        # (lock-step): same call in chat_turn.run_chat_turn, edit both or
+        # neither. The resolution is stats + resolve()s + a mkdir against a
+        # folder the USER picked (network share, unhydrated OneDrive), and
+        # THIS is the lane the user is watching when the app goes "Daemon
+        # offline". One hop for the whole block, not four.
+        # v1.210.0: a BOUND workspace was already resolved by the
+        # grounding block above — reuse that tuple (one resolution per
+        # turn; the prompt block and this ToolContext must agree on the
+        # folder). The hop runs only for the project-root / scratch path.
+        if _ws_resolved is not None:
+            tool_ws, in_project_folder = _ws_resolved
+        else:
+            tool_ws, in_project_folder = await asyncio.to_thread(
+                _resolve_tool_workspace,
+                d.platform.config.home / "uploads",
+                body.workspace_dir or "",
+                (resolved_proj.root or "") if resolved_proj is not None else "",
+            )
+        ctx = ToolContext(
+            workspace=tool_ws, session_id="chat", agent_run_id="chat",
+            config=d.platform.config, event_bus=d.platform.event_bus,
+            engine=d.platform.engine,
+            # v1.200.0: resolved-project tag for artifact sinks. MIRROR
+            # NOTE (lock-step): non-stream copy in daemon/chat_turn.py.
+            project_id=(pid if resolved_proj is not None else None),
+        )
+        explicit_armed = [
+            t for t in armed if t not in auto_armed and t not in conn_tools
+        ]
+        system += (
+            "\n\n# Tools\n"
+            + (
+                "The user armed these tools for this chat: "
+                + ", ".join(explicit_armed)
+                + ". "
+                if explicit_armed
+                else ""
+            )
+            + (
+                "Auto-selected from this request: " + ", ".join(auto_armed) + ". "
+                if auto_armed
+                else ""
+            )
+            + (
+                "Connector tools the user toggled on: "
+                + ", ".join(conn_tools)
+                + ". "
+                if conn_tools
+                else ""
+            )
+            + "Use them when they help; answer directly when they don't."
+            + (
+                "\nSPREADSHEET FIGURES: never compute numbers yourself —"
+                " call excel_query (profile the workbook first with"
+                " excel_profile) and report its computed results exactly."
+                if any(t.startswith("excel_") for t in armed)
+                else ""
+            )
+            + (
+                "\nREDACTION: scan first (redact_scan), present the"
+                " numbered findings, and get the user's confirmation of"
+                " exactly which to remove BEFORE calling redact_pii —"
+                " pass the confirmed values via terms."
+                if any(t.startswith("redact") for t in armed)
+                else ""
+            )
+            + (
+                # Lock-step with chat_turn.py's non-stream lane (v1.167.0):
+                # the dashboard STREAMS, so this — the lane users actually
+                # see — shipped without the PDF guidance for a full wave.
+                "\nPDF PAGES: for page-level PDF work (merge/split/rotate/"
+                "reorder) use pdf_arrange/pdf_split — they write NEW files"
+                " and never modify the original."
+                if any(t in ("pdf_arrange", "pdf_split") for t in armed)
+                else ""
+            )
+            + (
+                # Lock-step with chat_turn.py's non-stream lane (v1.170.0):
+                # the workflow tool sentences, each gated on ITS OWN
+                # arming. workflow_list is auto-safe and routinely arms
+                # ALONE while workflow_run is ask-gated and never
+                # auto-armed, so a combined any() gate had the prompt
+                # claim a runnable tool absent from tool_specs — a lie
+                # the model relays. The saved-workflows LIST rides the
+                # prompt above regardless.
+                "\nWORKFLOWS: workflow_list lists the user's saved workflows."
+                if "workflow_list" in armed
+                else ""
+            )
+            + (
+                "\nWORKFLOWS: workflow_run runs a saved workflow by name and"
+                " returns its run id — prefer running a saved workflow over"
+                " redoing its steps by hand."
+                if "workflow_run" in armed
+                else ""
+            )
+            + (
+                f"\nYour file tools operate INSIDE the folder {tool_ws}; "
+                "read, edit, and create files there directly, and use the absolute paths "
+                "that file_search returns."
+                if in_project_folder
+                else ""
+            )
+            + (
+                # ASK-TIER sentence (v1.187.0, THIS LANE ONLY — see the
+                # arming above): the model must know these tools pause for
+                # a human, or a denial reads to it as a broken tool and it
+                # retries the exact call the user just refused. The
+                # posture rewrites it (v1.188.0) because each mode makes a
+                # DIFFERENT promise and the prompt must not claim a pause
+                # that will not happen (yolo) or stay silent about ones
+                # that will (always_ask).
+                "\nAPPROVAL-GATED: "
+                + ", ".join(sorted(ask_armed))
+                + " are pre-approved for this conversation (the user"
+                " chose auto-approve) — they run without pausing. Still"
+                " prefer the specialized tools when one fits."
+                if ask_armed and approval_mode == "yolo"
+                else "\nAPPROVAL-GATED: "
+                + ", ".join(sorted(ask_armed))
+                + " will PAUSE this turn while the user is asked to"
+                " approve the call — the user sees the exact command/code"
+                " you pass. Use them when the task genuinely needs them;"
+                " prefer the specialized tools when one fits, and if the"
+                " user declines, do not retry the same call."
+                if ask_armed
+                else ""
+            )
+            + (
+                "\nSTRICT APPROVAL: the user chose to approve every file"
+                " edit and internet call — document/file-writing tools"
+                " and web_search/web_fetch also pause for approval."
+                " One approval per call unless the user grants the tool"
+                " for the conversation; if they decline, do not retry"
+                " the same call."
+                if approval_mode == "always_ask"
+                else ""
+            )
+            # Lock-step with chat_turn.py (v1.186.0). THIS is the lane the
+            # dashboard uses, and the failure it was built from happened
+            # here: a local model read nine documents and wrote nothing.
+            # A directive that reached only the non-stream lane would have
+            # fixed the report without fixing the user's experience of it.
+            + _write_directive(body, armed)
+        )
+    overrides: dict[str, str] = {}
+    for _name in armed:
+        overrides[_name] = "allow"
+        _tool = d.platform.registry.get(_name)
+        if _tool is not None:
+            overrides[_tool.perm_key()] = "allow"
+    armed_grant = set(overrides.keys())
+    # (provider_choice/model_choice were resolved above the attachments.)
+
+    # ------------------------------------------------------------------ #
+    # STREAM — the round + tool loop, emitting SSE frames as it goes.
+    # ------------------------------------------------------------------ #
+    async def gen():
+        usage_in = usage_out = completions = 0
+        tools_used: list[str] = []          # ONLY tools that actually executed
+        denied_tools: list[str] = []        # armed tools refused this turn
+        # DOORS (v1.199.0): links into the surface a SUCCESSFUL creating
+        # tool just changed. Appended only inside the `if ran:` block —
+        # the same gate as tools_used, so a failed/denied call can never
+        # mint one. MIRROR NOTE (lock-step): chat_turn.py's tool loop
+        # carries the same collection — edit both or neither.
+        door_entries: list[dict[str, str] | None] = []
+        last_tool_output = ""               # last SUCCESSFUL output (synthesis)
+        stopped_note = ""                   # round budget cut off tool calls
+        escalate = False        # the turn asked for the full agent
+        escalate_reason = ""
+        escalate_agent = None   # v1.139.0: validated roster target (None = default)
+        workflow_draft = None           # proposed reusable workflow (v1.120.0)
+        made_docs: list[str] = []           # documents created/edited (preview)
+        workflow_run_info = None    # v1.170.0: workflow this turn STARTED (contract 2)
+        reply_text = ""
+        route_provider = provider_choice or ""
+        route_model = model_choice or ""
+        # ROUTE DISCLOSURE (v1.165.0): filled from the router's final
+        # frame each round; `requested` seeds from the explicit pick ("" =
+        # default route) so even an errored turn reports what was asked.
+        route_requested = provider_choice or ""
+        route_reason = ""
+        # v1.228.0: the failed primary + derived reason on a failover
+        # (both "" otherwise) — read off the same final frame.
+        route_from = ""
+        route_why = ""
+        # USAGE LEDGER, EXACTLY ONE TERMINAL ROW. Every terminal path below
+        # goes through this helper, so the cancellation guards can run
+        # unconditionally without ever writing a second row for the same
+        # turn. It reads the live counters/route by closure, which is what
+        # makes it correct from an exception handler.
+        persisted = False
+
+        def _persist_once(state: AgentState) -> None:
+            nonlocal persisted
+            if persisted or not completions:
+                return
+            persisted = True
+            _persist_chat_usage(
+                d, provider=route_provider, model=route_model,
+                state=state, completions=completions,
+                usage_in=usage_in, usage_out=usage_out,
+            )
+
+        try:
+            for _round in range(_MAX_TOOL_ROUNDS):
+                if await _stop():
+                    # The completed rounds were billed even though the
+                    # client walked away — keep the ledger honest.
+                    _persist_once(AgentState.CANCELLED)
+                    return
+                yield _sse("round", {"round": _round})
+                final_resp = None
+                async for frame in _router_frames(
+                    d.platform.router,
+                    provider=provider_choice or None,
+                    model=model_choice or None,
+                    system=system,
+                    messages=msgs,
+                    tools=tool_specs,
+                    task_class="chat",
+                ):
+                    if await _stop():
+                        # STOP MID-ANSWER (v1.241.0). The round-TOP check
+                        # above only comes round at a tool-round boundary, so
+                        # a Stop pressed while the model was writing did
+                        # nothing until the whole answer finished — and for a
+                        # caller with no connection to drop (a panel turn),
+                        # nothing at all. Ends exactly the way the round-top
+                        # check ends: the completed rounds were billed, so the
+                        # ledger says CANCELLED through the ONE `_persist_once`
+                        # writer, and no frame is emitted (the SSE frame
+                        # sequence is a fixed contract).
+                        #
+                        # HONESTY: this does not kill a tool that is already
+                        # running. Its worker thread finishes and its write
+                        # lands (v1.228.0). Stop ends the answer being
+                        # generated and prevents the NEXT round.
+                        _persist_once(AgentState.CANCELLED)
+                        return
+                    ftype = frame.get("type")
+                    if ftype == "text":
+                        txt = frame.get("text") or ""
+                        if txt:
+                            yield _sse("token", {"text": txt})
+                    elif ftype == "meta":
+                        route_provider = frame.get("provider") or route_provider
+                        route_model = frame.get("model") or route_model
+                        yield _sse(
+                            "meta",
+                            {"provider": route_provider, "model": route_model},
+                        )
+                    elif ftype == "reset":
+                        # A pre-first-token failover swapped providers — tell the
+                        # client to discard any partial text streamed so far.
+                        yield _sse("reset", {"reason": frame.get("reason", "")})
+                    elif ftype == "final":
+                        final_resp = frame.get("response")
+                        route_provider = frame.get("provider") or route_provider
+                        route_model = frame.get("model") or route_model
+                        # Route disclosure off the final frame (v1.165.0).
+                        # `requested` is legitimately "" on the default
+                        # route, so test MEMBERSHIP, not truthiness — an
+                        # `or` here would silently keep the seed value and
+                        # mask a router that reports differently.
+                        if "requested" in frame:
+                            route_requested = str(frame.get("requested") or "")
+                        route_reason = str(frame.get("reason") or route_reason)
+                        route_from = str(frame.get("from") or route_from)
+                        route_why = str(frame.get("why") or route_why)
+                if final_resp is None:
+                    # The stream ended without an aggregate — honest error, not
+                    # a fabricated reply. Completed rounds still get counted.
+                    _persist_once(AgentState.FAILED)
+                    yield _sse(
+                        "error",
+                        {"detail": "stream ended without a final response"},
+                    )
+                    return
+                reply_text = final_resp.text or ""
+                _u = final_resp.usage or {}
+                usage_in += int(_u.get("input_tokens", 0) or 0)
+                usage_out += int(_u.get("output_tokens", 0) or 0)
+                completions += 1
+                calls = final_resp.tool_calls or []
+                # THE DRAFT, THREE WAYS (v1.225.0) — lock-step copy of
+                # chat_turn: the exit tool, an unarmed workflow_create,
+                # or JSON written in a text-only reply.
+                workflow_draft = _draft_from_calls(calls, armed)
+                if workflow_draft is None and not calls:
+                    workflow_draft = _draft_from_text(reply_text)
+                if workflow_draft is not None:
+                    break
+                esc_call = next(
+                    (c for c in calls if c.name == _ESCALATE_TOOL), None
+                )
+                if esc_call is not None:
+                    escalate = True
+                    _esc_args = esc_call.arguments or {}
+                    escalate_reason = str(_esc_args.get("reason") or "").strip()
+                    # v1.139.0 roster target — validated; None keeps every
+                    # caller default. MIRROR NOTE (lock-step): same
+                    # extraction as chat_turn.run_chat_turn's escalate
+                    # branch — edit both or neither.
+                    escalate_agent = _validated_escalate_agent(
+                        d.platform, _esc_args.get("agent")
+                    )
+                    break
+                # ask_armed counts (v1.187.0): a turn whose ONLY armed
+                # verbs are approval-gated still has real calls to run.
+                if not calls or not (armed or ask_armed):
+                    break
+                if _round == _MAX_TOOL_ROUNDS - 1:
+                    # LAST allowed round (mirrors chat_complete): no round is
+                    # left to show the model these results — skip, say so.
+                    stopped_note = (
+                        f"stopped after {_round} tool rounds; "
+                        f"{len(calls)} tool call(s) not executed"
+                    )
+                    escalate = True
+                    escalate_reason = escalate_reason or (
+                        "this needs more steps than a quick answer allows"
+                    )
+                    break
+                msgs.append(LLMMessage(role="assistant",
+                                       content=final_resp.text,
+                                       tool_calls=calls))
+                for tc in calls:
+                    ran = False
+                    _t = d.platform.registry.get(tc.name)
+                    # REDACT args before they cross the wire — a planted secret
+                    # (secrets/computeruse tools redact) never streams to the
+                    # browser; same guard the DB-persist path uses.
+                    safe_args = (
+                        _t.redact_args(tc.arguments) if _t is not None else tc.arguments
+                    )
+                    # MID-TURN APPROVAL (v1.187.0). The two halves of this
+                    # mechanism predate it: `authorize` names the
+                    # interactive session grant as the sanctioned lift for
+                    # an ask-tier tool, and `invoke` has carried
+                    # `deny_reason=` since v1.155.0 for "a caller that
+                    # already asked a human and was refused". Nothing in
+                    # chat ever ASKED — an ask-tier call was silently
+                    # denied and the user learned from a footnote. Now the
+                    # turn pauses, the card renders, and the decision is
+                    # genuinely the user's — including the refusal, which
+                    # is why the deny path still calls `invoke`: the
+                    # refusal must reach the ledger as a decision a human
+                    # made, not vanish as a call that never happened.
+                    #
+                    # BEFORE the "started" frame, so the tool card never
+                    # spins while the app is waiting on a human.
+                    _deny_reason = ""
+                    _grant_extra: set[str] = set()
+                    _perm_name = _t.perm_key() if _t is not None else tc.name
+                    _mode = d.platform.permissions.mode_for(_perm_name, overrides)
+                    # THE POSTURE DECIDES WHETHER A CARD RENDERS
+                    # (v1.188.0). The engine's answer is unchanged in
+                    # every mode — the posture only chooses when to put a
+                    # human between an *askable* call and its execution:
+                    #   approve_for_me  engine-ask only (v1.187.0);
+                    #   always_ask      engine-ask PLUS file edits + web,
+                    #                   unless a card already granted the
+                    #                   tool this conversation;
+                    #   yolo            never — an engine-ask is granted
+                    #                   because the user pre-approved it
+                    #                   from the dropdown. A base `deny`
+                    #                   never reaches this branch (it is
+                    #                   not ASK) and `invoke` refuses it
+                    #                   in yolo exactly as everywhere.
+                    _engine_asks = (
+                        _mode is PermissionMode.ASK
+                        and _perm_name not in armed_grant
+                        and tc.name not in armed_grant
+                    )
+                    # THE ARMED SET IS THE GATE (v1.227.0, RT1): this
+                    # turn's tools are `armed` + `ask_armed` (what the
+                    # model was shown). Anything else is refused by the
+                    # registry as "not armed" — so it must never CARD
+                    # either: asking the user to approve a call that
+                    # cannot run would make their Allow a lie.
+                    # MIRROR NOTE (lock-step): chat_turn.py passes its
+                    # armed set the same way — edit both or neither.
+                    _turn_tools = {*armed, *ask_armed}
+                    _unarmed = tc.name not in _turn_tools
+                    if approval_mode == "yolo":
+                        if _engine_asks:
+                            _grant_extra = {tc.name, _perm_name}
+                        _needs_card = False
+                    elif approval_mode == "always_ask":
+                        _needs_card = _engine_asks or (
+                            tc.name in STRICT_ASK_TOOLS
+                            and tc.name not in card_grants
+                            and _mode is not PermissionMode.DENY
+                        )
+                    else:
+                        _needs_card = _engine_asks
+                    if _unarmed:
+                        _needs_card = False
+                    if _needs_card:
+                        _apr = _approvals(d)
+                        _ap_id, _fut = _apr.request(tc.name, safe_args)
+                        yield _sse("approval", {
+                            "id": _ap_id, "call_id": tc.id,
+                            "tool": tc.name, "args": safe_args,
+                            "timeout_s": int(APPROVAL_TIMEOUT_S),
+                        })
+                        _decision = "timeout"
+                        _aloop = asyncio.get_running_loop()
+                        _deadline = _aloop.time() + APPROVAL_TIMEOUT_S
+                        try:
+                            while True:
+                                _left = _deadline - _aloop.time()
+                                if _left <= 0:
+                                    break
+                                try:
+                                    # shield: a keepalive slice expiring
+                                    # must not CANCEL the future — the
+                                    # user's click can land in the next
+                                    # slice.
+                                    _decision = await asyncio.wait_for(
+                                        asyncio.shield(_fut),
+                                        timeout=min(15.0, _left),
+                                    )
+                                    break
+                                except asyncio.TimeoutError:
+                                    # SSE comment — keeps the connection
+                                    # alive through a slow human decision
+                                    # without inventing a frame type.
+                                    yield ": keepalive\n\n"
+                        finally:
+                            _apr.pop(_ap_id)
+                        yield _sse("approval_resolved", {
+                            "id": _ap_id, "call_id": tc.id,
+                            "tool": tc.name, "decision": _decision,
+                        })
+                        if _decision == "once":
+                            _grant_extra = {tc.name, _perm_name}
+                        elif _decision == "conversation":
+                            # Rest of THIS turn's rounds; the client
+                            # persists it for later turns by arming the
+                            # tool (the existing "+"-menu machinery — not
+                            # a second grant store). IN-PLACE update, not
+                            # `|=`: an augmented assignment would bind
+                            # `armed_grant` as a LOCAL of this generator
+                            # and unbind every earlier read of the
+                            # enclosing scope's set. `card_grants` is what
+                            # stops strict mode re-carding this tool —
+                            # armed_grant alone cannot say WHO granted.
+                            armed_grant.update({tc.name, _perm_name})
+                            card_grants.update({tc.name, _perm_name})
+                        elif _decision == "deny":
+                            _deny_reason = (
+                                "you declined this call when asked"
+                            )
+                        else:
+                            _deny_reason = (
+                                "the approval request timed out with no"
+                                " answer"
+                            )
+                    yield _sse("tool_call", {
+                        "id": tc.id, "name": tc.name,
+                        "status": "started", "args": safe_args,
+                    })
+                    try:
+                        # deny_reason rides ONLY when a human actually
+                        # refused — the common path stays byte-identical
+                        # with every existing caller (and every test
+                        # double) of this five-argument invoke.
+                        result = await d.platform.registry.invoke(
+                            tc.name, tc.arguments, ctx, d.platform.permissions,
+                            overrides,
+                            session_allow=(armed_grant | _grant_extra),
+                            allowed_names=_turn_tools,
+                            **(
+                                {"deny_reason": _deny_reason}
+                                if _deny_reason
+                                else {}
+                            ),
+                        )
+                        if result.ok:
+                            content = result.output
+                            ran = True
+                            last_tool_output = str(result.output or "")
+                        else:
+                            content = result.error or "error"
+                            if "permission denied" in (result.error or ""):
+                                denied_tools.append(tc.name)
+                    except Exception as exc:  # noqa: BLE001
+                        content = f"{type(exc).__name__}: {exc}"
+                    if ran:
+                        tools_used.append(tc.name)
+                        # DOOR (v1.199.0): a successful creating tool
+                        # opens a link into its surface. Same gate as
+                        # tools_used — inside this `if ran:` — so honesty
+                        # is enforced at the call site. MIRROR NOTE
+                        # (lock-step): chat_turn.py's tool loop carries
+                        # the same append — edit both or neither.
+                        door_entries.append(door_for(tc.name, result))
+                        # WORKFLOW RUN RECEIPT (v1.170.0, contract 2): a
+                        # SUCCESSFUL workflow_run's {run_id, workflow}
+                        # rides the done frame as `workflow_run` so the
+                        # client renders the live run under this reply.
+                        # Only a run the tool actually started counts —
+                        # a failed/denied call leaves the key absent —
+                        # and only with a real run id, because a chip
+                        # pointing at no run would poll a 404 forever.
+                        # The last successful call wins. MIRROR NOTE
+                        # (lock-step): chat_turn.py's tool loop carries
+                        # this same capture — edit both or neither.
+                        if tc.name == "workflow_run":
+                            _wr = getattr(result, "data", None) or {}
+                            _wr_id = str(_wr.get("run_id") or "").strip()
+                            if _wr_id:
+                                workflow_run_info = {
+                                    "run_id": _wr_id,
+                                    "name": str(
+                                        _wr.get("workflow") or ""
+                                    ).strip(),
+                                }
+                        # Track created/edited documents for the preview
+                        # (mirrors chat_complete).
+                        if tc.name in _DOC_WRITING_TOOLS:
+                            _rel = str(
+                                (getattr(result, "data", None) or {}).get("path")
+                                or ""
+                            )
+                            if _rel:
+                                try:
+                                    _abs = str((tool_ws / _rel).resolve())
+                                    if _abs not in made_docs:
+                                        made_docs.append(_abs)
+                                except Exception:  # noqa: BLE001
+                                    pass
+                        # EVERY file a turn creates is disclosed, not just
+                        # the document tools' (v1.165.0): merge the
+                        # ABSOLUTE ToolResult.created_paths (repl's
+                        # workspace diff, batch jobs) so a repl-written
+                        # file reaches `documents` here too. Call order
+                        # kept, deduped against the doc-tool entries.
+                        # ABSOLUTE paths only — the contract says absolute
+                        # (tools/base.py); a relative name from a lying
+                        # tool is an unverifiable claim and resolving it
+                        # against a guessed base could disclose the WRONG
+                        # file. MIRROR NOTE (lock-step): chat_turn.py's
+                        # tool loop carries this same merge — edit both
+                        # or neither.
+                        for _cp in getattr(result, "created_paths", None) or []:
+                            _cp = str(_cp)
+                            try:
+                                if not Path(_cp).is_absolute():
+                                    continue
+                            except (OSError, ValueError):
+                                continue
+                            if _cp not in made_docs:
+                                made_docs.append(_cp)
+                        # FENCE externally-sourced output before the model (and
+                        # the client) sees it — the same guard chat_complete +
+                        # the agent runtime apply to returns_untrusted_content.
+                        if getattr(_t, "returns_untrusted_content", False):
+                            from ...computeruse.safety import (
+                                detect_injection,
+                                wrap_untrusted,
+                            )
+
+                            _inj = detect_injection(str(content))
+                            content = wrap_untrusted(
+                                f"[content withheld — suspected {_inj['category']}: "
+                                f"{_inj['reason']}]"
+                                if _inj["flagged"]
+                                else str(content)
+                            )
+                    yield _sse("tool_call", {
+                        "id": tc.id, "name": tc.name, "status": "finished",
+                        "ok": ran, "output": str(content)[:2000],
+                    })
+                    msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
+                                           name=tc.name, content=str(content)[:12000]))
+        except Exception as exc:  # noqa: BLE001 — honest error, never fabricate
+            # Completed rounds were still billed — persist BEFORE the error
+            # frame (mirrors chat_complete's failure path); the client sees
+            # the same error either way.
+            _persist_once(AgentState.FAILED)
+            yield _sse("error", {"detail": str(exc)})
+            return
+        except BaseException:
+            # STOP MID-GENERATION. When the client aborts DURING a round,
+            # Starlette cancels this generator at its current await
+            # (CancelledError) or, if it is parked at a yield, at
+            # finalization (GeneratorExit). Both are BaseException-shaped:
+            # they skip the round-TOP disconnect check above AND the
+            # handler above, so every COMPLETED earlier round — already
+            # counted at its `final` frame and already billed by the
+            # provider — used to vanish from the ledger entirely. No frame
+            # is emitted here (the connection is gone) and the exception is
+            # re-raised unchanged, so cancellation still means cancellation.
+            _persist_once(AgentState.CANCELLED)
+            raise
+
+        # LANGUAGE GUARD (v1.144.0) — the lock-step copy of chat_turn's, and
+        # like it, run BEFORE the ledger so a rewrite is billed.
+        #
+        # STREAM-SPECIFIC NOTE: the leaked text has already been streamed to
+        # the client token by token, so the correction lands in the `done`
+        # frame instead — which useChatStream treats as AUTHORITATIVE
+        # ("done.reply is authoritative; fall back to the accumulated text"),
+        # so the finished bubble and the saved thread both carry the
+        # corrected reply. The user may see the wrong-language text flicker
+        # during generation; that is honest (it IS what the model produced)
+        # and needs no client change. MIRROR NOTE (lock-step): chat_turn.
+        try:
+            reply_text, lang_note, _l_in, _l_out, _l_n = await _enforce_language(
+                d.platform,
+                text=reply_text or "",
+                user_text=_last_user_text(body.messages),
+                system=system,
+                messages=msgs,
+                provider=provider_choice,
+                model=model_choice,
+            )
+        except BaseException:
+            # The one remaining await between the last billed round and the
+            # COMPLETED row below (it calls a model when it rewrites): a
+            # Stop delivered HERE drops exactly the same already-billed
+            # tokens as one delivered inside the loop.
+            _persist_once(AgentState.CANCELLED)
+            raise
+        usage_in += _l_in
+        usage_out += _l_out
+        completions += _l_n
+
+        # USAGE LEDGER — persist the run row exactly as chat_complete does so a
+        # streamed turn counts the same on the Usage page.
+        _persist_once(AgentState.COMPLETED)
+
+        # Reply honesty (mirrors chat_complete): synthesize from the last tool
+        # output when the model returned no final text; note denied tools.
+        # THE DRAFT CARRIES THE CHAT'S PROJECT (v1.225.0) — lock-step copy
+        # of chat_turn's stamp; this is the lane the card is born in.
+        if workflow_draft is not None and resolved_proj is not None and pid:
+            workflow_draft["project_id"] = pid
+        reply = reply_text or ""
+        if workflow_draft is not None:
+            # Mirrors chat_complete: a draft exit is a success — no
+            # placeholder, no creation-honesty note.
+            reply = reply.strip()
+            if denied_tools:
+                names = ", ".join(dict.fromkeys(denied_tools))
+                reply += f"\n\n_Note: {names} could not run (permission denied)._"
+        else:
+            if not reply.strip() and last_tool_output:
+                snippet = last_tool_output.strip()[:600]
+                ran_names = ", ".join(dict.fromkeys(tools_used)) or "the armed tools"
+                reply = f"Ran {ran_names}. Result:\n{snippet}"
+            elif not reply.strip():
+                reply = "(no reply)"
+            if denied_tools:
+                names = ", ".join(dict.fromkeys(denied_tools))
+                reply += f"\n\n_Note: {names} could not run (permission denied)._"
+            if stopped_note:
+                reply += f"\n\n_Note: {stopped_note}._"
+            if lang_note:
+                reply += f"\n\n_Note: {lang_note}._"
+            _ctx_note = plan.note()
+            if _ctx_note:
+                reply += f"\n\n_Note: {_ctx_note}._"
+            reply += _creation_honesty_note(body, armed, tools_used)
+            # v1.153.2: and check the reply's own CLAIMS against the
+            # ledger — the note above keys off the user's phrasing and
+            # so missed a reply announcing a saved file after only a
+            # scan had run. MIRROR NOTE (lock-step): both lanes.
+            reply += _claimed_write_note(reply, tools_used)
+        if text_only_pick and (body.tools or []):
+            reply += (
+                f"\n\n_Note: {provider_choice} can't run tools — this "
+                f"turn was answered text-only._"
+            )
+        done_frame: dict[str, Any] = {
+            "reply": reply,
+            "provider": route_provider,
+            "model": route_model,
+            # ROUTE DISCLOSURE (v1.165.0) — the identical object POST
+            # /chat returns: server-side truth of WHO answered and WHY,
+            # because the client-side "answered by X" chip is silent on
+            # the default route. Top-level provider/model stay untouched
+            # for existing clients. MIRROR NOTE (lock-step): the
+            # non-stream response dict in chat_turn.py carries the same
+            # object — edit both or neither.
+            "route": {
+                "requested": route_requested,
+                "provider": route_provider,
+                "model": route_model,
+                "reason": route_reason,
+                # v1.228.0 (additive): which provider failed and why, on
+                # a failover — same keys the non-stream lane emits.
+                "from": route_from,
+                "why": route_why,
+            },
+            "tools_used": tools_used,
+            # DOORS (v1.199.0): server-derived links into the surfaces
+            # this turn's SUCCESSFUL creating tools changed — deduped by
+            # href, capped at 4, ALWAYS present (possibly empty). Files
+            # are deliberately not doors (the ArtifactsRail owns files).
+            # MIRROR NOTE (lock-step): the non-stream response dict in
+            # chat_turn.py carries the identical key — edit both or
+            # neither.
+            "doors": collect_doors(door_entries),
+            # ENVELOPE ADAPTATION (v1.202.0): {"model", "changes":
+            # ["tool_cap:<n>", ...]} when the capability envelope bent
+            # this turn, else null — ALWAYS PRESENT (null, never absent),
+            # like doors' [], pinning lane parity on absent-vs-null.
+            # MIRROR NOTE (lock-step): the non-stream response dict in
+            # chat_turn.py carries the identical key — edit both or
+            # neither.
+            "adapted": envelope_adapted,
+            "denied_tools": denied_tools,
+            "auto_armed": auto_armed,
+            "documents": made_docs,
+            "escalate": escalate,
+            "escalate_reason": escalate_reason,
+            # v1.139.0 pinned contract change: the validated roster target
+            # (None = the caller's default builder), same as POST /chat.
+            "escalate_agent": escalate_agent,
+            "workflow_draft": workflow_draft,
+            "usage": {"input_tokens": usage_in, "output_tokens": usage_out},
+            # v1.146.0 + v1.153.0 — same shape POST /chat returns, so the
+            # composer's headroom meter and the compaction offer behave
+            # identically on both lanes.
+            "context": {**plan.as_dict(), **context_report},
+        }
+        # CONTRACT 2 (v1.170.0): present ONLY when this turn's tool loop
+        # actually started a workflow run — absent otherwise (including
+        # failed calls), so clients key off the key itself, never a null.
+        # MIRROR NOTE (lock-step): the non-stream response dict in
+        # chat_turn.py carries the same conditional key — edit both or
+        # neither.
+        if workflow_run_info is not None:
+            done_frame["workflow_run"] = workflow_run_info
+        yield _sse("done", done_frame)
+
+    # The prep ran EAGERLY above (so a 400/404 still lands as a status code,
+    # not as a broken stream); the frames start when the caller iterates.
+    return gen()

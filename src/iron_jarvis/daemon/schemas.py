@@ -231,6 +231,24 @@ class ChatBody(BaseModel):
     #: gate still does. It is never a permission by itself: an unknown or
     #: forged id resolves to no pane, and no gate anywhere WIDENS on it.
     pane_id: str = ""
+    #: A CALLER-CHOSEN name for this streaming turn (v1.241.0), so it can be
+    #: stopped from somewhere other than the connection running it:
+    #: ``POST /chat/turns/{turn_id}/stop``.
+    #:
+    #: THE SILENT FAILURE THIS PREVENTS: a Stop button that does nothing.
+    #: Stopping a turn was CONNECTION-BOUND — drop the HTTP response and
+    #: Starlette cancels the generator — which is unavailable to any caller
+    #: that has no connection to drop (a browser side panel asks the daemon to
+    #: run the turn; docs/BROWSER-SIDEBAR-PLAN.md §4).
+    #:
+    #: OPTIONAL AND DEFAULTED, deliberately, exactly like ``pane_id``: absent,
+    #: NOTHING registers and the turn behaves byte for byte as it did before —
+    #: the dashboard's existing stop-by-disconnect is untouched. The daemon
+    #: never mints one, because an id the caller did not choose has nobody to
+    #: use it. It is not a credential and grants nothing: the stop route takes
+    #: the ordinary install bearer like every other ``/chat/*`` route, and an
+    #: unknown or finished id is a 404, never a silent success.
+    turn_id: str | None = None
 
 
 class ChatCompactBody(BaseModel):
