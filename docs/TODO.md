@@ -31,7 +31,7 @@ are unchanged by the ships themselves.*
   `docs/BROWSER.md` — bundled for the Guide, and the sixteen known limits stated
   in plain words rather than discovered.
 
-## Browser — the sidebar and one-click setup (v1.240.0 → v1.242.0)
+## Browser — the sidebar and one-click setup, delivered (v1.240.0 → v1.242.0)
 
 *Asked for by the user on 2026-09-07: setup automated down to the approvals Chrome
 will not let us skip, a guided modal explaining the bare minimum, a chat sidebar
@@ -40,7 +40,7 @@ steer an agentic run at any time. The binding plan is `docs/BROWSER-SIDEBAR-PLAN
 it supersedes D28 narrowly and re-affirms the rest (see the note at the top of
 `docs/BROWSER-PLAN.md`).*
 
-- [ ] **Ship 1 — Setup in one place (v1.240.0).** A guided modal on the Browser page
+- [x] **Ship 1 — Setup in one place (v1.240.0).** SHIPPED, CI green, installer published. A guided modal on the Browser page
   that names the real add-on folder for this machine, copies it, and walks the four
   steps, advancing itself as the daemon's status changes. A time-boxed setup window
   opens the site-access page for the user and tells the dashboard to put the **Pair**
@@ -50,13 +50,13 @@ it supersedes D28 narrowly and re-affirms the rest (see the note at the top of
   because the pairing socket needs no credential, the identity is a client-written
   header, and the add-on's id is a public constant. There is no cryptographic repair,
   so the manual Pair press is permanently the security boundary.
-- [ ] **Ship 2 — The chat turn becomes addressable (v1.241.0).** `/chat/stream`
+- [x] **Ship 2 — The chat turn becomes addressable (v1.241.0).** SHIPPED, CI green, installer published. `/chat/stream`
   cancellation is connection-bound today: no run id, no cancel route, and the only
   cooperative check is `request.is_disconnected()` once per tool round. A panel turn
   has no HTTP connection to drop, so Stop is undeliverable for the sidebar until the
   streaming turn is extracted (mirroring the v1.136.0 `run_chat_turn` extraction) and
   given a turn registry. The dashboard gains a real out-of-band Stop for free.
-- [ ] **Ship 3 — The sidebar (v1.242.0).** A `chrome.sidePanel` page, a new protocol
+- [x] **Ship 3 — The sidebar (v1.242.0).** SHIPPED, CI green, installer published. A `chrome.sidePanel` page, a new protocol
   frame pair (the add-on cannot ask the daemon a question today, by design), panel
   turns that run in the daemon under the same gates, and Stop / Steer / Approve.
   The popup is retired, since Chrome ignores `openPanelOnActionClick` when
@@ -65,6 +65,24 @@ it supersedes D28 narrowly and re-affirms the rest (see the note at the top of
 *Not in these three ships, and not pretended otherwise: the add-on still cannot be
 installed for the user. Developer mode and Load unpacked stay manual until there is
 a Web Store listing, which needs a developer account and a review cycle.*
+
+### Left behind by these three ships, on purpose
+
+- [ ] **Move the streaming turn to its own file.** v1.241.0 lifted it out of the
+  route closure but could not move it: eight existing tests read
+  `routes/chat.py`'s TEXT and assert the lane's prep sites live there, and three
+  more monkeypatch that module's namespace. `daemon/chat_stream.py` is the import
+  seam. A follow-up that relaxes those pins can finish the move.
+- [ ] **A read_only chat can still be CARDED for an acting browser tool it can
+  never run.** `ask_armed` (`routes/chat.py`) is not passed through
+  `_filter_browser_tools`, so the tool's own `require(interactive)` refuses at
+  gate 3 — after the user has already been asked. Identical in the dashboard and
+  the sidebar; the sidebar widens nothing. Fixing it changes existing chat
+  behaviour and pinned tests.
+- [ ] **The panel cannot compare its own build to the app's.** It states the
+  version Chrome is running and the dashboard states the app's;
+  `GET /browser/status` now forwards `extension_version`, so the card can make
+  the comparison outright rather than leaving it to the reader.
 
 ---
 

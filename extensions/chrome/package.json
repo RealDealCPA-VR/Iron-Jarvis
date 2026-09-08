@@ -1,6 +1,6 @@
 {
   "name": "ironjarvis-browser-addon",
-  "version": "1.242.0",
+  "version": "1.242.1",
   "private": true,
   "description": "The Iron Jarvis browser add-on: the Chrome/Edge half of the Browser Bridge.",
   "license": "UNLICENSED",
