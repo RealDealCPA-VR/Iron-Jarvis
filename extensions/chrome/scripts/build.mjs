@@ -83,7 +83,8 @@ function fail(label, message) {
 /**
  * Every file the shipped add-on names by string, and where the name is written.
  *
- * Derived, never listed: manifest.json names the service worker and the popup, and
+ * Derived, never listed: manifest.json names the service worker and the side panel,
+ * and
  * the background sources name the content script and the setup page (there is no
  * `content_scripts` block by design — plan section 6 — so the content bundle is
  * reachable only through `chrome.scripting.executeScript`). Reading the names from
@@ -100,10 +101,16 @@ function requiredFiles() {
   }
   named.push([worker, "manifest.json background.service_worker"]);
 
-  const popup = manifest.action && manifest.action.default_popup;
-  if (typeof popup === "string" && popup) {
-    named.push([popup, "manifest.json action.default_popup"]);
+  // The SIDE PANEL, not a popup. `action.default_popup` was removed in v1.242.0
+  // because Chrome ignores `setPanelBehavior({openPanelOnActionClick: true})` while
+  // it is set (D32), and a verifier still reading the old field would find nothing,
+  // check nothing, and let a build ship with no panel bundle at all -- the silent
+  // half of this file's whole reason to exist. So it is REQUIRED, not optional.
+  const panel = manifest.side_panel && manifest.side_panel.default_path;
+  if (typeof panel !== "string" || !panel) {
+    fail("verify", `manifest.json declares no side_panel.default_path, so the action click\n  opens nothing and the add-on has no chat surface at all.`);
   }
+  named.push([panel, "manifest.json side_panel.default_path"]);
 
   for (const [source, pattern, where] of [
     ["src/background/tabs.ts", /CONTENT_SCRIPT_FILE = "([^"]+)"/, "tabs.ts CONTENT_SCRIPT_FILE"],

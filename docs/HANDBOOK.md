@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.241.0 (2026-09-07).*
+holds itself to. Current as of v1.242.0 (2026-09-07).*
 
 ---
 
@@ -395,12 +395,27 @@ Below those sits the older **computer use** machinery, which drives a headless
 Chromium of its own behind a domain allowlist. It is unchanged, and it shares no
 cookies or sessions with your browser.
 
-**Setting it up (v1.240.0).** The Browser card has a **Set up my browser** button
-that opens a guided window and walks the four steps in order, moving itself along
-as each one lands: find the add-on folder on this machine (it names the real path
-and copies it), load that folder into Chrome, press **Pair**, then allow site
-access. While the window is open Jarvis opens the site-access page for you instead
-of making you find it.
+**Setting it up (v1.240.0, five steps since v1.242.0).** The Browser card has a
+**Set up my browser** button that opens a guided window and walks the steps in
+order, moving itself along as each one lands: find the add-on folder on this
+machine (it names the real path and copies it), load that folder into Chrome,
+press **Pair**, allow site access, and open the sidebar. While the window is open
+Jarvis opens the site-access page for you instead of making you find it.
+
+**The last step is the one that makes the rest reachable.** Chrome does not put a
+newly loaded add-on on the toolbar — it hides it behind the **puzzle-piece** button
+at the top right. Open that menu, find **Iron Jarvis**, and press the **pin**, and
+the icon stays on the toolbar where one click opens the sidebar. The Browser card
+says this too, in every state, for anyone who set their browser up months ago and
+never opens the guided window again.
+
+**If clicking the icon opens a small popup rather than a sidebar**, your browser is
+still running an older copy of the add-on: Chrome keeps the copy it loaded until
+you reload it, so updating Iron Jarvis does not update what Chrome runs. Open
+`chrome://extensions` and press **Reload** on Iron Jarvis. The add-on carries the
+same version number as the app it shipped with, the sidebar prints that number in
+its own header, and the Browser card prints the app's — an older number in the
+sidebar is the copy to reload.
 
 Two of those steps are yours and cannot be automated, and the guide says so rather
 than leaving you wondering. Chrome will not let an app install an add-on into your
@@ -571,6 +586,24 @@ password never reaches Iron Jarvis at all — and what Jarvis types is redacted 
 the record is written. Everything a browser tool does is on the Activity ledger, with
 no credential ever written down.
 
+**The sidebar is a window onto Jarvis, not a second Jarvis.** The chat docked in
+your browser holds no model, no agent loop and no settings of its own: the question
+you type there is answered by the same engine, the same persona and the same
+permission gates as the chat on the Jarvis page, and its answer is streamed back into
+the panel. What it may do in your browser follows the Browser access setting exactly
+— **Read only** gets the inspection tools, **Interactive** the full set with the
+approval card still in front of every page action — and with Browser access **off**
+it runs nothing at all and says so, rather than looking busy. An approval it raises
+is answered in the panel, and a refusal is recorded as your decision.
+
+**Stop and steer, and what neither can do.** Stop ends the answer being written and
+prevents the next step; it does **not** kill a step already running — that step
+finishes and its write lands, so Stop is not an undo. A steer note joins the
+conversation at the next step boundary, so it cannot interrupt a half-written
+sentence; the panel shows the note as pending until the turn actually takes it, and
+if the turn ends first the panel says the note was not taken instead of pretending it
+landed.
+
 **What this first version cannot do**, stated here rather than discovered later. One
 browser at a time, and a newer connection replaces the older. Chrome and Edge only,
 version 120 or newer. Loaded unpacked, so Chrome may prompt about it at each start until a Web Store listing
@@ -592,8 +625,8 @@ harness away from its *own* web tools is best effort and is reported honestly. T
 is no Jarvis browser yet. And Chrome unloads a browser add-on that has gone quiet, so
 a long-idle bridge reads as **Paired — not running** with Chrome open in front of
 you; it is not broken and needs no re-pairing, and it reconnects by itself the moment
-anything wakes the add-on — opening its popup, switching tabs, or restarting the
-browser.
+anything wakes the add-on — opening its side panel, switching tabs, or restarting
+the browser.
 
 **The whole guide** is `docs/BROWSER.md` — the same ground at length. It is bundled
 into the app for the Guide rather than dropped in a folder you can open, so the way to

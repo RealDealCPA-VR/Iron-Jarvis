@@ -7,13 +7,30 @@
  * cleanly and beautifuly explains the bare minimum steps the user needs to
  * take".
  *
- * THE BARE MINIMUM IS FOUR THINGS, and three of them are presses nobody can
+ * THE BARE MINIMUM IS FIVE THINGS, and four of them are presses nobody can
  * make on the user's behalf at any price:
  *
  *   1 · Open the folder.        (we hand over the real absolute path)
  *   2 · Load it in Chrome.      (Developer mode + Load unpacked — manual)
  *   3 · Pair.                   (the security boundary — manual, HERE)
  *   4 · Allow site access.      (one button, inside the add-on — manual)
+ *   5 · Open the sidebar.       (the toolbar icon — and PINNING it — manual)
+ *
+ * WHY STEP 5 EXISTS (v1.242.0). Ship 3 put a chat sidebar inside the browser and
+ * NOTHING in this app said so: zero mentions of a sidebar, a side panel or a
+ * toolbar anywhere in the dashboard, and the wizard stopped at site access. Worse
+ * than silence — Chrome does not put a newly loaded unpacked add-on on the
+ * toolbar at all; it hides it behind the puzzle-piece menu. So the feature could
+ * be installed, paired, granted and completely unreachable, which is v1.218.0's
+ * lesson word for word: a real feature that renders nothing in the state the
+ * user's machine is actually in. The pin instruction is the difference between
+ * the sidebar existing and the sidebar being usable, so it is a step, not a
+ * footnote.
+ *
+ * AND THE DIALOG NO LONGER CLOSES ITSELF. It used to show a green panel for
+ * 1.6 s once site access landed and then vanish. A wizard that disappears
+ * one step before the last one is a wizard that never gives the last one, so
+ * the success line now sits ABOVE step 5 and the user presses Done.
  *
  * WHY PAIRING IS ITS OWN STEP, AND WHY IT IS THE MAIN PATH. The first cut of
  * this dialog armed a window the daemon used to auto-pair with, so it treated
@@ -90,6 +107,8 @@ import {
   ClipboardCopy,
   FolderOpen,
   Link2,
+  PanelRight,
+  Pin,
   Puzzle,
   RefreshCw,
   ShieldCheck,
@@ -302,7 +321,7 @@ function SetupFolder({
 /*  The stepper                                                                */
 /* -------------------------------------------------------------------------- */
 
-type StepNo = 1 | 2 | 3 | 4;
+type StepNo = 1 | 2 | 3 | 4 | 5;
 
 interface StepMeta {
   n: StepNo;
@@ -481,12 +500,19 @@ function AccessChoice({
 
 export function BrowserSetupModal({
   status,
+  appVersion,
   onClose,
   onChanged,
 }: {
   /** The card's polled `GET /browser/status`. Handed down rather than fetched
    *  again, so the modal and the card behind it can never disagree. */
   status: BrowserStatus | null;
+  /** The version THIS copy of Iron Jarvis is, from `GET /health`, so step 5 can
+   *  name the number the add-on's own header must match. Optional: the dialog
+   *  is mounted in tests and by a card whose health call may not have landed
+   *  yet, and a version sentence is worth having only when there is a version
+   *  in it — the reload remedy is printed either way. */
+  appVersion?: string;
   onClose: () => void;
   /** Ask the card to refetch — after arming, after pairing, after an access
    *  change, and after the grant nudge. */
@@ -500,8 +526,11 @@ export function BrowserSetupModal({
   const [armedDir, setArmedDir] = useState("");
   const [busy, setBusy] = useState<"pair" | "grant" | "access" | null>(null);
   const [nudged, setNudged] = useState(false);
-  const [finished, setFinished] = useState(false);
-  const finishedRef = useRef(false);
+  // Step 5's only signal. Nothing on this machine can observe a user clicking a
+  // toolbar icon in Chrome, so the last step is acknowledged rather than
+  // detected — and it is acknowledged by the press that also closes the dialog,
+  // so there is no state here claiming a thing we did not see.
+  const [sidebarSeen, setSidebarSeen] = useState(false);
 
   const changedRef = useRef(onChanged);
   changedRef.current = onChanged;
@@ -583,31 +612,16 @@ export function BrowserSetupModal({
   const step2 = loaded;
   const step3 = pairedNow;
   const step4 = granted;
-  const current: StepNo = !step1 ? 1 : !step2 ? 2 : !step3 ? 3 : 4;
+  const step5 = sidebarSeen;
+  const current: StepNo = !step1 ? 1 : !step2 ? 2 : !step3 ? 3 : !step4 ? 4 : 5;
 
   const steps: StepMeta[] = [
     { n: 1, label: "Open the folder", done: step1 },
     { n: 2, label: "Load it in Chrome", done: step2 },
     { n: 3, label: "Pair", done: step3 },
     { n: 4, label: "Allow site access", done: step4 },
+    { n: 5, label: "Open the sidebar", done: step5 },
   ];
-
-  /* -- Finishing ----------------------------------------------------------- */
-
-  // Green, then gone. The dialog says it worked for a beat rather than
-  // vanishing, because a modal that disappears the instant a background poll
-  // returns reads as a crash.
-  useEffect(() => {
-    if (!granted || finishedRef.current) return;
-    // THE LATCH IS A REF. Depending on the `finished` STATE here would re-run
-    // this effect the instant it set it, and the cleanup would clear the very
-    // timeout that was about to close the dialog — a success state that never
-    // goes away, which is the failure this comment is cheaper than.
-    finishedRef.current = true;
-    setFinished(true);
-    const id = window.setTimeout(() => close(), 1600);
-    return () => window.clearTimeout(id);
-  }, [granted, close]);
 
   /* -- The three presses --------------------------------------------------- */
 
@@ -676,8 +690,8 @@ export function BrowserSetupModal({
             Set up your browser
           </h2>
           <p className="mt-0.5 text-[11.5px] text-zinc-500">
-            Four presses, and Iron Jarvis does the rest. Three of them are Chrome&apos;s to keep and
-            one is yours to give.
+            Five presses, and Iron Jarvis does the rest. Three of them are Chrome&apos;s to keep,
+            one is yours to give, and the last one opens the sidebar.
           </p>
         </div>
       </header>
@@ -740,8 +754,12 @@ export function BrowserSetupModal({
         {armError && <ErrorNote>{armError}</ErrorNote>}
         {failure && <ErrorNote>{failure}</ErrorNote>}
 
-        {/* Exactly one open instruction. Everything above it is a check. */}
-        {finished ? (
+        {/* THE SUCCESS LINE IS NOT THE END ANY MORE. It is step 4's check, and
+            it sits above step 5 rather than replacing the step list: the dialog
+            used to render this alone and then close itself, which meant the one
+            instruction that makes the sidebar reachable at all could never be
+            shown. */}
+        {granted && (
           <div
             data-testid="browser-setup-success"
             className="flex items-center gap-2.5 rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-3 text-[13px] text-emerald-200"
@@ -749,10 +767,14 @@ export function BrowserSetupModal({
             <CheckCircle2 size={16} className="shrink-0 text-emerald-400" aria-hidden="true" />
             <span>
               <span className="font-semibold">Your browser is connected.</span> Jarvis can see the
-              page you are looking at, at the level you chose — {accessLabel(access)}.
+              page you are looking at, at the level you chose — {accessLabel(access)}. One thing
+              left, and it is in your browser rather than here.
             </span>
           </div>
-        ) : (
+        )}
+
+        {/* Exactly one open instruction. Everything above it is a check. */}
+        {
           <div className="space-y-2.5">
             {step1 && (
               <DoneRow
@@ -932,8 +954,75 @@ export function BrowserSetupModal({
                 )}
               </StepCard>
             )}
+
+            {/* STEP 5 - THE ONE THAT MAKES ALL OF THE ABOVE REACHABLE.
+                Everything before this makes the add-on WORK; this is the only
+                step that makes it VISIBLE. Chrome hides a freshly loaded
+                unpacked add-on behind the puzzle-piece menu, so a user who has
+                done steps 1-4 perfectly can have no icon to click and, until
+                v1.242.0, nothing anywhere in this app telling them a sidebar
+                existed at all. */}
+            {current === 5 && (
+              <StepCard n={5} icon={<PanelRight size={13} />} title="Open the Jarvis sidebar">
+                <p className="text-[12.5px] leading-relaxed text-zinc-400">
+                  Click the Iron Jarvis icon in your browser&apos;s toolbar. A sidebar opens down
+                  the right-hand side of the window, and you can talk to Jarvis about the page
+                  you are looking at without leaving it.
+                </p>
+                <div
+                  data-testid="browser-setup-pin"
+                  className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-100/80"
+                >
+                  <span className="font-semibold text-amber-200">
+                    You probably have no icon yet &mdash; pin it.
+                  </span>{" "}
+                  Chrome does not put a newly loaded add-on on the toolbar. Click the
+                  puzzle-piece button at the top right of your browser, find Iron Jarvis in that
+                  list, and press the pin beside it. Until you do, the icon lives inside that
+                  menu and there is nothing on the toolbar to click.
+                </div>
+                <p
+                  data-testid="browser-setup-stale-build"
+                  className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-2.5 py-2 text-[11.5px] leading-relaxed text-zinc-500"
+                >
+                  If clicking it opens a small popup instead of a sidebar, your browser is still
+                  running an older copy of the add-on &mdash; Chrome keeps the copy it loaded
+                  until you reload it. Open{" "}
+                  <code className="rounded bg-white/[0.05] px-1 py-0.5 font-mono text-[11px] text-zinc-300">
+                    chrome://extensions
+                  </code>{" "}
+                  and press Reload on Iron Jarvis.
+                  {appVersion ? (
+                    <>
+                      {" "}
+                      This copy of Iron Jarvis is{" "}
+                      <span data-testid="browser-setup-app-version" className="text-zinc-300">
+                        {appVersion}
+                      </span>
+                      , and the sidebar prints the add-on version your browser is running in its
+                      own header &mdash; an older number there is the copy to reload.
+                    </>
+                  ) : null}
+                </p>
+                <button
+                  type="button"
+                  data-testid="browser-setup-sidebar-done"
+                  onClick={() => {
+                    // Marked and closed in one press: this is an ACKNOWLEDGEMENT,
+                    // not an observation. Nothing on this machine can see a user
+                    // click a toolbar icon in Chrome, and a step that ticked
+                    // itself here would be claiming knowledge this app has not got.
+                    setSidebarSeen(true);
+                    close();
+                  }}
+                  className="btn-accent py-1.5 text-xs"
+                >
+                  <Pin size={14} /> Got it &mdash; I can see the sidebar
+                </button>
+              </StepCard>
+            )}
           </div>
-        )}
+        }
 
         {/* The level, last: the steps are the job, this is the setting the job
             is done AT — and it is the thing this dialog must never change on

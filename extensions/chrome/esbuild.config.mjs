@@ -2,8 +2,8 @@
 // two HTML surfaces, all into dist/, which is what manifest.json points at.
 //
 // Why the HTML files are COPIED rather than left in src/: the manifest's
-// `action.default_popup` and the setup page's `chrome.runtime.getURL` both name
-// a single directory, and a popup that loads `../popup/popup.html` while its
+// `side_panel.default_path` and the setup page's `chrome.runtime.getURL` both name
+// a single directory, and a page that loads `../sidepanel/sidepanel.html` while its
 // bundle lives in dist/ resolves to a blank white panel with no error anywhere
 // the user can see it. One output directory removes that failure mode.
 //
@@ -35,13 +35,13 @@ const OUT = join(ROOT, "dist");
 const ENTRY_POINTS = {
   background: join(ROOT, "src/background/index.ts"),
   content: join(ROOT, "src/content/index.ts"),
-  popup: join(ROOT, "src/popup/popup.ts"),
+  sidepanel: join(ROOT, "src/sidepanel/sidepanel.ts"),
   setup: join(ROOT, "src/setup/setup.ts"),
 };
 
 /** HTML copied verbatim beside its bundle. */
 const HTML = [
-  ["src/popup/popup.html", "popup.html"],
+  ["src/sidepanel/sidepanel.html", "sidepanel.html"],
   ["src/setup/setup.html", "setup.html"],
 ];
 
@@ -77,7 +77,7 @@ async function main() {
     await copyFile(join(ROOT, from), join(OUT, to));
   }
   console.log(
-    "built dist/background.js, dist/content.js, dist/popup.js, dist/setup.js + 2 html",
+    "built dist/background.js, dist/content.js, dist/sidepanel.js, dist/setup.js + 2 html",
   );
 }
 

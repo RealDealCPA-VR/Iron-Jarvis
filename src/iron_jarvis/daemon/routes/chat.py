@@ -1312,7 +1312,10 @@ def register(app: FastAPI, d) -> None:
 # THE STREAMING TURN (v1.241.0) — lifted out of the route so a caller with no
 # HTTP connection can run it, and so Stop can reach it by name.
 # --------------------------------------------------------------------------- #
-async def stream_chat_turn(platform, personas: dict, body, *, should_stop=None):
+async def stream_chat_turn(
+    platform, personas: dict, body, *, should_stop=None, steer_source=None,
+    tool_ceiling: "frozenset[str] | None" = None,
+):
     """Streaming twin of :func:`chat_complete` (FX-01) — the turn itself.
 
     IDENTICAL prep (persona/project/learning/memory fabric/attachments/skill/
@@ -1341,6 +1344,44 @@ async def stream_chat_turn(platform, personas: dict, body, *, should_stop=None):
     ``request.is_disconnected``, which is exactly the call this code used to
     hard-code, so that lane's behaviour is unchanged.
 
+    ``steer_source`` (v1.242.0) — an optional callable (sync or async) asked
+    at every tool-round boundary for a note to inject as the user's next
+    message. It is the honest half of "steer": it cannot interrupt a
+    half-generated sentence, only join the conversation at the next round, and
+    the CALL ITSELF is how the caller learns its note was taken (no new SSE
+    frame kind — the wire contract is fixed). Absent, nothing is asked and the
+    lane is byte-identical to v1.241.0.
+
+    ``tool_ceiling`` (v1.242.0) — a HARD BOUND on what this turn may arm,
+    applied AFTER the ordinary selection pass and after the ask tier, and
+    applied to the two exit specs as well. ``None`` is the default and means
+    "no ceiling", which is byte-identical to every pre-existing caller.
+
+    THE SILENT FAILURE THE CEILING PREVENTS, and it shipped: ARMING IS
+    GRANTING. A few lines below, every armed name is written into
+    ``overrides`` as ``"allow"`` and becomes ``armed_grant``, and the mid-turn
+    card predicate (``_engine_asks``) is False for anything in that set. So a
+    caller that runs a turn with ``auto_tools=True`` on a sentence it did not
+    write hands the model whatever the autoselect pass makes of that sentence,
+    already consented to. The browser side panel is exactly that caller: a
+    sidebar scoped to the browser ran "write a file called pwn.txt" and the
+    file was written with no approval card, because ``write_file`` was armed
+    and arming is granting. ``_filter_browser_tools`` could not help — it
+    returns early unless a ``browser_*`` name is present, so on that turn it
+    inspected nothing at all.
+
+    The ceiling is an ADDITIONAL bound and never a replacement: every existing
+    gate (the browser access filter, the risk tiers, the deny floor, the
+    approval posture, the registry's ``allowed_names`` refusal) still runs.
+    It only ever REMOVES, it is applied before ``overrides`` is built, and an
+    unknown name fails CLOSED — membership is tested with ``in``, so a name
+    nobody put in the ceiling is dropped rather than allowed.
+
+    ``escalate_to_agent`` and ``workflow_draft`` are subject to it too, and
+    that is the half that matters most: ``escalate_to_agent`` hands the request
+    to an agent session with its OWN full tool set, which walks straight around
+    any ceiling this turn holds.
+
     ``body.turn_id`` — optional and defaulted. Present, the turn registers in
     :data:`iron_jarvis.core.turns.TURNS` for the duration and
     ``POST /chat/turns/{turn_id}/stop`` can stop it from anywhere; absent,
@@ -1366,11 +1407,13 @@ async def stream_chat_turn(platform, personas: dict, body, *, should_stop=None):
         # NO turn_id: byte-identical to the pre-v1.241.0 path — nothing
         # registered, nothing to release, the generator handed back bare.
         return await chat_stream(
-            platform, personas, body, should_stop=should_stop, handle=None
+            platform, personas, body, should_stop=should_stop,
+            steer_source=steer_source, handle=None, tool_ceiling=tool_ceiling,
         )
     try:
         inner = await chat_stream(
-            platform, personas, body, should_stop=should_stop, handle=handle
+            platform, personas, body, should_stop=should_stop,
+            steer_source=steer_source, handle=handle, tool_ceiling=tool_ceiling,
         )
     except BaseException:
         # Prep can raise (400/404) before there is any generator to release
@@ -1393,7 +1436,8 @@ async def stream_chat_turn(platform, personas: dict, body, *, should_stop=None):
 
 
 async def chat_stream(
-    platform, personas: dict, body, *, should_stop=None, handle=None
+    platform, personas: dict, body, *, should_stop=None, steer_source=None,
+    handle=None, tool_ceiling: "frozenset[str] | None" = None,
 ):
     """THE STREAMING CHAT LANE — the lifted route body itself.
 
@@ -1445,6 +1489,34 @@ async def chat_stream(
         if inspect.isawaitable(res):
             res = await res
         return bool(res)
+
+    async def _steer() -> str:
+        """The note a second window queued for this turn, or "" (v1.242.0).
+
+        THE SILENT FAILURE THIS PREVENTS: a correction the user typed while
+        the turn was working that the turn never reads — and a surface that
+        showed it as delivered anyway.
+
+        Consulted at the TOOL-ROUND BOUNDARY and nowhere else, because that is
+        the one place this loop is already re-entrant and already checks for
+        stop. It cannot interrupt a half-generated sentence, and no surface
+        built on it may imply that it can (docs/BROWSER-SIDEBAR-PLAN.md §5).
+
+        CONSUMPTION IS THE SIGNAL. The caller learns its note landed by being
+        CALLED — this returns text only when that text is about to be appended
+        to the turn's messages — so there is no second bookkeeping to drift
+        out of step, and no new SSE frame kind (the ``/chat/stream`` wire
+        contract is fixed). A caller that queued nothing answers "".
+
+        Sync or async, exactly like ``should_stop``: a socket-driven caller
+        that has to narrate the consumption wants to await its own send.
+        """
+        if steer_source is None:
+            return ""
+        res = steer_source()
+        if inspect.isawaitable(res):
+            res = await res
+        return str(res or "")
 
     # ------------------------------------------------------------------ #
     # PREP — verbatim from chat_complete (kept in lock-step deliberately).
@@ -1844,14 +1916,33 @@ async def chat_stream(
                 and d.platform.registry.get("shell") is not None
             ):
                 ask_armed.append("shell")
+        # THE CEILING (v1.242.0), applied LAST and to EVERY list that can
+        # reach the model. Last for the same reason `_filter_browser_tools` is
+        # last: four fill passes and the ask tier each append names, and a
+        # bound applied before any of them is a bound that pass can step over.
+        # Applied to `armed` BEFORE `overrides` is built below, because that
+        # is the line where arming turns into granting.
+        if tool_ceiling is not None:
+            armed = [t for t in armed if t in tool_ceiling]
+            # `auto_armed` must stay a SUBSET of `armed` (the receipt reports
+            # it and ~30 call sites unpack the pair) — the identical invariant
+            # `_resolve_armed_tools` keeps around the browser filter.
+            auto_armed = [t for t in auto_armed if t in tool_ceiling]
+            ask_armed = [t for t in ask_armed if t in tool_ceiling]
+        # The two EXIT specs are appended here rather than armed, so a ceiling
+        # that only filtered `armed` would leave both reachable — and
+        # `escalate_to_agent` is the one name that makes a ceiling pointless,
+        # because the agent session it starts brings its own full tool set.
+        _exit_specs = [
+            spec
+            for spec in (_ESCALATE_SPEC, _WORKFLOW_DRAFT_SPEC)
+            if tool_ceiling is None or spec["name"] in tool_ceiling
+        ]
         tool_specs = (
             d.platform.registry.specs(armed + ask_armed)
             if (armed or ask_armed)
             else []
-        ) + [
-            _ESCALATE_SPEC,
-            _WORKFLOW_DRAFT_SPEC,
-        ]
+        ) + _exit_specs
     # THE POSTURE (v1.188.0): how the mid-turn ask behaves this turn.
     # Resolved ONCE, for BOTH branches above (a text-only pick still runs
     # the loop, and the loop reads it), so the prompt sentence below and
@@ -2083,6 +2174,15 @@ async def chat_stream(
                     # client walked away — keep the ledger honest.
                     _persist_once(AgentState.CANCELLED)
                     return
+                # STEER (v1.242.0): a note queued from another window joins
+                # the conversation as the user's own next message, here at the
+                # round boundary and nowhere else. AFTER the stop check on
+                # purpose — a turn that is stopping must not first be handed
+                # more work — and BEFORE the round frame, so the note is in
+                # `msgs` for the completion this round is about to make.
+                _note = await _steer()
+                if _note:
+                    msgs.append(LLMMessage(role="user", content=_note))
                 yield _sse("round", {"round": _round})
                 final_resp = None
                 async for frame in _router_frames(

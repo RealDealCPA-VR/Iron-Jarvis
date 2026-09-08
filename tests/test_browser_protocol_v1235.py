@@ -215,6 +215,8 @@ def _one_of_every_frame() -> dict[str, dict]:
         P.FRAME_RESPONSE: P.response_frame("req_1", {"tabs": [], "count": 0}),
         P.FRAME_EVENT: P.event_frame("evt_1", P.EVENT_TAB_ACTIVATED, {"tab_id": 42}),
         P.FRAME_PAIRING_ACK: P.pairing_ack_frame("pair_abc"),
+        P.FRAME_PANEL: P.panel_frame(P.PANEL_ACTION_SEND, {"text": "what is on this page?"}),
+        P.FRAME_PANEL_EVENT: P.panel_event_frame(P.PANEL_EVENT_DELTA, {"text": "Reading"}),
     }
 
 
@@ -241,6 +243,40 @@ def test_the_two_directions_are_disjoint():
 def test_a_restricted_socket_may_send_only_the_pairing_ack():
     assert P.RESTRICTED_INBOUND_FRAMES == (P.FRAME_PAIRING_ACK,)
     assert set(P.RESTRICTED_INBOUND_FRAMES) <= set(P.EXTENSION_TO_DAEMON)
+    # The side panel's frame is the one most tempting to admit early, and the one
+    # that must never be: it asks the daemon to RUN something, and an unpaired
+    # socket is by definition a connection no human has approved.
+    assert P.FRAME_PANEL not in P.RESTRICTED_INBOUND_FRAMES
+
+
+def test_the_panel_vocabularies_are_exactly_the_plans_seven_and_seven():
+    """BROWSER-SIDEBAR-PLAN section 3, verbatim. Both sides read these tuples."""
+    assert P.ALL_PANEL_ACTIONS == ("open", "send", "stop", "steer", "approve", "deny", "close")
+    assert P.ALL_PANEL_EVENTS == (
+        "state",
+        "delta",
+        "tool",
+        "approval",
+        "steered",
+        "done",
+        "error",
+    )
+    assert len(set(P.ALL_PANEL_ACTIONS)) == len(P.ALL_PANEL_ACTIONS)
+    assert len(set(P.ALL_PANEL_EVENTS)) == len(P.ALL_PANEL_EVENTS)
+
+
+def test_a_panel_frame_carries_no_correlation_id():
+    """The asymmetry of protocol.py:176-179, stated as a property.
+
+    An id on this frame would be an id the extension minted for the daemon to
+    remember, which is the second pending map the ``req_``/``evt_`` split exists to
+    make impossible.
+    """
+    frame = P.panel_frame(P.PANEL_ACTION_STOP)
+    assert set(frame) == {"type", "action", "params"}
+    assert frame["params"] == {}, "an action with nothing to say still carries a dict"
+    event = P.panel_event_frame(P.PANEL_EVENT_DONE)
+    assert set(event) == {"type", "event", "payload"}
 
 
 def test_a_failed_response_carries_an_error_and_no_result():

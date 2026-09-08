@@ -268,10 +268,15 @@ _BROWSER_ADDON_ALIASES = ("browser_addon", "chrome-addon", "extension", "addon")
 #: ``src/background/tabs.ts`` (``CONTENT_SCRIPT_FILE``), and the host-permission
 #: setup page is opened by ``src/background/hostperms.ts`` (``SETUP_PAGE``). So a
 #: check that read ONLY the manifest -- which is what this one did until v1.239.0 --
-#: called a ``dist/`` holding ``background.js`` and ``popup.html`` "built and ready
+#: called a ``dist/`` holding ``background.js`` and the side panel "built and ready
 #: to load" while every ``read_page`` failed with a bare injection error and the
 #: site-access setup page could not open at all: the exact silent-blame case this
 #: row exists to end.
+#:
+#: The SIDE PANEL is not in this tuple and must not be added: ``manifest.json``
+#: names it at ``side_panel.default_path``, so :func:`_addon_build_missing` reads it
+#: from the manifest the way Chrome does, and a second hard-coded copy here could
+#: disagree with the shipped manifest in silence.
 #:
 #: Named HERE rather than read from those sources, because a PACKAGED install ships
 #: ``manifest.json``, ``README.md`` and ``dist/**`` and no ``src/`` at all
@@ -368,9 +373,15 @@ def _addon_build_missing(folder: Path) -> list[str]:
     background = manifest.get("background")
     if isinstance(background, dict) and background.get("service_worker"):
         wanted.append(str(background["service_worker"]))
-    action = manifest.get("action")
-    if isinstance(action, dict) and action.get("default_popup"):
-        wanted.append(str(action["default_popup"]))
+    # ``side_panel.default_path``, NOT ``action.default_popup``: the popup was retired
+    # in v1.242.0 (D32 -- Chrome ignores ``openPanelOnActionClick`` while a popup is
+    # declared), and a check still reading the old field would find nothing, check
+    # nothing, and report a panel-less add-on as ready to load. ``action`` is still in
+    # the manifest, carrying only ``default_title``, so reading it would find no file
+    # at all and this row would quietly stop covering the surface the user clicks.
+    panel = manifest.get("side_panel")
+    if isinstance(panel, dict) and panel.get("default_path"):
+        wanted.append(str(panel["default_path"]))
     for entry in manifest.get("content_scripts") or []:
         if isinstance(entry, dict):
             wanted += [str(js) for js in (entry.get("js") or [])]

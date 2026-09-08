@@ -76,8 +76,10 @@ say so, and `extensions/chrome/README.md` has the detail.
 ## The guided setup (v1.240.0)
 
 The Browser card has a **Set up my browser** button. It opens a window that walks
-the four steps below in order and moves itself along as each one lands, so you are
-never looking at a step you have already done or one you cannot do yet. It names
+the five steps below in order and moves itself along as each one lands, so you are
+never looking at a step you have already done or one you cannot do yet. The last
+step is the sidebar itself — where its toolbar icon is, and how to pin it — because
+everything before it makes the add-on *work* and only that one makes it *visible*. It names
 the add-on folder for *this* machine and gives you a button to copy it, and while
 it is open Jarvis opens the site-access page for you rather than making you find
 it.
@@ -182,6 +184,52 @@ this project": it can read a completed download and copy it into a project.
 What it **cannot** do is change where Chrome saves things, or quietly redirect a
 download somewhere else. Moving the file is a copy you asked for, not a setting
 Jarvis touched.
+
+## The sidebar
+
+**Where the icon is, and why you probably cannot see it yet.** Chrome does not
+put a newly loaded unpacked add-on on the toolbar — it files it behind the
+**puzzle-piece** button at the top right. Open that menu, find **Iron Jarvis**,
+and press the **pin** beside it; the icon then stays on the toolbar and one
+click opens the sidebar. Until you pin it, the sidebar is reachable only through
+that menu, which is the difference between a feature existing and a feature
+being usable. The guided setup makes this its last step, and the **Browser** card
+repeats it for anyone who set their browser up long ago.
+
+**If the icon opens a small popup instead of a sidebar**, your browser is still
+running an older copy of the add-on. Chrome keeps the copy it loaded until you
+reload it, so updating Iron Jarvis does not update what Chrome is running: open
+`chrome://extensions` and press **Reload** on Iron Jarvis. The add-on carries the
+same version number as the app it shipped with, the sidebar prints that version
+in its own header, and the Browser card prints the app's — an older number in the
+sidebar is the copy to reload.
+
+Clicking the Iron Jarvis icon opens a chat docked beside the page you are
+reading. **It is a window onto Jarvis, not a second Jarvis.** The panel holds no
+model, no agent loop, no settings and no tool list. Your question travels down
+the connection the browser already has, the daemon runs the turn with the same
+engine, the same persona and the same permission gates as the chat on the Jarvis
+page, and the answer is streamed back into the panel as it is written.
+
+**What it may do in your browser follows the Browser access setting exactly.**
+**Read only** gets the inspection tools. **Interactive** gets the full set with
+every page action still stopping at the approval card. With Browser access
+**off** the daemon runs nothing at all for the panel and says so — the sidebar
+never sits there looking busy over a turn that was refused. An approval a turn
+raises is shown in the panel and answered there, and a refusal is recorded as
+your decision, exactly as it is anywhere else.
+
+**Stop, and what it cannot do.** Stop ends the answer being written and prevents
+the next step. It does **not** kill a step that is already running: that step
+finishes on its own thread and its write lands. Stop is not an undo, and the
+panel says so on the press rather than implying an abort it cannot perform.
+
+**Steer, and what it cannot do.** A steer note joins the conversation at the
+next step boundary — the one place the turn is between things — so it cannot
+interrupt a half-written sentence. The panel marks the note **pending** until
+the turn actually takes it, and if the turn ends before a boundary comes round,
+the panel says the note was not taken. It never shows a correction as landed
+before it has.
 
 ## Letting a coding harness use it
 
@@ -314,7 +362,7 @@ something.
     has been quiet for a while, so a bridge nobody has used for a long stretch
     shows as **Paired — not running** with Chrome plainly open in front of you.
     It is not broken and does not need re-pairing: it reconnects by itself as
-    soon as anything wakes the add-on — opening its popup, switching tabs, or
+    soon as anything wakes the add-on — opening its side panel, switching tabs, or
     restarting the browser. Keeping it awake with a timer would need a Chrome
     permission the add-on deliberately does not ask for.
 

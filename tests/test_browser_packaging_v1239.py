@@ -383,7 +383,7 @@ def test_build_wrapper_produces_a_loadable_addon() -> None:
     manifest = addon_manifest()
     named = [
         manifest["background"]["service_worker"],
-        manifest["action"]["default_popup"],
+        manifest["side_panel"]["default_path"],
     ]
     for path in named:
         built = ADDON_DIR / path

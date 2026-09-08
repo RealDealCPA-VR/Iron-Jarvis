@@ -45,6 +45,8 @@ import {
   FRAME_PAIRED,
   FRAME_PAIRING_ACK,
   FRAME_PAIRING_REQUIRED,
+  FRAME_PANEL,
+  FRAME_PANEL_EVENT,
   FRAME_READY,
   FRAME_RESPONSE,
   MAX_FRAME_BYTES,
@@ -135,8 +137,16 @@ export interface BridgeSocketOptions {
   onDirective: (action: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>;
   extensionId: string;
   extensionVersion: string;
-  /** Called whenever the status the popup shows changes. */
+  /** Called whenever the status the side panel shows changes. */
   onStatusChange?: (status: BridgeStatus) => void;
+  /**
+   * Hand one `browser.panel_event` to whoever is showing the side panel.
+   *
+   * Optional because the socket must work with nothing listening: the panel is a
+   * page the user can close at any moment, and a bridge that depended on it would
+   * be a bridge that stops carrying tool calls when a window is shut.
+   */
+  onPanelEvent?: (event: string, payload: Record<string, unknown>) => void;
 }
 
 export class BridgeSocket {
@@ -281,6 +291,22 @@ export class BridgeSocket {
     this.sendHello();
   }
 
+  /**
+   * Send one `browser.panel` action. Returns whether it actually left.
+   *
+   * The boolean is the whole point. `emitEvent` may drop a frame in silence because
+   * a browser event nobody heard costs nothing, but a panel action dropped in
+   * silence is a user watching a question they typed go nowhere — so the caller is
+   * told, and the panel says so in its own transcript.
+   */
+  sendPanel(action: string, params: Record<string, unknown>): boolean {
+    if (!this.isOpen() || !this.token) {
+      return false;
+    }
+    this.send({ type: FRAME_PANEL, action, params });
+    return true;
+  }
+
   /** Emit one `browser.event`. A no-op unless the socket is paired and open. */
   emitEvent(eventId: string, event: string, payload: Record<string, unknown>): void {
     if (!this.isOpen() || !this.token) {
@@ -394,6 +420,14 @@ export class BridgeSocket {
         return;
       case FRAME_DIRECTIVE:
         void this.answerDirective(frame as unknown as DirectiveFrame);
+        return;
+      case FRAME_PANEL_EVENT:
+        // Handed straight on, unread. The socket does not know what a turn is and
+        // must not learn: this is the one frame whose meaning lives in a page.
+        this.opts.onPanelEvent?.(
+          String(frame["event"] ?? ""),
+          (frame["payload"] ?? {}) as Record<string, unknown>,
+        );
         return;
       default:
         // An unknown frame type is the daemon running ahead of this add-on.

@@ -12,10 +12,12 @@
 
 export const ALL_DIRECTIVES = ["request_host_permissions", "disconnect"] as const;
 export const ALL_EVENTS = ["tab_activated", "navigation_completed", "download_completed"] as const;
-export const ALL_FRAME_TYPES = ["browser.command", "browser.directive", "browser.paired", "browser.pairing_required", "browser.ready", "browser.connection_replaced", "browser.hello", "browser.response", "browser.event", "browser.pairing_ack"] as const;
+export const ALL_FRAME_TYPES = ["browser.command", "browser.directive", "browser.paired", "browser.pairing_required", "browser.ready", "browser.connection_replaced", "browser.panel_event", "browser.hello", "browser.response", "browser.event", "browser.pairing_ack", "browser.panel"] as const;
 export const ALL_METHODS = ["status", "list_tabs", "active_tab", "read_page", "get_elements", "screenshot", "activate_tab", "scroll", "create_tab", "close_tab", "click", "type_text", "press_key", "navigate"] as const;
+export const ALL_PANEL_ACTIONS = ["open", "send", "stop", "steer", "approve", "deny", "close"] as const;
+export const ALL_PANEL_EVENTS = ["state", "delta", "tool", "approval", "steered", "done", "error"] as const;
 export const COMMAND_TIMEOUTS_S = { "navigate": 30.0, "read_page": 20.0 };
-export const DAEMON_TO_EXTENSION = ["browser.command", "browser.directive", "browser.paired", "browser.pairing_required", "browser.ready", "browser.connection_replaced"] as const;
+export const DAEMON_TO_EXTENSION = ["browser.command", "browser.directive", "browser.paired", "browser.pairing_required", "browser.ready", "browser.connection_replaced", "browser.panel_event"] as const;
 export const DEFAULT_COMMAND_TIMEOUT_S = 15.0;
 export const DEFAULT_SNAPSHOT_MODE = "interactive";
 export const DIRECTIVE_DISCONNECT = "disconnect";
@@ -24,7 +26,7 @@ export const EVENT_DOWNLOAD_COMPLETED = "download_completed";
 export const EVENT_ID_PREFIX = "evt_";
 export const EVENT_NAVIGATION_COMPLETED = "navigation_completed";
 export const EVENT_TAB_ACTIVATED = "tab_activated";
-export const EXTENSION_TO_DAEMON = ["browser.hello", "browser.response", "browser.event", "browser.pairing_ack"] as const;
+export const EXTENSION_TO_DAEMON = ["browser.hello", "browser.response", "browser.event", "browser.pairing_ack", "browser.panel"] as const;
 export const FRAME_COMMAND = "browser.command";
 export const FRAME_CONNECTION_REPLACED = "browser.connection_replaced";
 export const FRAME_DIRECTIVE = "browser.directive";
@@ -33,6 +35,8 @@ export const FRAME_HELLO = "browser.hello";
 export const FRAME_PAIRED = "browser.paired";
 export const FRAME_PAIRING_ACK = "browser.pairing_ack";
 export const FRAME_PAIRING_REQUIRED = "browser.pairing_required";
+export const FRAME_PANEL = "browser.panel";
+export const FRAME_PANEL_EVENT = "browser.panel_event";
 export const FRAME_READY = "browser.ready";
 export const FRAME_RESPONSE = "browser.response";
 export const FULL_TEXT_CHARS = 60000;
@@ -65,6 +69,20 @@ export const MODE_SUMMARY = "summary";
 export const PAGE_ACTION_METHODS = ["click", "type_text", "press_key", "navigate"] as const;
 export const PAIRING_DEADLINE_S = 300.0;
 export const PAIRING_ID_PREFIX = "pair_";
+export const PANEL_ACTION_APPROVE = "approve";
+export const PANEL_ACTION_CLOSE = "close";
+export const PANEL_ACTION_DENY = "deny";
+export const PANEL_ACTION_OPEN = "open";
+export const PANEL_ACTION_SEND = "send";
+export const PANEL_ACTION_STEER = "steer";
+export const PANEL_ACTION_STOP = "stop";
+export const PANEL_EVENT_APPROVAL = "approval";
+export const PANEL_EVENT_DELTA = "delta";
+export const PANEL_EVENT_DONE = "done";
+export const PANEL_EVENT_ERROR = "error";
+export const PANEL_EVENT_STATE = "state";
+export const PANEL_EVENT_STEERED = "steered";
+export const PANEL_EVENT_TOOL = "tool";
 export const PASSWORD_AUTOCOMPLETE = ["current-password", "new-password"] as const;
 export const PAYMENT_AUTOCOMPLETE = ["cc-csc", "cc-exp", "cc-exp-month", "cc-exp-year", "cc-number"] as const;
 export const PROTOCOL_VERSION = 1;
@@ -206,6 +224,20 @@ export interface HelloFrame {
 /** Extension -> daemon: something happened in the browser, unprompted. */
 export interface EventFrame {
   id: string;
+  type: string;
+  event: string;
+  payload: Record<string, unknown>;
+}
+
+/** Extension -> daemon: the side panel asks for something. */
+export interface PanelFrame {
+  type: string;
+  action: string;
+  params: Record<string, unknown>;
+}
+
+/** Daemon -> extension: one thing that happened in the panel's conversation. */
+export interface PanelEventFrame {
   type: string;
   event: string;
   payload: Record<string, unknown>;
@@ -489,5 +521,7 @@ export type BrowserFrame =
   | ReadyFrame
   | ConnectionReplacedFrame
   | HelloFrame
-  | EventFrame;
+  | EventFrame
+  | PanelFrame
+  | PanelEventFrame;
 

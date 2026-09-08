@@ -1,7 +1,7 @@
 // The service worker: the only place the add-on holds a socket.
 //
 // Everything the add-on does for Iron Jarvis happens here or is called from here.
-// The popup and the setup page hold no socket of their own and talk to this worker
+// The side panel and the setup page hold no socket of their own and talk to this worker
 // through `chrome.runtime.sendMessage`, for one reason: there is exactly one live
 // connection per browser (D08), and a second socket opened by a popup would REPLACE
 // the worker's, take the session, and then die when the popup closed — leaving the
@@ -44,7 +44,7 @@
 // `get_elements` go through `tabs.runInPage`, which injects `content/index.ts` on
 // demand and speaks to it; the screenshot is `tabs.captureVisible`, which must live in
 // the worker because only an extension page may call `captureVisibleTab`. This file
-// stays what it was — the socket, the directives, the events and the popup's
+// stays what it was — the socket, the directives, the events and the panel's
 // messages — and the reason is MV3 lifetime: a worker that also held the DOM walk
 // would be a worker that gets evicted in the middle of one.
 
@@ -91,16 +91,30 @@ import {
   typeTextInPage,
 } from "./tabs";
 
-/** The dashboard page the popup's Open Jarvis button goes to. */
+/** The dashboard page the side panel's Open Jarvis button goes to. */
 const JARVIS_URL = "http://127.0.0.1:8788/computeruse";
 
-/** Messages the popup and the setup page send this worker. */
+/** Messages the side panel and the setup page send this worker.
+ *
+ * `panel_action` is ONE variant rather than seven, and the `action` it carries is a
+ * `PANEL_ACTION_*` constant from the generated protocol. A second vocabulary spelled
+ * here would be a third place the panel's verbs are written — the drift the
+ * generated protocol exists to make impossible.
+ *
+ * `panel_event` travels the other way: the worker broadcasts it and the panel page
+ * listens. It is in this union because the panel's own listener reads the same
+ * `kind` discriminant, and a message shape that only one side knows about is the
+ * shape that gets renamed on one side.
+ */
 export type WorkerMessage =
   | { kind: "status" }
   | { kind: "open_jarvis" }
   | { kind: "toggle_connection" }
   | { kind: "request_host_permission" }
-  | { kind: "host_permission_result"; granted: boolean };
+  | { kind: "host_permission_result"; granted: boolean }
+  | { kind: "panel_action"; action: string; params?: Record<string, unknown> }
+  | { kind: "panel_event"; event: string; payload: Record<string, unknown> }
+  | { kind: "panel_status" };
 
 const manifest = chrome.runtime.getManifest();
 const dispatcher = new Dispatcher();
@@ -109,9 +123,9 @@ const dispatcher = new Dispatcher();
 let eventSeq = 0;
 
 /**
- * The last status this worker computed, so the popup renders immediately.
+ * The last status this worker computed, so the side panel renders immediately.
  *
- * A popup that had to wait for a round trip would paint an empty panel first and
+ * A panel that had to wait for a round trip would paint an empty header first and
  * then fill in, which reads as a broken add-on for the ~100ms it lasts.
  */
 let lastStatus: BridgeStatus | null = null;
@@ -124,8 +138,42 @@ const socket = new BridgeSocket({
   extensionVersion: manifest.version,
   onStatusChange: (status) => {
     lastStatus = status;
+    // The panel's header is the only connection readout there is now that the popup
+    // is retired (D32), and it is a page that may be open while this changes.
+    broadcast({ kind: "panel_status" });
+  },
+  onPanelEvent: (event, payload) => {
+    broadcast({ kind: "panel_event", event, payload });
   },
 });
+
+/**
+ * Send one message to whatever add-on page is open, and ignore the common failure.
+ *
+ * `chrome.runtime.sendMessage` REJECTS when nothing is listening, which is the
+ * normal case: the side panel is usually closed. An unhandled rejection in a service
+ * worker is noise in the one console a reviewer reads, so it is swallowed here — and
+ * only here, where the absence genuinely means nothing.
+ */
+function broadcast(message: Record<string, unknown>): void {
+  try {
+    void chrome.runtime.sendMessage(message).catch(() => {});
+  } catch {
+    // Chrome throws synchronously during shutdown. There is nothing to report to.
+  }
+}
+
+// The action click opens the SIDE PANEL. Chrome ignores this call while
+// `action.default_popup` is set in the manifest, which is why the popup was retired
+// rather than kept alongside (D32). Guarded because `chrome.sidePanel` does not
+// exist before Chrome 114: the manifest floor is 120, but a worker that threw here
+// would take the whole bridge down over a panel, so an older browser loses the panel
+// and keeps everything else.
+try {
+  void chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true })?.catch(() => {});
+} catch {
+  // No side panel API in this browser. The bridge below is unaffected.
+}
 
 // --- the three tab-metadata read methods ------------------------------------
 
@@ -363,7 +411,7 @@ onHostPermissionChanged(() => {
   void socket.announce();
 });
 
-// --- messages from the popup and the setup page -----------------------------
+// --- messages from the side panel and the setup page ------------------------
 
 chrome.runtime.onMessage.addListener((message: WorkerMessage, _sender, respond) => {
   // Read the discriminant into a plain string first. A message arrives from a page,
@@ -394,7 +442,7 @@ chrome.runtime.onMessage.addListener((message: WorkerMessage, _sender, respond) 
           await socket.suspend();
         }
         // `"none"`: the bridge is offline and already retrying. Doing nothing is the
-        // honest answer, and the popup shows no button in that state anyway.
+        // honest answer, and the panel shows no button in that state anyway.
         respond(socket.status());
         return;
       }
@@ -402,6 +450,16 @@ chrome.runtime.onMessage.addListener((message: WorkerMessage, _sender, respond) 
         await openSetupPage();
         respond({ opened: true });
         return;
+      case "panel_action": {
+        // The panel asks; the DAEMON decides. Nothing here inspects the action, gates
+        // it, or answers it locally: access mode, risk tier and the approval registry
+        // all live on the other end of this socket, and a check written here would be
+        // a second policy that can disagree with the real one.
+        const body = message as { action?: string; params?: Record<string, unknown> };
+        const sent = socket.sendPanel(String(body.action ?? ""), body.params ?? {});
+        respond({ sent });
+        return;
+      }
       case "host_permission_result":
         // The setup page reports the outcome of its own click. `announce()` re-reads
         // the grant from Chrome rather than trusting the message, because the page
@@ -416,7 +474,7 @@ chrome.runtime.onMessage.addListener((message: WorkerMessage, _sender, respond) 
     }
   })();
   // `true` keeps the message channel open for the async `respond` above. Returning
-  // nothing here makes every reply arrive after the port closed, and the popup then
+  // nothing here makes every reply arrive after the port closed, and the panel then
   // renders its "could not reach the add-on" state forever.
   return true;
 });

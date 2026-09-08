@@ -97,11 +97,6 @@ jobs:
         working-directory: dashboard
         run: pnpm install --frozen-lockfile
 
-      - name: Dashboard unit tests (vitest)
-        if: steps.gate.outputs.publish == 'true'
-        working-directory: dashboard
-        run: pnpm test
-
       # THE GATE COVERS WHAT THE INSTALLER CONTAINS — and since v1.239.0 the
       # installer contains the browser add-on (desktop/package.json
       # extraResources -> resources/browser-addon). extensions/chrome/dist is
@@ -115,6 +110,13 @@ jobs:
       # there gets the real add-on refused at /browser/ws with close 1008),
       # it typechecks (esbuild strips types without checking them), and it
       # re-reads manifest.json to confirm every file it names landed in dist/.
+      #
+      # IT RUNS BEFORE THE DASHBOARD SUITE, and that ordering is load-bearing
+      # (v1.242.0): __tests__/sidepanel-runtime-v1242.test.ts EXECUTES the built
+      # dist/sidepanel.js against dist/sidepanel.html, and it FAILS rather than
+      # skips when they are absent — a test that skips when its subject is
+      # missing is a test that cannot fail. Move this below `pnpm test` and the
+      # dashboard job goes red on a checkout that never built the add-on.
       - name: Install browser add-on deps
         if: steps.gate.outputs.publish == 'true'
         working-directory: extensions/chrome
@@ -124,6 +126,11 @@ jobs:
         if: steps.gate.outputs.publish == 'true'
         working-directory: extensions/chrome
         run: node scripts/build.mjs
+
+      - name: Dashboard unit tests (vitest)
+        if: steps.gate.outputs.publish == 'true'
+        working-directory: dashboard
+        run: pnpm test
 
       - name: Syntax-check the desktop entry points
         if: steps.gate.outputs.publish == 'true'

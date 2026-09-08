@@ -103,6 +103,10 @@ vi.mock("@/lib/api", () => ({
       if (api.status === null) throw new api.FakeApiError("Not Found", 404);
       return api.status;
     }
+    // The card asks once, so step 5 can name the version this app IS — the
+    // number the add-on's own header has to match after an update.
+    if (path === "/health")
+      return { status: "ok", version: "1.242.0", providers: [], default_provider: "mock" };
     return {};
   },
   post: async (path: string, body?: unknown) => {
@@ -270,6 +274,59 @@ describe("the guided window is reachable from the card (v1.240.0)", () => {
   it("pressing it opens the dialog and arms a window", async () => {
     await openFromCard(CARD_STATES.not_connected);
     expect(postPaths()).toContain("/browser/setup/arm");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  R1 — the card says the sidebar exists, in every state                      */
+/* -------------------------------------------------------------------------- */
+
+describe("the Your browser card names the sidebar durably (v1.242.0)", () => {
+  // The guided window is read ONCE. A user who set their browser up last month
+  // and never opens it again is the reader this block exists for, so it is
+  // asserted in every state of the card rather than only where the wizard is
+  // offered — the failure being fixed is that nothing in this app mentioned a
+  // sidebar, a side panel or a toolbar anywhere at all.
+  for (const state of ["off", "not_connected", "waiting", "paired_down", "connected"]) {
+    it(`is on the card in the ${state} state`, async () => {
+      api.status = CARD_STATES[state];
+      render(<YourBrowserCard />);
+      const badge = await screen.findByTestId("browser-badge");
+      await waitFor(() => expect(badge.dataset.state).toBe(state));
+      const note = screen.getByTestId("browser-sidebar-note");
+      expect(note.textContent).toContain("toolbar");
+      expect(note.textContent).toContain("sidebar");
+    });
+  }
+
+  it("leads with the pin, because Chrome hides the icon behind the puzzle menu", async () => {
+    api.status = CARD_STATES.connected;
+    render(<YourBrowserCard />);
+    const pin = await screen.findByTestId("browser-sidebar-pin");
+    expect(pin.textContent).toContain("puzzle-piece");
+    expect(pin.textContent).toMatch(/press the pin/i);
+  });
+
+  it("names this app's version and the remedy for a stale add-on", async () => {
+    api.status = CARD_STATES.connected;
+    render(<YourBrowserCard />);
+    const stale = await screen.findByTestId("browser-sidebar-stale");
+    expect(stale.textContent).toContain("chrome://extensions");
+    expect(stale.textContent).toContain("Reload");
+    // The number comes from GET /health, never from a constant in the card: a
+    // hardcoded version is a version that goes stale the next release and then
+    // tells the user the wrong copy is the current one.
+    await waitFor(() =>
+      expect(screen.getByTestId("browser-sidebar-app-version").textContent).toBe("1.242.0"),
+    );
+  });
+
+  it("never calls the add-on an extension while saying any of it", async () => {
+    api.status = CARD_STATES.connected;
+    render(<YourBrowserCard />);
+    const note = await screen.findByTestId("browser-sidebar-note");
+    const words = (note.textContent ?? "").replace(/chrome:\/\/extensions/g, "");
+    expect(words).not.toMatch(/\bextensions?\b/i);
   });
 });
 
@@ -591,7 +648,10 @@ describe("the modal advances itself off the polled status", () => {
     expect(postPaths()).toContain("/browser/request-host-permission");
   });
 
-  it("shows a success state and closes itself once site access lands", async () => {
+  it("shows a success state once site access lands, and stays open for step 5", async () => {
+    // v1.242.0. This used to assert the opposite — a green panel for 1.6 s and
+    // then `onClose` — and that auto-close is exactly why the sidebar step could
+    // never be given: the dialog vanished one instruction before the last one.
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const onClose = vi.fn();
     const { rerender } = render(
@@ -608,11 +668,71 @@ describe("the modal advances itself off the polled status", () => {
     expect(await screen.findByTestId("browser-setup-success")).toBeTruthy();
     expect(onClose).not.toHaveBeenCalled();
 
+    // Long past the old 1.6 s timeout. The dialog is STILL up, and step 5 is
+    // the open instruction — the user closes it, nothing else does.
     await act(async () => {
-      vi.advanceTimersByTime(2000);
+      vi.advanceTimersByTime(5000);
     });
-    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
-    expect(postPaths()).toContain("/browser/setup/disarm");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("browser-setup-open-5")).toBeTruthy();
+    expect(postPaths()).not.toContain("/browser/setup/disarm");
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  R1 — the sidebar is the LAST step, and the pin is what makes it reachable   */
+/* -------------------------------------------------------------------------- */
+
+describe("the guided window ends on the sidebar (v1.242.0)", () => {
+  /** Drive the REAL card to a granted browser, so what is asserted below is
+   *  what a user reaching the end of setup actually sees. */
+  async function reachStep5() {
+    await openFromCard(CARD_STATES.not_connected);
+    await pollWith(CARD_STATES.connected);
+    return screen.findByTestId("browser-setup-open-5");
+  }
+
+  it("adds a fifth step and lands on it once site access is granted", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await reachStep5();
+    expect(screen.getByTestId("browser-setup-step-5").dataset.active).toBe("true");
+    expect(screen.getByTestId("browser-setup-step-4").dataset.done).toBe("true");
+    // One open instruction, still.
+    expect(screen.queryByTestId("browser-setup-open-4")).toBeNull();
+  });
+
+  it("names the toolbar icon, the sidebar, and the puzzle-piece pin", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const card = await reachStep5();
+    const text = card.textContent ?? "";
+    expect(text).toContain("toolbar");
+    expect(text).toContain("sidebar");
+    // THE FINDING IN ONE ASSERTION. Chrome hides a freshly loaded unpacked
+    // add-on behind the puzzle-piece menu, so "click the icon" alone is an
+    // instruction a user cannot follow — there is no icon to click.
+    const pin = screen.getByTestId("browser-setup-pin").textContent ?? "";
+    expect(pin).toContain("puzzle-piece");
+    expect(pin).toMatch(/\bpin\b/i);
+  });
+
+  it("says how to spot and fix a stale copy of the add-on", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await reachStep5();
+    const stale = screen.getByTestId("browser-setup-stale-build").textContent ?? "";
+    expect(stale).toContain("popup");
+    expect(stale).toContain("chrome://extensions");
+    expect(stale).toContain("Reload");
+    // The card fetched /health, so the dialog can name the number the add-on's
+    // own header must match.
+    expect(screen.getByTestId("browser-setup-app-version").textContent).toBe("1.242.0");
+  });
+
+  it("closes on the user's press, not on a timer", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await reachStep5();
+    fireEvent.click(screen.getByTestId("browser-setup-sidebar-done"));
+    await waitFor(() => expect(postPaths()).toContain("/browser/setup/disarm"));
+    expect(screen.queryByTestId("browser-setup-modal")).toBeNull();
   });
 });
 

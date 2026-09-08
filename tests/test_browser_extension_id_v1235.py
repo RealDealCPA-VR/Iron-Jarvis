@@ -29,10 +29,14 @@ What each assertion catches, and why a green suite would otherwise miss it:
   cannot be made at all, and the add-on would sit permanently unable to read a page
   while reporting itself connected.
 * The MINIMAL permission set. A permission added casually is a permission the user
-  granted without being asked about it; this pins the four the plan justifies.
-* The popup declares NO PAIRING UI (D28). Pairing is initiated and approved from
-  Jarvis, so a Pair button inside the add-on would be a second, unreviewable door to
-  the same credential.
+  granted without being asked about it; this pins the five the plans justify.
+* The SIDE PANEL declares no pairing UI and no settings (D28, as narrowed by D32 and
+  the sidebar plan section 1). Pairing is initiated and approved from Jarvis, so a
+  Pair button inside the add-on would be a second, unreviewable door to the same
+  credential; and the panel is a VIEW of a conversation the daemon runs, so a model
+  picker or a tool switch here would be a second place the capability is governed.
+  The composer is the one control that had to be admitted, and it is admitted
+  deliberately: the user asked for a chat sidebar.
 * The Node verifier implements the SAME algorithm as the Python one. Two
   implementations of one derivation drift, and the CI check would then pass while the
   daemon rejected the real browser.
@@ -55,7 +59,7 @@ from iron_jarvis.browser import identity
 REPO = Path(__file__).resolve().parents[1]
 MANIFEST = REPO / "extensions" / "chrome" / "manifest.json"
 VERIFY_ID = REPO / "extensions" / "chrome" / "scripts" / "verify-id.mjs"
-POPUP_HTML = REPO / "extensions" / "chrome" / "src" / "popup" / "popup.html"
+PANEL_HTML = REPO / "extensions" / "chrome" / "src" / "sidepanel" / "sidepanel.html"
 
 
 def _manifest() -> dict:
@@ -129,11 +133,12 @@ def test_optional_host_permissions_carry_both_schemes():
 
 def test_the_permission_set_stays_minimal():
     assert sorted(_manifest()["permissions"]) == sorted(
-        ["tabs", "scripting", "downloads", "storage"]
+        ["tabs", "scripting", "downloads", "storage", "sidePanel"]
     ), (
-        "these four are the ones the plan justifies: tab metadata, on-demand "
-        "injection, download completion (D23), and the pairing token's storage. A "
-        "fifth means the user granted something nobody argued for"
+        "these five are the ones the plans justify: tab metadata, on-demand "
+        "injection, download completion (D23), the pairing token's storage, and the "
+        "side panel the action click opens (D32). A sixth means the user granted "
+        "something nobody argued for"
     )
 
 
@@ -147,24 +152,33 @@ def test_manifest_v3_and_a_module_service_worker():
     )
 
 
-def test_the_popup_declares_no_pairing_ui(  # D28
+def test_the_side_panel_declares_no_pairing_ui_and_no_settings(  # D28, narrowed by D32
 ):
-    raw = POPUP_HTML.read_text(encoding="utf-8").replace("\r\n", "\n")
+    """What D28 forbade in the popup, still forbidden in the panel that replaced it.
+
+    The sidebar plan supersedes exactly one line of D28 -- chat -- and re-affirms the
+    rest, so the list this pin walks is D28's minus the composer the user asked for.
+    A ``<textarea>`` is now legitimate; a ``<select>`` and a ``<form>`` are not,
+    because the first is how a model picker arrives and the second is how a
+    credential field arrives.
+    """
+    raw = PANEL_HTML.read_text(encoding="utf-8").replace("\r\n", "\n")
     # Strip HTML comments FIRST. The file explains in prose why it has no pairing
     # UI, so a naive search for "pair" matches the very comment that documents the
-    # rule — the pin has to read what the popup RENDERS, not what it says about
+    # rule — the pin has to read what the panel RENDERS, not what it says about
     # itself.
     html = re.sub(r"<!--.*?-->", "", raw, flags=re.S).lower()
-    for forbidden in ("<textarea", "<select", "<form", "<input"):
+    for forbidden in ("<select", "<form", "<input"):
         assert forbidden not in html, (
-            f"the popup must not contain {forbidden!r}: D28 keeps pairing approval, "
-            "chat, model selection, automation UI and tool settings out of it"
+            f"the side panel must not contain {forbidden!r}: D28 keeps pairing "
+            "approval, model selection, automation UI and tool settings out of the "
+            "browser, and the sidebar plan lifted only the chat half of that rule"
         )
     # No control the user can press may offer to pair: pairing is approved in
     # Jarvis, and a second door to the same credential is a second thing to audit.
     for label in re.findall(r"<button[^>]*>(.*?)</button>", html, flags=re.S):
         assert "pair" not in label, (
-            f"the popup renders a button offering to pair ({label.strip()[:60]!r}); "
+            f"the side panel renders a button offering to pair ({label.strip()[:60]!r}); "
             "D28 puts that in Iron Jarvis only"
         )
 

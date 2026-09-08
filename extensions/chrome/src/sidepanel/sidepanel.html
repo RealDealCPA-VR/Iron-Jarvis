@@ -1,0 +1,317 @@
+<!doctype html>
+<!--
+  The side panel: a WINDOW onto a conversation that runs in Iron Jarvis (D32, D33).
+
+  It holds no model, no agent loop, no policy and no tool settings. Everything it
+  shows arrives as a `browser.panel_event` frame and everything the user presses
+  leaves as a `browser.panel` action, over the socket the service worker already
+  holds. D28's do-not-place list is superseded for chat and re-affirmed for the
+  rest: there is no model picker, no tool switch and no pairing control here, and
+  none may be added — those are governed in Jarvis, on surfaces that are reviewed.
+
+  It also carries the connection readout the popup used to own. The popup is gone
+  (D32: Chrome ignores `openPanelOnActionClick` while `action.default_popup` is
+  set), so the status story lives here or nowhere.
+
+  Copy rule: this add-on is never called an "extension" in anything the user reads —
+  in Iron Jarvis that word already means an MCP server.
+
+  Naming rule: the place the user goes to change any of this has ONE name, and it is
+  the one the dashboard's own nav shows — "the Browser page in Iron Jarvis". Two
+  names for one page is two places to look for a user who can find neither.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Iron Jarvis</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --ink: #e8eef5;
+        --muted: #8fa1b5;
+        --bg: #0b1016;
+        --line: #1f2b38;
+        --cyan: #35d0e6;
+        --amber: #e0a84a;
+        --green: #4fd48a;
+        --dim: #5b6b7d;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+
+      /* --- header: the status readout the popup used to own ----------------- */
+
+      header {
+        flex: none;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line);
+      }
+      h1 {
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: 0.4px;
+        margin: 0 0 8px;
+      }
+      .state {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 600;
+      }
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--dim);
+        flex: none;
+      }
+      .state[data-tone="connected"] .dot {
+        background: var(--green);
+        box-shadow: 0 0 8px rgba(79, 212, 138, 0.6);
+      }
+      .state[data-tone="waiting"] .dot {
+        background: var(--amber);
+      }
+      .state[data-tone="off"] .dot {
+        background: var(--dim);
+      }
+      .note {
+        color: var(--muted);
+        margin: 6px 0 0;
+      }
+      .access {
+        color: var(--muted);
+        margin: 6px 0 0;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      /* --- transcript ------------------------------------------------------- */
+
+      #transcript {
+        flex: 1 1 auto;
+        overflow-y: auto;
+        padding: 12px 14px;
+      }
+      .turn {
+        margin: 0 0 12px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .turn[data-who="you"] {
+        color: var(--ink);
+        border-left: 2px solid var(--cyan);
+        padding-left: 9px;
+      }
+      .turn[data-who="jarvis"] {
+        color: var(--ink);
+      }
+      .turn[data-who="tool"] {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .turn[data-who="error"] {
+        color: var(--amber);
+      }
+      /* A steer note is PENDING until the daemon says the turn took it. The word
+         is written by sidepanel.ts, not here, so the two cannot disagree. */
+      .turn[data-who="steer"] {
+        color: var(--amber);
+        font-size: 12px;
+      }
+      .turn[data-pending="true"] {
+        opacity: 0.75;
+      }
+      #empty {
+        color: var(--muted);
+        padding: 4px 0;
+      }
+      #empty strong {
+        color: var(--ink);
+        display: block;
+        margin-bottom: 6px;
+      }
+
+      /* --- approval --------------------------------------------------------- */
+
+      #approval {
+        flex: none;
+        margin: 0 14px 10px;
+        padding: 10px 12px;
+        border: 1px solid var(--amber);
+        border-radius: 8px;
+        background: rgba(224, 168, 74, 0.1);
+      }
+      #approval p {
+        margin: 0 0 8px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+      }
+
+      /* --- composer --------------------------------------------------------- */
+
+      footer {
+        flex: none;
+        padding: 10px 14px 12px;
+        border-top: 1px solid var(--line);
+      }
+      textarea {
+        width: 100%;
+        min-height: 58px;
+        resize: vertical;
+        font: inherit;
+        color: var(--ink);
+        background: #10161e;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 8px 9px;
+      }
+      textarea:focus {
+        outline: none;
+        border-color: var(--cyan);
+      }
+      .controls {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      button {
+        appearance: none;
+        font: inherit;
+        font-weight: 600;
+        padding: 7px 12px;
+        border-radius: 7px;
+        cursor: pointer;
+        border: 1px solid var(--line);
+        background: #16202b;
+        color: var(--ink);
+      }
+      button.primary {
+        border-color: var(--cyan);
+        background: rgba(53, 208, 230, 0.14);
+      }
+      button.warn {
+        border-color: var(--amber);
+        background: rgba(224, 168, 74, 0.14);
+      }
+      button:hover {
+        filter: brightness(1.18);
+      }
+      button[disabled] {
+        opacity: 0.5;
+        cursor: default;
+        filter: none;
+      }
+      .hint {
+        color: var(--muted);
+        font-size: 11.5px;
+        margin: 8px 0 0;
+      }
+
+      /* Running and idle are one attribute on <body>, so every control that
+         depends on the turn state is switched in one place rather than by five
+         separate `hidden` writes that can disagree. */
+      body[data-turn="idle"] #stop,
+      body[data-turn="idle"] #steer,
+      body[data-turn="idle"] #running-hint {
+        display: none;
+      }
+      body[data-turn="running"] #send {
+        display: none;
+      }
+      /* Access `off` is fail-closed in the daemon; the panel says so rather than
+         offering a composer that can only be refused. */
+      body[data-access="off"] footer,
+      body[data-access="off"] #approval {
+        display: none;
+      }
+      body:not([data-access="off"]) #empty {
+        display: none;
+      }
+    </style>
+  </head>
+  <body data-turn="idle" data-access="unknown">
+    <header>
+      <h1>Jarvis</h1>
+      <div class="state" id="state" data-tone="off">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="state-word">Checking…</span>
+      </div>
+      <p class="note" id="note"></p>
+      <!-- ACCESS AND THE BUILD, on one line, because they answer the two questions
+           a wedged panel raises: what am I allowed to do, and WHICH COPY of the
+           add-on is Chrome actually running. The version is the manifest's own
+           (`chrome.runtime.getManifest().version`), not a constant written here,
+           and it is on screen because chrome://extensions showed 1.235.0 before
+           and after an app update — Chrome keeps serving the build it loaded until
+           somebody presses Reload, so a user updating Iron Jarvis had no way at all
+           to tell a stale add-on from a current one. Nothing can compare it here:
+           the daemon's `browser.ready` carries no app version, so the panel states
+           the fact and the Browser page in Iron Jarvis owns the comparison. -->
+      <p class="access">
+        Access: <span id="access">—</span> · Add-on <span id="version">—</span>
+      </p>
+      <div class="actions">
+        <button class="primary" id="open" type="button">Open Jarvis</button>
+        <!-- Empty and hidden until the worker says which action is real. A static
+             "Disconnect" here is a promise the header may be about to contradict. -->
+        <button id="toggle" type="button" hidden></button>
+      </div>
+    </header>
+
+    <div id="transcript">
+      <div id="empty">
+        <strong>Browser access is off.</strong>
+        This panel can run nothing while it is off — no reading a page, no acting on
+        one, and no answers about the tab you are looking at. Turn it on from the
+        Browser page in Iron Jarvis and this panel starts working.
+      </div>
+    </div>
+
+    <!-- Empty and hidden until an acting tool actually asks. A card sitting here
+         with placeholder words is a card the user learns to click through. -->
+    <div id="approval" hidden>
+      <p id="approval-text"></p>
+      <div class="row">
+        <button class="primary" id="approve" type="button">Approve</button>
+        <button id="deny" type="button">Deny</button>
+      </div>
+    </div>
+
+    <footer>
+      <textarea id="ask" rows="3" placeholder="Ask Jarvis about this browser…"></textarea>
+      <div class="controls">
+        <button class="primary" id="send" type="button">Send</button>
+        <button class="warn" id="stop" type="button">Stop</button>
+        <button id="steer" type="button">Steer</button>
+      </div>
+      <p class="hint" id="running-hint">
+        Stop prevents the next step. A tool that is already running finishes, and
+        what it wrote stays written. Steer adds a note the turn picks up at its next
+        step — it cannot interrupt a sentence already being written.
+      </p>
+    </footer>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

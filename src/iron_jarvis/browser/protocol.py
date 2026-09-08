@@ -60,12 +60,20 @@ FRAME_PAIRED = "browser.paired"
 FRAME_PAIRING_REQUIRED = "browser.pairing_required"
 FRAME_READY = "browser.ready"
 FRAME_CONNECTION_REPLACED = "browser.connection_replaced"
+#: One turn's worth of news for the side panel. Unsolicited, like a directive, and
+#: for the same reason: the panel is a VIEW of a conversation the daemon is running,
+#: so the daemon narrates and the panel paints. See :data:`ALL_PANEL_EVENTS`.
+FRAME_PANEL_EVENT = "browser.panel_event"
 
 #: Extension -> daemon.
 FRAME_HELLO = "browser.hello"
 FRAME_RESPONSE = "browser.response"
 FRAME_EVENT = "browser.event"
 FRAME_PAIRING_ACK = "browser.pairing_ack"
+#: The side panel asking for something: open, send, stop, steer, approve, deny,
+#: close. Fire-and-forget UPWARD, exactly like ``browser.event``, and deliberately
+#: NOT a request/response pair -- see the note on :data:`ALL_PANEL_ACTIONS`.
+FRAME_PANEL = "browser.panel"
 
 DAEMON_TO_EXTENSION: tuple[str, ...] = (
     FRAME_COMMAND,
@@ -74,6 +82,7 @@ DAEMON_TO_EXTENSION: tuple[str, ...] = (
     FRAME_PAIRING_REQUIRED,
     FRAME_READY,
     FRAME_CONNECTION_REPLACED,
+    FRAME_PANEL_EVENT,
 )
 
 EXTENSION_TO_DAEMON: tuple[str, ...] = (
@@ -81,6 +90,7 @@ EXTENSION_TO_DAEMON: tuple[str, ...] = (
     FRAME_RESPONSE,
     FRAME_EVENT,
     FRAME_PAIRING_ACK,
+    FRAME_PANEL,
 )
 
 #: Every legal ``type`` value, both directions.
@@ -89,6 +99,11 @@ ALL_FRAME_TYPES: tuple[str, ...] = DAEMON_TO_EXTENSION + EXTENSION_TO_DAEMON
 #: The ONLY frame an unpaired (restricted) socket may send, per D06A. Anything
 #: else closes it with 1008. Named here rather than spelled at the state machine
 #: so the extension's socket code and the daemon's guard read the same constant.
+#:
+#: ``browser.panel`` is POINTEDLY absent. A side panel belongs to a browser that has
+#: already been paired by a human press, so an unpaired socket asking the daemon to
+#: run a chat turn is not an early panel -- it is a local process that never paired,
+#: reaching the model through a window meant for the user's browser.
 RESTRICTED_INBOUND_FRAMES: tuple[str, ...] = (FRAME_PAIRING_ACK,)
 
 # --------------------------------------------------------------------------- #
@@ -166,6 +181,65 @@ ALL_EVENTS: tuple[str, ...] = (
     EVENT_TAB_ACTIVATED,
     EVENT_NAVIGATION_COMPLETED,
     EVENT_DOWNLOAD_COMPLETED,
+)
+
+# --------------------------------------------------------------------------- #
+# The side panel (BROWSER-SIDEBAR-PLAN section 3, D33)
+# --------------------------------------------------------------------------- #
+
+#: ``browser.panel`` actions -- the whole vocabulary the side panel may speak.
+#:
+#: The panel is an EVENT-DRIVEN VIEW, not an RPC client. No action here is answered
+#: with a correlated reply, and none carries an id the daemon has to remember: the
+#: answer to ``send`` is the stream of ``browser.panel_event`` frames that follows,
+#: the same way ``browser.directive`` already flows the other way unasked. That is
+#: not a shortcut. The comment at the top of the id-prefix section explains why the
+#: daemon owns the ONLY pending-future map on this socket; a second correlation map
+#: minted at the extension's end would hand an add-on the ability to resolve a
+#: future the daemon is waiting on, which is precisely what ``evt_`` exists to
+#: prevent.
+PANEL_ACTION_OPEN = "open"
+PANEL_ACTION_SEND = "send"
+PANEL_ACTION_STOP = "stop"
+PANEL_ACTION_STEER = "steer"
+PANEL_ACTION_APPROVE = "approve"
+PANEL_ACTION_DENY = "deny"
+PANEL_ACTION_CLOSE = "close"
+
+ALL_PANEL_ACTIONS: tuple[str, ...] = (
+    PANEL_ACTION_OPEN,
+    PANEL_ACTION_SEND,
+    PANEL_ACTION_STOP,
+    PANEL_ACTION_STEER,
+    PANEL_ACTION_APPROVE,
+    PANEL_ACTION_DENY,
+    PANEL_ACTION_CLOSE,
+)
+
+#: ``browser.panel_event`` names -- everything the daemon narrates to the panel.
+#:
+#: ``steered`` is its own event rather than a flag on ``delta`` because of what the
+#: panel must NOT do: a steer note is shown as PENDING until the turn's next tool
+#: round actually consumes it (plan section 5), and only the daemon knows when that
+#: happened. Without a frame that says so, the panel would have to guess -- and the
+#: guess it would make is the one that tells the user their correction landed before
+#: it did.
+PANEL_EVENT_STATE = "state"
+PANEL_EVENT_DELTA = "delta"
+PANEL_EVENT_TOOL = "tool"
+PANEL_EVENT_APPROVAL = "approval"
+PANEL_EVENT_STEERED = "steered"
+PANEL_EVENT_DONE = "done"
+PANEL_EVENT_ERROR = "error"
+
+ALL_PANEL_EVENTS: tuple[str, ...] = (
+    PANEL_EVENT_STATE,
+    PANEL_EVENT_DELTA,
+    PANEL_EVENT_TOOL,
+    PANEL_EVENT_APPROVAL,
+    PANEL_EVENT_STEERED,
+    PANEL_EVENT_DONE,
+    PANEL_EVENT_ERROR,
 )
 
 # --------------------------------------------------------------------------- #
@@ -439,6 +513,33 @@ class EventFrame(TypedDict):
     payload: dict[str, Any]
 
 
+class PanelFrame(TypedDict):
+    """Extension -> daemon: the side panel asks for something.
+
+    Three keys and no id, because there is nothing to correlate: the panel does not
+    wait for an answer to this frame, it watches ``browser.panel_event``. ``params``
+    is not optional -- an action with nothing to say carries ``{}``, so no call site
+    has to decide between an absent key and an empty one.
+    """
+
+    type: str
+    action: str
+    params: dict[str, Any]
+
+
+class PanelEventFrame(TypedDict):
+    """Daemon -> extension: one thing that happened in the panel's conversation.
+
+    The mirror of :class:`PanelFrame`, and the only way a turn reaches the panel.
+    ``event`` is one of :data:`ALL_PANEL_EVENTS` and ``payload`` is that event's own
+    shape.
+    """
+
+    type: str
+    event: str
+    payload: dict[str, Any]
+
+
 #: Every frame ``TypedDict``, in generation order. ``ErrorEnvelope`` first because
 #: two frames reference it and the generated TypeScript is read top to bottom.
 FRAME_TYPEDDICTS: tuple[type, ...] = (
@@ -453,6 +554,8 @@ FRAME_TYPEDDICTS: tuple[type, ...] = (
     ConnectionReplacedFrame,
     HelloFrame,
     EventFrame,
+    PanelFrame,
+    PanelEventFrame,
 )
 
 #: ``type`` string -> the ``TypedDict`` describing that frame. The round-trip test
@@ -469,6 +572,8 @@ FRAME_SHAPES: dict[str, type] = {
     FRAME_RESPONSE: ResponseFrame,
     FRAME_EVENT: EventFrame,
     FRAME_PAIRING_ACK: PairingAckFrame,
+    FRAME_PANEL: PanelFrame,
+    FRAME_PANEL_EVENT: PanelEventFrame,
 }
 
 # --------------------------------------------------------------------------- #
@@ -1109,6 +1214,21 @@ def event_frame(event_id: str, event: str, payload: dict[str, Any] | None = None
     return {"id": event_id, "type": FRAME_EVENT, "event": event, "payload": dict(payload or {})}
 
 
+def panel_frame(action: str, params: dict[str, Any] | None = None) -> PanelFrame:
+    """Build a ``browser.panel`` frame (extension -> daemon).
+
+    ``params`` is copied rather than referenced: the panel builds one of these per
+    press, and a frame holding the caller's own dict is a frame whose contents can
+    change after it was queued for the socket.
+    """
+    return {"type": FRAME_PANEL, "action": action, "params": dict(params or {})}
+
+
+def panel_event_frame(event: str, payload: dict[str, Any] | None = None) -> PanelEventFrame:
+    """Build a ``browser.panel_event`` frame (daemon -> extension)."""
+    return {"type": FRAME_PANEL_EVENT, "event": event, "payload": dict(payload or {})}
+
+
 
 def _int_param(value: Any) -> int | None:
     """``value`` as a positive int, or ``None`` for anything else.
@@ -1544,6 +1664,8 @@ __all__ = [
     "ALL_EVENTS",
     "ALL_FRAME_TYPES",
     "ALL_METHODS",
+    "ALL_PANEL_ACTIONS",
+    "ALL_PANEL_EVENTS",
     "COMMAND_TIMEOUTS_S",
     "DAEMON_TO_EXTENSION",
     "DEFAULT_COMMAND_TIMEOUT_S",
@@ -1563,6 +1685,8 @@ __all__ = [
     "FRAME_PAIRED",
     "FRAME_PAIRING_ACK",
     "FRAME_PAIRING_REQUIRED",
+    "FRAME_PANEL",
+    "FRAME_PANEL_EVENT",
     "FRAME_READY",
     "FRAME_RESPONSE",
     "FRAME_SHAPES",
@@ -1597,6 +1721,20 @@ __all__ = [
     "PAGE_ACTION_METHODS",
     "PAIRING_DEADLINE_S",
     "PAIRING_ID_PREFIX",
+    "PANEL_ACTION_APPROVE",
+    "PANEL_ACTION_CLOSE",
+    "PANEL_ACTION_DENY",
+    "PANEL_ACTION_OPEN",
+    "PANEL_ACTION_SEND",
+    "PANEL_ACTION_STEER",
+    "PANEL_ACTION_STOP",
+    "PANEL_EVENT_APPROVAL",
+    "PANEL_EVENT_DELTA",
+    "PANEL_EVENT_DONE",
+    "PANEL_EVENT_ERROR",
+    "PANEL_EVENT_STATE",
+    "PANEL_EVENT_STEERED",
+    "PANEL_EVENT_TOOL",
     "PARAM_SHAPES",
     "PASSWORD_AUTOCOMPLETE",
     "PAYMENT_AUTOCOMPLETE",
@@ -1640,6 +1778,8 @@ __all__ = [
     "PairedFrame",
     "PairingAckFrame",
     "PairingRequiredFrame",
+    "PanelEventFrame",
+    "PanelFrame",
     "ReadPageParams",
     "ReadyFrame",
     "ResponseFrame",
@@ -1684,6 +1824,8 @@ __all__ = [
     "paired_frame",
     "pairing_ack_frame",
     "pairing_required_frame",
+    "panel_event_frame",
+    "panel_frame",
     "read_page_params",
     "ready_frame",
     "response_frame",

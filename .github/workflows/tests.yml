@@ -60,6 +60,26 @@ jobs:
         working-directory: dashboard
         run: pnpm install --frozen-lockfile
 
+      # THE ADD-ON IS BUILT BEFORE THE DASHBOARD SUITE, and the ordering is
+      # load-bearing (v1.242.0). `__tests__/sidepanel-runtime-v1242.test.ts`
+      # EXECUTES the built `extensions/chrome/dist/sidepanel.js` against its real
+      # HTML — the only test anywhere that runs the sidebar's one script — and it
+      # FAILS rather than skips when those files are absent, because a test that
+      # skips when its subject is missing is a test that cannot fail. `dist/` is
+      # gitignored, so on a fresh checkout it exists only because this step ran.
+      #
+      # It duplicates two steps from the `browser-addon` job below on purpose: that
+      # job answers "does the add-on build", this one answers "does the panel it
+      # produced still run", and a job that needed the other job's filesystem would
+      # need an artifact upload to share one.
+      - name: Install browser add-on deps
+        working-directory: extensions/chrome
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the browser add-on (the panel runtime test executes it)
+        working-directory: extensions/chrome
+        run: node scripts/build.mjs
+
       - name: Unit tests (vitest)
         working-directory: dashboard
         run: pnpm test

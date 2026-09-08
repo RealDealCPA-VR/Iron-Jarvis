@@ -83,13 +83,13 @@ def _addon(root: Path, *, name: str = "browser-addon") -> Path:
                 "version": "1.239.0",
                 "key": PINNED_EXTENSION_KEY,
                 "background": {"service_worker": "dist/background.js", "type": "module"},
-                "action": {"default_popup": "dist/popup.html"},
+                "side_panel": {"default_path": "dist/sidepanel.html"},
             }
         ),
         encoding="utf-8",
     )
     (folder / "dist" / "background.js").write_text("// built", encoding="utf-8")
-    (folder / "dist" / "popup.html").write_text("<!doctype html>", encoding="utf-8")
+    (folder / "dist" / "sidepanel.html").write_text("<!doctype html>", encoding="utf-8")
     return folder
 
 

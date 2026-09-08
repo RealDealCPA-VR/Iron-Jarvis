@@ -111,6 +111,7 @@ from ..core.ids import utcnow
 from ..core.logging import get_logger
 from . import protocol as P
 from .errors import BrowserError, BrowserErrorCode
+from .panel import PANEL_ACCESS_ALLOWED
 
 logger = get_logger(__name__)
 
@@ -476,6 +477,16 @@ class ExtensionBackend:
         #: because the transport owns no policy and no cache: it knows a page moved,
         #: and nothing about what a snapshot is.
         self.snapshot_invalidator = snapshot_invalidator
+        #: ``async (conn, action, params) -> None``, installed by
+        #: :func:`iron_jarvis.browser.panel.install`. The SIDE PANEL's whole
+        #: reach into the daemon. Held as a callable for the same reason the
+        #: two above are: this class is the transport, it holds no policy and
+        #: knows nothing about chat, and a panel handler imported here would
+        #: drag the entire chat lane into the socket module. ``None`` means no
+        #: panel handler was installed, which is REPORTED to the panel rather
+        #: than dropped — a Send that does nothing, silently, is the failure
+        #: the whole sidebar was written against.
+        self.panel_handler: Any = None
         self._conn: ExtensionConnection | None = None
         self._lock = asyncio.Lock()
         self._seq = itertools.count(1)
@@ -1220,11 +1231,92 @@ class ExtensionBackend:
         if kind == P.FRAME_EVENT:
             await self._handle_event(frame)
             return True
+        if kind == P.FRAME_PANEL:
+            await self._handle_panel(conn, frame)
+            return True
         # An unknown type on a PAIRED socket is recorded, not fatal: a newer add-on
         # speaking a frame this daemon predates must not take the connection down,
         # or an upgrade on either side becomes an outage.
         self.note_error(f"your browser sent an unknown frame type {kind!r}")
         return True
+
+    async def _handle_panel(
+        self, conn: ExtensionConnection, frame: dict[str, Any]
+    ) -> None:
+        """One ``browser.panel`` frame from the side panel (v1.242.0).
+
+        THE SILENT FAILURE THIS PREVENTS: a sidebar whose buttons do nothing
+        and say nothing. Every path out of here either runs the action or
+        sends a ``browser.panel_event`` ``error`` naming the reason — an
+        inbound panel frame is never dropped on the floor, which is exactly
+        what happened before this branch existed (it fell through to the
+        unknown-type note and the user watched a spinner forever).
+
+        TWO GATES, both fail-closed, and neither is this module's policy:
+
+        * **Unpaired.** ``browser.panel`` is deliberately absent from
+          :data:`~iron_jarvis.browser.protocol.RESTRICTED_INBOUND_FRAMES`, so a
+          socket that has not paired never reaches this method at all — the
+          restricted-state check at the top of :meth:`handle_frame` closes it
+          with 1008 first. A panel belongs to a browser the user pressed Pair
+          for; a local process that never paired asking the daemon to run a
+          chat turn is not an early panel.
+        * **Browser access.** ``off`` — and an unreadable or unrecognised
+          setting — refuses the action entirely. The word is read LIVE through
+          :meth:`access_word` at frame time, never captured, because the user
+          may have switched the capability off since this socket connected.
+          The refusal is a spoken one: the panel is told why, and what to do.
+
+        The access check here is not a second policy. It is the SAME
+        ``config.browser_access`` word ``BrowserRuntime.access`` normalises,
+        and the tools a panel turn may use are gated again, independently, by
+        the ordinary chat arming path (``_filter_browser_tools``). This gate
+        exists so that ``off`` costs a refusal instead of a turn.
+        """
+        action = str(frame.get("action") or "")
+        raw_params = frame.get("params")
+        params = dict(raw_params) if isinstance(raw_params, Mapping) else {}
+        access = self.access_word()
+        if access not in PANEL_ACCESS_ALLOWED:
+            self.note_error(
+                "the sidebar asked Iron Jarvis to work while Browser access is off"
+            )
+            await conn.send(
+                P.panel_event_frame(
+                    P.PANEL_EVENT_ERROR,
+                    {
+                        "text": "Browser access is off, so Iron Jarvis will not"
+                        " run anything from this sidebar. Turn it on from"
+                        " the Browser page in Iron Jarvis.",
+                        "reason": "browser_access_off",
+                    },
+                )
+            )
+            return
+        handler = self.panel_handler
+        if handler is None:
+            await conn.send(
+                P.panel_event_frame(
+                    P.PANEL_EVENT_ERROR,
+                    {
+                        "text": "This Iron Jarvis cannot run a sidebar"
+                        " conversation.",
+                        "reason": "no_panel_handler",
+                    },
+                )
+            )
+            return
+        try:
+            await handler(conn, action, params)
+        except Exception as exc:  # noqa: BLE001 — a failed action must SPEAK
+            logger.debug("panel action failed (%s)", action, exc_info=True)
+            self.note_error(f"a sidebar action failed: {clip_detail(exc)}")
+            await conn.send(
+                P.panel_event_frame(
+                    P.PANEL_EVENT_ERROR,
+                    {"text": "Iron Jarvis could not do that from the sidebar."},
+                )
+            )
 
     async def _handle_hello(
         self, conn: ExtensionConnection, frame: dict[str, Any]

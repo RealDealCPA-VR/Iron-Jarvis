@@ -114,7 +114,8 @@ def _addon(root: Path, *, built: bool = True, key: str = PINNED_EXTENSION_KEY,
                 "version": "1.239.0",
                 "key": key,
                 "background": {"service_worker": "dist/background.js", "type": "module"},
-                "action": {"default_popup": "dist/popup.html"},
+                "side_panel": {"default_path": "dist/sidepanel.html"},
+                "action": {"default_title": "Iron Jarvis"},
             }
         )
     (folder / "manifest.json").write_text(manifest_text, encoding="utf-8")
@@ -137,7 +138,7 @@ def _built_files() -> tuple[str, ...]:
     its own list would keep answering "built" for a folder the shipped check calls
     unbuilt.
     """
-    return ("dist/background.js", "dist/popup.html") + doctor_mod.BROWSER_ADDON_RUNTIME_FILES
+    return ("dist/background.js", "dist/sidepanel.html") + doctor_mod.BROWSER_ADDON_RUNTIME_FILES
 
 
 def _point_at(monkeypatch: pytest.MonkeyPatch, folder: Path | str) -> None:
@@ -272,7 +273,7 @@ def test_an_addon_missing_the_runtime_loaded_content_script_is_not_reported_read
     tmp_path, monkeypatch
 ):
     """The build hole this check could not see. ``manifest.json`` names the service
-    worker and the popup and NOTHING else -- there is no ``content_scripts`` block by
+    worker and the side panel and NOTHING else -- there is no ``content_scripts`` block by
     design -- so a ``dist/`` that lost ``content.js`` used to be "built and ready to
     load" while every ``read_page`` failed with a bare injection error, which is
     precisely the silently-blamed add-on this row exists to end.
@@ -347,7 +348,7 @@ def test_an_addon_with_no_key_is_refused_rather_than_trusted(tmp_path, monkeypat
         {
             "manifest_version": 3,
             "background": {"service_worker": "dist/background.js"},
-            "action": {"default_popup": "dist/popup.html"},
+            "side_panel": {"default_path": "dist/sidepanel.html"},
         }
     )
     folder = _addon(tmp_path, manifest_text=manifest)

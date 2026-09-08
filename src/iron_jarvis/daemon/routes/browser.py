@@ -92,6 +92,7 @@ from ..schemas import SettingsBody
 from ...browser import protocol as P
 from ...browser.errors import BrowserError, BrowserErrorCode, browser_error
 from ...browser.extension_backend import ExtensionConnection
+from ...browser import panel as _panel
 from ...browser.identity import pinned_extension_id
 from ...browser.service import ACCESS_OFF
 
@@ -399,6 +400,10 @@ def _disconnected_status() -> dict[str, Any]:
         "access": "off",
         "host_permission": False,
         "extension_id": "",
+        # Spelled in BOTH shapes on purpose: a key that exists only when
+        # something is connected makes every reader write a second branch, and
+        # the one that forgets renders a comparison against `undefined`.
+        "extension_version": "",
         # The id the daemon EXPECTS, as opposed to ``extension_id`` above, which is
         # whatever is connected right now (empty when nothing is). Public material,
         # and the card needs it precisely when nothing is connected: a pairing
@@ -760,6 +765,14 @@ def _settings_writer(app: FastAPI) -> Any:
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
 
+    # THE SIDE PANEL (v1.242.0). Installed at registration, from the ONE place
+    # that holds both the deps object and the browser backend: the transport
+    # knows nothing about chat and the runtime knows nothing about the deps
+    # shim, so neither of them can wire this. Without it an inbound
+    # `browser.panel` frame reaches a backend with no handler, and the panel is
+    # told so — never left spinning.
+    _panel.install(d)
+
     # ----------------------------------------------------------------- socket
 
     async def _open_pairing(runtime: Any, conn: ExtensionConnection) -> bool:
@@ -827,10 +840,20 @@ def register(app: FastAPI, d) -> None:
         capability that authorises reading their browser is switched off. The access
         level is re-read on every idle tick, so switching it back on promotes this
         socket in place instead of making the user reconnect.
+
+        A PAIRED, ADOPTED socket now polls on the same slice, for the other half
+        of that story: the access word is re-read and RE-ANNOUNCED whenever it
+        moves, so switching Browser off is pushed to a browser that is already
+        connected instead of leaving its sidebar header claiming a capability
+        the daemon is refusing. Nothing here asserts a duration.
         """
         backend = runtime.backend
         loop = asyncio.get_running_loop()
         expires_at = loop.time() + _deadline_s(getattr(runtime, "pairing", None))
+        # The access word this socket was last TOLD. Seeded with what adopt()
+        # (or the inert ready frame) just sent, so the first tick re-announces
+        # only a word that has actually moved since.
+        announced_access = backend.access_word()
         reason, detail = "closed", ""
         recv = asyncio.ensure_future(ws.receive())
         try:
@@ -846,6 +869,9 @@ def register(app: FastAPI, d) -> None:
                         # become the authoritative one now, and adopt() sends the
                         # browser.ready that says so.
                         await backend.adopt(conn)
+                        # adopt() sent a ready frame carrying this word; the
+                        # paired branch below must not repeat it.
+                        announced_access = backend.access_word()
                         inert = False
                         _schedule_auto_grant(runtime, conn)
                         continue
@@ -858,7 +884,34 @@ def register(app: FastAPI, d) -> None:
                     recv = asyncio.ensure_future(ws.receive())
                     continue
                 if conn.paired:
-                    done, _ = await asyncio.wait({recv}, return_when=asyncio.FIRST_COMPLETED)
+                    done, _ = await asyncio.wait(
+                        {recv}, timeout=_ACCESS_POLL_S,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if not done:
+                        # THE ACCESS WORD IS PUSHED ON EVERY CHANGE (v1.242.0).
+                        # `access` reached the add-on only in `browser.ready`,
+                        # sent at adopt() and on the off->on recovery above —
+                        # there was NO push on on->off for a socket that was
+                        # already adopted. So a user who turned Browser off
+                        # left the sidebar header reading "Interactive" while
+                        # the daemon refused every panel frame, and the panel's
+                        # own `body[data-access="off"]` rule — which hides the
+                        # composer — never fired in the one state it was
+                        # written for. A header that names a capability the
+                        # daemon is refusing is the exact dishonesty this
+                        # product forbids, so the word is re-read on the same
+                        # slice the inert path already uses and re-announced
+                        # whenever it MOVES (never on every tick: a repeated
+                        # identical ready frame is noise on a socket that also
+                        # carries commands).
+                        word = backend.access_word()
+                        if word != announced_access:
+                            announced_access = word
+                            await conn.send(
+                                backend.ready_frame(active=not _access_off(runtime))
+                            )
+                        continue
                 else:
                     done, _ = await asyncio.wait(
                         {recv}, timeout=_PAIRING_POLL_S, return_when=asyncio.FIRST_COMPLETED
@@ -993,6 +1046,16 @@ def register(app: FastAPI, d) -> None:
                     "access": str(runtime.access() or "off"),
                     "host_permission": bool(view.get("host_permission")),
                     "extension_id": str(view.get("extension_id") or ""),
+                    # THE VERSION CHROME IS ACTUALLY RUNNING (v1.242.0). The
+                    # add-on ships inside the installer, but Chrome keeps the
+                    # copy it loaded until it restarts -- so an updated app can
+                    # be talking to a build from two versions ago, whose icon
+                    # still opens the retired popup and has no sidebar at all.
+                    # The add-on reported this on `browser.hello` all along and
+                    # NOTHING compared it to anything; forwarding it is what
+                    # lets the card say "reload it" instead of the user
+                    # wondering why the sidebar they just read about is missing.
+                    "extension_version": str(view.get("extension_version") or ""),
                     "active_tab": view.get("active_tab") or None,
                     "last_error": view.get("last_error") or None,
                 }

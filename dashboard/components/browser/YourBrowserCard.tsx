@@ -72,14 +72,16 @@ import {
   ChevronRight,
   Activity,
   Wand2,
+  PanelRight,
 } from "lucide-react";
 import { post, put, ApiError } from "@/lib/api";
-import { usePolledApi } from "@/lib/useApi";
+import { useApi, usePolledApi } from "@/lib/useApi";
 import type {
   BrowserPendingPairing,
   BrowserStatus,
   BrowserTab,
   BrowserTestResult,
+  Health,
 } from "@/lib/types";
 import {
   Card,
@@ -447,6 +449,84 @@ function InstallSteps() {
 }
 
 /* -------------------------------------------------------------------------- */
+/*  The sidebar, said out loud                                                 */
+/* -------------------------------------------------------------------------- */
+
+/** THE ONE PLACE THIS APP TELLS A USER THE SIDEBAR EXISTS (v1.242.0).
+ *
+ *  v1.242.0 put a chat sidebar inside the user's browser and this dashboard
+ *  said nothing about it anywhere: no "sidebar", no "side panel", no "toolbar"
+ *  in any page or component. The guided window now ends on it, but a window is
+ *  read once — this block is for the user who set the browser up last month and
+ *  never opens that dialog again, so it is on the card in EVERY state rather
+ *  than only where the wizard appears.
+ *
+ *  AND IT LEADS WITH THE PIN, because that is the part that decides whether the
+ *  feature is reachable at all: Chrome does not put a newly loaded unpacked
+ *  add-on on the toolbar, it files it behind the puzzle-piece menu. A user told
+ *  "click the icon" who has no icon concludes the feature is broken.
+ *
+ *  THE VERSION LINE IS THE STALE-BUILD REMEDY. Chrome keeps serving the copy of
+ *  the add-on it loaded until somebody presses Reload, so an Iron Jarvis update
+ *  can leave the previous add-on running — and the previous one still declares
+ *  a popup, which means the toolbar click opens the retired popup and the
+ *  sidebar cannot be reached at all. `GET /browser/status` does not carry the
+ *  add-on's version, so nothing here can compare the two numbers for the user;
+ *  what it CAN do is print the number this app is and say where the other one
+ *  is written (the sidebar's own header), which is the comparison made
+ *  reachable rather than a comparison claimed.
+ *
+ *  LIGHT MARKS: `border-amber-500/25`, `bg-amber-500/10`, `text-amber-100/80`
+ *  and `text-amber-200` all already carry mark1 + mark8 rules in the generated
+ *  light-amber-overrides block in app/globals.css. Nothing new is introduced. */
+function SidebarNote({ appVersion }: { appVersion: string }) {
+  return (
+    <div
+      data-testid="browser-sidebar-note"
+      className="rounded-xl border border-white/[0.08] bg-white/[0.02] px-3 py-2.5"
+    >
+      <SectionLabel>The Jarvis sidebar</SectionLabel>
+      <p className="mt-2 flex items-start gap-2 text-[12px] leading-relaxed text-zinc-400">
+        <PanelRight size={14} className="mt-0.5 shrink-0 text-zinc-500" aria-hidden="true" />
+        <span>
+          Click the Iron Jarvis icon in your browser&apos;s toolbar and a chat sidebar opens down
+          the right-hand side of the window — ask Jarvis about the page you are looking at without
+          leaving it.
+        </span>
+      </p>
+      <p
+        data-testid="browser-sidebar-pin"
+        className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-100/80"
+      >
+        <span className="font-semibold text-amber-200">No icon on the toolbar?</span> Chrome does
+        not put a newly loaded add-on there. Click the puzzle-piece button at the top right of your
+        browser, find Iron Jarvis in that list, and press the pin beside it.
+      </p>
+      <p
+        data-testid="browser-sidebar-stale"
+        className="mt-2 text-[11px] leading-relaxed text-zinc-500"
+      >
+        If the icon opens a small popup instead of a sidebar, your browser is still running an
+        older copy of the add-on — open{" "}
+        <code className="font-mono text-zinc-400">chrome://extensions</code> and press Reload on
+        Iron Jarvis.
+        {appVersion ? (
+          <>
+            {" "}
+            This copy of Iron Jarvis is{" "}
+            <span data-testid="browser-sidebar-app-version" className="text-zinc-400">
+              {appVersion}
+            </span>
+            , and the sidebar prints the add-on version your browser is running in its own header —
+            an older number there is the copy to reload.
+          </>
+        ) : null}
+      </p>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /*  The card                                                                   */
 /* -------------------------------------------------------------------------- */
 
@@ -455,6 +535,11 @@ export function YourBrowserCard() {
   // actively watching. `usePolledApi` tears the interval down while the window
   // is hidden (v1.230.0), so a minimised dashboard costs nothing here.
   const { data, error, reload } = usePolledApi<BrowserStatus>("/browser/status", 5000);
+  // The version THIS app is, for the stale-add-on line below. Fetched once, not
+  // polled: it cannot change without the process restarting, and a second 5 s
+  // interval on this card would be traffic bought for a string.
+  const { data: health } = useApi<Health>("/health");
+  const appVersion = (health?.version ?? "").trim();
 
   const [busy, setBusy] = useState<
     "pair" | "grant" | "test" | "disconnect" | "forget" | "access" | null
@@ -599,7 +684,7 @@ export function YourBrowserCard() {
                   <Wand2 size={14} /> Set up my browser
                 </button>
                 <span className="text-[11px] text-zinc-500">
-                  Four steps, guided — Iron Jarvis does everything else itself.
+                  Five steps, guided — Iron Jarvis does everything else itself.
                 </span>
               </div>
             )}
@@ -607,6 +692,7 @@ export function YourBrowserCard() {
             {setupOpen && (
               <BrowserSetupModal
                 status={data ?? null}
+                appVersion={appVersion}
                 onClose={() => setSetupOpen(false)}
                 onChanged={reload}
               />
@@ -836,6 +922,12 @@ export function YourBrowserCard() {
 
             {note && <SuccessNote>{note}</SuccessNote>}
             {actionError && <ErrorNote>{actionError}</ErrorNote>}
+
+            {/* THE SIDEBAR, NAMED. Above the access selector and in every state,
+                because a user who set this up once and never opens the guided
+                window again would otherwise never learn the sidebar exists —
+                and because the pin instruction is what makes it reachable. */}
+            <SidebarNote appVersion={appVersion} />
 
             {/* The access selector. Always present, because it is the switch the
                 whole feature hangs on and hiding it behind a state would make

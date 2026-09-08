@@ -1,8 +1,14 @@
 """The browser add-on's PANEL is pinned — the words, and the button's honesty.
 
-Ship 1 of the Browser capability (v1.235.0). The popup is the only Iron Jarvis
-surface that lives inside the user's browser, and every word it renders is written
-at runtime by ``popup.ts``. Two defects in the reviewed diff lived exactly there:
+Ship 1 of the Browser capability (v1.235.0), MOVED TO THE SIDE PANEL at v1.242.0.
+The popup is gone (D32: Chrome ignores ``openPanelOnActionClick`` while
+``action.default_popup`` is set), and its status readout moved into the side panel's
+header rather than being rewritten there — so every pin below moved with it, none
+was deleted, and the two findings they encode are still the findings.
+
+The panel is the only Iron Jarvis surface that lives inside the user's browser, and
+every word it renders is written at runtime by ``sidepanel.ts``. Two defects in the
+reviewed diff lived exactly there:
 
 * the "Not connected" state offered a button labelled **Disconnect**, and pressing
   it persisted ``ij.browser.suspended`` — a state no other surface reported and no
@@ -13,7 +19,7 @@ at runtime by ``popup.ts``. Two defects in the reviewed diff lived exactly there
   at all. A placeholder sitting where a mode belongs reads AS the mode.
 
 There is no test harness for the add-on's TypeScript in this repo (``extensions/
-chrome`` has no vitest project), so these are SOURCE pins, the way this repo pins
+chrome`` has no vitest project and must not grow one), so these are SOURCE pins, the way this repo pins
 untestable surfaces — plus real executable assertions on the Python half of the
 wire, which is where the ``access`` field is actually defined.
 
@@ -44,8 +50,8 @@ from iron_jarvis.browser.service import ACCESS_LEVELS
 
 REPO = Path(__file__).resolve().parents[1]
 ADDON = REPO / "extensions" / "chrome" / "src"
-POPUP_TS = ADDON / "popup" / "popup.ts"
-POPUP_HTML = ADDON / "popup" / "popup.html"
+PANEL_TS = ADDON / "sidepanel" / "sidepanel.ts"
+PANEL_HTML = ADDON / "sidepanel" / "sidepanel.html"
 SETUP_HTML = ADDON / "setup" / "setup.html"
 SOCKET_TS = ADDON / "bridge" / "socket.ts"
 WORKER_TS = ADDON / "background" / "index.ts"
@@ -144,7 +150,7 @@ def test_every_bridge_state_maps_to_the_action_its_button_promises():
     states = _string_array(socket, "BRIDGE_STATES")
     assert set(states) == set(EXPECTED_ACTIONS), (
         "a bridge state exists that this pin does not know about; every state the "
-        "popup can be in has to say what its button does"
+        "panel can be in has to say what its button does"
     )
     for state in states:
         assert actions.get(state) == EXPECTED_ACTIONS[state], (
@@ -183,49 +189,49 @@ def test_a_suspended_browser_always_shows_the_way_back():
         assert "connect" in labels[actions[state]].lower(), (
             f"state {state!r} offers no visible way back onto the bridge"
         )
-    popup = _code(POPUP_TS)
-    suspended = _block(popup, 'case "suspended":')
+    panel = _code(PANEL_TS)
+    suspended = _block(panel, 'case "suspended":')
     assert "press Connect" in suspended, (
         "the suspended state's note names the button the user must press; if the "
         "button's word changes this sentence has to change with it"
     )
 
 
-def test_the_popup_never_writes_a_button_label_of_its_own():
+def test_the_panel_never_writes_a_button_label_of_its_own():
     """The label comes from the action, so the two cannot disagree."""
-    popup = _code(POPUP_TS)
-    describe = _block(popup, "export function describe(")
+    panel = _code(PANEL_TS)
+    describe = _block(panel, "export function describe(")
     assert "TOGGLE_LABELS[toggleAction(" in describe, (
         "describe() must derive the button's word from toggleAction; a per-branch "
         "literal is how the offline branch came to say Disconnect"
     )
-    assert not re.search(r'toggle:\s*"', popup), (
-        "a hardcoded toggle label is back in popup.ts — it can be wrong about what "
-        "the press will do, and nothing else would notice"
+    assert not re.search(r'toggle:\s*"', panel), (
+        "a hardcoded toggle label is back in sidepanel.ts — it can be wrong about "
+        "what the press will do, and nothing else would notice"
     )
 
 
 def test_the_button_is_hidden_when_there_is_nothing_for_it_to_do():
     """D28's disconnected panel offers Open Jarvis only."""
-    popup = _code(POPUP_TS)
-    assert 'el.toggle.hidden = view.toggle === "";' in popup, (
+    panel = _code(PANEL_TS)
+    assert 'el.toggle.hidden = view.toggle === "";' in panel, (
         "the button must be hidden exactly when the action is none; a visible "
         "button that does nothing reads as a broken add-on"
     )
-    html = _read(POPUP_HTML)
+    html = _read(PANEL_HTML)
     tag = re.search(r'<button[^>]*id="toggle"[^>]*>(.*?)</button>', html, flags=re.S)
-    assert tag, "popup.html no longer declares the toggle button"
+    assert tag, "sidepanel.html no longer declares the toggle button"
     assert "hidden" in tag.group(0), (
         "the button ships hidden: it is painted before the worker answers, and a "
         "static label is a promise the panel may be about to contradict"
     )
     assert tag.group(1).strip() == "", (
-        f"popup.html hardcodes the button's label ({tag.group(1).strip()!r}); the "
+        f"sidepanel.html hardcodes the button's label ({tag.group(1).strip()!r}); the "
         "word belongs to the state, not to the markup"
     )
 
 
-def test_the_worker_acts_on_the_same_mapping_the_popup_labels_from():
+def test_the_worker_acts_on_the_same_mapping_the_panel_labels_from():
     """A label written here and a handler written there is the defect's real shape."""
     worker = _code(WORKER_TS)
     block = _block(worker, 'case "toggle_connection":')
@@ -270,14 +276,14 @@ def test_the_generated_typescript_carries_the_optional_access_field():
     """The add-on reads the generated file; a field that stops there is not on the wire."""
     ready = _block(_read(PROTOCOL_TS), "export interface ReadyFrame")
     assert "access?: string;" in ready, (
-        "regenerate extensions/chrome/src/protocol.ts — the popup's Access row reads "
+        "regenerate extensions/chrome/src/protocol.ts — the panel's Access row reads "
         "this field and cannot be typed against it otherwise"
     )
 
 
 def test_the_access_row_renders_the_reported_mode_for_every_level_the_daemon_has():
-    popup = _code(POPUP_TS)
-    words = _record_literal(popup, "const ACCESS_WORDS")
+    panel = _code(PANEL_TS)
+    words = _record_literal(panel, "const ACCESS_WORDS")
     assert set(words) == set(ACCESS_LEVELS), (
         f"the add-on words {sorted(words)} do not cover the daemon's access levels "
         f"{sorted(ACCESS_LEVELS)}; a level with no word prints its raw wire value"
@@ -286,28 +292,28 @@ def test_the_access_row_renders_the_reported_mode_for_every_level_the_daemon_has
         assert word and word[0].isupper() and "_" not in word, (
             f"{level!r} renders as {word!r} — the panel must show words, not wire values"
         )
-    assert "accessWord(status.access)" in popup, (
+    assert "accessWord(status.access)" in panel, (
         "the Access row must render what the daemon reported; it printed a constant "
         "placeholder in every state, including Connected, for the whole of Ship 1"
     )
 
 
 def test_an_unreported_access_mode_is_named_as_unknown_not_dressed_as_a_value():
-    popup = _code(POPUP_TS)
-    unknown = re.search(r'ACCESS_UNKNOWN = "([^"]*)"', popup)
-    assert unknown, "popup.ts must name the absent-mode text once, as a constant"
+    panel = _code(PANEL_TS)
+    unknown = re.search(r'ACCESS_UNKNOWN = "([^"]*)"', panel)
+    assert unknown, "sidepanel.ts must name the absent-mode text once, as a constant"
     text = unknown.group(1)
     assert "unknown" in text.lower(), (
         f"the absent mode reads {text!r}, which sits in the Access row looking like "
         "a mode; say it is unknown and say where the answer lives"
     )
-    words = _record_literal(popup, "const ACCESS_WORDS")
+    words = _record_literal(panel, "const ACCESS_WORDS")
     assert text not in words.values(), "the absent-mode text must not be a real mode's word"
-    assert '"Set in Jarvis"' not in popup, (
+    assert '"Set in Jarvis"' not in panel, (
         "the old placeholder is back: it was printed in every state including "
         "Connected, and a user reads it as the setting rather than as its absence"
     )
-    body = _block(popup, "export function accessWord(")
+    body = _block(panel, "export function accessWord(")
     assert "ACCESS_UNKNOWN" in body and "ACCESS_WORDS" in body
 
 
@@ -325,7 +331,7 @@ def _visible_html(path: Path) -> str:
     return text
 
 
-@pytest.mark.parametrize("path", [POPUP_HTML, SETUP_HTML], ids=["popup", "setup"])
+@pytest.mark.parametrize("path", [PANEL_HTML, SETUP_HTML], ids=["sidepanel", "setup"])
 def test_no_page_of_the_add_on_calls_itself_an_extension(path: Path):
     """In Iron Jarvis "extension" already means an MCP server (copy rule)."""
     visible = _visible_html(path)
