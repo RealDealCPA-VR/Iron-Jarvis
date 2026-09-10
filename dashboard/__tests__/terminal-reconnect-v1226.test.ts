@@ -45,27 +45,36 @@ describe("terminalReconnectDelayMs (v1.226.0)", () => {
   });
 });
 
-describe("TerminalPane wiring (v1.226.0 source pins)", () => {
-  const src = readFileSync(
-    join(process.cwd(), "components", "terminal", "TerminalPane.tsx"),
-    "utf8",
-  );
+describe("TerminalPane wiring (v1.226.0 source pins; the socket is the host's since v1.243.0)", () => {
+  // Normalised at the reader: CI checks files out with CRLF (v1.232.1).
+  const read = (...p: string[]) =>
+    readFileSync(join(process.cwd(), ...p), "utf8").replace(/\r\n/g, "\n");
+  const src = read("components", "terminal", "TerminalPane.tsx");
+  // v1.243.0: the socket and its reconnect schedule live in the PaneHost,
+  // which outlives the pane; the mounted pane hands its /health verdict over.
+  const host = read("components", "terminal", "paneHost.ts");
 
   it("the close handler consults the schedule with the live daemon reachability", () => {
-    expect(src).toContain("terminalReconnectDelayMs(attempts, daemonOnlineRef.current)");
+    expect(host).toContain("terminalReconnectDelayMs(this.attempts, this.daemonOnline)");
     // 4000 (shell exited) is still the one permanent stop, ahead of the schedule.
-    const exitStop = src.indexOf("if (ev.code === 4000) {");
-    const schedule = src.indexOf("terminalReconnectDelayMs(attempts,");
+    const exitStop = host.indexOf("if (ev.code === 4000) {");
+    const schedule = host.indexOf("terminalReconnectDelayMs(this.attempts,");
     expect(exitStop).toBeGreaterThan(-1);
     expect(schedule).toBeGreaterThan(exitStop);
+    // …and the reachability it reads is the pane's live one.
+    expect(src).toContain("h.daemonOnline = daemonOnlineRef.current;");
+    expect(src).toContain("hostRef.current.daemonOnline = daemonOnline;");
   });
 
   it("a lost link renders a Reconnect button that re-runs connect; an exited shell does not", () => {
     expect(src).toContain('{lostLink ? "Connection lost" : "Session closed"}');
     expect(src).toContain("onClick={() => reconnectRef.current?.()}");
+    expect(src).toContain("reconnectRef.current = () => h.reconnectNow();");
     // The overlay is pointer-events-none; the button must opt back in.
     expect(src).toMatch(/pointer-events-auto[^>]*>\s*Reconnect/);
     // The exited-shell path clears the lost flag so no lever is offered.
-    expect(src).toMatch(/ev\.code === 4000\) \{\s*setLostLink\(false\);/);
+    expect(host).toMatch(
+      /ev\.code === 4000\) \{\s*this\.exited = true;\s*this\.setConn\("closed", false\);/,
+    );
   });
 });

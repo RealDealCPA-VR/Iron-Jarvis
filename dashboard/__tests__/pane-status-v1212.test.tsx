@@ -543,31 +543,37 @@ describe("outputNotifyAt (pure — the throttle TerminalPane runs in ws.onmessag
 /* ---- source pins (jsdom cannot run xterm — the house idiom) ------------------ */
 
 describe("TerminalPane wiring (source-pinned)", () => {
-  const pane = readFileSync(
-    join(process.cwd(), "components", "terminal", "TerminalPane.tsx"),
-    "utf8",
-  );
+  // Normalised at the reader: CI checks files out with CRLF (v1.232.1).
+  const read = (...p: string[]) =>
+    readFileSync(join(process.cwd(), ...p), "utf8").replace(/\r\n/g, "\n");
+  const pane = read("components", "terminal", "TerminalPane.tsx");
+  // v1.243.0: the socket lives in paneHost.ts, because it outlives the pane.
+  // The host writes each frame to xterm and hands it to the mounted pane's
+  // onOutput with a `replaying` flag; the pane decides whether to notify.
+  const host = read("components", "terminal", "paneHost.ts");
 
-  it("notifies from ws.onmessage through the pure gate, guarded and throttled", () => {
-    // Anchor on the ASSIGNMENT ("ws.onmessage = "), not the bare phrase — a
-    // comment 500 lines earlier also says "ws.onmessage", and a window opened
-    // there spans the whole onopen handler, letting the notify block drift
-    // out of the real message handler unnoticed (reviewer finding 2).
-    const om = pane.slice(pane.indexOf("ws.onmessage = "), pane.indexOf("ws.onclose"));
+  it("notifies from the host's output callback through the pure gate, guarded and throttled", () => {
+    // Anchor on the view's onOutput ASSIGNMENT, up to the listener wiring
+    // that follows it — a window that drifts past it would let the notify
+    // block leave the real callback unnoticed (reviewer finding 2).
+    const om = pane.slice(
+      pane.indexOf("onOutput: (data, replaying) =>"),
+      pane.indexOf('holder.addEventListener("contextmenu"'),
+    );
     // The decision is the tested pure helper, fed the frame, the clock, the
-    // throttle memory, and the SAME replay window the answerback suppression
-    // trusts — not a re-implementation.
+    // throttle memory, and the replay guard — not a re-implementation.
     expect(om).toContain("outputNotifyAt(");
     expect(om).toContain("replayGuardUntil");
     expect(om).toContain("lastOutputNotifyRef.current = at;");
     // v1.213.0 widened the callback to carry the frame's decoded text — the
     // pin holds the call shape, not the (now non-empty) argument list.
-    expect(om).toContain("onOutputRef.current?.(decodeFrame(ev.data))");
-    // The honest limitation is documented where the code lives: the replay is
-    // not distinguishable by frame shape (the phrase wraps in the source, so
-    // the pin holds the line-stable half).
-    expect(om).toContain("NOT distinguishable by frame");
-    expect(om).toContain("no marker");
+    expect(om).toContain("onOutputRef.current?.(decodeFrame(data))");
+    // v1.243.0: the replay IS distinguishable now — the daemon ends it with an
+    // empty frame — so the guard is exact rather than a window on the clock.
+    expect(om).toContain("replaying ? Number.POSITIVE_INFINITY : 0");
+    const msg = host.slice(host.indexOf("ws.onmessage = "), host.indexOf("ws.onclose = "));
+    expect(msg).toContain("isReplayEnd(data)");
+    expect(msg).toContain("this.view?.onOutput(data, this.replaying)");
   });
 
   it("reads the callback through a ref — the once-per-session socket effect must never pin a stale page closure", () => {

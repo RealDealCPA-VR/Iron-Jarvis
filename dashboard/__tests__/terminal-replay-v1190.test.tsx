@@ -67,27 +67,35 @@ describe("waitForStableSize", () => {
 });
 
 describe("the pane's ordering (source-pinned)", () => {
-  const pane = readFileSync(
-    join(process.cwd(), "components", "terminal", "TerminalPane.tsx"),
-    "utf8",
-  );
+  // Normalised at the reader: CI checks files out with CRLF (v1.232.1).
+  const read = (...p: string[]) =>
+    readFileSync(join(process.cwd(), ...p), "utf8").replace(/\r\n/g, "\n");
+  const pane = read("components", "terminal", "TerminalPane.tsx");
+  // v1.243.0: the terminal and its socket live in a PaneHost that outlives
+  // the pane. `h.start()` is a new host's FIRST connect (a no-op for a live
+  // one), so it is the call the wait must precede.
+  const host = read("components", "terminal", "paneHost.ts");
 
-  it("waits for layout, then fits, THEN connects", () => {
+  it("waits for layout, then fits, THEN starts the host (its first connect)", () => {
     const wait = pane.indexOf("await waitForStableSize(holder)");
-    const connect = pane.indexOf("connect();");
+    const start = pane.indexOf("h.start();");
     expect(wait).toBeGreaterThan(-1);
-    expect(connect).toBeGreaterThan(-1);
+    expect(start).toBeGreaterThan(-1);
     // The order IS the fix: a connect that precedes the wait replays the
     // scrollback into an unsized buffer, exactly the reported bug.
-    expect(wait).toBeLessThan(connect);
+    expect(wait).toBeLessThan(start);
     // …and a fit sits between them, so the replay meets the true cols.
-    const between = pane.slice(wait, connect);
+    const between = pane.slice(wait, start);
     expect(between).toContain("doFit()");
     // The wait respects disposal — a pane unmounted mid-wait must not connect.
     expect(between).toContain("if (disposed) return;");
+    // …and nothing but start() connects a new host: building one never does.
+    const registry = host.slice(host.indexOf("export function acquirePaneHost"));
+    expect(registry).not.toContain("connect(");
   });
 
-  it("sweeps the viewport once after the replay window", () => {
-    expect(pane).toMatch(/term\?\.refresh\(0, Math\.max\(0, \(term\?\.rows \?\? 1\) - 1\)\)/);
+  it("sweeps the viewport once after the replay lands", () => {
+    const finish = host.slice(host.indexOf("private finishReplay("));
+    expect(finish).toMatch(/this\.term\.refresh\(0, Math\.max\(0, this\.term\.rows - 1\)\)/);
   });
 });

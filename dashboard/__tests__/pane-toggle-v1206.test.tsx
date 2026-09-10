@@ -655,15 +655,28 @@ describe("TerminalPane's one-shot focus steal (source-pinned)", () => {
     expect(pane).toContain("onWriterReady?.(writeToShell)");
     expect(pane).toContain("onWriterReady?.(null)");
     // The writer is the snippet path's mechanism — raw text on the attach WS,
-    // read through wsRef at CALL time so reconnects are covered — and refuses
-    // (false) on a closed/absent socket instead of pretending it typed.
+    // read through hostRef at CALL time so reconnects (and, since v1.243.0, a
+    // host that outlived an earlier mount) are covered — and refuses (false)
+    // on a closed/absent socket instead of pretending it typed.
     const writer = pane.slice(
       pane.indexOf("const writeToShell"),
       pane.indexOf("onWriterReady?.(writeToShell)"),
     );
-    expect(writer).toContain("wsRef.current");
-    expect(writer).toContain("readyState !== WebSocket.OPEN) return false");
+    expect(writer).toContain("hostRef.current");
     expect(writer).toContain("live.send(text)");
-    expect(writer).toContain("return true");
+    expect(writer).toContain(": false");
+    // The refusal itself lives in the host's send(), the one door every
+    // typing path (writer, Run, Launch, snippets) goes through.
+    const host = readFileSync(
+      join(process.cwd(), "components", "terminal", "paneHost.ts"),
+      "utf8",
+    );
+    const send = host.slice(
+      host.indexOf("  send(text: string): boolean {"),
+      host.indexOf("  dispose(): void {"),
+    );
+    expect(send).toContain("readyState !== WS_OPEN) return false");
+    expect(send).toContain("live.send(text)");
+    expect(send).toContain("return true");
   });
 });

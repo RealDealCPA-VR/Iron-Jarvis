@@ -266,28 +266,58 @@ def register(app: FastAPI, d) -> None:
             await close_exited()
             return
 
-        # This pane is now the live reader: the session's background auto-drain
-        # (Creative Studio) steps aside while we're attached so we never race it
-        # for the PTY's bytes. Balanced by remove_consumer() in the finally.
-        session.add_consumer()
+        # The frame that ENDS the scrollback replay (v1.243.0): one EMPTY binary
+        # frame. The pump below never sends an empty frame, so it cannot be
+        # mistaken for output.
+        REPLAY_END = b""
+        # Close code for an attach that fell too far behind to catch up
+        # (1013 = "try again later"): the pane reconnects to a fresh replay.
+        ATTACH_OVERFLOW = 1013
+
+        # ATTACH (v1.243.0): this pane's replay AND its share of everything the
+        # PTY prints after it, taken in one step (`TerminalSession.subscribe`).
+        # This used to be `add_consumer()` plus a bare `session.read()` loop,
+        # and a read hands each chunk to exactly ONE caller — so a second attach
+        # (a phone, a second window, a reload racing its own close) split the
+        # stream with the first, and the background drain could take the chunk
+        # in flight at the moment of attach. Either way a pane lost bytes out of
+        # the middle of an escape sequence and printed the rest as text. Every
+        # reader now delivers to every attach. Balanced by unsubscribe() in the
+        # finally, which also hands the PTY back to the background drain.
+        history, sub = session.subscribe()
 
         # PERSISTENCE: replay the session's scrollback so a RE-ATTACHING pane
-        # (the user switched tabs / navigated away and back) shows its history
+        # (a reload, a daemon restart, a dropped link) shows its history
         # instead of a blank screen. The shell itself never died — only the
         # browser's xterm buffer was lost — so we resend what it printed.
-        history = session.scrollback_bytes()
-        if history:
-            try:
+        # Then mark where the replay ENDS. The pane needs that boundary: every
+        # query in the replay makes xterm generate an answer, and the pane has
+        # to keep answers to questions asked in the past out of the shell.
+        # Without the marker it could only guess how long that is (it used to
+        # guess 800 ms, and a slow parse outran it).
+        try:
+            if history:
                 await ws.send_bytes(history)
-            except Exception:  # a client that drops mid-replay just reconnects
-                pass
+            await ws.send_bytes(REPLAY_END)
+        except Exception:  # a client that drops mid-replay just reconnects
+            pass
 
         async def pump_output() -> None:  # PTY -> client
             # 10ms idle poll: measured end-to-end, the shell's own echo is
             # ~50ms (ConPTY/PowerShell), so our added worst-case latency should
             # stay well under it. 100 wakeups/s per idle terminal is noise.
             while True:
-                data = session.read()
+                session.read()  # whoever reads, every attach gets the chunk
+                data = sub.take()
+                if sub.overflowed:
+                    # So far behind that catching up would be a lie about the
+                    # present: drop the link, and the pane reconnects to a
+                    # fresh replay (any close but 4000 retries).
+                    try:
+                        await ws.close(code=ATTACH_OVERFLOW)
+                    except Exception:
+                        pass
+                    break
                 if data:
                     await ws.send_bytes(data)
                 elif not session.alive:
@@ -336,7 +366,7 @@ def register(app: FastAPI, d) -> None:
         except WebSocketDisconnect:
             pass
         finally:
-            session.remove_consumer()  # hand the PTY back to the background drain
+            session.unsubscribe(sub)  # ...and hand the PTY back to the background drain
             out.cancel()
             try:
                 await ws.close()

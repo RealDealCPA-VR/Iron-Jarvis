@@ -503,6 +503,32 @@ does not need a bump, stop and bump it.
   window knows. Same wave: `GET /sessions/{id}/review` answers `200
   {"review": null}` for the normal no-review state (it 404'd on every
   detail visit), and the session page reads that shape.
+- **A Build terminal OUTLIVES the Build page** (v1.243.0). The user's report:
+  leave Build, come back, and the panes "disconnect or show a strange string
+  of characters" and take a while to return. Every TerminalPane owned its
+  xterm AND its socket inside a mount effect, so a module switch (or a Rail ⇄
+  Canvas flip, which swaps the wrapper element) disposed both, and the return
+  rebuilt them from a full replay plus the repaint wiggle. The replay
+  re-parsed old QUERIES (a live pane's scrollback held Codex's OSC 10/11
+  colour queries), and the 800 ms `TERM_REPORT_RE` knew only CSI `c/n/R/t`, so
+  xterm's colour answers were typed into the shell. `components/terminal/
+  paneHost.ts` now holds each pane's terminal + socket in a module registry:
+  an unmount PARKS (the wrapper moves to an off-screen, inert lot — never
+  `display:none`; xterm's renderer pauses itself off-screen), a mount ADOPTS
+  (`acquirePaneHost` → `adopt` → `waitForStableSize` → `settle` → `start`).
+  Only `closeTerminal` → `disposePaneHost` and the page's load-time
+  `retainPaneHosts` end a host — never put `term.dispose()` or `new WebSocket`
+  back in the pane. A REAL re-attach (reload, restart, lost link) is
+  DELIMITED: the daemon ends the replay with one EMPTY binary frame, and the
+  host drops every `isTerminalReport` answer until xterm's `write("", cb)`
+  says the parser has passed it. Daemon half: `TerminalSession.read()` fans
+  each chunk out to every `subscribe()`d attach (a read used to hand a chunk
+  to ONE caller, so two attaches — or the drain thread at the instant of
+  attach — tore escape sequences), `subscribe` snapshots the replay under the
+  same lock, and the last `unsubscribe` starts the background drain, because
+  a PTY nobody reads fills its pipe and the Claude in it BLOCKS until someone
+  looks. `tests/test_terminal_attach_v1243.py`,
+  `dashboard/__tests__/terminal-host-v1243.test.ts`.
 - **A grant is written where the NEXT run reads, and yolo never rides an
   escalation** (v1.232.0, audit Wave 6, A6/A7/A9). "Allow for this
   conversation" on a session's ask widened an in-memory set and nothing
@@ -851,7 +877,10 @@ does not need a bump, stop and bump it.
   holder has no size wraps its replay into a buffer no later fit can re-wrap,
   so a hidden pane must keep a real box. Never `display:none`, never an
   unmount. The rail also needs a fallback focus (`activeId`): on the canvas a
-  null focus is harmless, in the rail it renders an empty workspace.
+  null focus is harmless, in the rail it renders an empty workspace. The
+  TerminalPane component itself CAN unmount (leaving Build, a shape flip) —
+  since v1.243.0 its xterm and socket live in `components/terminal/
+  paneHost.ts` and are parked, not destroyed (see the hard rule).
 - `dashboard/app/<route>/page.tsx` per page; shared in `dashboard/components/`
   (`ui.tsx` primitives, `Sidebar.tsx` nav incl. Simple/Advanced mode,
   `ModelSwitcher.tsx` quality dial) and `dashboard/lib/` (`api.ts` fetch+auth,

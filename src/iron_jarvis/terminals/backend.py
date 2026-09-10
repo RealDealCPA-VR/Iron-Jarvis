@@ -115,7 +115,10 @@ class FakeBackend:
         if not self._out:
             return b""
         chunk = bytes(self._out[:max_bytes])
-        del self._out[:max_bytes]
+        # Delete exactly what was taken: the background drain reads from its
+        # own thread, and a write landing between the two lines would
+        # otherwise be deleted unread.
+        del self._out[: len(chunk)]
         return chunk
 
     def resize(self, cols: int, rows: int) -> None:

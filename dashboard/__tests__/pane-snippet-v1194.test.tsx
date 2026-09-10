@@ -251,7 +251,11 @@ describe("the pane's snippet call sites (source-pinned)", () => {
   );
 
   it("the Ctrl+V handler reaches the image probe at all, and never emits ^V", () => {
-    const handler = pane.slice(pane.indexOf("attachCustomKeyEventHandler"));
+    // v1.243.0: the terminal outlives the pane, so the pane's key handler is
+    // handed to the host (which runs it through xterm's custom key handler
+    // while this pane holds it) rather than attached inline.
+    expect(pane).toContain("h.keyHandler = keyHandler;");
+    const handler = pane.slice(pane.indexOf("const keyHandler = (e: KeyboardEvent)"));
     const vBranch = handler.indexOf('e.key === "v"');
     const imageGuard = handler.indexOf("ijBridge?.clipboardReadImage", vBranch);
     const textPaste = handler.indexOf("pasteFromClipboard()", vBranch);

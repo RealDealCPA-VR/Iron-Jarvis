@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import threading
 import time
+from collections import deque
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -95,6 +96,60 @@ def _safe_replay_start(buf: bytes | bytearray, scan: int = 4096) -> int:
     return i + min(anchors) if anchors else i
 
 
+#: How far one attached pane may fall behind the live stream before it is cut
+#: loose (v1.243.0). Generous — a TUI repainting a big screen is a few hundred
+#: KB — so only a genuinely stalled reader (a phone on a dead link) ever hits it.
+ATTACH_BACKLOG_MAX_BYTES = 8 * 1024 * 1024
+
+
+class OutputSubscription:
+    """One attached pane's share of a session's live output (v1.243.0).
+
+    Every chunk :meth:`TerminalSession.read` takes off the PTY is appended to
+    EVERY subscription, whichever caller did the reading. Before this, a read
+    handed each chunk to exactly one caller: a second attach (a phone, a second
+    window, a reload racing its own close) split the stream with the first, and
+    the background drain could take the chunk in flight at the instant a pane
+    attached. Either way a pane lost bytes out of the middle of an escape
+    sequence and rendered the rest of it as text.
+
+    Bounded: a reader ``limit`` bytes behind is marked :attr:`overflowed` and
+    its backlog dropped. The route then closes that socket and the pane
+    reconnects to a fresh replay — the daemon never buffers a dead link's
+    gigabytes, and a pane never renders a stream with a hole in it.
+    """
+
+    def __init__(self, lock: threading.Lock, limit: int) -> None:
+        # The SESSION's read lock: pushes happen under it (inside read()), and
+        # take() holds it too, so a chunk is never half-delivered.
+        self._lock = lock
+        self._limit = limit
+        self._chunks: deque[bytes] = deque()
+        self._size = 0
+        self.overflowed = False
+
+    def _push(self, data: bytes) -> None:
+        """Called by :meth:`TerminalSession.read` with the read lock held."""
+        if self.overflowed:
+            return
+        self._chunks.append(data)
+        self._size += len(data)
+        if self._size > self._limit:
+            self.overflowed = True
+            self._chunks.clear()
+            self._size = 0
+
+    def take(self) -> bytes:
+        """Everything delivered since the last take, as one chunk (``b""`` if none)."""
+        with self._lock:
+            if not self._chunks:
+                return b""
+            data = b"".join(self._chunks)
+            self._chunks.clear()
+            self._size = 0
+        return data
+
+
 class TerminalSession:
     """One real shell the user can type into, streamed over a WebSocket.
 
@@ -127,6 +182,13 @@ class TerminalSession:
         # studio automode background thread all type into the same PTY — without
         # a lock a Shift+Tab keystroke can land in the middle of a typed brief.
         self._write_lock = threading.Lock()
+        # Serializes read() (v1.243.0). A Build pane's pump on the event loop
+        # and the background drain thread can both read, and each chunk must
+        # land in the tail and in every attached pane's subscription exactly
+        # once, in order. subscribe() takes the same lock, so a pane's replay
+        # snapshot and its live share can never overlap or leave a gap.
+        self._read_lock = threading.Lock()
+        self._subscribers: list[OutputSubscription] = []
         # Bounded tail of recent output — context for the per-terminal AI assist.
         self._tail = bytearray()
         # True once the tail has been head-trimmed (or restored from a sliced
@@ -174,30 +236,76 @@ class TerminalSession:
             self.backend.write(data)
 
     def read(self, max_bytes: int = 65536) -> bytes:
-        """Non-blocking read of pending output (``b""`` if nothing ready)."""
-        data = self.backend.read_nonblocking(max_bytes)
-        if data:
-            self._tail += data
-            if len(self._tail) > TAIL_MAX_BYTES:
-                del self._tail[: len(self._tail) - TAIL_MAX_BYTES]
-                self._tail_truncated = True
-            self.last_output_at = time.monotonic()
+        """Non-blocking read of pending output (``b""`` if nothing ready).
+
+        Every chunk is also delivered to each attached pane's
+        :class:`OutputSubscription` (v1.243.0), so it no longer matters WHO
+        reads — the pane's own pump, a second pane's, or the background drain
+        thread. Serialized, so the tail and every subscription see each chunk
+        once, in order."""
+        with self._read_lock:
+            data = self.backend.read_nonblocking(max_bytes)
+            if data:
+                self._tail += data
+                if len(self._tail) > TAIL_MAX_BYTES:
+                    del self._tail[: len(self._tail) - TAIL_MAX_BYTES]
+                    self._tail_truncated = True
+                self.last_output_at = time.monotonic()
+                for sub in self._subscribers:
+                    sub._push(data)
         return data
+
+    # --- Live attaches (v1.243.0) -------------------------------------------
+
+    def subscribe(
+        self, limit: int = ATTACH_BACKLOG_MAX_BYTES
+    ) -> tuple[bytes, OutputSubscription]:
+        """Attach a live pane: its replay AND its share of everything after.
+
+        The scrollback snapshot and the registration happen under ONE hold of
+        the read lock, so no chunk can land between them — every byte is in
+        the replay or in the subscription, never both and never neither."""
+        with self._read_lock:
+            history = self.scrollback_bytes()
+            sub = OutputSubscription(self._read_lock, limit)
+            self._subscribers.append(sub)
+        self.add_consumer()
+        return history, sub
+
+    def unsubscribe(self, sub: OutputSubscription) -> None:
+        """Detach a pane (idempotent). The last one out hands the PTY to the
+        background drain — see :meth:`remove_consumer`."""
+        with self._read_lock:
+            try:
+                self._subscribers.remove(sub)
+            except ValueError:
+                return  # already detached — keep the consumer count balanced
+        self.remove_consumer()
 
     # --- Live consumers + background auto-drain --------------------------
 
     def add_consumer(self) -> None:
         """Register a live output consumer (a Build-page WebSocket pane). While
-        any consumer is attached it does the reading and fills the tail itself,
-        so the background auto-drain steps aside to avoid stealing its bytes."""
+        any consumer is attached it does the reading, so the background
+        auto-drain steps aside rather than run a second reader."""
         with self._consumer_lock:
             self._consumers += 1
 
     def remove_consumer(self) -> None:
-        """Drop a previously-registered live consumer."""
+        """Drop a previously-registered live consumer.
+
+        THE LAST ONE OUT STARTS THE DRAIN (v1.243.0). A PTY nobody reads fills
+        its output pipe, and the program in it BLOCKS on its next write — so a
+        Claude left working in a Build pane simply stopped when the user
+        switched to another page, and resumed only when they came back (the
+        Studio hit this first; see start_autodrain). The drain keeps output
+        flowing into the tail and steps aside again when a pane re-attaches."""
         with self._consumer_lock:
             if self._consumers > 0:
                 self._consumers -= 1
+            nobody = self._consumers == 0
+        if nobody and self.alive:
+            self.start_autodrain()
 
     @property
     def has_consumer(self) -> bool:
@@ -225,7 +333,9 @@ class TerminalSession:
         while not self._drain_stop.is_set():
             if not self.alive:
                 break
-            if self.has_consumer:  # a WS pane is reading — don't steal its bytes
+            if self.has_consumer:  # a WS pane is reading — one reader is enough
+                # (a read here would no longer steal from it — read() delivers
+                # to every attached pane — but two pollers is wasted work)
                 time.sleep(0.05)
                 continue
             try:

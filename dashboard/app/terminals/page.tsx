@@ -36,6 +36,7 @@ import {
   type PaneChatStatus,
 } from "@/components/terminal/paneStatusCore";
 import { PaneRail, type RailPane } from "@/components/terminal/PaneRail";
+import { disposePaneHost, retainPaneHosts } from "@/components/terminal/paneHost";
 import {
   PaneStateSummary,
   displayState,
@@ -650,15 +651,22 @@ export default function TerminalsPage() {
     let cancelled = false;
     (async () => {
       try {
-        const [terms, sh, mods, clis, sks] = await Promise.all([
-          get<{ terminals: TerminalInfo[] }>("/terminals"),
-          get<{ shells: Shell[] }>("/terminals/shells").catch(() => ({ shells: [] })),
-          get<{ models: ModelOption[] }>("/models").catch(() => ({ models: [] })),
-          get<{ clis: AiCli[] }>("/terminals/ai-clis").catch(() => ({ clis: [] })),
-          get<{ skills: Skill[] }>("/skills").catch(() => ({ skills: [] })),
-        ]);
+        // THE PANES FIRST (v1.243.0). This used to await five requests together,
+        // and the page showed nothing but "Attaching to sessions…" until the
+        // slowest answered. Measured on the live install: `/terminals` in 5 ms,
+        // `/models` in 2.1–3.4 s, a cold `/terminals/ai-clis` in 3.1 s — so
+        // every return to Build waited seconds for catalogs that only fill the
+        // per-pane pickers and the Launch menu. The panes render the moment
+        // the list is in; the catalogs (below) arrive when they arrive.
+        const terms = await get<{ terminals: TerminalInfo[] }>("/terminals");
         if (cancelled) return;
         const alive = terms.terminals.filter((t) => t.alive);
+        // Terminals outlive this page (v1.243.0, components/terminal/paneHost):
+        // a pane's xterm and socket stay open while you are elsewhere, so a
+        // return is instant. This is where that ends for a pane the daemon no
+        // longer offers — closed by an agent or another window, or a shell
+        // that exited — so no socket stays open for a pane nobody can see.
+        retainPaneHosts(alive.map((t) => t.id));
         setTerminals(alive);
         // Deep-link from "Open in Build →" (Creative Studio): ?focus=<id>
         // brings that terminal to the front + centers it so the user lands
@@ -687,12 +695,6 @@ export default function TerminalsPage() {
         } else {
           setFocusedId(alive[0]?.id ?? null);
         }
-        setShells(sh.shells);
-        setShell(sh.shells[0]?.name ?? "");
-        // Only offer models the user can ACTUALLY run (provider connected).
-        setModels(mods.models.filter((m) => m.available !== false));
-        setAiClis(clis.clis);
-        setSkills(sks.skills);
         setOffline(false);
       } catch (e) {
         if (cancelled) return;
@@ -702,6 +704,40 @@ export default function TerminalsPage() {
         if (!cancelled) setLoading(false);
       }
     })();
+    // The catalogs, in the background (see above) — each on its own, so a slow
+    // model list never holds up the Launch menu or the other way round, and
+    // each degrades to empty on its own failure exactly as before.
+    get<{ shells: Shell[] }>("/terminals/shells")
+      .then((sh) => {
+        if (cancelled) return;
+        setShells(sh.shells);
+        setShell((cur) => cur || (sh.shells[0]?.name ?? ""));
+      })
+      .catch(() => {
+        /* no list — the selector says "default" and the daemon picks */
+      });
+    get<{ models: ModelOption[] }>("/models")
+      .then((mods) => {
+        // Only offer models the user can ACTUALLY run (provider connected).
+        if (!cancelled) setModels(mods.models.filter((m) => m.available !== false));
+      })
+      .catch(() => {
+        /* the per-pane picker offers the default model only */
+      });
+    get<{ clis: AiCli[] }>("/terminals/ai-clis")
+      .then((clis) => {
+        if (!cancelled) setAiClis(clis.clis);
+      })
+      .catch(() => {
+        /* the Launch menu keeps saying "Detecting…" */
+      });
+    get<{ skills: Skill[] }>("/skills")
+      .then((sks) => {
+        if (!cancelled) setSkills(sks.skills);
+      })
+      .catch(() => {
+        /* no skill picker in the assist bar */
+      });
     return () => {
       cancelled = true;
     };
@@ -753,7 +789,10 @@ export default function TerminalsPage() {
   );
 
   const closeTerminal = useCallback((id: string) => {
-    // Optimistically remove the pane (its WS unmounts), then kill server-side.
+    // Optimistically remove the pane, then kill server-side. Its terminal
+    // and socket OUTLIVE an unmount (v1.243.0 — that is how a return to
+    // Build is instant), so closing is the one place they are ended for good.
+    disposePaneHost(id);
     setTerminals((prev) => prev.filter((t) => t.id !== id));
     setFocusedId((cur) => (cur === id ? null : cur));
     del(`/terminals/${id}`).catch(() => {

@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.242.1 (2026-09-07).*
+holds itself to. Current as of v1.243.0 (2026-09-10).*
 
 ---
 
@@ -354,6 +354,17 @@ seam); Train (teach it your writing voice, suggest-only).
   the shell only while it is visible **and** its window has focus, so
   opening the same session from a phone or a second tab never reflows the
   desktop's running session (the last focused window wins).
+- **Build terminals survive leaving Build** (v1.243.0): switching to another
+  page no longer closes your terminals. Each pane's terminal and its link to
+  the shell stay open in the background, so coming back is instant — exactly
+  the screen you left, with no replay, no redraw and no stray characters.
+  Flipping Rail ⇄ Canvas keeps every terminal the same way. A Claude or Codex
+  you left working keeps working: a pane nobody is watching is still read, so
+  the program never stalls waiting for you to come back. A reload or a daemon
+  restart still replays the pane's history, and the answers the terminal
+  gives to questions in that old output (a colour or device query) are no
+  longer typed into your shell as stray text. Two windows on one pane (the
+  desktop and a phone) now each get the whole stream instead of half of it.
 - **Usage counts models that did work** (v1.232.0): the By-model list and
   "Across N models" leave out the offline mock provider and rows that moved
   zero tokens (a probe, a refused call, a misconfigured id); the API still

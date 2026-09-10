@@ -26,7 +26,7 @@ import {
   Workflow,
   X,
 } from "lucide-react";
-import { ApiError, get, patch, post, wsUrl } from "@/lib/api";
+import { ApiError, get, patch, post } from "@/lib/api";
 import { waitForStableSize } from "@/lib/layout";
 import {
   CLI_IMAGE_BUDGET_BYTES,
@@ -36,7 +36,8 @@ import {
   shrinkToFit,
 } from "@/lib/snippet";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
-import { outputNotifyAt, terminalReconnectDelayMs } from "@/components/terminal/paneStatusCore";
+import { outputNotifyAt } from "@/components/terminal/paneStatusCore";
+import { acquirePaneHost, type ConnState, type PaneHost } from "@/components/terminal/paneHost";
 import { resizeAllowed } from "@/components/terminal/resizeGate";
 import { useDaemon } from "@/lib/daemon";
 import type { AiCli, ModelOption, Skill, TerminalInfo } from "@/lib/types";
@@ -50,8 +51,6 @@ type AIResult = {
   /** Skill playbooks injected into this answer (names). */
   skills?: string[];
 };
-
-type ConnState = "connecting" | "open" | "reconnecting" | "closed";
 
 // --- Launch recipes (v1.238.0, D18) ---------------------------------------
 // Before this ship a launch was one string typed into a live shell, and the
@@ -324,39 +323,10 @@ export function clipImageOutcome(value: unknown, name?: string): ClipImage {
   return { kind: "none" };
 }
 
-// Terminal REPORT/answerback replies xterm auto-generates for control QUERIES
-// (Primary/Secondary Device Attributes "\x1b[?1;2c", cursor-position reports
-// "\x1b[..R", device-status "\x1b[..n", window reports "\x1b[..t"). On (re)connect
-// the daemon replays saved scrollback that can contain such a query; xterm
-// answers it and the answer would be injected into the shell as fake input
-// (visible as "[?1;2c" at a fresh prompt). We drop these ONLY during the brief
-// post-connect replay window — a real user keystroke never matches this shape.
-const TERM_REPORT_RE = /^\x1b\[[?>=0-9;]*[cnRt]/;
-
-/** xterm theme tuned to the arc-reactor cyan / near-black aesthetic. */
-const XTERM_THEME = {
-  background: "#0a0c11",
-  foreground: "#cdd3df",
-  cursor: "#22d3ee",
-  cursorAccent: "#0a0c11",
-  selectionBackground: "rgba(34,211,238,0.28)",
-  black: "#0b0d11",
-  red: "#fb7185",
-  green: "#34d399",
-  yellow: "#fbbf24",
-  blue: "#38bdf8",
-  magenta: "#a78bfa",
-  cyan: "#22d3ee",
-  white: "#cdd3df",
-  brightBlack: "#475569",
-  brightRed: "#fda4af",
-  brightGreen: "#6ee7b7",
-  brightYellow: "#fcd34d",
-  brightBlue: "#7dd3fc",
-  brightMagenta: "#c4b5fd",
-  brightCyan: "#67e8f9",
-  brightWhite: "#f4f4f5",
-} as const;
+// The terminal itself — its options and theme, its socket, and the filter that
+// keeps xterm's answers to REPLAYED queries out of the shell — lives in
+// components/terminal/paneHost.ts (v1.243.0), because it now outlives this
+// component. That file's header says why.
 
 /** Best-effort utf-8 decode of ONE PTY frame for the page's peek strip
  *  (v1.213.0). A frame boundary may split a multi-byte sequence — the
@@ -458,16 +428,23 @@ export function TerminalPane({
   // nothing to reconnect to) or the link was LOST (retries exhausted). Only
   // the latter offers a Reconnect action.
   const [lostLink, setLostLink] = useState(false);
-  // The daemon's reachability per the shared /health poll, read through a ref
-  // inside the attach effect (which is keyed on the session id only).
+  // The daemon's reachability per the shared /health poll. The host's
+  // reconnect schedule reads it (keep retrying while the daemon is down), and
+  // the host outlives this component, so the value is handed over to it.
   const { online: daemonOnline } = useDaemon();
   const daemonOnlineRef = useRef(daemonOnline);
   daemonOnlineRef.current = daemonOnline;
-  // Set by the attach effect: re-runs `connect` from a clean attempt counter
-  // without re-wiring xterm. Null while no session is attached.
+  // Set by the attach effect: the host's Reconnect (a clean attempt counter on
+  // the SAME terminal — the replay lands on it). Null while none is adopted.
   const reconnectRef = useRef<(() => void) | null>(null);
-  // The live WS, exposed to the AI bar so "Run" can type into THIS shell.
-  const wsRef = useRef<WebSocket | null>(null);
+  // This pane's terminal host (v1.243.0, components/terminal/paneHost): the
+  // xterm and socket that OUTLIVE this component. Everything that types into
+  // the shell — the AI bar's Run, Launch, snippets, the pane chat's writer —
+  // goes through its send(), which refuses (false) on a socket that is down.
+  const hostRef = useRef<PaneHost | null>(null);
+  useEffect(() => {
+    if (hostRef.current) hostRef.current.daemonOnline = daemonOnline;
+  }, [daemonOnline]);
 
   // v1.212.0: output notifications for the page's view-toggle badge. The
   // socket effect below runs once per session id while the page hands a
@@ -582,6 +559,12 @@ export function TerminalPane({
   // Studio's `_studio_cli`). "" = a plain shell — the server falls back to a
   // bare quoted path.
   const [paneCli, setPaneCli] = useState("");
+  // The pane's terminal outlives this component (v1.243.0) but this state
+  // does not: seed it from what the daemon recorded at launch, so a snippet
+  // sent after a return visit is still formatted for the CLI in the pane.
+  useEffect(() => {
+    if (agentCli) setPaneCli((cur) => cur || agentCli);
+  }, [agentCli]);
 
   // --- naming this pane (v1.217.0) -----------------------------------------
   const [renaming, setRenaming] = useState(false);
@@ -603,11 +586,10 @@ export function TerminalPane({
   const notInstalledClis = aiClis.filter((c) => !c.installed);
 
   function launchCli(cli: AiCli) {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
     // Type the launch command WITHOUT a newline — the user presses Enter to
-    // actually start it (a last look, same as the AI "Run" suggestion).
-    ws.send(cli.command);
+    // actually start it (a last look, same as the AI "Run" suggestion). A
+    // shell that is not connected takes nothing, and nothing is recorded.
+    if (!hostRef.current?.send(cli.command)) return;
     setPaneCli(cli.id); // remember it for snippet delivery
     // …and TELL THE DAEMON (v1.217.0). The launch is typed into an already
     // running shell, so the server never learns what started — which left the
@@ -735,8 +717,7 @@ export function TerminalPane({
     if (snipSending) return;
     const ready = snips.filter((s) => s.status === "ready" && s.file);
     if (!ready.length) return;
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+    if (!hostRef.current?.isOpen) {
       setSnips((prev) =>
         prev.map((s) =>
           s.status === "ready"
@@ -766,8 +747,8 @@ export function TerminalPane({
             content_b64,
             cli: paneCli,
           });
-          const live = wsRef.current;
-          if (!live || live.readyState !== WebSocket.OPEN) {
+          const live = hostRef.current;
+          if (!live || !live.isOpen) {
             setSnips((prev) =>
               prev.map((s) =>
                 s.id === snip.id
@@ -814,11 +795,10 @@ export function TerminalPane({
   }
 
   function runSuggested() {
-    const ws = wsRef.current;
-    if (!aiResult?.command || !ws || ws.readyState !== WebSocket.OPEN) return;
     // Type the command into the shell WITHOUT submitting it — the user presses
-    // Enter themselves (a last look before anything executes).
-    ws.send(aiResult.command);
+    // Enter themselves (a last look before anything executes). A shell that is
+    // not connected takes nothing, and the suggestion stays on screen.
+    if (!aiResult?.command || !hostRef.current?.send(aiResult.command)) return;
     setAiResult(null);
     setAiPrompt("");
   }
@@ -828,31 +808,27 @@ export function TerminalPane({
     if (!holder || typeof window === "undefined") return;
 
     let disposed = false;
+    // This mount's claim on the host. A later mount (a Rail ⇄ Canvas flip, a
+    // return visit) adopts with its own, and this one's release is then
+    // ignored — see PaneHost.adopt.
+    const owner = {};
+    let host: PaneHost | null = null;
     let term: import("@xterm/xterm").Terminal | null = null;
-    let fit: import("@xterm/addon-fit").FitAddon | null = null;
-    let ws: WebSocket | null = null;
     let ro: ResizeObserver | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let attempts = 0;
-    // Drop xterm's auto-answers to queries embedded in replayed scrollback until
-    // this timestamp (set on every (re)connect). See TERM_REPORT_RE.
-    let replayGuardUntil = 0;
-    let focusedOnce = false; // steal focus on FIRST connect only — a reconnect
+    let focusedOnce = false; // steal focus once per mount — a reconnect
     // mid-interaction would close an open dropdown/popup out from under the user
 
     // v1.207.0: hand the page this pane's "type into the live shell" writer —
     // the SAME mechanism the v1.194 snippet path uses (raw text over the
     // attach WebSocket; the daemon feeds it to the PTY as keystrokes, exactly
-    // like term.onData). Registered once per attach and read through wsRef at
-    // call time, so it survives reconnects without churning the registry;
-    // unregistered (null) in the cleanup below. HONEST when down: a write on
-    // a closed/absent socket is a no-op that returns false, so the caller can
-    // refuse instead of pretending the command ran.
+    // like term.onData). Registered once per mount and read through hostRef
+    // at call time, so it survives reconnects without churning the registry;
+    // unregistered (null) in the cleanup below. HONEST when down: the host's
+    // send() writes nothing and returns false on a closed/absent socket, so
+    // the caller can refuse instead of pretending the command ran.
     const writeToShell = (text: string): boolean => {
-      const live = wsRef.current;
-      if (!live || live.readyState !== WebSocket.OPEN) return false;
-      live.send(text);
-      return true;
+      const live = hostRef.current;
+      return live ? live.send(text) : false;
     };
     onWriterReady?.(writeToShell);
 
@@ -955,7 +931,7 @@ export function TerminalPane({
 
     const doFit = () => {
       try {
-        fit?.fit();
+        host?.fit.fit();
       } catch {
         /* container not measurable yet */
       }
@@ -967,8 +943,8 @@ export function TerminalPane({
       // attaching to the same session must never reflow the desktop's
       // running session; the daemon keeps last-writer semantics.
       if (!resizeAllowed(holder)) return;
-      if (ws && ws.readyState === WebSocket.OPEN && term) {
-        ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+      if (host && term) {
+        host.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
       }
     };
 
@@ -984,143 +960,71 @@ export function TerminalPane({
       sendResize();
     };
 
-    const connect = () => {
-      ws = new WebSocket(wsUrl(`/terminals/${info.id}/ws`));
-      wsRef.current = ws; // the AI bar's "Run" types through this socket
-      ws.binaryType = "arraybuffer";
-      ws.onopen = () => {
-        attempts = 0;
-        setLostLink(false);
-        // Every (re)attach replays the session's full scrollback — reset so it
-        // lands on a clean screen instead of appending to a buffer that already
-        // holds the same history (doubled output after a silent reconnect), and
-        // so a full-screen app's stale modes don't corrupt the replay.
-        term?.reset();
-        // Guard the scrollback-replay window so echoed query answers ("[?1;2c")
-        // don't get injected into the shell as fake input.
-        replayGuardUntil = Date.now() + 800;
-        setState("open");
-        doFit();
-        sendResize();
-        // Full repaint once the replay window closes (v1.190.0): the replay
-        // lands as one burst and any cell painted from transitional metrics
-        // stays stale until SOMETHING repaints it — which used to be "the
-        // user drags the box". Timed just past the replay guard so it sweeps
-        // the whole viewport exactly once per (re)attach.
-        setTimeout(() => {
-          try {
-            term?.refresh(0, Math.max(0, (term?.rows ?? 1) - 1));
-          } catch {
-            /* disposed mid-wait — nothing to repaint */
-          }
-        }, 850);
-        if (!focusedOnce) {
-          // One-shot either way: the shot is CONSUMED even when skipped, so a
-          // later reconnect can never steal focus mid-interaction (the
-          // original point of focusedOnce). Skipped when the holder isn't
-          // actually visible (v1.206.0): a pane restored straight into chat
-          // view keeps its terminal mounted under visibility:hidden, and an
-          // invisible PTY grabbing keystrokes is a keylogger-shaped bug in
-          // the desktop app. offsetParent misses visibility:hidden, so use
-          // checkVisibility with the visibility option (both spellings — the
-          // dictionary member was renamed checkVisibilityCSS →
-          // visibilityProperty); default to visible where the API is absent.
-          focusedOnce = true;
-          const check = (
-            holder as HTMLElement & {
-              checkVisibility?: (opts?: Record<string, boolean>) => boolean;
-            }
-          ).checkVisibility;
-          const holderVisible =
-            typeof check === "function"
-              ? check.call(holder, { checkVisibilityCSS: true, visibilityProperty: true })
-              : true;
-          if (holderVisible) term?.focus();
+    // Clipboard shortcuts: Ctrl/Cmd+V and Ctrl+Shift+V paste; Ctrl+Shift+C
+    // copies a selection (plain Ctrl+C stays as the interrupt signal). The
+    // host runs this through xterm's custom key handler while this pane holds
+    // it, and drops it when the pane parks.
+    const keyHandler = (e: KeyboardEvent): boolean => {
+      if (e.type !== "keydown") return true;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && (e.key === "v" || e.key === "V")) {
+        // THE IMAGE CASE HAS TO BE REACHABLE AT ALL (v1.194.0). This handler
+        // used to preventDefault() unconditionally, which suppresses the
+        // browser's native `paste` event entirely — so image bytes never
+        // reached the pane no matter what else we wired up. (Which flavour
+        // WINS is decided in `resolvePaste`/`snipFilesFromPaste`: text does.)
+        if (ijBridge?.clipboardReadImage) {
+          // Desktop app: the native clipboard is only reachable over IPC
+          // (navigator.clipboard is permission-gated here). Text first, image
+          // only when there is no text — see `resolvePaste`.
+          e.preventDefault();
+          pasteFromClipboard();
+          return false; // don't also send the literal control char
         }
-      };
-      ws.onmessage = (ev: MessageEvent) => {
-        if (!term) return;
-        // Server -> client: PTY output as binary (ArrayBuffer); text just in case.
-        if (typeof ev.data === "string") term.write(ev.data);
-        else term.write(new Uint8Array(ev.data as ArrayBuffer));
-        // v1.212.0: tell the page NEW output landed (throttled) so a pane
-        // showing its chat layer can badge the terminal toggle. Every server
-        // frame on this socket IS PTY output — the daemon only send_bytes()es
-        // PTY reads, the scrollback replay, and the exit note; control JSON
-        // travels client->server only — so classification is "non-empty
-        // frame". The (re)connect replay is NOT distinguishable by frame
-        // shape (it arrives as ordinary send_bytes, no marker), so this
-        // honestly reuses the same replayGuardUntil time window the
-        // answerback suppression above trusts; the ~300ms throttle and the
-        // page's view gate absorb whatever that heuristic misses.
-        const at = outputNotifyAt(
-          ev.data,
-          Date.now(),
-          lastOutputNotifyRef.current,
-          replayGuardUntil,
-        );
-        if (at !== null) {
-          lastOutputNotifyRef.current = at;
-          // Decode ONLY the notifying frame (v1.213.0) — the throttle already
-          // decided the page wants a glimpse; suppressed frames cost nothing.
-          onOutputRef.current?.(decodeFrame(ev.data));
+        // Plain browser: let the default paste proceed so `onPaste` above
+        // sees the image bytes; a text-only paste falls through to xterm's
+        // own paste handling (same term.paste, same bracketed-paste mode).
+        return false; // xterm must still not emit the literal ^V
+      }
+      if (mod && e.shiftKey && (e.key === "c" || e.key === "C")) {
+        const sel = term?.getSelection();
+        if (sel) {
+          e.preventDefault();
+          writeClip(sel).catch(() => {});
+          return false;
         }
-      };
-      ws.onclose = (ev: CloseEvent) => {
-        if (disposed) return;
-        // 4000 = the SHELL ITSELF exited (daemon's explicit signal). There is
-        // nothing to reconnect to — retrying just re-attached to a dead PTY in
-        // a crash loop that also stole focus every cycle.
-        if (ev.code === 4000) {
-          setLostLink(false);
-          setState("closed");
-          return;
-        }
-        // v1.226.0: quick retries, then keep going with capped backoff while
-        // the daemon is offline (a restart rehydrates this same terminal id);
-        // see terminalReconnectDelayMs for the schedule.
-        const delay = terminalReconnectDelayMs(attempts, daemonOnlineRef.current);
-        if (delay !== null) {
-          attempts += 1;
-          setState("reconnecting");
-          reconnectTimer = setTimeout(connect, delay);
-        } else {
-          setLostLink(true);
-          setState("closed");
-        }
-      };
-      ws.onerror = () => {
-        try {
-          ws?.close();
-        } catch {
-          /* noop */
-        }
-      };
+      }
+      // Keyboard scrollback — Shift+PageUp / Shift+PageDown.
+      if (e.shiftKey && e.key === "PageUp") {
+        e.preventDefault();
+        term?.scrollPages(-1);
+        return false;
+      }
+      if (e.shiftKey && e.key === "PageDown") {
+        e.preventDefault();
+        term?.scrollPages(1);
+        return false;
+      }
+      return true;
     };
 
     (async () => {
-      const [{ Terminal }, { FitAddon }] = await Promise.all([
-        import("@xterm/xterm"),
-        import("@xterm/addon-fit"),
-      ]);
-      if (disposed) return;
-
-      term = new Terminal({
-        cursorBlink: true,
-        cursorStyle: "bar",
-        fontSize: 12.5,
-        lineHeight: 1.15,
-        fontFamily:
-          'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
-        theme: { ...XTERM_THEME },
-        scrollback: 5000,
-        allowProposedApi: true,
-      });
-      fit = new FitAddon();
-      term.loadAddon(fit);
-      term.open(holder);
-      termRef.current = term; // expose for launch-command refocus
-      const live = term; // narrowed here; the closure runs later
+      let h: PaneHost;
+      try {
+        // THE TERMINAL OUTLIVES THIS COMPONENT (v1.243.0). A return visit — or
+        // a Rail ⇄ Canvas flip — gets back the SAME xterm on the SAME socket:
+        // nothing to replay, nothing to redraw, and the program in the pane
+        // never noticed anyone left. Only a first visit builds one.
+        h = await acquirePaneHost(info.id);
+      } catch {
+        return; // the pane was closed while its terminal was being built
+      }
+      if (disposed) return; // never adopted — it stays parked for the next mount
+      host = h;
+      term = h.term;
+      hostRef.current = h;
+      termRef.current = h.term; // expose for launch-command refocus
+      const live = h.term; // narrowed here; the closure runs later
       clearRef.current = () => {
         try {
           live.clear();
@@ -1129,63 +1033,62 @@ export function TerminalPane({
           /* disposed */
         }
       };
-      doFit();
-
-      // Client -> server: raw keystrokes as text. Suppress xterm's auto-answers
-      // to queries in replayed scrollback during the brief post-connect window.
-      term.onData((d: string) => {
-        if (Date.now() < replayGuardUntil && TERM_REPORT_RE.test(d)) return;
-        if (ws && ws.readyState === WebSocket.OPEN) ws.send(d);
-      });
-
-      // Clipboard shortcuts: Ctrl/Cmd+V and Ctrl+Shift+V paste; Ctrl+Shift+C
-      // copies a selection (plain Ctrl+C stays as the interrupt signal).
-      term.attachCustomKeyEventHandler((e) => {
-        if (e.type !== "keydown") return true;
-        const mod = e.ctrlKey || e.metaKey;
-        if (mod && (e.key === "v" || e.key === "V")) {
-          // THE IMAGE CASE HAS TO BE REACHABLE AT ALL (v1.194.0). This handler
-          // used to preventDefault() unconditionally, which suppresses the
-          // browser's native `paste` event entirely — so image bytes never
-          // reached the pane no matter what else we wired up. (Which flavour
-          // WINS is decided in `resolvePaste`/`snipFilesFromPaste`: text does.)
-          if (ijBridge?.clipboardReadImage) {
-            // Desktop app: the native clipboard is only reachable over IPC
-            // (navigator.clipboard is permission-gated here). Text first, image
-            // only when there is no text — see `resolvePaste`.
-            e.preventDefault();
-            pasteFromClipboard();
-            return false; // don't also send the literal control char
+      h.daemonOnline = daemonOnlineRef.current;
+      h.keyHandler = keyHandler;
+      reconnectRef.current = () => h.reconnectNow();
+      h.adopt(holder, owner, {
+        onConn: (s, lost) => {
+          setState(s);
+          setLostLink(lost);
+        },
+        // The socket (re)opened: claim the size. The daemon's repaint wiggle
+        // keys off an attach's first resize.
+        onOpen: () => {
+          doFit();
+          sendResize();
+        },
+        onOutput: (data, replaying) => {
+          // v1.212.0: tell the page NEW output landed (throttled) so a pane
+          // showing its chat layer can badge the terminal toggle. Every server
+          // frame on this socket IS PTY output — the daemon only sends PTY
+          // reads, the scrollback replay, the end-of-replay marker (which the
+          // host consumes) and the exit note. The (re)attach replay is skipped
+          // EXACTLY (v1.243.0): the daemon ends it with an empty frame and the
+          // host says which frames came before it, so `replayGuardUntil` is no
+          // longer a guess on the clock — "forever" while replaying, "never"
+          // after. The ~300ms throttle and the page's view gate still apply.
+          const replayGuardUntil = replaying ? Number.POSITIVE_INFINITY : 0;
+          const at = outputNotifyAt(
+            data,
+            Date.now(),
+            lastOutputNotifyRef.current,
+            replayGuardUntil,
+          );
+          if (at !== null) {
+            lastOutputNotifyRef.current = at;
+            // Decode ONLY the notifying frame (v1.213.0) — the throttle already
+            // decided the page wants a glimpse; suppressed frames cost nothing.
+            onOutputRef.current?.(decodeFrame(data));
           }
-          // Plain browser: let the default paste proceed so `onPaste` above
-          // sees the image bytes; a text-only paste falls through to xterm's
-          // own paste handling (same term.paste, same bracketed-paste mode).
-          return false; // xterm must still not emit the literal ^V
-        }
-        if (mod && e.shiftKey && (e.key === "c" || e.key === "C")) {
-          const sel = term?.getSelection();
-          if (sel) {
-            e.preventDefault();
-            writeClip(sel).catch(() => {});
-            return false;
-          }
-        }
-        // Keyboard scrollback — Shift+PageUp / Shift+PageDown.
-        if (e.shiftKey && e.key === "PageUp") {
-          e.preventDefault();
-          term?.scrollPages(-1);
-          return false;
-        }
-        if (e.shiftKey && e.key === "PageDown") {
-          e.preventDefault();
-          term?.scrollPages(1);
-          return false;
-        }
-        return true;
+        },
       });
       holder.addEventListener("contextmenu", onContextMenu);
       holder.addEventListener("wheel", onWheel, { passive: false, capture: true });
       holder.addEventListener("paste", onPaste, true);
+
+      // FIT BEFORE CONNECT (v1.190.0). The daemon replays the session's whole
+      // scrollback the moment a NEW socket opens, at whatever size this
+      // terminal has right then — history wrapped into a default 80×24 buffer
+      // never recovers, and no later fit can re-wrap it. Waiting for a stable
+      // size removes the ordering from luck. A returning host is already
+      // connected; the same wait keeps its first fit off a transitional size,
+      // which would resize the PTY and make a running TUI redraw for nothing.
+      // Capped wait: a hidden pane proceeds rather than hangs.
+      await waitForStableSize(holder);
+      if (disposed) return;
+      doFit();
+      h.settle();
+      h.start(); // first visit: connect now; a live host: a no-op
 
       ro = new ResizeObserver(() => {
         doFit();
@@ -1195,59 +1098,48 @@ export function TerminalPane({
       window.addEventListener("resize", onWinResize);
       window.addEventListener("focus", onWinFocus);
 
-      // FIT BEFORE CONNECT (v1.190.0). The server replays the session's whole
-      // scrollback the moment the socket opens, at whatever size this terminal
-      // has RIGHT THEN — and on a RETURN visit the xterm module is cached, so
-      // this code used to win the race against the pane's own layout: the
-      // replay wrapped into a default 80×24 buffer, the history came back
-      // malformed, and no later fit could re-wrap it (dragging re-fits and
-      // triggers the server's repaint wiggle, which fixes only the live
-      // screen — the user's exact report). On the FIRST visit the module
-      // download gave layout time to settle, which is why the original pane
-      // looked right. Capped wait: a hidden pane proceeds rather than hangs.
-      await waitForStableSize(holder);
-      if (disposed) return;
-      doFit();
-
-      setState("connecting");
-      connect();
+      if (!focusedOnce) {
+        // One-shot either way: the shot is CONSUMED even when skipped, so a
+        // later reconnect can never steal focus mid-interaction (the
+        // original point of focusedOnce). Skipped when the holder isn't
+        // actually visible (v1.206.0): a pane restored straight into chat
+        // view keeps its terminal mounted under visibility:hidden, and an
+        // invisible PTY grabbing keystrokes is a keylogger-shaped bug in
+        // the desktop app. offsetParent misses visibility:hidden, so use
+        // checkVisibility with the visibility option (both spellings — the
+        // dictionary member was renamed checkVisibilityCSS →
+        // visibilityProperty); default to visible where the API is absent.
+        focusedOnce = true;
+        const check = (
+          holder as HTMLElement & {
+            checkVisibility?: (opts?: Record<string, boolean>) => boolean;
+          }
+        ).checkVisibility;
+        const holderVisible =
+          typeof check === "function"
+            ? check.call(holder, { checkVisibilityCSS: true, visibilityProperty: true })
+            : true;
+        if (holderVisible) term?.focus();
+      }
     })();
-
-    // The overlay's Reconnect action (v1.226.0): a fresh attempt counter and
-    // one more connect on the SAME xterm instance (the replay lands on it).
-    reconnectRef.current = () => {
-      if (disposed) return;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      attempts = 0;
-      setLostLink(false);
-      setState("reconnecting");
-      connect();
-    };
 
     return () => {
       disposed = true;
-      onWriterReady?.(null); // the session is going away — no writer to offer
+      onWriterReady?.(null); // this mount is going away — no writer to offer
       reconnectRef.current = null;
-      wsRef.current = null;
+      hostRef.current = null;
       termRef.current = null;
       clearRef.current = null;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
       window.removeEventListener("resize", onWinResize);
       window.removeEventListener("focus", onWinFocus);
       holder.removeEventListener("contextmenu", onContextMenu);
       holder.removeEventListener("wheel", onWheel, { capture: true } as EventListenerOptions);
       holder.removeEventListener("paste", onPaste, true);
       ro?.disconnect();
-      try {
-        ws?.close();
-      } catch {
-        /* noop */
-      }
-      try {
-        term?.dispose();
-      } catch {
-        /* noop */
-      }
+      // PARK, never dispose (v1.243.0): the shell, its socket and every line
+      // it prints stay alive for the next visit. Closing the pane is the one
+      // thing that ends them (the page's closeTerminal → disposePaneHost).
+      host?.release(owner);
     };
     // Re-wire only when the session id changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
