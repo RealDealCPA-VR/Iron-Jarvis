@@ -688,6 +688,43 @@ def runtime_checks(platform) -> list[dict]:
             _result("browser_bridge", False, f"browser check failed: {exc}", level=RECOMMENDED)
         )
 
+    # The second copy of the backups (v1.249.0, R-05): only when one is set up.
+    # An unplugged drive is named here — and on Settings → Maintenance — instead
+    # of each backup quietly skipping the copy it was asked to make.
+    try:
+        from ..maintenance import mirror_status
+
+        ms = mirror_status(platform.config.home, platform.config)
+        if ms["configured"]:
+            last = ms.get("last") or {}
+            if ms["missing"]:
+                checks.append(
+                    _result(
+                        "backup_mirror",
+                        False,
+                        f"the backup copy folder {ms['dir']} is missing — is the drive plugged in?",
+                        fix="Plug the drive back in, or pick another folder under Settings → Maintenance.",
+                        level=RECOMMENDED,
+                    )
+                )
+            elif last and not last.get("ok"):
+                checks.append(
+                    _result(
+                        "backup_mirror",
+                        False,
+                        f"the last backup copy to {ms['dir']} failed: {last.get('error')}",
+                        fix="Check the folder, then press Back up now under Settings → Maintenance.",
+                        level=RECOMMENDED,
+                    )
+                )
+            else:
+                when = f" (last copy {last['at']})" if last.get("at") else " (no copy yet — the next backup makes one)"
+                checks.append(
+                    _result("backup_mirror", True, f"backups are also copied to {ms['dir']}{when}", level=RECOMMENDED)
+                )
+    except Exception as exc:  # noqa: BLE001
+        checks.append(_result("backup_mirror", False, f"backup copy check failed: {exc}", level=RECOMMENDED))
+
     # The custom endpoint's configured model actually EXISTS on that gateway.
     # A renamed gateway alias otherwise 400s every request routed there with a
     # cryptic provider error (live-hit 2026-07-31: model 'brain' after the

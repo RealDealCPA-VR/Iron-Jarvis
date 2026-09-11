@@ -352,6 +352,15 @@ class Config(BaseModel):
     # somewhere the user will look. "" = <Documents>\Iron Jarvis. Read through
     # `chat_files_dir`; see documents/workfolder.py for why it exists.
     chat_files_root: str = ""
+    # A SECOND copy of every backup (v1.249.0, R-05): after each automatic or
+    # manual backup the newest archive is copied here and pruned to the same
+    # keep count, and — with backup_mirror_media — the generated-media library
+    # (artifacts/ + creative-thumbs/, which no archive includes) is copied
+    # incrementally under <dir>/media. "" = off. Validated at PUT /settings
+    # (maintenance.mirror_dir_problem), NEVER at load: an unplugged drive must
+    # not stop the app from starting.
+    backup_mirror_dir: str = ""
+    backup_mirror_media: bool = True
     obsidian_vault: str | None = None  # long-term memory vault path
     notion_database_id: str | None = None  # long-term memory Notion DB
     computer_use: dict[str, Any] = Field(default_factory=default_computer_use)

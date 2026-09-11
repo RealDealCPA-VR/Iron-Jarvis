@@ -483,6 +483,10 @@ _SETTINGS_KEYS = [
     # Where a chat with no project keeps each conversation's folder (v1.244.0;
     # "" = <Documents>\Iron Jarvis — see config.chat_files_dir).
     "chat_files_root",
+    # A second copy of every backup, on another drive (v1.249.0, R-05; "" = off).
+    # The folder is checked at PUT /settings (maintenance.mirror_dir_problem).
+    "backup_mirror_dir",
+    "backup_mirror_media",
     # OpenCode store override for the Usage merge (dir or .db path).
     "opencode_data_dir",
     # Pi coding agent session-store override for the Usage merge (dir path).

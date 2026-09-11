@@ -149,7 +149,12 @@ def prune_backups(backups_dir: Path, keep: int) -> int:
 
 
 def run_auto_backup(
-    home: Path, *, engine=None, keep: int = 7, include_keys: bool = True
+    home: Path,
+    *,
+    engine=None,
+    keep: int = 7,
+    include_keys: bool = True,
+    config=None,
 ) -> Path:
     """Write a timestamped snapshot under ``<home>/backups`` and prune to ``keep``.
 
@@ -158,14 +163,306 @@ def run_auto_backup(
     restoring it regenerates a fresh key that cannot decrypt any stored secret, so
     every API key / OAuth login is lost while the UI still shows them "present".
     The home is already local + private; pass ``include_keys=False`` only for a
-    portable export you intend to move off-machine. Returns the archive path."""
+    portable export you intend to move off-machine. Returns the archive path.
+
+    ``config`` (v1.249.0, R-05): when it carries a ``backup_mirror_dir``, the new
+    archive (and, with ``backup_mirror_media``, the media library) is ALSO copied
+    there — read live, so a Settings change applies to the very next backup. A
+    mirror that fails is RECORDED (:func:`mirror_status`), never raised: the local
+    backup already succeeded and must not be reported as a failure."""
     home = Path(home)
     backups_dir = home / BACKUP_DIRNAME
     stamp = utcnow().strftime("%Y%m%d-%H%M%S")
     out = backups_dir / f"ironjarvis-backup-{stamp}.tar.gz"
     create_backup(home, out, engine=engine, include_keys=include_keys)
     prune_backups(backups_dir, keep)
+    mirror = (getattr(config, "backup_mirror_dir", "") or "").strip() if config is not None else ""
+    if mirror:
+        try:
+            mirror_backup(
+                home,
+                out,
+                mirror,
+                keep=keep,
+                media=bool(getattr(config, "backup_mirror_media", True)),
+            )
+        except Exception as exc:  # noqa: BLE001 — the local backup stands regardless
+            _write_mirror_state(
+                home,
+                {
+                    "dir": mirror,
+                    "at": utcnow().isoformat(timespec="seconds"),
+                    "ok": False,
+                    "archive": None,
+                    "media": None,
+                    "error": f"couldn't copy the backup to {mirror}: {type(exc).__name__}: {exc}"[:400],
+                },
+            )
     return out
+
+
+# --- v1.249.0 (R-05): a second copy on another drive -------------------------
+#
+# Every archive lives inside the home, on the same disk as the data it protects,
+# so one failed drive (or one deleted %APPDATA% folder) loses the data and all
+# seven backups together — and the generated-media library (``artifacts/`` +
+# ``creative-thumbs/``: paid generations that cannot be recreated exactly) was
+# in no backup at all. A MIRROR folder, ideally on another drive, gets a copy of
+# each new archive (pruned the same way) and an incremental copy of the media.
+
+#: Where the last mirror run's outcome is kept — inside ``backups/``, which no
+#: archive ever includes.
+MIRROR_STATE_NAME = "mirror-status.json"
+#: The media library is copied under this sub-folder of the mirror.
+MIRROR_MEDIA_DIRNAME = "media"
+#: The media folders (relative to the home) — the same ones every archive skips.
+_MEDIA_DIRS = ("artifacts", "creative-thumbs")
+#: One media pass is BOUNDED: a first copy of a large library finishes over
+#: several backups instead of holding the backup thread for hours, and what was
+#: left for next time is REPORTED, never implied complete.
+MIRROR_MEDIA_MAX_FILES = 5000
+MIRROR_MEDIA_DEADLINE_S = 600.0
+#: A copy counts as unchanged when its size matches and its modified time is
+#: within this many seconds — FAT-formatted drives store times to 2 s.
+_MTIME_SLACK_S = 2.0
+
+
+def mirror_dir_problem(home: Path, value: str) -> "str | None":
+    """Why ``value`` cannot hold the backup copies, or None when it can (v1.249.0).
+
+    ``fs_policy.root_problem`` answers first — absolute, a folder on this
+    machine, allowed, and WRITABLE (the one definition every "work in this
+    folder" door uses) — then one rule of its own: not inside Iron Jarvis's own
+    data folder, because a copy in the same tree survives nothing the original
+    would not. ``""`` (switched off) is never a problem. BLOCKING (the
+    writability probe creates a file): call it off the event loop."""
+    from .core.fs_policy import root_problem
+
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    problem = root_problem(path)
+    if problem:
+        return problem
+    try:
+        folder = path.resolve()
+        own = Path(home).resolve()
+    except OSError as exc:
+        return f"folder cannot be read: {exc}"
+    if folder == own or own in folder.parents:
+        return (
+            "that folder is inside Iron Jarvis's own data folder — pick a folder "
+            "outside it, ideally on another drive"
+        )
+    return None
+
+
+def _state_path(home: Path) -> Path:
+    return Path(home) / BACKUP_DIRNAME / MIRROR_STATE_NAME
+
+
+def _read_mirror_state(home: Path) -> "dict | None":
+    import json
+
+    try:
+        data = json.loads(_state_path(home).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _write_mirror_state(home: Path, state: dict) -> None:
+    """Atomic write of the last run's outcome; never raises (a status file that
+    cannot be written must not fail a backup that succeeded)."""
+    import json
+
+    path = _state_path(home)
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def mirror_media(
+    home: Path,
+    dest_root: Path,
+    *,
+    max_files: int = MIRROR_MEDIA_MAX_FILES,
+    deadline_s: float = MIRROR_MEDIA_DEADLINE_S,
+) -> dict:
+    """Copy NEW or CHANGED media files (size + modified time) from the home's
+    media folders into ``dest_root``, keeping their relative paths. Additive
+    only — nothing in the mirror is ever deleted here. Bounded by ``max_files``
+    copies and ``deadline_s``; a pass that stopped early says so
+    (``truncated``) and the rest is picked up by the next backup."""
+    home = Path(home)
+    dest_root = Path(dest_root)
+    start = time.monotonic()
+    copied = unchanged = failed = 0
+    copied_bytes = 0
+    errors: list[str] = []
+    truncated = False
+    for name in _MEDIA_DIRS:
+        src_root = home / name
+        if not src_root.is_dir():
+            continue
+        for dirpath, _dirnames, filenames in os.walk(src_root):
+            for fn in filenames:
+                if copied >= max_files or time.monotonic() - start > deadline_s:
+                    truncated = True
+                    break
+                src = Path(dirpath) / fn
+                rel = src.relative_to(home)
+                dst = dest_root / rel
+                tmp = dst.with_name(dst.name + ".ij-tmp")
+                try:
+                    st = src.stat()
+                    try:
+                        dt = dst.stat()
+                        if (
+                            dt.st_size == st.st_size
+                            and abs(dt.st_mtime - st.st_mtime) <= _MTIME_SLACK_S
+                        ):
+                            unchanged += 1
+                            continue
+                    except FileNotFoundError:
+                        pass
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, tmp)
+                    os.replace(tmp, dst)
+                    copied += 1
+                    copied_bytes += st.st_size
+                except OSError as exc:
+                    failed += 1
+                    if len(errors) < 5:
+                        errors.append(f"{rel}: {exc}")
+                    try:
+                        tmp.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            if truncated:
+                break
+        if truncated:
+            break
+    return {
+        "copied": copied,
+        "unchanged": unchanged,
+        "bytes": copied_bytes,
+        "failed": failed,
+        "errors": errors,
+        "truncated": truncated,
+    }
+
+
+def mirror_backup(
+    home: Path,
+    archive: Path,
+    mirror_dir: str,
+    *,
+    keep: int = 7,
+    media: bool = True,
+    max_files: int = MIRROR_MEDIA_MAX_FILES,
+    deadline_s: float = MIRROR_MEDIA_DEADLINE_S,
+) -> dict:
+    """Copy ``archive`` into ``mirror_dir`` (temp + ``os.replace``), prune the
+    mirror to ``keep`` — ONLY files named like the app's own archives, so a
+    user's own files in that folder are never touched — then, with ``media``,
+    copy the media library incrementally under ``<mirror>/media``. Records and
+    returns the outcome (:func:`mirror_status` reads it back). BLOCKING: runs
+    inside the backup thread, never on the event loop."""
+    home = Path(home)
+    archive = Path(archive)
+    state: dict = {
+        "dir": mirror_dir,
+        "at": utcnow().isoformat(timespec="seconds"),
+        "ok": False,
+        "archive": None,
+        "pruned": 0,
+        "media": None,
+        "error": None,
+    }
+    problem = mirror_dir_problem(home, mirror_dir)
+    if problem:
+        state["error"] = f"the backup copy folder can't be used: {problem}"
+        state["missing"] = not Path(mirror_dir).expanduser().is_dir()
+        _write_mirror_state(home, state)
+        return state
+    dest_dir = Path(mirror_dir).expanduser()
+    tmp = dest_dir / (archive.name + ".tmp")
+    try:
+        shutil.copy2(archive, tmp)
+        os.replace(tmp, dest_dir / archive.name)
+    except OSError as exc:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        state["error"] = f"couldn't copy the backup to {dest_dir}: {exc}"
+        _write_mirror_state(home, state)
+        return state
+    state["archive"] = archive.name
+    state["pruned"] = prune_backups(dest_dir, keep)
+    state["ok"] = True
+    if media:
+        report = mirror_media(
+            home, dest_dir / MIRROR_MEDIA_DIRNAME, max_files=max_files, deadline_s=deadline_s
+        )
+        state["media"] = report
+        if report["failed"]:
+            state["error"] = (
+                f"{report['failed']} media file(s) could not be copied — "
+                + "; ".join(report["errors"][:2])
+            )
+    _write_mirror_state(home, state)
+    return state
+
+
+def mirror_status(home: Path, config=None) -> dict:
+    """What Settings → Maintenance and the health check show about the mirror
+    (v1.249.0): the configured folder, whether media is copied, whether the
+    folder is there right now (an unplugged drive), and the last run's outcome
+    — only when that run was for THIS folder. Never raises. Touches the
+    filesystem (``is_dir``): call it off the event loop."""
+    folder = (getattr(config, "backup_mirror_dir", "") or "").strip() if config is not None else ""
+    media = bool(getattr(config, "backup_mirror_media", True)) if config is not None else True
+    missing = False
+    if folder:
+        try:
+            missing = not Path(folder).expanduser().is_dir()
+        except OSError:
+            missing = True
+    last = _read_mirror_state(home)
+    if not folder or not last or last.get("dir") != folder:
+        last = None
+    return {"dir": folder, "media": media, "configured": bool(folder), "missing": missing, "last": last}
+
+
+def mirror_loop_health(status: dict) -> "dict | None":
+    """The ``/diagnostics`` background-loop entry for the mirror, in the one
+    shape every loop reports (``ok`` + ``last_success_at``, or ``last_error`` +
+    ``at``) — so a failing copy is NAMED on the Overview and in the bell like
+    any other loop. None when no mirror is configured."""
+    if not status.get("configured"):
+        return None
+    last = status.get("last") or {}
+    if status.get("missing"):
+        return {
+            "ok": False,
+            "last_error": f"backup copy folder {status['dir']} is missing — is the drive plugged in?",
+            "at": last.get("at") or utcnow().isoformat(timespec="seconds"),
+        }
+    if last and not last.get("ok"):
+        return {"ok": False, "last_error": str(last.get("error") or "copy failed"), "at": last.get("at")}
+    if last:
+        return {"ok": True, "last_success_at": last.get("at")}
+    return None
 
 
 # --- v1.229.0 (audit Wave 3, CL7): list / boot-skip / restore ----------------

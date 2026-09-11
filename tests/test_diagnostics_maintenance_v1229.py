@@ -215,7 +215,13 @@ def test_restore_replaces_config_and_db_then_schedules_the_stop(tmp_path, monkey
     app = create_app(str(tmp_path))
     home = tmp_path / ".ironjarvis"
     with TestClient(app) as c:
-        assert c.get("/maintenance/backups").json() == {"dir": str(home / "backups"), "backups": []}
+        # v1.249.0 (R-05) made this response ADDITIVE: `mirror` rides along,
+        # reading "off" until a backup copy folder is set in Settings.
+        listing = c.get("/maintenance/backups").json()
+        assert listing["dir"] == str(home / "backups") and listing["backups"] == []
+        assert listing["mirror"] == {
+            "dir": "", "media": True, "configured": False, "missing": False, "last": None,
+        }
         assert c.put("/settings", json={"values": {"default_model": "before-restore"}}).status_code == 200
         assert c.post("/diagnostics/repair", json={"action": "backup_now"}).json()["ok"] is True
         listed = c.get("/maintenance/backups").json()["backups"]

@@ -20,11 +20,16 @@
  *    says a restart follows, then POST /maintenance/restore. The daemon refuses
  *    (409) while sessions or workflow runs are in flight; that sentence is
  *    shown as-is.
+ *  - Copy backups to another drive (v1.249.0, R-05): the `backup_mirror_dir`
+ *    and `backup_mirror_media` settings, saved through PUT /settings (which
+ *    refuses a folder that cannot hold the copies and says why), and ONE
+ *    plain-words line from GET /maintenance/backups -> `mirror`: off, the drive
+ *    is missing, no copy yet, the last copy, or why it failed.
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { ArchiveRestore, ClipboardCopy, FolderOpen } from "lucide-react";
-import { get, post, ApiError } from "@/lib/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ArchiveRestore, ClipboardCopy, FolderOpen, HardDrive } from "lucide-react";
+import { get, post, put, ApiError } from "@/lib/api";
 import { ErrorNote, LoaderInline, SectionLabel } from "@/components/ui";
 
 type OpenLogsResult = { ok: boolean; path: string; error?: string } | null;
@@ -110,13 +115,207 @@ function fmtWhen(iso: string): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
 
+/** GET /maintenance/backups -> `mirror` (v1.249.0, R-05). */
+export interface MirrorStatus {
+  dir: string;
+  media: boolean;
+  configured: boolean;
+  missing: boolean;
+  last: {
+    ok?: boolean;
+    at?: string;
+    error?: string | null;
+    archive?: string | null;
+    media?: { copied?: number; unchanged?: number; failed?: number; truncated?: boolean } | null;
+  } | null;
+}
+
+/** The one plain-words line under the backup-copy field. Exported so the test
+ *  reads the same sentence the card shows. */
+export function mirrorLine(m: MirrorStatus | null | undefined): {
+  tone: "ok" | "warn" | "muted";
+  text: string;
+} {
+  if (!m || !m.configured) return { tone: "muted", text: "Off — backups are kept on this PC only." };
+  if (m.missing) {
+    return {
+      tone: "warn",
+      text: `The folder ${m.dir} isn’t there right now — is the drive plugged in? Backups still run on this PC.`,
+    };
+  }
+  const last = m.last;
+  if (!last) {
+    return { tone: "muted", text: "No copy yet — the next backup makes one, or press Back up now." };
+  }
+  if (!last.ok) {
+    return { tone: "warn", text: `The last copy didn’t complete: ${last.error ?? "unknown error"}` };
+  }
+  let mediaText = "";
+  if (last.media) {
+    const n = last.media.copied ?? 0;
+    mediaText = n > 0 ? ` · ${n} new media file${n === 1 ? "" : "s"} copied` : " · media up to date";
+    if (last.media.truncated) mediaText += " (the rest follow with the next backup)";
+  }
+  const partial = last.error ? ` · ${last.error}` : "";
+  return {
+    tone: last.error ? "warn" : "ok",
+    text: `Last copy ${last.at ? fmtWhen(last.at) : ""}${mediaText}${partial}`,
+  };
+}
+
+const TONE_CLASS: Record<"ok" | "warn" | "muted", string> = {
+  ok: "text-zinc-400",
+  warn: "text-amber-300/80",
+  muted: "text-zinc-500",
+};
+
+/** Settings -> Maintenance: a second copy of every backup, on another drive. */
+function BackupMirror({ disabled, refreshKey }: { disabled: boolean; refreshKey?: number }) {
+  const [dir, setDir] = useState("");
+  const [media, setMedia] = useState(true);
+  const [saved, setSaved] = useState<{ dir: string; media: boolean } | null>(null);
+  const [status, setStatus] = useState<MirrorStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  // What the user has typed is never overwritten by a load that lands late
+  // (measured on the live check: the settings GET resolved AFTER the folder
+  // was typed, blanked the box, and Save then stored an empty folder). The
+  // baseline still updates, so "Save" stays enabled while the two differ.
+  const touched = useRef(false);
+
+  const loadSettings = useCallback(async () => {
+    try {
+      const r = await get<{ settings?: Record<string, unknown> }>("/settings");
+      const s = r?.settings ?? {};
+      const d = typeof s.backup_mirror_dir === "string" ? s.backup_mirror_dir : "";
+      const m = s.backup_mirror_media !== false;
+      if (!touched.current) {
+        setDir(d);
+        setMedia(m);
+      }
+      setSaved({ dir: d, media: m });
+    } catch {
+      /* the field stays empty; Save still works */
+    }
+  }, []);
+
+  const loadStatus = useCallback(async () => {
+    try {
+      const r = await get<{ mirror?: MirrorStatus }>("/maintenance/backups");
+      setStatus(r?.mirror ?? null);
+    } catch {
+      setStatus(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSettings();
+  }, [loadSettings]);
+  useEffect(() => {
+    void loadStatus();
+  }, [loadStatus, refreshKey]);
+
+  const trimmed = dir.trim();
+  const dirty = !saved || saved.dir !== trimmed || saved.media !== media;
+
+  async function save() {
+    setBusy(true);
+    setErr(null);
+    setNote(null);
+    try {
+      await put("/settings", { values: { backup_mirror_dir: trimmed, backup_mirror_media: media } });
+      setSaved({ dir: trimmed, media });
+      setNote(
+        trimmed
+          ? `Saved — every backup is now also copied to ${trimmed}.`
+          : "Saved — backups are kept on this PC only.",
+      );
+      await loadStatus();
+    } catch (e) {
+      setErr(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const line = mirrorLine(status);
+  return (
+    <div className="border-t hairline pt-4" data-testid="backup-mirror">
+      <SectionLabel>Copy backups to another drive</SectionLabel>
+      <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">
+        After every backup, also save a copy in a folder on another drive — a USB drive or a second
+        disk — so one failed disk can’t take your data and its backups with it.
+      </p>
+      <div className="mt-2.5 flex gap-2">
+        <input
+          id="backup-mirror-dir"
+          aria-label="Backup copy folder"
+          value={dir}
+          onChange={(e) => {
+            touched.current = true;
+            setDir(e.target.value);
+            setNote(null);
+            setErr(null);
+          }}
+          placeholder="e.g. D:\Iron Jarvis backups"
+          disabled={disabled || busy}
+          spellCheck={false}
+          className="min-w-0 flex-1 rounded-lg border hairline bg-ink-900/60 px-2 py-1.5 font-mono text-xs text-zinc-200"
+        />
+        <button
+          type="button"
+          onClick={save}
+          disabled={disabled || busy || !dirty}
+          className="btn-ghost justify-center px-3 py-1.5 text-xs"
+        >
+          {busy ? (
+            <LoaderInline label="Saving…" />
+          ) : (
+            <>
+              <HardDrive size={14} /> Save
+            </>
+          )}
+        </button>
+      </div>
+      <label className="mt-2 flex items-center gap-2 text-[12px] text-zinc-400">
+        <input
+          id="backup-mirror-media"
+          type="checkbox"
+          checked={media}
+          onChange={(e) => {
+            touched.current = true;
+            setMedia(e.target.checked);
+            setNote(null);
+          }}
+          disabled={disabled || busy}
+        />
+        Also keep generated images, video and audio there (only new files are copied each time)
+      </label>
+      <p data-testid="backup-mirror-status" className={`mt-2 text-[11px] ${TONE_CLASS[line.tone]}`}>
+        {line.text}
+      </p>
+      {note && <p className="mt-1 text-[11px] text-zinc-400">{note}</p>}
+      {err && <ErrorNote>{err}</ErrorNote>}
+      <p className="mt-1.5 text-[11px] leading-relaxed text-zinc-500">
+        The copy holds everything a restore needs — your database, settings and saved logins — so
+        keep that drive somewhere safe.
+      </p>
+    </div>
+  );
+}
+
 export function MaintenanceTools({
   disabled = false,
   onRestartRequested,
+  refreshKey,
 }: {
   disabled?: boolean;
   /** Called after a successful restore with the note to show while reconnecting. */
   onRestartRequested: (note: string) => void | Promise<void>;
+  /** v1.249.0: bumped by the page after "Back up now" — re-reads the copy status. */
+  refreshKey?: number;
 }) {
   // --- Copy diagnostics ----------------------------------------------------
   const [copyState, setCopyState] = useState<"idle" | "busy" | "copied" | "unavailable">("idle");
@@ -206,6 +405,8 @@ export function MaintenanceTools({
 
   return (
     <>
+      <BackupMirror disabled={disabled} refreshKey={refreshKey} />
+
       <div className="border-t hairline pt-4" data-testid="copy-diagnostics">
         <SectionLabel>Copy diagnostics</SectionLabel>
         <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">

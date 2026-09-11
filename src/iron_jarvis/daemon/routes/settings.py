@@ -88,6 +88,20 @@ def register(app: FastAPI, d) -> None:
                 setattr(trial, key, value)
             except Exception:  # noqa: BLE001 - pydantic validation
                 raise HTTPException(status_code=400, detail=f"invalid value for {key}")
+        # v1.249.0 (R-05): the backup copy folder must be usable NOW — a folder
+        # on this machine the app may write in, outside its own data folder
+        # (maintenance.mirror_dir_problem → fs_policy.root_problem, the one
+        # definition). Checked HERE, where the blocking writability probe runs
+        # in the threadpool, never at config load: an unplugged drive must not
+        # stop the app from starting.
+        if "backup_mirror_dir" in candidates:
+            from ...maintenance import mirror_dir_problem
+
+            raw_mirror = str(candidates.get("backup_mirror_dir") or "").strip()
+            candidates["backup_mirror_dir"] = raw_mirror
+            problem = mirror_dir_problem(cfg.home, raw_mirror)
+            if problem:
+                raise HTTPException(status_code=400, detail=f"backup copy folder: {problem}")
         # Everything validated — snapshot the PRIOR values (non-secret keys only)
         # for a settings-change undo (TX-01) BEFORE mutating, then commit to the
         # running config.
@@ -107,6 +121,10 @@ def register(app: FastAPI, d) -> None:
             if getattr(cfg, k, None) != v
         }
         _record_settings_undo(d.platform, changed_prior)
+        # v1.249.0 (R-05): switching the backup copy OFF retires its loop entry,
+        # or the Overview would keep naming a copy nobody asked for any more.
+        if "backup_mirror_dir" in updated and not getattr(cfg, "backup_mirror_dir", ""):
+            d.loop_health.pop("backup_mirror", None)
         # LIVE re-arm: an autonomy_*/sentinels_* change re-arms its background
         # loop immediately (this endpoint runs in a threadpool, so hop onto the
         # daemon loop). Previously the toggle waited for the next restart.
@@ -234,10 +252,16 @@ def register(app: FastAPI, d) -> None:
     def maintenance_backups() -> dict[str, Any]:
         """The archives under ``<home>/backups`` (v1.229.0, audit CL7), newest
         first, for Settings → Maintenance → Restore from backup."""
-        from ...maintenance import BACKUP_DIRNAME, list_backups
+        from ...maintenance import BACKUP_DIRNAME, list_backups, mirror_status
 
         home = d.platform.config.home
-        return {"dir": str(home / BACKUP_DIRNAME), "backups": list_backups(home)}
+        return {
+            "dir": str(home / BACKUP_DIRNAME),
+            "backups": list_backups(home),
+            # v1.249.0 (R-05): the second-drive copy — folder, whether it is
+            # there right now, and the last copy's outcome — for the card.
+            "mirror": mirror_status(home, d.platform.config),
+        }
 
     @app.post("/maintenance/restore")
     def maintenance_restore(body: RestoreBody) -> dict[str, Any]:
@@ -352,10 +376,18 @@ def register(app: FastAPI, d) -> None:
             n = prune_events(d.platform.engine, body.older_than_days, vacuum=True)
             return {"action": action, "ok": True, "result": f"pruned {n} event(s) + vacuumed"}
         if action == "backup_now":
-            from ...maintenance import run_auto_backup
+            from ...maintenance import mirror_loop_health, mirror_status, run_auto_backup
 
-            p = run_auto_backup(d.platform.config.home, engine=d.platform.engine)
-            return {"action": action, "ok": True, "result": str(p)}
+            cfg = d.platform.config
+            # v1.249.0 (R-05): a manual backup is copied to the second drive
+            # too, and its outcome refreshes the loop entry — plugging the
+            # drive back in and pressing Back up now clears a stale failure.
+            p = run_auto_backup(cfg.home, engine=d.platform.engine, config=cfg)
+            status = mirror_status(cfg.home, cfg)
+            entry = mirror_loop_health(status)
+            if entry is not None:
+                d.loop_health["backup_mirror"] = entry
+            return {"action": action, "ok": True, "result": str(p), "mirror": status}
         if action == "recheck":
             from ...onboarding import doctor as _doctor
 
