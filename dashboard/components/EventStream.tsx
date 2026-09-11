@@ -1,6 +1,6 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, m } from "framer-motion"; // v1.250.0 (S-08)
 import { Radio } from "lucide-react";
 import { useEvents } from "@/lib/useEvents";
 import { clockTime } from "@/lib/format";
@@ -66,7 +66,7 @@ export function EventStream() {
         <ul className="max-h-[440px] space-y-0.5 overflow-y-auto pr-1 font-mono text-xs">
           <AnimatePresence initial={false}>
             {events.map((e) => (
-              <motion.li
+              <m.li
                 key={e.id}
                 layout
                 initial={{ opacity: 0, x: -10, backgroundColor: "rgb(var(--accent-rgb)/0.10)" }}
@@ -85,7 +85,7 @@ export function EventStream() {
                   {e.session_id ? e.session_id.slice(0, 8) : ""}
                   {summarize(e.payload)}
                 </span>
-              </motion.li>
+              </m.li>
             ))}
           </AnimatePresence>
         </ul>

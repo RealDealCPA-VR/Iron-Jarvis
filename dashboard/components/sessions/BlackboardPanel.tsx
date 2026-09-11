@@ -42,7 +42,8 @@
 // the fix is a backend `blackboard.posted` event, after which this poll becomes
 // the fallback floor rather than the only signal.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { StickyNote, MessageSquare } from "lucide-react";
 import { get } from "@/lib/api";
 import { Card } from "@/components/ui";
@@ -92,6 +93,8 @@ export function BlackboardPanel({
 }) {
   const [records, setRecords] = useState<BlackboardRecordView[]>([]);
 
+  // The latest loader, so the visible-only repeat below can reach it.
+  const loadRef = useRef<() => void>(() => {});
   useEffect(() => {
     let alive = true;
     const load = async () => {
@@ -103,17 +106,15 @@ export function BlackboardPanel({
       }
     };
     void load();
-    if (!active) {
-      return () => {
-        alive = false;
-      };
-    }
-    const timer = setInterval(() => void load(), 5000);
+    // v1.250.0 (S-09): the REPEAT runs through useVisibleInterval below, so a
+    // hidden window polls nothing and gets one catch-up when it comes back.
+    loadRef.current = () => void load();
     return () => {
       alive = false;
-      clearInterval(timer);
+      loadRef.current = () => {};
     };
   }, [sessionId, active]);
+  useVisibleInterval(() => loadRef.current(), 5000, active);
 
   if (records.length === 0) return null;
 

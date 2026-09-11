@@ -44,7 +44,7 @@
  */
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion"; // v1.250.0 (S-08)
 import { Info } from "lucide-react";
 
 export function ModuleTitle({
@@ -169,7 +169,7 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <motion.div
+    <m.div
       initial={{ opacity: 0, y: -8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
@@ -177,6 +177,6 @@ export function PageHeader({
     >
       <ModuleTitle title={title} hint={subtitle} />
       {actions && <div className="flex items-center gap-2">{actions}</div>}
-    </motion.div>
+    </m.div>
   );
 }

@@ -25,6 +25,7 @@ import { ApiError, del, get, patch, post } from "@/lib/api";
 import type { AiCli, ModelOption, Shell, Skill, TerminalInfo } from "@/lib/types";
 import { Card, OfflineHint, ErrorNote, Spinner, ConfirmButton } from "@/components/ui";
 import { usePolledApi } from "@/lib/useApi";
+import { useModels } from "@/lib/useModels";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { DirectoryTree } from "@/components/terminal/DirectoryTree";
@@ -160,7 +161,13 @@ export default function TerminalsPage() {
   }, [activityData]);
 
   const [shells, setShells] = useState<Shell[]>([]);
-  const [models, setModels] = useState<ModelOption[]>([]); // per-pane AI picker
+  // Per-pane AI picker. v1.250.0 (S-02): the SHARED catalog, not a fetch of
+  // this page's own — the title bar's switcher has usually loaded it already,
+  // and `/models` measured 2.1–3.4 s on the live install (see the note below).
+  // `usable` is the same filter this page applied by hand: only models a turn
+  // could actually reach, with an older daemon's unrated ones still offered.
+  const catalog = useModels();
+  const models = catalog.usable;
   const [aiClis, setAiClis] = useState<AiCli[]>([]); // per-pane "Launch CLI" menu
   const [skills, setSkills] = useState<Skill[]>([]); // per-pane AI skill picker
   const [shell, setShell] = useState<string>("");
@@ -716,14 +723,9 @@ export default function TerminalsPage() {
       .catch(() => {
         /* no list — the selector says "default" and the daemon picks */
       });
-    get<{ models: ModelOption[] }>("/models")
-      .then((mods) => {
-        // Only offer models the user can ACTUALLY run (provider connected).
-        if (!cancelled) setModels(mods.models.filter((m) => m.available !== false));
-      })
-      .catch(() => {
-        /* the per-pane picker offers the default model only */
-      });
+    // The model catalog comes from the shared hook (v1.250.0, S-02) — see
+    // `catalog` above — so it is no longer one of the slow catalogs this
+    // effect waits on.
     get<{ clis: AiCli[] }>("/terminals/ai-clis")
       .then((clis) => {
         if (!cancelled) setAiClis(clis.clis);

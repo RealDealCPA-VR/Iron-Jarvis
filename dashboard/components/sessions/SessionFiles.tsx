@@ -23,7 +23,8 @@
 //    preview, copy-path, open-in-native-app, download all behave exactly as
 //    they do in chat.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { get, API_BASE, ijToken } from "@/lib/api";
 import { ArtifactsRail } from "@/components/chat/ArtifactsRail";
 
@@ -172,6 +173,8 @@ export function SessionFiles({
 }) {
   const [result, setResult] = useState<SessionResult | null>(null);
 
+  // The latest loader, so the visible-only repeat below can reach it.
+  const loadRef = useRef<() => void>(() => {});
   useEffect(() => {
     let alive = true;
     const load = async () => {
@@ -183,17 +186,15 @@ export function SessionFiles({
       }
     };
     void load();
-    if (!active) {
-      return () => {
-        alive = false;
-      };
-    }
-    const timer = setInterval(() => void load(), 8000);
+    // v1.250.0 (S-09): the REPEAT runs through useVisibleInterval below, so a
+    // hidden window polls nothing and gets one catch-up when it comes back.
+    loadRef.current = () => void load();
     return () => {
       alive = false;
-      clearInterval(timer);
+      loadRef.current = () => {};
     };
   }, [sessionId, active, reloadNonce]);
+  useVisibleInterval(() => loadRef.current(), 8000, active);
 
   if (!result?.found) return null;
   const rows = sessionFileRows(result, workspacePath);

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { motion } from "framer-motion";
+import { m } from "framer-motion"; // v1.250.0 (S-08)
 import {
   Sparkles,
   CheckCircle2,
@@ -81,7 +81,7 @@ export function OnboardingWelcome() {
   }
 
   return (
-    <motion.div
+    <m.div
       initial={{ opacity: 0, y: -8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
@@ -199,6 +199,6 @@ export function OnboardingWelcome() {
           </div>
         )}
       </div>
-    </motion.div>
+    </m.div>
   );
 }

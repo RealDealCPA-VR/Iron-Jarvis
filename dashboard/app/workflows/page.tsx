@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
+import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { post, ApiError } from "@/lib/api";
 import type { WorkflowRun, WorkflowStep } from "@/lib/types";
 import {
@@ -526,11 +527,9 @@ function RunHistory() {
   // progress emits no workflow.completed until the END, so events alone leave
   // the history stale for the whole run.
   const hasLive = runs.some(isLiveRun);
-  useEffect(() => {
-    if (!hasLive) return;
-    const id = setInterval(reload, 5000);
-    return () => clearInterval(id);
-  }, [hasLive, reload]);
+  // v1.250.0 (S-09): only while the window is visible — a minimised dashboard
+  // refetched the run table every 5 s for as long as anything was live.
+  useVisibleInterval(reload, 5000, hasLive);
 
   // Newest first (records carry a started_at timestamp).
   const ordered = [...runs].sort((a, b) => {

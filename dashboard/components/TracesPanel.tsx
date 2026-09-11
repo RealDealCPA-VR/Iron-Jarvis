@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { ChevronRight, Activity } from "lucide-react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion"; // v1.250.0 (S-08)
 import { useApi } from "@/lib/useApi";
 import type { Trace } from "@/lib/types";
 import { Card, Spinner, Empty } from "./ui";
@@ -44,13 +44,13 @@ export function TracesPanel({ sessionId }: { sessionId: string }) {
                 />
               </button>
               {open === i && (
-                <motion.pre
+                <m.pre
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: "auto" }}
                   className="overflow-auto border-t border-white/[0.06] px-3 py-2 text-zinc-400"
                 >
                   {JSON.stringify(t.payload, null, 2)}
-                </motion.pre>
+                </m.pre>
               )}
             </li>
           ))}

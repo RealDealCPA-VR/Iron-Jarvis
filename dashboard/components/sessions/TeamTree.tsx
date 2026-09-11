@@ -16,7 +16,8 @@
 //    at the ROOT instead of being dropped: a visible child in the wrong slot
 //    beats a silently missing one.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import Link from "next/link";
 import { FileText, Network } from "lucide-react";
 import { get } from "@/lib/api";
@@ -247,6 +248,8 @@ export function TeamTree({
   const [team, setTeam] = useState<TeamResponse | null>(null);
   const [files, setFiles] = useState<Record<string, ChildFiles>>({});
 
+  // The latest loader, so the visible-only repeat below can reach it.
+  const loadRef = useRef<() => void>(() => {});
   useEffect(() => {
     let alive = true;
     const load = async () => {
@@ -301,17 +304,15 @@ export function TeamTree({
       }
     };
     void load();
-    if (!active) {
-      return () => {
-        alive = false;
-      };
-    }
-    const timer = setInterval(() => void load(), 8000);
+    // v1.250.0 (S-09): the REPEAT runs through useVisibleInterval below, so a
+    // hidden window polls nothing and gets one catch-up when it comes back.
+    loadRef.current = () => void load();
     return () => {
       alive = false;
-      clearInterval(timer);
+      loadRef.current = () => {};
     };
   }, [sessionId, active]);
+  useVisibleInterval(() => loadRef.current(), 8000, active);
 
   if (!team?.found) return null;
   const tree = buildTeamTree(team);

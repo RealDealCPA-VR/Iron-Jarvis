@@ -35,16 +35,19 @@
 // plain pre-wrapped text.
 
 import {
+  memo,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type CSSProperties,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, m } from "framer-motion"; // v1.250.0 (S-08)
 import Link from "next/link";
 import {
   AudioLines,
@@ -161,7 +164,16 @@ import {
   StreamError,
   type ToolCard,
   type ContextUsage,
+  useLiveText,
+  type UseChatStream,
 } from "@/lib/useChatStream";
+import { settledSplit } from "@/lib/streamSplit";
+import { useModels } from "@/lib/useModels";
+import {
+  createComposerStore,
+  useComposer,
+  type ComposerStore,
+} from "@/lib/composerStore";
 import { QuietNote, TurnClock } from "@/components/chat/TurnClock";
 import { useRunStream } from "@/lib/useRunStream";
 import { appendDictation } from "@/components/VoiceInput";
@@ -1108,12 +1120,757 @@ function pendingSessionOf(msgs: ChatMessage[]): string | null {
 /** Streamed assistant markdown with a blinking caret pinned after the last line
  *  (a `::after` on the final block, so it sits inline with the running text). */
 function StreamingText({ content }: { content: string }) {
+  // v1.250.0 (S-03): re-parse only what is still GROWING. Everything before
+  // the last blank line that sits outside a code fence is finished markdown —
+  // it goes through MemoMarkdown, so a frame's flush re-parses the tail alone
+  // instead of the whole reply (cost was O(reply) per update).
+  //
+  // The split is skipped unless the tail is non-empty: the caret is an
+  // `::after` on the LAST child of this wrapper, so an empty tail would hang
+  // it on a blank line. Blocks that continue across the boundary (a list, a
+  // table) keep their own paragraph, because the cut is always a blank line.
+  const cut = settledSplit(content);
   return (
     <div className="[&>*:last-child]:after:ml-0.5 [&>*:last-child]:after:inline-block [&>*:last-child]:after:h-[0.95em] [&>*:last-child]:after:w-[2px] [&>*:last-child]:after:translate-y-[1px] [&>*:last-child]:after:animate-caret [&>*:last-child]:after:rounded-full [&>*:last-child]:after:bg-accent-soft [&>*:last-child]:after:align-baseline [&>*:last-child]:after:content-['']">
-      <Markdown content={content} />
+      {cut > 0 && <MemoMarkdown content={content.slice(0, cut)} />}
+      <Markdown content={cut > 0 ? content.slice(cut) : content} />
     </div>
   );
 }
+
+/* ===================================================================== *
+ * THE COMPOSER (v1.250.0, S-05)
+ *
+ * Five values — text, caret, the two dismissals, the highlighted skill row —
+ * live in a store instead of the page (lib/composerStore.ts), and the four
+ * subtrees that actually read them subscribe here. The page keeps the chrome
+ * it always had: the "+" menu, the project control, the mic. Nothing about
+ * the markup changes; what changes is who re-renders when a key goes down.
+ * ===================================================================== */
+
+/**
+ * The TEXT half of picking a skill, in ONE place (v1.250.0, S-05).
+ *
+ * Both the "/" dropdown's click and the textarea's Enter land here, because
+ * they must do the same thing: splice out ONLY the "/token" being typed and
+ * keep the rest of the message (v1.105.0 — clearing would eat a prompt the
+ * user had already written), then put the caret where the token was. The
+ * page's half (arm the chip, persist it with the thread) is its own callback.
+ */
+function applySkillPick(
+  store: ComposerStore,
+  tok: ReturnType<typeof slashTokenAt>,
+  inputRef: React.RefObject<HTMLTextAreaElement | null>,
+): void {
+  const next = spliceToken(store.get().text, tok);
+  const pos = tok ? tok.start : 0;
+  store.setText(next, pos);
+  store.setSlashDismissed(false);
+  inputRef.current?.focus();
+  // The DOM selection has to be fixed after React commits the new value, or
+  // the caret lands at the end of the spliced text and the next thing typed
+  // goes to the wrong place.
+  requestAnimationFrame(() => {
+    const el = inputRef.current;
+    if (el) el.selectionStart = el.selectionEnd = pos;
+  });
+}
+
+/** The textarea. The four caret handlers are the ones v1.105.0 measured as
+ *  necessary (onSelect alone never fires for a collapsed caret), and the
+ *  auto-grow lives here too — it keys off the text, so it belongs with it. */
+const ComposerInput = memo(function ComposerInput({
+  store,
+  inputRef,
+  busy,
+  skills,
+  onSend,
+  onStop,
+  onOpened,
+  onPickSkill,
+  onTyped,
+}: {
+  store: ComposerStore;
+  inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  busy: boolean;
+  skills: SkillOption[] | null;
+  onSend: (text: string) => void;
+  onStop: () => void;
+  /** Called when a "/" token opens — the page fetches the skill catalog once
+   *  (v1.250.0, S-05: it used to be an effect on a page-level `slashActive`,
+   *  and the page no longer watches the text). Idempotent on its own side. */
+  onOpened: () => void;
+  /** The page's half of picking a skill: arm the chip, persist it with the
+   *  thread. The TEXT half (splice the "/token", place the caret) is the
+   *  store's and stays here. */
+  onPickSkill: (name: string) => void;
+  /** A real keystroke — the page uses it to retire the voice auto-send, which
+   *  must never fire for something the user typed by hand. */
+  onTyped: () => void;
+}) {
+  const { text, caret, slashDismissed } = useComposer(store);
+
+  // Auto-grow to fit multi-line text (up to ~1/4 viewport) and shrink back
+  // when it is cleared on send, so a Shift+Enter draft is never trapped in
+  // one row. Runs on every text change, including the programmatic reset.
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [text, inputRef]);
+
+  const slashToken = busy || slashDismissed ? null : slashTokenAt(text, caret);
+  const slashActive = slashToken !== null;
+  const slashQuery = slashToken?.query ?? "";
+  // Ask the page for the catalog the first time a "/" token opens.
+  const openedRef = useRef(onOpened);
+  openedRef.current = onOpened;
+  useEffect(() => {
+    if (slashActive) openedRef.current();
+  }, [slashActive]);
+  const skillMatches = useMemo(() => {
+    if (!slashActive) return [] as SkillOption[];
+    const list = skills ?? [];
+    return slashQuery
+      ? list.filter(
+          (s) =>
+            s.name.toLowerCase().includes(slashQuery) ||
+            (s.description || "").toLowerCase().includes(slashQuery),
+        )
+      : list;
+  }, [slashActive, slashQuery, skills]);
+
+  /** Select a skill: chip on, the "/token" being typed consumed — ONLY that
+   *  token, so a prompt already written is never eaten (v1.105.0). */
+  function pickSkill(name: string) {
+    const tok = slashToken;
+    const next = spliceToken(text, tok);
+    const pos = tok ? tok.start : 0;
+    store.setText(next, pos);
+    store.setSlashDismissed(false);
+    onPickSkill(name);
+    inputRef.current?.focus();
+    // The DOM selection has to be fixed after React commits the new value, or
+    // the caret lands at the end and the next thing typed goes elsewhere.
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (el) el.selectionStart = el.selectionEnd = pos;
+    });
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // Ignore keystrokes mid-IME-composition (CJK / accented input): Enter is
+    // confirming a candidate, not sending a half-finished message.
+    if (e.nativeEvent.isComposing) return;
+    // While the "/" skill dropdown is open it owns the navigation keys.
+    if (slashActive) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        store.setSkillIndex((i) => Math.min(i + 1, Math.max(skillMatches.length - 1, 0)));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        store.setSkillIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        store.setSlashDismissed(true);
+        return;
+      }
+      // Enter picks the highlighted skill; with no match it falls through and
+      // sends the literal "/…" text like any other message.
+      if (e.key === "Enter" && !e.shiftKey && skillMatches.length > 0) {
+        e.preventDefault();
+        const idx = Math.min(store.get().skillIndex, skillMatches.length - 1);
+        pickSkill(skillMatches[idx].name);
+        return;
+      }
+    }
+    // Escape cancels an in-flight turn (keyboard "Stop") without leaving the composer.
+    if (e.key === "Escape" && busy) {
+      e.preventDefault();
+      onStop();
+      return;
+    }
+    // Enter sends; Shift+Enter inserts a newline.
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      onSend(store.get().text);
+    }
+  }
+
+  return (
+    <textarea
+      ref={inputRef}
+      value={text}
+      onChange={(e) => {
+        onTyped(); // typed — never auto-send
+        store.type(e.target.value, e.target.selectionStart ?? e.target.value.length);
+      }}
+      // Caret moves that onChange never sees: arrow keys, clicking into the
+      // middle of the text, Home/End, drag-select. All four are wired because
+      // React's onSelect ALONE does not fire for a collapsed caret — measured
+      // in a real browser, the DOM selectionStart went 21 -> 8 on ArrowLeft
+      // while the tracked value stayed at 21, so the picker refused to reopen
+      // when you moved back into an earlier "/word". keyup and click are the
+      // ones that actually fire for that; onSelect is kept for drag-selection
+      // and onFocus for tabbing back in.
+      onKeyUp={(e) => store.setCaret(e.currentTarget.selectionStart ?? 0)}
+      onClick={(e) => store.setCaret(e.currentTarget.selectionStart ?? 0)}
+      onFocus={(e) => store.setCaret(e.currentTarget.selectionStart ?? 0)}
+      onSelect={(e) => store.setCaret(e.currentTarget.selectionStart ?? 0)}
+      onKeyDown={onKeyDown}
+      autoFocus
+      rows={1}
+      aria-label="Message"
+      placeholder="Message Iron Jarvis…  (Enter to send · Shift+Enter new line · / for skills)"
+      className="field max-h-40 min-h-[2.75rem] flex-1 resize-none"
+    />
+  );
+});
+
+/** The "/" skill picker — floats above the composer. Renders from the same
+ *  token rule as the textarea's own; both read the store, so they cannot
+ *  disagree about which "/word" the caret is in. */
+const SlashPicker = memo(function SlashPicker({
+  store,
+  busy,
+  skills,
+  inputRef,
+  onOpened,
+  onPick,
+}: {
+  store: ComposerStore;
+  busy: boolean;
+  skills: SkillOption[] | null;
+  inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  /** Same one-shot catalog load the textarea asks for — whichever notices the
+   *  open token first wins, and the page's ref makes the other a no-op. */
+  onOpened: () => void;
+  onPick: (name: string) => void;
+}) {
+  const { text, caret, slashDismissed, skillIndex } = useComposer(store);
+  const slashToken = busy || slashDismissed ? null : slashTokenAt(text, caret);
+  const slashQuery = slashToken?.query ?? "";
+  const openedRef = useRef(onOpened);
+  openedRef.current = onOpened;
+  useEffect(() => {
+    if (slashToken !== null) openedRef.current();
+  }, [slashToken !== null]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Keep the highlighted row pinned to the top as the query changes — moved
+  // here with the query it watches (v1.250.0, S-05).
+  useEffect(() => {
+    store.setSkillIndex(0);
+  }, [slashQuery, slashToken !== null, store]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (slashToken === null) return null;
+  const list = skills ?? [];
+  // ALL matches — the dropdown scrolls. (An 8-row cap made the picker look
+  // like it wasn't loading the whole skill library.)
+  const skillMatches = slashQuery
+    ? list.filter(
+        (s) =>
+          s.name.toLowerCase().includes(slashQuery) ||
+          (s.description || "").toLowerCase().includes(slashQuery),
+      )
+    : list;
+
+  return (
+    <div className="absolute bottom-full left-3 right-3 z-20 mb-2 overflow-hidden rounded-xl border border-white/10 bg-zinc-900 shadow-lg shadow-black/40">
+      {skills === null ? (
+        <p className="px-3 py-2.5 text-xs text-zinc-500">Loading skills…</p>
+      ) : skillMatches.length === 0 ? (
+        <p className="px-3 py-2.5 text-xs text-zinc-500">no matching skill</p>
+      ) : (
+        <div role="listbox" aria-label="Skills" className="max-h-72 overflow-y-auto p-1">
+          <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+            {skillMatches.length} skill{skillMatches.length === 1 ? "" : "s"}
+            {slashQuery ? " matching" : ""} — ↑↓ + Enter, or keep typing
+          </div>
+          {skillMatches.map((s, i) => (
+            <button
+              key={s.name}
+              type="button"
+              role="option"
+              aria-selected={i === skillIndex}
+              ref={(el) => {
+                if (i === skillIndex) el?.scrollIntoView({ block: "nearest" });
+              }}
+              onClick={() => onPick(s.name)}
+              onMouseEnter={() => store.setSkillIndex(i)}
+              title={s.description}
+              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors ${
+                i === skillIndex ? "bg-accent/[0.12] text-accent-soft" : "text-zinc-300"
+              }`}
+            >
+              <Sparkles size={12} className="shrink-0 text-accent-soft/70" />
+              <span className="shrink-0 font-mono text-[12px]">{s.name}</span>
+              <span className="truncate text-[11px] text-zinc-500">{s.description}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
+
+/** The "@" agent picker (v1.150.0). Same shape as the "/" picker — one
+ *  affordance grammar for both — and it yields to it when both could open. */
+const AtPicker = memo(function AtPicker({
+  store,
+  busy,
+  mentionable,
+}: {
+  store: ComposerStore;
+  busy: boolean;
+  mentionable: MentionableAgent[] | null;
+}) {
+  const { text, caret, slashDismissed, atDismissed } = useComposer(store);
+  const atToken = busy || atDismissed ? null : tokenAt(text, caret, "@");
+  const slashOpen =
+    !(busy || slashDismissed) && slashTokenAt(text, caret) !== null;
+  if (atToken === null || slashOpen) return null;
+  const atQuery = atToken.query ?? "";
+  const list = mentionable ?? [];
+  const agentMatches = atQuery
+    ? list.filter(
+        (a) =>
+          a.mention.toLowerCase().includes(atQuery) ||
+          (a.description || "").toLowerCase().includes(atQuery),
+      )
+    : list;
+
+  return (
+    <div className="absolute bottom-full left-3 right-3 z-20 mb-2 overflow-hidden rounded-xl border border-white/10 bg-zinc-900 shadow-lg shadow-black/40">
+      {mentionable === null ? (
+        <p className="px-3 py-2.5 text-xs text-zinc-500">Loading agents…</p>
+      ) : agentMatches.length === 0 ? (
+        <p className="px-3 py-2.5 text-xs text-zinc-500">
+          no matching agent — add one on the Agents page
+        </p>
+      ) : (
+        <div role="listbox" aria-label="Agents" className="max-h-72 overflow-y-auto p-1">
+          <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+            {agentMatches.length} agent{agentMatches.length === 1 ? "" : "s"}
+            {atQuery ? " matching" : ""} — they answer instead of Iron Jarvis
+          </div>
+          {agentMatches.map((a) => (
+            <button
+              key={a.name}
+              type="button"
+              role="option"
+              aria-selected={false}
+              onClick={() => {
+                const cur = store.get();
+                store.setText(spliceToken(cur.text, atToken) + `@${a.mention} `);
+                store.setAtDismissed(false);
+              }}
+              title={a.description}
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-zinc-300 transition-colors hover:bg-accent/[0.12] hover:text-accent-soft"
+            >
+              <Bot size={12} className="shrink-0 text-accent-soft/70" />
+              <span className="shrink-0 font-mono text-[12px]">{a.mention}</span>
+              {/* Where it runs + whether it can actually take work. An offline
+                  remote is LISTED, not hidden — "my agent isn't in the list"
+                  is the worse failure. */}
+              <span className="shrink-0 text-[10px] text-zinc-600">
+                {a.kind === "remote" ? "remote" : a.kind === "dynamic" ? "custom" : "built-in"}
+              </span>
+              {!a.healthy && (
+                <span className="shrink-0 text-[10px] text-amber-400/80">offline</span>
+              )}
+              <span className="truncate text-[11px] text-zinc-500">{a.description}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
+
+/** The send ARROW: invisible until there is something to send (text or an
+ *  attachment) — then it materializes. Subscribed because its presence is a
+ *  function of the text. */
+const SendArrow = memo(function SendArrow({
+  store,
+  busy,
+  hasAttachments,
+  onSend,
+}: {
+  store: ComposerStore;
+  busy: boolean;
+  hasAttachments: boolean;
+  onSend: (text: string) => void;
+}) {
+  const { text } = useComposer(store);
+  if (!(text.trim() || hasAttachments || busy)) return null;
+  return (
+    <button
+      onClick={() => onSend(store.get().text)}
+      disabled={busy || !text.trim()}
+      aria-label="Send"
+      title="Send (Enter)"
+      className="btn-accent h-[2.75rem] w-[2.75rem] shrink-0 rounded-full p-0"
+    >
+      {busy ? <LoaderInline /> : <Send size={16} />}
+    </button>
+  );
+});
+
+/** Voice Chat auto-send (headless). Once dictated text settles — no interim
+ *  words, nothing being transcribed — send it. Web Speech finalizes eagerly,
+ *  so give the speaker a moment; the server engine already waited out 1.4s of
+ *  silence before finalizing, so send almost immediately.
+ *
+ *  It lives in its own component purely so that watching the TEXT does not
+ *  re-render the page: the effect needs every keystroke, the page does not. */
+const VoiceAutoSend = memo(function VoiceAutoSend({
+  store,
+  armed,
+  delayMs,
+  onSend,
+}: {
+  store: ComposerStore;
+  /** Every condition the page owns, already ANDed: voice mode on, not busy,
+   *  not speaking, nothing interim/processing/errored — and the last text
+   *  came from the microphone rather than the keyboard. */
+  armed: boolean;
+  /** The dictation engine's settle delay, in ms — 350 for the server engine
+   *  (it already waited out 1.4s of silence), 1500 for Web Speech. */
+  delayMs: number;
+  onSend: (text: string) => void;
+}) {
+  const { text } = useComposer(store);
+  const onSendRef = useRef(onSend);
+  onSendRef.current = onSend;
+  useEffect(() => {
+    if (!armed) return;
+    const t = text.trim();
+    if (!t) return;
+    const timer = setTimeout(() => onSendRef.current(store.get().text), delayMs);
+    return () => clearTimeout(timer);
+  }, [armed, text, delayMs, store]);
+  return null;
+});
+
+/** What a message row may ask the page to do. ONE object, built once with
+ *  stable callbacks, so a row's props only change when its own message does
+ *  (v1.250.0, S-05). */
+export interface RowHandlers {
+  retryTask: (task: string) => void;
+  regenerate: () => void;
+  crystallize: (threadId: string) => void;
+  promote: (content: string) => Promise<void>;
+  /** The receipt's own prop types, not a second description of them: these
+   *  three are handed straight to TurnReceipt, and a hand-written shape here
+   *  would be one more thing that can drift from the component it feeds. */
+  openDocument: NonNullable<ComponentProps<typeof TurnReceipt>["onOpenDocument"]>;
+  undoFor: NonNullable<ComponentProps<typeof TurnReceipt>["undoFor"]>;
+  undoWrite: NonNullable<ComponentProps<typeof TurnReceipt>["onUndo"]>;
+}
+
+/**
+ * ONE message in the conversation (v1.250.0, S-05).
+ *
+ * Memoized on purpose: every keystroke in the composer, and every daemon
+ * event, used to re-render all 50 bubbles of a long thread (measured: 105
+ * bubble renders per keystroke, 173 per streamed token). The branches, the
+ * markup and the order are exactly what the inline map rendered; only the
+ * closures became props — and the live workflow cards subscribe to events
+ * themselves, so an event no longer reaches this row at all.
+ */
+const MessageRow = memo(function MessageRow({
+  m,
+  i,
+  isLast,
+  prevUser,
+  canRegen,
+  busy,
+  threadId,
+  projectId,
+  crystallizingId,
+  h,
+}: {
+  m: ChatMessage;
+  i: number;
+  isLast: boolean;
+  prevUser: string;
+  canRegen: boolean;
+  busy: boolean;
+  threadId: string | null;
+  /** Nullable, exactly as the page holds it: GoalBirth takes it as-is and the
+   *  promote button turns a missing project into its own disabled reason. */
+  projectId: string | null;
+  crystallizingId: string | null;
+  h: RowHandlers;
+}) {
+  if (m.role === "user") {
+    return (
+      <Bubble role="user">
+        {m.content}
+        {m.attachmentNames && m.attachmentNames.length > 0 && (
+          <AttachmentFooter names={m.attachmentNames} />
+        )}
+      </Bubble>
+    );
+  }
+  // The hand-off (v1.108.0). A turn that grew into a full agent run has no
+  // reply of its own — say WHY out loud, or the wait reads as a stall.
+  if (m.workflowDraft)
+    return (
+      <div className="group/msg space-y-2">
+        {m.content && (
+          <Bubble role="assistant">
+            <MemoMarkdown content={m.content} />
+          </Bubble>
+        )}
+        <WorkflowDraftCard draft={m.workflowDraft} />
+        {m.workflowRun && (
+          <WorkflowRunChip runId={m.workflowRun.runId} name={m.workflowRun.name} />
+        )}
+      </div>
+    );
+  // v1.150.0: a panel reply is attributed. Without a name on it, a three-way
+  // conversation is an unreadable wall of anonymous assistant bubbles.
+  if (m.panelWho)
+    return (
+      <div className="group/msg space-y-1">
+        <div className="ml-11 flex items-center gap-2">
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+              m.panelError
+                ? "border-rose-500/30 bg-rose-500/[0.06] text-rose-300"
+                : "border-accent/25 bg-accent/[0.06] text-accent-soft"
+            }`}
+          >
+            <Bot size={11} />
+            {agentDisplayName(m.panelWho)}
+          </span>
+          {m.panelError && (
+            <span className="text-[11px] text-rose-400/80">couldn&apos;t answer</span>
+          )}
+          {m.panelThreadId && (
+            <Link
+              href={`/agents?thread=${m.panelThreadId}`}
+              className="ml-auto mr-1 text-[11px] text-zinc-500 transition-colors hover:text-accent-soft"
+            >
+              open in Agents →
+            </Link>
+          )}
+        </div>
+        <Bubble role="assistant">
+          <MemoMarkdown content={m.content} />
+        </Bubble>
+      </div>
+    );
+  // v1.149.0: an agent turn shows the LEDGER's account under the model's own —
+  // files it really wrote, tools that really ran, errors, what can be reverted.
+  if (m.runResult)
+    return (
+      <div className="group/msg space-y-2">
+        {m.content && (
+          <Bubble role="assistant">
+            <MemoMarkdown content={m.content} />
+          </Bubble>
+        )}
+        <RunResultCard
+          result={m.runResult}
+          onRetry={() => h.retryTask(m.runResult?.task || "")}
+        />
+      </div>
+    );
+  if (m.escalated)
+    return (
+      <div className="group/msg">
+        <div className="ml-11 flex items-start gap-2 rounded-xl border border-accent/20 bg-accent/[0.05] px-3 py-2 text-[12px] text-zinc-300">
+          <Zap size={13} className="mt-0.5 shrink-0 text-accent-soft" />
+          <span>
+            {m.escalatedTo ? (
+              <>
+                Handing this to {m.escalatedTo} — {m.escalated}.
+              </>
+            ) : (
+              <>Taking this on properly — {m.escalated}.</>
+            )}
+          </span>
+        </div>
+      </div>
+    );
+  return (
+    <div className="group/msg">
+      <Bubble role="assistant">
+        <MemoMarkdown content={m.content} />
+      </Bubble>
+      {m.interrupted && (
+        <div className="ml-11 mt-1 text-[11px] italic text-amber-400/80">
+          interrupted — the reply was cut off
+        </div>
+      )}
+      {/* v1.170.0: the turn RAN a workflow (the model via the workflow_run
+          tool, or the user from the "+" menu) — the live chip renders where
+          the user is standing, INSIDE the generic branch so the reply keeps
+          every standard affordance: hover actions, sources, receipt,
+          regenerate. A forked branch here once silently dropped all of them. */}
+      {m.workflowRun && (
+        <div className="mt-2">
+          <WorkflowRunChip runId={m.workflowRun.runId} name={m.workflowRun.name} />
+        </div>
+      )}
+      {/* TURN RECEIPT (v1.165.0): server-side accountability — who answered and
+          why, tools run/denied, files. Supersedes the legacy viaProvider chip
+          below whenever the message carries a route. */}
+      {m.route && (
+        <div className="ml-11">
+          <TurnReceipt
+            route={m.route}
+            adapted={m.adapted}
+            toolsUsed={m.toolsUsed}
+            deniedTools={m.deniedTools}
+            documents={m.documents}
+            onOpenDocument={h.openDocument}
+            undoFor={h.undoFor}
+            onUndo={h.undoWrite}
+          />
+        </div>
+      )}
+      {/* DOORS (v1.199.0): links into the surfaces this turn actually touched —
+          SERVER-derived from the tools that executed ok (files excluded; the
+          ArtifactsRail owns files). Rides the message, so live and persisted
+          turns render alike; a pre-v1.199.0 message has none. */}
+      <DoorsStrip doors={m.doors} />
+      {!m.route && m.viaProvider && (
+        <div
+          className="ml-11 mt-1 inline-flex items-center gap-1.5 rounded-full border border-amber-400/25 bg-amber-400/[0.08] px-2 py-0.5 text-[11px] text-amber-200/90"
+          title={`Your selected model couldn't take this turn (it may not support tools, or it errored), so the router used ${m.viaProvider} instead. Verify the endpoint's tool support in Connections to keep turns local.`}
+        >
+          <Bot size={10} className="shrink-0" />
+          answered by {m.viaProvider}
+        </div>
+      )}
+      {/* Tools the reply's tool loop actually ran — LEGACY line for
+          pre-v1.165.0 messages; the TurnReceipt carries the same fact (plus
+          denials) when a route is present, so both would say it twice. */}
+      {!m.route && m.toolsUsed && m.toolsUsed.length > 0 && (
+        <div className="ml-11 mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-zinc-500">
+          <Wrench size={10} className="shrink-0 text-accent-soft/70" />
+          <span className="truncate">used: {m.toolsUsed.join(", ")}</span>
+        </div>
+      )}
+      {/* URLs the turn's web tools actually returned */}
+      {m.sources && m.sources.length > 0 && <SourcesRow sources={m.sources} />}
+      {/* Crystallize nudge (v1.120.0): agent turns are by definition
+          multi-step — offer to keep the process. */}
+      {m.fromSession && isLast && !busy && threadId && (
+        <button
+          type="button"
+          disabled={crystallizingId !== null}
+          onClick={() => h.crystallize(threadId)}
+          className="ml-11 mt-1.5 inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11.5px] text-accent-soft transition-colors hover:bg-accent/[0.12] disabled:opacity-50"
+        >
+          {crystallizingId ? (
+            <Loader2 size={12} className="animate-spin" />
+          ) : (
+            <GitBranch size={12} />
+          )}
+          Keep this as a workflow?
+        </button>
+      )}
+      {/* Goal birth (v1.208.0): only on the newest settled reply; GoalBirth
+          applies the deliberately-high bar and renders nothing otherwise,
+          because a false chip trains the user to ignore every chip. */}
+      {isLast && !busy && (
+        <GoalBirth userText={prevUser} toolsUsed={m.toolsUsed} projectId={projectId} />
+      )}
+      <div className="ml-11 mt-1 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100">
+        <CopyIconButton text={m.content} title="Copy message" />
+        <PromoteKnowledgeButton
+          disabledReason={projectId ? null : "bind this chat to a project first"}
+          onPromote={() => h.promote(m.content)}
+        />
+        {canRegen && (
+          <button
+            type="button"
+            onClick={h.regenerate}
+            title="Regenerate reply"
+            aria-label="Regenerate reply"
+            className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+          >
+            <RefreshCw size={12} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+});
+
+/**
+ * The live reply bubble (v1.250.0, S-03).
+ *
+ * THE ONLY component that watches the streamed text: it subscribes to the
+ * stream's text store, so a token re-renders THIS and nothing else. The chat
+ * page used to hold that text in state, which meant every word redrew the
+ * whole conversation — 173 bubble renders per token on a 50-message thread.
+ *
+ * Everything it renders is what the bubble always rendered, in the same order:
+ * the streamed markdown (or the waiting row with its clock), the live tool
+ * cards, the quiet note, and the mid-turn approval card.
+ */
+function LiveReply({
+  stream,
+  onGrow,
+  // NAMED for the page function it carries, so both approval cards — this one
+  // and the agent lane's — visibly route to the page's ONE grant handler.
+  // chat-consent-v1192 pins that by reading this file's source, so keep the
+  // wiring literal here and do not spell the prop pair out in prose: the pin
+  // counts occurrences and a comment quoting the JSX is a third match.
+  // Two lanes drifting apart is the bug that pin exists to catch.
+  armFromApproval,
+}: {
+  stream: UseChatStream;
+  onGrow: () => void;
+  armFromApproval: (tool: string) => void;
+}) {
+  const text = useLiveText(stream);
+  // Keep the newest line in view as the reply grows — the page's scroll effect
+  // can no longer see this text, so the growth reports itself.
+  useEffect(() => {
+    if (text) onGrow();
+  }, [text, onGrow]);
+  return (
+    <Bubble role="assistant">
+      {text ? (
+        <StreamingText content={text} />
+      ) : (
+        <span className="inline-flex items-center gap-2 text-zinc-400">
+          <Loader2 size={14} className="animate-spin text-accent-soft" />
+          {/* v1.246.0: WHAT it is waiting on, and for how long — a working
+              turn and a stuck one used to show the same pulsing word. */}
+          <span className="animate-pulse">
+            {stream.phase === "preparing" && stream.withFiles
+              ? "Reading your files…"
+              : "Thinking…"}
+          </span>
+          <TurnClock since={stream.startedAt ?? null} />
+        </span>
+      )}
+      {stream.tools.length > 0 && <ToolCardList cards={stream.tools} />}
+      {text && <QuietNote since={stream.lastEventAt ?? null} />}
+      {/* MID-TURN APPROVAL (v1.187.0): the daemon paused this turn on an
+          ask-tier tool and is waiting for a decision. "Allow for this
+          conversation" also arms the tool here, so later turns grant it via
+          the existing "+"-menu machinery — one store. */}
+      {stream.approval && (
+        <ApprovalCard
+          approval={stream.approval}
+          onConversation={armFromApproval}
+        />
+      )}
+    </Bubble>
+  );
+}
+
 
 export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -1211,7 +1968,14 @@ export default function ChatPage() {
   const [workfolderNote, setWorkfolderNote] = useState("");
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [input, setInput] = useState("");
+  // v1.250.0 (S-05): the composer's text/caret/dismissals/highlight live in a
+  // store, not in this component — a keystroke re-renders the textarea, the
+  // pickers and the send arrow, and nothing else. `composer.get().text` is the
+  // synchronous read every send path uses; `setText` is the ref API that
+  // prefill, dictation, retry and ?ask= write through.
+  const composerRef = useRef<ComposerStore | null>(null);
+  if (composerRef.current === null) composerRef.current = createComposerStore();
+  const composer = composerRef.current;
   // Empty-state example chips (v1.198.0). The initializer must be
   // DETERMINISTIC: this page is prerendered, so a random initial render would
   // bake one trio into the build's HTML and hydration-mismatch nearly every
@@ -1260,15 +2024,14 @@ export default function ChatPage() {
   // dropdown for the current "/…" text (any edit reopens it).
   const [skills, setSkills] = useState<SkillOption[] | null>(null);
   const [activeSkill, setActiveSkill] = useState("");
-  const [skillIndex, setSkillIndex] = useState(0);
-  const [slashDismissed, setSlashDismissed] = useState(false);
+  // skillIndex / slashDismissed / atDismissed / caret: see `composer` above
+  // (v1.250.0, S-05) — they are the composer's, and the composer re-renders
+  // alone when they change.
   // "@" agent picker (v1.150.0): the catalog + whether Esc closed the dropdown.
   const [mentionable, setMentionable] = useState<MentionableAgent[] | null>(null);
-  const [atDismissed, setAtDismissed] = useState(false);
   // Caret offset in the composer. The picker keys off the "/" token AT THE
   // CARET (v1.105.0), not the start of the message, so it needs to know where
   // the cursor is — mid-sentence "/" is the whole point of that change.
-  const [caret, setCaret] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
   // Threads sidebar: the saved-conversation list + which one is loaded.
@@ -1481,7 +2244,10 @@ export default function ChatPage() {
   // Token streaming: `stream` drives the live CHAT bubble (deltas + tool cards);
   // `runStream` drives the AGENT working bubble. Both are additive — the
   // non-streaming /chat POST and the session finalize path remain the fallback.
-  const stream = useChatStream();
+  // v1.250.0 (S-03): the live reply is rendered by <LiveReply> below, which
+  // subscribes to the stream's text store — so a streamed token no longer
+  // re-renders this 7,750-line page.
+  const stream = useChatStream({ textInState: false });
   const runStream = useRunStream();
   // Whether the current streaming turn has fed TTS yet (drives the once-per-turn
   // resetStream in feedTTS).
@@ -1720,26 +2486,22 @@ export default function ChatPage() {
   const awaiting = awaitingId !== null;
   const busy = awaiting || chatBusy;
 
-  // Load the model catalog for the header picker (best-effort — stays on "default").
+  // The model catalog for the header picker. v1.250.0 (S-02): through the
+  // SHARED hook, so this page renders the catalog the title bar's switcher has
+  // usually already loaded instead of re-fetching it on every mount (a raw
+  // `get` also bypassed the payload cache entirely, so it could never be
+  // seeded). Best-effort as before: no catalog, and the picker stays on
+  // "default".
+  //
+  // v1.148.0 still holds: the ones that AREN'T connected are KEPT. They used to
+  // be filtered out entirely, which answered "why isn't my model in the list?"
+  // with silence; they now sort last, are badged "offline", and are not
+  // selectable — labelled beats hidden, and a dead option the user can't click
+  // is not the "silently fails" trap the filter existed to prevent.
+  const catalog = useModels();
   useEffect(() => {
-    let cancelled = false;
-    get<{ models: ModelOption[] }>("/models")
-      .then((d) => {
-        // v1.148.0: keep the ones that AREN'T connected too. They used to be
-        // filtered out entirely, which answered "why isn't my model in the
-        // list?" with silence; they now sort last, are badged "offline", and
-        // are not selectable — labelled beats hidden, and a dead option the
-        // user can't click is not the "silently fails" trap the filter existed
-        // to prevent.
-        if (!cancelled) setModels(d.models);
-      })
-      .catch(() => {
-        /* picker just stays on the server default */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if (catalog.models.length > 0) setModels(catalog.models);
+  }, [catalog.models]);
 
   // Load the persona catalog (best-effort — falls back to "assistant" + Custom).
   useEffect(() => {
@@ -1871,8 +2633,7 @@ export default function ChatPage() {
       const wantPersona = (params.get("persona") || "").trim();
       if (wantPersona) selectPersonaLocal(wantPersona);
       if (ask) {
-        setInput(ask);
-        setCaret(ask.length);
+        composer.setText(ask);
         inputRef.current?.focus();
       }
       if (skill) {
@@ -2529,7 +3290,7 @@ export default function ChatPage() {
     setToolsOpen(false);
     setToolQuery("");
     setActiveSkill(""); // so is the active skill
-    setSlashDismissed(false);
+    composer.reset(); // and so is anything half-typed for the old thread
     setError(null);
     setOffline(false);
     sinceRef.current = null;
@@ -2925,58 +3686,28 @@ export default function ChatPage() {
   // Available in BOTH modes since v1.104.0 (it was gated to chat, so in Agent
   // mode "/" silently did nothing). The modes APPLY the skill differently, see
   // sendAgent: chat injects the playbook server-side, an agent has skill_load.
-  const slashToken = useMemo(
-    () => (busy || slashDismissed ? null : slashTokenAt(input, caret)),
-    [input, caret, busy, slashDismissed],
-  );
-
-  const slashActive = slashToken !== null;
-  const slashQuery = slashToken?.query ?? "";
-
-  const skillMatches = useMemo(() => {
-    if (!slashActive) return [] as SkillOption[];
-    const list = skills ?? [];
-    const filtered = slashQuery
-      ? list.filter(
-          (s) =>
-            s.name.toLowerCase().includes(slashQuery) ||
-            (s.description || "").toLowerCase().includes(slashQuery),
-        )
-      : list;
-    // ALL matches — the dropdown scrolls. (An 8-row cap made the picker look
-    // like it wasn't loading the whole skill library.)
-    return filtered;
-  }, [slashActive, slashQuery, skills]);
-
-  // "@" AGENT PICKER (v1.150.0) — the same token rule as "/", so a mention can
-  // be reached for mid-sentence and an email address never opens a dropdown.
-  const atToken = useMemo(
-    () => (busy || atDismissed ? null : tokenAt(input, caret, "@")),
-    [input, caret, busy, atDismissed],
-  );
-  const atActive = atToken !== null;
-  const atQuery = atToken?.query ?? "";
-  const agentMatches = useMemo(() => {
-    if (!atActive) return [] as MentionableAgent[];
-    const list = mentionable ?? [];
-    if (!atQuery) return list;
-    return list.filter(
-      (a) =>
-        a.mention.toLowerCase().includes(atQuery) ||
-        (a.description || "").toLowerCase().includes(atQuery),
-    );
-  }, [atActive, atQuery, mentionable]);
+  // The "/" and "@" token rules, the skill/agent match lists and the caret
+  // they key off all moved into the composer components (v1.250.0, S-05):
+  // ComposerInput, SlashPicker and AtPicker each derive them from the store, so
+  // deriving them HERE would re-render the whole page on every keystroke for
+  // values only those three subtrees ever read. The rule itself is unchanged —
+  // "/" must open a word, which is what keeps `http://x`, `C:/Users`, `and/or`
+  // and `24/7` from flickering a dropdown (v1.105.0).
 
   /** Mentions in the composer that resolve to a REAL agent — the send path
    *  routes to the panel only when at least one does, so "@ 9am" or an email
-   *  address never diverts a normal message. */
-  const liveMentions = useMemo(() => {
-    const known = new Set((mentionable ?? []).map((a) => a.mention.toLowerCase()));
-    const found = input.match(/(?<![A-Za-z0-9._-])@([A-Za-z0-9][A-Za-z0-9._-]*)/g) ?? [];
-    return found
-      .map((t) => t.slice(1).replace(/[._-]+$/, "").toLowerCase())
-      .filter((t) => known.has(t));
-  }, [input, mentionable]);
+   *  address never diverts a normal message. Called with the text being sent
+   *  (a function, not a memo: watching the text is what we just stopped). */
+  const liveMentionsIn = useCallback(
+    (text: string) => {
+      const known = new Set((mentionable ?? []).map((a) => a.mention.toLowerCase()));
+      const found = text.match(/(?<![A-Za-z0-9._-])@([A-Za-z0-9][A-Za-z0-9._-]*)/g) ?? [];
+      return found
+        .map((t) => t.slice(1).replace(/[._-]+$/, "").toLowerCase())
+        .filter((t) => known.has(t));
+    },
+    [mentionable],
+  );
 
   const toolMatches = useMemo(() => {
     const list = toolCatalog ?? [];
@@ -3145,9 +3876,13 @@ export default function ChatPage() {
     [connCatalog],
   );
 
-  // Lazily fetch + cache the skill catalog the first time "/" opens the picker.
-  useEffect(() => {
-    if (!slashActive || skillsFetchedRef.current) return;
+  /** Lazily fetch + cache the skill catalog the first time "/" opens the
+   *  picker. v1.250.0 (S-05): a CALLBACK rather than an effect on
+   *  `slashActive`, because the page no longer watches the composer's text —
+   *  the textarea and the picker both call it when the token opens, and the
+   *  ref makes the second call a no-op. */
+  const loadSkillsOnce = useCallback(() => {
+    if (skillsFetchedRef.current) return;
     skillsFetchedRef.current = true;
     get<{ skills: SkillOption[] }>("/skills")
       .then((d) => setSkills(d.skills ?? []))
@@ -3155,7 +3890,7 @@ export default function ChatPage() {
         skillsFetchedRef.current = false; // a later "/" retries
         setSkills([]);
       });
-  }, [slashActive]);
+  }, []);
 
   // Lazily fetch + cache the tool registry the first time the "+" menu opens.
   useEffect(() => {
@@ -3170,10 +3905,9 @@ export default function ChatPage() {
       });
   }, [toolsOpen]);
 
-  // Keep the highlighted skill row pinned to the top as the query changes.
-  useEffect(() => {
-    setSkillIndex(0);
-  }, [slashQuery, slashActive]);
+  // Keeping the highlighted skill row pinned to the top as the query changes
+  // moved into SlashPicker (v1.250.0, S-05) — it is the only thing that reads
+  // the query, and watching it here re-rendered the page on every keystroke.
 
   // Close the "+" popover on any outside click.
   useEffect(() => {
@@ -3253,29 +3987,13 @@ export default function ChatPage() {
     });
   }
 
-  /** Select a skill from the "/" dropdown: chip on, "/query" text consumed. */
+  /** The page's half of picking a skill: arm the chip and persist it with the
+   *  thread. The TEXT half — splice out ONLY the "/token" being typed, keep the
+   *  rest of the message, place the caret — is `applySkillPick`, which both
+   *  the dropdown's click and the textarea's Enter call (v1.250.0, S-05). */
   function pickSkill(name: string) {
     setActiveSkill(name);
-    // Splice out ONLY the "/token" being typed and keep the rest of the message
-    // (v1.105.0). This was `setInput("")`, which was invisibly correct while
-    // "/" could lead a message and nothing else — the token WAS the whole
-    // message. The moment "/" is allowed mid-sentence, clearing would eat a
-    // prompt the user had already written.
-    const tok = slashToken;
-    const next = spliceToken(input, tok);
-    const pos = tok ? tok.start : 0;
-    setInput(next);
-    setCaret(pos); // keep the memo's view of the caret consistent THIS render
-    setSlashDismissed(false);
     markSetupChanged();
-    inputRef.current?.focus();
-    // The DOM selection has to be fixed after React commits the new value,
-    // otherwise the caret lands at the end of the spliced text and the next
-    // thing typed goes to the wrong place.
-    requestAnimationFrame(() => {
-      const el = inputRef.current;
-      if (el) el.selectionStart = el.selectionEnd = pos;
-    });
   }
 
   // ---------------------------------------------------------- agent-mode machinery
@@ -3305,7 +4023,21 @@ export default function ChatPage() {
   useEffect(() => {
     if (!pinnedRef.current) return;
     bottomRef.current?.scrollIntoView({ behavior: busy ? "auto" : "smooth", block: "end" });
-  }, [messages, awaitingId, chatBusy, progress.length, stream.text, runStream.text, busy]);
+  }, [messages, awaitingId, chatBusy, progress.length, runStream.text, busy]);
+
+  // v1.250.0 (S-03): the streamed reply no longer re-renders this page, so its
+  // growth cannot be an effect dependency — <LiveReply> calls this after each
+  // frame's flush instead, which is the same "scroll once the text grew" rule
+  // in the same pinned-only, instant-while-streaming shape.
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+  const scrollLiveIntoView = useCallback(() => {
+    if (!pinnedRef.current) return;
+    bottomRef.current?.scrollIntoView({
+      behavior: busyRef.current ? "auto" : "smooth",
+      block: "end",
+    });
+  }, []);
 
   // Track the reader's pin state; releasing the pin surfaces a "Jump to latest"
   // pill instead of fighting them for the scroll position.
@@ -3323,15 +4055,8 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }
 
-  // Auto-grow the composer to fit multi-line input (up to ~1/4 viewport), and
-  // shrink back when it's cleared on send. Runs on every `input` change (incl.
-  // the programmatic reset), so a Shift+Enter draft is never trapped in one row.
-  useLayoutEffect(() => {
-    const el = inputRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-  }, [input]);
+  // The composer's auto-grow moved into ComposerInput with the text it keys
+  // off (v1.250.0, S-05).
 
   // Fetch the finished session and turn it into the assistant's reply. Only acts
   // once the session has actually reached a terminal status (the `agent.completed`
@@ -3569,7 +4294,7 @@ export default function ChatPage() {
       const delta = dictation.transcript.slice(dictEmittedRef.current);
       dictEmittedRef.current = dictation.transcript.length;
       inputFromVoiceRef.current = true;
-      setInput((p) => appendDictation(p, delta));
+      composer.setText(appendDictation(composer.get().text, delta));
     }
   }, [dictation.transcript]);
 
@@ -3614,29 +4339,9 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceMode, busy, tts.speaking]);
 
-  // Voice Chat auto-send: once dictated text settles (no interim words, no
-  // clip being transcribed), send it. Web Speech finalizes eagerly, so give
-  // the speaker a moment to continue; the server engine already waited out
-  // 1.4s of silence before finalizing, so send almost immediately.
-  useEffect(() => {
-    if (!voiceMode || busy || tts.speaking) return;
-    if (!inputFromVoiceRef.current) return;
-    const text = input.trim();
-    if (!text) return;
-    if (dictation.interim || dictation.processing || dictation.error) return;
-    const delay = dictation.engine === "server" ? 350 : 1500;
-    const timer = setTimeout(() => send(input), delay);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    voiceMode,
-    input,
-    busy,
-    tts.speaking,
-    dictation.interim,
-    dictation.processing,
-    dictation.error,
-  ]);
+  // Voice Chat auto-send moved into <VoiceAutoSend> (v1.250.0, S-05): the
+  // effect needs every dictated character, the page does not. Everything the
+  // page owns is ANDed into `armed` below, where it re-renders nothing.
 
   // ---------------------------------------------------------------- compaction
 
@@ -4096,7 +4801,7 @@ export default function ChatPage() {
     const lastUser = [...history].reverse().find((m) => m.role === "user");
     if (!lastUser) return;
     inputFromVoiceRef.current = false;
-    setInput((cur) => (cur.trim() ? cur : lastUser.content));
+    if (!composer.get().text.trim()) composer.setText(lastUser.content);
   }
 
   /**
@@ -4481,7 +5186,7 @@ export default function ChatPage() {
       if (e instanceof ApiError && e.status === 0) setOffline(true);
       else setError(e instanceof ApiError ? e.message : String(e));
       inputFromVoiceRef.current = false; // programmatic restore, never voice
-      setInput((cur) => (cur.trim() ? cur : message));
+      if (!composer.get().text.trim()) composer.setText(message);
     } finally {
       sendingRef.current = false;
       if (chatGenRef.current === gen) {
@@ -4548,7 +5253,7 @@ export default function ChatPage() {
     // is about to re-send); anything the user typed themselves is kept.
     const lastUser = [...history].reverse().find((m) => m.role === "user");
     if (lastUser)
-      setInput((cur) => (cur.trim() === lastUser.content.trim() ? "" : cur));
+      if (composer.get().text.trim() === lastUser.content.trim()) composer.reset();
     void completeChat(history, atts);
   }
 
@@ -4816,7 +5521,7 @@ export default function ChatPage() {
     setShowJump(false);
     setError(null);
     setOffline(false);
-    setInput("");
+    composer.reset();
     // MESSAGING thread (owner === "daemon"): the reply goes out the comm lane
     // — the daemon runs the turn, stores it, and mirrors it to the phone.
     if (commMetaRef.current) {
@@ -4827,7 +5532,7 @@ export default function ChatPage() {
     // Jarvis — "@builder @critic draft this" asks those two, in order, each
     // seeing the previous one's answer. Only fires when a mention resolves to a
     // real agent, so "@ 9am" or an email address is an ordinary message.
-    if (liveMentions.length > 0) {
+    if (liveMentionsIn(message).length > 0) {
       void sendPanel(message);
       return;
     }
@@ -4886,7 +5591,7 @@ export default function ChatPage() {
     } catch (e) {
       const err = e instanceof ApiError ? e : new ApiError(String(e), 0);
       setError(err.status === 0 ? "Daemon offline — the panel didn't run." : err.message);
-      setInput(message); // never lose the typed message
+      composer.setText(message); // never lose the typed message
       setMessages(messagesRef.current.slice(0, -1));
     } finally {
       setChatBusy(false);
@@ -4903,7 +5608,10 @@ export default function ChatPage() {
       chatGenRef.current += 1;
       stream.abort();
       tts.cancel(); // stop reading a reply the user just cut off
-      const partial = stream.text.trim();
+      // v1.250.0 (S-03): the live text lives in the stream's store now, and
+      // the store is always current — including between frames, which is
+      // exactly when Stop lands.
+      const partial = (stream.textStore?.get() ?? stream.text).trim();
       const sources = extractWebSources(stream.tools);
       const full: ChatMessage[] = [
         ...messagesRef.current,
@@ -4992,8 +5700,7 @@ export default function ChatPage() {
     setToolsOpen(false);
     setToolQuery("");
     setActiveSkill("");
-    setSlashDismissed(false);
-    setInput("");
+    composer.reset();
     setError(null);
     setOffline(false);
     setThreadId(null);
@@ -5021,51 +5728,12 @@ export default function ChatPage() {
   }
 
   function prefill(text: string) {
-    setInput(text);
+    composer.setText(text);
     inputRef.current?.focus();
   }
 
-  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    // Ignore keystrokes mid-IME-composition (CJK / accented input): Enter is
-    // confirming a candidate, not sending a half-finished message.
-    if (e.nativeEvent.isComposing) return;
-    // While the "/" skill dropdown is open it owns the navigation keys.
-    if (slashActive) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setSkillIndex((i) => Math.min(i + 1, Math.max(skillMatches.length - 1, 0)));
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setSkillIndex((i) => Math.max(i - 1, 0));
-        return;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setSlashDismissed(true);
-        return;
-      }
-      // Enter picks the highlighted skill; with no match it falls through and
-      // sends the literal "/…" text like any other message.
-      if (e.key === "Enter" && !e.shiftKey && skillMatches.length > 0) {
-        e.preventDefault();
-        pickSkill(skillMatches[Math.min(skillIndex, skillMatches.length - 1)].name);
-        return;
-      }
-    }
-    // Escape cancels an in-flight turn (keyboard "Stop") without leaving the composer.
-    if (e.key === "Escape" && busy) {
-      e.preventDefault();
-      stop();
-      return;
-    }
-    // Enter sends; Shift+Enter inserts a newline.
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      send(input);
-    }
-  }
+  // onKeyDown moved into ComposerInput (v1.250.0, S-05) — it reads the "/"
+  // match list and the highlighted row, which now live with the text.
 
   const started = messages.length > 0 || sessionId !== null || threadId !== null;
   const shareTitle =
@@ -5207,6 +5875,40 @@ export default function ChatPage() {
               operation; its control belongs on the list, which is visible at
               every width and in every state. */}
         </div>
+  );
+
+  // v1.250.0 (S-05): ONE handlers object for every MessageRow, identity-stable
+  // for the life of the page. Each method calls through a ref refreshed on
+  // every render, so a memoized row's props change only when its own message
+  // does — a keystroke or a streamed token no longer invalidates 50 bubbles.
+  // The implementations below are the SAME functions the inline map called;
+  // all of them are hoisted `function` declarations, so reading them here is
+  // safe wherever this sits in the body.
+  const rowImpl: RowHandlers = {
+    retryTask: (task) => {
+      if (task) composer.setText(task);
+      inputRef.current?.focus();
+    },
+    regenerate: () => regenerate(),
+    crystallize: (id) => void crystallizeThread(id),
+    promote: (content) => promoteNoteToKnowledge(content),
+    openDocument: (path) => openDocPreview(path),
+    undoFor: (path) => undoForPath(path),
+    undoWrite: (actionId, path) => undoWrite(actionId, path),
+  };
+  const rowImplRef = useRef(rowImpl);
+  rowImplRef.current = rowImpl;
+  const rowHandlers = useMemo<RowHandlers>(
+    () => ({
+      retryTask: (task) => rowImplRef.current.retryTask(task),
+      regenerate: () => rowImplRef.current.regenerate(),
+      crystallize: (id) => rowImplRef.current.crystallize(id),
+      promote: (content) => rowImplRef.current.promote(content),
+      openDocument: (path) => rowImplRef.current.openDocument(path),
+      undoFor: (path) => rowImplRef.current.undoFor(path),
+      undoWrite: (actionId, path) => rowImplRef.current.undoWrite(actionId, path),
+    }),
+    [],
   );
 
   return (
@@ -5437,7 +6139,7 @@ export default function ChatPage() {
                     const item =
                       "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12.5px] text-zinc-200 transition-colors hover:bg-white/[0.06]";
                     return (
-                      <motion.div
+                      <m.div
                         ref={threadMenuRef}
                         role="menu"
                         aria-label={`Options for ${mt.title || "chat"}`}
@@ -5535,7 +6237,7 @@ export default function ChatPage() {
                         </button>
                         <AnimatePresence initial={false}>
                           {threadMenuProjects && (
-                            <motion.div
+                            <m.div
                               initial={{ height: 0, opacity: 0 }}
                               animate={{ height: "auto", opacity: 1 }}
                               exit={{ height: 0, opacity: 0 }}
@@ -5589,7 +6291,7 @@ export default function ChatPage() {
                                   </>
                                 )}
                               </div>
-                            </motion.div>
+                            </m.div>
                           )}
                         </AnimatePresence>
                         <div className="my-1 h-px bg-white/[0.06]" />
@@ -5605,7 +6307,7 @@ export default function ChatPage() {
                           <Trash2 size={14} className="shrink-0" />
                           Delete chat
                         </button>
-                      </motion.div>
+                      </m.div>
                     );
                   })()}
               </AnimatePresence>,
@@ -5900,18 +6602,13 @@ export default function ChatPage() {
                   </div>
                 ) : (
                   <>
+                    {/* v1.250.0 (S-05): one memoized row per message. The
+                        branches moved into MessageRow unchanged; what the page
+                        keeps is the per-row FACTS (is it last, what came
+                        before it, may it be regenerated) and one stable
+                        handlers object, so typing or streaming no longer
+                        re-renders every bubble in the thread. */}
                     {messages.map((m, i) => {
-                      if (m.role === "user") {
-                        return (
-                          <Bubble key={i} role="user">
-                            {m.content}
-                            {m.attachmentNames && m.attachmentNames.length > 0 && (
-                              <AttachmentFooter names={m.attachmentNames} />
-                            )}
-                          </Bubble>
-                        );
-                      }
-                      // Assistant: markdown + hover actions (copy / regenerate).
                       // No regenerate on MESSAGING threads: the daemon owns the
                       // transcript, so a browser-side re-run could never be
                       // saved (and would silently diverge from the phone).
@@ -5921,242 +6618,24 @@ export default function ChatPage() {
                         i > 0 &&
                         messages[i - 1].role === "user" &&
                         !busy;
-                      // The hand-off (v1.108.0). A turn that grew into a full
-                      // agent run has no reply of its own — say WHY out loud,
-                      // or the wait reads as the app having stalled.
-                      if (m.workflowDraft)
-                        return (
-                          <div key={i} className="group/msg space-y-2">
-                            {m.content && (
-                              <Bubble role="assistant">
-                                <MemoMarkdown content={m.content} />
-                              </Bubble>
-                            )}
-                            <WorkflowDraftCard draft={m.workflowDraft} events={events} />
-                            {m.workflowRun && (
-                              <WorkflowRunChip
-                                runId={m.workflowRun.runId}
-                                name={m.workflowRun.name}
-                                events={events}
-                              />
-                            )}
-                          </div>
-                        );
-                      // v1.150.0: a panel reply is attributed. Without a name on
-                      // it, a three-way conversation is an unreadable wall of
-                      // anonymous assistant bubbles.
-                      if (m.panelWho)
-                        return (
-                          <div key={i} className="group/msg space-y-1">
-                            <div className="ml-11 flex items-center gap-2">
-                              <span
-                                className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
-                                  m.panelError
-                                    ? "border-rose-500/30 bg-rose-500/[0.06] text-rose-300"
-                                    : "border-accent/25 bg-accent/[0.06] text-accent-soft"
-                                }`}
-                              >
-                                <Bot size={11} />
-                                {agentDisplayName(m.panelWho)}
-                              </span>
-                              {m.panelError && (
-                                <span className="text-[11px] text-rose-400/80">
-                                  couldn&apos;t answer
-                                </span>
-                              )}
-                              {m.panelThreadId && (
-                                <Link
-                                  href={`/agents?thread=${m.panelThreadId}`}
-                                  className="ml-auto mr-1 text-[11px] text-zinc-500 transition-colors hover:text-accent-soft"
-                                >
-                                  open in Agents →
-                                </Link>
-                              )}
-                            </div>
-                            <Bubble role="assistant">
-                              <MemoMarkdown content={m.content} />
-                            </Bubble>
-                          </div>
-                        );
-                      // v1.149.0: an agent turn shows the LEDGER's account under
-                      // the model's own — files it really wrote, tools that
-                      // really ran, errors, and what can still be reverted.
-                      if (m.runResult)
-                        return (
-                          <div key={i} className="group/msg space-y-2">
-                            {m.content && (
-                              <Bubble role="assistant">
-                                <MemoMarkdown content={m.content} />
-                              </Bubble>
-                            )}
-                            <RunResultCard
-                              result={m.runResult}
-                              onRetry={() => {
-                                const task = m.runResult?.task || "";
-                                if (task) setInput(task);
-                                inputRef.current?.focus();
-                              }}
-                            />
-                          </div>
-                        );
-                      if (m.escalated)
-                        return (
-                          <div key={i} className="group/msg">
-                            <div className="ml-11 flex items-start gap-2 rounded-xl border border-accent/20 bg-accent/[0.05] px-3 py-2 text-[12px] text-zinc-300">
-                              <Zap
-                                size={13}
-                                className="mt-0.5 shrink-0 text-accent-soft"
-                              />
-                              <span>
-                                {m.escalatedTo ? (
-                                  <>
-                                    Handing this to {m.escalatedTo} —{" "}
-                                    {m.escalated}.
-                                  </>
-                                ) : (
-                                  <>Taking this on properly — {m.escalated}.</>
-                                )}
-                              </span>
-                            </div>
-                          </div>
-                        );
                       return (
-                        <div key={i} className="group/msg">
-                          <Bubble role="assistant">
-                            <MemoMarkdown content={m.content} />
-                          </Bubble>
-                          {m.interrupted && (
-                            <div className="ml-11 mt-1 text-[11px] italic text-amber-400/80">
-                              interrupted — the reply was cut off
-                            </div>
-                          )}
-                          {/* v1.170.0: the turn RAN a workflow (the model via
-                              the workflow_run tool, or the user from the "+"
-                              menu) — the live chip renders where the user is
-                              standing, INSIDE the generic branch so the reply
-                              keeps every standard affordance: hover actions,
-                              sources, receipt, regenerate. A forked branch
-                              here once silently dropped all of them. */}
-                          {m.workflowRun && (
-                            <div className="mt-2">
-                              <WorkflowRunChip
-                                runId={m.workflowRun.runId}
-                                name={m.workflowRun.name}
-                                events={events}
-                              />
-                            </div>
-                          )}
-                          {/* Honesty chip: the reply came from a DIFFERENT
-                              provider than the one the user picked (capability
-                              reroute / failover) — never silent. */}
-                          {/* TURN RECEIPT (v1.165.0): server-side accountability
-                              — who answered and why, tools run/denied, files.
-                              Supersedes the legacy viaProvider chip below
-                              whenever the message carries a route. */}
-                          {m.route && (
-                            <div className="ml-11">
-                              <TurnReceipt
-                                route={m.route}
-                                adapted={m.adapted}
-                                toolsUsed={m.toolsUsed}
-                                deniedTools={m.deniedTools}
-                                documents={m.documents}
-                                onOpenDocument={openDocPreview}
-                                undoFor={undoForPath}
-                                onUndo={undoWrite}
-                              />
-                            </div>
-                          )}
-                          {/* DOORS (v1.199.0): links into the surfaces this
-                              turn actually touched — SERVER-derived from the
-                              tools that executed ok (files excluded; the
-                              ArtifactsRail owns files). Rides the message,
-                              so live and persisted turns render alike; a
-                              pre-v1.199.0 message has none and shows
-                              nothing. */}
-                          <DoorsStrip doors={m.doors} />
-                          {!m.route && m.viaProvider && (
-                            <div
-                              className="ml-11 mt-1 inline-flex items-center gap-1.5 rounded-full border border-amber-400/25 bg-amber-400/[0.08] px-2 py-0.5 text-[11px] text-amber-200/90"
-                              title={`Your selected model couldn't take this turn (it may not support tools, or it errored), so the router used ${m.viaProvider} instead. Verify the endpoint's tool support in Connections to keep turns local.`}
-                            >
-                              <Bot size={10} className="shrink-0" />
-                              answered by {m.viaProvider}
-                            </div>
-                          )}
-                          {/* Tools the reply's tool loop actually ran — LEGACY
-                              line for pre-v1.165.0 messages; the TurnReceipt
-                              carries the same fact (plus denials) when a route
-                              is present, so showing both would say it twice. */}
-                          {!m.route && m.toolsUsed && m.toolsUsed.length > 0 && (
-                            <div className="ml-11 mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-zinc-500">
-                              <Wrench size={10} className="shrink-0 text-accent-soft/70" />
-                              <span className="truncate">
-                                used: {m.toolsUsed.join(", ")}
-                              </span>
-                            </div>
-                          )}
-                          {/* URLs the turn's web tools actually returned */}
-                          {m.sources && m.sources.length > 0 && (
-                            <SourcesRow sources={m.sources} />
-                          )}
-                          {/* Crystallize nudge (v1.120.0): agent turns are by
-                              definition multi-step — offer to keep the process. */}
-                          {m.fromSession &&
-                            i === messages.length - 1 &&
-                            !busy &&
-                            threadId && (
-                              <button
-                                type="button"
-                                disabled={crystallizingId !== null}
-                                onClick={() => void crystallizeThread(threadId)}
-                                className="ml-11 mt-1.5 inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11.5px] text-accent-soft transition-colors hover:bg-accent/[0.12] disabled:opacity-50"
-                              >
-                                {crystallizingId ? (
-                                  <Loader2 size={12} className="animate-spin" />
-                                ) : (
-                                  <GitBranch size={12} />
-                                )}
-                                Keep this as a workflow?
-                              </button>
-                            )}
-                          {/* Goal birth (v1.208.0): only on the newest settled
-                              reply; GoalBirth applies the deliberately-high bar
-                              and renders nothing otherwise, because a
-                              false chip trains the user to ignore every chip.
-                              Per-turn dismissal lives inside it. */}
-                          {i === messages.length - 1 && !busy && (
-                            <GoalBirth
-                              userText={i > 0 && messages[i - 1].role === "user" ? messages[i - 1].content : ""}
-                              toolsUsed={m.toolsUsed}
-                              projectId={projectId}
-                            />
-                          )}
-                          <div className="ml-11 mt-1 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100">
-                            <CopyIconButton text={m.content} title="Copy message" />
-                            <PromoteKnowledgeButton
-                              disabledReason={
-                                projectId
-                                  ? null
-                                  : "bind this chat to a project first"
-                              }
-                              onPromote={() =>
-                                promoteNoteToKnowledge(m.content)
-                              }
-                            />
-                            {canRegen && (
-                              <button
-                                type="button"
-                                onClick={regenerate}
-                                title="Regenerate reply"
-                                aria-label="Regenerate reply"
-                                className="grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
-                              >
-                                <RefreshCw size={12} />
-                              </button>
-                            )}
-                          </div>
-                        </div>
+                        <MessageRow
+                          key={i}
+                          m={m}
+                          i={i}
+                          isLast={i === messages.length - 1}
+                          prevUser={
+                            i > 0 && messages[i - 1].role === "user"
+                              ? messages[i - 1].content
+                              : ""
+                          }
+                          canRegen={canRegen}
+                          busy={busy}
+                          threadId={threadId}
+                          projectId={projectId}
+                          crystallizingId={crystallizingId}
+                          h={rowHandlers}
+                        />
                       );
                     })}
                     {/* CHAT MODE: the live streaming bubble. Streamed markdown +
@@ -6164,44 +6643,14 @@ export default function ChatPage() {
                         shimmer until then), with any live tool calls below. */}
                     {chatBusy && (
                       <div aria-live="polite" aria-busy="true">
-                        <Bubble role="assistant">
-                          {stream.text ? (
-                            <StreamingText content={stream.text} />
-                          ) : (
-                            <span className="inline-flex items-center gap-2 text-zinc-400">
-                              <Loader2
-                                size={14}
-                                className="animate-spin text-accent-soft"
-                              />
-                              {/* v1.246.0: WHAT it is waiting on, and for how
-                                  long — a working turn and a stuck one used
-                                  to show the same pulsing word forever. */}
-                              <span className="animate-pulse">
-                                {stream.phase === "preparing" && stream.withFiles
-                                  ? "Reading your files…"
-                                  : "Thinking…"}
-                              </span>
-                              <TurnClock since={stream.startedAt ?? null} />
-                            </span>
-                          )}
-                          {stream.tools.length > 0 && (
-                            <ToolCardList cards={stream.tools} />
-                          )}
-                          {stream.text && (
-                            <QuietNote since={stream.lastEventAt ?? null} />
-                          )}
-                          {/* MID-TURN APPROVAL (v1.187.0): the daemon paused
-                              this turn on an ask-tier tool and is waiting for
-                              a decision. "Allow for this conversation" also
-                              arms the tool here, so later turns grant it via
-                              the existing "+"-menu machinery — one store. */}
-                          {stream.approval && (
-                            <ApprovalCard
-                              approval={stream.approval}
-                              onConversation={armFromApproval}
-                            />
-                          )}
-                        </Bubble>
+                        {/* v1.250.0 (S-03): the live bubble is its own
+                            component so a streamed token re-renders IT, not
+                            this page. Same bubble, same order, same clock. */}
+                        <LiveReply
+                          stream={stream}
+                          onGrow={scrollLiveIntoView}
+                          armFromApproval={armFromApproval}
+                        />
                       </div>
                     )}
                     {/* AGENT MODE: the live working bubble. Narrates the current
@@ -6580,119 +7029,15 @@ export default function ChatPage() {
                 {/* "/" skill picker — floats above the composer */}
                 {/* "@" AGENT PICKER (v1.150.0). Same shape as the "/" picker
                     below — one affordance grammar for both. */}
-                {atActive && !slashActive && (
-                  <div className="absolute bottom-full left-3 right-3 z-20 mb-2 overflow-hidden rounded-xl border border-white/10 bg-zinc-900 shadow-lg shadow-black/40">
-                    {mentionable === null ? (
-                      <p className="px-3 py-2.5 text-xs text-zinc-500">Loading agents…</p>
-                    ) : agentMatches.length === 0 ? (
-                      <p className="px-3 py-2.5 text-xs text-zinc-500">
-                        no matching agent — add one on the Agents page
-                      </p>
-                    ) : (
-                      <div
-                        role="listbox"
-                        aria-label="Agents"
-                        className="max-h-72 overflow-y-auto p-1"
-                      >
-                        <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-                          {agentMatches.length} agent{agentMatches.length === 1 ? "" : "s"}
-                          {atQuery ? " matching" : ""} — they answer instead of Iron Jarvis
-                        </div>
-                        {agentMatches.map((a) => (
-                          <button
-                            key={a.name}
-                            type="button"
-                            role="option"
-                            aria-selected={false}
-                            onClick={() => {
-                              setInput(
-                                (prev) => spliceToken(prev, atToken) + `@${a.mention} `,
-                              );
-                              setAtDismissed(false);
-                              inputRef.current?.focus();
-                            }}
-                            title={a.description}
-                            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-zinc-300 transition-colors hover:bg-accent/[0.12] hover:text-accent-soft"
-                          >
-                            <Bot size={12} className="shrink-0 text-accent-soft/70" />
-                            <span className="shrink-0 font-mono text-[12px]">
-                              {a.mention}
-                            </span>
-                            {/* Where it runs + whether it can actually take work.
-                                An offline remote is LISTED, not hidden — "my
-                                agent isn't in the list" is the worse failure. */}
-                            <span className="shrink-0 text-[10px] text-zinc-600">
-                              {a.kind === "remote" ? "remote" : a.kind === "dynamic" ? "custom" : "built-in"}
-                            </span>
-                            {!a.healthy && (
-                              <span className="shrink-0 text-[10px] text-amber-400/80">
-                                offline
-                              </span>
-                            )}
-                            <span className="truncate text-[11px] text-zinc-500">
-                              {a.description}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-                {slashActive && (
-                  <div className="absolute bottom-full left-3 right-3 z-20 mb-2 overflow-hidden rounded-xl border border-white/10 bg-zinc-900 shadow-lg shadow-black/40">
-                    {skills === null ? (
-                      <p className="px-3 py-2.5 text-xs text-zinc-500">
-                        Loading skills…
-                      </p>
-                    ) : skillMatches.length === 0 ? (
-                      <p className="px-3 py-2.5 text-xs text-zinc-500">
-                        no matching skill
-                      </p>
-                    ) : (
-                      <div
-                        role="listbox"
-                        aria-label="Skills"
-                        className="max-h-72 overflow-y-auto p-1"
-                      >
-                        <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-                          {skillMatches.length} skill{skillMatches.length === 1 ? "" : "s"}
-                          {slashQuery ? " matching" : ""} — ↑↓ + Enter, or keep typing
-                        </div>
-                        {skillMatches.map((s, i) => (
-                          <button
-                            key={s.name}
-                            type="button"
-                            role="option"
-                            aria-selected={i === skillIndex}
-                            ref={(el) => {
-                              if (i === skillIndex)
-                                el?.scrollIntoView({ block: "nearest" });
-                            }}
-                            onClick={() => pickSkill(s.name)}
-                            onMouseEnter={() => setSkillIndex(i)}
-                            title={s.description}
-                            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors ${
-                              i === skillIndex
-                                ? "bg-accent/[0.12] text-accent-soft"
-                                : "text-zinc-300"
-                            }`}
-                          >
-                            <Sparkles
-                              size={12}
-                              className="shrink-0 text-accent-soft/70"
-                            />
-                            <span className="shrink-0 font-mono text-[12px]">
-                              {s.name}
-                            </span>
-                            <span className="truncate text-[11px] text-zinc-500">
-                              {s.description}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
+                <AtPicker store={composer} busy={busy} mentionable={mentionable} />
+                <SlashPicker
+                  store={composer}
+                  busy={busy}
+                  skills={skills}
+                  inputRef={inputRef}
+                  onOpened={loadSkillsOnce}
+                  onPick={pickSkill}
+                />
                 <input
                   ref={fileRef}
                   type="file"
@@ -7250,34 +7595,18 @@ export default function ChatPage() {
                   )}
                   {dictation.supported ? <Mic size={15} /> : <MicOff size={15} />}
                 </button>
-                <textarea
-                  ref={inputRef}
-                  value={input}
-                  onChange={(e) => {
+                <ComposerInput
+                  store={composer}
+                  inputRef={inputRef}
+                  busy={busy}
+                  skills={skills}
+                  onSend={send}
+                  onStop={stop}
+                  onOpened={loadSkillsOnce}
+                  onPickSkill={pickSkill}
+                  onTyped={() => {
                     inputFromVoiceRef.current = false; // typed — never auto-send
-                    setInput(e.target.value);
-                    setCaret(e.target.selectionStart ?? e.target.value.length);
-                    setSlashDismissed(false); // editing reopens the "/" dropdown
                   }}
-                  // Caret moves that onChange never sees: arrow keys, clicking
-                  // into the middle of the text, Home/End, drag-select. All
-                  // four are wired because React's onSelect ALONE does not fire
-                  // for a collapsed caret — measured in a real browser, the DOM
-                  // selectionStart went 21 -> 8 on ArrowLeft while the tracked
-                  // value stayed at 21, so the picker refused to reopen when
-                  // you moved back into an earlier "/word". keyup and click are
-                  // the ones that actually fire for that; onSelect is kept for
-                  // drag-selection and onFocus for tabbing back in.
-                  onKeyUp={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
-                  onClick={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
-                  onFocus={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
-                  onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
-                  onKeyDown={onKeyDown}
-                  autoFocus
-                  rows={1}
-                  aria-label="Message"
-                  placeholder="Message Iron Jarvis…  (Enter to send · Shift+Enter new line · / for skills)"
-                  className="field max-h-40 min-h-[2.75rem] flex-1 resize-none"
                 />
                 {(awaiting || (chatBusy && stream.streaming)) && (
                   <button
@@ -7288,19 +7617,31 @@ export default function ChatPage() {
                     <Square size={14} /> Stop
                   </button>
                 )}
-                {/* The send ARROW: invisible until there's something to send
-                    (text or an attachment) — then it materializes. */}
-                {(input.trim() || attachments.length > 0 || busy) && (
-                  <button
-                    onClick={() => send(input)}
-                    disabled={busy || !input.trim()}
-                    aria-label="Send"
-                    title="Send (Enter)"
-                    className="btn-accent h-[2.75rem] w-[2.75rem] shrink-0 rounded-full p-0"
-                  >
-                    {busy ? <LoaderInline /> : <Send size={16} />}
-                  </button>
-                )}
+                {/* The send ARROW — see SendArrow (v1.250.0, S-05): its
+                    presence is a function of the text, so it subscribes to the
+                    composer store instead of the page re-rendering for it. */}
+                <SendArrow
+                  store={composer}
+                  busy={busy}
+                  hasAttachments={attachments.length > 0}
+                  onSend={send}
+                />
+                {/* v1.250.0 (S-05): headless — Voice Chat's auto-send watches
+                    the dictated text without the page watching it. */}
+                <VoiceAutoSend
+                  store={composer}
+                  armed={
+                    voiceMode &&
+                    !busy &&
+                    !tts.speaking &&
+                    inputFromVoiceRef.current &&
+                    !dictation.interim &&
+                    !dictation.processing &&
+                    !dictation.error
+                  }
+                  delayMs={dictation.engine === "server" ? 350 : 1500}
+                  onSend={send}
+                />
               </div>
               {/* Composer footer: share on the left (under the project
                   control), the model switcher on the right. Both are the same

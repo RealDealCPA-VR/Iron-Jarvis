@@ -91,6 +91,9 @@ vi.mock("@/lib/api", () => ({
 
 vi.mock("@/lib/useChatStream", () => ({
   StreamError: H.FakeStreamError,
+  // v1.250.0 (S-03): the live bubble's text comes through this hook; with the
+  // module mocked it falls back to the plain `text` field, as the real one does.
+  useLiveText: (s: { text?: string }) => s?.text ?? "",
   useChatStream: () => ({
     streaming: false,
     text: "",

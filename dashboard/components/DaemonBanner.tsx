@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+// v1.250.0 (S-08): `m` + the layout's LazyMotion, so this banner no longer
+// pulls framer-motion's whole feature set into the shared chunk.
+import { AnimatePresence, m } from "framer-motion";
 import { ServerCrash, ShieldAlert, X, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { API_BASE } from "@/lib/api";
@@ -62,7 +64,7 @@ export function DaemonBanner() {
   return (
     <AnimatePresence>
       {showOffline && (
-        <motion.div
+        <m.div
           role="status"
           aria-live="polite"
           initial={{ height: 0, opacity: 0 }}
@@ -115,10 +117,10 @@ export function DaemonBanner() {
               <X size={15} aria-hidden="true" />
             </button>
           </div>
-        </motion.div>
+        </m.div>
       )}
       {showAuth && (
-        <motion.div
+        <m.div
           role="alert"
           initial={{ height: 0, opacity: 0 }}
           animate={{ height: "auto", opacity: 1 }}
@@ -149,10 +151,10 @@ export function DaemonBanner() {
               <X size={15} aria-hidden="true" />
             </button>
           </div>
-        </motion.div>
+        </m.div>
       )}
       {showError && (
-        <motion.div
+        <m.div
           role="alert"
           initial={{ height: 0, opacity: 0 }}
           animate={{ height: "auto", opacity: 1 }}
@@ -184,7 +186,7 @@ export function DaemonBanner() {
               <X size={15} aria-hidden="true" />
             </button>
           </div>
-        </motion.div>
+        </m.div>
       )}
     </AnimatePresence>
   );

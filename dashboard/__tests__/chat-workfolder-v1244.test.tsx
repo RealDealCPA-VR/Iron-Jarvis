@@ -79,6 +79,9 @@ vi.mock("@/lib/api", () => ({
 
 vi.mock("@/lib/useChatStream", () => ({
   StreamError: H.FakeStreamError,
+  // v1.250.0 (S-03): see the real hook — no store on a mock, so the text is
+  // read straight off the object these fakes return.
+  useLiveText: (s: { text?: string }) => s?.text ?? "",
   useChatStream: () => ({
     streaming: false,
     text: "",

@@ -88,6 +88,11 @@ vi.mock("@/lib/useChatStream", () => {
   }
   return {
     StreamError,
+    // v1.250.0 (S-03): the live bubble reads its text through this hook so a
+    // streamed token re-renders the bubble instead of the page. With the module
+    // mocked there is no store, and the real hook's own fallback is this: the
+    // plain `text` field these fakes already carry.
+    useLiveText: (s: { text?: string }) => s?.text ?? "",
     useChatStream: () => ({
       streaming: false,
       text: "",

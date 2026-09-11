@@ -1,10 +1,18 @@
 "use client";
 
-import { motion, type Variants } from "framer-motion";
+import { m, type Variants } from "framer-motion";
 import type { ReactNode } from "react";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
+// v1.250.0 (S-08): `m` instead of `motion`. They render the same thing; the
+// difference is that `motion.*` drags framer-motion's whole feature set into
+// the bundle that imports it, while `m.*` carries none and takes its features
+// from the LazyMotion provider in app/layout.tsx. Because the layout imports
+// the Sidebar, the banner, the palette and the switcher — every one of them a
+// motion user — that full bundle was sitting in the chunk shared by all 43
+// routes. The animations, easing and durations below are untouched.
+//
 // Arrival motion, quieted (v1.99.0). This used to slide every section up 14px
 // over 450ms, staggered 60ms apart — so a six-section page finished animating
 // roughly 750ms after it was already usable, on every navigation, dozens of
@@ -31,14 +39,14 @@ export function PageShell({
   className?: string;
 }) {
   return (
-    <motion.div
+    <m.div
       initial="hidden"
       animate="show"
       variants={container}
       className={className}
     >
       {children}
-    </motion.div>
+    </m.div>
   );
 }
 
@@ -51,8 +59,8 @@ export function Reveal({
   className?: string;
 }) {
   return (
-    <motion.div variants={fadeUp} className={className}>
+    <m.div variants={fadeUp} className={className}>
       {children}
-    </motion.div>
+    </m.div>
   );
 }

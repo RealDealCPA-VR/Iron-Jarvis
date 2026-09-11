@@ -1,16 +1,13 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
-import { NavDrawer } from "@/components/Sidebar";
 import { DesktopNotifyBridge } from "@/components/DesktopNotifyBridge";
 import { TitleBar } from "@/components/TitleBar";
 import { DaemonBanner } from "@/components/DaemonBanner";
-import { CommandPalette } from "@/components/CommandPalette";
 import { NotificationBell } from "@/components/NotificationBell";
 import { MoodOrb } from "@/components/MoodOrb";
 import { ModelSwitcher } from "@/components/ModelSwitcher";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { SimulatedBanner } from "@/components/SimulatedBanner";
-import { FirstRunWizard } from "@/components/FirstRunWizard";
 import { MainContent } from "@/components/MainContent";
 import { DaemonProvider } from "@/lib/daemon";
 // ONE /events socket per window (v1.230.0, FP6): every useEvents hook in
@@ -21,6 +18,17 @@ import { EventsProvider } from "@/lib/useEvents";
 // (v1.180.0 review finding). Silent + best-effort: no route, no overrides,
 // derived faces exactly as before.
 import { FaceStylesProvider } from "@/components/agents/FaceStyles";
+// Animation features for every `m.*` in the app (v1.250.0, S-08).
+import { MotionProvider } from "@/components/MotionProvider";
+// The three OVERLAYS are loaded on demand (v1.250.0, S-08). Each one is closed
+// on arrival — the drawer, the palette and the first-run wizard render nothing
+// until something opens them — but their code (and framer-motion, and the
+// palette's whole search surface) sat in the chunk every one of the 43 routes
+// downloads before first paint. `Overlays` imports them through next/dynamic
+// and PREFETCHES on idle, so Ctrl+K is still instant: by the time a user can
+// press it the chunk is already in memory, and a press that beats the idle
+// callback simply awaits the same import.
+import { Overlays } from "@/components/Overlays";
 
 export const metadata: Metadata = {
   // Base title; NotificationBell mutates document.title at runtime to surface
@@ -71,6 +79,7 @@ export default function RootLayout({
         <DaemonProvider>
           <EventsProvider>
           <FaceStylesProvider>
+          <MotionProvider>
           <div className="flex h-screen flex-col overflow-hidden">
             {/* Frontier-desktop chrome (v1.111.0): the TitleBar is the FIRST
                 child on purpose — in the frameless Electron window its drag
@@ -109,18 +118,14 @@ export default function RootLayout({
               </main>
             </div>
           </div>
-          {/* Navigation drawer — opened by the TitleBar hamburger
-              (ij:toggle-nav); the persistent rail is gone. */}
-          <NavDrawer />
-          {/* Global search / command palette — the TitleBar search button
-              (ij:open-palette) and Ctrl+K both open it. */}
-          <CommandPalette />
+          {/* The navigation drawer (ij:toggle-nav), the global search palette
+              (ij:open-palette / Ctrl+K) and the blocking first-run overlay —
+              all three on demand, prefetched on idle. */}
+          <Overlays />
           {/* "This PC" notifications: comm.desktop events → native OS toast
               via the Electron preload (no-op in a plain browser). */}
           <DesktopNotifyBridge />
-          {/* Blocking first-run overlay (skips /connections + /settings so
-              the user can actually go wire a model). */}
-          <FirstRunWizard />
+          </MotionProvider>
           </FaceStylesProvider>
           </EventsProvider>
         </DaemonProvider>

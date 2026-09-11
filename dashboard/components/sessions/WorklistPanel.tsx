@@ -24,7 +24,8 @@
 //
 // Polls ~5s while the session is active so a long job's progress is watchable.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import Link from "next/link";
 import { ListChecks, RotateCcw } from "lucide-react";
 import { get, post, ApiError } from "@/lib/api";
@@ -140,6 +141,8 @@ export function WorklistPanel({
     }
   }
 
+  // The latest loader, so the visible-only repeat below can reach it.
+  const loadRef = useRef<() => void>(() => {});
   useEffect(() => {
     let alive = true;
     const load = async () => {
@@ -154,17 +157,15 @@ export function WorklistPanel({
       }
     };
     void load();
-    if (!active) {
-      return () => {
-        alive = false;
-      };
-    }
-    const timer = setInterval(() => void load(), 5000);
+    // v1.250.0 (S-09): the REPEAT runs through useVisibleInterval below, so a
+    // hidden window polls nothing and gets one catch-up when it comes back.
+    loadRef.current = () => void load();
     return () => {
       alive = false;
-      clearInterval(timer);
+      loadRef.current = () => {};
     };
   }, [sessionId, active]);
+  useVisibleInterval(() => loadRef.current(), 5000, active);
 
   const summary = board?.summary;
   const total = summary?.total ?? 0;

@@ -48,6 +48,7 @@ import {
 import { API_BASE, ApiError, del, get, ijToken, post } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
+import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import { timeAgo } from "@/lib/format";
 import type { AiCli, Drive, FsEntry, FsListing, Skill } from "@/lib/types";
 import {
@@ -2219,6 +2220,8 @@ function StudioView({
   // session-start snapshot (skills save into subfolders — a flat listing
   // missed them), stamp each first sighting, auto-ingest it into the durable
   // gallery, and only re-render when the media set actually changes.
+  // The latest media watcher, so the visible-only repeat below can reach it.
+  const mediaTickRef = useRef<() => void>(() => {});
   useEffect(() => {
     if (!session || gone) return;
     let cancelled = false;
@@ -2276,12 +2279,19 @@ function StudioView({
         cancelled = true;
       };
     }
-    const id = setInterval(tick, 5000);
+    // v1.250.0 (S-09): the repeat runs through useVisibleInterval below, so a
+    // hidden window watches nothing and catches up once on return.
+    mediaTickRef.current = tick;
     return () => {
       cancelled = true;
-      clearInterval(id);
+      mediaTickRef.current = () => {};
     };
   }, [session, gone, alive]);
+  useVisibleInterval(
+    () => mediaTickRef.current(),
+    5000,
+    Boolean(session) && !gone && alive,
+  );
 
   // Console auto-scroll — sticks to the bottom unless the user scrolled up (only
   // matters while the raw-terminal disclosure is open).

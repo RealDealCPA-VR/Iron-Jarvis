@@ -18,7 +18,7 @@
 // React component (`useChatStream`). It is purely additive — the non-streaming
 // POST /chat path is untouched.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { API_BASE, ApiError, flattenDetail, ijToken } from "./api";
 import type { WorkflowDraft } from "@/lib/types";
 
@@ -619,11 +619,54 @@ export interface PendingApproval {
   examples?: Record<string, unknown>[];
 }
 
+/**
+ * The live reply, readable without re-rendering the caller (v1.250.0, S-03).
+ *
+ * Every streamed token used to `setText` in the hook, which re-renders
+ * WHOEVER CALLED IT — on the chat page that is a 7,750-line component, so a
+ * long answer redrew the whole conversation once per word. The text now lands
+ * in a ref, is published at most once per animation frame, and reaches the one
+ * component that shows it through this store.
+ */
+export interface TextStore {
+  /** The reply so far — always current, even between frames. */
+  get(): string;
+  /** Called after each flush; returns an unsubscribe. */
+  subscribe(cb: () => void): () => void;
+}
+
+export interface UseChatStreamOptions {
+  /** Keep the live text in React state (default true). Pass false when the
+   *  text is rendered by a child through `textStore`, so the caller does not
+   *  re-render per frame. */
+  textInState?: boolean;
+}
+
+/** The live text of `stream`, subscribed at the component that SHOWS it.
+ *  Falls back to `stream.text` for a stream that has no store (the chat
+ *  tests mock this hook with a plain object). */
+export function useLiveText(stream: Pick<UseChatStream, "text" | "textStore">): string {
+  const store = stream.textStore;
+  const subscribe = useCallback(
+    (cb: () => void) => (store ? store.subscribe(cb) : () => {}),
+    [store],
+  );
+  const live = useSyncExternalStore(
+    subscribe,
+    () => (store ? store.get() : ""),
+    () => "",
+  );
+  return store ? live : stream.text;
+}
+
 export interface UseChatStream {
   /** True while a turn is in flight. */
   streaming: boolean;
-  /** Accumulated assistant text so far this turn. */
+  /** Accumulated assistant text so far this turn. Empty when the caller asked
+   *  for `textInState: false` — read `textStore` (or `useLiveText`) instead. */
   text: string;
+  /** The live reply, readable without re-rendering this hook's caller. */
+  textStore?: TextStore;
   /** Live tool cards for this turn, keyed by call id. */
   tools: ToolCard[];
   /** The approval the turn is paused on, or null. The page renders the card;
@@ -666,9 +709,52 @@ function carriesFiles(body: unknown): boolean {
   return Array.isArray(atts) && atts.length > 0;
 }
 
-export function useChatStream(): UseChatStream {
+export function useChatStream(opts: UseChatStreamOptions = {}): UseChatStream {
+  // v1.250.0 (S-03): a caller that renders the live text in a CHILD passes
+  // `textInState: false` — the growing reply then reaches that child through
+  // `textStore` and the caller itself never re-renders per token. Everyone
+  // else keeps `text` as state, exactly as before.
+  const textInState = opts.textInState ?? true;
   const [streaming, setStreaming] = useState(false);
   const [text, setText] = useState("");
+  // The live text and its subscribers. The ref is the truth (a handler reads
+  // it synchronously); state/notifications are flushed at most once a frame.
+  const textRef = useRef("");
+  const listenersRef = useRef<Set<() => void>>(new Set());
+  const frameRef = useRef<number | null>(null);
+  const storeRef = useRef<TextStore | null>(null);
+  if (storeRef.current === null) {
+    storeRef.current = {
+      get: () => textRef.current,
+      subscribe: (cb: () => void) => {
+        listenersRef.current.add(cb);
+        return () => listenersRef.current.delete(cb);
+      },
+    };
+  }
+  const flushText = useCallback(() => {
+    if (frameRef.current !== null) {
+      cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+    if (textInState) setText(textRef.current);
+    for (const cb of [...listenersRef.current]) cb();
+  }, [textInState]);
+  const scheduleText = useCallback(() => {
+    if (frameRef.current !== null) return; // a flush is already queued
+    frameRef.current =
+      typeof requestAnimationFrame === "function"
+        ? requestAnimationFrame(() => {
+            frameRef.current = null;
+            if (textInState) setText(textRef.current);
+            for (const cb of [...listenersRef.current]) cb();
+          })
+        : (setTimeout(() => {
+            frameRef.current = null;
+            if (textInState) setText(textRef.current);
+            for (const cb of [...listenersRef.current]) cb();
+          }, 16) as unknown as number);
+  }, [textInState]);
   const [tools, setTools] = useState<ToolCard[]>([]);
   const [approval, setApproval] = useState<PendingApproval | null>(null);
   const [phase, setPhase] = useState<TurnPhase | null>(null);
@@ -696,6 +782,7 @@ export function useChatStream(): UseChatStream {
       abortRef.current = controller;
       setStreaming(true);
       setText("");
+      textRef.current = "";
       setTools([]);
       setApproval(null);
       const t0 = Date.now();
@@ -732,7 +819,11 @@ export function useChatStream(): UseChatStream {
             case "token":
               committed = true;
               acc += ev.text;
-              setText(acc);
+              // v1.250.0 (S-03): the ref is the truth; the screen catches up
+              // once a frame. `onToken` still sees EVERY token (the TTS feed
+              // splits on whole words and must not miss one).
+              textRef.current = acc;
+              scheduleText();
               onToken?.(ev.text, acc);
               break;
             case "tool_call":
@@ -799,6 +890,9 @@ export function useChatStream(): UseChatStream {
           }
         }
       } finally {
+        // The last words land EXACTLY, not one frame late: flush synchronously
+        // and drop any queued frame (v1.250.0, S-03).
+        flushText();
         // A NEWER turn owns the status line — this one must not blank it.
         const superseded =
           abortRef.current !== null && abortRef.current !== controller;
@@ -823,6 +917,7 @@ export function useChatStream(): UseChatStream {
   return {
     streaming,
     text,
+    textStore: storeRef.current,
     tools,
     approval,
     phase,
