@@ -31,7 +31,7 @@ from ..schemas import (
 from ...core.db import CONVERSATION_WRITE_LOCK, session_scope
 from ...core.models import AgentState, PermissionMode
 from ...memory import commit as _commit
-from ...core.approvals import APPROVAL_TIMEOUT_S, DECISIONS, ChatApprovals
+from ...core.approvals import DECISIONS, ChatApprovals
 from ...core.turns import TURNS
 from ..doors import collect_doors, door_for
 
@@ -61,6 +61,9 @@ from ..chat_turn import (
     _final_answer_after_tools,
     _last_user_text,
     _no_text_reply,
+    OUT_OF_ROUNDS_INSTRUCTION,
+    _is_office_turn,
+    _round_budget,
     _persist_chat_usage,
     _wants_final_answer,
     chat_tool_deadline,
@@ -114,6 +117,15 @@ def _sse(event: str, data: dict[str, Any]) -> str:
 _SSE_HEARTBEAT_S = 10.0
 
 _SSE_KEEPALIVE = b": keepalive\n\n"
+
+#: How long the /chat/stream mid-turn ask waits (v1.247.0). None = until the
+#: user answers or declines, presses Stop, or the connection goes away — the
+#: person asked is looking at this turn, and a question that expired into a
+#: refusal while they read it was the old behaviour. A seam for tests only.
+CHAT_ASK_TIMEOUT_S: float | None = None
+
+#: How often a parked ask checks for Stop or a dropped connection.
+_ASK_POLL_S = 1.0
 
 
 class HeartbeatStreamingResponse(StreamingResponse):
@@ -537,6 +549,15 @@ def register(app: FastAPI, d) -> None:
                 "session_id": event_session,
                 "requested_at": created_at,
             }
+            # v1.247.0 — NUMBERS ONLY, never args: how many calls one answer
+            # covers (a batched ask) and how long the run waits for it (0 =
+            # until answered), so the bell can say both honestly.
+            _count = payload.get("count")
+            if isinstance(_count, int) and not isinstance(_count, bool) and _count > 1:
+                meta[aid]["count"] = _count
+            _wait = payload.get("timeout_s")
+            if isinstance(_wait, (int, float)) and not isinstance(_wait, bool):
+                meta[aid]["timeout_s"] = int(_wait)
         # Ids with no event row are DROPPED, not padded with "unknown": the
         # chat stream lane files into this same registry but announces via
         # its SSE frame only — that ask's one answering surface is the chat
@@ -2248,8 +2269,14 @@ async def chat_stream(
                 started_at=turn_started,
             )
 
+        # THE ROUND BUDGET (v1.247.0) — ONE helper, both lanes. An office
+        # turn that uses every round ends HERE with an answer instead of
+        # escalating. MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
+        _rounds = _round_budget({*armed, *ask_armed})
+        _office = _is_office_turn({*armed, *ask_armed})
+        _cut_office = False
         try:
-            for _round in range(_MAX_TOOL_ROUNDS):
+            for _round in range(_rounds):
                 if await _stop():
                     # The completed rounds were billed even though the
                     # client walked away — keep the ledger honest.
@@ -2365,21 +2392,62 @@ async def chat_stream(
                 # verbs are approval-gated still has real calls to run.
                 if not calls or not (armed or ask_armed):
                     break
-                if _round == _MAX_TOOL_ROUNDS - 1:
+                if _round == _rounds - 1:
                     # LAST allowed round (mirrors chat_complete): no round is
                     # left to show the model these results — skip, say so.
                     stopped_note = (
                         f"stopped after {_round} tool rounds; "
                         f"{len(calls)} tool call(s) not executed"
                     )
-                    escalate = True
-                    escalate_reason = escalate_reason or (
-                        "this needs more steps than a quick answer allows"
-                    )
+                    if _office:
+                        # OFFICE WORK STAYS IN CHAT (v1.247.0) — lock-step
+                        # with chat_turn: no hand-off that discards this
+                        # turn's work; one tool-less answer below instead.
+                        _cut_office = True
+                    else:
+                        escalate = True
+                        escalate_reason = escalate_reason or (
+                            "this needs more steps than a quick answer allows"
+                        )
                     break
                 msgs.append(LLMMessage(role="assistant",
                                        content=final_resp.text,
                                        tool_calls=calls))
+                # ONE CARD FOR THE BATCH (v1.247.0) — the stream half of the
+                # runtime's grouping. Read this round's calls AHEAD with the
+                # same predicate the per-call card uses below, grouped by
+                # permission, so a round renaming 8 files shows ONE card
+                # ("rename_real_file × 8"). `_round_answers` is per round:
+                # 'once' covers exactly this batch, never a later round.
+                def _redacted(_c):
+                    _ct = d.platform.registry.get(_c.name)
+                    return _ct.redact_args(_c.arguments) if _ct is not None else _c.arguments
+
+                def _would_card(_c) -> str:
+                    if approval_mode == "yolo" or _c.name not in {*armed, *ask_armed}:
+                        return ""
+                    _ct = d.platform.registry.get(_c.name)
+                    _cp = _ct.perm_key() if _ct is not None else _c.name
+                    _cm = d.platform.permissions.mode_for(_cp, overrides)
+                    _asks = (
+                        _cm is PermissionMode.ASK
+                        and _cp not in armed_grant
+                        and _c.name not in armed_grant
+                    )
+                    if approval_mode == "always_ask":
+                        _asks = _asks or (
+                            _c.name in STRICT_ASK_TOOLS
+                            and _c.name not in card_grants
+                            and _cm is not PermissionMode.DENY
+                        )
+                    return _cp if _asks else ""
+
+                _round_asks: dict[str, list] = {}
+                for _c in calls:
+                    _cp = _would_card(_c)
+                    if _cp:
+                        _round_asks.setdefault(_cp, []).append(_c)
+                _round_answers: dict[str, str] = {}
                 for tc in calls:
                     ran = False
                     _t = d.platform.registry.get(tc.name)
@@ -2453,42 +2521,94 @@ async def chat_stream(
                     if _unarmed:
                         _needs_card = False
                     if _needs_card:
-                        _apr = _approvals(d)
-                        _ap_id, _fut = _apr.request(tc.name, safe_args)
-                        yield _sse("approval", {
-                            "id": _ap_id, "call_id": tc.id,
-                            "tool": tc.name, "args": safe_args,
-                            "timeout_s": int(APPROVAL_TIMEOUT_S),
-                        })
-                        _decision = "timeout"
-                        _aloop = asyncio.get_running_loop()
-                        _deadline = _aloop.time() + APPROVAL_TIMEOUT_S
-                        try:
-                            while True:
-                                _left = _deadline - _aloop.time()
-                                if _left <= 0:
-                                    break
-                                try:
-                                    # shield: a keepalive slice expiring
-                                    # must not CANCEL the future — the
-                                    # user's click can land in the next
-                                    # slice.
-                                    _decision = await asyncio.wait_for(
-                                        asyncio.shield(_fut),
-                                        timeout=min(15.0, _left),
+                        if _perm_name in _round_answers:
+                            # ONE CARD FOR THE BATCH (v1.247.0): this call's
+                            # group was answered on its first card, and the
+                            # same answer covers it — 'once' is the batch,
+                            # 'deny' refuses all of it.
+                            _decision = _round_answers[_perm_name]
+                        else:
+                            _apr = _approvals(d)
+                            _group = _round_asks.get(_perm_name) or [tc]
+                            _count = len(_group)
+                            _frame = {
+                                "id": "", "call_id": tc.id,
+                                "tool": tc.name, "args": safe_args,
+                                # 0 = no expiry (v1.247.0): the turn waits
+                                # for the person it asked.
+                                "timeout_s": (
+                                    max(1, int(CHAT_ASK_TIMEOUT_S))
+                                    if CHAT_ASK_TIMEOUT_S else 0
+                                ),
+                            }
+                            if _count > 1:
+                                _examples = [
+                                    _redacted(_c) for _c in _group[:3]
+                                ]
+                                _ap_id, _fut = _apr.request(
+                                    tc.name, safe_args,
+                                    count=_count, examples=_examples,
+                                )
+                                _frame["count"] = _count
+                                _frame["examples"] = _examples
+                            else:
+                                _ap_id, _fut = _apr.request(tc.name, safe_args)
+                            _frame["id"] = _ap_id
+                            yield _sse("approval", _frame)
+                            _decision = "timeout"
+                            _stopped = False
+                            _aloop = asyncio.get_running_loop()
+                            _deadline = (
+                                _aloop.time() + CHAT_ASK_TIMEOUT_S
+                                if CHAT_ASK_TIMEOUT_S else None
+                            )
+                            _beat = _aloop.time()
+                            try:
+                                while True:
+                                    _now = _aloop.time()
+                                    if _deadline is not None and _now >= _deadline:
+                                        break
+                                    _slice = (
+                                        _ASK_POLL_S if _deadline is None
+                                        else min(_ASK_POLL_S, _deadline - _now)
                                     )
-                                    break
-                                except asyncio.TimeoutError:
-                                    # SSE comment — keeps the connection
-                                    # alive through a slow human decision
-                                    # without inventing a frame type.
-                                    yield ": keepalive\n\n"
-                        finally:
-                            _apr.pop(_ap_id)
-                        yield _sse("approval_resolved", {
-                            "id": _ap_id, "call_id": tc.id,
-                            "tool": tc.name, "decision": _decision,
-                        })
+                                    try:
+                                        # shield: a slice expiring must not
+                                        # CANCEL the future — the user's
+                                        # click can land in the next slice.
+                                        _decision = await asyncio.wait_for(
+                                            asyncio.shield(_fut),
+                                            timeout=_slice,
+                                        )
+                                        break
+                                    except asyncio.TimeoutError:
+                                        # STOP WHILE PARKED (v1.247.0): with
+                                        # no expiry, Stop (from any window)
+                                        # or a dropped connection is the one
+                                        # way out besides an answer.
+                                        if await _stop():
+                                            _stopped = True
+                                            break
+                                        if _aloop.time() - _beat >= 15.0:
+                                            _beat = _aloop.time()
+                                            # SSE comment — keeps the
+                                            # connection alive through a slow
+                                            # human decision without
+                                            # inventing a frame type.
+                                            yield ": keepalive\n\n"
+                            finally:
+                                _apr.pop(_ap_id)
+                            if _stopped:
+                                # Completed rounds were billed; the ledger
+                                # says CANCELLED through the one writer, and
+                                # no frame is emitted (as every stop path).
+                                _persist_once(AgentState.CANCELLED)
+                                return
+                            yield _sse("approval_resolved", {
+                                "id": _ap_id, "call_id": tc.id,
+                                "tool": tc.name, "decision": _decision,
+                            })
+                            _round_answers[_perm_name] = _decision
                         if _decision == "once":
                             _grant_extra = {tc.name, _perm_name}
                         elif _decision == "conversation":
@@ -2669,7 +2789,7 @@ async def chat_stream(
             # FINAL ANSWER (v1.246.0) — lock-step copy of chat_turn's. The
             # heartbeat keeps the stream alive while it runs, and the answer
             # lands in the authoritative `done` frame.
-            if _wants_final_answer(
+            if _cut_office or _wants_final_answer(
                 reply_text or "", workflow_draft, escalate, completions,
             ):
                 _f_text, _f_in, _f_out, _f_n = await _final_answer_after_tools(
@@ -2678,8 +2798,13 @@ async def chat_stream(
                     messages=msgs,
                     provider=provider_choice,
                     model=model_choice,
+                    # v1.247.0 — lock-step with chat_turn.
+                    **(
+                        {"instruction": OUT_OF_ROUNDS_INSTRUCTION}
+                        if _cut_office else {}
+                    ),
                 )
-                reply_text = _f_text
+                reply_text = _f_text or reply_text
                 usage_in += _f_in
                 usage_out += _f_out
                 completions += _f_n

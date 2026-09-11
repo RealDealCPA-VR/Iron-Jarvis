@@ -317,7 +317,7 @@ def test_timeout_denies_honestly_instead_of_hanging(tmp_path, monkeypatch):
     """Nobody answers: the wait ends, the call is refused with the timeout
     named, and the stream COMPLETES. Patched on routes.chat — that module
     imported the name, so patching the source module would change nothing."""
-    monkeypatch.setattr(chat_routes, "APPROVAL_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(chat_routes, "CHAT_ASK_TIMEOUT_S", 0.2)
     client = TestClient(create_app(str(tmp_path)))
     client.app.state.platform.router.stream = _shell_call_stream()
 
@@ -342,7 +342,7 @@ def test_timeout_denies_honestly_instead_of_hanging(tmp_path, monkeypatch):
 
 
 def test_ask_tier_arms_in_the_stream_lane_prompt_and_specs(tmp_path, monkeypatch):
-    monkeypatch.setattr(chat_routes, "APPROVAL_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(chat_routes, "CHAT_ASK_TIMEOUT_S", 0.2)
     client = TestClient(create_app(str(tmp_path)))
     fake = _shell_call_stream()
     client.app.state.platform.router.stream = fake

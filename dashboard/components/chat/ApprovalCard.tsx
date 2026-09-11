@@ -21,6 +21,15 @@
 //                          the ledger as the user's decision (deny_reason),
 //                          so "the user said no" is a fact the app remembers,
 //                          not a call that never happened.
+//
+// ONE CARD FOR A BATCH (v1.247.0): when one step asks for several calls that
+// need the same permission ("rename_real_file × 8"), the daemon files ONE ask
+// carrying `count` and up to three example argument sets. "Allow these N"
+// runs exactly those calls; Deny refuses all of them.
+//
+// WAITING, NOT EXPIRING (v1.247.0): `timeoutS === 0` means the daemon waits
+// until the user answers — so the card says so and shows no countdown. A
+// positive value (an unattended door) is named once, never ticked.
 
 import { useState } from "react";
 import { LoaderInline } from "@/components/ui";
@@ -45,6 +54,25 @@ function ArgLine({ name, value }: { name: string; value: unknown }) {
       <span className="text-zinc-500">{name}:</span> {text}
     </p>
   );
+}
+
+/** One example call of a batch, on one compact line. */
+function ExampleLine({ args }: { args: Record<string, unknown> }) {
+  const text = Object.entries(args)
+    .map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)
+    .join(" · ");
+  return <p className="truncate font-mono text-[11px] text-zinc-400">{text || "—"}</p>;
+}
+
+/** "Waiting for you" in the words the daemon's wait actually has. */
+export function waitingLine(timeoutS: number | undefined): string {
+  if (timeoutS === 0) return "Waiting for you — nothing runs until you answer.";
+  if (typeof timeoutS === "number" && timeoutS > 0) {
+    const mins = Math.round(timeoutS / 60);
+    const span = mins >= 1 ? `${mins} min` : `${timeoutS} s`;
+    return `Waiting for you — if nobody answers within ${span}, it is not run.`;
+  }
+  return "Waiting for you.";
 }
 
 export function ApprovalCard({
@@ -80,13 +108,19 @@ export function ApprovalCard({
     }
   }
 
+  const count = approval.count && approval.count > 1 ? approval.count : 1;
+  const batch = count > 1;
   const args = approval.args ?? {};
+  const examples = (approval.examples ?? []).filter(
+    (e): e is Record<string, unknown> => !!e && typeof e === "object",
+  );
   return (
     <div
       role="alertdialog"
-      aria-label={`Approve ${approval.tool}?`}
+      aria-label={batch ? `Approve ${approval.tool} × ${count}?` : `Approve ${approval.tool}?`}
       className="space-y-2.5 rounded-xl border border-amber-400/30 bg-amber-400/[0.06] p-3"
       data-testid="chat-approval-card"
+      data-count={count}
     >
       <div className="flex items-center gap-2">
         <ShieldQuestion size={15} className="shrink-0 text-amber-300" aria-hidden="true" />
@@ -94,23 +128,57 @@ export function ApprovalCard({
           The assistant wants to run{" "}
           <code className="rounded bg-black/30 px-1 font-mono text-[11.5px]">
             {approval.tool}
-          </code>{" "}
-          — your call.
+          </code>
+          {batch ? (
+            <>
+              {" "}
+              <span data-testid="approval-count">× {count}</span> — one answer
+              covers all of them.
+            </>
+          ) : (
+            <> — your call.</>
+          )}
         </p>
       </div>
 
-      {Object.keys(args).length > 0 && (
-        <div className="space-y-1.5">
-          {Object.entries(args).map(([k, v]) => (
-            <ArgLine key={k} name={k} value={v} />
-          ))}
-        </div>
-      )}
+      {batch
+        ? examples.length > 0 && (
+            <div className="space-y-1">
+              {examples.map((e, i) => (
+                <ExampleLine key={i} args={e} />
+              ))}
+              {count > examples.length && (
+                <p className="text-[11px] text-zinc-500">
+                  …and {count - examples.length} more like these
+                </p>
+              )}
+            </div>
+          )
+        : Object.keys(args).length > 0 && (
+            <div className="space-y-1.5">
+              {Object.entries(args).map(([k, v]) => (
+                <ArgLine key={k} name={k} value={v} />
+              ))}
+            </div>
+          )}
 
+      <p data-testid="approval-waiting" className="text-[11px] font-medium text-amber-200/90">
+        {waitingLine(approval.timeoutS)}
+      </p>
       <p className="text-[11px] leading-relaxed text-zinc-400">
-        The turn is paused until you answer. “Once” runs only this call;
-        “this conversation” stops asking for {approval.tool} here; Deny
-        refuses it and the assistant is told you declined.
+        {batch ? (
+          <>
+            “Allow these {count}” runs exactly these calls; “this conversation”
+            stops asking for {approval.tool} here; Deny refuses all {count} and
+            the assistant is told you declined.
+          </>
+        ) : (
+          <>
+            The turn is paused until you answer. “Once” runs only this call;
+            “this conversation” stops asking for {approval.tool} here; Deny
+            refuses it and the assistant is told you declined.
+          </>
+        )}
       </p>
 
       {error && <p className="text-[11px] text-rose-300">{error}</p>}
@@ -122,7 +190,13 @@ export function ApprovalCard({
           disabled={!!sent}
           className="btn-accent text-xs"
         >
-          {sent === "once" ? <LoaderInline label="Running…" /> : "Allow once"}
+          {sent === "once" ? (
+            <LoaderInline label="Running…" />
+          ) : batch ? (
+            `Allow these ${count}`
+          ) : (
+            "Allow once"
+          )}
         </button>
         <button
           type="button"
@@ -142,7 +216,7 @@ export function ApprovalCard({
           disabled={!!sent}
           className="btn-ghost text-xs text-rose-300 hover:text-rose-200"
         >
-          {sent === "deny" ? <LoaderInline label="Declining…" /> : "Deny"}
+          {sent === "deny" ? <LoaderInline label="Declining…" /> : batch ? `Deny all ${count}` : "Deny"}
         </button>
       </div>
     </div>

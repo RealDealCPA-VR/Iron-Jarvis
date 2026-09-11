@@ -184,6 +184,7 @@ async def test_resolve_where_answers_only_the_matching_session_and_tools():
 @pytest.mark.asyncio
 async def test_conversation_grant_on_one_parallel_ask_releases_its_siblings(rt, monkeypatch):
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 1.0)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 1.0)  # v1.247.0: attended asks wait; bound this one
     allow: set = set()
     agent_def = get_agent_definition(AgentType.BUILDER)
 
@@ -224,6 +225,7 @@ async def test_once_and_deny_release_nothing(rt, monkeypatch):
     """'once' covers exactly this call and 'deny' refuses exactly this call —
     neither may speak for a sibling."""
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 0.6)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 0.6)  # v1.247.0: attended asks wait; bound this one
     allow: set = set()
     agent_def = get_agent_definition(AgentType.BUILDER)
 
@@ -250,6 +252,7 @@ async def test_once_and_deny_release_nothing(rt, monkeypatch):
 @pytest.mark.asyncio
 async def test_timeout_reason_is_honest_and_rides_the_ledger_as_paused(rt, monkeypatch):
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 0.2)  # v1.247.0: attended asks wait; bound this one
     rt.platform.router.stream = _shell_then_done()
     orch = Orchestrator(rt.platform)
     sess = await orch.create_session("rename the files", AgentType.BUILDER, origin="chat")
@@ -279,6 +282,7 @@ async def test_timeout_reason_is_honest_and_rides_the_ledger_as_paused(rt, monke
 async def test_a_users_deny_is_still_a_permission_denial(rt, monkeypatch):
     """Only the CLOCK is 'paused'; a human's No keeps its label."""
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 2.0)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 2.0)  # v1.247.0: attended asks wait; bound this one
     rt.platform.router.stream = _shell_then_done()
     orch = Orchestrator(rt.platform)
     sess = await orch.create_session("rename the files", AgentType.BUILDER, origin="chat")
@@ -299,6 +303,7 @@ async def test_a_users_deny_is_still_a_permission_denial(rt, monkeypatch):
 @pytest.mark.asyncio
 async def test_a_paused_run_is_waiting_in_the_db_and_running_again_after(rt, monkeypatch):
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 2.0)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 2.0)  # v1.247.0: attended asks wait; bound this one
     rt.platform.router.stream = _shell_then_done()
     orch = Orchestrator(rt.platform)
     sess = await orch.create_session("rename the files", AgentType.BUILDER, origin="chat")
@@ -328,6 +333,7 @@ async def test_a_paused_run_is_waiting_in_the_db_and_running_again_after(rt, mon
 @pytest.mark.asyncio
 async def test_timeout_and_deny_both_leave_running_then_terminal(rt, monkeypatch):
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 0.2)  # v1.247.0: attended asks wait; bound this one
     rt.platform.router.stream = _shell_then_done()
     orch = Orchestrator(rt.platform)
     sess = await orch.create_session("rename the files", AgentType.BUILDER, origin="chat")
@@ -344,6 +350,7 @@ async def test_timeout_and_deny_both_leave_running_then_terminal(rt, monkeypatch
 @pytest.mark.asyncio
 async def test_a_cancel_during_the_pause_never_leaves_waiting(rt, monkeypatch):
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 30.0)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 30.0)  # v1.247.0: attended asks wait; bound this one
     rt.platform.router.stream = _shell_then_done()
     orch = Orchestrator(rt.platform)
     sess = await orch.create_session("rename the files", AgentType.BUILDER, origin="chat")
@@ -371,6 +378,7 @@ async def test_parallel_asks_share_one_waiting_transition(rt, monkeypatch):
     """N parallel asks = ONE running->waiting and ONE waiting->running, not
     N of each (the kanban must not flicker per card)."""
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 0.3)  # v1.247.0: attended asks wait; bound this one
     agent_def = get_agent_definition(AgentType.BUILDER)
     run = AgentRun(session_id="session_test", state=AgentState.RUNNING)
     rt.runtime._save(run)
@@ -394,6 +402,7 @@ async def test_a_bare_pause_without_a_run_changes_no_state(rt, monkeypatch):
     """The v1189 call shape (no ``run``) keeps working and publishes no
     state change — there is no run to flip."""
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 0.1)  # v1.247.0: attended asks wait; bound this one
     deny, extra = await rt.runtime._pause_for_approval(
         _session(), _tc("mv a b"), get_agent_definition(AgentType.BUILDER), set()
     )

@@ -46,7 +46,16 @@ def _waiting_on(d, session_id: str) -> dict[str, Any] | None:
     approval_id = first.get("approval_id")
     if not approval_id:
         return None
-    return {"approval_id": str(approval_id), "tool": str(first.get("tool") or "")}
+    out: dict[str, Any] = {
+        "approval_id": str(approval_id),
+        "tool": str(first.get("tool") or ""),
+    }
+    # v1.247.0: a batched ask says how many calls one answer covers — a
+    # number, never the calls' arguments (this row rides every listing).
+    _count = first.get("count")
+    if isinstance(_count, int) and not isinstance(_count, bool) and _count > 1:
+        out["count"] = _count
+    return out
 
 
 def _etag_matches(if_none_match: str | None, etag: str) -> bool:

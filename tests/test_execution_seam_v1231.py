@@ -431,6 +431,7 @@ async def test_an_automation_session_pauses_and_an_unanswered_ask_times_out(rt, 
     v1.227.0 outcome derives ``needs_you`` from — instead of the instant
     headless denial."""
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 0.1)  # v1.247.0: attended asks wait; bound this one
     deny, extra = await rt.runtime._pause_for_approval(
         _session(origin), _tc(), get_agent_definition(AgentType.BUILDER), set()
     )
@@ -477,6 +478,7 @@ async def test_delegate_never_parks_an_automation_session(rt, monkeypatch):
     nobody present, so a supervisor decomposing a phone job must not sit five
     minutes on a question the app answers itself."""
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 0.1)  # v1.247.0: attended asks wait; bound this one
     for name in ("delegate", "spawn_agent"):
         deny, extra = await rt.runtime._pause_for_approval(
             _session("comm:telegram"), _tc(name, {"task": "x", "agent_type": "builder"}),
@@ -507,6 +509,7 @@ def _shell_then_done():
 @pytest.mark.asyncio
 async def test_an_unanswered_schedule_ask_ends_as_needs_you_not_a_silent_denial(rt, monkeypatch):
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 0.3)  # v1.247.0: attended asks wait; bound this one
     rt.platform.router.stream = _shell_then_done()
     orch = Orchestrator(rt.platform)
     sess = await orch.create_session("rename the files", AgentType.BUILDER, origin="schedule:nightly")
@@ -527,6 +530,7 @@ async def test_a_comm_started_session_asks_back_and_the_bell_lists_it(rt, monkey
     renders and the v1.200.0 phone fan-out reads — tagged with the session.
     Unanswered, the job ends ``needs_you`` and the phone hears the result."""
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 1.5)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 1.5)  # v1.247.0: attended asks wait; bound this one
     rt.platform.router.stream = _shell_then_done()
     orch = Orchestrator(rt.platform)
     notifier = Notifier()

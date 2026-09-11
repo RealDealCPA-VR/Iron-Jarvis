@@ -203,6 +203,11 @@ interface SessionAsk {
   id: string;
   tool: string;
   args?: Record<string, unknown>;
+  /** v1.247.0: a batched ask (count > 1) and the daemon's wait (0 = until
+   *  answered) — read off the approval.requested payload or the listing. */
+  count?: number;
+  examples?: Record<string, unknown>[];
+  timeoutS?: number;
 }
 
 interface ChatMessage {
@@ -3472,12 +3477,18 @@ export default function ChatPage() {
       if (e.type === "approval.requested") {
         const id = String(e.payload?.approval_id ?? "");
         if (!id || resolved.has(id) || asks.has(id)) continue;
+        const p = (e.payload ?? {}) as Record<string, unknown>;
         asks.set(id, {
           id,
           tool: String(e.payload?.tool ?? ""),
           args: (e.payload?.args ?? undefined) as
             | Record<string, unknown>
             | undefined,
+          ...(typeof p.count === "number" && p.count > 1 ? { count: p.count } : {}),
+          ...(Array.isArray(p.examples)
+            ? { examples: p.examples as Record<string, unknown>[] }
+            : {}),
+          ...(typeof p.timeout_s === "number" ? { timeoutS: p.timeout_s } : {}),
         });
       }
     }
@@ -3494,12 +3505,23 @@ export default function ChatPage() {
   async function pollPendingAsks(id: string) {
     try {
       const r = await get<{
-        approvals?: { id?: unknown; tool?: unknown; session_id?: unknown }[];
+        approvals?: {
+          id?: unknown;
+          tool?: unknown;
+          session_id?: unknown;
+          count?: unknown;
+          timeout_s?: unknown;
+        }[];
       }>("/chat/approvals/pending");
       if (awaitingIdRef.current !== id) return;
       const mine = (r.approvals ?? [])
         .filter((a) => a.session_id === id && typeof a.id === "string")
-        .map((a) => ({ id: String(a.id), tool: String(a.tool ?? "") }));
+        .map((a) => ({
+          id: String(a.id),
+          tool: String(a.tool ?? ""),
+          ...(typeof a.count === "number" && a.count > 1 ? { count: a.count } : {}),
+          ...(typeof a.timeout_s === "number" ? { timeoutS: a.timeout_s } : {}),
+        }));
       setPolledAsks(mine);
     } catch {
       /* best-effort — the event fold and the bell still cover it */
@@ -6231,6 +6253,9 @@ export default function ChatPage() {
                                 callId: "",
                                 tool: ask.tool,
                                 args: ask.args,
+                                count: ask.count,
+                                examples: ask.examples,
+                                timeoutS: ask.timeoutS,
                               }}
                               onConversation={armFromApproval}
                             />

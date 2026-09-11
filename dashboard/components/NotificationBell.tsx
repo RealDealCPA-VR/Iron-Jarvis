@@ -279,6 +279,10 @@ interface PendingAgentApproval {
   tool: string;
   sessionId: string;
   requestedAt: string;
+  /** Calls one answer covers — a batched ask (v1.247.0). 1 = a single call. */
+  count: number;
+  /** Seconds the run waits; 0/absent = until answered (v1.247.0). */
+  timeoutS?: number;
 }
 
 /** Parse one /chat/approvals/pending row (null = not a usable row). */
@@ -292,6 +296,8 @@ function parseAgentApproval(raw: unknown): PendingAgentApproval | null {
     tool: typeof r.tool === "string" && r.tool ? r.tool : "unknown",
     sessionId: typeof r.session_id === "string" ? r.session_id : "",
     requestedAt: typeof r.requested_at === "string" ? r.requested_at : "",
+    count: typeof r.count === "number" && r.count > 1 ? r.count : 1,
+    ...(typeof r.timeout_s === "number" ? { timeoutS: r.timeout_s } : {}),
   };
 }
 
@@ -347,8 +353,14 @@ function AgentApprovalRow({
             An agent is asking permission
           </span>
           <p className="mt-0.5 text-[12px] leading-snug text-amber-200">
-            It wants to run <span className="font-mono">{ask.tool}</span> — the
-            run is paused until you answer.
+            It wants to run <span className="font-mono">{ask.tool}</span>
+            {ask.count > 1 ? (
+              <span data-testid="bell-approval-count"> × {ask.count} (one answer covers all)</span>
+            ) : null}{" "}
+            —{" "}
+            {ask.timeoutS && ask.timeoutS > 0
+              ? `the run waits up to ${Math.max(1, Math.round(ask.timeoutS / 60))} min for you.`
+              : "the run is waiting for you."}
           </p>
           <div className="mt-1.5 flex items-center gap-1.5">
             <button

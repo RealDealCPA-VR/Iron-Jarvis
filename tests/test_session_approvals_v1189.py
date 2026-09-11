@@ -243,6 +243,7 @@ async def test_a_denial_is_the_users_and_says_so(rt):
 @pytest.mark.asyncio
 async def test_nobody_answering_is_a_bounded_honest_timeout(rt, monkeypatch):
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 0.1)  # v1.247.0: attended asks wait; bound this one
     deny, extra = await rt.runtime._pause_for_approval(
         _session(), _tc(), _agent_def(), set()
     )
@@ -264,6 +265,7 @@ async def test_unattributed_origins_never_pause(rt, monkeypatch):
     The timeout is patched tiny so a MUTATED gate fails this test in 0.1s with
     a timeout-deny instead of hanging the suite for unanswered pauses."""
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 0.1)  # v1.247.0: attended asks wait; bound this one
     for origin in (None, "", "mystery:new-surface"):
         deny, extra = await rt.runtime._pause_for_approval(
             _session(origin=origin), _tc(), _agent_def(), set()

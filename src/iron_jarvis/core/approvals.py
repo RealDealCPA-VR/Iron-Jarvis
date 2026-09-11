@@ -108,6 +108,9 @@ class ChatApprovals:
         tool: str,
         args: dict[str, Any] | None,
         session_id: str | None = None,
+        *,
+        count: int = 1,
+        examples: "list[Any] | None" = None,
     ) -> tuple[str, "asyncio.Future[str]"]:
         """File one request; returns ``(id, future)``. The future resolves to a
         DECISIONS value. ``tool``/``args`` are kept only as display/matching
@@ -126,6 +129,12 @@ class ChatApprovals:
             "args": args,
             "requested_at": time.time(),
         }
+        # ONE ASK FOR A BATCH (v1.247.0): how many calls this one answer
+        # covers, and up to three of their (already redacted) argument sets.
+        # Recorded only for a real batch, so a single ask keeps its shape.
+        if int(count or 1) > 1:
+            self._meta[approval_id]["count"] = int(count)
+            self._meta[approval_id]["examples"] = list(examples or [])[:3]
         return approval_id, fut
 
     def pending_for(self, session_id: str | None) -> list[dict[str, Any]]:
@@ -143,6 +152,12 @@ class ChatApprovals:
                 "tool": m["tool"],
                 "args": m["args"],
                 "requested_at": m["requested_at"],
+                # v1.247.0: present only on a batched ask (see ``request``).
+                **(
+                    {"count": m["count"], "examples": m.get("examples", [])}
+                    if "count" in m
+                    else {}
+                ),
             }
             for m in self._meta.values()
             if m.get("session_id") == sid

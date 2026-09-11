@@ -37,7 +37,8 @@ def _client(tmp_path) -> TestClient:
 #: Every key the listing may carry, exactly. Pinned as a SET EQUALITY in the
 #: tests below so a future edit adding args (or anything else riding the
 #: event payload) goes red instead of silently widening the broadcast.
-ALLOWED_KEYS = {"id", "tool", "session_id", "requested_at"}
+# v1.247.0: + the wait (a number) — still never args.
+ALLOWED_KEYS = {"id", "tool", "session_id", "requested_at", "timeout_s"}
 
 
 def test_no_pending_approvals_is_an_honest_empty_list(tmp_path):

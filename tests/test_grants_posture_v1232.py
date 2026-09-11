@@ -225,6 +225,7 @@ def test_a_yolo_chat_escalates_as_approve_for_me_and_still_asks(rt, monkeypatch)
     run asks once per ask-tier tool like any other — auto-approve was
     consented to one watched turn at a time, not for a background batch."""
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 0.2)  # v1.247.0: attended asks wait; bound this one
     rt.platform.router.stream = _shell_then_done()
     client = TestClient(rt.app)
     r = client.post(
@@ -245,6 +246,7 @@ def test_a_yolo_chat_escalates_as_approve_for_me_and_still_asks(rt, monkeypatch)
 @pytest.mark.asyncio
 async def test_approve_for_me_auto_grants_an_armed_tool_and_asks_for_an_unarmed_one(rt, monkeypatch):
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 0.2)  # v1.247.0: attended asks wait; bound this one
     agent_def = get_agent_definition(AgentType.BUILDER)
     # Armed at escalation (allow_tools carried shell): no pause, no ask.
     deny, extra = await rt.runtime._pause_for_approval(

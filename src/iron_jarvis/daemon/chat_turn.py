@@ -1027,6 +1027,15 @@ FINAL_ANSWER_INSTRUCTION = (
     "tools. If you created or changed a file, say which one and where it is."
 )
 
+#: The same completion's words when an office turn used every round
+#: (v1.247.0): there ARE results to report, and some calls were not made.
+OUT_OF_ROUNDS_INSTRUCTION = (
+    "You have used every tool round this turn allows, so no more tools can "
+    "run. Write your final answer to my request now from the tool results "
+    "above: say what is done, which file(s) you created or changed and "
+    "where, and what is still left to do."
+)
+
 
 def chat_tool_deadline(platform) -> float | None:
     """The chat lanes' tool deadline (v1.246.0): the SAME setting an agent run
@@ -1060,6 +1069,7 @@ async def _final_answer_after_tools(
     messages,
     provider: str,
     model: str,
+    instruction: str = "",
 ) -> tuple[str, int, int, int]:
     """Ask the SAME model once, WITHOUT tools, for the answer it never wrote.
     Returns ``(text, usage_in, usage_out, completions)`` — ``text`` is "" when
@@ -1076,7 +1086,7 @@ async def _final_answer_after_tools(
     from ..providers.adapters.base import LLMMessage
 
     nudge = list(messages or []) + [
-        LLMMessage(role="user", content=FINAL_ANSWER_INSTRUCTION),
+        LLMMessage(role="user", content=instruction or FINAL_ANSWER_INSTRUCTION),
     ]
     try:
         async with asyncio.timeout(_FINAL_ANSWER_TIMEOUT_S):
@@ -1714,7 +1724,10 @@ _ESCALATE_SPEC = {
         "loops, or a tool you have not been given. Do NOT call it for questions "
         "you can answer, or for work the tools you already hold can do: it "
         "restarts the turn and costs the user time. Never tell the user to "
-        "switch modes — there are no modes; call this instead."
+        "switch modes — there are no modes; call this instead. If you hold "
+        "file or document tools, documents, spreadsheets and files are NOT a "
+        "reason to call this: read, create and edit them here — this turn has "
+        "the rounds for it."
     ),
     "input_schema": {
         "type": "object",
@@ -2024,6 +2037,26 @@ _DOC_WRITING_TOOLS = {
     "excel_apply_spec",
     "redact_pii",
 }
+
+#: A chat turn that can WRITE a document gets this many tool rounds instead
+#: of _MAX_TOOL_ROUNDS (v1.247.0). Office work is read → work out → write →
+#: check, often twice; six rounds ended such turns on the last-round
+#: escalation, which handed the job to an agent and discarded what the turn
+#: had already done. A turn with no document-writing tool keeps six.
+_DOC_TOOL_ROUNDS = 12
+
+
+def _is_office_turn(armed_names) -> bool:
+    """Is a document-writing tool armed this turn? (v1.247.0) — the ONE
+    answer both chat lanes use (the stream lane passes armed + ask_armed)."""
+    return bool(_DOC_WRITING_TOOLS & set(armed_names or ()))
+
+
+def _round_budget(armed_names) -> int:
+    """How many tool rounds this turn gets (v1.247.0): _DOC_TOOL_ROUNDS for an
+    office turn, _MAX_TOOL_ROUNDS otherwise. MIRROR NOTE (lock-step): both
+    chat lanes size their loop with this — never a bare range() again."""
+    return _DOC_TOOL_ROUNDS if _is_office_turn(armed_names) else _MAX_TOOL_ROUNDS
 
 #: File-creation intent in the user's message ("create an excel of…"), used
 #: for the no-file-was-written honesty note below.
@@ -3384,8 +3417,13 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     workflow_draft = None   # the turn proposed a reusable workflow (v1.120.0)
     made_docs: list[str] = []  # documents this turn created/edited (preview)
     workflow_run_info = None   # v1.170.0: a workflow this turn STARTED (contract 2)
+    # THE ROUND BUDGET (v1.247.0) — ONE helper, both lanes. An office turn
+    # that uses every round ends HERE with an answer instead of escalating.
+    _rounds = _round_budget(armed)
+    _office = _is_office_turn(armed)
+    _cut_office = False
     try:
-        for _round in range(_MAX_TOOL_ROUNDS):
+        for _round in range(_rounds):
             route = await d.platform.router.complete(
                 provider=provider_choice or None,
                 model=model_choice or None,
@@ -3427,7 +3465,7 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                 break
             if not calls or not armed:
                 break
-            if _round == _MAX_TOOL_ROUNDS - 1:
+            if _round == _rounds - 1:
                 # LAST allowed round: no round is left to show the model
                 # these results, so executing them would burn tool side
                 # effects invisibly. Skip them and say so.
@@ -3435,10 +3473,17 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                     f"stopped after {_round} tool rounds; "
                     f"{len(calls)} tool call(s) not executed"
                 )
-                escalate = True
-                escalate_reason = escalate_reason or (
-                    "this needs more steps than a quick answer allows"
-                )
+                if _office:
+                    # OFFICE WORK STAYS IN CHAT (v1.247.0): escalating here
+                    # handed the job to an agent and discarded this turn's
+                    # work. It ends here, with the note above and one
+                    # tool-less completion for the answer (below).
+                    _cut_office = True
+                else:
+                    escalate = True
+                    escalate_reason = escalate_reason or (
+                        "this needs more steps than a quick answer allows"
+                    )
                 break
             msgs.append(LLMMessage(role="assistant",
                                    content=route.response.text,
@@ -3584,15 +3629,19 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     # it once, without tools, for the answer. Before the language guard, so
     # the answer is checked like any other; billed below like any other.
     # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
-    if _wants_final_answer(model_text, workflow_draft, escalate, completions):
+    if _cut_office or _wants_final_answer(
+        model_text, workflow_draft, escalate, completions,
+    ):
         _f_text, _f_in, _f_out, _f_n = await _final_answer_after_tools(
             d.platform,
             system=system,
             messages=msgs,
             provider=provider_choice,
             model=model_choice,
+            # v1.247.0: an office turn cut at its last round is told so.
+            **({"instruction": OUT_OF_ROUNDS_INSTRUCTION} if _cut_office else {}),
         )
-        model_text = _f_text
+        model_text = _f_text or model_text
         usage_in += _f_in
         usage_out += _f_out
         completions += _f_n

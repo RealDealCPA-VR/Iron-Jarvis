@@ -189,6 +189,7 @@ def test_a_stored_outcome_wins_over_the_live_derivation(tmp_path):
 # --------------------------------------------------------------------------- #
 async def test_a_timed_out_ask_marks_the_session_needs_you_everywhere(rt, monkeypatch):
     monkeypatch.setattr(runtime_mod, "SESSION_APPROVAL_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(runtime_mod, "ATTENDED_APPROVAL_TIMEOUT_S", 0.3)  # v1.247.0: attended asks wait; bound this one
     rt.platform.router.stream = _shell_then_done()
     orch = Orchestrator(rt.platform)
     sess = await orch.create_session("rename the files", AgentType.BUILDER, origin="chat")

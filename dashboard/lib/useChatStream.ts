@@ -46,6 +46,10 @@ export type SSEEvent =
       tool: string;
       args?: Record<string, unknown>;
       timeout_s?: number;
+      /** ONE ask for a batch (v1.247.0): how many calls it covers, and up
+       *  to three of their (redacted) argument sets. Absent = one call. */
+      count?: number;
+      examples?: Record<string, unknown>[];
     }
   | {
       /** The pause above ended — by a click or by the timeout. */
@@ -238,6 +242,12 @@ export function sseEventFrom(
       if (data.args !== undefined && data.args !== null)
         ev.args = data.args as Record<string, unknown>;
       if (typeof data.timeout_s === "number") ev.timeout_s = data.timeout_s;
+      // v1.247.0 — whitelisted like every field here, or it silently vanishes.
+      if (typeof data.count === "number" && data.count > 1) ev.count = data.count;
+      if (Array.isArray(data.examples))
+        ev.examples = data.examples.filter(
+          (e): e is Record<string, unknown> => !!e && typeof e === "object",
+        );
       return ev;
     }
     case "approval_resolved": {
@@ -602,7 +612,11 @@ export interface PendingApproval {
   callId: string;
   tool: string;
   args?: Record<string, unknown>;
+  /** Seconds the daemon waits for the answer; 0 = until answered (v1.247.0). */
   timeoutS?: number;
+  /** A batched ask (v1.247.0): calls covered, and up to three examples. */
+  count?: number;
+  examples?: Record<string, unknown>[];
 }
 
 export interface UseChatStream {
@@ -736,6 +750,8 @@ export function useChatStream(): UseChatStream {
                 tool: ev.tool,
                 args: ev.args,
                 timeoutS: ev.timeout_s,
+                count: ev.count,
+                examples: ev.examples,
               });
               break;
             case "approval_resolved":

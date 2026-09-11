@@ -431,6 +431,8 @@ export default function SessionDetailPage({
                     id: session.waiting_on.approval_id,
                     callId: "",
                     tool: session.waiting_on.tool,
+                    // v1.247.0: a batched ask's count rides the row.
+                    count: (session.waiting_on as { count?: number }).count,
                   }}
                 />
               </div>

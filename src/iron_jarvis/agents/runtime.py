@@ -41,6 +41,34 @@ ENVELOPE_ADAPTED = "envelope.adapted"
 #: forever on a question nobody will answer.
 SESSION_APPROVAL_TIMEOUT_S = 300.0
 
+#: Origin PREFIXES where a PERSON is watching the run (v1.247.0): a chat
+#: escalation, an Agents-page job, a Projects task, a user-started session.
+#: Their asks WAIT — until answered, declined, or the session is cancelled —
+#: instead of expiring into a refusal after SESSION_APPROVAL_TIMEOUT_S. The
+#: measurement that drove it: 26 of the 31 asks on the 2026-08-23 rename job
+#: expired unanswered and each was recorded as work not done. The
+#: UNATTENDED doors (goal, schedule, workflow, reflex, comm, autonomy) keep
+#: the bound: nobody may be awake to answer, and the trust ladder (grant
+#: offers, needs_you) is built on those timeout receipts.
+ATTENDED_ORIGINS = ("chat", "job", "project", "user")
+
+#: How long an ATTENDED ask may wait. None = no expiry — the product value.
+#: A seam, not a setting: a test that drives the bounded path on an
+#: attended session sets it; nothing in the app does.
+ATTENDED_APPROVAL_TIMEOUT_S: float | None = None
+
+#: Up to this many of a batch's calls ride its one approval as examples.
+_BATCH_EXAMPLES = 3
+
+
+def _ask_timeout_for(origin: str) -> float | None:
+    """How long an ask from a run of ``origin`` waits (v1.247.0): no bound
+    for an attended origin, SESSION_APPROVAL_TIMEOUT_S for the rest. Both
+    read at call time, so a patched module value applies."""
+    if str(origin or "").startswith(ATTENDED_ORIGINS):
+        return ATTENDED_APPROVAL_TIMEOUT_S
+    return SESSION_APPROVAL_TIMEOUT_S
+
 #: Origin PREFIXES whose sessions may PAUSE on an ask-tier tool and put the
 #: question where a person can answer it (chat card, bell, phone). Every door
 #: that stamps one of these has a channel: chat/job/project/user are watched
@@ -1344,6 +1372,72 @@ class AgentRuntime:
             sink.done(ok=True, result=run.result)
         return run
 
+    def _pause_needed(
+        self,
+        session: Session,
+        tc,
+        agent_def: AgentDefinition,
+        session_allow: set[str],
+    ) -> str:
+        """The permission key an ask for ``tc`` would pause on, or "" when
+        no pause is needed (v1.247.0).
+
+        The gate ``_pause_for_approval`` has always applied, lifted out
+        verbatim so a step can GROUP its asks (one approval per permission)
+        before any of them is filed. ONE definition: the pause itself calls
+        this first, so the grouping and the pause can never disagree."""
+        origin = getattr(session, "origin", None) or ""
+        # "goal" joined v1.209.0: without it a goal iteration's ask-tier tool
+        # took the instant headless denial and minted NO approval receipts —
+        # so ask_stats stayed empty and grant_offers could never fire. The
+        # contract card promises "asks flow to the bell" (v1.200.0 delivers
+        # them to bell + phone); an unattended 3am ask times out into a
+        # conservative timeout receipt that BLOCKS offers — the designed
+        # trust-ladder behavior, not a hazard.
+        #
+        # schedule / workflow / reflex / comm / autonomy joined v1.231.0
+        # (audit AE17): the v1.200.0 machinery already carries every
+        # ``approval.requested`` to the bell AND the phone, so a session
+        # those doors start has a channel to ask through — yet this list
+        # kept them on the instant headless denial, and the phone-approval
+        # path was unreachable from a phone-STARTED session. They MAY pause
+        # now; an unanswered ask ends as the v1.227.0 ``needs_you`` outcome
+        # (the timeout receipt below), never as work silently not done.
+        # Still an ALLOWLIST: an unattributed run (None / "" / an origin no
+        # door stamps) keeps the instant honest denial — presence is a fact
+        # a door states, never a default.
+        if not origin.startswith(ASKING_ORIGINS):
+            return ""
+        if tc.name in SAFE_HEADLESS_TOOLS:
+            # The daemon's own resolver grants these with nobody present
+            # (``delegate``/``spawn_agent`` never touch the host), so a
+            # supervisor decomposing a phone or schedule job must not park
+            # five minutes on a question the app answers itself (v1.231.0).
+            return ""
+        tool = self.p.registry.get(tc.name)
+        perm = tool.perm_key() if tool is not None else tc.name
+        mode = self.p.permissions.mode_for(perm, agent_def.permission_overrides)
+        if mode is not PermissionMode.ASK:
+            # allow runs; a hard deny is refused by ``invoke`` — a session
+            # grant never lifts it, in any posture.
+            return ""
+        # THE POSTURE (v1.232.0, audit A7). ``approve_for_me`` (and "", the
+        # default every non-chat door leaves): the session's grant list —
+        # the tools armed at escalation, every "Allow for this run" answered
+        # since (persisted below), a continue body's additions — runs without
+        # a pause. ``always_ask``: that list does NOT pre-approve; only a
+        # grant the user answered DURING THIS RUN skips the pause, so each
+        # ask-tier tool asks once per run and the sibling release covers
+        # its batch. ``yolo`` cannot reach here (``inherited_approval_mode``).
+        posture = inherited_approval_mode(getattr(session, "approval_mode", ""))
+        if posture == "always_ask":
+            granted = self._run_grants.get(session.id, set())
+        else:
+            granted = session_allow
+        if perm in granted or tc.name in granted:
+            return ""
+        return perm
+
     async def _pause_for_approval(
         self,
         session: Session,
@@ -1351,6 +1445,7 @@ class AgentRuntime:
         agent_def: AgentDefinition,
         session_allow: set[str],
         run: "AgentRun | None" = None,
+        batch: "list | None" = None,
     ) -> tuple[str, set[str]]:
         """PAUSE this run on an ask-tier call and let the USER answer
         (v1.189.0) — the session half of chat's v1.187.0 mid-turn ask.
@@ -1399,61 +1494,47 @@ class AgentRuntime:
         approvals = getattr(self.p, "approvals", None)
         if approvals is None:  # bare-platform tests: no registry, no pause
             return "", set()
-        origin = getattr(session, "origin", None) or ""
-        # "goal" joined v1.209.0: without it a goal iteration's ask-tier tool
-        # took the instant headless denial and minted NO approval receipts —
-        # so ask_stats stayed empty and grant_offers could never fire. The
-        # contract card promises "asks flow to the bell" (v1.200.0 delivers
-        # them to bell + phone); an unattended 3am ask times out into a
-        # conservative timeout receipt that BLOCKS offers — the designed
-        # trust-ladder behavior, not a hazard.
-        #
-        # schedule / workflow / reflex / comm / autonomy joined v1.231.0
-        # (audit AE17): the v1.200.0 machinery already carries every
-        # ``approval.requested`` to the bell AND the phone, so a session
-        # those doors start has a channel to ask through — yet this list
-        # kept them on the instant headless denial, and the phone-approval
-        # path was unreachable from a phone-STARTED session. They MAY pause
-        # now; an unanswered ask ends as the v1.227.0 ``needs_you`` outcome
-        # (the timeout receipt below), never as work silently not done.
-        # Still an ALLOWLIST: an unattributed run (None / "" / an origin no
-        # door stamps) keeps the instant honest denial — presence is a fact
-        # a door states, never a default.
-        if not origin.startswith(ASKING_ORIGINS):
-            return "", set()
-        if tc.name in SAFE_HEADLESS_TOOLS:
-            # The daemon's own resolver grants these with nobody present
-            # (``delegate``/``spawn_agent`` never touch the host), so a
-            # supervisor decomposing a phone or schedule job must not park
-            # five minutes on a question the app answers itself (v1.231.0).
+        perm = self._pause_needed(session, tc, agent_def, session_allow)
+        if not perm:
             return "", set()
         tool = self.p.registry.get(tc.name)
-        perm = tool.perm_key() if tool is not None else tc.name
-        mode = self.p.permissions.mode_for(perm, agent_def.permission_overrides)
-        if mode is not PermissionMode.ASK:
-            # allow runs; a hard deny is refused by ``invoke`` — a session
-            # grant never lifts it, in any posture.
-            return "", set()
-        # THE POSTURE (v1.232.0, audit A7). ``approve_for_me`` (and "", the
-        # default every non-chat door leaves): the session's grant list —
-        # the tools armed at escalation, every "Allow for this run" answered
-        # since (persisted below), a continue body's additions — runs without
-        # a pause. ``always_ask``: that list does NOT pre-approve; only a
-        # grant the user answered DURING THIS RUN skips the pause, so each
-        # ask-tier tool asks once per run and the sibling release covers
-        # its batch. ``yolo`` cannot reach here (``inherited_approval_mode``).
-        posture = inherited_approval_mode(getattr(session, "approval_mode", ""))
-        if posture == "always_ask":
-            granted = self._run_grants.get(session.id, set())
-        else:
-            granted = session_allow
-        if perm in granted or tc.name in granted:
-            return "", set()
         safe = tool.redact_args(tc.arguments) if tool is not None else tc.arguments
         # The session id rides the request (v1.227.0) so the registry can
         # answer "what is this run waiting on" (`pending_for`) and release a
         # batch's siblings together (`resolve_where`).
-        approval_id, fut = approvals.request(tc.name, safe, session_id=session.id)
+        # ONE APPROVAL FOR THE BATCH (v1.247.0): ``batch`` is every call of
+        # this step that needs the SAME permission (``tc`` is its first). One
+        # card covers them all — 'once' runs exactly these calls, 'deny'
+        # refuses all of them — and each call still gets its own ledger row
+        # from ``registry.invoke``. A single ask files exactly as before.
+        calls = list(batch or [tc])
+        names = {c.name for c in calls}
+        count = len(calls)
+        # WAITING, NOT REFUSING (v1.247.0): an attended run waits for its
+        # person; an unattended door keeps SESSION_APPROVAL_TIMEOUT_S.
+        timeout = _ask_timeout_for(getattr(session, "origin", None) or "")
+        examples: list = []
+        if count > 1:
+            for c in calls[:_BATCH_EXAMPLES]:
+                ct = self.p.registry.get(c.name)
+                examples.append(
+                    ct.redact_args(c.arguments) if ct is not None else c.arguments
+                )
+            approval_id, fut = approvals.request(
+                tc.name, safe, session_id=session.id, count=count, examples=examples
+            )
+        else:
+            approval_id, fut = approvals.request(tc.name, safe, session_id=session.id)
+        requested = {
+            "approval_id": approval_id,
+            "tool": tc.name,
+            "args": safe,
+            # 0 = no expiry: nothing runs until the person answers.
+            "timeout_s": (max(1, int(timeout)) if timeout else 0),
+        }
+        if count > 1:
+            requested["count"] = count
+            requested["examples"] = examples
         decision = "timeout"
         # WAITING is flipped (and persisted) BEFORE the ask is announced, so a
         # surface that reacts to `approval.requested` by reading the row
@@ -1467,17 +1548,16 @@ class AgentRuntime:
             await self._enter_waiting(run, session.id)
             await self.p.event_bus.publish(
                 EventType.APPROVAL_REQUESTED,
-                {
-                    "approval_id": approval_id,
-                    "tool": tc.name,
-                    "args": safe,
-                    "timeout_s": int(SESSION_APPROVAL_TIMEOUT_S),
-                },
+                requested,
                 session_id=session.id,
             )
-            decision = await asyncio.wait_for(
-                fut, timeout=SESSION_APPROVAL_TIMEOUT_S
-            )
+            if timeout is None:
+                # No clock: an answer, a decline, or a cancel of the session
+                # (CancelledError lands HERE and the ``finally`` pops the ask)
+                # are the only ways out.
+                decision = await fut
+            else:
+                decision = await asyncio.wait_for(fut, timeout=timeout)
         except asyncio.TimeoutError:
             decision = "timeout"
         finally:
@@ -1496,8 +1576,8 @@ class AgentRuntime:
             session_id=session.id,
         )
         if decision == "conversation":
-            session_allow.update({tc.name, perm})
-            self._run_grants.setdefault(session.id, set()).update({tc.name, perm})
+            session_allow.update({*names, perm})
+            self._run_grants.setdefault(session.id, set()).update({*names, perm})
             # THE GRANT OUTLIVES THE RUN (v1.232.0, audit A6). "Allow for this
             # run" used to live only in the in-memory set above, so the very
             # next continue (the chat's next message) re-asked for what the
@@ -1510,7 +1590,7 @@ class AgentRuntime:
             # ``allow_tools_json`` would silently undo the row write.
             try:
                 merged = await asyncio.to_thread(
-                    self._persist_grant, session.id, {tc.name, perm}
+                    self._persist_grant, session.id, {*names, perm}
                 )
                 if merged:
                     session.allow_tools_json = json.dumps(merged)
@@ -1526,7 +1606,7 @@ class AgentRuntime:
             self._release_siblings(approvals, session.id, perm)
             return "", set()
         if decision == "once":
-            return "", {tc.name, perm}
+            return "", {*names, perm}
         if decision == "deny":
             return "the user declined this call when asked", set()
         return PAUSE_TIMEOUT_REASON, set()
@@ -1881,6 +1961,32 @@ class AgentRuntime:
                 if isinstance(s, dict)
             }
 
+            # ONE APPROVAL FOR THE BATCH (v1.247.0). The runtime used to pause
+            # PER CALL inside the gather, so a step renaming 26 files was 26
+            # cards (and, before sibling release, 26 separate clocks). Group
+            # this step's calls that WILL pause by permission — through the
+            # pause's own gate, ``_pause_needed`` — and give each group of two
+            # or more ONE shared pause. Single asks take the old path unchanged.
+            batch_of: dict[int, tuple[str, list]] = {}
+            batch_tasks: dict[str, "asyncio.Future[tuple[str, set[str]]]"] = {}
+            if (
+                len(resp.tool_calls) > 1
+                and getattr(self.p, "approvals", None) is not None
+            ):
+                groups: dict[str, list] = {}
+                for _c in resp.tool_calls:
+                    if _c.name not in armed_names:
+                        continue
+                    if broken_calls.get(call_signature(_c.name, _c.arguments), ""):
+                        continue
+                    _perm = self._pause_needed(session, _c, agent_def, session_allow)
+                    if _perm:
+                        groups.setdefault(_perm, []).append(_c)
+                for _perm, _group in groups.items():
+                    if len(_group) > 1:
+                        for _c in _group:
+                            batch_of[id(_c)] = (_perm, _group)
+
             async def _invoke(tc):
                 deny_reason = broken_calls.get(
                     call_signature(tc.name, tc.arguments), ""
@@ -1899,9 +2005,27 @@ class AgentRuntime:
                     # the user instead of dying on the headless resolver — the
                     # session half of chat's v1.187.0 ask. Per CALL, inside the
                     # gather, so parallel asks each get their own card.
-                    deny_reason, grant_extra = await self._pause_for_approval(
-                        session, tc, agent_def, session_allow, run=run
-                    )
+                    grouped = batch_of.get(id(tc))
+                    if grouped is not None:
+                        # The first call of the group files the ONE ask; the
+                        # rest await the same answer. Shielded: one awaiter's
+                        # cancel must not cancel the shared pause (the gather's
+                        # ``finally`` below does that, once, for everyone).
+                        _perm, _group = grouped
+                        shared = batch_tasks.get(_perm)
+                        if shared is None:
+                            shared = asyncio.ensure_future(
+                                self._pause_for_approval(
+                                    session, _group[0], agent_def, session_allow,
+                                    run=run, batch=_group,
+                                )
+                            )
+                            batch_tasks[_perm] = shared
+                        deny_reason, grant_extra = await asyncio.shield(shared)
+                    else:
+                        deny_reason, grant_extra = await self._pause_for_approval(
+                            session, tc, agent_def, session_allow, run=run
+                        )
                     if deny_reason:
                         # An unanswered pause is NOT a permission denial
                         # (v1.227.0, A11): the ledger kind says "paused", so
@@ -1940,10 +2064,18 @@ class AgentRuntime:
                     safe = tool.redact_args(tc.arguments) if tool else tc.arguments
                     sink.tool_started(tc.id, tc.name, safe)
 
-            results = await asyncio.gather(
-                *(_invoke(tc) for tc in resp.tool_calls),
-                return_exceptions=True,
-            )
+            try:
+                results = await asyncio.gather(
+                    *(_invoke(tc) for tc in resp.tool_calls),
+                    return_exceptions=True,
+                )
+            finally:
+                # A cancelled run must not leave a shared batch pause parked
+                # with no expiry: cancel it, and its own ``finally`` pops the
+                # ask and restores RUNNING.
+                for _shared in batch_tasks.values():
+                    if not _shared.done():
+                        _shared.cancel()
             for tc, result in zip(resp.tool_calls, results):
                 if isinstance(result, asyncio.CancelledError):
                     # Cooperative cancellation (user stopped the run) must still
