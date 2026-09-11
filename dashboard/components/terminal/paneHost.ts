@@ -52,6 +52,114 @@ const WS_OPEN = 1;
  *  answers muted forever — a LIVE query would go unanswered. */
 export const REPLAY_FALLBACK_MS = 5000;
 
+// ---- flow control (v1.248.0) ------------------------------------------------
+//
+// THE FLOOD. A command that prints a lot (a 100 MB log, a test run's progress
+// bars) reached the pane as fast as the daemon could read the PTY, and every
+// frame went straight into `term.write`. xterm queues what it has not parsed
+// yet, so the queue grew by megabytes, the parser ate the main thread in
+// slices, and the whole page — typing included — lagged behind a stream
+// nobody could read anyway. The host now counts the bytes it has handed xterm
+// that xterm has not finished parsing, asks the daemon to HOLD the stream
+// above FLOW_HIGH and to RESUME below FLOW_LOW (hysteresis, so it never
+// flaps). The daemon keeps reading the PTY while held — a PTY nobody reads
+// blocks the program in it — and buffers, bounded, on its side.
+
+/** Ask the daemon to hold the stream when this many bytes are queued in xterm. */
+export const FLOW_HIGH = 512 * 1024;
+/** ...and to resume it once the queue has drained below this. */
+export const FLOW_LOW = 128 * 1024;
+
+/**
+ * The first daemon that understands a `{"type":"flow"}` frame. An OLDER one
+ * TYPES every text frame that is not a resize into the shell
+ * (`routes/terminals.py`: `else: session.write(text)`), so sending it one
+ * would put `{"type":"flow","paused":true}` on the user's command line. A host
+ * sends flow frames only when the pane has confirmed the daemon is this
+ * version or newer (`flowWanted`).
+ */
+export const FLOW_MIN_DAEMON = "1.248.0";
+
+/** localStorage override: "off" never sends flow frames; "on" sends them
+ *  whatever the daemon's version (diagnostics only). */
+export const FLOW_PREF_KEY = "ij.build.flow";
+
+function versionParts(v: string): number[] | null {
+  const m = /^\s*v?(\d+)\.(\d+)\.(\d+)/.exec(v);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+/** Does a daemon reporting `version` understand flow frames? Unknown or
+ *  unparsable is NO: the safe answer is the one that types nothing. */
+export function daemonSupportsFlow(version: string | null | undefined): boolean {
+  const have = versionParts(version ?? "");
+  const need = versionParts(FLOW_MIN_DAEMON);
+  if (!have || !need) return false;
+  for (let i = 0; i < 3; i += 1) {
+    if (have[i] !== need[i]) return have[i] > need[i];
+  }
+  return true;
+}
+
+function readPref(key: string): string | null {
+  try {
+    return typeof localStorage === "undefined" ? null : localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+/** Should this window's panes send flow frames to a daemon reporting
+ *  `version`? The override wins; otherwise the version decides. */
+export function flowWanted(version: string | null | undefined): boolean {
+  const pref = readPref(FLOW_PREF_KEY);
+  if (pref === "off") return false;
+  if (pref === "on") return true;
+  return daemonSupportsFlow(version);
+}
+
+// ---- GPU rendering (v1.248.0) -----------------------------------------------
+//
+// xterm's default renderer draws with the DOM; its WebGL renderer draws the
+// same cells from a glyph atlas on the GPU, so a busy TUI or a scrolling log
+// costs a fraction of the main-thread time. Browsers cap LIVE WebGL contexts
+// per page (~16 — past that the oldest is lost), so a host holds a context
+// only while its terminal is on screen: loaded on adopt/unpark, disposed on
+// park/release. A lost context (a driver reset, the cap) disposes the addon
+// and xterm falls back to the DOM renderer on the SAME buffer and socket.
+
+/** localStorage switch: "off" keeps every pane on the DOM renderer. */
+export const WEBGL_PREF_KEY = "ij.build.webgl";
+
+/** A host stops trying the GPU after this many lost contexts. */
+export const GPU_MAX_LOSSES = 3;
+
+export function webglWanted(): boolean {
+  return readPref(WEBGL_PREF_KEY) !== "off";
+}
+
+/** The slice of @xterm/addon-webgl a host uses. */
+export interface GpuAddon {
+  activate(terminal: unknown): void;
+  dispose(): void;
+  onContextLoss?: (listener: () => void) => unknown;
+}
+
+/** Resolves a factory for a GPU addon, or null when this machine should not
+ *  have one (switched off, or no WebGL2 at all — jsdom, a GPU-less VM). The
+ *  import is lazy for the same reason xterm's is: never during SSR / build. */
+export type GpuLoader = () => Promise<(() => GpuAddon) | null>;
+
+const loadWebgl: GpuLoader = async () => {
+  if (!webglWanted()) return null;
+  if (typeof window === "undefined") return null;
+  if (typeof (window as { WebGL2RenderingContext?: unknown }).WebGL2RenderingContext === "undefined") {
+    return null;
+  }
+  const { WebglAddon } = await import("@xterm/addon-webgl");
+  return () => new WebglAddon() as unknown as GpuAddon;
+};
+
 /**
  * Is this onData payload an answer xterm GENERATED for a query in the stream
  * it was parsing, rather than something the user typed?
@@ -201,6 +309,18 @@ export class PaneHost {
   sentSize = "";
 
   private readonly openSocket: SocketFactory;
+  private readonly gpuLoader: GpuLoader | null;
+  private gpu: GpuAddon | null = null;
+  private gpuLoading = false;
+  private gpuLosses = 0;
+  /** The terminal is in a pane's holder (not in the lot). */
+  private onScreen = false;
+  /** Parked BY a still-mounted pane — a rail pane behind the focused one. */
+  private paneParked = false;
+  private flowOn = false;
+  private flowPending = 0;
+  private flowPaused = false;
+  private flowGen = 0;
   private view: PaneHostView | null = null;
   private owner: object | null = null;
   private ws: WebSocket | null = null;
@@ -220,12 +340,14 @@ export class PaneHost {
     fit: FitAddon,
     wrapper: HTMLDivElement,
     openSocket: SocketFactory,
+    gpuLoader: GpuLoader | null = null,
   ) {
     this.id = id;
     this.term = term;
     this.fit = fit;
     this.wrapper = wrapper;
     this.openSocket = openSocket;
+    this.gpuLoader = gpuLoader;
     // Keystrokes AND xterm's own answers go out over whichever socket is live
     // — parked or not, because a program may query the terminal while nobody
     // is looking and will wait for the answer. While a REPLAY is being
@@ -256,6 +378,39 @@ export class PaneHost {
     return this.disposed;
   }
 
+  /** Parked by a still-mounted pane (the rail): off-screen, view kept. */
+  get isParked(): boolean {
+    return this.paneParked;
+  }
+
+  /** A WebGL renderer is live on this terminal right now. */
+  get gpuActive(): boolean {
+    return this.gpu !== null;
+  }
+
+  /** The daemon was asked to hold the stream and has not been told to resume. */
+  get isFlowPaused(): boolean {
+    return this.flowPaused;
+  }
+
+  /** Bytes handed to xterm that it has not finished parsing. */
+  get flowPendingBytes(): number {
+    return this.flowPending;
+  }
+
+  /** May this host send flow frames? Set by the pane from the daemon's
+   *  version (`flowWanted`). Switching it OFF while the daemon is holding the
+   *  stream first tells it to resume — a hold nobody lifts freezes the pane. */
+  get flowEnabled(): boolean {
+    return this.flowOn;
+  }
+
+  set flowEnabled(on: boolean) {
+    if (!on && this.flowPaused) this.sendFlow(false);
+    this.flowOn = on;
+    if (!on) this.flowPaused = false;
+  }
+
   /**
    * A pane takes this host: the terminal moves into `holder` and `view` hears
    * about the connection from now on. `owner` is the mount's own token — a
@@ -267,7 +422,10 @@ export class PaneHost {
     if (this.disposed) return;
     this.owner = owner;
     this.view = view;
+    this.paneParked = false;
     if (this.wrapper.parentElement !== holder) holder.appendChild(this.wrapper);
+    this.onScreen = true;
+    this.attachGpu();
     view.onConn(this.state, this.lostLink);
     // A link that dropped while nobody was looking (the daemon restarted for
     // an update while you were on another page) heals on return — never a
@@ -279,6 +437,8 @@ export class PaneHost {
    *  where they were, and repaint every row once (a pane coming back from
    *  the lot has rows the paused renderer never painted). */
   settle(): void {
+    // Parked by its pane: the reader's place is kept for the unpark.
+    if (this.paneParked) return;
     const at = this.parkedAt;
     this.parkedAt = null;
     try {
@@ -300,13 +460,49 @@ export class PaneHost {
     this.view = null;
     this.keyHandler = null;
     if (this.disposed) return;
+    // A pane that had already parked it recorded the reader's place then.
+    if (!this.paneParked) this.rememberPlace();
+    this.paneParked = false;
+    this.onScreen = false;
+    this.detachGpu();
+    parkingLot().appendChild(this.wrapper);
+  }
+
+  /**
+   * PARK WITHOUT LETTING GO (v1.248.0). A rail pane behind the focused one is
+   * still MOUNTED — its header shows the pane's state and its output still
+   * badges the rail — but nobody can see its terminal, which kept a renderer
+   * (and would keep a GPU context) busy drawing into a hidden box. The
+   * terminal moves to the lot exactly as on release; the VIEW and the OWNER
+   * stay, so output and connection changes keep reaching the pane, and
+   * nothing reconnects or replays. `unpark` puts it back.
+   */
+  park(owner: object): void {
+    if (this.owner !== owner || this.disposed || this.paneParked) return;
+    this.rememberPlace();
+    this.paneParked = true;
+    this.onScreen = false;
+    this.detachGpu();
+    parkingLot().appendChild(this.wrapper);
+  }
+
+  /** The pane is the focused one again: back into its holder, GPU and all.
+   *  The pane then waits for a stable size, fits, and calls `settle`. */
+  unpark(holder: HTMLElement, owner: object): void {
+    if (this.owner !== owner || this.disposed || !this.paneParked) return;
+    this.paneParked = false;
+    if (this.wrapper.parentElement !== holder) holder.appendChild(this.wrapper);
+    this.onScreen = true;
+    this.attachGpu();
+  }
+
+  private rememberPlace(): void {
     try {
       const b = this.term.buffer.active;
       this.parkedAt = { viewportY: b.viewportY, atBottom: b.viewportY >= b.baseY };
     } catch {
       this.parkedAt = null;
     }
-    parkingLot().appendChild(this.wrapper);
   }
 
   /** Connect for the first time. A no-op on a host that is already live, so a
@@ -367,6 +563,8 @@ export class PaneHost {
     } catch {
       /* noop */
     }
+    this.onScreen = false;
+    this.detachGpu();
     try {
       this.term.dispose();
     } catch {
@@ -387,6 +585,11 @@ export class PaneHost {
 
   private connect(): void {
     if (this.disposed) return;
+    // A new socket is a new stream: the daemon starts it unpaused, and bytes
+    // still queued for the OLD one no longer count against it.
+    this.flowGen += 1;
+    this.flowPending = 0;
+    this.flowPaused = false;
     const ws = this.openSocket(this.id);
     this.ws = ws;
     ws.binaryType = "arraybuffer";
@@ -410,8 +613,11 @@ export class PaneHost {
         return;
       }
       // Server -> client: PTY output as binary (ArrayBuffer); text just in case.
-      if (typeof data === "string") this.term.write(data);
-      else this.term.write(new Uint8Array(data as ArrayBuffer));
+      if (typeof data === "string") this.writeCounted(data, data.length);
+      else {
+        const buf = data as ArrayBuffer;
+        this.writeCounted(new Uint8Array(buf), buf.byteLength);
+      }
       this.view?.onOutput(data, this.replaying);
     };
     ws.onclose = (ev: CloseEvent) => {
@@ -449,6 +655,89 @@ export class PaneHost {
         /* noop */
       }
     };
+  }
+
+  /** Hand xterm a frame and count it until the parser is done with it — the
+   *  replay included, since it lands in the same queue (v1.248.0). */
+  private writeCounted(payload: string | Uint8Array, size: number): void {
+    const gen = this.flowGen;
+    this.flowPending += size;
+    this.term.write(payload, () => {
+      if (gen !== this.flowGen) return; // bytes of a superseded socket
+      this.flowPending -= size;
+      if (this.flowPaused && this.flowPending < FLOW_LOW) this.sendFlow(false);
+    });
+    if (!this.flowPaused && this.flowPending > FLOW_HIGH) this.sendFlow(true);
+  }
+
+  /** One flow frame — only to a daemon that understands it, only on an open
+   *  socket; the state changes only when the frame was actually sent. */
+  private sendFlow(paused: boolean): void {
+    if (!this.flowOn) return;
+    const live = this.ws;
+    if (!live || live.readyState !== WS_OPEN) return;
+    live.send(JSON.stringify({ type: "flow", paused }));
+    this.flowPaused = paused;
+  }
+
+  private attachGpu(): void {
+    if (this.gpu || this.gpuLoading || this.disposed || !this.gpuLoader) return;
+    if (this.gpuLosses >= GPU_MAX_LOSSES) return;
+    this.gpuLoading = true;
+    this.gpuLoader().then(
+      (make) => {
+        this.gpuLoading = false;
+        // Parked (or closed) while the renderer was loading: a hidden pane
+        // must not hold one of the page's few GPU contexts.
+        if (!make || this.disposed || !this.onScreen || this.gpu) return;
+        let addon: GpuAddon | null = null;
+        try {
+          addon = make();
+          this.term.loadAddon(addon as never);
+        } catch {
+          // No WebGL2 context here (a blocklisted GPU, a remote session): the
+          // DOM renderer for good — a retry would fail the same way.
+          try {
+            addon?.dispose();
+          } catch {
+            /* never activated */
+          }
+          this.gpuLosses = GPU_MAX_LOSSES;
+          return;
+        }
+        this.gpu = addon;
+        const live = addon;
+        addon.onContextLoss?.(() => {
+          if (this.gpu !== live) return;
+          this.gpuLosses += 1;
+          this.detachGpu(); // xterm is back on the DOM renderer, same buffer
+          this.repaint();
+        });
+      },
+      () => {
+        this.gpuLoading = false;
+        this.gpuLosses = GPU_MAX_LOSSES;
+      },
+    );
+  }
+
+  private detachGpu(): void {
+    const addon = this.gpu;
+    this.gpu = null;
+    if (!addon) return;
+    try {
+      addon.dispose();
+    } catch {
+      /* already gone with its context */
+    }
+  }
+
+  private repaint(): void {
+    try {
+      this.term.refresh(0, Math.max(0, this.term.rows - 1));
+    } catch {
+      /* disposed */
+    }
   }
 
   private beginReplay(): void {
@@ -504,6 +793,8 @@ const doomed = new Set<string>();
 export interface AcquireDeps {
   createTerminal?: TerminalFactory;
   openSocket?: SocketFactory;
+  /** GPU renderer loader; null = never (tests). Default: the WebGL addon. */
+  loadGpu?: GpuLoader | null;
 }
 
 /** The host for this pane: the live one when it exists, else a new one
@@ -524,7 +815,14 @@ export function acquirePaneHost(id: string, deps: AcquireDeps = {}): Promise<Pan
     // glyphs against real layout; the pane adopts it a moment later.
     parkingLot().appendChild(wrapper);
     term.open(wrapper);
-    return new PaneHost(id, term, fit, wrapper, deps.openSocket ?? openAttachSocket);
+    return new PaneHost(
+      id,
+      term,
+      fit,
+      wrapper,
+      deps.openSocket ?? openAttachSocket,
+      deps.loadGpu === undefined ? loadWebgl : deps.loadGpu,
+    );
   })();
   const tracked = made.then(
     (host) => {

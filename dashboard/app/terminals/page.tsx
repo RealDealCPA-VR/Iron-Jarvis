@@ -1053,6 +1053,7 @@ export default function TerminalsPage() {
                             <TerminalPane
                               info={t}
                               focused={focusedId === t.id}
+                              parked={shape === "rail" && activeId !== t.id}
                               paneName={paneOverrides[t.id]?.name ?? act?.name}
                               draggable={shape === "canvas"}
                               paneState={paneState}
@@ -1347,6 +1348,10 @@ export default function TerminalsPage() {
                     // a hidden pane must keep a real box. `visibility` also
                     // takes the hidden panes out of hit-testing and focus, so
                     // they cannot sit invisibly over the live one.
+                    // v1.248.0: the hidden panes' TERMINALS also park in the
+                    // paneHost lot (TerminalPane `parked`), so only the focused
+                    // one renders or holds a GPU context; this box keeps its
+                    // size, so an unpark fits to the real width.
                     return (
                       <div
                         key={t.id}
