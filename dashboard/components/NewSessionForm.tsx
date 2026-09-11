@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Play, Cpu, PlugZap, ArrowRight, Paperclip } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
+import { useModels } from "@/lib/useModels";
 import type { SessionView, ModelOption, Health } from "@/lib/types";
 import { ErrorNote, LoaderInline } from "./ui";
 import { VoiceInput, appendDictation } from "./VoiceInput";
@@ -56,7 +57,9 @@ export function NewSessionForm(props: { onCreated?: () => void }) {
 function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { data: modelsData } = useApi<{ models: ModelOption[] }>("/models");
+  // v1.250.0 (S-02): the shared catalog — the title bar's switcher has usually
+  // already loaded it, so this form renders the list instead of refetching it.
+  const { data: modelsData } = useModels();
   const { data: health } = useApi<Health>("/health");
   const { data: agentsData } = useApi<{ builtin: string[]; dynamic: { name: string }[] }>("/agents");
   const builtinAgents = agentsData?.builtin ?? FALLBACK_AGENTS;

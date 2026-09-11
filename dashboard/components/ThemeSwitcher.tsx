@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, m } from "framer-motion"; // v1.250.0 (S-08)
 
 /**
  * Arc-reactor theme switcher. Four "Mark" reactors in the top bar re-skin the
@@ -125,7 +125,7 @@ function BigReactor({ color, size = 128 }: { color: string; size?: number }) {
   return (
     <div className="relative" style={{ width: size, height: size, color }}>
       {/* glow bloom */}
-      <motion.div
+      <m.div
         className={layer}
         style={{
           borderRadius: "50%",
@@ -135,7 +135,7 @@ function BigReactor({ color, size = 128 }: { color: string; size?: number }) {
         transition={{ repeat: Infinity, duration: 2.8, ease: "easeInOut" }}
       />
       {/* outer dashed ring — slow spin */}
-      <motion.svg
+      <m.svg
         className={layer}
         viewBox="0 0 100 100"
         fill="none"
@@ -144,9 +144,9 @@ function BigReactor({ color, size = 128 }: { color: string; size?: number }) {
         transition={{ repeat: Infinity, ease: "linear", duration: 16 }}
       >
         <circle cx="50" cy="50" r="48" strokeWidth="0.8" strokeDasharray="2 5" opacity="0.45" />
-      </motion.svg>
+      </m.svg>
       {/* mid segmented ring — reverse spin */}
-      <motion.svg
+      <m.svg
         className={layer}
         viewBox="0 0 100 100"
         fill="none"
@@ -156,14 +156,14 @@ function BigReactor({ color, size = 128 }: { color: string; size?: number }) {
       >
         <circle cx="50" cy="50" r="42" strokeWidth="1.6" strokeDasharray="18 10" opacity="0.8" />
         <circle cx="50" cy="50" r="37" strokeWidth="0.6" opacity="0.3" />
-      </motion.svg>
+      </m.svg>
       {/* static spokes + inner ring */}
       <svg className={layer} viewBox="0 0 100 100" fill="none" stroke="currentColor">
         {spokes}
         <circle cx="50" cy="50" r="23" strokeWidth="1.2" opacity="0.6" />
       </svg>
       {/* pulsing core */}
-      <motion.svg
+      <m.svg
         className={layer}
         viewBox="0 0 100 100"
         animate={{ scale: [1, 1.08, 1], opacity: [0.85, 1, 0.85] }}
@@ -180,7 +180,7 @@ function BigReactor({ color, size = 128 }: { color: string; size?: number }) {
           strokeWidth="1.4"
         />
         <circle cx="50" cy="50" r="5.5" fill="currentColor" />
-      </motion.svg>
+      </m.svg>
     </div>
   );
 }
@@ -259,7 +259,7 @@ export function ThemeSwitcher() {
 
       <AnimatePresence>
         {reveal && (
-          <motion.div
+          <m.div
             key="theme-reveal"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -271,7 +271,7 @@ export function ThemeSwitcher() {
             aria-label={`Theme changed to ${reveal.mark}, ${reveal.name}`}
             className="fixed inset-0 z-[100] grid place-items-center bg-black/75 backdrop-blur-sm"
           >
-            <motion.div
+            <m.div
               initial={{ scale: 0.92, y: 10, opacity: 0 }}
               animate={{ scale: 1, y: 0, opacity: 1 }}
               exit={{ scale: 0.96, opacity: 0 }}
@@ -328,8 +328,8 @@ export function ThemeSwitcher() {
               >
                 Suit up
               </button>
-            </motion.div>
-          </motion.div>
+            </m.div>
+          </m.div>
         )}
       </AnimatePresence>
     </>

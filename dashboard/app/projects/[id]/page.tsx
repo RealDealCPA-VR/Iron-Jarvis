@@ -38,6 +38,7 @@ import {
   X,
 } from "lucide-react";
 import { useApi, usePolledApi } from "@/lib/useApi";
+import { useModels } from "@/lib/useModels";
 import { useDocumentVisible } from "@/lib/useDocumentVisible";
 import { patch, post, del, ApiError, API_BASE, ijToken } from "@/lib/api";
 import { useReviews } from "@/lib/useReviews";
@@ -350,7 +351,7 @@ function ProjectWorkspaceInner({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const detail = useApi<ProjectDetail>(`/projects/${encodeURIComponent(id)}`);
-  const models = useApi<{ models: ModelOption[] }>("/models");
+  const models = useModels(); // v1.250.0 (S-02): shared catalog
   // Live memory bases — the names the binding is validated against server-side,
   // so the checkboxes can never offer something the PATCH would reject.
   const ltm = useApi<{ active: string[] }>("/ltm/sources");

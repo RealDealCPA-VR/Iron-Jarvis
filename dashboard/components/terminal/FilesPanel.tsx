@@ -7,6 +7,7 @@
 // text/code/documents are extracted via `/documents/read`.
 
 import { useEffect, useRef, useState } from "react";
+import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import {
   Copy,
   Check,
@@ -348,12 +349,14 @@ export function FilesPanel({
 
     tickRef.current = () => void tick();
     void tick();
-    const timer = setInterval(tick, 4000);
+    // v1.250.0 (S-09): the 4 s repeat runs through useVisibleInterval below —
+    // a minimised window lists nothing and catches up once on return.
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      tickRef.current = () => {};
     };
   }, [folder]);
+  useVisibleInterval(() => tickRef.current(), 4000, Boolean(folder));
 
   const shown = files.slice(0, MAX_ROWS);
 

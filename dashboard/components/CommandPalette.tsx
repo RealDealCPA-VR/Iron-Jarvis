@@ -2,7 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AnimatePresence, motion } from "framer-motion";
+// v1.250.0 (S-08): `m` + the layout's LazyMotion. Import-and-tag switch only —
+// the markup below is untouched.
+import { AnimatePresence, m } from "framer-motion";
 import {
   Megaphone,
   Search,
@@ -855,7 +857,7 @@ export function CommandPalette() {
   return (
     <AnimatePresence>
       {open && (
-        <motion.div
+        <m.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -863,7 +865,7 @@ export function CommandPalette() {
           className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 px-4 pt-[14vh] backdrop-blur-sm"
           onClick={() => setOpen(false)}
         >
-          <motion.div
+          <m.div
             role="dialog"
             aria-modal="true"
             aria-label="Search Iron Jarvis"
@@ -1002,8 +1004,8 @@ export function CommandPalette() {
                 );
               })}
             </div>
-          </motion.div>
-        </motion.div>
+          </m.div>
+        </m.div>
       )}
     </AnimatePresence>
   );

@@ -1,7 +1,7 @@
 "use client";
 
 import { useDroppable } from "@dnd-kit/core";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, m } from "framer-motion"; // v1.250.0 (S-08)
 import type { SessionView } from "@/lib/types";
 import { dropAction, type LaneDef, type LaneId } from "@/lib/kanban";
 import type { Tone } from "@/components/ui";
@@ -87,7 +87,7 @@ export function KanbanColumn({
 
         <AnimatePresence mode="popLayout" initial={false}>
           {sessions.map((s) => (
-            <motion.div
+            <m.div
               key={s.id}
               layout
               initial={{ opacity: 0, y: 8, scale: 0.98 }}
@@ -102,7 +102,7 @@ export function KanbanColumn({
                 onApprove={() => onApprove(s.id)}
                 onReject={() => onReject(s.id)}
               />
-            </motion.div>
+            </m.div>
           ))}
         </AnimatePresence>
 

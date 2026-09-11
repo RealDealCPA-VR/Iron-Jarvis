@@ -18,6 +18,8 @@
 // read the shared WORKFLOW_RUN_TERMINAL set from lib/types.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useVisibleInterval } from "@/lib/useVisibleInterval";
+import { useEvents } from "@/lib/useEvents";
 import { useRouter } from "next/navigation";
 import {
   Check,
@@ -115,6 +117,8 @@ export function useWorkflowRun(runId: string | null, events: IJEvent[]) {
   const answeredQRef = useRef<string | null>(null);
   // Events already applied to `steps` — dedupe by id (see doc above).
   const seenRef = useRef<Set<string>>(new Set());
+  // The latest poll, so the visible-only repeat below can reach it (S-09).
+  const pollRef = useRef<() => void>(() => {});
 
   /** Clear every trace of the previous run BEFORE starting a new one: with
    *  the old id still live, run 1's events sitting in the rolling window
@@ -232,12 +236,15 @@ export function useWorkflowRun(runId: string | null, events: IJEvent[]) {
       }
     };
     void poll(); // immediate read — a reloaded thread's chip settles now, not in 2s
-    const iv = window.setInterval(() => void poll(), 2000);
+    // v1.250.0 (S-09): the 2 s repeat runs through useVisibleInterval below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    pollRef.current = () => void poll();
     return () => {
       stop = true;
-      window.clearInterval(iv);
+      pollRef.current = () => {};
     };
   }, [runId, reconciled]);
+  useVisibleInterval(() => pollRef.current(), 2000, Boolean(runId) && !reconciled);
 
   const submitAnswer = useCallback(async () => {
     const text = answerText.trim();
@@ -370,9 +377,14 @@ export function WorkflowRunChip({
 }: {
   runId: string;
   name: string;
-  events: IJEvent[];
+  /** v1.250.0 (S-05): OPTIONAL. The chat page used to hand every message row
+   *  its event window, so one daemon event re-rendered the whole conversation.
+   *  Omit it and the chip subscribes for itself — the same fan-out socket, one
+   *  subscriber per chip, and a memoized row that no longer redraws. */
+  events?: IJEvent[];
 }) {
-  const run = useWorkflowRun(runId, events);
+  const own = useEvents(120);
+  const run = useWorkflowRun(runId, events ?? own.events);
   const status = run.runStatus;
   const terminal = Boolean(status && WORKFLOW_RUN_TERMINAL.has(status));
   const live = runIsLive(status);
@@ -448,9 +460,13 @@ export function WorkflowDraftCard({
   events,
 }: {
   draft: WorkflowDraft;
-  events: IJEvent[];
+  /** v1.250.0 (S-05): OPTIONAL, like WorkflowRunChip's. A memoized message row
+   *  no longer hands every card the page's event window — the card subscribes
+   *  for itself, off the same one-socket fan-out. */
+  events?: IJEvent[];
 }) {
   const router = useRouter();
+  const own = useEvents(120);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   // The name actually saved under — suffixed when the model-chosen name would
@@ -458,7 +474,7 @@ export function WorkflowDraftCard({
   const [savedAs, setSavedAs] = useState<string | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const run = useWorkflowRun(runId, events);
+  const run = useWorkflowRun(runId, events ?? own.events);
   // The ONE step shape (v1.170.0): drafts widened to full step kinds (tool
   // args, on_failure, group) — view them through the shared type so the card
   // can say what a non-agent step really does.

@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { get, post, patch, del, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
+import { useModels } from "@/lib/useModels";
 import type { AgentsResponse, ModelOption } from "@/lib/types";
 import {
   Card,
@@ -115,7 +116,7 @@ export default function TemplatesPage() {
     "/templates",
   );
   const { data: agentsData } = useApi<AgentsResponse>("/agents");
-  const { data: modelsData } = useApi<{ models: ModelOption[] }>("/models");
+  const { data: modelsData } = useModels(); // v1.250.0 (S-02): shared catalog
 
   const offline = error && error.status === 0;
 

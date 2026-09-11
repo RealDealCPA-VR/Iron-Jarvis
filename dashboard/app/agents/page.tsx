@@ -65,6 +65,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { MessagesSquare } from "lucide-react";
 import { del, post, put, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
+import { useModels } from "@/lib/useModels";
 import type { AgentsResponse, ModelOption } from "@/lib/types";
 import { Card, Empty, ErrorNote, OfflineHint, SkeletonRows } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
@@ -153,7 +154,7 @@ export default function AgentsPage() {
     agents?: RemoteAgentInfo[];
     remotes?: RemoteAgentInfo[];
   }>("/agents/remote");
-  const { data: modelsData } = useApi<{ models: ModelOption[] }>("/models");
+  const { data: modelsData } = useModels(); // v1.250.0 (S-02): shared catalog
   // The roster (v1.139.0) feeds the agents room, the participant picker, and
   // the portraits the thread rail layers. Older daemons 404 here — the room is
   // not offered at all and the page falls back to its pre-rail composition.

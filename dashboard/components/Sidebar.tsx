@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, m } from "framer-motion"; // v1.250.0 (S-08)
 import {
   Package,
   MoveUpRight,
@@ -190,7 +190,7 @@ function NavLinks({
                 }`}
               >
                 {active && (
-                  <motion.span
+                  <m.span
                     layoutId={layoutId}
                     className="absolute inset-0 rounded-xl border border-accent/25 bg-accent/[0.08] shadow-[inset_0_0_0_1px_rgb(var(--accent-rgb)/0.06)]"
                     transition={{ type: "spring", stiffness: 380, damping: 32 }}
@@ -379,7 +379,7 @@ export function NavDrawer() {
     <AnimatePresence>
         {open && (
           <>
-            <motion.div
+            <m.div
               key="backdrop"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -388,7 +388,7 @@ export function NavDrawer() {
               onClick={() => setOpen(false)}
               className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm"
             />
-            <motion.aside
+            <m.aside
               key="drawer"
               role="dialog"
               aria-modal="true"
@@ -420,7 +420,7 @@ export function NavDrawer() {
               </nav>
               <NavModeToggle advanced={advanced} onToggle={toggleAdvanced} />
               <SidebarFooter />
-            </motion.aside>
+            </m.aside>
           </>
         )}
     </AnimatePresence>

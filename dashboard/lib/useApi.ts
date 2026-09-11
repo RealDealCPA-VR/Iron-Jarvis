@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, get } from "./api";
+import { cacheSet, cachedGet } from "./apiCache";
 import { useDaemon } from "./daemon";
 import { etagOf, isNotModified } from "./etag";
 import { useDocumentVisible } from "./useDocumentVisible";
@@ -18,7 +19,12 @@ export interface ApiState<T> {
  * Errors are captured (never thrown) so a render can show an offline hint.
  */
 export function useApi<T>(path: string | null, deps: unknown[] = []): ApiState<T> {
-  const [data, setData] = useState<T | null>(null);
+  // v1.250.0 (S-04): start from the last answer this path gave, so a return
+  // visit renders what the user saw instead of a grey placeholder, and the
+  // refetch below revalidates behind it. First visit: null, exactly as before.
+  const [data, setData] = useState<T | null>(
+    () => (path === null ? null : cachedGet<T>(path) ?? null),
+  );
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState<boolean>(path !== null);
   const [nonce, setNonce] = useState(0);
@@ -56,6 +62,15 @@ export function useApi<T>(path: string | null, deps: unknown[] = []): ApiState<T
     }
     let cancelled = false;
     setLoading(true);
+    // The tag of the payload this hook HOLDS — its own from a previous fetch,
+    // or, on a first render seeded from the cache (v1.250.0, S-04), that
+    // payload's tag. Never a tag keyed by path alone: sending one for a
+    // payload we do not hold would 304 us into stale data (v1.230.0, FP3).
+    if (!etagRef.current || etagRef.current.path !== path) {
+      const seeded = cachedGet<T>(path);
+      const seededTag = seeded === undefined ? null : etagOf(seeded);
+      etagRef.current = seededTag ? { path, etag: seededTag } : null;
+    }
     const held = etagRef.current && etagRef.current.path === path ? etagRef.current.etag : null;
     (held ? get<T>(path, { ifNoneMatch: held }) : get<T>(path))
       .then((d) => {
@@ -67,6 +82,7 @@ export function useApi<T>(path: string | null, deps: unknown[] = []): ApiState<T
         }
         setData(d);
         setError(null);
+        cacheSet(path, d);
         const etag = etagOf(d);
         etagRef.current = etag ? { path, etag } : null;
       })

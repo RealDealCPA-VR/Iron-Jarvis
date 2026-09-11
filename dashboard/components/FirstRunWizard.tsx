@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, m } from "framer-motion"; // v1.250.0 (S-08)
 import {
   ArrowLeft,
   ArrowRight,
@@ -389,7 +389,7 @@ export function FirstRunWizard() {
   return (
     <AnimatePresence>
       {show && (
-        <motion.div
+        <m.div
           key="first-run"
           role="dialog"
           aria-modal="true"
@@ -401,7 +401,7 @@ export function FirstRunWizard() {
           className="fixed inset-0 z-[80] overflow-y-auto bg-black/70 backdrop-blur-md"
         >
           <div className="flex min-h-full items-center justify-center p-4">
-            <motion.div
+            <m.div
               initial={{ opacity: 0, y: 16, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 8, scale: 0.98 }}
@@ -995,9 +995,9 @@ export function FirstRunWizard() {
                   )}
                 </div>
               </div>
-            </motion.div>
+            </m.div>
           </div>
-        </motion.div>
+        </m.div>
       )}
     </AnimatePresence>
   );
