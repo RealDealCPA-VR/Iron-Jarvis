@@ -179,6 +179,11 @@ class Session(SQLModel, table=True):
     #: finalize, never from prose. Additive nullable column (auto-reconciled
     #: by ``core.db._reconcile_additive_columns`` on boot, like ``max_steps``).
     outcome: str | None = None
+    #: v1.249.0 (R-02): set by the boot reconcile when a restart (an update, a
+    #: crash) cut this run off mid-work; cleared when the user continues or
+    #: dismisses it. The bell and the Overview offer Continue while it is set.
+    #: Additive nullable column (auto-reconciled on boot, like ``outcome``).
+    interrupted_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
     finished_at: datetime | None = None
 

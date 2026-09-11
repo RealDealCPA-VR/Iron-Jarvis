@@ -37,6 +37,7 @@ const {
   Notification,
   ipcMain,
   clipboard,
+  powerMonitor,
 } = require("electron");
 const { spawn, spawnSync } = require("child_process");
 const crypto = require("crypto");
@@ -401,6 +402,72 @@ function setStartAtLogin(enabled) {
   refreshMenus();
 }
 
+// One question, asked once (v1.249.0, R-04). A Windows Update restart at 03:29
+// on 2026-09-09 left Iron Jarvis closed for ~18 hours — schedules, Slack and
+// webhooks all off, and nothing on the machine would have brought it back.
+// Start-at-login already exists (tray + app menu) but ships OFF and nobody
+// finds it, so ASK, with Yes pre-selected, and never ask again either way.
+function maybeOfferStartWithWindows() {
+  if (!IS_PACKAGED || process.platform !== "win32" || START_HIDDEN) return;
+  let asked = false;
+  try {
+    const raw = JSON.parse(fs.readFileSync(desktopSettingsFile(), "utf8"));
+    asked = !!(raw && raw.startWithWindowsAsked);
+  } catch {
+    /* no settings file yet -> never asked */
+  }
+  if (asked) return;
+  writeDesktopSetting("startWithWindowsAsked", true); // asked; the answer is optional
+  if (getStartAtLogin()) return; // already on — nothing to offer
+  try {
+    dialog
+      .showMessageBox({
+        type: "question",
+        buttons: ["Yes, start with Windows", "Not now"],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+        title: "Iron Jarvis",
+        message: "Start Iron Jarvis with Windows (in the tray)?",
+        detail:
+          "Then schedules, messages and jobs waiting for you keep working after Windows " +
+          "restarts — an overnight update no longer leaves Iron Jarvis closed. It starts " +
+          "quietly in the tray, and you can turn this off any time from the tray menu.",
+      })
+      .then(({ response }) => {
+        if (response === 0) setStartAtLogin(true);
+      })
+      .catch(() => {
+        /* dialog unavailable — the tray toggle still works */
+      });
+  } catch {
+    /* never block boot on a dialog */
+  }
+}
+
+// --- Windows shutting down is not a crash (v1.249.0, R-04) ----------------
+// At a Windows restart the OS terminates our children. The supervisor read
+// that as a crash ("unexpected exit — restart #1"), counted it toward the
+// 24-hour crash toast, and respawned into a machine that was going away.
+// 0x40010004 (DBG_TERMINATE_PROCESS) and 0xC000013A (CTRL_C at session end)
+// are the codes Windows uses for it.
+const WINDOWS_SHUTDOWN_EXIT_CODES = new Set([0x40010004, 0xc000013a, -1073741510]);
+//: A shutdown-SHAPED exit with no session-end signal waits this long before
+//: respawning: if Windows really is going down we are gone well before it,
+//: and if it was a one-off the service still comes back by itself.
+const WINDOWS_SHUTDOWN_GRACE_MS = 15000;
+let windowsSessionEnding = false;
+
+function isWindowsShutdownExit(code) {
+  return typeof code === "number" && WINDOWS_SHUTDOWN_EXIT_CODES.has(code);
+}
+
+function markWindowsSessionEnding(why) {
+  if (windowsSessionEnding) return;
+  windowsSessionEnding = true;
+  desktopLog("warn", `[main] Windows is ${why} — the children will not be restarted`);
+}
+
 // --- Child log files ------------------------------------------------------
 // A Start-Menu launch has NO console: without a file sink every [daemon] /
 // [dashboard] line is lost and a 2am failure is undiagnosable. Each child gets
@@ -611,6 +678,23 @@ function startService(label, spawnFn) {
     if (gone) return;
     gone = true;
     if (shuttingDown || isQuitting) return; // expected teardown
+    // v1.249.0 (R-04): Windows taking the machine down is a normal close —
+    // never a crash, never a respawn into a dying session.
+    if (windowsSessionEnding) {
+      fileLogger(label)(`[main] ${new Date().toISOString()} ended because Windows is shutting down — not restarting\n`);
+      return;
+    }
+    if (isWindowsShutdownExit(code)) {
+      // The exit code alone is not proof. Wait out the grace window: if this
+      // process is still here, Windows was NOT shutting down and the service
+      // comes back — without either outcome counting as a crash.
+      fileLogger(label)(`[main] ${new Date().toISOString()} exit ${code} looks like a Windows shutdown — deciding in ${WINDOWS_SHUTDOWN_GRACE_MS}ms\n`);
+      setTimeout(() => {
+        if (shuttingDown || isQuitting || windowsSessionEnding) return;
+        startService(label, rec.spawnFn);
+      }, WINDOWS_SHUTDOWN_GRACE_MS);
+      return;
+    }
     // Contract C2 (v1.226.0, F-E-2): serve exits 75 when an Iron Jarvis daemon
     // ALREADY listens on the port — it attached, it did not start. That is not
     // a crash: restarting it looped forever against a stale daemon (13 spawns
@@ -1618,6 +1702,10 @@ function createMainWindow() {
     },
   });
   installSpellcheckMenu(mainWin);
+  // v1.249.0 (R-04): Windows warns a top-level window that the session is
+  // ending before it terminates anything — record it so the supervisor reads
+  // the children's deaths correctly.
+  mainWin.on("session-end", () => markWindowsSessionEnding("ending this session"));
 
   mainWin.once("ready-to-show", () => {
     mainWin.show();
@@ -2236,6 +2324,139 @@ function refreshMenus() {
   refreshTrayMenu();
 }
 
+// --- Jobs waiting for you, with no window open (v1.249.0, R-03) ----------
+// Since v1.247.0 an attended ask WAITS instead of expiring — and closing the
+// window to the tray destroys the renderer, so the page's bell (the only thing
+// that raised a Windows toast) is gone exactly when the wait starts. The tray
+// said "running" and a job could sit there all day. The main process now
+// watches the same listing the bell polls and speaks for it.
+
+//: How often the tray checks for waiting jobs.
+const ASK_WATCH_MS = 25000;
+//: Reminders after the first notice, measured from when we first saw the ask.
+const ASK_REMINDER_MS = [60 * 60 * 1000, 8 * 60 * 60 * 1000];
+let askSeen = {}; // id -> { first: ms, sent: number }
+let askWaitingCount = 0;
+
+//: Plain words for the common asks; anything else names the tool as it is.
+const ASK_PHRASES = {
+  rename_file: ["rename", "file", "files"],
+  rename_real_file: ["rename", "file", "files"],
+  write_file: ["write", "file", "files"],
+  write_document: ["create", "document", "documents"],
+  delete_file: ["delete", "file", "files"],
+  move_file: ["move", "file", "files"],
+  excel_edit: ["edit", "workbook", "workbooks"],
+  shell: ["run", "command", "commands"],
+};
+
+function plainAskSummary(ask) {
+  const count = Number(ask && ask.count) > 1 ? Math.floor(Number(ask.count)) : 1;
+  const tool = String((ask && ask.tool) || "a tool");
+  const phrase = ASK_PHRASES[tool];
+  if (phrase) {
+    return count > 1 ? `${phrase[0]} ${count} ${phrase[2]}` : `${phrase[0]} a ${phrase[1]}`;
+  }
+  const spoken = tool.replace(/_/g, " ");
+  return count > 1 ? `use ${spoken} (${count} times)` : `use ${spoken}`;
+}
+
+// WHAT TO SAY, and to whom — pure, so the schedule is testable without toasts.
+// While a window is open the page's bell owns the announcing: the ask is still
+// RECORDED here (so closing the window later does not re-announce it), but
+// nothing is raised, and reminders stay with the surface the user can see.
+function planAskNotifications(seen, approvals, now, windowOpen) {
+  const next = {};
+  const notify = [];
+  for (const ask of Array.isArray(approvals) ? approvals : []) {
+    const id = ask && typeof ask.id === "string" ? ask.id : "";
+    if (!id) continue;
+    const prev = seen[id];
+    const rec = prev ? { first: prev.first, sent: prev.sent } : { first: now, sent: 0 };
+    const summary = plainAskSummary(ask);
+    const sessionId = typeof ask.session_id === "string" ? ask.session_id : "";
+    if (!prev) {
+      if (windowOpen) {
+        rec.sent = 1; // the bell in front of the user has it
+      } else {
+        notify.push({
+          id,
+          sessionId,
+          title: "Jarvis is waiting for you",
+          body: `${summary} — click to open the job.`,
+        });
+        rec.sent = 1;
+      }
+    } else if (!windowOpen) {
+      const due = ASK_REMINDER_MS[rec.sent - 1];
+      if (due !== undefined && now - rec.first >= due) {
+        // How long it has ACTUALLY waited, not which reminder this is: the
+        // first reminder can land hours late (the window was open until now),
+        // and "waiting 1 hour" for a job that has sat for five is a lie.
+        const hours = Math.max(1, Math.floor((now - rec.first) / (60 * 60 * 1000)));
+        notify.push({
+          id,
+          sessionId,
+          title: "Still waiting for you",
+          body: `${summary} has been waiting ${hours} hour${hours === 1 ? "" : "s"} — click to open the job.`,
+        });
+        rec.sent += 1;
+      }
+    }
+    next[id] = rec;
+  }
+  return { seen: next, notify, waiting: Object.keys(next).length };
+}
+
+function setAskWaitingTooltip(count) {
+  askWaitingCount = count;
+  if (_trayDegraded.size) return; // a degraded service is the louder truth
+  try {
+    if (!tray) return;
+    tray.setToolTip(
+      count > 0
+        ? `Iron Jarvis — ${count} job${count === 1 ? "" : "s"} waiting for you`
+        : "Iron Jarvis — running"
+    );
+  } catch {
+    /* tray may be gone */
+  }
+}
+
+function showAskNotification(item) {
+  try {
+    const note = new Notification({ title: item.title, body: item.body });
+    note.on("click", () => {
+      showMainWindow();
+      if (item.sessionId && mainWin && !mainWin.isDestroyed()) {
+        mainWin.loadURL(`${DASHBOARD_URL}/sessions/${item.sessionId}`);
+      }
+    });
+    note.show();
+  } catch {
+    /* notifications unavailable — the tray tooltip still carries the count */
+  }
+}
+
+function installAskWatcher() {
+  const tick = () => {
+    const windowOpen = !!(mainWin && !mainWin.isDestroyed());
+    daemonRequest("GET", "/chat/approvals/pending", null)
+      .then((res) => {
+        const list = res && Array.isArray(res.approvals) ? res.approvals : null;
+        if (!list) return; // nothing answerable — keep what we know
+        const plan = planAskNotifications(askSeen, list, Date.now(), windowOpen);
+        askSeen = plan.seen;
+        setAskWaitingTooltip(plan.waiting);
+        for (const item of plan.notify) showAskNotification(item);
+      })
+      .catch(() => {
+        /* daemon busy or down — try again on the next tick */
+      });
+  };
+  setInterval(tick, ASK_WATCH_MS);
+}
+
 function createTray() {
   if (tray) return;
   // Windows renders tray icons crispest from .ico; fall back to the png.
@@ -2322,11 +2543,80 @@ function safeAppVersion() {
 // reaches the extraction step.
 // Shared by the notification click, the tray item, and the in-app
 // "Restart to update" affordance — all through requestUpdateInstall() below.
-function applyPendingUpdate() {
+//: The tidy stop an update gets before NSIS runs (v1.249.0, R-02) — the same
+//: budget Quit uses, because it is the same teardown: uvicorn drains open
+//: streams, then the lifespan folds the WAL and writes the terminal snapshot.
+//: Before this, an update force-killed the tree in 0.6 s and none of that ran.
+const UPDATE_TIDY_SHUTDOWN_MS = 5000;
+
+// Is the downloaded installer still there, and whole (v1.249.0, R-02)?
+// "ok" | "missing" | "corrupt" | "unknown". UNKNOWN means this layout tells us
+// nothing (a dev run, a future electron-updater) and the install proceeds
+// exactly as before. The known failure trigger is a cached download the 30-min
+// re-check invalidated while pendingUpdateInfo stayed set — checking it FIRST
+// is what keeps that case from stopping the daemon for an install that cannot
+// happen.
+function cachedInstallerState() {
+  try {
+    const base = process.env.LOCALAPPDATA;
+    if (!base) return "unknown";
+    const pending = path.join(base, "iron-jarvis-desktop-updater", "pending");
+    let info;
+    try {
+      info = JSON.parse(fs.readFileSync(path.join(pending, "update-info.json"), "utf8"));
+    } catch {
+      return "unknown"; // no marker to check against
+    }
+    if (!info || !info.fileName) return "unknown";
+    const exe = path.join(pending, info.fileName);
+    if (!fs.existsSync(exe)) return "missing";
+    if (!info.sha512) return "unknown";
+    const digest = crypto.createHash("sha512").update(fs.readFileSync(exe)).digest("base64");
+    return digest === info.sha512 ? "ok" : "corrupt";
+  } catch {
+    return "unknown";
+  }
+}
+
+// Bring back any child that is not running (v1.249.0, R-02). The install path
+// stops the daemon BEFORE the handoff, so a handoff that never happens must
+// not leave the app sitting there with a dead service.
+function respawnStoppedServices() {
+  for (const [label, rec] of Object.entries(_services)) {
+    if (!rec.spawnFn || rec.adopted) continue;
+    const child = label === "daemon" ? daemonProc : dashboardProc;
+    const alive = !!child && child.exitCode === null && child.signalCode === null;
+    if (!alive) startService(label, rec.spawnFn);
+  }
+}
+
+async function applyPendingUpdate() {
   if (!pendingUpdateInfo || !_autoUpdater || updateInstallInFlight) return;
   updateInstallInFlight = true;
+  // R-02: check the download BEFORE anything is stopped — a missing or
+  // half-downloaded installer can then never cost the user a live daemon.
+  const cached = cachedInstallerState();
+  if (cached === "missing" || cached === "corrupt") {
+    abortUpdateInstall(
+      new Error(
+        cached === "missing"
+          ? "the downloaded update is no longer on disk"
+          : "the downloaded update is incomplete (its checksum does not match)"
+      )
+    );
+    return;
+  }
   isQuitting = true; // allow the window to actually close
   markUpdatePending(pendingUpdateInfo.version); // recovery marker for a bad update
+  // R-02: close the daemon the SAME tidy way Quit does, so the WAL is folded
+  // and the terminal snapshot is written; force-kill only if it will not go.
+  let stopped = false;
+  try {
+    stopped = await requestDaemonShutdown(UPDATE_TIDY_SHUTDOWN_MS);
+  } catch {
+    stopped = false;
+  }
+  if (!stopped) killChild(daemonProc, "daemon", "update");
   let failure = null;
   const onInstallError = (err) => {
     failure = err || new Error("the installer did not start");
@@ -2343,12 +2633,17 @@ function applyPendingUpdate() {
     /* listener already gone */
   }
   if (failure) {
+    // R-02: the daemon was stopped for an install that never started — bring
+    // it back BEFORE the dialog, so the app is whole while the user reads it.
+    isQuitting = false;
+    respawnStoppedServices();
     abortUpdateInstall(failure);
     return;
   }
   // Handoff accepted: the installer is launching and app.quit() is queued. Kill
-  // our children now. An ORPHANED daemon from an earlier crashed session also
-  // locks resources/daemon, so sweep by image name too.
+  // whatever is still alive (the dashboard, and the daemon if it ignored the
+  // tidy stop). An ORPHANED daemon from an earlier crashed session also locks
+  // resources/daemon, so sweep by image name too.
   shutdown("update");
   sweepOrphanDaemons();
 }
@@ -2362,6 +2657,70 @@ function applyPendingUpdate() {
 // install — that is exactly the behaviour this had before.
 const ACTIVITY_PROBE_TIMEOUT_MS = 3000;
 let updatePromptInFlight = false;
+
+// The work in progress, in the user's words (v1.249.0, R-02). Pure: the dialog
+// and its test read the same sentence. The old dialog counted agent sessions
+// and workflow runs only, so a chat reply being written and a Build pane with
+// Claude working in it were killed without ever being mentioned.
+function describeBusyWork(activity) {
+  const a = activity || {};
+  const n = (key) => {
+    const v = Number(a[key]);
+    return Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+  };
+  const plural = (c, one, many) => `${c} ${c === 1 ? one : many}`;
+  const parts = [];
+  const chats = n("chat_replies");
+  if (chats) parts.push(`${plural(chats, "chat reply", "chat replies")} in progress`);
+  const panes = n("busy_panes");
+  if (panes) {
+    const seen = [];
+    for (const raw of Array.isArray(a.busy_pane_clis) ? a.busy_pane_clis : []) {
+      const name = String(raw || "").trim();
+      if (!name) continue;
+      const label = name.charAt(0).toUpperCase() + name.slice(1);
+      if (!seen.includes(label)) seen.push(label);
+    }
+    parts.push(
+      `${plural(panes, "Build pane", "Build panes")} working${seen.length ? ` (${seen.join(", ")})` : ""}`
+    );
+  }
+  const sessions = n("active_sessions");
+  if (sessions) parts.push(`${plural(sessions, "background job", "background jobs")} running`);
+  const runs = n("running_workflow_runs");
+  if (runs) parts.push(`${plural(runs, "workflow run", "workflow runs")} running`);
+  return parts.join(" · ") || "Work is still in progress";
+}
+
+//: How often "Install when idle" re-checks (v1.249.0, R-02).
+const INSTALL_WHEN_IDLE_MS = 60 * 1000;
+let installWhenIdleTimer = null;
+
+// The third answer to the busy dialog: wait, then install by itself. A daemon
+// that cannot answer counts as idle — the same best-effort rule the prompt
+// itself follows, so a dead daemon never strands a ready update.
+function installWhenIdle() {
+  if (installWhenIdleTimer) return;
+  try {
+    if (tray) tray.setToolTip("Iron Jarvis — update installs when the work finishes");
+  } catch {
+    /* tray may be gone */
+  }
+  installWhenIdleTimer = setInterval(() => {
+    if (!pendingUpdateInfo || updateInstallInFlight) {
+      clearInterval(installWhenIdleTimer);
+      installWhenIdleTimer = null;
+      return;
+    }
+    probeDaemonActivity(ACTIVITY_PROBE_TIMEOUT_MS).then((activity) => {
+      if (!pendingUpdateInfo || updateInstallInFlight) return;
+      if (activity && activity.busy) return; // still working — ask again in a minute
+      clearInterval(installWhenIdleTimer);
+      installWhenIdleTimer = null;
+      applyPendingUpdate();
+    });
+  }, INSTALL_WHEN_IDLE_MS);
+}
 
 // Resolves the parsed /system/activity body, or null on any failure. Never rejects.
 function probeDaemonActivity(timeoutMs) {
@@ -2411,24 +2770,28 @@ function requestUpdateInstall() {
     .then((activity) => {
       if (!pendingUpdateInfo || updateInstallInFlight) return;
       if (activity && activity.busy) {
-        const n = Number(activity.active_sessions) || 0;
-        const m = Number(activity.running_workflow_runs) || 0;
-        let choice = 0;
+        let choice = 1;
         try {
           choice = dialog.showMessageBoxSync({
             type: "warning",
-            buttons: ["Install now", "Later"],
+            buttons: ["Install now", "Later", "Install when idle"],
             defaultId: 1,
             cancelId: 1,
             noLink: true,
             title: "Iron Jarvis — work in progress",
-            message: `${n} agent session${n === 1 ? "" : "s"} / ${m} workflow run${m === 1 ? "" : "s"} are still running.`,
+            message: `${describeBusyWork(activity)}.`,
             detail:
-              "Installing now restarts the local service and they will be marked interrupted. " +
-              "Later keeps the update ready in the tray until you choose to install it.",
+              "Installing now stops that work: a reply being written stops, programs running in " +
+              "Build panes are closed, and background jobs are interrupted — you can continue " +
+              "them after the restart. Later keeps the update ready in the tray. Install when " +
+              "idle waits and installs it as soon as nothing is running.",
           });
         } catch {
           choice = 0; // a dialog failure must not block the install — proceed as before
+        }
+        if (choice === 2) {
+          installWhenIdle();
+          return;
         }
         if (choice !== 0) return; // Later
       }
@@ -2663,6 +3026,13 @@ async function startup() {
   installSpotlightIpc(); // wire the quick-task overlay's IPC before the hotkey
   installGpuFallback(); // GPU-crash counter -> offer software rendering
   createTray();
+  // v1.249.0 (R-04): on the platforms that emit it, the OS says the session is
+  // ending before it kills anything (Windows also tells the window itself).
+  try {
+    powerMonitor.on("shutdown", () => markWindowsSessionEnding("shutting down"));
+  } catch {
+    /* powerMonitor unavailable — the exit-code path still covers it */
+  }
   if (!START_HIDDEN) createLoadingWindow(); // login-boot goes straight to tray
   registerHotkey();
   installHotkeyRetry();
@@ -2784,14 +3154,15 @@ async function startup() {
     }
     handleStartupFailure(
       "Iron Jarvis — daemon did not start",
-      `The Iron Jarvis daemon did not answer on http://127.0.0.1:${DAEMON_PORT} within ` +
-        `${Math.round(STARTUP_TIMEOUT_MS / 1000)}s.\n\n` +
-        `Most common cause: another program is already using port ${DAEMON_PORT}. Close it, ` +
-        "then relaunch. Check the [daemon] logs for details." +
-        // v1.226.0: the gate now names spawn failures and version mismatches —
-        // say which one this was instead of blaming the port every time.
-        `\n\nDetails: ${(err && err.message) || "no details"}`,
-      pendingUpdate
+      (err && err.message) || "no details",
+      pendingUpdate,
+      {
+        label: "daemon",
+        exitCode: daemonProc ? daemonProc.exitCode : null,
+        gateError: (err && err.message) || "",
+        port: DAEMON_PORT,
+        timeoutS: Math.round(STARTUP_TIMEOUT_MS / 1000),
+      }
     );
     return;
   }
@@ -2805,14 +3176,16 @@ async function startup() {
     }
     handleStartupFailure(
       "Iron Jarvis — dashboard did not start",
-      `The dashboard at ${DASHBOARD_PROBE_URL} did not respond within ` +
-        `${Math.round(STARTUP_TIMEOUT_MS / 1000)}s.\n\n` +
-        (IS_PACKAGED
-          ? "Check the [dashboard] logs for details."
-          : "Most common cause: the dashboard has not been built yet. Build it once:\n\n" +
-            "    cd dashboard\n    pnpm install\n    pnpm build\n\n" +
-            "Then relaunch Iron Jarvis. Check the terminal for [daemon]/[dashboard] logs."),
-      pendingUpdate
+      (err && err.message) ||
+        (IS_PACKAGED ? "no details" : "the dashboard may not have been built yet (pnpm build)"),
+      pendingUpdate,
+      {
+        label: "dashboard",
+        exitCode: dashboardProc ? dashboardProc.exitCode : null,
+        gateError: (err && err.message) || "",
+        port: DASHBOARD_PORT,
+        timeoutS: Math.round(STARTUP_TIMEOUT_MS / 1000),
+      }
     );
     return;
   }
@@ -2832,15 +3205,103 @@ async function startup() {
   }
   showWindowWhenReady = false;
   installDaemonWatchdog(); // v1.226.0: a daemon that is up but not answering gets restarted
+  installAskWatcher(); // v1.249.0 (R-03): waiting jobs reach a closed window
+  maybeOfferStartWithWindows(); // v1.249.0 (R-04): asked once
   checkForUpdates();
   // Long-lived tray apps must keep looking for updates, not just at boot.
   setInterval(checkForUpdates, UPDATE_RECHECK_MS);
 }
 
+// The last lines a child wrote, for the failure classifier (v1.249.0, R-06).
+// Best-effort: no log, no tail, and the classifier simply has less to go on.
+function readLogTail(label, maxBytes = 16 * 1024) {
+  try {
+    const file = path.join(userDataDir || "", "logs", `${label}.log`);
+    const stat = fs.statSync(file);
+    const length = Math.min(stat.size, maxBytes);
+    const fd = fs.openSync(file, "r");
+    try {
+      const buf = Buffer.alloc(length);
+      fs.readSync(fd, buf, 0, length, Math.max(0, stat.size - length));
+      return buf.toString("utf8");
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return "";
+  }
+}
+
+// WHY it did not start, in words the user can act on (v1.249.0, R-06). Every
+// failure used to read "another program is already using port 8787" — including
+// a locked database and a failed data upgrade — and then the app quit. Pure:
+// the dialog and its test read the same sentences.
+function classifyStartupFailure(context) {
+  const c = context || {};
+  const label = c.label === "dashboard" ? "dashboard" : "daemon";
+  const service = label === "dashboard" ? "The Iron Jarvis dashboard" : "The Iron Jarvis service";
+  const port = c.port || DAEMON_PORT;
+  const seconds = c.timeoutS || Math.round(STARTUP_TIMEOUT_MS / 1000);
+  const hay = `${String(c.logTail || "")}\n${String(c.gateError || "")}`;
+  const has = (re) => re.test(hay);
+  // 10048 is the Windows socket code; uvicorn prints it as "[Errno 10048]"
+  // there and as EADDRINUSE elsewhere, so match the NUMBER, not one wording.
+  if (has(/in use by another program|EADDRINUSE|address already in use|10048|only one usage of each socket address/i)) {
+    return {
+      cause: "port",
+      message: `Another program is using the connection ${service.toLowerCase()} needs.`,
+      detail:
+        `Port ${port} is taken — often a second copy of Iron Jarvis, or a development server. ` +
+        "Close it and press Retry.",
+    };
+  }
+  if (has(/database is locked|database table is locked/i)) {
+    return {
+      cause: "db-locked",
+      message: "Iron Jarvis's database is locked by another program.",
+      detail:
+        "Usually a second copy of Iron Jarvis, or a backup/sync tool (OneDrive, antivirus) " +
+        "holding the file. Close it and press Retry. Your data is untouched.",
+    };
+  }
+  if (has(/no such column|no such table|alembic|migration failed|OperationalError/i)) {
+    return {
+      cause: "upgrade",
+      message: "The step that updates your saved data for this version did not finish.",
+      detail:
+        "Nothing has been deleted. Press Retry; if it fails again, use Open logs and reinstall " +
+        "the previous version from the Releases page.",
+    };
+  }
+  if (has(/ENOENT|EACCES|EPERM|not recognized as an internal|cannot find the (file|path)/i)) {
+    return {
+      cause: "missing",
+      message: `${service} could not be started.`,
+      detail:
+        "Its program file is missing or was blocked — antivirus software sometimes quarantines " +
+        "it. Press Retry; if it fails again, reinstall Iron Jarvis.",
+    };
+  }
+  if (has(/Traceback \(most recent call last\)/) || (typeof c.exitCode === "number" && c.exitCode !== 0)) {
+    return {
+      cause: "crash",
+      message: `${service} stopped with an error while starting.`,
+      detail: "Press Retry. If it happens again, Open logs shows what went wrong.",
+    };
+  }
+  return {
+    cause: "timeout",
+    message: `${service} did not answer within ${seconds} seconds.`,
+    detail: "Your PC may still be busy starting up. Press Retry.",
+  };
+}
+
 // Shared startup-failure path. After a just-applied update that repeatedly fails
 // to boot, offer a concrete recovery (reinstall the previous release) instead of
 // looping on a generic error — electron-updater/NSIS keep no prior version.
-function handleStartupFailure(title, message, pendingUpdate) {
+// Otherwise (v1.249.0, R-06): name the likely cause and offer Retry / Open logs
+// / Quit, instead of an error box that only ever quit.
+function handleStartupFailure(title, message, pendingUpdate, context) {
   if (pendingUpdate && pendingUpdate.attempts >= 2) {
     const choice = dialog.showMessageBoxSync({
       type: "error",
@@ -2856,7 +3317,43 @@ function handleStartupFailure(title, message, pendingUpdate) {
       shell.openExternal("https://github.com/RealDealCPA-VR/Iron-Jarvis/releases");
     }
   } else {
-    dialog.showErrorBox(title, message);
+    const info = classifyStartupFailure({
+      label: (context && context.label) || "daemon",
+      exitCode: context && context.exitCode,
+      logTail: readLogTail((context && context.label) || "daemon"),
+      gateError: (context && context.gateError) || message,
+      port: context && context.port,
+      timeoutS: context && context.timeoutS,
+    });
+    for (;;) {
+      let choice = 2;
+      try {
+        choice = dialog.showMessageBoxSync({
+          type: "error",
+          buttons: ["Retry", "Open logs", "Quit"],
+          defaultId: 0,
+          cancelId: 2,
+          noLink: true,
+          title,
+          message: info.message,
+          detail: `${info.detail}\n\nDetails: ${(context && context.gateError) || message}`,
+        });
+      } catch {
+        choice = 2; // no dialog (no display?) — fall through to the quit below
+      }
+      if (choice === 1) {
+        openLogsFolder(); // and ask again, so Retry stays one click away
+        continue;
+      }
+      if (choice === 0) {
+        isQuitting = true;
+        shutdown();
+        app.relaunch();
+        app.exit(0);
+        return;
+      }
+      break;
+    }
   }
   isQuitting = true;
   shutdown();

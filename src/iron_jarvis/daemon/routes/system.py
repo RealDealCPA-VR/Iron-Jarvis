@@ -153,11 +153,36 @@ def activity_snapshot(d) -> dict[str, Any]:
             )
         )
     writing = sum(1 for st in run_states if st != "waiting")
+    # v1.249.0 (R-02): the work an update used to kill without a word. A chat
+    # reply has no Session row (it runs as session_id "chat"), and a Build
+    # pane is a PTY the daemon owns — the update's tree kill ends the shell and
+    # the Claude/Codex inside it mid-edit. Counted HERE so the desktop's
+    # existing warning names them; the Repair gate reads its own explicit
+    # keys (active_sessions / writing_workflow_runs) and is unchanged.
+    from ...core.turns import CHAT_INFLIGHT
+
+    chat_replies = CHAT_INFLIGHT.count()
+    busy_panes = 0
+    busy_pane_clis: list[str] = []
+    try:
+        for info in d.platform.terminals.list():
+            if info.get("alive") is False:
+                continue
+            if info.get("state") in ("working", "blocked"):
+                busy_panes += 1
+                cli = info.get("agent_cli")
+                if cli:
+                    busy_pane_clis.append(str(cli))
+    except Exception:  # noqa: BLE001 — an unreadable pane list is "none known", never a 500
+        pass
     return {
         "active_sessions": sessions,
         "running_workflow_runs": len(run_states),
         "writing_workflow_runs": writing,
-        "busy": bool(sessions or run_states),
+        "chat_replies": chat_replies,
+        "busy_panes": busy_panes,
+        "busy_pane_clis": busy_pane_clis,
+        "busy": bool(sessions or run_states or chat_replies or busy_panes),
     }
 
 

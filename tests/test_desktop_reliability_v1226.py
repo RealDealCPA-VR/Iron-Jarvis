@@ -429,7 +429,11 @@ def _supervisor_harness() -> str:
     supervisor = _lift("const RESTART_BACKOFF_MS", "function notifyForeignDaemon")
     watchdog = _lift("const DAEMON_WATCHDOG_MS", "function installDaemonWatchdog")
     shutdown = _lift("function postDaemonShutdown", "function requestDaemonShutdown(timeoutMs)")
+    # v1.249.0 (R-04): onGone reads the Windows session-end seam. Lifted, not
+    # stubbed — a stub here would keep passing after the real thing was deleted.
+    windows = _lift("const WINDOWS_SHUTDOWN_EXIT_CODES", "function isWindowsShutdownExit")
     for needle, block in (
+        ("function isWindowsShutdownExit", windows),
         ("function startService", supervisor),
         ("function adoptOrReplaceExistingDaemon", supervisor),
         ("function probeDaemonOwnership", supervisor),
@@ -439,7 +443,10 @@ def _supervisor_harness() -> str:
         ("function waitForDaemonPortClosed", shutdown),
     ):
         assert needle in block, f"{needle} not lifted"
-    return _CLOCK + _HTTP + _SUPERVISOR_STUBS + supervisor + watchdog + shutdown + _SUPERVISOR_SCENARIOS
+    return (
+        _CLOCK + _HTTP + _SUPERVISOR_STUBS + windows + supervisor + watchdog + shutdown
+        + _SUPERVISOR_SCENARIOS
+    )
 
 
 def _sup(scenario: str, tmp_path: Path) -> dict:
@@ -883,7 +890,9 @@ def test_gate_passes_our_own_daemon(tmp_path):
 def test_startup_dialog_shows_the_gate_reason():
     """The mapping is worthless if the dialog still says 'port in use' for everything."""
     src = _src()
-    m = re.search(r'"Iron Jarvis — daemon did not start",(.{0,900}?)pendingUpdate\n', src, re.S)
+    # v1.249.0 (R-06): the call now passes a fourth argument (the context the
+    # cause-classifier reads), so the window ends at `pendingUpdate,`.
+    m = re.search(r'"Iron Jarvis — daemon did not start",(.{0,900}?)pendingUpdate,\n', src, re.S)
     assert m, "startup()'s daemon-failure branch moved"
     assert "err && err.message" in m.group(1), "the dialog does not show the gate's reason"
 
@@ -985,6 +994,8 @@ let dialogChoice = 1;
 const dialog = { showMessageBoxSync: (o) => { calls.push(["dialog", o.message, o.buttons.join("|")]); return dialogChoice; } };
 function applyPendingUpdate() { calls.push(["applyPendingUpdate"]); updateInstallInFlight = true; }
 function desktopLog(level, ...a) { calls.push(["log", level]); }
+// v1.249.0 (R-02): "Install when idle" says so in the tray while it waits.
+let tray = { setToolTip: (s) => calls.push(["tooltip", s]) };
 __LIFTED__
 (async () => {
   const s = JSON.parse(process.argv[2]);
@@ -993,6 +1004,12 @@ __LIFTED__
   requestUpdateInstall();
   if (s.twice) requestUpdateInstall();
   await advance(4000);
+  // v1.249.0: let the "install when idle" watcher run for a few of its
+  // minutes — with the work still going, or with it finished.
+  if (s.waitMs) {
+    if (s.thenIdle) modes.activity = { busy: false };
+    await advance(s.waitMs);
+  }
   process.stdout.write(JSON.stringify({ calls, promptInFlight: updatePromptInFlight, installInFlight: updateInstallInFlight }) + "\\n");
 })().catch((e) => { process.stderr.write(String(e && e.stack)); process.exit(1); });
 """
@@ -1011,10 +1028,33 @@ def test_busy_daemon_and_later_installs_nothing(tmp_path):
     names = [c[0] for c in out["calls"]]
     assert "dialog" in names, "the user was never asked"
     dlg = next(c for c in out["calls"] if c[0] == "dialog")
-    assert dlg[1] == "2 agent sessions / 1 workflow run are still running."
-    assert dlg[2] == "Install now|Later"
+    # v1.249.0 (R-02): the sentence is describeBusyWork's, and it now counts
+    # chat replies and Build panes too (its own tests live in v1249).
+    assert dlg[1] == "2 background jobs running · 1 workflow run running."
+    assert dlg[2] == "Install now|Later|Install when idle"
     assert "applyPendingUpdate" not in names, "'Later' installed anyway"
     assert out["promptInFlight"] is False, "a second click would be locked out forever"
+
+
+@requires_node
+def test_install_when_idle_waits_for_the_work_to_finish_then_installs(tmp_path):
+    """v1.249.0 (R-02), the third button: neither losing the work nor losing
+    the update. It must not install while the work is still running, and it
+    must not need the user to come back once it is done."""
+    busy = {"active_sessions": 1, "running_workflow_runs": 0, "busy": True}
+    out = _update({"activity": busy, "choice": 2, "waitMs": 3 * 60 * 1000}, tmp_path)
+    names = [c[0] for c in out["calls"]]
+    assert "applyPendingUpdate" not in names, "it installed while the work was still running"
+    assert any(c[0] == "tooltip" and "installs when the work finishes" in c[1] for c in out["calls"]), (
+        "the tray never said an update was waiting"
+    )
+    out = _update(
+        {"activity": busy, "choice": 2, "waitMs": 3 * 60 * 1000, "thenIdle": True}, tmp_path
+    )
+    names = [c[0] for c in out["calls"]]
+    assert names.count("applyPendingUpdate") == 1, (
+        f"the update never installed once the work finished: {out['calls']}"
+    )
 
 
 @requires_node

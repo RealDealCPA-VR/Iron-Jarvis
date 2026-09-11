@@ -20,6 +20,7 @@ import { usePolledApi } from "@/lib/useApi";
 import { useDesktopNotifications } from "@/lib/useDesktopNotifications";
 import type { ComputerUseStatus, IJEvent, WorkflowRun } from "@/lib/types";
 import { shortId, clockTime } from "@/lib/format";
+import { InterruptedJobRow, useInterruptedJobs } from "@/components/InterruptedJobs";
 
 /** One /diagnostics → background_loops entry (daemon/app.py `_tick`). */
 type LoopHealth = { ok?: boolean; last_error?: string; error?: string; at?: string };
@@ -453,6 +454,9 @@ export function NotificationBell() {
     "/chat/approvals/pending",
     15000,
   );
+  // v1.249.0 (R-02): work a restart cut off. It waits on the user exactly like
+  // the rows above — an update used to end these silently and offer nothing.
+  const interrupted = useInterruptedJobs(15000);
 
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -577,12 +581,17 @@ export function NotificationBell() {
   const reviewish = Math.max(reviews.length, polledReviews) + pendingApprovals;
   // Parked workflow questions and paused agent asks wait on the user exactly
   // like reviews/approvals.
-  const count = reviewish + waiting.length + agentAsks.length + failingLoops.length;
+  const count =
+    reviewish +
+    waiting.length +
+    agentAsks.length +
+    failingLoops.length +
+    interrupted.jobs.length;
   // v1.226.0: a polled source that FAILED (non-0 status, e.g. a 500) makes the
   // badge under-count — "You're all caught up" would then be a false empty
   // state. Offline (status 0) is the banner's story, not the bell's.
   const pollError =
-    [cu.error, diag.error, runsApi.error, agentAsksApi.error].find(
+    [cu.error, diag.error, runsApi.error, agentAsksApi.error, interrupted.error].find(
       (e) => e && e.status !== 0,
     ) ?? null;
 
@@ -623,6 +632,10 @@ export function NotificationBell() {
         parts.push(
           `${failingLoops.length} background task${failingLoops.length === 1 ? "" : "s"} failing`,
         );
+      if (interrupted.jobs.length)
+        parts.push(
+          `${interrupted.jobs.length} job${interrupted.jobs.length === 1 ? "" : "s"} stopped by a restart`,
+        );
       const body = parts.join(" · ") || "Something needs your attention.";
       notify(`Iron Jarvis — ${count} pending`, body, () => setOpen(true));
     }
@@ -633,6 +646,7 @@ export function NotificationBell() {
     waiting.length,
     agentAsks.length,
     failingLoops.length,
+    interrupted.jobs.length,
     notify,
   ]);
 
@@ -738,6 +752,12 @@ export function NotificationBell() {
                       ask={ask}
                       onGone={handleAgentAskGone}
                     />
+                  ))}
+
+                  {/* v1.249.0 (R-02): jobs a restart cut off, with the Continue
+                      the user had to go hunting for before. */}
+                  {interrupted.jobs.map((job) => (
+                    <InterruptedJobRow key={job.id} job={job} onGone={interrupted.forget} />
                   ))}
 
                   {pendingApprovals > 0 && (

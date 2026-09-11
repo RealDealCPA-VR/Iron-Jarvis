@@ -102,6 +102,12 @@ function decl(name) {
 }
 const LADDER_DECLS = ["RESTART_BACKOFF_MS", "FAST_DEATH_MS", "FAST_DEATHS_TO_VERIFY", "RESTART_CAP_MAX",
   "RESTART_CAP_WINDOW_MS", "DEATHS_DAY_MS", "DEATHS_DAY_TOAST_AT", "_services", "_trayDegraded"];
+// v1.249.0 (R-04): the ladder's onGone now consults the Windows session-end
+// seam before it counts a death, so EVERY harness in this file needs those
+// declarations. Lifted here rather than added to each harness's own list: they
+// belong to the ladder's scope, not to any one scenario.
+for (const d of ["WINDOWS_SHUTDOWN_EXIT_CODES", "WINDOWS_SHUTDOWN_GRACE_MS", "windowsSessionEnding"]) eval(decl(d));
+eval(fnSource("isWindowsShutdownExit"));
 """
 
 # --------------------------------------------------------------------------

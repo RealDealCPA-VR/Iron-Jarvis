@@ -58,6 +58,7 @@ import { EventStream } from "@/components/EventStream";
 import { ProviderDowngradeBanner } from "@/components/ProviderDowngradeBanner";
 import { OnboardingWelcome } from "@/components/OnboardingWelcome";
 import { PowerTips } from "@/components/PowerTips";
+import { InterruptedJobsNote } from "@/components/InterruptedJobs";
 import { GoalsStrip } from "@/components/GoalsStrip";
 import { MoodOrb } from "@/components/MoodOrb";
 import { PageShell, Reveal } from "@/components/motion";
@@ -753,6 +754,11 @@ export default function OverviewPage() {
           diskLoading={reliability.loading}
         />
       </Reveal>
+
+      {/* v1.249.0 (R-02): work a restart cut off, on the page the user lands
+          on afterwards — with the Continue that used to exist only on the
+          session's own page. Renders nothing when there is nothing to pick up. */}
+      <InterruptedJobsNote />
 
       {/* v1.229.0: a failing background loop is named where the user lands,
           in BOTH modes — the health tile below is Advanced-only and inside

@@ -32,7 +32,7 @@ from ...core.db import CONVERSATION_WRITE_LOCK, session_scope
 from ...core.models import AgentState, PermissionMode
 from ...memory import commit as _commit
 from ...core.approvals import DECISIONS, ChatApprovals
-from ...core.turns import TURNS
+from ...core.turns import CHAT_INFLIGHT, TURNS
 from ..doors import collect_doors, door_for
 
 # The chat TURN lives in daemon/chat_turn.py (v1.136.0 messaging surfaces):
@@ -188,6 +188,24 @@ class HeartbeatStreamingResponse(StreamingResponse):
         finally:
             beat.cancel()
         await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+
+class ChatReplyStreamingResponse(HeartbeatStreamingResponse):
+    """The heartbeat response, counted as a reply in progress (v1.249.0, R-02).
+
+    The count wraps the RESPONSE, never the turn's generator: the body
+    iterator is still advanced exactly as :class:`HeartbeatStreamingResponse`
+    advances it, so the turn's cancellation and ledger semantics are
+    untouched. Entered when the body starts, released in a ``finally``
+    however the stream ends — finished, client gone, or cancelled.
+    """
+
+    async def stream_response(self, send) -> None:
+        CHAT_INFLIGHT.enter()
+        try:
+            await super().stream_response(send)
+        finally:
+            CHAT_INFLIGHT.exit()
 
 
 async def _router_frames(router, **kwargs):
@@ -1346,7 +1364,11 @@ def register(app: FastAPI, d) -> None:
         messages, 502 router/tool failure) and FastAPI surfaces it here
         unchanged -- exactly the responses this route always returned.
         """
-        return await run_chat_turn(d.platform, d._PERSONAS, body)
+        # v1.249.0 (R-02): a reply being written is work an update must warn
+        # about, and it has no Session row to be counted by (it runs as
+        # session id "chat") — so /system/activity counts it through here.
+        with CHAT_INFLIGHT.track():
+            return await run_chat_turn(d.platform, d._PERSONAS, body)
 
     @app.post("/chat/stream")
     async def chat_stream_route(body: ChatBody, request: Request):
@@ -1366,7 +1388,8 @@ def register(app: FastAPI, d) -> None:
             should_stop=request.is_disconnected,
         )
         # v1.246.0: never quiet for long — see HeartbeatStreamingResponse.
-        return HeartbeatStreamingResponse(
+        # v1.249.0: and counted while it streams — see ChatReplyStreamingResponse.
+        return ChatReplyStreamingResponse(
             gen,
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

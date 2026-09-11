@@ -142,3 +142,64 @@ class TurnRegistry:
 #: every surface that can stop one must reach the same instance or a Stop
 #: press answers a copy nobody is running.
 TURNS = TurnRegistry()
+
+
+class _Tracked:
+    """The context manager :meth:`InflightCounter.track` returns."""
+
+    __slots__ = ("_counter",)
+
+    def __init__(self, counter: "InflightCounter") -> None:
+        self._counter = counter
+
+    def __enter__(self) -> "InflightCounter":
+        self._counter.enter()
+        return self._counter
+
+    def __exit__(self, *_exc: object) -> bool:
+        self._counter.exit()
+        return False
+
+
+class InflightCounter:
+    """How many chat replies are being generated RIGHT NOW (v1.249.0, R-02).
+
+    THE SILENT FAILURE THIS CLOSES: "Restart to update" force-killed the
+    daemon mid-reply with no warning, because ``/system/activity`` counted
+    Session rows and workflow runs — and a chat turn has neither (it runs as
+    session id ``"chat"``). The reply was cut off mid-sentence and nothing had
+    said it would be.
+
+    IN-MEMORY AND PROCESS-LOCAL for the same reason :class:`TurnRegistry` is:
+    a reply in flight is a live object on one loop in one process, and a
+    restart ends every one of them. Counted, never named — this answers "is
+    anything being written?", and no surface may read more into it than that.
+    """
+
+    __slots__ = ("_n", "_lock")
+
+    def __init__(self) -> None:
+        self._n = 0
+        self._lock = threading.Lock()
+
+    def enter(self) -> None:
+        with self._lock:
+            self._n += 1
+
+    def exit(self) -> None:
+        # Never below zero: an unbalanced release must not make the daemon
+        # report "nothing is running" while a reply is still being written.
+        with self._lock:
+            self._n = max(0, self._n - 1)
+
+    def count(self) -> int:
+        with self._lock:
+            return self._n
+
+    def track(self) -> _Tracked:
+        """``with CHAT_INFLIGHT.track():`` — counted for the block's lifetime."""
+        return _Tracked(self)
+
+
+#: THE chat-reply counter (one per daemon process, like TURNS above).
+CHAT_INFLIGHT = InflightCounter()

@@ -25,6 +25,27 @@ def _sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
+def _clear_interrupted(d, session_id: str) -> bool:
+    """Drop the interrupted tag from one session (v1.249.0, R-02).
+
+    BLOCKING (a DB write) — every caller hops off the loop. Returns False
+    only when the session does not exist; clearing an already-clear row is a
+    no-op success, so a double click reads as "already handled".
+    """
+    from ...core.db import session_scope
+    from ...core.models import Session
+
+    with session_scope(d.platform.engine) as db:
+        row = db.get(Session, session_id)
+        if row is None:
+            return False
+        if row.interrupted_at is not None:
+            row.interrupted_at = None
+            db.add(row)
+            db.commit()
+    return True
+
+
 def _waiting_on(d, session_id: str) -> dict[str, Any] | None:
     """``{approval_id, tool}`` for the OLDEST ask this session is paused on,
     or None (v1.227.0, audit A4). Derived from the shared approvals registry
@@ -210,6 +231,10 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="session not found")
         except ValueError as exc:  # workspace busy — a continuation is running
             raise HTTPException(status_code=409, detail=str(exc))
+        # v1.249.0 (R-02): this job is being picked up again, so it is no
+        # longer a prompt. The tag is cleared on the ORIGINAL row — the
+        # continuation is a new session, and the old one keeps its verdict.
+        await asyncio.to_thread(_clear_interrupted, d, session_id)
         if body.wait:
             session = await d.orchestrator.run_session(session.id)
         else:
@@ -357,6 +382,67 @@ def register(app: FastAPI, d) -> None:
             return _etagged_json({"sessions": [_session_row(d, s) for s in scoped]}, request)
         rows = [_session_row(d, s) for s in d.orchestrator.list_sessions(limit=lim)]
         return _etagged_json({"sessions": rows}, request)
+
+    @app.get("/sessions/interrupted")
+    def interrupted_sessions() -> dict[str, Any]:
+        """Jobs a RESTART cut off, newest first (v1.249.0, R-02).
+
+        REGISTERED BEFORE ``/sessions/{session_id}`` on purpose: FastAPI
+        matches in registration order, so the parameter route would swallow
+        "interrupted" and answer 404 for a path that exists.
+
+        The boot reconcile tags each one (``Session.interrupted_at``); the
+        bell and the Overview offer Continue while the tag is set, and
+        continuing or dismissing clears it. Bounded to the last 3 days and 20
+        rows — an interrupted job nobody came back to stops being a prompt
+        and stays in the session list like any other failed run.
+        """
+        from datetime import timedelta
+
+        from sqlmodel import select
+
+        from ...core.db import session_scope
+        from ...core.ids import utcnow
+        from ...core.models import Session, SessionStatus
+
+        cutoff = utcnow() - timedelta(days=3)
+        with session_scope(d.platform.engine) as db:
+            rows = list(
+                db.exec(
+                    select(Session)
+                    .where(
+                        Session.interrupted_at.is_not(None),  # type: ignore[union-attr]
+                        Session.interrupted_at >= cutoff,  # type: ignore[operator]
+                        Session.status == SessionStatus.FAILED,
+                    )
+                    .order_by(Session.interrupted_at.desc())  # type: ignore[union-attr]
+                    .limit(20)
+                )
+            )
+            out = [
+                {
+                    "id": s.id,
+                    "task": (s.task or "")[:300],
+                    "agent_type": getattr(s.agent_type, "value", str(s.agent_type)),
+                    "project_id": s.project_id,
+                    "interrupted_at": (
+                        s.interrupted_at.isoformat() if s.interrupted_at else None
+                    ),
+                }
+                for s in rows
+            ]
+        return {"sessions": out}
+
+    @app.post("/sessions/{session_id}/interrupted/dismiss")
+    async def dismiss_interrupted(session_id: str) -> dict[str, Any]:
+        """Stop offering Continue for this interrupted job (v1.249.0, R-02).
+
+        The run itself is untouched: this clears the PROMPT, nothing else.
+        """
+        cleared = await asyncio.to_thread(_clear_interrupted, d, session_id)
+        if not cleared:
+            raise HTTPException(status_code=404, detail="session not found")
+        return {"ok": True, "id": session_id}
 
     @app.get("/sessions/teams")
     def sessions_teams() -> dict[str, Any]:
