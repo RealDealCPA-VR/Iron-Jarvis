@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.248.0 (2026-09-11).*
+holds itself to. Current as of v1.249.0 (2026-09-11).*
 
 ---
 
@@ -421,6 +421,36 @@ seam); Train (teach it your writing voice, suggest-only).
   machine has trouble: set `ij.build.webgl` to `off` in the browser storage
   to turn graphics-card drawing off, or start the app with
   `IRONJARVIS_PTY_BACKEND=pywinpty` to use the previous terminal engine.
+- **Updating tells you what it will interrupt** (v1.249.0): **Restart to
+  update** now lists what is actually running — a reply being written, Build
+  panes with work in them, background jobs — and offers **Install now**,
+  **Later**, or **Install when idle**, which waits until nothing is busy. The
+  app then stops the way **Quit** does instead of being force-closed, and the
+  update is checked before anything shuts down, so a half-downloaded update
+  never costs you a running app.
+- **Work a restart interrupted is offered back** (v1.249.0): jobs cut off by a
+  restart appear on your Overview and in the bell with a **Continue** button,
+  for three days. Pressing Continue picks the job up where it stopped.
+- **Jobs waiting on you reach you with the window closed** (v1.249.0): when a
+  job needs your permission and Iron Jarvis is in the tray, Windows shows a
+  notice ("Jarvis is waiting for you: …"), the tray says how many are waiting,
+  and it reminds you after an hour and again after eight. Clicking opens the
+  job.
+- **A Windows restart no longer leaves it closed** (v1.249.0): Iron Jarvis
+  offers to start with Windows, quietly in the tray, so schedules and messages
+  keep running after an overnight restart — and a Windows shutdown is no longer
+  counted as a crash. You can turn it off in Settings.
+- **If it cannot start, it says why** (v1.249.0): instead of always blaming the
+  port, the message names the likely cause — another program on the port, a
+  locked database, a failed data upgrade, a missing program file — and offers
+  **Retry**, **Open logs** and **Quit**.
+- **Backups can go to a second drive** (v1.249.0): Settings → Maintenance →
+  Backups can copy every backup to another drive, and with it the images,
+  video and audio Iron Jarvis has made for you (which backups never included
+  before). The card says when the last copy happened, or names the folder if
+  the drive is not plugged in — backups keep running on this PC either way.
+  That copy holds your database, settings and saved logins, so keep the drive
+  somewhere safe.
 - **Usage counts models that did work** (v1.232.0): the By-model list and
   "Across N models" leave out the offline mock provider and rows that moved
   zero tokens (a probe, a refused call, a misconfigured id); the API still

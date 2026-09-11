@@ -270,10 +270,18 @@ def test_system_activity_counts_live_sessions_and_runs(tmp_path):
     app = create_app(str(tmp_path))
     c = TestClient(app)
     idle = c.get("/system/activity").json()
+    # v1.249.0 (R-02) widened this answer: an update's busy warning must also
+    # see a chat reply being written (session_id "chat", no Session row) and a
+    # Build pane with work in it. Still an EXACT match — the update dialog
+    # reads these keys by name, so a silently dropped one is a warning that
+    # stops warning.
     assert idle == {
         "active_sessions": 0,
         "running_workflow_runs": 0,
         "writing_workflow_runs": 0,
+        "chat_replies": 0,
+        "busy_panes": 0,
+        "busy_pane_clis": [],
         "busy": False,
     }
     with session_scope(app.state.platform.engine) as db:

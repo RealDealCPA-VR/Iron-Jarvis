@@ -523,9 +523,18 @@ def register(app: FastAPI, d) -> None:
             return {"approvals": []}
 
         def _recent_requests() -> list[tuple[str, str, str]]:
-            # Bounded by construction: a pending approval is at most one
-            # timeout window old (<=300s), so the newest 200 rows of an
-            # indexed-type query are more than enough to cover every live id.
+            # Bounded by ROW COUNT, not by age (corrected v1.249.0). The old
+            # reason — "a pending approval is at most one timeout window old
+            # (<=300s)" — died with v1.247.0: an ATTENDED ask (chat/job/
+            # project/user) now waits with NO expiry, so a live id can be hours
+            # or days old. 200 newest rows still covers every realistic case
+            # (each pending ask is one row, and `ids` is what actually limits
+            # the answer), but the honest limit is this: an install that
+            # accumulated more than 200 approval.requested rows SINCE the
+            # oldest unanswered ask would miss that ask's metadata — it stays
+            # in `ids`, so the ask is still listed, only without its tool name.
+            # v1.249.0's tray watcher (desktop/main.js installAskWatcher) reads
+            # this listing, so keep the fallback wording usable on its own.
             from ...core.events import EventType
             from ...core.models import EventRecord
 

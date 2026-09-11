@@ -124,8 +124,19 @@ def test_the_route_serves_the_heartbeat_response(tmp_path):
     src = inspect.getsource(chat_routes)
     route = src[src.index('@app.post("/chat/stream")'):]
     route = route[: route.index("@app.post", 10)]
-    assert "HeartbeatStreamingResponse(" in route
-    assert "StreamingResponse(" not in route.replace("HeartbeatStreamingResponse(", "")
+    # The route may serve a SUBCLASS (v1.249.0's ChatReplyStreamingResponse
+    # counts the reply for the update warning), so pin the BEHAVIOUR rather
+    # than one class name: whatever it returns must be a heartbeat response,
+    # and a bare StreamingResponse must never be served here — that is the
+    # regression this test exists to catch (a turn that goes quiet).
+    import re
+
+    served = re.search(r"return\s+(\w*StreamingResponse)\(", route)
+    assert served, route[-400:]
+    name = served.group(1)
+    assert name != "StreamingResponse", "a bare StreamingResponse goes quiet"
+    cls = getattr(chat_routes, name)
+    assert issubclass(cls, chat_routes.HeartbeatStreamingResponse)
 
 
 # --- the tool deadline -------------------------------------------------------

@@ -676,6 +676,45 @@ does not need a bump, stop and bump it.
   first (and, with bytes recorded as they arrive, last) character could be
   half a code point. `_utf8_window` trims only those edges — invalid bytes
   inside still show; `tests/test_terminal_tail_utf8_v1248.py`.
+- **An update stops tidily, and what it interrupted is offered back**
+  (v1.249.0, R-02/R-03/R-04/R-06 — the user's Upgrade Ballot). The installer is
+  verified BEFORE anything stops: a bad download must never cost a live daemon.
+  Then the daemon gets Quit's tidy stop (`requestDaemonShutdown`), and a handoff
+  that fails RESPAWNS the children before the dialog — `quitAndInstall` returns
+  false and routes failures through its own `error` event, so the teardown must
+  not run first. The busy warning counts what the old one could not see: chat
+  replies (session_id "chat", no Session row — `core/turns.CHAT_INFLIGHT`) and
+  Build panes whose activity is working/blocked, with "Install when idle"
+  re-checking every 60 s. `Session.interrupted_at` is the tag the boot reconcile
+  writes, ONE `sessions.interrupted` event per boot (never one per session), and
+  `GET /sessions/interrupted` feeds one bell row plus one Overview note whose
+  Continue clears the tag. CLOSING TO THE TRAY DESTROYS THE RENDERER, so a
+  waiting ask is announced by `installAskWatcher` in main.js — never a page
+  toast (DesktopNotifyBridge's old comment claimed otherwise); reminders report
+  how long the ask has ACTUALLY waited. A shutdown-shaped child exit
+  (0x40010004 / session-end) only DEFERS a respawn and is not a crash.
+  `classifyStartupFailure` names the cause from the child's exit and its last
+  log lines — port in use (uvicorn prints `[Errno 10048]`, not `WinError`), a
+  locked database, a failed data upgrade, a missing binary — and the dialog
+  offers Retry / Open logs / Quit. R-01 WAS REJECTED BY THE USER:
+  `quitAndInstall(false, true)` stays as it is, and nothing relaunches the app
+  after a successful install. `tests/test_desktop_reliability_v1249.py`,
+  `tests/test_update_busy_v1249.py`,
+  `dashboard/__tests__/interrupted-jobs-v1249.test.tsx`.
+- **A backup that never leaves the disk it protects is one failure from
+  nothing** (v1.249.0, R-05). `backup_mirror_dir` copies each new archive, plus
+  `artifacts/` + `creative-thumbs/` into `<mirror>/media/`, after automatic AND
+  manual backups. Three rules: the folder is validated at `PUT /settings`
+  through `fs_policy.root_problem` and NEVER at load, or an unplugged drive
+  stops the app booting; the mirror is pruned ONLY over the app's own archive
+  glob (`prune_backups` globs `ironjarvis-backup-*.tar.gz`), because the user's
+  own files live in that folder; and a failed copy records state
+  (`backups/mirror-status.json`, `loop_health["backup_mirror"]`, a doctor line)
+  and never fails the local backup. Media is incremental (size+mtime, FAT
+  slack) and bounded (5000 files / 600 s), and reports what it skipped. The
+  copy holds the database, settings and secrets — the card says so.
+  `tests/test_backup_mirror_v1249.py`,
+  `dashboard/__tests__/backup-mirror-v1249.test.tsx`.
 - **A grant is written where the NEXT run reads, and yolo never rides an
   escalation** (v1.232.0, audit Wave 6, A6/A7/A9). "Allow for this
   conversation" on a session's ask widened an in-memory set and nothing
