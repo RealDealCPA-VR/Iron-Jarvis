@@ -50,6 +50,7 @@ import remarkGfm from "remark-gfm";
 import { get, post, put, ApiError } from "@/lib/api";
 import { useDaemon } from "@/lib/daemon";
 import { useChatStream, StreamError, type ToolCard } from "@/lib/useChatStream";
+import { TurnClock } from "@/components/chat/TurnClock";
 import { ErrorNote, OfflineHint } from "@/components/ui";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { TurnReceipt } from "@/components/chat/TurnReceipt";
@@ -1073,6 +1074,8 @@ export function PaneChat({ paneId, cwd, onRunCommand, onStatus }: PaneChatProps)
             ) : (
               <div className="flex items-center gap-2 text-xs text-zinc-500">
                 <Loader2 size={12} className="animate-spin" /> Thinking…
+                {/* v1.246.0: how long — same clock as the Chat page. */}
+                <TurnClock since={stream.startedAt ?? null} />
               </div>
             )}
           </div>

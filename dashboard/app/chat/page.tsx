@@ -162,6 +162,7 @@ import {
   type ToolCard,
   type ContextUsage,
 } from "@/lib/useChatStream";
+import { QuietNote, TurnClock } from "@/components/chat/TurnClock";
 import { useRunStream } from "@/lib/useRunStream";
 import { appendDictation } from "@/components/VoiceInput";
 import { Empty, ErrorNote, LoaderInline, OfflineHint } from "@/components/ui";
@@ -6150,11 +6151,22 @@ export default function ChatPage() {
                                 size={14}
                                 className="animate-spin text-accent-soft"
                               />
-                              <span className="animate-pulse">Thinking…</span>
+                              {/* v1.246.0: WHAT it is waiting on, and for how
+                                  long — a working turn and a stuck one used
+                                  to show the same pulsing word forever. */}
+                              <span className="animate-pulse">
+                                {stream.phase === "preparing" && stream.withFiles
+                                  ? "Reading your files…"
+                                  : "Thinking…"}
+                              </span>
+                              <TurnClock since={stream.startedAt ?? null} />
                             </span>
                           )}
                           {stream.tools.length > 0 && (
                             <ToolCardList cards={stream.tools} />
+                          )}
+                          {stream.text && (
+                            <QuietNote since={stream.lastEventAt ?? null} />
                           )}
                           {/* MID-TURN APPROVAL (v1.187.0): the daemon paused
                               this turn on an ask-tier tool and is waiting for

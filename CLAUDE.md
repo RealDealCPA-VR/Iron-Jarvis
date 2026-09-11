@@ -281,7 +281,8 @@ does not need a bump, stop and bump it.
   (`config.tool_call_timeout_s`, passed as `registry.invoke(deadline_s=)`):
   the timeout is an ORDINARY failed ToolResult through the same `_record` +
   `tool.executed` path, so it is one row with the right words and the run
-  continues; chat passes none. The deadline is `asyncio.timeout(...) as cm`
+  continues; both chat lanes pass it too since v1.246.0. The deadline is
+  `asyncio.timeout(...) as cm`
   and only `cm.expired()` earns the deadline wording: on 3.11+
   `asyncio.TimeoutError` IS the builtin, so a `TimeoutError` the TOOL raised
   (socket.timeout, an inner wait_for) must keep its own message — a bare
@@ -584,6 +585,32 @@ does not need a bump, stop and bump it.
   heartbeat logs stalls > 250 ms, and Ctrl+C with a selection copies.
   `tests/test_build_stability_v1245.py`,
   `dashboard/__tests__/build-stability-v1245.test.tsx`.
+- **A chat turn never goes quiet, never ends empty** (v1.246.0, C1). The
+  user's report: chat "gets hung up from time to time" and an attach-and-ask
+  turn ended on "a completed screen with absolutely no output". (1) Keepalives
+  were sent only during an approval wait, so a model thinking or a tool running
+  was total silence: `/chat/stream` is served by `HeartbeatStreamingResponse`
+  (a `: keepalive` after `_SSE_HEARTBEAT_S` = 10 s of silence; the body
+  iterator is still advanced in the response task, so cancellation and the
+  ledger are untouched). (2) `streamSSE` had no limit: it ends a turn after
+  `STREAM_STALL_MS` (60 s) with NO bytes — keepalives reset it — and after
+  `STREAM_PREP_MS` (10 min) with no response, each with a Retry sentence; the
+  caller's own abort stays silent. Keep the stall well above the heartbeat.
+  (3) The bubble says what it waits on and for how long (`useChatStream`
+  `phase`/`withFiles`/`startedAt`/`lastEventAt`; `components/chat/TurnClock`
+  ticks itself so the page never re-renders per second; "Reading your files…"
+  only while `preparing` a turn that carries attachments). (4) Both chat lanes
+  pass `deadline_s=chat_tool_deadline(platform)` — the agent run's setting.
+  (5) A model that was reached but wrote nothing is asked ONCE, without tools
+  and within `_FINAL_ANSWER_TIMEOUT_S`, for its answer
+  (`_final_answer_after_tools`, billed); only then does `_no_text_reply` say in
+  plain words what happened — never the bare "(no reply)". A draft exit or an
+  escalation is an answer and gets no nudge. (6) `rag_block` runs via
+  `asyncio.to_thread` (chunking + per-chunk embedding froze the loop), and the
+  chat ledger row carries the turn's real start (`started_at`). Every one of
+  these is lock-step across `chat_turn.py` and `routes/chat.py`.
+  `tests/test_chat_never_hangs_v1246.py`,
+  `dashboard/__tests__/chat-never-hangs-v1246.test.tsx`.
 - **A grant is written where the NEXT run reads, and yolo never rides an
   escalation** (v1.232.0, audit Wave 6, A6/A7/A9). "Allow for this
   conversation" on a session's ask widened an in-memory set and nothing

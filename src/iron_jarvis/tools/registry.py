@@ -567,8 +567,9 @@ class ToolRegistry:
             # passes `config.tool_call_timeout_s`) turns that into an ordinary
             # failed result that flows through the SAME `_record` +
             # `tool.executed` path below — one row, the right words, and the
-            # run continues to its next step. ``None`` = no deadline (chat and
-            # every caller not passing one keep today's behaviour).
+            # run continues to its next step. ``None`` = no deadline (every
+            # caller not passing one keeps today's behaviour). Both chat
+            # lanes pass the same setting since v1.246.0.
             # `asyncio.timeout` (not `wait_for`) so the deadline is told apart
             # from a TimeoutError the TOOL raised (socket.timeout, an inner
             # wait_for): on 3.11+ `asyncio.TimeoutError` IS the builtin, so a

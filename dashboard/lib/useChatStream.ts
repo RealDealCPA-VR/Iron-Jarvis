@@ -353,98 +353,188 @@ function isAbort(e: unknown): boolean {
 
 // ------------------------------------------------------------------- streamSSE
 
+/** A stream that delivers NO bytes — not even the daemon's keepalive comment,
+ *  sent after 10 s of silence since v1.246.0 — for this long is dead. */
+export const STREAM_STALL_MS = 60_000;
+
+/** The daemon prepares a turn (reads the attachments, arms the tools) BEFORE
+ *  it answers the request, so no bytes flow then. Past this, the preparation
+ *  is stuck rather than slow (v1.246.0). */
+export const STREAM_PREP_MS = 10 * 60_000;
+
+export function stallDetail(ms: number): string {
+  return (
+    `Nothing arrived from the daemon for ${Math.round(ms / 1000)} s, so this ` +
+    "turn was stopped. Anything it already finished is kept — press Retry to " +
+    "run it again."
+  );
+}
+
+export function prepDetail(ms: number): string {
+  return (
+    `The daemon spent over ${Math.max(1, Math.round(ms / 60_000))} minutes ` +
+    "preparing this turn without starting it, so it was stopped. Press Retry, " +
+    "or attach fewer or smaller files."
+  );
+}
+
+/** The watchdog's limits and the progress hook for one stream (v1.246.0). */
+export interface StreamWatch {
+  stallMs?: number;
+  prepMs?: number;
+  /** The daemon finished preparing: the response has begun. */
+  onOpen?: () => void;
+}
+
 /**
  * POST `body` to an SSE endpoint and yield each decoded frame. The token rides
  * in an Authorization header (fetch, unlike EventSource, can set one). Aborts
  * are swallowed (the generator simply ends); a non-2xx response or a network
  * failure yields a single `error` event with the parsed detail.
+ *
+ * NEVER HANGS SILENTLY (v1.246.0). The user's report: chat "gets hung up from
+ * time to time". Nothing here had a limit — a turn whose daemon stopped
+ * answering spun forever. Two watchdogs end it with words instead: no bytes
+ * at all for `stallMs` once the response has begun (the daemon's heartbeat
+ * makes silence meaningful), and no response at all within `prepMs`. Both
+ * abort OUR controller, which is linked to the caller's but is not it.
  */
 export async function* streamSSE(
   path: string,
   body: unknown,
   signal?: AbortSignal,
+  watch: StreamWatch = {},
 ): AsyncGenerator<SSEEvent> {
   const token = ijToken();
-  let res: Response;
+  const stallMs = watch.stallMs ?? STREAM_STALL_MS;
+  const prepMs = watch.prepMs ?? STREAM_PREP_MS;
+  const inner = new AbortController();
+  const relay = () => inner.abort();
+  if (signal?.aborted) inner.abort();
+  else signal?.addEventListener("abort", relay, { once: true });
+  let prepExpired = false;
+  const prepTimer = setTimeout(() => {
+    prepExpired = true;
+    inner.abort();
+  }, prepMs);
+  let stalled = false;
+  let stallTimer: ReturnType<typeof setTimeout> | undefined;
   try {
-    res = await fetch(`${API_BASE}${path}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "text/event-stream",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(body),
-      cache: "no-store",
-      signal,
-    });
-  } catch (e) {
-    if (isAbort(e)) return;
-    // A genuine transport failure (daemon unreachable) — flagged `offline` so the
-    // caller can distinguish it from an in-band provider `error` frame (which also
-    // carries status 0 but is NOT an offline condition).
-    yield { type: "error", detail: "daemon offline", status: 0, offline: true };
-    return;
-  }
-
-  if (!res.ok) {
-    let detail = `${res.status} ${res.statusText}`;
+    let res: Response;
     try {
-      const parsed = (await res.json()) as { detail?: unknown };
-      // v1.226.0: a list-shaped pydantic 422 flattens to "field: msg" (C4).
-      if (parsed?.detail) detail = flattenDetail(parsed.detail);
-    } catch {
-      /* body wasn't JSON — keep the status line */
-    }
-    yield { type: "error", detail, status: res.status };
-    return;
-  }
-
-  const reader = res.body?.getReader();
-  if (!reader) {
-    yield { type: "error", detail: "no response body", status: res.status };
-    return;
-  }
-  const decoder = new TextDecoder();
-  let buffer = "";
-  try {
-    for (;;) {
-      let chunk: ReadableStreamReadResult<Uint8Array>;
-      try {
-        chunk = await reader.read();
-      } catch (e) {
-        // v1.226.0: the daemon dying MID-TURN surfaces HERE, as a rejected
-        // read() ("Failed to fetch" / "network error"), not in the pre-fetch
-        // catch above. Flag it offline the same way so the page shows the
-        // OfflineHint instead of raw transport text. Scoped to the transport
-        // call only: a parser fault on a bad frame (below) is NOT offline.
-        if (!isAbort(e)) {
-          yield { type: "error", detail: "daemon offline", status: 0, offline: true };
-        }
+      res = await fetch(`${API_BASE}${path}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(body),
+        cache: "no-store",
+        signal: inner.signal,
+      });
+    } catch (e) {
+      if (prepExpired) {
+        yield { type: "error", detail: prepDetail(prepMs), status: 0 };
         return;
       }
-      const { value, done } = chunk;
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let sep: number;
-      // Frames are separated by a blank line.
-      while ((sep = buffer.indexOf("\n\n")) !== -1) {
-        const raw = buffer.slice(0, sep);
-        buffer = buffer.slice(sep + 2);
-        const ev = parseFrame(raw);
-        if (ev) yield ev;
+      if (isAbort(e)) return;
+      // A genuine transport failure (daemon unreachable) — flagged `offline` so the
+      // caller can distinguish it from an in-band provider `error` frame (which also
+      // carries status 0 but is NOT an offline condition).
+      yield { type: "error", detail: "daemon offline", status: 0, offline: true };
+      return;
+    } finally {
+      clearTimeout(prepTimer);
+    }
+
+    if (!res.ok) {
+      let detail = `${res.status} ${res.statusText}`;
+      try {
+        const parsed = (await res.json()) as { detail?: unknown };
+        // v1.226.0: a list-shaped pydantic 422 flattens to "field: msg" (C4).
+        if (parsed?.detail) detail = flattenDetail(parsed.detail);
+      } catch {
+        /* body wasn't JSON — keep the status line */
+      }
+      yield { type: "error", detail, status: res.status };
+      return;
+    }
+
+    const reader = res.body?.getReader();
+    if (!reader) {
+      yield { type: "error", detail: "no response body", status: res.status };
+      return;
+    }
+    watch.onOpen?.();
+    const armStall = () => {
+      if (stallTimer !== undefined) clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => {
+        stalled = true;
+        inner.abort();
+        reader.cancel().catch(() => {
+          /* already closed */
+        });
+      }, stallMs);
+    };
+    armStall();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      for (;;) {
+        let chunk: ReadableStreamReadResult<Uint8Array>;
+        try {
+          chunk = await reader.read();
+        } catch (e) {
+          if (stalled) {
+            yield { type: "error", detail: stallDetail(stallMs), status: 0 };
+            return;
+          }
+          // v1.226.0: the daemon dying MID-TURN surfaces HERE, as a rejected
+          // read() ("Failed to fetch" / "network error"), not in the pre-fetch
+          // catch above. Flag it offline the same way so the page shows the
+          // OfflineHint instead of raw transport text. Scoped to the transport
+          // call only: a parser fault on a bad frame (below) is NOT offline.
+          if (!isAbort(e)) {
+            yield { type: "error", detail: "daemon offline", status: 0, offline: true };
+          }
+          return;
+        }
+        const { value, done } = chunk;
+        if (done) {
+          if (stalled) {
+            yield { type: "error", detail: stallDetail(stallMs), status: 0 };
+            return;
+          }
+          break;
+        }
+        // ANY bytes — a keepalive comment included — prove the daemon is alive.
+        armStall();
+        buffer += decoder.decode(value, { stream: true });
+        let sep: number;
+        // Frames are separated by a blank line.
+        while ((sep = buffer.indexOf("\n\n")) !== -1) {
+          const raw = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          const ev = parseFrame(raw);
+          if (ev) yield ev;
+        }
+      }
+    } catch (e) {
+      if (!isAbort(e)) {
+        yield { type: "error", detail: e instanceof Error ? e.message : String(e) };
+      }
+    } finally {
+      try {
+        await reader.cancel();
+      } catch {
+        /* already closed */
       }
     }
-  } catch (e) {
-    if (!isAbort(e)) {
-      yield { type: "error", detail: e instanceof Error ? e.message : String(e) };
-    }
   } finally {
-    try {
-      await reader.cancel();
-    } catch {
-      /* already closed */
-    }
+    clearTimeout(prepTimer);
+    if (stallTimer !== undefined) clearTimeout(stallTimer);
+    signal?.removeEventListener("abort", relay);
   }
 }
 
@@ -526,6 +616,19 @@ export interface UseChatStream {
    *  answering goes through POST /chat/approvals/{id} — this hook only holds
    *  the state, so the decision has exactly one write path. */
   approval: PendingApproval | null;
+  /** Where the running turn is (v1.246.0): `preparing` until the daemon has
+   *  read the attachments and begun the response, then `working`; null when
+   *  no turn is running. */
+  phase: TurnPhase | null;
+  /** The running turn's request carried attachments — so `preparing` can
+   *  honestly say it is reading them. */
+  withFiles: boolean;
+  /** When the running turn started (ms epoch), or null. */
+  startedAt: number | null;
+  /** When the running turn last produced a real frame (ms epoch), or null.
+   *  Keepalives do not count: they prove the daemon is alive, not that the
+   *  turn moved. */
+  lastEventAt: number | null;
   /** Drive one chat turn. Accumulates tokens into `text`, upserts tool frames
    *  into `tools`, and resolves with the authoritative reply. Throws an
    *  ApiError on an `error` frame (matching the non-streaming POST /chat path). */
@@ -541,11 +644,23 @@ export interface UseChatStream {
  * Drive a single streaming chat turn against `POST /chat/stream`. One turn at a
  * time: a new `run` (or `abort`) tears down any prior AbortController.
  */
+/** See {@link UseChatStream.phase}. */
+export type TurnPhase = "preparing" | "working";
+
+function carriesFiles(body: unknown): boolean {
+  const atts = (body as { attachments?: unknown } | null)?.attachments;
+  return Array.isArray(atts) && atts.length > 0;
+}
+
 export function useChatStream(): UseChatStream {
   const [streaming, setStreaming] = useState(false);
   const [text, setText] = useState("");
   const [tools, setTools] = useState<ToolCard[]>([]);
   const [approval, setApproval] = useState<PendingApproval | null>(null);
+  const [phase, setPhase] = useState<TurnPhase | null>(null);
+  const [withFiles, setWithFiles] = useState(false);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [lastEventAt, setLastEventAt] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const abort = useCallback(() => {
@@ -569,6 +684,18 @@ export function useChatStream(): UseChatStream {
       setText("");
       setTools([]);
       setApproval(null);
+      const t0 = Date.now();
+      setPhase("preparing");
+      setWithFiles(carriesFiles(body));
+      setStartedAt(t0);
+      setLastEventAt(t0);
+      const watch: StreamWatch = {
+        onOpen: () => {
+          if (abortRef.current !== controller) return;
+          setPhase("working");
+          setLastEventAt(Date.now());
+        },
+      };
 
       let acc = "";
       let done: ChatStreamResult | null = null;
@@ -579,7 +706,14 @@ export function useChatStream(): UseChatStream {
       let committed = false;
 
       try {
-        for await (const ev of streamSSE("/chat/stream", body, controller.signal)) {
+        for await (const ev of streamSSE(
+          "/chat/stream",
+          body,
+          controller.signal,
+          watch,
+        )) {
+          // A real frame moved the turn (keepalives never reach here).
+          if (ev.type !== "done" && ev.type !== "error") setLastEventAt(Date.now());
           switch (ev.type) {
             case "token":
               committed = true;
@@ -649,10 +783,18 @@ export function useChatStream(): UseChatStream {
           }
         }
       } finally {
+        // A NEWER turn owns the status line — this one must not blank it.
+        const superseded =
+          abortRef.current !== null && abortRef.current !== controller;
         if (abortRef.current === controller) abortRef.current = null;
         setStreaming(false);
         // A turn that ends however it ends leaves no live question behind.
         setApproval(null);
+        if (!superseded) {
+          setPhase(null);
+          setStartedAt(null);
+          setLastEventAt(null);
+        }
       }
 
       // done.reply is authoritative; fall back to the accumulated text if the
@@ -662,5 +804,16 @@ export function useChatStream(): UseChatStream {
     [],
   );
 
-  return { streaming, text, tools, approval, run, abort };
+  return {
+    streaming,
+    text,
+    tools,
+    approval,
+    phase,
+    withFiles,
+    startedAt,
+    lastEventAt,
+    run,
+    abort,
+  };
 }

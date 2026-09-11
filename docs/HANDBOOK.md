@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.245.0 (2026-09-11).*
+holds itself to. Current as of v1.246.0 (2026-09-11).*
 
 ---
 
@@ -58,6 +58,17 @@ Chat is where most work happens, and it is wired into everything:
   folder is used instead; if it was pointed at one it cannot (such as
   `C:\Users`), the chip says so. Change the parent folder with the
   `chat_files_root` setting.
+- **A turn that is working says so** (v1.246.0): while a reply is on its
+  way, the bubble names what it is waiting on — "Reading your files…" while
+  your attachments are read, then "Thinking…" — with a clock once it passes a
+  few seconds, and "Still working · 40s" under text that has gone quiet (a
+  tool running, the model thinking between steps). The daemon sends a
+  keepalive every 10 seconds, so if nothing at all arrives for a minute the
+  turn is stopped with a sentence saying so and a Retry, instead of spinning
+  forever. A tool call in chat has the same time limit as in an agent run
+  (`tool_call_timeout_s`), and a model that finishes its work without writing
+  an answer is asked once for it — you get the answer, not a raw tool dump or
+  an empty bubble.
 - **Files rail**: every file a conversation *makes or was given* appears on
   the right — preview (spreadsheets as sheets, PDFs and images inline, docx as
   a Word-faithful page), download, open in the native app, save a copy, and a

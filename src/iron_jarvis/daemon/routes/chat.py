@@ -58,8 +58,12 @@ from ..chat_turn import (
     DRAFT_BLOCK,
     _creation_honesty_note,
     _enforce_language,
+    _final_answer_after_tools,
     _last_user_text,
+    _no_text_reply,
     _persist_chat_usage,
+    _wants_final_answer,
+    chat_tool_deadline,
     _apply_compaction,
     _plan_context,
     _profile_section,
@@ -102,6 +106,76 @@ _THREAD_SAVE_LOCK = CONVERSATION_WRITE_LOCK
 def _sse(event: str, data: dict[str, Any]) -> str:
     """Serialize one Server-Sent Event frame (FX-01 wire format)."""
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+#: Seconds of silence on a chat stream before the daemon sends a keepalive
+#: comment (v1.246.0). The dashboard ends a turn it has heard NOTHING from for
+#: a minute, so this must stay well under that.
+_SSE_HEARTBEAT_S = 10.0
+
+_SSE_KEEPALIVE = b": keepalive\n\n"
+
+
+class HeartbeatStreamingResponse(StreamingResponse):
+    """A ``StreamingResponse`` that never goes quiet for long (v1.246.0).
+
+    THE SILENT FAILURE THIS PREVENTS: a chat turn that looks hung. Keepalives
+    used to be sent ONLY while an approval card waited; a cold local model
+    thinking for 40 s, a tool running for two minutes, or the language
+    rewrite sent nothing at all, so the browser could not tell "working" from
+    "dead" — and neither could the user.
+
+    The body iterator is advanced EXACTLY as Starlette advances it — in the
+    response task, one ``send`` per chunk — so the turn's cancellation and
+    ledger semantics are untouched. A sibling task only ADDS a ``: keepalive``
+    comment (invisible to every SSE parser) after ``_SSE_HEARTBEAT_S`` of
+    silence. The lock keeps the two senders from interleaving a frame.
+    """
+
+    async def stream_response(self, send) -> None:
+        import time
+
+        await send({
+            "type": "http.response.start",
+            "status": self.status_code,
+            "headers": self.raw_headers,
+        })
+        lock = asyncio.Lock()
+        last = time.monotonic()
+
+        async def _beat() -> None:
+            nonlocal last
+            while True:
+                interval = _SSE_HEARTBEAT_S
+                await asyncio.sleep(max(0.01, interval - (time.monotonic() - last)))
+                if time.monotonic() - last < interval:
+                    continue
+                async with lock:
+                    try:
+                        await send({
+                            "type": "http.response.body",
+                            "body": _SSE_KEEPALIVE,
+                            "more_body": True,
+                        })
+                    except Exception:  # noqa: BLE001 — the main send will say
+                        return
+                    last = time.monotonic()
+
+        beat = asyncio.create_task(_beat())
+        try:
+            async for chunk in self.body_iterator:
+                if not isinstance(chunk, (bytes, memoryview)):
+                    chunk = chunk.encode(self.charset)
+                async with lock:
+                    await send({
+                        "type": "http.response.body",
+                        "body": chunk,
+                        "more_body": True,
+                    })
+                    last = time.monotonic()
+        finally:
+            beat.cancel()
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
 
 
 async def _router_frames(router, **kwargs):
@@ -1270,7 +1344,8 @@ def register(app: FastAPI, d) -> None:
             body,
             should_stop=request.is_disconnected,
         )
-        return StreamingResponse(
+        # v1.246.0: never quiet for long — see HeartbeatStreamingResponse.
+        return HeartbeatStreamingResponse(
             gen,
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -1458,6 +1533,11 @@ async def chat_stream(
     # it did as a route closure — the shim keeps the lift mechanical, and is
     # the SAME shim ``chat_turn.run_chat_turn`` has carried since v1.136.0.
     d = SimpleNamespace(platform=platform)
+    from ...core.ids import utcnow as _utcnow
+
+    # v1.246.0: the ledger row's real start (prep included — reading the
+    # attachments is part of what the user waited for).
+    turn_started = _utcnow()
 
     if not body.messages:
         raise HTTPException(status_code=400, detail="messages is required")
@@ -2165,6 +2245,7 @@ async def chat_stream(
                 d, provider=route_provider, model=route_model,
                 state=state, completions=completions,
                 usage_in=usage_in, usage_out=usage_out,
+                started_at=turn_started,
             )
 
         try:
@@ -2446,6 +2527,8 @@ async def chat_stream(
                             overrides,
                             session_allow=(armed_grant | _grant_extra),
                             allowed_names=_turn_tools,
+                            # v1.246.0 — lock-step with chat_turn.
+                            deadline_s=chat_tool_deadline(d.platform),
                             **(
                                 {"deny_reason": _deny_reason}
                                 if _deny_reason
@@ -2583,6 +2666,23 @@ async def chat_stream(
         # during generation; that is honest (it IS what the model produced)
         # and needs no client change. MIRROR NOTE (lock-step): chat_turn.
         try:
+            # FINAL ANSWER (v1.246.0) — lock-step copy of chat_turn's. The
+            # heartbeat keeps the stream alive while it runs, and the answer
+            # lands in the authoritative `done` frame.
+            if _wants_final_answer(
+                reply_text or "", workflow_draft, escalate, completions,
+            ):
+                _f_text, _f_in, _f_out, _f_n = await _final_answer_after_tools(
+                    d.platform,
+                    system=system,
+                    messages=msgs,
+                    provider=provider_choice,
+                    model=model_choice,
+                )
+                reply_text = _f_text
+                usage_in += _f_in
+                usage_out += _f_out
+                completions += _f_n
             reply_text, lang_note, _l_in, _l_out, _l_n = await _enforce_language(
                 d.platform,
                 text=reply_text or "",
@@ -2622,12 +2722,9 @@ async def chat_stream(
                 names = ", ".join(dict.fromkeys(denied_tools))
                 reply += f"\n\n_Note: {names} could not run (permission denied)._"
         else:
-            if not reply.strip() and last_tool_output:
-                snippet = last_tool_output.strip()[:600]
-                ran_names = ", ".join(dict.fromkeys(tools_used)) or "the armed tools"
-                reply = f"Ran {ran_names}. Result:\n{snippet}"
-            elif not reply.strip():
-                reply = "(no reply)"
+            if not reply.strip():
+                # v1.246.0 — lock-step with chat_turn.
+                reply = _no_text_reply(tools_used, last_tool_output)
             if denied_tools:
                 names = ", ".join(dict.fromkeys(denied_tools))
                 reply += f"\n\n_Note: {names} could not run (permission denied)._"

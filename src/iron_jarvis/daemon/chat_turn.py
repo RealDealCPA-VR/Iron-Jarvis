@@ -1016,6 +1016,108 @@ async def _enforce_language(
     return (text, NOTE_FAILED.format(name=label(code)), u_in, u_out, 1)
 
 
+#: The one "now write your answer" completion may take this long (v1.246.0).
+#: It is a last resort after the loop ended with NO text, so it is bounded: a
+#: wedged model must not turn a finished job into a turn that never ends.
+_FINAL_ANSWER_TIMEOUT_S = 120.0
+
+FINAL_ANSWER_INSTRUCTION = (
+    "You stopped without writing a reply. Write your final answer to my "
+    "request now, using what the tool results above show. Do not call any "
+    "tools. If you created or changed a file, say which one and where it is."
+)
+
+
+def chat_tool_deadline(platform) -> float | None:
+    """The chat lanes' tool deadline (v1.246.0): the SAME setting an agent run
+    obeys (``config.tool_call_timeout_s``, read live per call). Chat used to
+    pass none, so a hung tool held the turn — and the user's screen — open
+    with nothing moving; now the timeout is an ordinary failed result the
+    model reads and answers from. MIRROR NOTE (lock-step): both chat lanes."""
+    from ..agents.runtime import _tool_deadline
+
+    return _tool_deadline(getattr(platform, "config", None))
+
+
+def _wants_final_answer(text: str, workflow_draft, escalate: bool,
+                        completions: int) -> bool:
+    """Did the loop end with a model that was reached but wrote nothing?
+
+    A draft exit and an escalation are answers of their own (the card, the
+    hand-off), so they never get the nudge."""
+    return (
+        completions > 0
+        and not (text or "").strip()
+        and workflow_draft is None
+        and not escalate
+    )
+
+
+async def _final_answer_after_tools(
+    platform,
+    *,
+    system: str,
+    messages,
+    provider: str,
+    model: str,
+) -> tuple[str, int, int, int]:
+    """Ask the SAME model once, WITHOUT tools, for the answer it never wrote.
+    Returns ``(text, usage_in, usage_out, completions)`` — ``text`` is "" when
+    the nudge failed, timed out or came back empty, and the caller's honest
+    fallback takes over.
+
+    THE SILENT FAILURE THIS PREVENTS (v1.246.0): "a completed screen with
+    absolutely no output". A local model regularly ends its tool loop with an
+    empty message — the work is done, the file is written, and nothing says
+    so. The reply used to be the raw tool output ("Ran X. Result: …") or the
+    bare "(no reply)". One bounded completion with no tools cannot re-run a
+    side effect, and its usage rides back so it is billed like any other.
+    """
+    from ..providers.adapters.base import LLMMessage
+
+    nudge = list(messages or []) + [
+        LLMMessage(role="user", content=FINAL_ANSWER_INSTRUCTION),
+    ]
+    try:
+        async with asyncio.timeout(_FINAL_ANSWER_TIMEOUT_S):
+            route = await platform.router.complete(
+                provider=provider or None,
+                model=model or None,
+                system=system,
+                messages=nudge,
+                # EMPTY LIST, never None — same reason as the language rewrite.
+                tools=[],
+                task_class="chat",
+            )
+    except Exception:  # noqa: BLE001 — the fallback below is still honest
+        log.warning("final-answer completion failed", exc_info=True)
+        return ("", 0, 0, 0)
+    usage = route.response.usage or {}
+    return (
+        (route.response.text or "").strip(),
+        int(usage.get("input_tokens", 0) or 0),
+        int(usage.get("output_tokens", 0) or 0),
+        1,
+    )
+
+
+def _no_text_reply(tools_used: list[str], last_tool_output: str) -> str:
+    """The reply when the model wrote nothing even after being asked once.
+    Says what happened in plain words; never an empty bubble.
+    MIRROR NOTE (lock-step): both chat lanes call this."""
+    if last_tool_output.strip():
+        snippet = last_tool_output.strip()[:600]
+        ran = ", ".join(dict.fromkeys(tools_used)) or "the armed tools"
+        return (
+            "The model finished without writing an answer. "
+            f"Here is what {ran} returned:\n{snippet}"
+        )
+    return (
+        "The model returned an empty answer — no tool ran and nothing was "
+        "written. Press Retry, or pick a different model."
+    )
+
+
 def _resolve_connectors(d, body) -> tuple[list[str], list[str]]:
     """Split the turn's toggled connectors into (mcp_tool_names, memory_sources).
 
@@ -2594,7 +2696,12 @@ async def _prepare_attachments(
                 # RETRIEVAL, not a head-clip: ground on the chunks
                 # relevant to THIS question, with location refs — the
                 # old fixed clip fed page 1 and dropped the rest.
-                parts.append(rag_block(
+                # OFF THE LOOP (v1.246.0): chunking a big document and
+                # embedding every chunk is synchronous CPU (and, for an HTTP
+                # embedder, network) work — on the loop it froze every
+                # request in the app while the chat said nothing.
+                parts.append(await asyncio.to_thread(
+                    rag_block,
                     p.name, text, query,
                     getattr(d.platform, "embedder", None),
                     k=rag_k, char_budget=rag_budget, note=note,
@@ -2629,13 +2736,18 @@ async def _prepare_attachments(
 def _persist_chat_usage(
     d, *, provider: str, model: str, state: AgentState,
     completions: int, usage_in: int, usage_out: int,
+    started_at=None,
 ) -> None:
     """USAGE LEDGER: direct chat turns must count like agent runs, or the Usage
     page under-reports the user's main surface. Persist a run row (session_id
     "chat") with the adapters' reported token usage — including turns that
     FAILED partway, because the rounds that did complete were still billed.
     Accounting must never break (or alter) a reply or an error, so persistence
-    failures are swallowed."""
+    failures are swallowed.
+
+    ``started_at`` (v1.246.0): when the turn began. The row used to be created
+    at the END, so every chat turn recorded a duration of 0.0 s and a slow
+    turn was invisible in the one place a slow turn could be measured."""
     try:
         from ..core.ids import utcnow as _now
         from ..core.models import AgentRun
@@ -2651,6 +2763,7 @@ def _persist_chat_usage(
                 input_tokens=usage_in,
                 output_tokens=usage_out,
                 finished_at=_now(),
+                **({"created_at": started_at} if started_at is not None else {}),
             ))
             db.commit()
     except Exception:  # noqa: BLE001 — accounting must never break a reply
@@ -2677,6 +2790,9 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     # shared helpers above take the same ``d``-shaped first argument the
     # /chat/stream call sites in routes/chat.py still pass).
     d = SimpleNamespace(platform=platform)
+    from ..core.ids import utcnow as _utcnow
+
+    turn_started = _utcnow()  # v1.246.0: the ledger row's real start
 
     if not body.messages:
         raise HTTPException(status_code=400, detail="messages is required")
@@ -3338,10 +3454,13 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                     # run whenever ANY tool was armed. MIRROR NOTE
                     # (lock-step): the stream loop in routes/chat.py passes
                     # its own armed set the same way — edit both or neither.
+                    # v1.246.0: the agent run's tool deadline, so a hung
+                    # tool ends as a failed result instead of a hung turn.
                     result = await d.platform.registry.invoke(
                         tc.name, tc.arguments, ctx, d.platform.permissions,
                         overrides, session_allow=armed_grant,
                         allowed_names=set(armed),
+                        deadline_s=chat_tool_deadline(d.platform),
                     )
                     if result.ok:
                         content = result.output
@@ -3452,6 +3571,7 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
                 d, provider=route.provider, model=route.model,
                 state=AgentState.FAILED, completions=completions,
                 usage_in=usage_in, usage_out=usage_out,
+                started_at=turn_started,
             )
         raise HTTPException(status_code=502, detail=str(exc))
     # LANGUAGE GUARD (v1.144.0) — runs BEFORE the ledger below so a corrective
@@ -3460,6 +3580,22 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
     # construction and must never trigger (or be eaten by) a rewrite.
     # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
     model_text = route.response.text or ""
+    # FINAL ANSWER (v1.246.0): the model was reached but wrote nothing — ask
+    # it once, without tools, for the answer. Before the language guard, so
+    # the answer is checked like any other; billed below like any other.
+    # MIRROR NOTE (lock-step): stream copy in routes/chat.py.
+    if _wants_final_answer(model_text, workflow_draft, escalate, completions):
+        _f_text, _f_in, _f_out, _f_n = await _final_answer_after_tools(
+            d.platform,
+            system=system,
+            messages=msgs,
+            provider=provider_choice,
+            model=model_choice,
+        )
+        model_text = _f_text
+        usage_in += _f_in
+        usage_out += _f_out
+        completions += _f_n
     model_text, lang_note, _l_in, _l_out, _l_n = await _enforce_language(
         d.platform,
         text=model_text,
@@ -3479,6 +3615,7 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
         d, provider=route.provider, model=route.model,
         state=AgentState.COMPLETED, completions=completions,
         usage_in=usage_in, usage_out=usage_out,
+        started_at=turn_started,
     )
     # Reply honesty: if the model returned no final text but tools DID run
     # with output, synthesize a short summary from the last result rather
@@ -3501,12 +3638,9 @@ async def run_chat_turn(platform, personas: dict, body) -> dict[str, Any]:
             names = ", ".join(dict.fromkeys(denied_tools))
             reply += f"\n\n_Note: {names} could not run (permission denied)._"
     else:
-        if not reply.strip() and last_tool_output:
-            snippet = last_tool_output.strip()[:600]
-            ran = ", ".join(dict.fromkeys(tools_used)) or "the armed tools"
-            reply = f"Ran {ran}. Result:\n{snippet}"
-        elif not reply.strip():
-            reply = "(no reply)"
+        if not reply.strip():
+            # v1.246.0: said in plain words — never the bare "(no reply)".
+            reply = _no_text_reply(tools_used, last_tool_output)
         if denied_tools:
             names = ", ".join(dict.fromkeys(denied_tools))
             reply += f"\n\n_Note: {names} could not run (permission denied)._"
