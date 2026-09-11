@@ -148,9 +148,26 @@ class OutputSubscription:
         self._chunks: deque[bytes] = deque()
         self._size = 0
         self.overflowed = False
+        # v1.248.0: called — from whichever thread pushed — after every push,
+        # on overflow, and when the session's output ends. The route's pump
+        # sleeps until it fires instead of polling every 10 ms. Must be cheap
+        # and thread-safe (the route passes a `call_soon_threadsafe`).
+        self._waker: "Callable[[], None] | None" = None
+
+    def set_waker(self, waker: "Callable[[], None] | None") -> None:
+        """Install the callback that wakes this attach's sender (v1.248.0)."""
+        self._waker = waker
+
+    def _wake(self) -> None:
+        waker = self._waker
+        if waker is not None:
+            try:
+                waker()
+            except Exception:  # noqa: BLE001 — a closing loop must not break a reader
+                pass
 
     def _push(self, data: bytes) -> None:
-        """Called by :meth:`TerminalSession.read` with the read lock held."""
+        """Called by :meth:`TerminalSession._record_locked` with the read lock held."""
         if self.overflowed:
             return
         self._chunks.append(data)
@@ -159,6 +176,7 @@ class OutputSubscription:
             self.overflowed = True
             self._chunks.clear()
             self._size = 0
+        self._wake()
 
     def take(self) -> bytes:
         """Everything delivered since the last take, as one chunk (``b""`` if none)."""
@@ -246,8 +264,14 @@ class TerminalSession:
         self._killed = False
 
     def start(self, env: dict | None = None) -> "TerminalSession":
-        """Spawn the shell (idempotent)."""
+        """Spawn the shell (idempotent).
+
+        A PUSHING backend (v1.248.0: the raw ConPTY) is handed :meth:`_ingest`
+        BEFORE it spawns — its reader thread starts with the child, and a
+        handler installed afterwards would miss the shell's first bytes."""
         if not self._started:
+            if self.pushes_output:
+                self.backend.set_output_handler(self._ingest, self._on_output_eof)
             self.backend.start(self.argv, self.cwd, env, self.cols, self.rows)
             self._started = True
         return self
@@ -256,6 +280,26 @@ class TerminalSession:
         with self._write_lock:  # one writer at a time — keystrokes never interleave
             self.backend.write(data)
 
+    @property
+    def pushes_output(self) -> bool:
+        """True when the backend delivers output from its own reader thread
+        (v1.248.0) — nothing needs to poll :meth:`read`, and no drain runs."""
+        return bool(getattr(self.backend, "pushes_output", False))
+
+    @property
+    def output_finished(self) -> bool:
+        """Has every byte this PTY will produce been recorded (v1.248.0)?
+
+        A pushing backend's reader can still be delivering the last output
+        for a moment after the shell has exited, so a pump that closed on
+        "not alive" alone would cut the final lines off. A polling backend is
+        finished whenever a read comes back empty, which its caller checks for
+        itself; and a session WE killed is finished — nobody waits on the tail
+        of a pane the user closed."""
+        if not self.pushes_output or self._killed:
+            return True
+        return bool(getattr(self.backend, "output_finished", True))
+
     def read(self, max_bytes: int = 65536) -> bytes:
         """Non-blocking read of pending output (``b""`` if nothing ready).
 
@@ -263,28 +307,59 @@ class TerminalSession:
         :class:`OutputSubscription` (v1.243.0), so it no longer matters WHO
         reads — the pane's own pump, a second pane's, or the background drain
         thread. Serialized, so the tail and every subscription see each chunk
-        once, in order."""
+        once, in order. On a PUSHING backend there is nothing to poll: this
+        returns ``b""`` and the backend's reader thread records output through
+        :meth:`_ingest` instead."""
         answer_da1 = False
         with self._read_lock:
             data = self.backend.read_nonblocking(max_bytes)
             if data:
-                self._tail += data
-                if len(self._tail) > TAIL_MAX_BYTES:
-                    del self._tail[: len(self._tail) - TAIL_MAX_BYTES]
-                    self._tail_truncated = True
-                self.last_output_at = time.monotonic()
-                self.output_seq += 1
-                for sub in self._subscribers:
-                    sub._push(data)
-                # Nobody attached means nobody to answer the terminal's
-                # questions — see _asks_device_attributes (v1.245.0).
-                answer_da1 = not self._subscribers and _asks_device_attributes(data)
+                answer_da1 = self._record_locked(data)
         if answer_da1:
-            try:
-                self.write(_DA1_REPLY)
-            except Exception:  # noqa: BLE001 — a dying PTY needs no answer
-                pass
+            self._answer_da1()
         return data
+
+    def _ingest(self, data: bytes) -> None:
+        """A pushing backend's reader thread hands each chunk HERE (v1.248.0),
+        the moment it exists — through the same :meth:`_record_locked` that
+        :meth:`read` uses, so the tail, ``output_seq``, the attached panes and
+        the DA1 answer cannot drift between a polled and a pushed backend."""
+        if not data:
+            return
+        with self._read_lock:
+            answer_da1 = self._record_locked(data)
+        if answer_da1:
+            self._answer_da1()
+
+    def _record_locked(self, data: bytes) -> bool:
+        """THE one place terminal output is processed. The caller holds
+        ``_read_lock``. Returns whether the terminal's DA1 question needs the
+        SESSION's answer (see :func:`_asks_device_attributes`)."""
+        self._tail += data
+        if len(self._tail) > TAIL_MAX_BYTES:
+            del self._tail[: len(self._tail) - TAIL_MAX_BYTES]
+            self._tail_truncated = True
+        self.last_output_at = time.monotonic()
+        self.output_seq += 1
+        for sub in self._subscribers:
+            sub._push(data)
+        # Nobody attached means nobody to answer the terminal's questions —
+        # see _asks_device_attributes (v1.245.0).
+        return not self._subscribers and _asks_device_attributes(data)
+
+    def _answer_da1(self) -> None:
+        try:
+            self.write(_DA1_REPLY)
+        except Exception:  # noqa: BLE001 — a dying PTY needs no answer
+            pass
+
+    def _on_output_eof(self) -> None:
+        """A pushing backend's output has ENDED (v1.248.0): wake every attached
+        pane, so its pump sees the exit now instead of at its next timeout."""
+        with self._read_lock:
+            subs = list(self._subscribers)
+        for sub in subs:
+            sub._wake()
 
     # --- Live attaches (v1.243.0) -------------------------------------------
 
@@ -346,8 +421,12 @@ class TerminalSession:
     def start_autodrain(self) -> None:
         """Begin draining output in the background so it's captured even when no
         WebSocket is attached (the Creative Studio case). Idempotent — safe to
-        call more than once on the same session."""
-        if self._drain_thread is not None:
+        call more than once on the same session.
+
+        A PUSHING backend needs none (v1.248.0): its own reader thread never
+        stops reading, so a PTY nobody watches cannot fill up and the tail is
+        always current — a drain here would only poll an empty queue."""
+        if self._drain_thread is not None or self.pushes_output:
             return
         self._drain_stop.clear()
         thread = threading.Thread(

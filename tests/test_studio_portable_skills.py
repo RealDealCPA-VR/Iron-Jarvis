@@ -53,9 +53,17 @@ def test_auto_menu_with_no_media_skills_keeps_the_generic_hint(tmp_path):
     assert _portable_skill_line(reg, "") == _AUTO_SKILL_HINT
 
 
-def test_first_brief_is_per_engine(tmp_path):
+def test_first_brief_is_per_engine(tmp_path, monkeypatch):
     """End to end through /say: a codex-marked session gets the file-path line;
-    a claude-marked session keeps the native skill reference."""
+    a claude-marked session keeps the native skill reference.
+
+    v1.248.0: on a FakeBackend — the brief's composition is the subject. A
+    real shell's live tail ends with a bare prompt, which the Studio guard
+    rightly refuses to type into (see test_terminal_datapath_v1248); this
+    passed before only because an unattached pywinpty PTY was never read."""
+    from iron_jarvis.terminals.backend import FakeBackend
+
+    monkeypatch.setattr("iron_jarvis.terminals.session.default_backend", FakeBackend)
     client = TestClient(create_app(str(tmp_path)))
     platform = client.app.state.platform
     skill_dir = tmp_path / "skills" / "pixio-story"

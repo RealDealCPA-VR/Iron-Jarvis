@@ -19,9 +19,19 @@ def test_studio_start_rejects_unknown_and_missing_cli(tmp_path):
     assert r.status_code == 400
 
 
-def test_studio_say_and_tail_relay_into_a_real_terminal(tmp_path):
-    """Drive a plain shell terminal through the studio relay endpoints — the
-    same write/tail path the CLI session uses, without launching any AI CLI."""
+def test_studio_say_and_tail_relay_into_a_real_terminal(tmp_path, monkeypatch):
+    """Drive a terminal through the studio relay endpoints — the same
+    write/tail path the CLI session uses, without launching any AI CLI.
+
+    v1.248.0: on a FakeBackend. A real shell's tail ends with a bare prompt,
+    and the Studio's own guard rightly refuses to type a brief at one (it
+    would run as a shell command). This test passed on a real shell only
+    because nothing read an unattached pywinpty PTY, so the tail was EMPTY;
+    the raw ConPTY reader keeps it live, and test_terminal_datapath_v1248
+    pins the guard firing on a real prompt."""
+    from iron_jarvis.terminals.backend import FakeBackend
+
+    monkeypatch.setattr("iron_jarvis.terminals.session.default_backend", FakeBackend)
     client = TestClient(create_app(str(tmp_path)))
     term = client.post("/terminals", json={"cwd": str(tmp_path)})
     assert term.status_code == 200

@@ -155,7 +155,10 @@ def test_default_backend_picks_without_spawning():
     for method in ("start", "write", "read_nonblocking", "resize", "kill"):
         assert callable(getattr(b, method))
     if sys.platform == "win32":
-        assert isinstance(b, (WinPtyBackend, PipeBackend))
+        # v1.248.0: raw ConPTY first; pywinpty and the pipe shell as fallbacks.
+        from iron_jarvis.terminals.backend import ConPtyBackend
+
+        assert isinstance(b, (ConPtyBackend, WinPtyBackend, PipeBackend))
     else:
         assert isinstance(b, (PosixPtyBackend, PipeBackend))
 
