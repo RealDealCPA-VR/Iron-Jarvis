@@ -212,6 +212,22 @@ def register(app: FastAPI, d) -> None:
         out["running_sessions"] = len(d.orchestrator._running)
         out["pending_reviews"] = len(d.orchestrator._reviews)
         out["background_loops"] = dict(d.loop_health)  # silent-failure visibility
+        # v1.250.0 (S-01): WHERE THE BOOT'S SECONDS WENT — total plus per-phase
+        # ms, so "the app takes 6-15 s to open" is a number on the install that
+        # shows it instead of a guess on one that does not. The daemon logs the
+        # same breakdown as ONE INFO line at startup; this is the copy nobody
+        # has to grep a log for. Names and numbers only — the phase names are
+        # code identifiers, never a path or a file name, because this blob gets
+        # pasted into bug reports.
+        try:
+            _boot = getattr(d, "startup", None) or {}
+            out["startup"] = {
+                "total_ms": _boot.get("total_ms"),
+                "at": _boot.get("at"),
+                "steps_ms": dict(_boot.get("steps_ms") or {}),
+            }
+        except Exception:  # noqa: BLE001 — diagnostics must never raise
+            out["startup"] = {"total_ms": None, "at": None, "steps_ms": {}}
         # v1.229.0 (audit U4): a configured MCP server that did not start, by
         # name with its reason — the Overview hero reads this so "All systems
         # nominal" cannot sit over a pack whose tools every agent is missing.
