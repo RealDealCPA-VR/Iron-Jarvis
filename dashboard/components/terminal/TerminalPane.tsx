@@ -37,7 +37,12 @@ import {
 } from "@/lib/snippet";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
 import { outputNotifyAt } from "@/components/terminal/paneStatusCore";
-import { acquirePaneHost, type ConnState, type PaneHost } from "@/components/terminal/paneHost";
+import {
+  acquirePaneHost,
+  flowWanted,
+  type ConnState,
+  type PaneHost,
+} from "@/components/terminal/paneHost";
 import { resizeAllowed } from "@/components/terminal/resizeGate";
 import { useDaemon } from "@/lib/daemon";
 import type { AiCli, ModelOption, Skill, TerminalInfo } from "@/lib/types";
@@ -416,6 +421,7 @@ export function TerminalPane({
   onClose,
   onWriterReady,
   onOutput,
+  parked = false,
   models = [],
   aiClis = [],
   skills = [],
@@ -462,6 +468,11 @@ export function TerminalPane({
    *  so the page can peek the last output line; frames suppressed by the
    *  throttle are simply not delivered — the peek is a glimpse, not a log. */
   onOutput?: (chunk: string) => void;
+  /** v1.248.0: mounted but not on screen — a rail pane behind the focused
+   *  one. Its terminal PARKS in the lot (paneHost.park): the socket, the
+   *  buffer and the output badges keep going; nothing renders, nothing holds
+   *  a GPU context, and nothing resizes the PTY. */
+  parked?: boolean;
   /** Model catalog for the PER-PANE AI assist picker (from /models). */
   models?: ModelOption[];
   /** AI CLIs detected on this machine, for the "Launch" dropdown. */
@@ -488,9 +499,22 @@ export function TerminalPane({
   // The daemon's reachability per the shared /health poll. The host's
   // reconnect schedule reads it (keep retrying while the daemon is down), and
   // the host outlives this component, so the value is handed over to it.
-  const { online: daemonOnline } = useDaemon();
+  const { online: daemonOnline, health } = useDaemon();
   const daemonOnlineRef = useRef(daemonOnline);
   daemonOnlineRef.current = daemonOnline;
+  // v1.248.0: flow frames go only to a daemon that understands them — an
+  // older one TYPES them into the shell (see paneHost.FLOW_MIN_DAEMON).
+  const flowOn = flowWanted(health?.version);
+  const flowOnRef = useRef(flowOn);
+  flowOnRef.current = flowOn;
+  const parkedRef = useRef(parked);
+  parkedRef.current = parked;
+  const paneFocusedRef = useRef(focused);
+  paneFocusedRef.current = focused;
+  // Set by the attach effect: this mount's owner token, and "fit, then
+  // claim the size" — what an unpark needs once the pane is on screen.
+  const ownerRef = useRef<object | null>(null);
+  const claimSizeRef = useRef<(() => void) | null>(null);
   // Set by the attach effect: the host's Reconnect (a clean attempt counter on
   // the SAME terminal — the replay lands on it). Null while none is adopted.
   const reconnectRef = useRef<(() => void) | null>(null);
@@ -499,6 +523,9 @@ export function TerminalPane({
   // the shell — the AI bar's Run, Launch, snippets, the pane chat's writer —
   // goes through its send(), which refuses (false) on a socket that is down.
   const hostRef = useRef<PaneHost | null>(null);
+  useEffect(() => {
+    if (hostRef.current) hostRef.current.flowEnabled = flowOn;
+  }, [flowOn]);
   useEffect(() => {
     if (hostRef.current) hostRef.current.daemonOnline = daemonOnline;
   }, [daemonOnline]);
@@ -898,6 +925,7 @@ export function TerminalPane({
     // return visit) adopts with its own, and this one's release is then
     // ignored — see PaneHost.adopt.
     const owner = {};
+    ownerRef.current = owner;
     let host: PaneHost | null = null;
     let term: import("@xterm/xterm").Terminal | null = null;
     let ro: ResizeObserver | null = null;
@@ -1016,6 +1044,9 @@ export function TerminalPane({
     };
 
     const doFit = () => {
+      // A parked terminal sits in the lot: fitting it there would size it to
+      // the lot, not to its pane (v1.248.0).
+      if (host?.isParked) return;
       try {
         host?.fit.fit();
       } catch {
@@ -1029,6 +1060,9 @@ export function TerminalPane({
       // attaching to the same session must never reflow the desktop's
       // running session; the daemon keeps last-writer semantics.
       if (!resizeAllowed(holder)) return;
+      // v1.248.0: a parked pane never resizes the PTY. Its holder is hidden
+      // too, but the rule must not rest on that coincidence.
+      if (host?.isParked) return;
       if (host && term) {
         // v1.245.0: an unchanged size sends nothing — ConPTY reflows and a
         // running TUI repaints its whole screen on EVERY resize, same-size
@@ -1147,6 +1181,7 @@ export function TerminalPane({
         }
       };
       h.daemonOnline = daemonOnlineRef.current;
+      h.flowEnabled = flowOnRef.current;
       h.keyHandler = keyHandler;
       reconnectRef.current = () => h.reconnectNow();
       h.adopt(holder, owner, {
@@ -1202,6 +1237,14 @@ export function TerminalPane({
       doFit();
       h.settle();
       h.start(); // first visit: connect now; a live host: a no-op
+      // v1.248.0: fitted and connected at the TRUE size first — the replay
+      // must wrap at the pane's width (v1.190.0) — and only then does a pane
+      // that is not on screen park its terminal.
+      claimSizeRef.current = () => {
+        doFit();
+        sendResize();
+      };
+      if (parkedRef.current) h.park(owner);
 
       ro = new ResizeObserver(() => scheduleFit());
       ro.observe(holder);
@@ -1237,6 +1280,8 @@ export function TerminalPane({
       disposed = true;
       onWriterReady?.(null); // this mount is going away — no writer to offer
       reconnectRef.current = null;
+      if (ownerRef.current === owner) ownerRef.current = null;
+      claimSizeRef.current = null;
       hostRef.current = null;
       termRef.current = null;
       clearRef.current = null;
@@ -1255,6 +1300,35 @@ export function TerminalPane({
     // Re-wire only when the session id changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [info.id]);
+
+  // v1.248.0: a rail pane PARKS while another pane is focused and comes back
+  // when it is focused — the SAME terminal on the SAME socket, moved back into
+  // its holder, fitted and settled: no replay, no reconnect. Until the attach
+  // effect has connected a host there is nothing to move; that effect parks
+  // the host itself once it has fitted and started it.
+  useEffect(() => {
+    const h = hostRef.current;
+    const holder = holderRef.current;
+    const owner = ownerRef.current;
+    if (!h || !holder || !owner || !claimSizeRef.current) return;
+    if (parked) {
+      h.park(owner);
+      return;
+    }
+    if (!h.isParked) return;
+    h.unpark(holder, owner);
+    let cancelled = false;
+    void (async () => {
+      await waitForStableSize(holder);
+      if (cancelled || hostRef.current !== h || h.isParked) return;
+      claimSizeRef.current?.();
+      h.settle();
+      if (paneFocusedRef.current) h.term.focus();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [parked]);
 
   return (
     <div
