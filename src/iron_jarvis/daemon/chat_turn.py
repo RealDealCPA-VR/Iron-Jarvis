@@ -1283,7 +1283,14 @@ def _resolve_armed_tools(
         (m.content or "" for m in reversed(body.messages) if m.role == "user"),
         "",
     )
-    attach_names = [Path(a).name for a in (body.attachments or [])]
+    # THIS TURN'S attachments AND the conversation's earlier ones (v1.251.0,
+    # C-01). "now edit it" names no file and attaches none, so the scorer saw
+    # no document at all and armed nothing that could change one — the model
+    # was told about a file it had no verb for. A file this conversation was
+    # already given is the same consent as one attached again.
+    attach_names = [Path(a).name for a in (body.attachments or [])] + [
+        Path(a).name for a in _thread_file_paths(body)
+    ]
 
     def _fill(ceiling: int) -> list[str]:
         """One deterministic auto-fill toward *ceiling*. Factored so the drop
@@ -1384,7 +1391,17 @@ def _resolve_armed_tools(
         from ..tools.autoselect import AUTO_SAFE_TOOLS
 
         seen = set(explicit) | set(auto)
-        for raw in (body.attachments or [])[:_MAX_ATTACHMENTS]:
+        # THIS TURN'S attachments, THEN the conversation's earlier files
+        # (v1.251.0, C-01). Widening `attach_names` above was not enough on its
+        # own — THIS loop is where a file's TYPE becomes verbs, and it read only
+        # `body.attachments`, so "now edit it" (which attaches nothing) armed
+        # nothing that could edit. The treatment is deliberately identical: the
+        # READ half arms on type, because the file was already given to this
+        # conversation, and the CHANGE half still goes through
+        # `change_verbs_wanted` for the intent. Bounded by the reader.
+        for raw in list((body.attachments or [])[:_MAX_ATTACHMENTS]) + list(
+            _thread_file_paths(body)
+        ):
             suffix = Path(raw).suffix
             for name in (
                 live_tool_names(suffix, kind="read")
@@ -2552,7 +2569,15 @@ async def _prepare_attachments(
     # would name a tool absent from `tool_specs`.
     _auto_on = bool(getattr(body, "auto_tools", False))
     _picked = set(getattr(body, "tools", None) or ())
-    _attach_names = [Path(a).name for a in (body.attachments or [])]
+    # THE CONVERSATION'S EARLIER FILES COUNT HERE TOO (v1.251.0, C-01) — for
+    # exactly the reason the comment above gives. `_resolve_armed_tools` now asks
+    # `change_verbs_wanted` with the carried names in `attachments`; asking it
+    # here with only THIS turn's would put the two passes back on different
+    # arguments, which is the disagreement that comment exists to forbid.
+    _carried_paths = _thread_file_paths(body)
+    _attach_names = [Path(a).name for a in (body.attachments or [])] + [
+        Path(a).name for a in _carried_paths
+    ]
 
     # OFF THE EVENT LOOP, AND ONCE (v1.196.0). `change_verbs_wanted` asks
     # `select_auto_tools` — the same CPU-bound regex scorer `_resolve_armed_tools`
@@ -2567,7 +2592,16 @@ async def _prepare_attachments(
     # attachment names, picks, auto) — all fixed for the turn — so N calls with
     # the same suffix always agreed anyway, and N executor round-trips to
     # rediscover that is the wrong trade.
-    _suffixes = {Path(a).suffix.lower() for a in (body.attachments or [])}
+    # EVERY SUFFIX THE BLOCK WILL DESCRIBE, carried files included (v1.251.0,
+    # C-01). `_may_change` answers `[]` for a suffix missing from this set —
+    # fail-closed, and right — so on a carried-only turn (`body.attachments`
+    # empty: "now turn that into a memo", the case C-01 exists for) every
+    # carried file rendered the "no tool here can change this" clause while the
+    # arming pass had just granted its change verbs. The block and the tool list
+    # must not be able to contradict each other.
+    _suffixes = {Path(a).suffix.lower() for a in (body.attachments or [])} | {
+        Path(a).suffix.lower() for a in _carried_paths
+    }
 
     def _resolve_changes() -> dict[str, list[str]]:
         return {
@@ -2763,7 +2797,86 @@ async def _prepare_attachments(
                 parts[slot] = (
                     f"\n\n## Attached image: {name}\n(NOT analyzed — {blind}.)"
                 )
+
+    # THE CONVERSATION'S EARLIER FILES (v1.251.0, C-01). The user's report:
+    # attach a return, ask for a summary, then "now turn that into a memo" —
+    # and the second turn has no file, because history crosses as
+    # ``{role, content}`` text and only THIS message's attachments ride. The
+    # client sends what its Files rail already shows (``thread_files``), and
+    # each one is NAMED here with its absolute path so "it" / "that return"
+    # resolve to something the tools can open.
+    #
+    # NAMED, NEVER RE-READ: no extraction, no OCR, no retrieval for these —
+    # the text of an earlier attachment is already in the transcript, and
+    # re-rendering it every turn would spend the whole budget on files nobody
+    # asked about. `rendered=False` says exactly that to `live_file_line`, so
+    # the "the text above is a flattening" reminder is not claimed over text
+    # that is not there.
+    #
+    # Anything already attached THIS turn is skipped (the client filters too;
+    # this is the server's own guard), and the list is bounded here as well —
+    # a client is not the authority on how much of the prompt it may spend.
+    carried: list[Path] = []
+    _seen_here = {
+        (Path(a).name.lower()) for a in (body.attachments or [])[:_MAX_ATTACHMENTS]
+    }
+    for raw in _thread_file_paths(body):
+        if len(carried) >= _MAX_CARRIED_FILES:
+            break
+        p = Path(raw)
+        if not p.is_absolute():
+            p = d.platform.config.home / "uploads" / p.name
+        if p.name.lower() in _seen_here:
+            continue
+        ok, _why = fs_read_ok(str(p))
+        if not ok or not p.is_file():
+            continue  # moved, deleted, or outside the read policy: say nothing
+        carried.append(p)
+    if carried:
+        lines = []
+        for p in carried:
+            lines.append(
+                f"\n- {p.name}"
+                + live_file_line(
+                    p,
+                    workspace=await _tool_workspace(),
+                    rendered=False,
+                    vision=(await _has_vision()) if is_image(p) else True,
+                    remind=False,
+                    change=_may_change(p.suffix.lower()),
+                )
+            )
+        parts.append(
+            "\n\n## Files in this conversation (already given to you earlier)\n"
+            "Use these when the request says \"it\", \"that\" or names one of "
+            "them; their contents are earlier in this conversation."
+            + "".join(lines)
+        )
     return images, "".join(parts)
+
+
+#: How many of the conversation's EARLIER files one turn may name (v1.251.0,
+#: C-01). The thread stores up to 30; naming them all would spend the turn's
+#: budget on paths. The NEWEST few are what a follow-up means.
+_MAX_CARRIED_FILES = 8
+
+
+def _thread_file_paths(body) -> "list[str]":
+    """The conversation's earlier files, newest last, as the client sent them.
+
+    ONE reader for both chat lanes and for the arming pass, so the block the
+    model reads and the tools the turn arms can never disagree about which
+    files this conversation has."""
+    raw = getattr(body, "thread_files", None) or []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        s = str(item or "").strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out[-_MAX_CARRIED_FILES:]
 
 
 def _persist_chat_usage(

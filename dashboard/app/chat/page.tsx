@@ -773,6 +773,12 @@ const MAX_CONNECTORS = 6;
 // conversation made or was given) — newest survive the cap, matching the
 // daemon's setup validation (_MAX_THREAD_DOCS, raised 8 → 30 in v1.166.0).
 const MAX_THREAD_DOCS = 30;
+/** How many of the conversation's EARLIER files ride each turn (v1.251.0,
+ *  C-01). The thread may hold 30; naming all of them in every prompt would
+ *  spend the turn's budget on file paths, and the point is only that "it" and
+ *  "that return" resolve — so the NEWEST few, which is what a follow-up
+ *  almost always means. The daemon bounds this again on its side. */
+const MAX_CARRIED_FILES = 8;
 // Resizable side rail (preview/workspace column): width bounds + persistence.
 const RAIL_W_KEY = "ij_chat_rail_w";
 const RAIL_MIN_W = 280;
@@ -3752,6 +3758,20 @@ export default function ChatPage() {
       ...(model ? { model } : {}),
       ...(personaValue ? { persona: personaValue } : {}),
       ...(atts.length ? { attachments: atts.map((a) => a.path) } : {}),
+      // THE CONVERSATION'S FILES (v1.251.0, C-01). History goes over as
+      // {role, content} text, so a follow-up ("now turn that into a memo")
+      // used to carry no file at all and the chat asked for it again. This is
+      // the SAME list the Files rail shows — via the ref, like `documents` in
+      // the setup save, because a send can fire from a stale closure — minus
+      // the files this message is already attaching, and capped so a long
+      // conversation cannot crowd out the turn's own prompt.
+      ...(() => {
+        const here = new Set(atts.map((a) => a.path));
+        const carried = threadDocsRef.current
+          .filter((p) => !here.has(p))
+          .slice(-MAX_CARRIED_FILES);
+        return carried.length ? { thread_files: carried } : {};
+      })(),
       // The reply's playbook + armed tool loop (both sticky across turns).
       ...(activeSkill ? { skill: activeSkill } : {}),
       ...(selectedTools.length ? { tools: selectedTools.slice(0, MAX_TOOLS) } : {}),
