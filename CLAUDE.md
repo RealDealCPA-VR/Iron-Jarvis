@@ -563,6 +563,27 @@ does not need a bump, stop and bump it.
   grounding block said "opened from a Build terminal pane" and listed "this
   project", so the model called a plain chat's folder "your project folder" —
   the block is surface-neutral now and names a project only when one is.
+- **Build daily-driver pass, B1** (v1.245.0; the 2026-09-11 reliability audit
+  measured each of these). (1) ConPTY sends a DA1 query at shell start and
+  holds ALL output until answered (first byte 3.05 s vs 0.06 s): only an
+  attached xterm answered, so `TerminalSession.read` now answers `ESC[?1;2c`
+  itself when no pane is subscribed. (2) The WS input handler closed with
+  4000 ("shell exited" — the one close a pane never reconnects from) on ANY
+  exception, so a malformed resize killed a live pane for good: 4000 only
+  when `not session.alive`. (3) Same-size resizes reflowed ConPTY and
+  repainted the TUI: the route skips them after the attach's first (wiggle)
+  resize, and the pane debounces its ResizeObserver (`RESIZE_SETTLE_MS`) and
+  skips an unchanged `host.sentSize` unless forced (open, window focus).
+  (4) The snapshot was written only on graceful paths: a lifespan loop calls
+  `snapshot_if_changed` every 30 s (`output_seq` + identity key). (5) A
+  restored pane kept `agent_cli` and its chip claimed a CLI that died with the
+  old daemon: restore sets `resume_cli` instead and the pane's `ResumeStrip`
+  types `RESUME_COMMANDS[cli]` (`claude --continue`, `codex resume --last`;
+  others get no button). (6) `activity()` is cached per output change, the
+  2.5 s poll left the access log, per-message deflate is off, a loop-lag
+  heartbeat logs stalls > 250 ms, and Ctrl+C with a selection copies.
+  `tests/test_build_stability_v1245.py`,
+  `dashboard/__tests__/build-stability-v1245.test.tsx`.
 - **A grant is written where the NEXT run reads, and yolo never rides an
   escalation** (v1.232.0, audit Wave 6, A6/A7/A9). "Allow for this
   conversation" on a session's ask widened an in-memory set and nothing

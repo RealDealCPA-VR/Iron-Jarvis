@@ -195,6 +195,10 @@ export class PaneHost {
   /** The mounted pane's keyboard handler (clipboard, scrollback keys). Null
    *  while parked: nothing can be typed into a parked terminal. */
   keyHandler: ((e: KeyboardEvent) => boolean) | null = null;
+  /** The last size the mounted pane sent the daemon ("COLSxROWS"), so a
+   *  ResizeObserver tick that changed nothing sends nothing (v1.245.0). A
+   *  fresh attach always sends: the pane forces its open-time resize. */
+  sentSize = "";
 
   private readonly openSocket: SocketFactory;
   private view: PaneHostView | null = null;

@@ -62,7 +62,9 @@ describe("TerminalPane wiring (v1.232.0 source pins)", () => {
 
   it("sendResize consults the gate BEFORE touching the socket", () => {
     expect(src).toContain('import { resizeAllowed } from "@/components/terminal/resizeGate";');
-    const send = src.indexOf("const sendResize = () => {");
+    // v1.245.0: sendResize takes `force` (open + window focus claim the size
+    // even when unchanged); the gate still comes first.
+    const send = src.indexOf("const sendResize = (force = false) => {");
     const gate = src.indexOf("if (!resizeAllowed(holder)) return;", send);
     const wire = src.indexOf('JSON.stringify({ type: "resize"', send);
     expect(send).toBeGreaterThan(-1);

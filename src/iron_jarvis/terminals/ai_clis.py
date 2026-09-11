@@ -57,6 +57,18 @@ AUTOPILOT_FLAGS: dict[str, str] = {
     "claude": "--dangerously-skip-permissions",
 }
 
+#: How to pick a CLI's LAST conversation back up, in the same folder
+#: (v1.245.0) — the one-click Resume a Build pane offers after Iron Jarvis
+#: restarted. A pane's shell is a child of the daemon, so an update or a crash
+#: ends the CLI running in it; the pane comes back as a fresh shell in the same
+#: folder, and these continue the conversation from the CLI's OWN saved
+#: history. Only CLIs whose continue command is known are listed: the rest get
+#: no button rather than a guess.
+RESUME_COMMANDS: dict[str, str] = {
+    "claude": "claude --continue",
+    "codex": "codex resume --last",
+}
+
 
 def image_reference(cli: str, path: str | os.PathLike[str]) -> str:
     """The exact text to type into a RUNNING ``cli`` pane so it reads ``path``.
@@ -216,6 +228,7 @@ def detect_ai_clis(*, probe: bool = True) -> list[dict[str, Any]]:
             "installed": path is not None,
             "path": path,
             "autopilot_flag": AUTOPILOT_FLAGS.get(cli["id"], ""),
+            "resume_command": RESUME_COMMANDS.get(cli["id"], ""),
             "version": "",
             "recipe": None,
         }

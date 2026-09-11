@@ -792,6 +792,10 @@ class TerminalUpdate(BaseModel):
 
     name: str | None = None
     agent_cli: str | None = None
+    #: v1.245.0: the CLI that was running here before the daemon restarted —
+    #: the pane's Resume offer. Send "" to dismiss it (clicking Resume records
+    #: the CLI in `agent_cli` and clears this in the same PATCH).
+    resume_cli: str | None = None
     #: v1.238.0. PARTIAL twice over: omitting the field keeps every capability,
     #: and a mapping that names only some of the five keeps the rest. The
     #: Capabilities popover toggles one box at a time, so a whole-mapping

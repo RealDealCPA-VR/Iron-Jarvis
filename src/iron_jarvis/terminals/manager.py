@@ -126,6 +126,24 @@ def _capabilities_or_none(raw: Any) -> dict[str, bool] | None:
     return normalise_pane_capabilities(raw) if isinstance(raw, Mapping) else None
 
 
+def _snapshot_key(sessions: "list[TerminalSession]") -> tuple:
+    """What a snapshot of these sessions covers (v1.245.0): which panes, how
+    far each one's output had got (``output_seq``), and the identity fields a
+    snapshot carries. Equal keys mean the snapshot on disk is already current."""
+    return tuple(
+        sorted(
+            (
+                s.id,
+                getattr(s, "output_seq", 0),
+                s.pane_name or "",
+                s.agent_cli or "",
+                getattr(s, "resume_cli", None) or "",
+            )
+            for s in sessions
+        )
+    )
+
+
 class TerminalManager:
     """Create, look up, list, and kill multiple live terminal sessions.
 
@@ -533,6 +551,9 @@ class TerminalManager:
             return
         with self._lock:
             sessions = [s for s in self._sessions.values() if s.alive]
+        # What this write covers, so snapshot_if_changed can tell "nothing
+        # printed since" from "a pane printed" without writing to find out.
+        self._last_snapshot_key = _snapshot_key(sessions)
         out: list[dict[str, Any]] = []
         for s in sessions:
             try:
@@ -552,6 +573,9 @@ class TerminalManager:
                         # which is exactly when it most needs to.
                         "name": s.pane_name,
                         "agent_cli": s.agent_cli,
+                        # v1.245.0: an unanswered Resume offer survives
+                        # another restart (restore reads either field).
+                        "resume_cli": s.resume_cli,
                         # v1.238.0: WITHOUT THIS LINE the pane's capabilities
                         # silently reset to none on every daemon restart, and
                         # every unit test stays green because they all ask the
@@ -572,6 +596,21 @@ class TerminalManager:
         tmp = self.state_path.with_suffix(".tmp")
         tmp.write_text(json.dumps({"terminals": out}), encoding="utf-8")
         tmp.replace(self.state_path)
+
+    def snapshot_if_changed(self) -> bool:
+        """Write the snapshot only when it would differ from the last one
+        (v1.245.0). The daemon's 30 s loop calls this, so a quiet afternoon
+        costs nothing and a crash loses at most ~30 s of scrollback. Returns
+        True when it wrote. BLOCKING (JSON + atomic write): call it off the loop.
+        """
+        if not self.state_path:
+            return False
+        with self._lock:
+            sessions = [s for s in self._sessions.values() if s.alive]
+        if _snapshot_key(sessions) == getattr(self, "_last_snapshot_key", None):
+            return False
+        self.snapshot()
+        return True
 
     def restore(
         self, entry: dict[str, Any], *, env: dict | None = None, backend: PtyBackend | None = None
@@ -596,7 +635,9 @@ class TerminalManager:
                 return None
         rid = entry.get("id") or new_id("term")
         pane_name = entry.get("name") or None
-        agent_cli = entry.get("agent_cli") or None
+        # The CLI that was running here — or one still waiting to be resumed
+        # from an EARLIER restart the user has not answered yet.
+        agent_cli = entry.get("agent_cli") or entry.get("resume_cli") or None
         pane_env = {
             "IRONJARVIS_BUILD": "1",
             "IRONJARVIS_PANE_ID": rid,
@@ -605,6 +646,8 @@ class TerminalManager:
         if pane_name:
             pane_env["IRONJARVIS_PANE_NAME"] = pane_name
         if agent_cli:
+            # Kept in the fresh shell's environment: the likeliest next process
+            # in this pane is that same CLI, resumed.
             pane_env["IRONJARVIS_PANE_CLI"] = agent_cli
         session = self._spawn(
             cwd,
@@ -617,7 +660,12 @@ class TerminalManager:
         )
         session.id = rid
         session.pane_name = pane_name
-        session.agent_cli = agent_cli
+        # v1.245.0: the shell is FRESH — whatever CLI ran here died with the
+        # old daemon. The pane offers to resume it (resume_cli) and no longer
+        # claims it is running: the chip used to say "claude" over a bare
+        # shell for as long as the pane lived.
+        session.agent_cli = None
+        session.resume_cli = agent_cli
         # The other half of the round trip. An entry written before this field
         # existed has no key, which normalises to no capabilities — the safe
         # default, and the reason this is read through `_capabilities_or_none`

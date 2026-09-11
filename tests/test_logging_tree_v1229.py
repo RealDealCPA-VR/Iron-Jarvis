@@ -275,6 +275,8 @@ def test_access_filter_ignores_records_of_another_shape():
             "/computeruse",
             "/chat/approvals/pending",
             "/reflex/rules",
+            # v1.245.0: the Build page's 2.5 s pane-state poll.
+            "/terminals/activity",
         }
     )
 

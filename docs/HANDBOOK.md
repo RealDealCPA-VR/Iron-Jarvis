@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.244.1 (2026-09-11).*
+holds itself to. Current as of v1.245.0 (2026-09-11).*
 
 ---
 
@@ -376,6 +376,18 @@ seam); Train (teach it your writing voice, suggest-only).
   gives to questions in that old output (a colour or device query) are no
   longer typed into your shell as stray text. Two windows on one pane (the
   desktop and a phone) now each get the whole stream instead of half of it.
+- **Build after an update: Resume** (v1.245.0): an app update or a crash
+  still ends whatever was running in a pane — the shell comes back fresh in
+  the same folder — but a pane that was running Claude Code or Codex now
+  shows a strip: "*Claude Code was running here before Iron Jarvis
+  restarted.*" **Resume** types `claude --continue` (or `codex resume
+  --last`) and presses Enter, picking the last conversation back up; **×**
+  dismisses it. Pane history is saved every 30 seconds, so a crash loses at
+  most about half a minute of it. Also: a new terminal no longer sits blank
+  for three seconds, dragging a pane edge no longer makes Claude redraw over
+  and over, **Ctrl+C with text selected copies it** (with nothing selected it
+  still interrupts), and a stray input can no longer mark a live shell
+  "closed".
 - **Usage counts models that did work** (v1.232.0): the By-model list and
   "Across N models" leave out the offline mock provider and rows that moved
   zero tokens (a probe, a refused call, a misconfigured id); the API still

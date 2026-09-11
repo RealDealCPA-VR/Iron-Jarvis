@@ -126,7 +126,11 @@ def test_a_named_pane_is_still_named_after_a_daemon_restart(tmp_path):
     restored = m2.get(s.id)
     assert restored is not None
     assert restored.pane_name == "builder"
-    assert restored.agent_cli == "claude"
+    # v1.245.0: the restored pane runs a FRESH shell — the CLI died with the
+    # old daemon — so it no longer claims one is running; it remembers which
+    # one was, for its one-click Resume.
+    assert restored.agent_cli is None
+    assert restored.resume_cli == "claude"
 
 
 def test_a_restored_pane_exports_its_identity_too(tmp_path):

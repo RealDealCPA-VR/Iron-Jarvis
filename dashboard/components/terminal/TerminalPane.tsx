@@ -148,6 +148,63 @@ export function LaunchRecipeNote({ cli }: { cli: LaunchCli }) {
   );
 }
 
+/** How long a pane's size must hold still before it is fitted and sent to
+ *  the shell (v1.245.0): a dragged edge fires the ResizeObserver dozens of
+ *  times a second, and every resize made a running TUI repaint. */
+export const RESIZE_SETTLE_MS = 100;
+
+/**
+ * THE WAY BACK INTO THE CONVERSATION A RESTART ENDED (v1.245.0).
+ *
+ * A pane's shell is a child of the daemon, so an app update or a crash ends
+ * the Claude/Codex running in it; the pane comes back as a fresh shell in the
+ * same folder, and the daemon remembers which CLI was there (`resume_cli`).
+ * One click types that CLI's own continue command (`claude --continue`,
+ * `codex resume --last`) and presses Enter — the click IS the consent, the
+ * command is shown on the button's tooltip, and Dismiss clears the offer.
+ * A CLI with no known continue command gets no strip at all, rather than a
+ * guess. Exported on its own so it can be tested without xterm.
+ */
+export function ResumeStrip({
+  cliLabel,
+  command,
+  onResume,
+  onDismiss,
+}: {
+  cliLabel: string;
+  command: string;
+  onResume: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div
+      data-testid="resume-strip"
+      className="flex shrink-0 items-center gap-2 border-b border-accent/20 bg-accent/[0.06] px-3 py-1 text-[11px] text-accent-soft"
+    >
+      <Play size={12} className="shrink-0" />
+      <span className="min-w-0 flex-1 truncate">
+        {cliLabel} was running here before Iron Jarvis restarted.
+      </span>
+      <button
+        type="button"
+        onClick={onResume}
+        title={`Types “${command}” and presses Enter`}
+        className="shrink-0 rounded-md border border-accent/40 px-2 py-0.5 font-medium text-accent-soft transition-colors hover:bg-accent/15"
+      >
+        Resume
+      </button>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Dismiss the resume offer"
+        className="shrink-0 text-zinc-500 transition-colors hover:text-zinc-300"
+      >
+        <X size={12} />
+      </button>
+    </div>
+  );
+}
+
 // --- Screen snippets (v1.194.0) -------------------------------------------
 // A ConPTY pane is a BYTE STREAM: there is no image channel to paste into. But
 // every AI CLI we launch reads images OFF DISK from a path in the prompt, and
@@ -604,6 +661,35 @@ export function TerminalPane({
     window.setTimeout(() => setLaunchHint(null), 5000);
   }
 
+  // --- Resume after a restart (v1.245.0) — see ResumeStrip -----------------
+  const [resumeGone, setResumeGone] = useState(false);
+  const resumeLabel =
+    aiClis.find((c) => c.id === info.resume_cli)?.label ?? info.resume_cli ?? "";
+  const showResume = Boolean(info.resume_cli && info.resume_command) && !resumeGone;
+
+  function resumeCli() {
+    const cli = info.resume_cli;
+    const command = info.resume_command;
+    // The click IS the consent, so this one presses Enter (Launch leaves that
+    // to the user). A shell that is not connected takes nothing; the strip
+    // stays up so the click can be made again.
+    if (!cli || !command || !hostRef.current?.send(`${command}\r`)) return;
+    setResumeGone(true);
+    setPaneCli(cli);
+    onLaunched?.(cli);
+    patch(`/terminals/${info.id}`, { agent_cli: cli, resume_cli: "" }).catch(() => {
+      /* offline — the classifier sniffs the CLI back from the scrollback */
+    });
+    termRef.current?.focus();
+  }
+
+  function dismissResume() {
+    setResumeGone(true);
+    patch(`/terminals/${info.id}`, { resume_cli: "" }).catch(() => {
+      /* offline — the offer returns on the next load, which is harmless */
+    });
+  }
+
   // --- Pending screen snippets ---------------------------------------------
   const [snips, setSnips] = useState<PendingSnip[]>([]);
   const [expandedSnip, setExpandedSnip] = useState<string | null>(null);
@@ -937,27 +1023,45 @@ export function TerminalPane({
       }
     };
 
-    const sendResize = () => {
+    const sendResize = (force = false) => {
       // v1.232.0: only the PRIMARY attach (visible pane, focused document)
       // may resize the PTY — see resizeGate.ts. A phone or a second tab
       // attaching to the same session must never reflow the desktop's
       // running session; the daemon keeps last-writer semantics.
       if (!resizeAllowed(holder)) return;
       if (host && term) {
-        host.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+        // v1.245.0: an unchanged size sends nothing — ConPTY reflows and a
+        // running TUI repaints its whole screen on EVERY resize, same-size
+        // included. Forced on open (a new attach must claim its size) and on
+        // window focus (a phone may have resized the PTY in the meantime).
+        const size = `${term.cols}x${term.rows}`;
+        if (!force && host.sentSize === size) return;
+        if (host.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }))) {
+          host.sentSize = size;
+        }
       }
     };
 
-    const onWinResize = () => {
-      doFit();
-      sendResize();
+    // v1.245.0: a dragged pane or window edge fires the ResizeObserver dozens
+    // of times a second, and each fit+resize made the TUI repaint. Fit and
+    // resize ONCE, when the size has settled.
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleFit = () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        resizeTimer = null;
+        doFit();
+        sendResize();
+      }, RESIZE_SETTLE_MS);
     };
+
+    const onWinResize = () => scheduleFit();
     // Becoming the focused window makes this attach the primary one: claim
     // the size then, so a pane opened while the window was in the background
     // (the gate refused its open-time resize) gets its real size on return.
     const onWinFocus = () => {
       doFit();
-      sendResize();
+      sendResize(true);
     };
 
     // Clipboard shortcuts: Ctrl/Cmd+V and Ctrl+Shift+V paste; Ctrl+Shift+C
@@ -985,6 +1089,15 @@ export function TerminalPane({
         // sees the image bytes; a text-only paste falls through to xterm's
         // own paste handling (same term.paste, same bracketed-paste mode).
         return false; // xterm must still not emit the literal ^V
+      }
+      // v1.245.0: Ctrl+C WITH a selection copies it (the Windows Terminal
+      // habit) instead of interrupting the CLI; with nothing selected it is
+      // still ^C. Ctrl+Shift+C below keeps copying either way.
+      if (mod && !e.shiftKey && (e.key === "c" || e.key === "C") && term?.hasSelection()) {
+        e.preventDefault();
+        writeClip(term?.getSelection() ?? "").catch(() => {});
+        term?.clearSelection();
+        return false;
       }
       if (mod && e.shiftKey && (e.key === "c" || e.key === "C")) {
         const sel = term?.getSelection();
@@ -1045,7 +1158,7 @@ export function TerminalPane({
         // keys off an attach's first resize.
         onOpen: () => {
           doFit();
-          sendResize();
+          sendResize(true); // a new attach claims its size even when unchanged
         },
         onOutput: (data, replaying) => {
           // v1.212.0: tell the page NEW output landed (throttled) so a pane
@@ -1090,10 +1203,7 @@ export function TerminalPane({
       h.settle();
       h.start(); // first visit: connect now; a live host: a no-op
 
-      ro = new ResizeObserver(() => {
-        doFit();
-        sendResize();
-      });
+      ro = new ResizeObserver(() => scheduleFit());
       ro.observe(holder);
       window.addEventListener("resize", onWinResize);
       window.addEventListener("focus", onWinFocus);
@@ -1135,6 +1245,7 @@ export function TerminalPane({
       holder.removeEventListener("contextmenu", onContextMenu);
       holder.removeEventListener("wheel", onWheel, { capture: true } as EventListenerOptions);
       holder.removeEventListener("paste", onPaste, true);
+      if (resizeTimer) clearTimeout(resizeTimer);
       ro?.disconnect();
       // PARK, never dispose (v1.243.0): the shell, its socket and every line
       // it prints stay alive for the next visit. Closing the pane is the one
@@ -1456,6 +1567,14 @@ export function TerminalPane({
             ))}
           </div>
         </>
+      )}
+      {showResume && (
+        <ResumeStrip
+          cliLabel={resumeLabel}
+          command={info.resume_command ?? ""}
+          onResume={resumeCli}
+          onDismiss={dismissResume}
+        />
       )}
       {launchHint && (
         <div className="flex shrink-0 items-center gap-2 border-b border-accent/20 bg-accent/[0.06] px-3 py-1 text-[11px] text-accent-soft">

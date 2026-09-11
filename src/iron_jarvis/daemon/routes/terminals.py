@@ -206,6 +206,8 @@ def register(app: FastAPI, d) -> None:
             session.pane_name = body.name.strip() or None
         if body.agent_cli is not None:
             session.agent_cli = body.agent_cli.strip() or None
+        if body.resume_cli is not None:  # v1.245.0: Resume/Dismiss clear it
+            session.resume_cli = body.resume_cli.strip() or None
         if body.capabilities is not None:
             # A MERGE, not a replacement — see TerminalUpdate.capabilities. The
             # pane token is NOT re-minted: `PaneTokenStore.resolve` reads the
@@ -354,15 +356,31 @@ def register(app: FastAPI, d) -> None:
                             # size; a line-mode shell just ignores it.
                             if repaint_pending and rows > 1:
                                 session.resize(cols, rows - 1)
+                            elif not repaint_pending and (cols, rows) == (
+                                session.cols,
+                                session.rows,
+                            ):
+                                # A same-size resize (v1.245.0) changes nothing
+                                # for the pane, but ConPTY reflows the buffer and
+                                # a running TUI repaints its whole screen — and a
+                                # dragged window edge sent dozens a second. The
+                                # attach's FIRST resize still always wiggles.
+                                continue
                             repaint_pending = False
                             session.resize(cols, rows)
                         else:
                             session.write(text)
                     elif msg.get("bytes") is not None:
                         session.write(msg["bytes"])
-                except Exception:  # writing to a dying PTY must never crash the WS
-                    await close_exited()
-                    break
+                except Exception:  # noqa: BLE001 — input must never crash the WS
+                    # v1.245.0: only a DEAD shell gets 4000 ("shell exited") —
+                    # the one close a pane never reconnects from. A malformed
+                    # resize or a hiccup writing to a LIVE PTY used to send it
+                    # too, and a working shell was marked exited for good.
+                    if not session.alive:
+                        await close_exited()
+                        break
+                    continue
         except WebSocketDisconnect:
             pass
         finally:

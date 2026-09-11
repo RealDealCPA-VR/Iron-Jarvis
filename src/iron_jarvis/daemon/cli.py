@@ -343,6 +343,10 @@ def serve(
         port=port,
         timeout_graceful_shutdown=1.0,
         log_config=uvicorn_log_config(),
+        # v1.245.0: no per-message deflate. Every terminal burst was being
+        # zlib-compressed on the daemon's ONE event loop and inflated again in
+        # the renderer — pure cost on a loopback socket.
+        ws_per_message_deflate=False,
     )
 
 
@@ -736,6 +740,7 @@ def up(
             host=host,
             port=port,
             log_config=uvicorn_log_config(),
+            ws_per_message_deflate=False,  # v1.245.0 — see `serve`
         )
     finally:
         for pr in procs:

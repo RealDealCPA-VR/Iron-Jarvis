@@ -96,6 +96,27 @@ def _safe_replay_start(buf: bytes | bytearray, scan: int = 4096) -> int:
     return i + min(anchors) if anchors else i
 
 
+#: A terminal's answer to "what are you?" (Primary Device Attributes, DA1):
+#: "a VT100 with advanced video" — the same bytes xterm.js sends.
+_DA1_REPLY = "\x1b[?1;2c"
+
+#: A DA1 query: CSI c or CSI 0 c.
+_DA1_QUERY_RX = re.compile(rb"\x1b\[0?c")
+
+
+def _asks_device_attributes(data: bytes) -> bool:
+    """Does this output ask the terminal for its device attributes? (v1.245.0)
+
+    Measured: Windows ConPTY sends a DA1 query as a shell starts and holds ALL
+    of the child's output until something answers — first byte at 3.05 s
+    unanswered, 0.06 s answered. An attached pane's xterm answers it; nothing
+    else did, so a shell with no pane attached (every pane the daemon restores
+    at boot, a Creative Studio session) stalled three seconds before its first
+    byte. ``TerminalSession.read`` answers when no pane is attached to.
+    """
+    return bool(_DA1_QUERY_RX.search(data))
+
+
 #: How far one attached pane may fall behind the live stream before it is cut
 #: loose (v1.243.0). Generous — a TUI repainting a big screen is a few hundred
 #: KB — so only a genuinely stalled reader (a phone on a dead link) ever hits it.
@@ -243,6 +264,7 @@ class TerminalSession:
         reads — the pane's own pump, a second pane's, or the background drain
         thread. Serialized, so the tail and every subscription see each chunk
         once, in order."""
+        answer_da1 = False
         with self._read_lock:
             data = self.backend.read_nonblocking(max_bytes)
             if data:
@@ -251,8 +273,17 @@ class TerminalSession:
                     del self._tail[: len(self._tail) - TAIL_MAX_BYTES]
                     self._tail_truncated = True
                 self.last_output_at = time.monotonic()
+                self.output_seq += 1
                 for sub in self._subscribers:
                     sub._push(data)
+                # Nobody attached means nobody to answer the terminal's
+                # questions — see _asks_device_attributes (v1.245.0).
+                answer_da1 = not self._subscribers and _asks_device_attributes(data)
+        if answer_da1:
+            try:
+                self.write(_DA1_REPLY)
+            except Exception:  # noqa: BLE001 — a dying PTY needs no answer
+                pass
         return data
 
     # --- Live attaches (v1.243.0) -------------------------------------------
@@ -385,6 +416,14 @@ class TerminalSession:
     #: "codex" / "pi"). Set by the caller; beats sniffing the scrollback.
     #: None for an ordinary shell.
     agent_cli: str | None = None
+    #: v1.245.0: the CLI that was running here when the daemon last stopped.
+    #: Set on RESTORE — the shell comes back fresh, the CLI died with the old
+    #: daemon — so the pane can offer a one-click Resume instead of a chip
+    #: claiming a CLI that is not running. Cleared on Resume or Dismiss.
+    resume_cli: str | None = None
+    #: v1.245.0: bumped on every non-empty read — how the periodic snapshot
+    #: knows a pane printed since the last write.
+    output_seq: int = 0
     #: A human handle for this pane, unique among live panes. Agents address
     #: panes by name; the id stays the stable machine handle.
     pane_name: str | None = None
@@ -445,16 +484,30 @@ class TerminalSession:
         `done` from `idle`. See `terminals/agent_state.py` for why an
         unrecognised pane reports `unknown` rather than `idle`.
         """
-        from .agent_state import classify
+        from . import agent_state
 
-        return classify(
+        # ONE classification per output change (v1.245.0). The Build page
+        # polls every 2.5 s and each poll decoded a 32 KB tail and ran the
+        # classifier's regexes over it for every pane — 93% of the daemon's
+        # traffic, all of it on the one event loop. Nothing it reads changes
+        # unless the pane printed, its CLI changed, or it died.
+        alive = self.alive
+        key = (self.output_seq, len(self._tail), self.agent_cli, seen, alive)
+        cached = getattr(self, "_activity_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        result = agent_state.classify(
             self.output_tail(),
             cli=self.agent_cli,
             seen=seen,
-            alive=self.alive,
+            alive=alive,
         )
+        self._activity_cache = (key, result)
+        return result
 
     def info(self) -> dict[str, Any]:
+        from .ai_clis import RESUME_COMMANDS
+
         act = self.activity()
         return {
             "id": self.id,
@@ -474,6 +527,10 @@ class TerminalSession:
             "agent_cli": act.cli,
             "state": act.state.value,
             "state_line": act.line,
+            # v1.245.0 additive: the CLI a restart ended, and the command that
+            # resumes its last conversation ("" = no known way, so no button).
+            "resume_cli": self.resume_cli,
+            "resume_command": RESUME_COMMANDS.get(self.resume_cli or "", ""),
             # v1.238.0 additive, and ALWAYS all five keys: a surface that has to
             # ask whether the field is present would render a pane's
             # capabilities differently depending on when the pane was made.

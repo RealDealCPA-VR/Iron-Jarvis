@@ -380,6 +380,11 @@ export interface TerminalInfo {
    *  v1.235.0-v1.239.0 ships; the other four are recorded and displayed, and
    *  the rail's copy says so rather than implying a gate that is not there. */
   capabilities?: PaneCapabilities;
+  /** v1.245.0: the CLI that was running in this pane before Iron Jarvis
+   *  restarted (the shell came back fresh), and the command that picks its
+   *  last conversation back up ("" when there is nothing to resume). */
+  resume_cli?: string | null;
+  resume_command?: string;
   created_at: string;
 }
 

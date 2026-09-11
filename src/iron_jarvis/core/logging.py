@@ -196,6 +196,9 @@ QUIET_PATHS = frozenset(
         "/computeruse",
         "/chat/approvals/pending",
         "/reflex/rules",
+        # v1.245.0: the Build page's 2.5 s pane-state poll was 93% of the access
+        # log, so the 5 MB daemon.log held under a week of history.
+        "/terminals/activity",
     }
 )
 

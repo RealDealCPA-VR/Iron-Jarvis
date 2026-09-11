@@ -886,6 +886,42 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         _arm_autonomy()
 
+        # BUILD PANES KEEP RECENT HISTORY THROUGH A CRASH (v1.245.0). The
+        # terminal snapshot was written only on create/kill/rename and at a
+        # clean shutdown, and the 2026-09-09 Patch-Tuesday kill skipped every
+        # one of them — restored panes came back with history hours old. Every
+        # 30 s, IF any pane printed since the last write, write it again (off
+        # the loop; at most 64 KB of scrollback per pane).
+        async def _terminal_snapshot_loop() -> None:
+            while True:
+                await asyncio.sleep(30)
+                try:
+                    await asyncio.to_thread(platform.terminals.snapshot_if_changed)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 — a snapshot must never kill the daemon
+                    log.debug("periodic terminal snapshot failed", exc_info=True)
+
+        bg_tasks["terminal_snapshot"] = asyncio.create_task(_terminal_snapshot_loop())
+
+        # EVENT-LOOP STALL TELEMETRY (v1.245.0). The daemon is ONE loop: a
+        # blocking call anywhere freezes every terminal, chat stream and poll,
+        # and a long enough freeze trips the desktop watchdog, which kills the
+        # daemon and every shell with it. Nothing measured it, so a stall left
+        # no trace. Sleep 1 s and log any overshoot past 250 ms.
+        async def _loop_lag_loop() -> None:
+            loop = asyncio.get_running_loop()
+            while True:
+                started = loop.time()
+                await asyncio.sleep(1.0)
+                lag = loop.time() - started - 1.0
+                if lag > 0.25:
+                    log.warning(
+                        "event loop stalled for %d ms — every request waited", int(lag * 1000)
+                    )
+
+        bg_tasks["loop_lag"] = asyncio.create_task(_loop_lag_loop())
+
         # Sentinels ("always-on watchers") polling loop. GUARDED by
         # config.sentinels_enabled (OFF by default), so by default + in tests the
         # loop is never created and nothing is polled. Mirrors the autonomy loop:
