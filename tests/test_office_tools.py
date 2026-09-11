@@ -377,6 +377,118 @@ async def test_pdf_form_fill_can_be_UNDONE(platform, tmp_path):
     assert not out.exists()
 
 
+# ------------------------- 5. the chat rail's "Undo this write" affordance --
+#
+# THE MECHANISM IS NOT THE AFFORDANCE. Both writers capture and revert through
+# the same journal helpers `write_document` uses, and the capture→revert pair is
+# asserted above — but the chat rail only offers "Undo this write" for a row it
+# can JOIN TO A FILE: `ArtifactsRail.joinUndoByPath` skips any row missing
+# `path` or `workspace`, and `GET /undo` reports `path: null` for an ABSOLUTE
+# envelope target. So "undo works" and "the user gets a button" are two claims,
+# and only this test can make the second one. Driven through the path the chat
+# lane uses (registry.invoke under session id "chat", which has no Session row)
+# against the real route — the same end-to-end shape as
+# tests/test_undo_list_paths_v1168.py, which owns the field contract itself.
+
+
+def _undo_client(platform):
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.daemon.routes import undo as undo_routes
+
+    app = FastAPI()
+    undo_routes.register(app, SimpleNamespace(platform=platform))
+    return TestClient(app)
+
+
+def _chat_ctx(platform, workspace: Path) -> ToolContext:
+    """Chat's exact shape: session id "chat", agent run "chat", no Session row."""
+    workspace.mkdir(parents=True, exist_ok=True)
+    return ToolContext(
+        workspace=workspace, session_id="chat", agent_run_id="chat",
+        config=platform.config, event_bus=platform.event_bus, engine=platform.engine,
+    )
+
+
+def _chat_invoke(platform, ctx, name: str, args: dict):
+    import asyncio
+
+    return asyncio.run(
+        platform.registry.invoke(
+            name, args, ctx, platform.permissions, session_allow=[name]
+        )
+    )
+
+
+def _rail_row(platform, tool: str) -> dict:
+    """The row the rail would hold for *tool*, off the real route."""
+    res = _undo_client(platform).get("/undo", params={"session_id": "chat"})
+    assert res.status_code == 200, res.text
+    rows = res.json()["actions"]
+    row = next((r for r in rows if r.get("tool") == tool), None)
+    assert row is not None, f"no /undo row for {tool}; got {rows}"
+    return row
+
+
+def _assert_offerable(row: dict, written: Path, workspace: Path) -> None:
+    """Everything `joinUndoByPath` + the rail's button actually read."""
+    assert isinstance(row["action_id"], str) and row["action_id"], row
+    assert row["undoable"] is True, row
+    assert row["reversible"] is True, row
+    # A file the chat CREATED: the confirm wording keys off this kind and must
+    # say "will be removed", not "will be restored".
+    assert row["kind"] == "file_delete", row
+    # `path` is workspace-RELATIVE or the route reports null and the rail skips
+    # the row entirely — the exact shape of "no button at all".
+    assert isinstance(row["path"], str) and row["path"].strip(), row
+    assert not Path(row["path"]).is_absolute(), row
+    assert isinstance(row["workspace"], str) and row["workspace"].strip(), row
+    assert row["workspace"] == str(workspace.resolve()), row
+    # THE JOIN THE COMPONENT MAKES, resolving to the file that was really written.
+    assert Path(row["workspace"], row["path"]).resolve() == written.resolve()
+
+
+def test_a_docx_edit_leaves_an_undo_row_the_chat_rail_can_JOIN_to_the_file(tmp_path):
+    from iron_jarvis.platform import build_platform
+
+    platform = build_platform(str(tmp_path / "root"))
+    ws = tmp_path / "2026-09-11 Northwind"
+    ctx = _chat_ctx(platform, ws)
+    _letter(ws / "engagement.docx")
+
+    res = _chat_invoke(platform, ctx, "docx_edit", {
+        "path": "engagement.docx",
+        "operations": [{"op": "replace", "find": "$1,250", "replace": "$3,000"}],
+    })
+    assert res.ok is True, res.error
+    written = Path(res.data["abs_path"])
+    assert written.is_file()
+
+    _assert_offerable(_rail_row(platform, "docx_edit"), written, ws)
+
+
+def test_a_filled_pdf_form_leaves_the_same_joinable_undo_row(tmp_path):
+    from iron_jarvis.platform import build_platform
+
+    platform = build_platform(str(tmp_path / "root"))
+    ws = tmp_path / "2026-09-11 Northwind"
+    ctx = _chat_ctx(platform, ws)
+    _form(ws / "w9.pdf")
+
+    res = _chat_invoke(platform, ctx, "pdf_form_fill", {
+        "path": "w9.pdf",
+        "values": {"Name": "Northwind Consulting LLC"},
+    })
+    assert res.ok is True, res.error
+    written = Path(res.data["abs_path"])
+    assert written.is_file()
+
+    _assert_offerable(_rail_row(platform, "pdf_form_fill"), written, ws)
+
+
 async def test_the_excel_pair_says_WHERE_it_saved(platform, tmp_path):
     """SAME CHANGE SET, SAME v1.153.2 RULE. `excel_edit` and `excel_apply_spec`
     reported a workspace-RELATIVE path, which is a bare filename whenever the
