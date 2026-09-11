@@ -957,6 +957,35 @@ def test_status_carries_the_setup_window(client):
     assert 0 < after["expires_in_s"] <= int(browser_routes.SETUP_WINDOW_S)
 
 
+def test_the_countdown_never_reads_longer_than_the_window(monkeypatch):
+    """v1.246.1: the release gate went red on ``assert 121 <= 120``. The
+    deadline is ``monotonic() + 120.0``; on a clock that has not ticked since
+    the arm (Windows resolution ~16 ms), ``(m + 120.0) - m`` can come back a
+    hair above 120 in floating point, and rounding up said 121. That happens
+    only when ``m + 120`` crosses a power of two (the sum then rounds at the
+    coarser spacing) — a 120-second stretch below 2048 s of uptime, about when
+    a CI runner reaches this test. Driven with a clock value that really
+    overshoots, found here rather than hard-coded."""
+    from types import SimpleNamespace
+
+    window = browser_routes.SETUP_WINDOW_S
+    m = next(
+        v for v in (2048.0 - window + i * 0.000123 for i in range(1_000_000))
+        if (v + window) - v > window
+    )
+    monkeypatch.setattr(browser_routes, "_monotonic", lambda: m)
+    runtime = SimpleNamespace()
+    browser_routes._setup_arm(runtime)
+    assert browser_routes._setup_view(runtime) == {
+        "armed": True, "expires_in_s": int(window),
+    }
+    # The other edge: a window with a nanosecond left is still armed, and an
+    # armed window never reads 0 seconds.
+    deadline = getattr(runtime, browser_routes.SETUP_DEADLINE_ATTR)
+    monkeypatch.setattr(browser_routes, "_monotonic", lambda: deadline - 1e-9)
+    assert browser_routes._setup_view(runtime) == {"armed": True, "expires_in_s": 1}
+
+
 def test_the_disarm_route_shuts_the_window_on_a_real_install(client):
     client.post("/browser/setup/arm", headers=_headers(), json={})
 

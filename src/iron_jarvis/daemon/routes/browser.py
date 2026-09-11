@@ -373,7 +373,17 @@ def _setup_view(runtime: Any) -> dict[str, Any]:
     with no time on it, and a reader cannot tell that from a bug.
     """
     left = _setup_remaining_s(runtime)
-    return {"armed": left > 0.0, "expires_in_s": int(math.ceil(left)) if left > 0.0 else 0}
+    if left <= 0.0:
+        return {"armed": False, "expires_in_s": 0}
+    # A microsecond of slack before rounding up (v1.246.1). The deadline is
+    # ``monotonic() + window``, and on a clock that has not ticked since the
+    # arm (Windows: ~16 ms resolution), ``(m + 120.0) - m`` can come back a
+    # hair ABOVE 120 in floating point whenever ``m + 120`` crosses a power of
+    # two (the sum rounds at the coarser spacing) — ``ceil`` then reported
+    # 121 s on a 120-second window, and the v1.246.0 release gate went red on
+    # exactly that, ~30 min into a fresh runner's uptime. ``max(1, …)`` keeps
+    # the rule above: an armed window never reads 0.
+    return {"armed": True, "expires_in_s": max(1, int(math.ceil(left - 1e-6)))}
 
 
 #: THERE IS NO ``_pinned_socket`` GATE ANY MORE, AND THERE MUST NOT BE ONE.
