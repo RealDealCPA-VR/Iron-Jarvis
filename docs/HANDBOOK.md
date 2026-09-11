@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.250.0 (2026-09-11).*
+holds itself to. Current as of v1.251.0 (2026-09-11).*
 
 ---
 
@@ -80,6 +80,16 @@ Chat is where most work happens, and it is wired into everything:
   finish document and spreadsheet work itself (12 steps instead of 6) and,
   if it still runs out, tells you what it did and what is left instead of
   handing the job to a background agent.
+- **The app opens sooner, and says where its start-up time goes**
+  (v1.251.0): Iron Jarvis now checks the two things it waits for at the same
+  time instead of one after the other, and looks up your local model list
+  while it starts rather than on the first check afterwards — about half a
+  second off a cold start, measured on a real installed build. It also writes
+  one line into its log each time it starts, naming the slowest steps and
+  their seconds, and shows the same breakdown on the Diagnostics page. So if
+  your start is slower than that, the app can now tell us exactly which part
+  is taking the time instead of us guessing. Step names and numbers only —
+  nothing about your files or accounts.
 - **Chat stays quick however long it gets** (v1.250.0): typing no longer
   slows down as a conversation grows, long replies stream smoothly to the end,
   and you can scroll or type while one arrives. Going back to a page you were

@@ -739,6 +739,33 @@ does not need a bump, stop and bump it.
   broke 264 tests when they were missed: every `@/lib/useChatStream` mock must
   export `useLiveText`, and every `framer-motion` mock must export `m`.
   `dashboard/__tests__/{chat-stream-perf,api-cache,composer-store,lazy-motion,visible-interval}*`.
+- **A warm-up without single-flight is duplicated work, and a boot must be able
+  to explain itself** (v1.251.0, S-01). The two desktop boot gates ran
+  SERIALLY, so the splash waited out the whole daemon boot before probing a
+  dashboard that had been ready in ~0.1 s: they now run together
+  (`Promise.allSettled`, `GATE_POLL_MS` 150) with the DAEMON's verdict still
+  reported first when both fail, because its failure is the one that explains
+  the other and `classifyStartupFailure` keys off it. `warm_opencode` resolves
+  the allowlist on a boot thread — but `_opencode_cache` is written only when
+  the shell-out RETURNS, so the desktop's first `/health` raced the warm and
+  ran a SECOND `opencode models`: interleaved on the frozen build that was
+  0.08 s SLOWER than no warm-up at all, while every source test stayed green
+  (the test waited for the warm before calling). `_opencode_allowed` is
+  single-flight with the fast path OUTSIDE the lock; do not simplify that lock
+  away. Measured −0.42 s to the first healthy `/health`, 5/5 interleaved pairs;
+  cross-session variance here reaches 2×, so only within-session interleaving
+  counts. THE BALLOT'S 7–10 s "State home → server process" GAP DID NOT
+  REPRODUCE on an empty scratch root (0.73 s), so the daemon now measures its
+  own boot instead: every `_rehydrate_step`, `scheduler.start()` AND
+  `build_platform` (uvicorn prints "Started server process" BEFORE the
+  lifespan, so the blamed window IS `create_app` — timing only the rehydrate
+  steps would measure everything except the suspect), one INFO summary line
+  (`startup 8.42 s: platform 4.10, skills 1.90, …`) and a `startup` block on
+  `GET /diagnostics`. Names and numbers only — never a path, a file name or a
+  credential. Every phase records from a `finally`, and the record helper and
+  the summary emit are each wrapped: a boot's own report must never become what
+  breaks the boot (the v1.229.0 OBS5 lesson). `tests/test_startup_speed_v1250.py`,
+  `tests/test_boot_timing_v1250.py`.
 - **A grant is written where the NEXT run reads, and yolo never rides an
   escalation** (v1.232.0, audit Wave 6, A6/A7/A9). "Allow for this
   conversation" on a session's ask widened an in-memory set and nothing
