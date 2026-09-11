@@ -827,6 +827,9 @@ export default function SettingsPage() {
   // default_provider dropdown, both off the shared /health poll.
   const { refresh, health } = useDaemon();
   const [backupBusy, setBackupBusy] = useState(false);
+  // v1.249.0 (R-05): bumped after "Back up now" so the backup-copy status
+  // line under it re-reads the outcome of the copy that backup just made.
+  const [backupsVersion, setBackupsVersion] = useState(0);
   const [restarting, setRestarting] = useState(false);
   const [maintOk, setMaintOk] = useState<string | null>(null);
   const [maintErr, setMaintErr] = useState<string | null>(null);
@@ -932,12 +935,23 @@ export default function SettingsPage() {
     setMaintErr(null);
     setBackupBusy(true);
     try {
-      const r = await post<{ action: string; ok: boolean; result: string }>(
-        "/diagnostics/repair",
-        { action: "backup_now" },
-      );
-      if (r.ok) setMaintOk(`Backup written to ${r.result}`);
-      else setMaintErr("The daemon reported the backup did not complete.");
+      const r = await post<{
+        action: string;
+        ok: boolean;
+        result: string;
+        mirror?: { configured?: boolean; dir?: string; last?: { ok?: boolean } | null };
+      }>("/diagnostics/repair", { action: "backup_now" });
+      if (r.ok) {
+        // v1.249.0 (R-05): say whether the second-drive copy was made too.
+        const m = r.mirror;
+        const copy = m?.configured
+          ? m.last?.ok
+            ? ` — and copied to ${m.dir}`
+            : ` — but the copy to ${m.dir} did not complete (see below)`
+          : "";
+        setMaintOk(`Backup written to ${r.result}${copy}`);
+        setBackupsVersion((v) => v + 1);
+      } else setMaintErr("The daemon reported the backup did not complete.");
     } catch (err) {
       setMaintErr(err instanceof ApiError ? err.message : String(err));
     } finally {
@@ -1132,6 +1146,7 @@ export default function SettingsPage() {
                 <MaintenanceTools
                   disabled={backupBusy || restarting}
                   onRestartRequested={reconnectAfterRestore}
+                  refreshKey={backupsVersion}
                 />
 
                 <div className="border-t hairline pt-4">

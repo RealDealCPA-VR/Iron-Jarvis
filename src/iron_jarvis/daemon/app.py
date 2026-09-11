@@ -724,7 +724,12 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
             async def _auto_backup_loop() -> None:
                 from ..core.ids import utcnow
-                from ..maintenance import boot_backup_delay_s, run_auto_backup
+                from ..maintenance import (
+                    boot_backup_delay_s,
+                    mirror_loop_health,
+                    mirror_status,
+                    run_auto_backup,
+                )
 
                 try:
                     hours = float(os.environ.get("IRONJARVIS_AUTO_BACKUP_HOURS", "24"))
@@ -758,11 +763,29 @@ def create_app(project_root: str | None = None) -> FastAPI:
                             platform.config.home,
                             engine=platform.engine,
                             keep=keep,
+                            # v1.249.0 (R-05): the copy to a second drive reads
+                            # the LIVE config each run, so a Settings change
+                            # applies to the next backup without a restart.
+                            config=platform.config,
                         )
                         log.info("auto-backup written (keep=%d)", keep)
                         loop_health["auto_backup"] = {
                             "ok": True, "last_success_at": utcnow().isoformat()
                         }
+                        # The second-drive copy reports as its OWN loop, so a
+                        # failed copy (an unplugged drive) is named on the
+                        # Overview and in the bell like any other loop.
+                        try:
+                            _ms = await asyncio.to_thread(
+                                mirror_status, platform.config.home, platform.config
+                            )
+                            _entry = mirror_loop_health(_ms)
+                            if _entry is not None:
+                                loop_health["backup_mirror"] = _entry
+                            else:
+                                loop_health.pop("backup_mirror", None)
+                        except Exception:  # noqa: BLE001 - status is best-effort
+                            pass
                     except asyncio.CancelledError:
                         raise
                     except Exception as exc:  # noqa: BLE001 - never kill the daemon
