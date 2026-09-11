@@ -314,19 +314,28 @@ describe("source pins — the call site the component tests cannot see", () => {
       'import { GoalBirth } from "@/components/chat/GoalContractCard";',
     );
     // Gated exactly like the workflow chip: last message, turn settled.
-    expect(pageSrc).toMatch(
-      /\{i === messages\.length - 1 && !busy && \(\s*<GoalBirth/,
-    );
+    // v1.250.0 (S-05): each message is its own memoized row now, so the gate
+    // reads `isLast` inside the row — and the page is what decides `isLast`.
+    // BOTH halves are pinned: a row that always renders the chip, or a page
+    // that hands every row isLast, would put the chip on every reply.
+    expect(pageSrc).toMatch(/\{isLast && !busy && \(\s*<GoalBirth/);
+    expect(pageSrc).toMatch(/isLast=\{i === messages\.length - 1\}/);
   });
 
   it("the chip judges the USER'S message (the turn before) plus the turn's tools", () => {
     const at = pageSrc.indexOf("<GoalBirth");
     expect(at).toBeGreaterThan(-1);
     const mount = pageSrc.slice(at, at + 600);
-    expect(mount).toContain("messages[i - 1].content");
-    expect(mount).toContain('messages[i - 1].role === "user"');
+    // The row takes the preceding user message as `prevUser`; the page is
+    // where that is derived, and it must stay "the turn before, only when it
+    // was the user's" — a chip judging the assistant's own words would fire
+    // on nothing the user asked for.
+    expect(mount).toContain("userText={prevUser}");
     expect(mount).toContain("toolsUsed={m.toolsUsed}");
     expect(mount).toContain("projectId={projectId}");
+    expect(pageSrc).toMatch(
+      /prevUser=\{\s*i > 0 && messages\[i - 1\]\.role === "user"\s*\?\s*messages\[i - 1\]\.content\s*:\s*""\s*\}/,
+    );
   });
 
   it("the over-trigger bar is stated where the heuristic lives", () => {

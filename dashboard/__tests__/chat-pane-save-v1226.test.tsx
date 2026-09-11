@@ -65,6 +65,9 @@ vi.mock("@/lib/useChatStream", () => {
     partial = "";
   }
   return {
+    // v1.250.0 (S-03): the live bubble reads the streamed text from the hook's
+    // store through `useLiveText`, so a mock without it throws on render.
+    useLiveText: (s: { text?: string }) => s?.text ?? "",
     StreamError: FakeStreamError,
     useChatStream: () => ({
       streaming: false,

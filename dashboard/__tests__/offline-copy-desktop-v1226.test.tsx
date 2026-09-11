@@ -39,6 +39,12 @@ vi.mock("framer-motion", async () => {
     return rest;
   };
   return {
+    // v1.250.0 (S-08): components animate with framer's slim `m.*` under the
+    // layout's LazyMotion, so this mock must export `m` too — otherwise every
+    // mocked surface throws "No \"m\" export is defined on the mock".
+    get m() {
+      return (this as unknown as { motion: unknown }).motion;
+    },
     AnimatePresence: ({ children }: { children?: React.ReactNode }) =>
       createElement(Fragment, null, children),
     motion: new Proxy({} as Record<string, unknown>, {

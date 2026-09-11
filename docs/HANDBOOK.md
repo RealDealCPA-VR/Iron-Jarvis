@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.249.0 (2026-09-11).*
+holds itself to. Current as of v1.250.0 (2026-09-11).*
 
 ---
 
@@ -80,6 +80,12 @@ Chat is where most work happens, and it is wired into everything:
   finish document and spreadsheet work itself (12 steps instead of 6) and,
   if it still runs out, tells you what it did and what is left instead of
   handing the job to a background agent.
+- **Chat stays quick however long it gets** (v1.250.0): typing no longer
+  slows down as a conversation grows, long replies stream smoothly to the end,
+  and you can scroll or type while one arrives. Going back to a page you were
+  just on shows what you last saw instead of a grey placeholder, while it
+  quietly checks for anything new. Minimised windows stop checking altogether
+  until you return, and every screen loads a little less to get started.
 - **Files rail**: every file a conversation *makes or was given* appears on
   the right — preview (spreadsheets as sheets, PDFs and images inline, docx as
   a Word-faithful page), download, open in the native app, save a copy, and a

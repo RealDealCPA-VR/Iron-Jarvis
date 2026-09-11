@@ -715,6 +715,30 @@ does not need a bump, stop and bump it.
   copy holds the database, settings and secrets — the card says so.
   `tests/test_backup_mirror_v1249.py`,
   `dashboard/__tests__/backup-mirror-v1249.test.tsx`.
+- **Cost scales with attention, and the composer is not the page** (v1.250.0,
+  S-03/S-04/S-05/S-08/S-09 of the Upgrade Ballot). A streamed token used to
+  `setText` in the hook, re-rendering the 7,750-line chat page per WORD (4.1
+  page renders per keystroke, 105 bubble renders per keystroke, 173 per token —
+  measured). Now: the live text lives in a ref, is published at most once a
+  frame through `useChatStream`'s store, and is read by `useLiveText` in the
+  ONE component that shows it — with a synchronous flush on done/error/abort so
+  the last words land exactly, never a frame late. Settled markdown is memoized
+  and only the tail re-parsed, cut at blank lines OUTSIDE fences. Typing writes
+  `lib/composerStore.ts`, which the textarea, pickers and send arrow subscribe
+  to; THE PAGE MUST NEVER SUBSCRIBE (it reads text synchronously on send), or
+  every keystroke redraws every message again. Each message is a memoized
+  `MessageRow` taking handlers in one `h` object and `isLast` from the page —
+  both halves are pinned, because a row that always renders the newest-reply
+  affordances, or a page that hands every row `isLast`, puts them on every
+  reply. `useApi` seeds from `lib/apiCache.ts` (bounded, OUTSIDE `lib/api.ts`,
+  which ~71 test files mock wholesale) and revalidates behind it; timers use
+  `useVisibleInterval`; `/models` has ONE reader, `useModels`; animation is
+  `m.*` under the layout's `LazyMotion` (a `layout` prop or framer `drag` needs
+  `domMax` or it silently does nothing — and `app/page.tsx` importing `motion`
+  directly cost that route 6 kB). TWO MOCK CONTRACTS THIS CREATED, and they
+  broke 264 tests when they were missed: every `@/lib/useChatStream` mock must
+  export `useLiveText`, and every `framer-motion` mock must export `m`.
+  `dashboard/__tests__/{chat-stream-perf,api-cache,composer-store,lazy-motion,visible-interval}*`.
 - **A grant is written where the NEXT run reads, and yolo never rides an
   escalation** (v1.232.0, audit Wave 6, A6/A7/A9). "Allow for this
   conversation" on a session's ask widened an in-memory set and nothing

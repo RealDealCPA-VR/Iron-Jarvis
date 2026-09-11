@@ -3,7 +3,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { motion, AnimatePresence } from "framer-motion";
+// `m` + the layout's LazyMotion, like every other animated surface since
+// v1.250.0 (S-08): importing `motion` here pulled framer's full feature set
+// into the Overview's own chunk and cost this route ~6 kB.
+import { m, AnimatePresence } from "framer-motion";
 import {
   Activity,
   Gauge,
@@ -488,7 +491,7 @@ function CollapsibleCard({
       </div>
       <AnimatePresence initial={false}>
         {open && (
-          <motion.div
+          <m.div
             key="body"
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
@@ -497,7 +500,7 @@ function CollapsibleCard({
             className="overflow-hidden"
           >
             <div className="p-5">{children}</div>
-          </motion.div>
+          </m.div>
         )}
       </AnimatePresence>
     </section>

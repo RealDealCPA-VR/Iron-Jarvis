@@ -61,8 +61,19 @@ def test_the_receipt_component_is_mounted_with_server_truth():
     assert mount, "TurnReceipt is never rendered — the whole feature is dark"
     body = mount.group(0)
     for prop in ("route={m.route}", "deniedTools={m.deniedTools}",
-                 "documents={m.documents}", "onOpenDocument={openDocPreview}"):
+                 "documents={m.documents}"):
         assert prop in body, f"TurnReceipt mount lost {prop}"
+    # OPENING A FILE FROM THE RECEIPT (v1.250.0): the message row is memoized
+    # now (typing must not redraw every earlier reply), so its handlers arrive
+    # in one `h` object instead of closing over the page. The prop therefore
+    # reads `h.openDocument` — but the wiring is only real if the page still
+    # binds that to the preview opener, so pin BOTH halves: a row that names a
+    # handler nobody fills would render a dead "open" on every receipt.
+    assert "onOpenDocument={h.openDocument}" in body, "receipt lost its file opener"
+    assert re.search(r"openDocument:\s*\(path\)\s*=>\s*openDocPreview\(path\)", _PAGE), (
+        "the row's openDocument no longer reaches openDocPreview — the receipt's "
+        "file links would do nothing"
+    )
 
 
 def test_legacy_chip_and_tools_line_yield_to_the_receipt():

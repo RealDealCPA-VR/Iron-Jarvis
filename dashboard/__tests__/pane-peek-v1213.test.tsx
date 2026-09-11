@@ -80,6 +80,8 @@ const S = vi.hoisted(() => {
 });
 
 vi.mock("@/lib/useChatStream", () => ({
+  // v1.250.0 (S-03): the live bubble reads streamed text through `useLiveText`.
+  useLiveText: (s: { text?: string }) => s?.text ?? "",
   StreamError: S.FakeStreamError,
   useChatStream: () => ({
     streaming: S.stream.streaming,
